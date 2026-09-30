@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -20,23 +21,52 @@ import { parse } from "yaml";
  * nothing the deploy gate reads is ever cancelled by a later event.
  *
  * The shared group is paired with `cancel-in-progress: false`, and the flag is
- * what a reader is most likely to get wrong. GitHub's own documentation: "By
- * default, any existing pending job or workflow in the same concurrency group
- * will be canceled and the new queued job or workflow will take its place. To
- * also cancel any currently running job or workflow in the same concurrency
- * group, specify cancel-in-progress: true." So the PENDING run is cancelled
- * either way and the group holds at most one running plus one pending job
- * regardless of the flag — the flag buys no additional bound at all, it only
- * decides whether the RUNNING job is destroyed too. Before this suite the
- * running job belonged to the same pull request, so destroying it was the
- * benign self-supersede. A repository-level group means the running job can
- * belong to a DIFFERENT pull request, and `verify`, `actionlint` and
- * `ratchet-guard` are the required contexts in `.github/required-checks.json`,
- * which `ledger-relay` mirrors a run conclusion onto. So a true there would let
- * one contributor's push cancel a peer's required check. Measured over the 6.13
- * days ending 2026-09-30, `ci` arrives 78.8 times a day against a 6.6 minute
- * mean service time, so an arrival finds the slot busy 1-e^(-0.36) = 30% of the
- * time — about 24 required `verify` runs a day, not a rare edge.
+ * what a reader is most likely to get wrong in either direction. GitHub's own
+ * documentation: "By default, any existing pending job or workflow in the same
+ * concurrency group will be canceled and the new queued job or workflow will
+ * take its place. To also cancel any currently running job or workflow in the
+ * same concurrency group, specify cancel-in-progress: true." The PENDING run is
+ * therefore cancelled whatever the flag says, and the group holds at most one
+ * running plus one pending job either way — so the flag buys no additional
+ * bound, it only decides whether the RUNNING job is destroyed too.
+ *
+ * What `false` guarantees: no in-flight run is ever cancelled, so no required
+ * context concludes `cancelled` because a peer pushed while it was running.
+ * `verify`, `actionlint` and `ratchet-guard` are the required contexts in
+ * `.github/required-checks.json`, which `ledger-relay` mirrors a run conclusion
+ * onto, so that is a peer's blocked pull request.
+ *
+ * What it does NOT prevent, and what this design cannot remove: the PENDING run
+ * is still cancelled when a newer arrival claims the single pending slot. Under
+ * a per-pull-request group that run is always the same pull request's superseded
+ * head and the push that superseded it created a replacement, so it is
+ * self-healing. Here it can be a DIFFERENT pull request's current head with no
+ * replacement, and the bounded workflows trigger on opened/synchronize/reopened
+ * with no `edited`, so that pull request stays blocked until its author pushes
+ * again. `false` is strictly better than `true`, never a cure.
+ *
+ * The rates, from the 483 `ci` runs of the 6.13 days ending 2026-09-30 (mean
+ * service 6.58 min). Load is not steady — per-day arrivals 5, 0, 215, 122, 78,
+ * 17, 46 — so a window mean alone understates the regime that matters:
+ *
+ * | date | arrivals | rho | pending-cancelled | running-cancelled if `true` |
+ * |---|---:|---:|---:|---:|
+ * | 2026-09-26 | 215 | 0.98 | ~70/day | ~72/day |
+ * | 2026-09-27 | 122 | 0.56 | ~20/day | ~57/day |
+ * | 2026-09-28 | 78 | 0.36 | ~7/day | ~25/day |
+ * | window mean | 79 | 0.36 | ~7/day | ~26/day |
+ *
+ * M/M/1 with one waiting place, cross-checked by replaying the real arrival
+ * timestamps (97 pending cancellations against ~99 predicted). On `main` the
+ * mechanism already fires inside per-PR groups: 9 of 482 completed `ci` runs
+ * concluded cancelled, every one a same-PR self-supersede.
+ *
+ * On runner minutes the direction is counter-intuitive and stated here so it is
+ * not misremembered: `true` would bill FEWER minutes, because a destroyed run
+ * stops accruing. `false` costs minutes relative to `true` and is bought
+ * deliberately. The bound is unaffected either way — one running slot per group
+ * caps concurrency at 1 — and a run dropped from the pending slot never started,
+ * so the cheap kind of cancellation is the one that remains.
  *
  * Assertions are made on the parsed YAML data, never on the raw bytes, so
  * reformatting the block does not disturb them while a change to either key
@@ -63,6 +93,9 @@ type Workflow = {
  * `cancel-in-progress` is the literal boolean `false` in all four, for every
  * leg, not an event expression. It buys no bound (see the header), and on a
  * group shared by every pull request a `true` destroys a peer's in-flight run.
+ * It does not stop GitHub cancelling the group's PENDING run — that happens by
+ * default — so read the header before concluding that `false` means nothing is
+ * cancelled.
  */
 const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = {
   "ci.yml": {
@@ -95,13 +128,31 @@ const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = 
  * one's own reason says, so a collision has to fail here rather than only in
  * whichever older suite happens to pin that file's whole block.
  *
- * **This list is a judgement surface, not an enforcement mechanism.** Adding a
- * workflow here with a plausible reason turns the default-deny off for it, and
- * no assertion in this suite can tell a true justification from a plausible
- * one — only a reviewer reading the diff can. That is the design the plan
- * specifies ("unless it appears in a named, justified exception list"), and it
- * is why a diff touching this table deserves the same attention as one touching
- * a required-check pin.
+ * **This list is a judgement surface, not an enforcement mechanism, and it opens
+ * in BOTH directions.** A reviewer has to be able to see that, so both are
+ * named here:
+ *
+ * 1. **Adding.** Putting a workflow here with a plausible reason turns the
+ *    default-deny off for it. No assertion can tell a true justification from a
+ *    plausible one — only a reviewer reading the diff can. This direction needs
+ *    a conspicuous diff, because a workflow file has to appear.
+ * 2. **De-bounding.** Moving a workflow OUT of `BOUNDED` and reverting its group
+ *    to an unbounded one is the same escape with a much smaller diff: two lines
+ *    in this file plus a workflow edit, and every assertion still passes if the
+ *    table entry moves with the workflow. This is the direction a future
+ *    contributor reaches for when a bound inconveniences them, and it is the
+ *    more dangerous of the two precisely because it looks like housekeeping.
+ *
+ * Direction 2 is narrowed, not closed, by the assertion that no workflow named
+ * in `.github/required-checks.json` may appear here — that catches unbinding
+ * `ci`, `actionlint` and `ratchet-guard`, which are the three whose required
+ * contexts the whole design exists to protect. No assertion can catch every
+ * de-bounding move, and pretending otherwise would be worse than saying so.
+ *
+ * That is the design the plan specifies ("unless it appears in a named,
+ * justified exception list"), and it is why a diff that moves a name between
+ * `BOUNDED` and this table — in either direction — deserves the same attention
+ * as one touching a required-check pin.
  *
  * GitHub keeps only one PENDING run per concurrency group and cancels the
  * older pending one even at `cancel-in-progress: false`, so sharing a group
@@ -167,14 +218,26 @@ const PR_EVENTS = ["pull_request", "pull_request_target"];
  * and equally unbounded, so flagging it is the answer we want rather than a
  * false positive to work around.
  *
- * `github.head_ref` is here on its own account. On a `pull_request` event it is
- * the author's head branch name, so a group keyed on it is per-pull-request and
- * exactly as unbounded as one keyed on the pull request number — it just spells
- * the key differently.
+ * `github.event.number` is the canonical shorthand for the pull request number
+ * on a `pull_request` event and the spelling a future author is most likely to
+ * reach for. `github.event.pull_request.head.sha` is worse than per-PR: one pull
+ * request that pushes ten times gets ten groups.
+ *
+ * This list is a SPELLING list, not an exhaustive one. A group that means "this
+ * one pull request" can be spelled in ways not enumerated here, and the
+ * assertion below is named for what it does rather than for a universality it
+ * cannot deliver. What closes the gap for the workflows this repository ships is
+ * the classification equality: every workflow is in a table, and every table
+ * pins the exact group, so a missed spelling still cannot ship. The gap that
+ * remains is on the EXCEPTION path, where a workflow with a group nobody pinned
+ * is not covered by that argument — which is why the exception list's own
+ * docstring is the thing a reviewer has to read.
  */
 const UNBOUNDED_GROUP_KEYS = [
   "github.event.pull_request.number",
   "github.event.pull_request.head.ref",
+  "github.event.pull_request.head.sha",
+  "github.event.number",
   "github.head_ref",
   "github.ref",
 ];
@@ -271,16 +334,23 @@ describe("the bounded workflows", () => {
 
   it("parenthesise the event test so operator precedence cannot unbind the bound", () => {
     // This is a diagnostic over the shape the exact assertion above already
-    // holds, not a second guard: the unparenthesised form is the one plausible
-    // "fix" to a cancelled-run complaint, and it looks right in review while
-    // quietly bounding nothing. Asserting the shipped group means the failure
-    // names the precedence trap rather than an opaque string diff.
+    // holds, not a second guard — but it is the assertion that holds the deploy
+    // guarantee, because it reads the SHIPPED group and the table constant can be
+    // edited to match a wrong group. That is why the message names both things
+    // this shape carries, not just the precedence trap: a reader who repointed
+    // the non-pull-request leg at github.run_id, re-opening issue 474, is not
+    // here because of parentheses.
     for (const [name] of Object.entries(BOUNDED)) {
       expect(
         workflows.get(name)!.concurrency?.group,
-        `${name}'s group must parenthesise the event-name test: && binds tighter than || in a ` +
-          "GitHub expression, and the unparenthesised form reads as `a || (b && 'repo-wide') || " +
-          "github.sha`, which gives every pull_request run its own SHA group and bounds nothing.",
+        `${name}'s group must be exactly the parenthesised event-class form: ` +
+          "a literal prefix, then the two pull-request event names in parentheses, " +
+          "then an &&-gated 'repo-wide' arm, then a fall back to github.sha. Two things " +
+          "non-pull-request leg keys on github.sha so that no push to main shares a group with " +
+          "another event — the deploy gate refuses a merged SHA whose check concludes cancelled " +
+          "(issue 474) — and the pull-request arm must be parenthesised, because && binds tighter " +
+          "than || and the unparenthesised form reads as `a || (b && 'repo-wide') || github.sha`, " +
+          "which gives every pull_request run its own SHA group and bounds nothing.",
       ).toMatch(/^\S+-\$\{\{ \(github\.event_name == 'pull_request' \|\| github\.event_name == 'pull_request_target'\) && 'repo-wide' \|\| github\.sha \}\}$/);
     }
   });
@@ -297,37 +367,47 @@ describe("the bounded workflows", () => {
 
   it("never cancel an in-flight run, because the group is shared by every pull request", () => {
     // Asserted against the value actually shipped in the workflow file, not
-    // against BOUNDED's own copy of it. This is the assertion a reader most
-    // needs to be unable to weaken by editing a table: a `true` here — or the
-    // event expression that used to be here — lets one contributor's push
-    // cancel a peer's RUNNING run, because the group is repository-level and
-    // the run it destroys is not necessarily the author's own. `verify`,
-    // `actionlint` and `ratchet-guard` are the required contexts in
-    // .github/required-checks.json and ledger-relay mirrors a run conclusion
-    // onto them, so that cancellation blocks a pull request that did nothing
-    // wrong. The flag buys no bound to set against: GitHub cancels the PENDING
-    // run in a group by default whatever this says, so the group holds at most
-    // one running and one pending job either way. On the non-pull-request leg
-    // the same literal also keeps the issue-474 deploy gate satisfied.
+    // against BOUNDED's own copy of it, so it cannot be weakened by editing a
+    // table. A `true` here — or the event expression that used to be here —
+    // lets one contributor's push cancel a peer's RUNNING run, because the
+    // group is repository-level and the run it destroys is not necessarily the
+    // author's own. `verify`, `actionlint` and `ratchet-guard` are the required
+    // contexts in .github/required-checks.json and ledger-relay mirrors a run
+    // conclusion onto them, so that cancellation blocks a pull request that did
+    // nothing wrong. Measured at the window mean that is ~26 destroyed running
+    // runs a day, ~72 on the busiest measured day.
+    //
+    // The message below is careful about what this does and does not buy,
+    // because the over-strong version of the claim is the one that was shipped
+    // first and it is false: `false` does NOT prevent cancellation. GitHub
+    // cancels the PENDING run in a group whatever this flag says, and on this
+    // shared group that run can be another pull request's live head with no
+    // replacement. The flag governs the running run only; the bound is
+    // unaffected either way because the group holds at most one running job
+    // regardless. On the non-pull-request leg the same literal also keeps the
+    // issue-474 deploy gate satisfied.
     for (const [name] of Object.entries(BOUNDED)) {
       expect(
         workflows.get(name)!.concurrency?.["cancel-in-progress"],
-        `${name}'s cancel-in-progress must be the literal boolean false, on every leg. The ` +
-          "shared pull-request group means a cancelling run destroys a run that may belong to a " +
-          "different pull request, and these are required contexts; the bound is unaffected " +
-          "because GitHub cancels the pending run in a group regardless of this flag.",
+        `${name}'s cancel-in-progress must be the literal boolean false, on every leg. A true ` +
+          "destroys a RUNNING run that may belong to a different pull request, and these are " +
+          "required contexts. It does not stop GitHub cancelling the group's PENDING run — that " +
+          "happens by default and the workflow comments say so — and the bound is unaffected " +
+          "either way, since the group holds at most one running job regardless of this flag.",
       ).toBe(false);
     }
   });
 });
 
 describe("the per-pull-request group keys", () => {
-  it("denies every key a group can use to mean 'this one pull request'", () => {
-    // The dynamic deny rule above can only exercise the key list against keys
-    // some workflow happens to use today, so on its own it cannot tell you that
-    // a key is missing from the list — dropping `github.head_ref` changed
-    // nothing observable until a workflow used it, which is exactly when the
-    // omission costs something. These are the spellings, asserted directly.
+  it("denies these spellings of a group that means 'this one pull request'", () => {
+    // Named for what it asserts, not for a universality the list cannot
+    // deliver: the key list is a spelling list, and the docstring above says so
+    // and says what closes the gap. The dynamic deny rule alone can only
+    // exercise the list against keys some workflow uses today, so on its own it
+    // cannot tell you a key is missing from it — dropping `github.head_ref`
+    // changed nothing observable until a workflow used it, which is exactly when
+    // the omission costs something. Hence the direct assertions.
     //
     // `github.ref_name` is listed against `github.ref` because the match is a
     // substring one: a group naming ref_name is denied, and the message names
@@ -335,6 +415,8 @@ describe("the per-pull-request group keys", () => {
     for (const [key, reportedAs] of [
       ["github.event.pull_request.number", "github.event.pull_request.number"],
       ["github.event.pull_request.head.ref", "github.event.pull_request.head.ref"],
+      ["github.event.pull_request.head.sha", "github.event.pull_request.head.sha"],
+      ["github.event.number", "github.event.number"],
       ["github.head_ref", "github.head_ref"],
       ["github.ref", "github.ref"],
       ["github.ref_name", "github.ref"],
@@ -404,11 +486,17 @@ describe("the workflows left unbounded", () => {
   });
 
   it("keeps the premise each reason names", () => {
-    // Every reason above that names a pull request names it for one reason: the
-    // pending run that GitHub would cancel is work that is lost, not work
-    // somebody re-runs. That premise is `cancel-in-progress: false`, so it is
-    // asserted rather than trusted — flipping a justified workflow to cancel
-    // makes the justification false and fails here.
+    // The premise these reasons rest on is NOT that `cancel-in-progress: false`
+    // prevents cancellation — it does not, for the pending run. It is that each
+    // exception's GROUP is scoped to one unit of work, so that the pending run
+    // GitHub drops is always that same unit's superseded attempt and a
+    // replacement exists. `cancel-in-progress: false` is a second, independent
+    // part of the same premise: without it the RUNNING attempt is destroyed too,
+    // and for these workflows that is work nobody re-runs — the first of two
+    // /claim racers, the run that repairs an already-closed pull request, the
+    // relay that posts the check-runs. So the flag is asserted because flipping
+    // it makes each stated reason false, not because it is what the reason is
+    // about.
     for (const [name, entry] of UNBOUNDED_BY_CHOICE) {
       if (!isPullRequestReachable(workflows.get(name)!.on)) continue;
       expect(
@@ -421,12 +509,52 @@ describe("the workflows left unbounded", () => {
     }
   });
 
+  it("never cover a workflow that produces a required check", () => {
+    // The mechanical half of the de-bounding guard, and the only one in the
+    // suite. Moving ci.yml, actionlint.yml or ratchet-guard.yml out of BOUNDED
+    // and reverting its group passes every other assertion here, because the
+    // table entry can move with the workflow — that escape needs a two-line
+    // diff and looks like housekeeping. Those three are exactly the workflows
+    // whose job names appear in .github/required-checks.json, and a required
+    // context is the one thing this repository cannot afford to have quietly
+    // unbounded, so it cannot be exempted from the bound at all. A workflow that
+    // legitimately needs its own group per unit of work (pr-gate.yml, keyed on
+    // the pull request number) is not a required context and is unaffected.
+    const required = requiredCheckWorkflows();
+    expect([...required].sort(), ".github/required-checks.json must name workflows this suite can read")
+      .not.toEqual([]);
+    for (const name of required) {
+      expect(
+        UNBOUNDED_BY_CHOICE.has(name),
+        `${name} produces a required check context, so it must stay in BOUNDED. Moving it here ` +
+          "and reverting its group passes every other assertion in this file, which is exactly why " +
+          "it needs a mechanical guard rather than a reviewer's memory.",
+      ).toBe(false);
+      expect(workflows.has(name), `${name} is a required-check workflow but is not in the directory`).toBe(true);
+    }
+  });
+
   it("are never one of the bounded workflows", () => {
     for (const name of UNBOUNDED_BY_CHOICE.keys()) {
       expect(Object.hasOwn(BOUNDED, name), `${name} is both bounded and left unbounded`).toBe(false);
     }
   });
 });
+
+/**
+ * The workflow filenames whose jobs are required check contexts, read from
+ * .github/required-checks.json rather than hardcoded — the same file the deploy
+ * gate resolves through, so a required check added there is covered here without
+ * editing this suite. A path is taken as a basename, and anything that does not
+ * resolve to a workflow in the directory is left for the caller's
+ * `workflows.has` assertion to name.
+ */
+function requiredCheckWorkflows(): string[] {
+  const pins = JSON.parse(
+    readFileSync(resolve(".github/required-checks.json"), "utf8"),
+  ) as Record<string, string>;
+  return [...new Set(Object.values(pins).map((path) => path.split("/").pop()!))];
+}
 
 /** True when any of the two fork-reachable events appears in a workflow's `on` block. */
 function isPullRequestReachable(on: unknown): boolean {
