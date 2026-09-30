@@ -103,7 +103,7 @@ jobs:
         if: ${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: zizmor --no-progress .github/workflows-pr/
+        run: zizmor --no-progress .github/workflows-pr/*.yml
 
       # A pull_request_target run tests refs/pull/N/merge — the head merged with the
       # base as it stood at event time — and branch protection keeps strict
