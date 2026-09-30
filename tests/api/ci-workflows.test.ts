@@ -82,8 +82,10 @@ describe("GitHub Actions release gates", () => {
   it("judges the pull request head only as git data, executed entirely from main", async () => {
     const workflow = await readWorkflow("ratchet-guard.yml");
     // pull_request_target keeps the gate alive when a pull request disables
-    // the pull_request ci run: the workflow definition, the checkout and the
-    // script that executes all come from main. `branches: [main]` keeps a PR
+    // a workflow's own pull_request run: the workflow definition, the
+    // checkout and the script that executes all come from main — ci.yml's
+    // PR leg fires pull_request_target since issue 822, so the ci run can
+    // no longer be silenced that way. `branches: [main]` keeps a PR
     // retargeted to main (an edited event, which gets no new run) from
     // carrying its stale green over. push covers the commits main itself
     // lands: the repo merges with --rebase, so a merged SHA is a brand-new

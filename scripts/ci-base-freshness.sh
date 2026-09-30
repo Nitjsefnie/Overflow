@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Base freshness gate — the LAST step of both required CI jobs (ci.yml verify,
-# actionlint.yml actionlint), guarded by `if: pull_request`.
+# actionlint.yml actionlint), guarded by `if: pull_request_target`.
 #
 # What issue 441 needed: the tree that LANDS on main must be covered by a
-# required check. A pull_request run tests refs/pull/N/merge — the head merged
+# required check. A pull_request_target run tests refs/pull/N/merge — the head merged
 # with the base as it stood at event time — and branch protection keeps strict
 # up-to-date checking disabled, so when main has advanced, the tree GitHub
 # actually lands (the branch rebased onto current main) was never tested.
