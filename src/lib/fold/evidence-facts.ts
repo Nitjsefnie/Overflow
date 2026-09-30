@@ -288,37 +288,50 @@ export async function synchronizeReconciliationEvidence(
  * fact rows — the same shape the single-document read returned, so the fold's
  * merge logic is unchanged. Deterministic ordering by numeric subject key.
  *
- * One statement, one snapshot: the metadata and its facts are fetched by a
- * single lateral-joined select, so a fold pass committing mid-read can never
- * hand the reader a metadata/facts pair from different writes (a BEFORE/AFTER
- * pair of plain selects could). One round trip, like the old single `select`.
+ * One statement, one snapshot: metadata and facts are fetched by a single
+ * join, so a fold pass committing mid-read can never hand the reader a
+ * metadata/facts pair from different writes (a BEFORE/AFTER pair of plain
+ * selects could). The statement returns ROWS — one per fact plus the metadata
+ * row — never a jsonb aggregate: an aggregate of all facts would be one jsonb
+ * value under jsonb's 268,435,455-byte total ceiling, reintroducing at read
+ * time the exact permanent-failure shape issue 850 removed from the write
+ * path (the write deliberately admits documents whose facts total more than
+ * that; only the per-fact limit bounds a fact). Each row detoasts its own
+ * payload, so the read is bounded by the per-fact limit no matter how many
+ * facts a repository carries.
  */
 export async function readReconciliationEvidence(
   sql: SqlClient,
   repositoryId: string,
 ): Promise<ReconciliationEvidence | null> {
-  const [row] = await sql<{
+  const rows = await sql<{
     version: number; format_version: number; checkpoint: Date; last_full_pass_at: Date;
-    facts: ReadonlyArray<{ kind: string; subject_key: string; payload: unknown }> | null;
+    kind: ReconciliationFactKind | null; subject_key: string | null; payload: unknown;
   }[]>`
     select e.version, e.format_version, e.checkpoint, e.last_full_pass_at,
-      coalesce(aggregate.facts, '[]'::jsonb) as facts
+      f.kind, f.subject_key, f.payload
     from repository_reconciliation_evidence e
-    left join lateral (
-      select jsonb_agg(jsonb_build_object('kind', f.kind, 'subject_key', f.subject_key, 'payload', f.payload)) as facts
-      from repository_reconciliation_evidence_facts f
-      where f.repository_id = e.repository_id
-    ) aggregate on true
+    left join repository_reconciliation_evidence_facts f on f.repository_id = e.repository_id
     where e.repository_id = ${repositoryId}
   `;
-  if (row === undefined) {
+  const [metadata] = rows;
+  if (metadata === undefined) {
     return null;
   }
+  // A metadata row with no facts surfaces exactly one row whose fact columns
+  // are NULL; every real fact row carries both (kind is CHECK-constrained,
+  // subject_key is NOT NULL).
+  const factRows: Array<{ kind: string; subject_key: string; payload: unknown }> = [];
+  for (const row of rows) {
+    if (row.kind !== null) {
+      factRows.push({ kind: row.kind, subject_key: row.subject_key!, payload: row.payload });
+    }
+  }
   return {
-    version: row.version,
-    formatVersion: row.format_version,
-    checkpoint: row.checkpoint,
-    lastFullPassAt: row.last_full_pass_at,
-    ...mergeEvidenceFacts(row.facts ?? []),
+    version: metadata.version,
+    formatVersion: metadata.format_version,
+    checkpoint: metadata.checkpoint,
+    lastFullPassAt: metadata.last_full_pass_at,
+    ...mergeEvidenceFacts(factRows),
   };
 }
