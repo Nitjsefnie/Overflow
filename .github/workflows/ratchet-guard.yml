@@ -51,8 +51,15 @@ concurrency:
   # parentheses are load-bearing: && binds tighter than || in a GitHub
   # expression, and without them the pull_request arm falls through to
   # github.sha and the bound is gone.
+  #
+  # cancel-in-progress is false because the group is shared by every pull
+  # request, and this job is a required context in .github/required-checks.json.
+  # The flag adds no bound — GitHub cancels the pending run in a group by
+  # default — it only decides whether the RUNNING job is destroyed too, and on a
+  # shared group that run can belong to a different pull request. See ci.yml's
+  # concurrency block for the full argument and the measured contention rate.
   group: ratchet-guard-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+  cancel-in-progress: false
 
 jobs:
   ratchet-guard:

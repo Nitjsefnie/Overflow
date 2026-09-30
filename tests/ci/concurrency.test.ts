@@ -19,6 +19,25 @@ import { parse } from "yaml";
  * push to main, a schedule tick and a dispatch each get a private group and
  * nothing the deploy gate reads is ever cancelled by a later event.
  *
+ * The shared group is paired with `cancel-in-progress: false`, and the flag is
+ * what a reader is most likely to get wrong. GitHub's own documentation: "By
+ * default, any existing pending job or workflow in the same concurrency group
+ * will be canceled and the new queued job or workflow will take its place. To
+ * also cancel any currently running job or workflow in the same concurrency
+ * group, specify cancel-in-progress: true." So the PENDING run is cancelled
+ * either way and the group holds at most one running plus one pending job
+ * regardless of the flag — the flag buys no additional bound at all, it only
+ * decides whether the RUNNING job is destroyed too. Before this suite the
+ * running job belonged to the same pull request, so destroying it was the
+ * benign self-supersede. A repository-level group means the running job can
+ * belong to a DIFFERENT pull request, and `verify`, `actionlint` and
+ * `ratchet-guard` are the required contexts in `.github/required-checks.json`,
+ * which `ledger-relay` mirrors a run conclusion onto. So a true there would let
+ * one contributor's push cancel a peer's required check. Measured over the 6.13
+ * days ending 2026-09-30, `ci` arrives 78.8 times a day against a 6.6 minute
+ * mean service time, so an arrival finds the slot busy 1-e^(-0.36) = 30% of the
+ * time — about 24 required `verify` runs a day, not a rare edge.
+ *
  * Assertions are made on the parsed YAML data, never on the raw bytes, so
  * reformatting the block does not disturb them while a change to either key
  * fails loudly here.
@@ -40,58 +59,101 @@ type Workflow = {
  * without them `a || b && 'repo-wide' || github.sha` reads as
  * `a || (b && 'repo-wide') || github.sha` and every `pull_request` run gets its
  * own SHA group — the exact unbounded shape this suite exists to deny.
+ *
+ * `cancel-in-progress` is the literal boolean `false` in all four, for every
+ * leg, not an event expression. It buys no bound (see the header), and on a
+ * group shared by every pull request a `true` destroys a peer's in-flight run.
  */
-const BOUNDED: Record<string, { group: string; "cancel-in-progress": string }> = {
+const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = {
   "ci.yml": {
     group: "ci-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": "${{ github.event_name == 'pull_request_target' }}",
+    "cancel-in-progress": false,
   },
   "actionlint.yml": {
     group: "actionlint-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": "${{ github.event_name == 'pull_request_target' }}",
+    "cancel-in-progress": false,
   },
   "ratchet-guard.yml": {
     group: "ratchet-guard-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": "${{ github.event_name == 'pull_request_target' }}",
+    "cancel-in-progress": false,
   },
   "code-scanning.yml": {
     group: "code-scanning-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    "cancel-in-progress": false,
   },
 };
 
 /**
- * Every workflow that is deliberately NOT repository-bounded, and why keeping
- * it that way is correct rather than merely convenient. The reason is the value
- * and not a comment, so a blanked or stubbed justification fails the
- * non-blank-reason test below instead of passing unnoticed.
+ * Every workflow that is deliberately NOT repository-bounded: why keeping it
+ * that way is correct rather than merely convenient, and the exact group and
+ * cancel-in-progress it ships.
+ *
+ * The reason is a field and not a comment, so a blanked or stubbed
+ * justification fails the non-blank-reason test below instead of passing
+ * unnoticed. The group is pinned for the same reason `BOUNDED` pins its: two
+ * workflows sharing a group cancel each other's PENDING runs whatever each
+ * one's own reason says, so a collision has to fail here rather than only in
+ * whichever older suite happens to pin that file's whole block.
+ *
+ * **This list is a judgement surface, not an enforcement mechanism.** Adding a
+ * workflow here with a plausible reason turns the default-deny off for it, and
+ * no assertion in this suite can tell a true justification from a plausible
+ * one — only a reviewer reading the diff can. That is the design the plan
+ * specifies ("unless it appears in a named, justified exception list"), and it
+ * is why a diff touching this table deserves the same attention as one touching
+ * a required-check pin.
  *
  * GitHub keeps only one PENDING run per concurrency group and cancels the
  * older pending one even at `cancel-in-progress: false`, so sharing a group
- * would drop work for all four of these. That is why the bound is applied only
- * to the metered CI workflows, each of whose runs is reproducible from the next
- * push.
+ * would drop work for these. That is why the bound is applied only to the
+ * metered CI workflows, each of whose runs is reproducible from the next push.
  */
-const UNBOUNDED_BY_CHOICE = new Map<string, string>([
+const UNBOUNDED_BY_CHOICE = new Map<string, { reason: string; group: string; "cancel-in-progress": unknown }>([
   [
     "claim.yml",
-    "Two racers commenting /claim on one issue must both get an answer. A shared group keeps only the newest PENDING run and cancels the older even at cancel-in-progress false, so one racer would silently never be answered.",
+    {
+      reason:
+        "Two racers commenting /claim on one issue must both get an answer. A shared group keeps only the newest PENDING run and cancels the older even at cancel-in-progress false, so one racer would silently never be answered.",
+      group: "claim-${{ github.event.issue.number }}",
+      "cancel-in-progress": false,
+    },
   ],
   [
     "pr-gate.yml",
-    "A cancelled run may already have closed the pull request; the queued run is what reads that and repairs it. Cancelling it leaves the pull request closed with no repair.",
+    {
+      reason:
+        "A cancelled run may already have closed the pull request; the queued run is what reads that and repairs it. Cancelling it leaves the pull request closed with no repair.",
+      group: "pr-gate-${{ github.event.pull_request.number }}",
+      "cancel-in-progress": false,
+    },
   ],
   [
     "ledger-relay.yml",
-    "The relay posts the check-runs branch protection requires. A cancelled relay posts none, and a missing check-run blocks every open pull request.",
+    {
+      reason:
+        "The relay posts the check-runs branch protection requires. A cancelled relay posts none, and a missing check-run blocks every open pull request.",
+      group: "ledger-relay",
+      "cancel-in-progress": false,
+    },
   ],
   [
     "coverage-comment.yml",
-    "The report posts a comment the author reads. Cancelling a queued run loses the report for that head commit, and the next run may not come.",
+    {
+      reason:
+        "The report posts a comment the author reads. Cancelling a queued run loses the report for that head commit, and the next run may not come.",
+      group:
+        "coverage-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
+      "cancel-in-progress": false,
+    },
   ],
   [
     "dependency-audit.yml",
-    "No pull_request trigger at all: schedule and workflow_dispatch only, so both the pull_request arm of its group and its cancel-in-progress test are dead. The group is already per-ref on a schedule tick, and it never receives the events that would make a repository-level group contend.",
+    {
+      reason:
+        "This workflow has NO pull_request and NO pull_request_target trigger — it is schedule and workflow_dispatch only — so BOTH arms that would make it unbounded are dead: the pull_request arm of its group always resolves null and falls through to github.ref, and its cancel-in-progress test is never true. The group is therefore already per-ref on a schedule tick, and it never receives the event that would make a repository-level group contend.",
+      group: "dependency-audit-${{ github.event.pull_request.number || github.ref }}",
+      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    },
   ],
 ]);
 
@@ -104,8 +166,29 @@ const PR_EVENTS = ["pull_request", "pull_request_target"];
  * `pull_request` event that resolves to `<N>/merge`, which is per-pull-request
  * and equally unbounded, so flagging it is the answer we want rather than a
  * false positive to work around.
+ *
+ * `github.head_ref` is here on its own account. On a `pull_request` event it is
+ * the author's head branch name, so a group keyed on it is per-pull-request and
+ * exactly as unbounded as one keyed on the pull request number — it just spells
+ * the key differently.
  */
-const UNBOUNDED_GROUP_KEYS = ["github.event.pull_request.number", "github.ref"];
+const UNBOUNDED_GROUP_KEYS = [
+  "github.event.pull_request.number",
+  "github.event.pull_request.head.ref",
+  "github.head_ref",
+  "github.ref",
+];
+
+/**
+ * The per-pull-request keys a group expression uses, as a pure function so it
+ * can be exercised on synthetic groups. Asserting the key list through a
+ * dynamic loop over real workflow files alone leaves the list itself untested:
+ * dropping a key from it changes nothing observable until a workflow happens to
+ * use that key, so the omission is invisible at the moment it is made.
+ */
+export function unboundedGroupKeysIn(group: string): string[] {
+  return UNBOUNDED_GROUP_KEYS.filter((key) => group.includes(key));
+}
 
 const workflows = new Map<string, Workflow>();
 
@@ -153,14 +236,14 @@ describe("every workflow's concurrency block", () => {
       if (!isPullRequestReachable(workflow.on)) continue;
       if (UNBOUNDED_BY_CHOICE.has(name)) continue;
       const group = String(workflow.concurrency?.group ?? "");
-      for (const key of UNBOUNDED_GROUP_KEYS) {
+      for (const key of unboundedGroupKeysIn(group)) {
         expect(
-          group.includes(key),
+          key,
           `${name} is reachable from a pull request and keys its concurrency group on ${key}, ` +
             "so the repository's Actions minutes scale with the number of open pull requests. " +
             "Key a pull request into one repository-level group, or add it to UNBOUNDED_BY_CHOICE " +
             "with the reason it may stay unbounded.",
-        ).toBe(false);
+        ).toBe("");
       }
     }
   });
@@ -212,34 +295,112 @@ describe("the bounded workflows", () => {
     }
   });
 
-  it("keep the non-pull-request leg cancellable only by a pull request", () => {
-    // The deploy gate in scripts/deploy-revision.sh reads the check conclusion
-    // for the SHA it deploys and refuses `cancelled` (issue 474), so a push to
-    // main must never evaluate cancel-in-progress true. Every bounded workflow
-    // expresses the cancellation as a string event test for exactly that reason;
-    // a literal `true` fails these.
-    for (const [name, expected] of Object.entries(BOUNDED)) {
+  it("never cancel an in-flight run, because the group is shared by every pull request", () => {
+    // Asserted against the value actually shipped in the workflow file, not
+    // against BOUNDED's own copy of it. This is the assertion a reader most
+    // needs to be unable to weaken by editing a table: a `true` here — or the
+    // event expression that used to be here — lets one contributor's push
+    // cancel a peer's RUNNING run, because the group is repository-level and
+    // the run it destroys is not necessarily the author's own. `verify`,
+    // `actionlint` and `ratchet-guard` are the required contexts in
+    // .github/required-checks.json and ledger-relay mirrors a run conclusion
+    // onto them, so that cancellation blocks a pull request that did nothing
+    // wrong. The flag buys no bound to set against: GitHub cancels the PENDING
+    // run in a group by default whatever this says, so the group holds at most
+    // one running and one pending job either way. On the non-pull-request leg
+    // the same literal also keeps the issue-474 deploy gate satisfied.
+    for (const [name] of Object.entries(BOUNDED)) {
       expect(
-        expected["cancel-in-progress"],
-        `${name}'s cancel-in-progress must stay a string event test`,
-      ).toMatch(/^\$\{\{ github\.event_name == '(?:pull_request|pull_request_target)' \}\}$/);
-      expect(workflows.get(name)!.concurrency?.["cancel-in-progress"]).toBe(
-        expected["cancel-in-progress"],
-      );
+        workflows.get(name)!.concurrency?.["cancel-in-progress"],
+        `${name}'s cancel-in-progress must be the literal boolean false, on every leg. The ` +
+          "shared pull-request group means a cancelling run destroys a run that may belong to a " +
+          "different pull request, and these are required contexts; the bound is unaffected " +
+          "because GitHub cancels the pending run in a group regardless of this flag.",
+      ).toBe(false);
+    }
+  });
+});
+
+describe("the per-pull-request group keys", () => {
+  it("denies every key a group can use to mean 'this one pull request'", () => {
+    // The dynamic deny rule above can only exercise the key list against keys
+    // some workflow happens to use today, so on its own it cannot tell you that
+    // a key is missing from the list — dropping `github.head_ref` changed
+    // nothing observable until a workflow used it, which is exactly when the
+    // omission costs something. These are the spellings, asserted directly.
+    //
+    // `github.ref_name` is listed against `github.ref` because the match is a
+    // substring one: a group naming ref_name is denied, and the message names
+    // the key that caught it rather than the one the author wrote.
+    for (const [key, reportedAs] of [
+      ["github.event.pull_request.number", "github.event.pull_request.number"],
+      ["github.event.pull_request.head.ref", "github.event.pull_request.head.ref"],
+      ["github.head_ref", "github.head_ref"],
+      ["github.ref", "github.ref"],
+      ["github.ref_name", "github.ref"],
+    ] as const) {
+      expect(
+        unboundedGroupKeysIn("some-workflow-${{ " + key + " }}"),
+        `a group keyed on ${key} is per-pull-request on a pull_request event and must be denied`,
+      ).toContain(reportedAs);
+    }
+  });
+
+  it("does not deny a repository-level group", () => {
+    // The negative direction, so the list cannot be widened until it denies
+    // the four groups this repository actually ships.
+    for (const group of Object.values(BOUNDED).map((entry) => entry.group)) {
+      expect(unboundedGroupKeysIn(group), `${group} is a repository-level group`).toEqual([]);
     }
   });
 });
 
 describe("the workflows left unbounded", () => {
   it("each carry a written reason", () => {
-    for (const [name, reason] of UNBOUNDED_BY_CHOICE) {
+    for (const [name, entry] of UNBOUNDED_BY_CHOICE) {
       expect(workflows.has(name), `${name} is listed as unbounded but is not in the workflow directory`).toBe(true);
       expect(
-        reason.trim().length,
+        entry.reason.trim().length,
         `${name} is in UNBOUNDED_BY_CHOICE without a reason, so the default-deny above is disabled for it`,
       ).toBeGreaterThan(0);
-      expect(reason.length, `${name}'s reason must be a justification, not a stub`).toBeGreaterThan(80);
+      expect(entry.reason.length, `${name}'s reason must be a justification, not a stub`).toBeGreaterThan(80);
     }
+  });
+
+  it("ship exactly the group and cancel-in-progress recorded beside the reason", () => {
+    // Two workflows sharing a group cancel each other's PENDING runs whatever
+    // each one's own reason says, so a collision is a correctness change and not
+    // a cosmetic one — but nothing in this suite used to pin an exception's
+    // group, so pointing pr-gate's at `ci-repo-wide` left the whole file green
+    // and only an older suite's whole-block pin noticed. This is that pin.
+    for (const [name, entry] of UNBOUNDED_BY_CHOICE) {
+      const workflow = workflows.get(name)!;
+      expect(workflow.concurrency?.group, `${name}'s group`).toBe(entry.group);
+      expect(workflow.concurrency?.["cancel-in-progress"], `${name}'s cancel-in-progress`).toBe(
+        entry["cancel-in-progress"],
+      );
+    }
+  });
+
+  it("never share a group with each other or with a bounded workflow", () => {
+    // The failure the exact pins above cannot see: two different workflows can
+    // each ship the group their own entry records and still collide, because
+    // the collision is in the resolved string, not in either file. A constant
+    // group (`ledger-relay`) is the case that needs this most — it is not
+    // derived from a pull request, so nothing else about it looks unusual.
+    const groups = new Map<string, string[]>();
+    for (const [name, workflow] of workflows) {
+      const group = String(workflow.concurrency?.group ?? "");
+      groups.set(group, [...(groups.get(group) ?? []), name]);
+    }
+    const collisions = [...groups.entries()]
+      .filter(([, names]) => names.length > 1)
+      .map(([group, names]) => `${names.join(" and ")} both resolve to "${group}"`);
+    expect(
+      collisions,
+      "two workflows in one concurrency group cancel each other's pending runs, so a shared " +
+        "group is a correctness change for both of them at once",
+    ).toEqual([]);
   });
 
   it("keeps the premise each reason names", () => {
@@ -248,14 +409,15 @@ describe("the workflows left unbounded", () => {
     // somebody re-runs. That premise is `cancel-in-progress: false`, so it is
     // asserted rather than trusted — flipping a justified workflow to cancel
     // makes the justification false and fails here.
-    for (const [name, reason] of UNBOUNDED_BY_CHOICE) {
+    for (const [name, entry] of UNBOUNDED_BY_CHOICE) {
       if (!isPullRequestReachable(workflows.get(name)!.on)) continue;
       expect(
         workflows.get(name)!.concurrency?.["cancel-in-progress"],
-        `${name} is left unbounded on the stated ground that cancelling loses work, but its ` +
-          "cancel-in-progress is not the literal false that ground depends on",
+        `${name} is listed as unbounded on a reason about work a cancellation would lose, but its ` +
+          "cancel-in-progress is not the literal false that reason depends on — either it now " +
+          "cancels, or it has gained a pull request trigger its reason says it does not receive",
       ).toBe(false);
-      expect(reason).toMatch(/cancel/i);
+      expect(entry.reason).toMatch(/cancel/i);
     }
   });
 
