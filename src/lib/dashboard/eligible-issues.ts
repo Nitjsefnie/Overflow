@@ -92,17 +92,24 @@ type EligibleIssueRow = {
   created_at: string | Date;
 };
 
-export async function listEligibleIssues(
-  accountId: string,
-  filters: EligibleIssueFilters = {},
-  dependencies: { sql?: DashboardSql } = {},
-): Promise<EligibleIssueProjection[]> {
-  const sql = resolveBoardSql(dependencies);
-  const repositoryFilter = normalizedFilter(filters.repository);
-  const openingLabelFilter = normalizedFilter(filters.openingLabel);
-  const claimState = filters.claimState ?? "OPEN";
-  const boardPage = resolveBoardPage(filters.page, filters.pageSize);
-  const rows = await sql<EligibleIssueRow[]>`
+/**
+ * The board statement, exactly as Postgres receives it: the tagged template's
+ * static text with each interpolated value's positional parameter, $1 through
+ * $11, and the values bound in the same order by listEligibleIssues below.
+ *
+ * The board serves through sql.unsafe — the unnamed-statement path — on
+ * purpose. The driver issues tagged-template statements as named prepared
+ * statements, and PostgreSQL's plan_cache_mode = auto switches a named
+ * statement to its generic plan on the sixth execution: with parameter values
+ * unknown, the outer select's issues leg was priced at a handful of rows
+ * against tens of thousands, and every execution after the fifth paid
+ * nested-loop joins for the mis-estimate. An unnamed statement is re-planned
+ * with the actual parameter values on every execution, so the collapse never
+ * happens. The values still bind as parameters; nothing is interpolated into
+ * this text, and the statement's text is byte-identical to the tagged
+ * template it replaced.
+ */
+const BOARD_QUERY = `
     with candidate_sponsors as materialized (
       -- The sponsors whose open issues can reach the board before any
       -- credit-limit test: every predicate the board and the repayment
@@ -115,7 +122,7 @@ export async function listEligibleIssues(
       join users as sponsors on sponsors.id = repositories.sponsor_id
       where issues.state = 'OPEN'
         and repositories.active = true and repositories.unavailable_reason is null
-        and sponsors.id <> ${accountId}
+        and sponsors.id <> $1
         and sponsors.enforcement_state in ('ACTIVE', 'WARNED', 'UNDER_AUDIT')
     ),
     reservations as materialized (
@@ -272,19 +279,19 @@ export async function listEligibleIssues(
     left join repayment_issues on repayment_issues.id = issues.id
     where issues.state = 'OPEN'
       and repositories.active = true and repositories.unavailable_reason is null
-      and sponsors.id <> ${accountId}
+      and sponsors.id <> $2
       and sponsors.enforcement_state in ('ACTIVE', 'WARNED', 'UNDER_AUDIT')
       and (
         issues.claim_assignee_github_login is not null
         or coalesce(sponsor_balances.balance, 0) > -coalesce(sponsor_credit_limits.credit_limit, 10)
         or repayment_issues.id is not null
       )
-      and (${repositoryFilter}::text is null or repositories.owner_name = ${repositoryFilter})
-      and (${openingLabelFilter}::text is null or issues.opening_label = ${openingLabelFilter})
+      and ($3::text is null or repositories.owner_name = $4)
+      and ($5::text is null or issues.opening_label = $6)
       and (
-        ${claimState}::text = 'ALL'
-        or (${claimState}::text = 'OPEN' and issues.claim_assignee_github_login is null)
-        or (${claimState}::text = 'CLAIMED' and issues.claim_assignee_github_login is not null)
+        $7::text = 'ALL'
+        or ($8::text = 'OPEN' and issues.claim_assignee_github_login is null)
+        or ($9::text = 'CLAIMED' and issues.claim_assignee_github_login is not null)
       )
     ) as ranked
     order by
@@ -297,8 +304,32 @@ export async function listEligibleIssues(
       -- without a final total order a page boundary could drop or duplicate a
       -- row between requests.
       ranked.id asc
-    limit ${boardPage.limit} offset ${boardPage.offset}
+    limit $10 offset $11
   `;
+
+export async function listEligibleIssues(
+  accountId: string,
+  filters: EligibleIssueFilters = {},
+  dependencies: { sql?: DashboardSql } = {},
+): Promise<EligibleIssueProjection[]> {
+  const sql = resolveBoardSql(dependencies);
+  const repositoryFilter = normalizedFilter(filters.repository);
+  const openingLabelFilter = normalizedFilter(filters.openingLabel);
+  const claimState = filters.claimState ?? "OPEN";
+  const boardPage = resolveBoardPage(filters.page, filters.pageSize);
+  const rows = await sql.unsafe<EligibleIssueRow[]>(BOARD_QUERY, [
+    accountId,
+    accountId,
+    repositoryFilter,
+    repositoryFilter,
+    openingLabelFilter,
+    openingLabelFilter,
+    claimState,
+    claimState,
+    claimState,
+    boardPage.limit,
+    boardPage.offset,
+  ]);
 
   return rows.map((row) => {
     const projection: EligibleIssueProjection = {

@@ -28,14 +28,23 @@ type QueryCapture = { text: string; values: unknown[] };
 
 function sqlHarness(responses: unknown[][]): { sql: DashboardSql; captures: QueryCapture[] } {
   const captures: QueryCapture[] = [];
-  const sql = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    captures.push({ text: strings.join("?"), values });
+  const respond = (text: string, values: unknown[]) => {
+    captures.push({ text, values });
     const response = responses.shift();
     if (response === undefined) {
       throw new Error("Unexpected dashboard query.");
     }
     return response;
-  }) as DashboardSql;
+  };
+  const sql = Object.assign(
+    (strings: TemplateStringsArray, ...values: unknown[]) => respond(strings.join("?"), values),
+    {
+      // The board read serves through the unnamed-statement escape hatch; its
+      // $1..$n placeholders normalize to the tagged template's "?" shape, so
+      // every text assertion below stays driver-agnostic.
+      unsafe: (text: string, values: unknown[] = []) => respond(text.replace(/\$\d+\b/g, "?"), values),
+    },
+  ) as unknown as DashboardSql;
   return { sql, captures };
 }
 

@@ -3,9 +3,9 @@
 import { render, screen } from "@testing-library/react";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
-const { sql } = vi.hoisted(() => ({ sql: vi.fn() }));
+const { sql, unsafe } = vi.hoisted(() => ({ sql: vi.fn(), unsafe: vi.fn() }));
 
-vi.mock("@/lib/db/client", () => ({ getSql: () => sql }));
+vi.mock("@/lib/db/client", () => ({ getSql: () => Object.assign(sql, { unsafe }) }));
 vi.mock("@/lib/dashboard/session", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/dashboard/session")>(),
   requireMemberPageSession: async () => ({
@@ -20,8 +20,9 @@ vi.hoisted(() => { vi.resetModules(); });
 afterAll(() => { vi.resetModules(); });
 
 function respondWith(options: { issues?: unknown[] | Error } = {}) {
-  sql.mockImplementation(async (strings: TemplateStringsArray) => {
-    const text = strings.join("?");
+  // The board serves through the unnamed-statement escape hatch, so the
+  // mocked client answers both call shapes with the same text match.
+  const respond = (text: string) => {
     if (text.includes("from issues")) {
       if (options.issues instanceof Error) {
         throw options.issues;
@@ -29,7 +30,9 @@ function respondWith(options: { issues?: unknown[] | Error } = {}) {
       return options.issues ?? [];
     }
     throw new Error(`Unexpected query: ${text}`);
-  });
+  };
+  sql.mockImplementation(async (strings: TemplateStringsArray) => respond(strings.join("?")));
+  unsafe.mockImplementation(async (text: string) => respond(text));
 }
 
 /**
@@ -100,7 +103,10 @@ describe("issues board page", () => {
 
     // The window is the query's final interpolation pair; its leading values
     // are the account id and the filters.
-    const [limit, offset] = sql.mock.lastCall!.slice(-2);
+    // The unnamed path carries the values as one trailing array: the window
+    // is its final pair.
+    const values = unsafe.mock.lastCall![1] as unknown[];
+    const [limit, offset] = values.slice(-2);
     expect(limit).toBe(3);
     expect(offset).toBe(9);
   });
@@ -109,7 +115,10 @@ describe("issues board page", () => {
     respondWith({ issues: [issueRow(1)] });
     await IssuesPage();
 
-    const [limit, offset] = sql.mock.lastCall!.slice(-2);
+    // The unnamed path carries the values as one trailing array: the window
+    // is its final pair.
+    const values = unsafe.mock.lastCall![1] as unknown[];
+    const [limit, offset] = values.slice(-2);
     expect(limit).toBe(200);
     expect(offset).toBe(0);
   });
