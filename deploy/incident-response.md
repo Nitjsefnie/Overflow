@@ -1,6 +1,6 @@
 # Incident response for Overflow operators
 
-## Responsibility and open decisions
+## Responsibility and decisions
 
 The maintainer, **Nitjsefnie**, decides the response and any notifications, and
 is responsible for sending them. Operators preserve evidence and carry out the
@@ -355,7 +355,8 @@ look for continued unauthorized activity; keep the incident open if it recurs.
 
 ## Record
 
-In the location chosen by Nitjsefnie, keep a UTC timeline of discovery,
+In the breach log (see [Responsibility and
+decisions](#responsibility-and-decisions)), keep a UTC timeline of discovery,
 decisions, containment and recovery; who performed each action; affected
 account, token-issuance and subject IDs; returned SQL results; evidence export
 locations and time bounds; deployed release/rollback intervals; observed
