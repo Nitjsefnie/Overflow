@@ -218,8 +218,8 @@ describe("the verify workflow's migration immutability step", () => {
 });
 
 /**
- * Concurrency is the difference between a superseded pull request branch run
- * (fine to cancel) and a merged SHA's run (never fine): the deploy gate in
+ * Concurrency is the difference between a run that may be superseded and a
+ * merged SHA's run, which may not: the deploy gate in
  * scripts/deploy-revision.sh reads the check conclusion for the SHA it deploys,
  * and a run cancelled by the next push to main concludes `cancelled`, which the
  * gate refuses. Under a per-pull-request group with a ref fallback every main
@@ -228,11 +228,24 @@ describe("the verify workflow's migration immutability step", () => {
  *
  * The group is now split by event class instead: a pull request enters one
  * repository-level group, and every other leg keys on its own `github.sha`, so
- * no push to main shares a group with anything at all and nothing a merge
- * depends on can be cancelled. Cancellation stays gated on the event being a
- * pull request. The parentheses around the event-name test are load-bearing —
- * `&&` binds tighter than `||` in a GitHub expression, and without them the
- * pull_request arm falls through to `github.sha` and the group is per-SHA again.
+ * no push to main shares a group with anything at all. The parentheses around
+ * the event-name test are load-bearing — `&&` binds tighter than `||` in a
+ * GitHub expression, and without them the pull_request arm falls through to
+ * `github.sha` and the group is per-SHA again.
+ *
+ * `cancel-in-progress` is the literal boolean `false` on every leg, and the
+ * reason is the shared group rather than the deploy gate. GitHub's documented
+ * behaviour is that the PENDING run in a group is cancelled by default
+ * whatever this flag says, and that the flag's only effect is whether the
+ * RUNNING job is cancelled too — so it cannot tighten the bound at all. Under a
+ * per-pull-request group the running job belonged to the same pull request and
+ * destroying it was the benign self-supersede. Here it can belong to a
+ * DIFFERENT pull request, and `verify` is a required context in
+ * `.github/required-checks.json` that `ledger-relay` mirrors a run conclusion
+ * onto, so a cancelling flag would let one contributor's push knock down a
+ * peer's required check. Measured over the 6.13 days ending 2026-09-30, `ci`
+ * arrives 78.8 times a day against a 6.6 minute mean service time, so about 30%
+ * of arrivals find the slot busy — roughly 24 such cancellations a day.
  *
  * Assertions are made on the parsed YAML data (workflow.concurrency), never on
  * the raw bytes, so reformatting the block does not disturb them and a change
@@ -260,15 +273,18 @@ describe("the verify workflow's concurrency group", () => {
     ).toBe("ci-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}");
   });
 
-  it("cancels in-progress runs only when the event is a pull request", () => {
+  it("never cancels an in-flight run, on any leg", () => {
     expect(
       typeof concurrency["cancel-in-progress"],
-      "cancel-in-progress must be a string holding the event expression, not a literal boolean",
-    ).toBe("string");
+      "cancel-in-progress must be the boolean false, not a string holding an event expression",
+    ).toBe("boolean");
     expect(
       concurrency["cancel-in-progress"],
-      "cancel-in-progress must be the expression ${{ github.event_name == 'pull_request_target' }} — a literal true also cancels main pushes, and a cancelled check makes the deploy gate refuse the merged SHA",
-    ).toBe("${{ github.event_name == 'pull_request_target' }}");
+      "cancel-in-progress must be false — the group is shared by every pull request, so a true " +
+        "destroys a RUNNING run that may belong to a different pull request, and verify is a " +
+        "required context ledger-relay mirrors the conclusion onto. It cannot tighten the bound: " +
+        "GitHub cancels the group's pending run by default either way.",
+    ).toBe(false);
   });
 });
 

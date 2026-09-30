@@ -24,12 +24,23 @@ concurrency:
   # repository-level group, so the repository's Actions minutes stop scaling
   # with the number of open pull requests, and GitHub keeps one PENDING run per
   # group so `code-scanning-repo-wide` is a single slot. Scheduled and
-  # main-branch runs key on their own SHA and queue instead of cancelling each
-  # other, and cancellation is gated on the event being a pull request. The
-  # parentheses are load-bearing: && binds tighter than ||, and without them
-  # the pull_request arm falls through to github.sha and the bound is gone.
+  # main-branch runs key on their own SHA. The parentheses are load-bearing:
+  # && binds tighter than ||, and without them the pull_request arm falls
+  # through to github.sha and the bound is gone.
+  #
+  # cancel-in-progress is false here too, even though this workflow is NOT one
+  # of the required contexts in .github/required-checks.json — so a cancelled
+  # run blocks nobody, which is the whole argument for letting it cancel. The
+  # flag still adds no bound (GitHub cancels the pending run in a group by
+  # default), and what it would buy is the unused remainder of a ~2 minute
+  # analyze job on roughly 30% of arrivals. What it would cost is the SARIF
+  # upload: cancelling mid-analysis discards the scan for that pull request and
+  # the next run may not come. The same rule as the three required workflows is
+  # worth more here than the remainder it saves, and one rule is one rule for
+  # the next workflow to follow. See ci.yml's concurrency block for the full
+  # argument and the measured contention rate.
   group: code-scanning-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 jobs:
   analyze:

@@ -41,15 +41,33 @@ concurrency:
   # bounds one contributor's parallelism and nothing else, and N open pull
   # requests produced N concurrent runs. GitHub keeps one PENDING run per group
   # and cancels the superseded one, so `ci-repo-wide` is a single slot.
-  # Every other leg — push, workflow_dispatch — keys on its own SHA and is
-  # therefore never cancelled by a later event: the deploy gate reads the check
-  # conclusion for the SHA it deploys and refuses a `cancelled` one (issue
-  # 474), so nothing a merge depends on may share a cancellable group. The
-  # parentheses are load-bearing; && binds tighter than || in a GitHub
-  # expression, and without them the pull_request arm falls through to github.sha
-  # and the bound is gone.
+  # Every other leg — push, workflow_dispatch — keys on its own SHA: the deploy
+  # gate reads the check conclusion for the SHA it deploys and refuses a
+  # `cancelled` one (issue 474), so nothing a merge depends on may share a group
+  # with another event. The parentheses are load-bearing; && binds tighter than
+  # || in a GitHub expression, and without them the pull_request arm falls
+  # through to github.sha and the bound is gone.
+  #
+  # cancel-in-progress is false, and NOT an event test gating on the pull
+  # request, because the group is now shared by every pull request. GitHub's
+  # documented behaviour: "By default, any existing pending job or workflow in
+  # the same concurrency group will be canceled and the new queued job or
+  # workflow will take its place. To also cancel any currently running job or
+  # workflow in the same concurrency group, specify cancel-in-progress: true."
+  # The pending run is cancelled either way and the group holds at most one
+  # running plus one pending job, so the flag buys NO additional bound — it only
+  # decides whether the RUNNING job is destroyed too. With a per-pull-request
+  # group that was the benign self-supersede. With this group the run it destroys
+  # can belong to a DIFFERENT pull request, and `verify` is a required context in
+  # .github/required-checks.json that ledger-relay mirrors a run conclusion onto
+  # — so a true here lets one contributor's push knock down a peer's required
+  # check. Measured over the 6.13 days ending 2026-09-30, ci arrives 78.8 times
+  # a day against a 6.6 minute mean service time, so an arrival finds the slot
+  # busy 1-e^(-0.36) = 30% of the time: roughly 24 such cancellations a day,
+  # not a rare edge. Expect "my required check went cancelled after someone
+  # else's push" reports if this ever becomes true; they are this line's fault.
   group: ci-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+  cancel-in-progress: false
 
 jobs:
   verify:
