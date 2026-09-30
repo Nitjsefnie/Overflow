@@ -140,12 +140,23 @@ const curlShim = [
  * that property is read off an interaction the run produced instead of off a
  * wall-clock margin, and the recorded file survives after the run.
  *
+ * It also grows the exim log, once, on the FIRST wait. A log that already
+ * carried its own Completed line before the run ever polled it proves nothing
+ * about a verdict that arrives later - which is the whole shape of a greylist
+ * retry, and the whole reason a poll that concludes on sight is wrong. Appending
+ * at the first wait makes "not there yet, and then there" something the run
+ * actually observes.
+ *
  * The real sleep is named by absolute path: the shim directory is first on the
  * script's PATH, so a bare `sleep` here would find this file again.
  */
 const sleepShim = [
   "#!/bin/sh",
   `printf 'x\\n' >> "$OVERFLOW_TEST_SLEEP_CALLS"`,
+  `if [ -s "$OVERFLOW_TEST_LOG_APPEND" ] && [ ! -e "$OVERFLOW_TEST_LOG_APPENDED" ]; then`,
+  `  cat "$OVERFLOW_TEST_LOG_APPEND" >> "$OVERFLOW_TEST_EXIM_LOG"`,
+  `  : > "$OVERFLOW_TEST_LOG_APPENDED"`,
+  "fi",
   `/bin/sleep "$@"`,
   "",
 ].join("\n");
@@ -191,6 +202,12 @@ function runAlert(
      * left the host. `null`: no log file at all, so the run cannot read one.
      */
     eximLog?: string[] | null;
+    /**
+     * Lines appended to the mainlog on the run's FIRST wait, so the verdict
+     * this fixture is about arrives after the run has already looked and found
+     * nothing. See the sleep shim.
+     */
+    eximLogGrows?: string[];
     /** The wait budget, as the script's OVERFLOW_ALERT_EXIM_WAIT_SECONDS. */
     waitSeconds?: string;
     /** A daemon that accepts the submission without answering a 250 OK id=. */
@@ -224,6 +241,9 @@ function runAlert(
       const lines = options.eximLog ?? deliveredEximLog;
       writeFileSync(eximLogPath, `${lines.join("\n")}\n`);
     }
+    const logAppendPath = join(directory, "mainlog-append");
+    const grows = options.eximLogGrows;
+    writeFileSync(logAppendPath, grows && grows.length > 0 ? `${grows.join("\n")}\n` : "");
 
     const result = spawnSync(
       "/bin/sh",
@@ -237,6 +257,9 @@ function runAlert(
           OVERFLOW_ALERT_EXIM_LOG: eximLogPath,
           OVERFLOW_ALERT_EXIM_WAIT_SECONDS: options.waitSeconds ?? "1",
           OVERFLOW_TEST_CURL_ARGV: curlArgvPath,
+          OVERFLOW_TEST_EXIM_LOG: eximLogPath,
+          OVERFLOW_TEST_LOG_APPEND: logAppendPath,
+          OVERFLOW_TEST_LOG_APPENDED: join(directory, "mainlog-appended"),
           OVERFLOW_TEST_MAIL: mailPath,
           OVERFLOW_TEST_MESSAGE_ID: messageId,
           OVERFLOW_TEST_NO_ID: options.noId ? "1" : "0",
@@ -402,6 +425,10 @@ describe("overflow-alert.sh delivery verdict", () => {
     ).toBe(false);
     expect(run.stderr).toContain("address_file");
     expect(run.stderr).toContain(messageId);
+    // The recipient stays out of the journal on this path too, for the same
+    // reason its own validation keeps it out: this line is what gets pasted
+    // into an issue.
+    expect(run.stderr).not.toContain(recipientAddress);
   });
 
   it.each(localTransports)(
@@ -452,16 +479,22 @@ describe("overflow-alert.sh delivery verdict", () => {
   );
 
   it("keeps waiting through a defer and delivers when the retry Completes", () => {
+    // The defer is the FIRST thing the run can see, and the Completed line only
+    // lands after it has already waited once - a greylist retry as exim writes
+    // it. A poll that concludes on the defer would report a dead alert on the
+    // one signal the operator has to trust, so the run has to survive its
+    // first look and let the later Completed line win.
     const run = runAlert({
       recipient: validRecipient,
+      waitSeconds: "3",
       eximLog: [
         spoolLine(),
         `${logStamp} ${messageId} ** defer rejected: RCPT TO:<${recipientAddress}>: 451 greylisted`,
-        routingLine("remote_smtp_smarthost"),
-        completedLine(),
       ],
+      eximLogGrows: [routingLine("remote_smtp_smarthost"), completedLine()],
     });
 
+    expect(run.sleeps, "a defer alone must not end the poll").toBeGreaterThan(0);
     expect(run.status).toBe(0);
   });
 
