@@ -41,6 +41,35 @@ LockPersonality=yes
 RestrictRealtime=yes
 RestrictNamespaces=yes
 
+# The one widening in this unit, and it is deliberate. The script reads
+# /var/log/exim4/mainlog, which is 0640 Debian-exim:adm inside a 2750
+# Debian-exim:adm directory - verified on this host. A root process reads that
+# only because uid 0 normally carries CAP_DAC_OVERRIDE, and the empty
+# CapabilityBoundingSet= above strips exactly that: the identical hardening is
+# harmless in the alert unit beside this one, which reads the JOURNAL and
+# never the file. Measured under this unit's own sandbox, with the whole
+# hardening set below applied and a grep of the mainlog as its only command:
+#
+#   grep: /var/log/exim4/mainlog: Permission denied
+#
+# so the canary could never open the file. It submitted, read no Completed line
+# it was never able to look for, spent the whole 60s budget proving that, and
+# reported a relay that had written Completed one second after submission.
+#
+# The ordinary group mechanism is the fix and it needs no capability, so the
+# empty bounding set stays empty. Stated plainly, because it is a real
+# widening: group adm is not the one exim log. On this host it also carries
+# /var/log/nginx, /var/log/postgresql, /var/log/fail2ban.log, the cloud-init,
+# tor, privoxy and tinyproxy logs and their rotated copies - enumerated with
+# `find /var/log /etc -maxdepth 2 -group adm` - and the process is root, so
+# anything adm can read, it can now read. /var/log/wtmp and /var/log/lastlog
+# are group utmp and /etc/shadow is group shadow, so neither of the two an
+# operator would worry about is in it. The script has no path from that reach
+# to anything but the one grep it already attempts, and the unit's closed
+# reviewed set is what keeps a second directive from arriving beside this one
+# unnoticed.
+SupplementaryGroups=adm
+
 # The whole filesystem is read-only except the one directory the dead-streak
 # marker needs: RuntimeDirectory= stands up /run/overflow-canary for each run
 # and grants it implicitly (ReadWritePaths= stays out), and

@@ -1,5 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
+  chmodSync,
+  chownSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -214,6 +216,23 @@ async function startSmtp(options: {
    * nothing further to observe, whatever became of it afterwards.
    */
   smarthostAcceptLine?: boolean;
+  /**
+   * Take the mainlog's read permission away the instant this daemon writes its
+   * first line - which is before the `250 OK id=` the run is waiting for is
+   * written to the socket, so the script has passed its pre-flight read and
+   * cannot poll until the log has already gone dark - and give it back after
+   * this many milliseconds.
+   *
+   * That is the window the pre-flight check narrows rather than closes: a
+   * rotation under `nocreate` (this host's /etc/logrotate.d/exim4-base) leaves
+   * the path absent until exim itself reopens it, and a permission change lands
+   * the same way. Without a fixture that reaches it, the poll-time branch is
+   * unexercised code that only exists because a branch nobody runs is how the
+   * deployed defect shipped. A window longer than the wait budget models a log
+   * that stays dark; a shorter one models a gap that closes, which the run must
+   * not carry out of the loop as its verdict.
+   */
+  logUnreadableForMs?: number;
 }): Promise<SmtpStandIn> {
   const messageId = options.messageId ?? nextMessageId();
   const messages: string[] = [];
@@ -242,6 +261,25 @@ async function startSmtp(options: {
       writeFileSync(options.logPath, `2026-09-30 03:20:04 ${body}\n`, {
         flag: "a",
       });
+      if (options.logUnreadableForMs !== undefined) {
+        denyReadToChild(options.logPath);
+        // Tracked like every other write this fixture makes, so `close` waits
+        // for the restore rather than the fixture directory dying under a timer
+        // that then writes to a path that is gone.
+        pending.push(
+          new Promise<void>((resolve) => {
+            setTimeout(() => {
+              try {
+                grantReadToChild(options.logPath);
+              } catch (error) {
+                writeFailures.push(error);
+              } finally {
+                resolve();
+              }
+            }, options.logUnreadableForMs);
+          }),
+        );
+      }
     };
 
     socket.setEncoding("utf8");
@@ -445,6 +483,83 @@ function makeFixture(options: FixtureOptions = {}): CanaryFixture {
 }
 
 /**
+ * Whether the suite itself is running as root, which decides how a log this
+ * process may not read is built.
+ *
+ * The deployed defect was a ROOT process that could not read a 0640 file: uid
+ * 0 normally carries CAP_DAC_OVERRIDE, and `CapabilityBoundingSet=` empty -
+ * copied into the canary unit from the alert template beside it - strips it,
+ * so the permission bits stood and `grep` answered "Permission denied".
+ * Reproducing that honestly needs both halves, and one of them depends on who
+ * runs the suite:
+ *
+ * - as root, a 0640 root-owned log is still readable, because root bypasses
+ *   the bits; so the log is left alone and the SCRIPT is run as an
+ *   unprivileged uid, and the read then fails on the group bits, which is the
+ *   half production actually hit;
+ * - unprivileged, the log is locked at 0000 instead, which denies its own
+ *   owner the read. A suite that cannot setuid has no other way to make a file
+ *   it owns unreadable to itself.
+ */
+const SUITE_RUNS_AS_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
+
+/** The uid/gid the script is dropped to when the suite runs as root. */
+const UNPRIVILEGED_IDENTITY = { uid: 65534, gid: 65534 } as const;
+
+/**
+ * Locks a log to the mode the deployed unit could not read: owner and group
+ * only, root-owned, and no permission at all for anyone else.
+ */
+function denyReadToChild(logPath: string): void {
+  if (SUITE_RUNS_AS_ROOT) {
+    chownSync(logPath, 0, 0);
+    chmodSync(logPath, 0o640);
+  } else {
+    chmodSync(logPath, 0o000);
+  }
+}
+
+/** Puts the log back the way the fixture wrote it: readable by everyone. */
+function grantReadToChild(logPath: string): void {
+  chmodSync(logPath, 0o644);
+}
+
+/**
+ * Opens a fixture to the dropped identity. A `mkdtemp` directory is 0700, so
+ * without this the child could not even reach the files - and a fixture that
+ * fails for want of a directory it cannot enter would be a false green, so
+ * only the parts a 0640 log actually needs are widened.
+ */
+function openFixtureToDroppedIdentity(fixture: CanaryFixture): void {
+  if (!SUITE_RUNS_AS_ROOT) return;
+
+  chmodSync(fixture.directory, 0o755);
+  mkdirSync(fixture.stateDir, { recursive: true });
+  chmodSync(fixture.stateDir, 0o777);
+  chmodSync(fixture.recipientFile, 0o644);
+  chmodSync(fixture.webhookFile, 0o644);
+}
+
+/**
+ * Proves the lock denies the read to the identity the script will run as,
+ * using the script's own test. Without it a fixture that silently failed to
+ * reproduce production - root still bypassing the bits, a chmod that lost a
+ * race - would leave these tests green for the wrong reason, which is the
+ * shape of the defect being fixed.
+ */
+function expectUnreadableToChild(logPath: string): void {
+  const probe = spawnSync("/bin/sh", ["-c", '[ -r "$1" ] && exit 0; exit 3', "sh", logPath], {
+    encoding: "utf8",
+    ...(SUITE_RUNS_AS_ROOT ? UNPRIVILEGED_IDENTITY : {}),
+  });
+
+  expect(
+    probe.status,
+    `${logPath} is still readable to the identity the script runs as, so the fixture does not reproduce the deployed failure`,
+  ).toBe(3);
+}
+
+/**
  * Runs the real script and resolves with its outcome.
  *
  * Deliberately not spawnSync: the SMTP and webhook stand-ins live in this
@@ -454,10 +569,21 @@ function makeFixture(options: FixtureOptions = {}): CanaryFixture {
  */
 function runCanary(
   fixture: CanaryFixture,
-  options: { smtpUrl: string; waitSeconds?: number | string; shimBin?: string },
+  options: {
+    smtpUrl: string;
+    waitSeconds?: number | string;
+    shimBin?: string;
+    /**
+     * Run the script as the identity `denyReadToChild` locked the log against.
+     * A no-op where the suite cannot setuid, where the lock is on the file's
+     * own owner instead.
+     */
+    asDroppedIdentity?: boolean;
+  },
 ): Promise<CanaryRun> {
   return new Promise((resolve, reject) => {
     const child = spawn("/bin/sh", [scriptPath], {
+      ...(options.asDroppedIdentity === true && SUITE_RUNS_AS_ROOT ? UNPRIVILEGED_IDENTITY : {}),
       env: {
         NODE_ENV: "test",
         PATH: options.shimBin
@@ -1244,6 +1370,181 @@ describe("overflow-canary.sh verdict discrimination", () => {
       expect(run.status).toBe(0);
       expect(webhook.posts, "nothing here is knowably wrong, so nobody is paged").toEqual([]);
       expect(readFileSync(fixture.eximLog, "utf8")).toContain(smtp.messageId);
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+});
+
+/**
+ * A log this process cannot read, which is the deployed defect, and the one
+ * thing no test here ever exercised.
+ *
+ * The alert unit beside this one carries byte-identical hardening and is safe
+ * on the same mainlog, because it reads the JOURNAL and never the file: the
+ * identical empty `CapabilityBoundingSet=` that makes the file unreadable is
+ * harmless next to `journalctl`. So every canary test ran against a scratch
+ * log with permissive modes, and the permission was never once a factor. The
+ * first production run reported
+ *
+ *   the local daemon accepted the message as 1xBzft-... but
+ *   /var/log/exim4/mainlog records no Completed line for it within 60s
+ *
+ * while exim had written `Completed` for that id one second after submission.
+ * The canary could never read the file; it spent its whole budget proving it,
+ * named a relay that had delivered the message, and paged.
+ *
+ * So these three tests run the script against a log it genuinely cannot read,
+ * and pin the property that makes the next one self-diagnosing: an unreadable
+ * log says nothing about the relay, and a run that cannot take a verdict must
+ * not report one.
+ */
+describe("overflow-canary.sh when the exim log cannot be read", () => {
+  /**
+   * What a report may not say once the verdict cannot be taken. Each is a
+   * phrase one of the relay branches emits, and each is a claim about the
+   * relay - the false statement that sent an operator to the smarthost instead
+   * of to a file mode. Asserted as absences rather than as the presence of a
+   * replacement phrase, because the wording of a refusal is the script's to
+   * choose and the absence is the property that matters.
+   */
+  const RELAY_VERDICT_CLAIMS = [/Completed/, /did not take the message/, /the smarthost/];
+
+  it("refuses before submitting anything, rather than reporting the relay dead", async () => {
+    // The pre-flight check. A canary that cannot read the log cannot take a
+    // verdict, so it says so and stops: no submission, no heartbeat mail the
+    // operator would find with no explanation attached, no report on a channel
+    // that exists for outages, and no dead-streak marker - a marker here would
+    // silence the next run over a fault in this script's own host, and the
+    // relay may well be fine.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({ outcome: "completed", logPath: fixture.eximLog });
+    openFixtureToDroppedIdentity(fixture);
+    denyReadToChild(fixture.eximLog);
+    expectUnreadableToChild(fixture.eximLog);
+
+    try {
+      const run = await runCanary(fixture, {
+        smtpUrl: smtp.url,
+        asDroppedIdentity: true,
+      });
+
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain(fixture.eximLog);
+      expect(run.stderr).toMatch(/not readable/);
+      for (const claim of RELAY_VERDICT_CLAIMS) {
+        expect(run.stderr, "an unreadable log is not a verdict about the relay").not.toMatch(
+          claim,
+        );
+      }
+      expect(
+        smtp.messages,
+        "a run that cannot read the verdict must not send a message nobody can interpret",
+      ).toEqual([]);
+      expect(
+        webhook.posts,
+        "a host fault in the canary is not an outage of the path it watches",
+      ).toEqual([]);
+      expect(existsSync(fixture.marker), "a fault in the check is not a reported outage").toBe(
+        false,
+      );
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("names the unreadable log when it goes dark mid-poll, and still claims nothing about the relay", async () => {
+    // The window the pre-flight check narrows rather than closes. This host's
+    // /etc/logrotate.d/exim4-base rotates with `nocreate`, so the path is
+    // briefly absent until exim reopens it, and a permission change lands the
+    // same way. The pre-flight read passed, the message is already submitted,
+    // and then there is no log to read for the rest of the budget: the run must
+    // refuse rather than blame the relay.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({
+      outcome: "deferred",
+      logPath: fixture.eximLog,
+      logUnreadableForMs: 10_000,
+    });
+    openFixtureToDroppedIdentity(fixture);
+
+    try {
+      const run = await runCanary(fixture, {
+        smtpUrl: smtp.url,
+        waitSeconds: 2,
+        asDroppedIdentity: true,
+      });
+
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain(fixture.eximLog);
+      expect(run.stderr).toMatch(/not readable/);
+      // The submission DID reach the daemon - the id exists, which is the
+      // difference from the pre-flight case and the reason this is not the
+      // same refusal.
+      expect(
+        run.stderr,
+        "the message was accepted, so the run knows the id whose verdict it cannot take",
+      ).toContain(smtp.messageId);
+      for (const claim of RELAY_VERDICT_CLAIMS) {
+        expect(run.stderr, "an unreadable log is not a verdict about the relay").not.toMatch(
+          claim,
+        );
+      }
+      expect(
+        webhook.posts,
+        "a report headed 'not delivering' is the false page this defect produced once already",
+      ).toEqual([]);
+      expect(existsSync(fixture.marker), "a fault in the check is not a reported outage").toBe(
+        false,
+      );
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("reports the timeout, not the unreadable log, when the gap closes inside the budget", async () => {
+    // The other direction, and the one a latch would get wrong. Remembering the
+    // first unreadable moment and reading it at the deadline turns a gap that
+    // closed again into "the log is not readable" - a claim about this host
+    // that stopped being true before the run ended, in place of the one about
+    // the relay that is still true. So the state that decides the verdict is
+    // the state at the deadline, and a run whose log came back reports what it
+    // read: a defer that never Completed.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({
+      outcome: "deferred",
+      logPath: fixture.eximLog,
+      logUnreadableForMs: 400,
+    });
+    openFixtureToDroppedIdentity(fixture);
+
+    try {
+      const run = await runCanary(fixture, {
+        smtpUrl: smtp.url,
+        waitSeconds: 3,
+        asDroppedIdentity: true,
+      });
+
+      expect(run.status).toBe(1);
+      expect(run.stderr).toMatch(/defer/);
+      expect(
+        run.stderr,
+        "the log was readable again before the budget closed, so the unreadable reason is stale",
+      ).not.toMatch(/not readable/);
+      expect(webhook.posts, "a relay that never Completed the message is a real outage").toHaveLength(
+        1,
+      );
+      const report = JSON.parse(webhook.posts[0]!) as { content: string };
+      expect(report.content).toContain("defer");
     } finally {
       await smtp.close();
       await webhook.close();

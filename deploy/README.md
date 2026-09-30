@@ -1755,6 +1755,37 @@ is the only observation on this host that can see the smarthost leg at all,
 since a canary addressed to a local mailbox would never leave the box and
 would call the one failure this exists to catch a healthy host.
 
+**It reads that log as a member of `adm`, and cannot read it at all without
+that membership.** `/var/log/exim4/mainlog` is `0640 Debian-exim:adm` in a
+`2750 Debian-exim:adm` directory, and the canary unit runs with
+`CapabilityBoundingSet=` empty — copied from the alert template beside it,
+where the identical hardening is safe because that unit reads the *journal*
+and never the file. An empty bounding set strips `CAP_DAC_OVERRIDE`, which is
+the only reason a root process could open a file whose group it did not hold.
+The unit therefore carries `SupplementaryGroups=adm`: the ordinary group
+mechanism, no capability, and the group this host's own log files are already
+owned by. It is the one widening in that unit, and it is wider than one file —
+group `adm` also owns the nginx, postgresql, fail2ban, cloud-init, tor,
+privoxy and tinyproxy logs here — so the directive is **pinned** to `adm` in
+`tests/deploy/canary-units.test.ts` rather than admitted by name with its
+value left open.
+
+**If that membership is ever wrong, the canary says so instead of blaming the
+relay.** Before it submits anything the script checks that it can read the
+log, and exits 2 with a line naming the file if it cannot: no message is sent,
+no report is posted, and no dead-streak marker is written, because an
+unreadable log is a fault in the check rather than an outage of the path
+being checked. The same check runs again at the deadline, so a log that goes
+unreadable *during* the wait is refused the same way rather than reported as a
+relay that timed out.
+
+That distinction is the whole point, and it was paid for. The canary's first
+production run had neither the membership nor the capability: it could not
+open the file, spent its full 60-second budget proving it, and reported that
+the relay had never completed a message exim had logged as `Completed` **one
+second after submission** — a false page, on the one channel the maintainer
+trusts, about a host that was healthy.
+
 **What `Completed` means, precisely — and what it does not.** It means the
 smarthost **accepted** the message. That covers the classes worth naming: a
 stopped daemon (curl fails outright), revoked SMTP credentials, a daily
@@ -1795,7 +1826,9 @@ as `alert-recipient` is — one line, one address, no CR — and the webhook fil
 must be a single nonempty line. A file that fails either check exits 2 and
 sends nothing, so a misconfiguration is loud in the canary's own journal
 rather than a canary quietly reporting health through a channel it cannot
-reach.
+reach. The exim mainlog is checked the same way and for the same reason, with
+the same exit 2 and no submission: a log this process cannot read yields no
+verdict, and no verdict is never turned into a report about the relay.
 
 #### Prerequisites
 
@@ -1803,10 +1836,16 @@ reach.
 systemctl is-active exim4
 test -s /etc/overflow/canary-recipient && echo "recipient file present"
 test -s /etc/overflow/canary-discord-webhook && echo "webhook file present"
+systemctl show overflow-canary.service -p SupplementaryGroups --value | grep -qw adm && echo "canary reads the exim log as a member of adm" || echo "the canary is NOT in group adm - every run will refuse with the log named as unreadable"
 ```
 
-The second and third commands must each print their confirmation. Create the
-files with the address and the webhook URL and nothing else:
+The second, third and fourth commands must each print their confirmation. If
+the fourth prints its warning, the installed unit is not the one in this
+repository: reinstall it from `/srv/overflow/deploy/overflow-canary.service`
+rather than editing the installed copy, because the reviewed set in
+`tests/deploy/canary-units.test.ts` is what keeps the next directive beside
+this one from arriving unnoticed. Create the files with the address and the
+webhook URL and nothing else:
 
 ```bash
 install -d -o root -g root -m 0700 /etc/overflow
@@ -1887,6 +1926,18 @@ for the next 03:20 UTC:
 test ! -e /run/overflow-canary/dead && echo "no outage recorded"
 systemctl list-timers overflow-canary.timer --no-pager
 ```
+
+**Read the journal line first, because two different things now look like
+"no `Completed`".** This host's `/etc/logrotate.d/exim4-base` rotates with
+`nocreate`, so the replacement file is created by exim itself when it next
+reopens the path: between the rename and that reopen the path does not exist
+at all. The canary no longer mistakes that for a relay verdict — it refuses
+with exit 2 and a line naming the log as unreadable, and posts nothing. So a
+line naming `/var/log/exim4/mainlog` as not readable is a rotation (or a
+membership that has gone) and **not** an outage to act on, while a line
+naming a relay verdict is a real one. Neither reaches the webhook unless it
+is the second kind, so an unreadable-log refusal leaves the next run free to
+try.
 
 **If a scheduled run ever reports the path dead and the mail route looks
 fine, check for a log rotation before you believe it.** The verdict is a
