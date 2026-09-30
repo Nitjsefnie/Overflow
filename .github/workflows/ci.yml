@@ -2,11 +2,25 @@ name: ci
 
 # The complete release gate. It exercises the real migration path against
 # PostgreSQL before running every behavioral, static, and production-build check.
+#
+# pull_request_target so the executed workflow definition is main's: a pull
+# request that edits its own workflow files cannot shape the job that judges
+# it (issue 822). The boundary: pull-request code runs in a job whose
+# definition is main's, with contents: read and no secret reference anywhere
+# in this file — the App key lives only in the ledger relay's environment,
+# and only the relay posts the required contexts. The verify job checks out
+# the pull request's merge ref explicitly (under pull_request_target the
+# default checkout is main's tip): the suite must test the pull request's
+# change, and the merge ref preserves the HEAD^1/HEAD^2 parent semantics the
+# docs-only and ratchet steps rely on. persist-credentials: false is what
+# actions/checkout's fork guard requires before it admits a PR ref under
+# pull_request_target.
 on:
   push:
     branches: [main]
-  pull_request:
+  pull_request_target:  # zizmor: ignore[dangerous-triggers]
     branches: [main]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       base:
@@ -23,7 +37,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 jobs:
   verify:
@@ -62,6 +76,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: "refs/pull/${{ github.event.pull_request.number }}/merge"
           persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -83,9 +98,10 @@ jobs:
       # A change that touched only documentation cannot move coverage, so the
       # measurement below would compare the same tree against itself. Detect
       # it instead of measuring it: the script checks the endpoint diff and
-      # every first-parent commit since the base. A pull_request uses the
-      # merge ref's first parent (the whole PR change), a push uses its before
-      # SHA, and a dispatch uses its validated optional base. A dispatch with
+      # every first-parent commit since the base. A pull_request_target run
+      # uses the merge ref's first parent (the whole PR change), a push uses
+      # its before SHA, and a dispatch uses its validated optional base. A
+      # dispatch with
       # no base, an unknown event, or an undecidable push counts as code.
       # Rename detection is off, so a code source renamed to a doc counts as
       # code (issue 646).
@@ -98,7 +114,7 @@ jobs:
         run: |
           git fetch --depth=2 origin "${GITHUB_SHA}"
           base=""
-          if [ "${EVENT_NAME}" = pull_request ]; then
+          if [ "${EVENT_NAME}" = pull_request_target ]; then
             base=HEAD^1
           elif [ "${EVENT_NAME}" = push ]; then
             base="${PUSH_BEFORE}"
@@ -140,7 +156,7 @@ jobs:
         run: node scripts/check-coverage-floor.ts
 
       # Informational, never a gate. The diff base is the checked-out
-      # commit's first parent — on a pull_request run that is the merge
+      # commit's first parent — on a pull_request_target run that is the merge
       # commit's base-side parent (GitHub merges the head into the base, so
       # the base tip is the first parent and the head the second), which
       # makes HEAD^1..HEAD exactly the change the pull request carries.
@@ -185,7 +201,7 @@ jobs:
       # — so the step first completes the history of both sides before
       # checking.
       - name: Ratchet documents
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request_target' }}
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
@@ -193,7 +209,7 @@ jobs:
           node scripts/check-ratchets.ts HEAD^1 HEAD^2
 
       - name: Migration immutability
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request_target' }}
         run: |
           git fetch --depth=2 origin "${GITHUB_SHA}"
           node scripts/check-migration-edits.ts HEAD^1 HEAD^2
@@ -209,7 +225,7 @@ jobs:
       - name: Page geometry check
         run: node scripts/check-page-geometry.mjs
 
-      # A pull_request run tests refs/pull/N/merge — the head merged with the
+      # A pull_request_target run tests refs/pull/N/merge — the head merged with the
       # base as it stood at event time — and branch protection keeps strict
       # up-to-date checking disabled, so a run that went green against an older
       # main stays green after main advances: the tree GitHub actually lands
@@ -227,7 +243,7 @@ jobs:
       # the repository's merge cadence). Push and workflow_dispatch runs test
       # main itself and skip the gate.
       - name: Base freshness
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request_target' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO_SLUG: ${{ github.repository }}
