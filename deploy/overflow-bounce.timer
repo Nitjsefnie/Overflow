@@ -1,0 +1,25 @@
+# Quarter-hourly timer for the Overflow bounce watcher
+# (overflow-bounce.service).
+#
+# Install as /etc/systemd/system/overflow-bounce.timer.
+# deploy/README.md section 12 carries the install and verification steps.
+
+[Unit]
+Description=Check every 15 minutes for failed deliveries of Overflow alert and canary mail
+
+[Timer]
+# Fixed wall-clock schedule in UTC, stated explicitly so a host timezone
+# change cannot move the check. Persistent= catches up a run missed while
+# the host was down, on the next boot.
+#
+# Why 15 minutes: the cadence is the bounce latency budget. A delivery
+# failure is reported within a quarter hour of its DSN arriving, at the
+# cost of 96 cheap spool reads a day against the canary's one
+# 60-second-wait run; and the DSN for a remote failure can arrive minutes
+# to hours after the send, so the watcher polls rather than waits.
+OnCalendar=*-*-* *:00/15:00 UTC
+Persistent=true
+Unit=overflow-bounce.service
+
+[Install]
+WantedBy=timers.target
