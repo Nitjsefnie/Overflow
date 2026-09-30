@@ -29,6 +29,10 @@ import {
  * /run/overflow-alert, which `RuntimeDirectory=` grants implicitly — so there
  * is still no `ReadWritePaths=`: the exim daemon spools the submission outside
  * this sandbox.
+ *
+ * `TimeoutStartSec` is here because the script waits on the exim mainlog for a
+ * relay verdict, and a run killed at its timeout reports neither outcome - not
+ * the delivery, and not the failure it would have reported instead.
  */
 const REVIEWED_ALERT_SERVICE_KEYS: ReadonlySet<string> = new Set([
   "AmbientCapabilities",
@@ -60,6 +64,7 @@ const REVIEWED_ALERT_SERVICE_KEYS: ReadonlySet<string> = new Set([
   "SystemCallArchitectures",
   "SystemCallErrorNumber",
   "SystemCallFilter",
+  "TimeoutStartSec",
   "Type",
   "UMask",
 ]);
@@ -93,6 +98,13 @@ const requiredAlertServiceValues: ReadonlyArray<readonly [string, string]> = [
   ["StandardError", "journal"],
   ["SyslogIdentifier", "overflow-alert"],
   ["Environment", "PATH=/usr/local/bin:/usr/bin:/bin"],
+  // The script's own ceiling - curl's 30s --max-time plus the 60s it will wait
+  // for a relay verdict - is 90s, and this host leaves systemd's
+  // DefaultTimeoutStartSec at the same 90s, so without this the run is killed at
+  // the moment its own bound expires. Pinned rather than merely reviewed,
+  // because the number is the whole point: a shorter timeout reintroduces the
+  // silent kill, and a longer one hides a hang.
+  ["TimeoutStartSec", "120s"],
 ];
 
 /** `[Service]` directives that must be on, in any spelling systemd reads as true. */
