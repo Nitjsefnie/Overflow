@@ -491,6 +491,45 @@ function runCanary(
   });
 }
 
+/**
+ * The budget a terminal outcome has to conclude the poll well inside of, and
+ * the bound that says "well inside".
+ *
+ * The bound is DERIVED, not chosen. A hardcoded 10 s sitting beside a fixture
+ * that could be lowered to 5 s is an assertion that can silently stop firing:
+ * the reviewer's probe lowered this very fixture to 5 s and the
+ * deleted-short-circuit mutant came back green across all 35 tests, because
+ * the run then finished inside the bound while still having spent its budget.
+ * Halving keeps the two coupled at every budget — a run that spent the budget
+ * is always outside the bound, and a short-circuit that finishes in well
+ * under a second is always inside it.
+ */
+const TERMINAL_BUDGET_SECONDS = 20;
+const TERMINAL_BOUND_MS = (TERMINAL_BUDGET_SECONDS * 1000) / 2;
+
+/** `runCanary`, with the wall clock alongside it, for the elapsed assertions. */
+async function runTimed(
+  fixture: CanaryFixture,
+  options: { smtpUrl: string; waitSeconds?: number | string; shimBin?: string },
+): Promise<{ run: CanaryRun; elapsed: number }> {
+  const startedAt = Date.now();
+  const run = await runCanary(fixture, options);
+
+  return { run, elapsed: Date.now() - startedAt };
+}
+
+/**
+ * Asserts a terminal outcome concluded the poll rather than running out the
+ * budget. Shared by both terminal fixtures so the property is stated once and
+ * neither shape is the other's sole pin.
+ */
+function expectConcludedBeforeTheBudget(elapsedMs: number): void {
+  expect(
+    elapsedMs,
+    `a terminal outcome must conclude the poll, not run out the ${TERMINAL_BUDGET_SECONDS}s budget`,
+  ).toBeLessThan(TERMINAL_BOUND_MS);
+}
+
 beforeAll(() => {
   // A shim would stub out the very handshake the verdict rests on, so the
   // suite needs the real client. Probed rather than skipped: a runner without
@@ -1109,6 +1148,12 @@ describe("overflow-canary.sh verdict discrimination", () => {
     // verdict it meets reports `defer` for the whole budget: still a correct
     // dead verdict, but the wrong cause, named to an operator at three in the
     // morning, and it burns the entire budget before saying so.
+    //
+    // The elapsed assertion is the same one its sibling below makes, and for
+    // the same reason: "names bounce" and "concludes without waiting" are two
+    // separate properties, and this fixture is the only one that exercises
+    // the second when a defer came first. Pinning it in one place only would
+    // leave the two shapes resting on each other's survival.
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -1119,12 +1164,16 @@ describe("overflow-canary.sh verdict discrimination", () => {
     });
 
     try {
-      const run = await runCanary(fixture, { smtpUrl: smtp.url, waitSeconds: 20 });
+      const { run, elapsed } = await runTimed(fixture, {
+        smtpUrl: smtp.url,
+        waitSeconds: TERMINAL_BUDGET_SECONDS,
+      });
 
       expect(run.status).toBe(1);
       const report = JSON.parse(webhook.posts[0]!) as { content: string };
       expect(report.content, "the terminal outcome is the cause").toContain("bounce");
       expect(report.content, "the provisional one must not mask it").not.toContain("defer");
+      expectConcludedBeforeTheBudget(elapsed);
     } finally {
       await smtp.close();
       await webhook.close();
@@ -1139,28 +1188,25 @@ describe("overflow-canary.sh verdict discrimination", () => {
     // would ship silently.
     //
     // The suite previously wrote only `** defer` lines, so nothing pinned
-    // this. The elapsed bound below is the rule's one permitted exception to
-    // "never assert a wall-clock margin" - an assertion that something did
-    // NOT happen inside an interval far shorter than it could take - and it
-    // is scaled from the budget the run is given: 20 s of budget, 10 s of
-    // bound, against a short-circuit that finishes in well under a second.
+    // this. The elapsed bound is the rule's one permitted exception to "never
+    // assert a wall-clock margin" - an assertion that something did NOT happen
+    // inside an interval far shorter than it could take - and it is DERIVED
+    // from the budget rather than chosen beside it.
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
     const smtp = await startSmtp({ outcome: "terminal", logPath: fixture.eximLog });
 
     try {
-      const startedAt = Date.now();
-      const run = await runCanary(fixture, { smtpUrl: smtp.url, waitSeconds: 20 });
-      const elapsed = Date.now() - startedAt;
+      const { run, elapsed } = await runTimed(fixture, {
+        smtpUrl: smtp.url,
+        waitSeconds: TERMINAL_BUDGET_SECONDS,
+      });
 
       expect(run.status).toBe(1);
       const report = JSON.parse(webhook.posts[0]!) as { content: string };
       expect(report.content).toContain("rejected");
-      expect(
-        elapsed,
-        "a terminal outcome must conclude the poll, not run out the budget",
-      ).toBeLessThan(10_000);
+      expectConcludedBeforeTheBudget(elapsed);
     } finally {
       await smtp.close();
       await webhook.close();
