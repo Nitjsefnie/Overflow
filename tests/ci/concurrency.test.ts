@@ -101,7 +101,7 @@ const PR_EVENTS = ["pull_request", "pull_request_target"];
 /** Group keys that scope a run to one pull request or one ref, not to the repository. */
 const UNBOUNDED_GROUP_KEYS = ["github.event.pull_request.number", "github.ref"];
 
-let workflows = new Map<string, Workflow>();
+const workflows = new Map<string, Workflow>();
 
 beforeAll(async () => {
   const directory = resolve(".github/workflows");
