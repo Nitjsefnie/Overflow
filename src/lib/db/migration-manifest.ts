@@ -77,6 +77,7 @@ export const bundledMigrationNames: readonly string[] = [
   "054_privileged_action_credentials.sql",
   "055_allow_nullable_issue_and_pr_bodies.sql",
   "056_board_read_indexes.sql",
+  "057_fold_evidence_facts.sql",
 ];
 
 /**
