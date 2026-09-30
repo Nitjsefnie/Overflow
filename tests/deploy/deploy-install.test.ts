@@ -171,6 +171,38 @@ const otherShellLines = new Set([
   "journalctl -u overflow-alert@test.service --no-pager -n 20",
   "tail -n 20 /var/log/exim4/mainlog",
   "rm /etc/systemd/system/overflow-alert@.service",
+  // Section 12's canary subsection: the second prerequisite check, the
+  // webhook file's creation in the same shape as the recipient file's, the
+  // two-unit install with the timer's enable, the healthy run and its
+  // readbacks, the closed-port probe that must produce the out-of-band
+  // report, and the rollback's removal of both files.
+  "test -s /etc/overflow/canary-recipient && echo \"recipient file present\"",
+  "test -s /etc/overflow/canary-discord-webhook && echo \"webhook file present\"",
+  "install -o root -g root -m 0600 /dev/null /etc/overflow/canary-recipient",
+  "printf '%s\\n' '<address>' > /etc/overflow/canary-recipient",
+  "chown root:root /etc/overflow/canary-recipient",
+  "chmod 0600 /etc/overflow/canary-recipient",
+  "install -o root -g root -m 0600 /dev/null /etc/overflow/canary-discord-webhook",
+  "printf '%s\\n' '<webhook-url>' > /etc/overflow/canary-discord-webhook",
+  "chown root:root /etc/overflow/canary-discord-webhook",
+  "chmod 0600 /etc/overflow/canary-discord-webhook",
+  "install -o root -g root -m 0644 /srv/overflow/deploy/overflow-canary.service /etc/systemd/system/",
+  "install -o root -g root -m 0644 /srv/overflow/deploy/overflow-canary.timer /etc/systemd/system/",
+  "systemctl enable --now overflow-canary.timer",
+  "systemctl list-timers overflow-canary.timer --no-pager",
+  "systemctl start overflow-canary.service",
+  "journalctl -u overflow-canary.service --no-pager -n 20",
+  "tail -n 5 /var/log/exim4/mainlog",
+  "test ! -e /run/overflow-canary/dead && echo \"no outage recorded\"",
+  "cp /srv/overflow/scripts/overflow-canary.sh /tmp/canary-probe.sh",
+  "chmod +x /tmp/canary-probe.sh",
+  "OVERFLOW_CANARY_SMTP_URL=smtp://127.0.0.1:1 OVERFLOW_CANARY_STATE_DIR=/tmp/canary-probe-state /bin/sh /tmp/canary-probe.sh",
+  "rm /tmp/canary-probe.sh",
+  "rm -rf /tmp/canary-probe-state",
+  "systemctl show overflow-canary.service -p ExecStart -p Environment",
+  "systemctl disable --now overflow-canary.timer",
+  "rm /etc/systemd/system/overflow-canary.timer",
+  "rm /etc/systemd/system/overflow-canary.service",
 ].map((line) => tokenizeLines(line)[0].join(" ")));
 
 // The manual fallback's expanded source-attestation gates are explicitly

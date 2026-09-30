@@ -1734,3 +1734,152 @@ The watched units work unchanged without the wiring: nothing else references
 the alert unit, and a failure of `overflow.service` or
 `overflow-backup.service` is still visible in the journal the way it was
 before this section.
+
+### The alert path canary
+
+Everything above leaves the host by one route: `overflow-alert.sh` submits to
+the local exim daemon, exim relays to the smarthost, the smarthost delivers to
+one mailbox. Nothing on that route reports its own failure, so a route that
+stopped delivering looks exactly like a host with nothing to report.
+`overflow-canary.service`, started daily by `overflow-canary.timer`, is what
+breaks that symmetry.
+
+The canary runs the same script and the same route, then reads the verdict
+from somewhere the route cannot fake: it submits with `curl -v`, takes the
+exim message id off the final `250 OK id=` line, and waits for a line reading
+`<id> Completed` in `/var/log/exim4/mainlog`. A relay that defers, rejects or
+drops the message logs `defer`, `rejected` or `Failed` against that id
+instead. **The absence of `Completed` is the failure** — which is the only
+observation on this host that can see the smarthost leg at all, since a
+canary addressed to a local mailbox would never leave the box and would call
+the one failure this exists to catch a healthy host.
+
+A dead path is reported out of band, to the Discord webhook in
+`/etc/overflow/canary-discord-webhook` — a channel that shares no leg with the
+route being checked — and the oneshot exits nonzero, so the unit also lands in
+the `failed` state. One report per dead streak: the marker under
+`/run/overflow-canary` records an outage that has been reported, so a path dead
+for a week posts once rather than seven times, and a run that completes clears
+the marker so the next failure posts again. The marker is written only once a
+report has actually been delivered, so an unreachable webhook leaves the next
+run free to try.
+
+Both host files are configuration, like `alert-recipient`, and are never
+committed or referenced by value here. The recipient file is validated exactly
+as `alert-recipient` is — one line, one address, no CR — and the webhook file
+must be a single nonempty line. A file that fails either check exits 2 and
+sends nothing, so a misconfiguration is loud in the canary's own journal
+rather than a canary quietly reporting health through a channel it cannot
+reach.
+
+#### Prerequisites
+
+```bash
+systemctl is-active exim4
+test -s /etc/overflow/canary-recipient && echo "recipient file present"
+test -s /etc/overflow/canary-discord-webhook && echo "webhook file present"
+```
+
+The second and third commands must each print their confirmation. Create the
+files with the address and the webhook URL and nothing else:
+
+```bash
+install -d -o root -g root -m 0700 /etc/overflow
+install -o root -g root -m 0600 /dev/null /etc/overflow/canary-recipient
+printf '%s\n' '<address>' > /etc/overflow/canary-recipient
+chown root:root /etc/overflow/canary-recipient
+chmod 0600 /etc/overflow/canary-recipient
+install -o root -g root -m 0600 /dev/null /etc/overflow/canary-discord-webhook
+printf '%s\n' '<webhook-url>' > /etc/overflow/canary-discord-webhook
+chown root:root /etc/overflow/canary-discord-webhook
+chmod 0600 /etc/overflow/canary-discord-webhook
+```
+
+#### Install
+
+The script needs no install step — `/srv/overflow` is a checkout of this
+repository at the deployed revision, so each deploy ships it. Note that
+`scripts/deploy-revision.sh` does not reinstall units, so a host that has
+already been deployed needs these two copies run by hand. Install the two
+files, reload, and enable the timer:
+
+```bash
+install -o root -g root -m 0644 \
+  /srv/overflow/deploy/overflow-canary.service /etc/systemd/system/
+install -o root -g root -m 0644 \
+  /srv/overflow/deploy/overflow-canary.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now overflow-canary.timer
+systemctl list-timers overflow-canary.timer --no-pager
+```
+
+#### Verify
+
+Prove both directions, healthy first and then broken. Never send a burst at
+the address in `/etc/overflow/alert-recipient` to do this.
+
+A healthy run must exit zero and leave no marker:
+
+```bash
+systemctl start overflow-canary.service
+journalctl -u overflow-canary.service --no-pager -n 20
+tail -n 5 /var/log/exim4/mainlog
+```
+
+The journal must name the relay's `Completed` line for the message id it
+submitted, and the exim mainlog must carry a `Completed` line for that same
+id. Confirm the unit did not record an outage, and that the timer is armed
+for the next 03:20 UTC:
+
+```bash
+test ! -e /run/overflow-canary/dead && echo "no outage recorded"
+systemctl list-timers overflow-canary.timer --no-pager
+```
+
+Then prove the dead direction, which is the one the canary exists for. Take a
+throwaway copy of the script, point its `OVERFLOW_CANARY_SMTP_URL` at a
+closed port, and run it. The port below is `127.0.0.1:1`, which nothing
+listens on; check yours with `ss -ltn` first, because a port that answers
+proves nothing. The run must post to the webhook and exit nonzero:
+
+```bash
+cp /srv/overflow/scripts/overflow-canary.sh /tmp/canary-probe.sh
+chmod +x /tmp/canary-probe.sh
+OVERFLOW_CANARY_SMTP_URL=smtp://127.0.0.1:1 \
+  OVERFLOW_CANARY_STATE_DIR=/tmp/canary-probe-state \
+  /bin/sh /tmp/canary-probe.sh
+```
+
+A nonzero exit is the pass condition here, and the report must have arrived
+in the channel the webhook file names. A second identical run posts nothing,
+because the probe's marker records the outage:
+
+```bash
+OVERFLOW_CANARY_SMTP_URL=smtp://127.0.0.1:1 \
+  OVERFLOW_CANARY_STATE_DIR=/tmp/canary-probe-state \
+  /bin/sh /tmp/canary-probe.sh
+```
+
+Remove the probe and its state, then confirm the real unit is untouched:
+
+```bash
+rm /tmp/canary-probe.sh
+rm -rf /tmp/canary-probe-state
+systemctl show overflow-canary.service -p ExecStart -p Environment
+```
+
+#### Rollback
+
+Disable the timer and remove both files. The alert path itself is unchanged
+by them, so nothing else needs reverting:
+
+```bash
+systemctl disable --now overflow-canary.timer
+rm /etc/systemd/system/overflow-canary.timer
+rm /etc/systemd/system/overflow-canary.service
+systemctl daemon-reload
+```
+
+The two host files may stay: nothing reads them once the canary unit is gone,
+and `/etc/overflow/canary-recipient` is the address a future canary would
+use.
