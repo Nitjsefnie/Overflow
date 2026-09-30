@@ -321,6 +321,11 @@ fi
     }));
     expect(workflow.on.push).not.toHaveProperty("paths");
     expect(workflow.on.pull_request_target).not.toHaveProperty("paths");
+    // The migration's whole point: no pull_request trigger beside
+    // pull_request_target. objectContaining tolerates a re-added trigger, so
+    // the absence is pinned on its own — a re-add silently reopens the hole
+    // this branch closes (final-review mutant M1).
+    expect(workflow.on).not.toHaveProperty("pull_request");
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.concurrency).toEqual({
       group: "ci-${{ github.event.pull_request.number || github.ref }}",
@@ -401,6 +406,10 @@ fi
     }));
     expect(workflow.on.push).not.toHaveProperty("paths");
     expect(workflow.on.pull_request_target).not.toHaveProperty("paths");
+    // Same RE-ADD guard as the ci.yml pin: objectContaining tolerates a
+    // pull_request trigger beside pull_request_target, so the absence is
+    // pinned on its own (final-review mutant M1).
+    expect(workflow.on).not.toHaveProperty("pull_request");
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.concurrency).toEqual({
       group: "actionlint-${{ github.event.pull_request.number || github.ref }}",
