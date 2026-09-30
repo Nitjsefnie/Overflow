@@ -1,7 +1,6 @@
-import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { guardByCredential, resolveRouteCredential } from "@/lib/security/route-credential";
-import { mintApiToken } from "@/lib/security/api-token";
+import { hashApiToken, mintApiToken } from "@/lib/security/api-token";
 import {
   foreignOrigin,
   requestHost,
@@ -14,7 +13,7 @@ useTrustedOrigin();
 const ownerId = "00000000-0000-4000-8000-000000000001";
 const memberId = "00000000-0000-4000-8000-000000000002";
 const apiToken = `ovf_${"route-credential".padEnd(43, "_")}`;
-const apiTokenHash = createHash("sha256").update(apiToken).digest();
+const apiTokenHash = hashApiToken(apiToken);
 const tokenRejection = {
   error: { code: "UNAUTHENTICATED", message: "The supplied API token was not accepted." },
 };

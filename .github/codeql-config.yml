@@ -1,0 +1,10 @@
+# Issue 826: exclude one test file from CodeQL analysis, with reason.
+# tests/db/backup-restore.test.ts forces a hostile umask on its backup
+# script via `sh -c 'umask 022; exec sh "$@"'` — the canonical argv-safe
+# pattern (the uncontrolled absolute path CodeQL reports is the test's own
+# mkdtemp scratch dir, which cannot be removed without losing the umask
+# constraint). js/shell-command-injection-from-environment has no honest
+# fix here, so the file is out of the analysis perimeter; every other
+# test stays analyzed.
+paths-ignore:
+  - tests/db/backup-restore.test.ts

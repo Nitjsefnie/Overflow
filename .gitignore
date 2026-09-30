@@ -27,6 +27,7 @@
 !.github/dependabot.yml
 !.github/required-checks.json
 !.github/requirements-zizmor.txt
+!.github/codeql-config.yml
 !.github/ISSUE_TEMPLATE/
 .github/ISSUE_TEMPLATE/*
 !.github/ISSUE_TEMPLATE/bug-report.md

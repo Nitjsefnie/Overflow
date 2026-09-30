@@ -139,7 +139,7 @@ function touchesHeaderSurface(selector: string): boolean {
     .map((part) => part.replace(/\s+/g, " ").trim())
     .some((part) =>
       HEADER_SURFACE_CLASSES.some((name) =>
-        new RegExp(`${name.replace(/\./g, "\\.")}(?![\\w-])`).test(part)) ||
+        new RegExp(`${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(part)) ||
       /(^|[\s>+~(])nav(?![\w-])/.test(part));
 }
 
