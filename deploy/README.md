@@ -1894,13 +1894,15 @@ valid, nor about DNS or TLS to `discord.com`** — a loopback listener is
 neither of those, and the first Verify step above is what covers the real
 channel.
 
-The verdict below is the **payload the listener actually received**, not the
-absence of a marker. A listener that has not finished binding when the unit
-posts makes the report fail for a reason that has nothing to do with the
-sandbox, and a step that reports its finding when the finding is absent is
-worse than no step: it teaches the operator to distrust the one check that
-would have caught a real regression. The wait for the port below is what
-keeps the two apart, and the marker is only corroboration.
+The verdict below is the **payload the listener actually received**. A
+listener that has not finished binding when the unit posts makes the report
+fail for a reason that has nothing to do with the sandbox, and a step that
+reports its finding when the finding is absent is worse than no step: it
+teaches the operator to distrust the one check that would have caught a real
+regression. The bounded wait below is what keeps the two apart — and nothing
+in this step reads `/run/overflow-canary/dead`, so there is no second signal
+to fall back on: the recorded payload is the whole verdict, which is why the
+wait has to be trustworthy rather than merely present.
 
 Check the port is free, then install a drop-in that redirects the run. It
 overrides the two paths, so the host's own webhook file is never read,
@@ -1919,13 +1921,31 @@ The first line is a precondition, not a report. **If it prints `BUSY`, stop
 here**: the listener below would die on `EADDRINUSE` without saying so, and
 the unit's report would be posted to whatever stranger holds that port.
 
-Start the listener, wait for it to be listening before starting the unit,
-then run it. The listener records every request body it is given, which is
-what the verdict is read from:
+Start the listener, then wait for it to be listening before starting the
+unit. The wait is **bounded**, and deliberately its own block: an unbounded
+wait cannot tell "not bound yet" from "died a minute ago", and a step that
+leaves the operator watching a silent spin with a `systemctl start` queued
+behind it fails in the same unreadable way this whole section exists to
+prevent. 15 s is roughly sixty times the bind time measured on this host, so
+it cannot reintroduce the race a bare start would have:
 
 ```bash
 python3 -c "import http.server as h;H=type('H',(h.BaseHTTPRequestHandler,),{'do_POST':lambda s:(open('/etc/overflow/canary-sandbox-probe-received','ab').write(s.rfile.read(int(s.headers['Content-Length']))),s.send_response(200),s.end_headers()),'log_message':lambda *a:None});h.HTTPServer(('127.0.0.1',18099),H).serve_forever()" &
-until ss -ltn | grep -q 18099 ; do sleep 1 ; done
+```
+
+```bash
+for _ in $(seq 1 15) ; do ss -ltn | grep -q 18099 && break ; sleep 1 ; done
+ss -ltn | grep -q 18099 || { echo "the listener did not bind 127.0.0.1:18099 within 15s - stop and read the python error above" ; false ; }
+```
+
+**If that block prints its message, or exits nonzero, stop there and do not
+run the next block** — the listener is not up, and the run that follows would
+report a sandbox failure that does not exist. Read the error the listener
+printed on the terminal that started it: a traceback there names a missing
+module, a bad one-liner or a permission problem on the write path, none of
+which the port check above can see. Then start the unit and read the verdict:
+
+```bash
 systemctl start overflow-canary.service
 journalctl -u overflow-canary.service --no-pager -n 20
 grep -q failure-alert /etc/overflow/canary-sandbox-probe-received && echo "sandbox reached the out-of-band channel" || echo "the listener received no report - see the journal above"
