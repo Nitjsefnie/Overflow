@@ -1628,35 +1628,70 @@ systemd starts `overflow-alert@<failed unit>.service` through that unit's
 `OnFailure=overflow-alert@%n.service`. The template unit runs
 `/srv/overflow/scripts/overflow-alert.sh` with the failed unit's name, and the
 script mails the failed unit's current-boot journal tail — the last 200 lines
-— to the address in `/etc/overflow/alert-recipient`. Each failed unit is
-throttled to one message per 30 minutes: the script sends at most one message
-per failed unit per 30 minutes, a suppressed repeat is logged to the alert
-unit's journal and submits no mail, and the throttle state lives under
-`/run/overflow-alert`, cleared at reboot. The alert unit has no `[Install]`
-section and is never enabled: `OnFailure=` and a manual
-`systemctl start overflow-alert@<unit>` are the only ways it runs.
+— to the address in `/etc/overflow/alert-recipient`.
+
+**Submitting the message is not the same as the message arriving, and the
+script never treats the first as the second.** The local exim daemon answers a
+submission it has merely spooled with `250 OK id=<id>`, and it writes
+`Completed` in its mainlog whether it handed the message to the smarthost or
+dropped it into a mailbox on this machine. Every signal below the SMTP
+conversation is therefore green for a message that reached nobody, and a unit
+failure used to produce a log line that read like a delivered alert. So the
+script does not stop at the daemon's answer: it takes the id off the final
+`250 OK id=`, follows that id into `/var/log/exim4/mainlog`, and calls the
+alert delivered only when exim `Completed` the id **and** the routing line for
+that same id named a transport that leaves this host. A run that cannot show
+both has failed, and it says which way in the alert unit's journal: the
+submission never reached the daemon, the daemon took it but named no id to
+follow, exim wrote a verdict against the id that ends the message for good
+(`rejected`, `bounce`, `blackhole`, `discarded` or `Failed`), the budget closed
+with no `Completed` behind it, or the message was routed to a transport that
+stays on this host. A `defer` is deliberately not a failure on its own — that
+is a temporary failure exim goes on to retry, so the script keeps waiting
+through it and a greylist does not manufacture a dead alert.
+
+That definition is what the throttle keys on. Each failed unit is throttled to
+one message per 30 minutes, and **the record is written only after the alert
+has actually left the host**: a submission that failed, that could not be
+followed, and a message exim routed to this machine's own mail spool all leave
+no state behind, so the next failure mails again immediately instead of being
+silenced for half an hour by a delivery that never happened. A suppressed
+repeat is logged to the alert unit's journal and submits no mail, and the
+throttle state lives under `/run/overflow-alert`, cleared at reboot. The alert
+unit has no `[Install]` section and is never enabled: `OnFailure=` and a
+manual `systemctl start overflow-alert@<unit>` are the only ways it runs.
 
 The recipient file is host configuration, not part of this repository: root
 only (`root:root` `0600`), carrying exactly one line — the bare address. It is
 never committed and never referenced by value in the repository, and the
 script refuses anything but a single address on a single line (missing,
-empty, no `@`, or more than one line each exit nonzero without sending), so a
+empty, no `@`, or more than one line each exit 2 without sending), so a
 misconfigured file fails loudly in the alert unit's own journal instead of
 mailing a broken message.
+
+What that address *resolves to* is host configuration too, and it is the
+question this section exists to answer. An address exim can deliver to on this
+machine is an address nobody is told anything at, so the next subsection is
+not optional reading: it is where the routing gets established.
 
 ### Prerequisites
 
 The local mail daemon must be running and able to relay: the script submits
 the message by SMTP to the local exim daemon, which relays it to the
-recipient. Check both before installing anything:
+recipient. Check the daemon and the recipient file before installing anything:
 
 ```bash
 systemctl is-active exim4
 test -s /etc/overflow/alert-recipient && echo "recipient file present"
 ```
 
-The second command must print the confirmation. If the file does not exist
-yet, create it with the address and nothing else:
+The first must print `active` and the second must print its confirmation.
+Neither says anything about whether the address leaves this host — a running
+daemon with a recipient it delivers to its own mailbox satisfies both, and
+that is the configuration the Verify step below exists to catch. Establish the
+routing first.
+
+If the file does not exist yet, create it with the address and nothing else:
 
 ```bash
 install -d -o root -g root -m 0700 /etc/overflow
@@ -1687,6 +1722,82 @@ Re-copying the two watched units is what replaces the copies section 6 (or a
 previous deploy) installed; on a host whose installed units already carry
 local edits, diff before overwriting.
 
+### Prove the recipient leaves the host
+
+**Nothing in this repository configures where the message goes.** The routing
+is exim's own host configuration under `/etc/exim4/`, and the change this
+section documents does not apply it — what follows is a runbook for the
+operator, not a record of something that has been done here. Run it after the
+units are installed, and again whenever the address in
+`/etc/overflow/alert-recipient` changes.
+
+`exim -bt` runs the routers and the address verification and prints the
+decision without queueing anything, so it answers this question without
+sending a message. Read the address into the argument rather than typing it,
+so it stays out of the shell history and out of anything pasted afterwards:
+
+`exim -bt "$(cat /etc/overflow/alert-recipient)"`
+
+Two shapes come back, and telling them apart is the whole job.
+
+A local mailbox write resolves like this: `R: mail4root for <address>`, then
+`<address> -> /var/mail/mail`, then `transport = address_file`. The message
+ends in a file on this machine, nobody is told anything, and the script will
+report the alert as a failure — correctly, because from the operator's side
+that is what it is.
+
+A smarthost resolves like this: `R: smarthost for <address>`, then
+`<address>`, then `router = smarthost, transport = remote_smtp_smarthost`,
+then `host <smarthost> [...] port=587`. That transport leaves the host, which
+is what the script requires.
+
+**The discriminator is `transport =` on the resolution, not `R:` on the line
+above it.** `R:` names the router that made the decision, and `mail4root` is
+a perfectly good name for a router that then hands the message to a local
+delivery agent. Read the transport.
+
+If the first shape is what comes back, the decision is yours, and it is not
+the repository's:
+
+- **Route the address off the host.** The configuration the Verify step below
+  accepts, and the only one that can page a person.
+- **Keep the local mailbox as a retained record.** Defensible — a root mailbox
+  on the box is a durable record of every failure, and it is one of the reasons
+  this host has an audit trail at all. It carries two obligations you have to
+  accept deliberately rather than discover.
+
+  The first is that the script will treat every such alert as a failure and
+  say so in the alert unit's journal, forever. That is the intended reading,
+  not a defect to route around: the record is not the alert. The second
+  follows from the first, and is easier to miss. Because a local write records
+  no throttle state, **the 30-minute throttle never engages on this
+  configuration at all** — there is no state file for it to read, so every
+  `OnFailure=` trigger for the unit mails, and a unit in a crash loop produces
+  a message per failure rather than one per half hour. The service manager's
+  start limit is the only thing bounding that, and it bounds a fast loop only:
+  a unit that trips its start limit inside the interval is a unit that is not
+  starting, and one that cycles more slowly than the window mails once per
+  cycle for as long as it keeps cycling.
+
+  The mailbox itself also grows without a rule — no `logrotate` entry on this
+  host covers `/var/mail/mail` — so a retained record is an unbounded one
+  unless you write the rule yourself. Measure the state you are deciding
+  about, and measure where the mail is going while you are there:
+  `ls -l /var/mail/mail` for its size, `grep -c '^From ' /var/mail/mail` for
+  its message count, and the two routing counts —
+  `zcat -f /var/log/exim4/mainlog* | grep -c 'T=address_file'` against
+  `zcat -f /var/log/exim4/mainlog* | grep -c 'T=remote_smtp'` — which are the
+  whole argument in two numbers. They are a snapshot rather than a constant:
+  across the retained rotations on the host this section was written against,
+  573 deliveries went to a local mailbox and 7 left the host. The local figure
+  only climbs as the log fills, and the off-host one is every alert anybody on
+  this host has actually been sent.
+
+**The deployment is not verified until an off-host delivery has been
+observed**, not until one was attempted and the daemon accepted it. The Verify
+step below is what observes it, and a run that ends any other way is a run
+this section does not consider a pass.
+
 ### Verify
 
 Both watched units must name the alert template:
@@ -1702,8 +1813,11 @@ backup unit. systemd replaces the units' `%n` specifier when it loads them,
 so the readback shows the expanded name — including the template's own
 `.service` suffix, doubled next to the instance — not the raw
 `OnFailure=overflow-alert@%n.service` line the repository's unit files
-carry. Then send a real message through the whole route with a throwaway
-instance — the instance name need not be a unit that exists:
+carry.
+
+Then send a real message through the whole route with a throwaway instance —
+the instance name need not be a unit that exists, and the message's subject
+names it: `[overflow] test failed on <host>`.
 
 ```bash
 systemctl start overflow-alert@test.service
@@ -1711,14 +1825,78 @@ journalctl -u overflow-alert@test.service --no-pager -n 20
 tail -n 20 /var/log/exim4/mainlog
 ```
 
-The alert unit's journal must show a clean exit, and the exim mainlog must
-show the delivery (or the relay attempt) to the address in the recipient
-file; the message's subject names the throwaway instance —
-`[overflow] test failed on <host>`. The throwaway instance leaves one file
-behind: its throttle state under `/run/overflow-alert`. A second start of the
-same throwaway instance within half an hour mails nothing — the script logs
-the suppression to the alert unit's journal and submits no mail. Remove the
-instance's state file under `/run/overflow-alert` to send again immediately.
+The script's own line is the verdict, and it is one of two shapes. A delivered
+alert reads `overflow-alert.sh: exim routed <id> to <transport> and Completed
+it; the alert left this host`. Anything else reads `overflow-alert.sh:
+<reason>; the send is NOT recorded, so the next failure for test.service
+alerts again`, where the reason names which failure it was: the submission
+never reached the daemon, the daemon named no id to follow, a verdict exim
+recorded against the id, a local transport the message was routed to, no
+`Completed` for the id inside the 60-second budget (with or without a verdict
+written against it), or a mainlog that could not be read at all. **A run that
+ends in the second shape has failed, whatever the SMTP conversation looked
+like**, and the second shape's own wording is the finding — read it rather than
+re-running.
+
+That `tail` is for seeing the shape of the traffic, not for finding your
+delivery. **Match on the id, never on the word `Completed`.** The mainlog holds
+every message this host has relayed, and on a host whose recipient resolved to
+a local mailbox the alert path's own traffic fills it with `Completed` lines
+that mean a file write — the last twenty lines will usually hold several, and
+browsing them for one that looks like a delivery will find a file write and
+call it a pass.
+
+`<id>` is the handle onto this send and onto nothing else. Take it from the
+journal line rather than typing it —
+`journalctl -u overflow-alert@test.service --no-pager -n 20 | grep -oE '[0-9A-Za-z]{6}-[0-9A-Za-z]{6,}-[0-9A-Za-z]{4,}' | tail -n 1`
+— and substitute it for `<id>` in the three commands that follow. They are the
+whole verification, and each one discriminates on your id and nothing else.
+
+`grep -F "<id> Completed" /var/log/exim4/mainlog` prints the `Completed` line
+for your message, or nothing.
+
+`grep -F "<id> =>" /var/log/exim4/mainlog` prints your routing line verbatim,
+`R=<router> T=<transport>`, or nothing.
+
+`awk -v id="<id>" '{at=index($0,id); if(at==0) next; a=index($0,"=>"); if(a==0||a<=at) next; r=substr($0,a+2); if(match(r,/T=[^[:space:]]+/)) t=substr(r,RSTART+2,RLENGTH-2)} END{if(t!="") print t; else print "(no routing line)"}' /var/log/exim4/mainlog`
+reduces that line to the single word the script judges on — the last routing
+line for the id, which is the current decision on a message that deferred and
+was re-routed. This is the same extraction the script itself performs.
+
+If the journal named no id at all, stop there: there is no send to follow, and
+running the last command with an empty `<id>` searches the whole log for any
+line carrying a `T=`, which is the exact false green this step exists to end.
+
+**All three, and only all three, is a pass**: a `Completed` line for your id, a
+routing line for your id, and a transport that leaves the host. The `Completed`
+line on its own carries no `T=` at all and cannot say where the message went;
+the routing line on its own is a decision exim had not yet carried out. The
+third command's word is the verdict, and the list of transports the script
+treats as staying on this machine is a maintenance obligation kept in the
+script rather than restated here, so read it from the deployed copy with
+`sed -n '/^leaves_host()/,/^}/p' /srv/overflow/scripts/overflow-alert.sh`.
+
+Anything on that list — `address_file` is what a local mailbox write resolves
+to — is a failed alert, and so is the `(no routing line)` case. When the
+transport is `remote_smtp_smarthost` or another name not on the list, the
+alert left the host.
+
+The throwaway instance leaves one file behind, and which file it leaves is
+itself a check: **an alert that left the host writes its throttle state under
+`/run/overflow-alert`, and one that did not leaves no state at all.** So
+`ls -l /run/overflow-alert` showing a state file for `test.service` is
+independent evidence of a delivery, and it is the one that catches a run whose
+journal reads like a pass and whose mailbox never grew. The absence of one
+after a run the journal called delivered is a contradiction — chase it rather
+than tidy it away.
+
+A second start of the same throwaway instance within half an hour mails
+nothing — the script logs the suppression to the alert unit's journal
+(`last alert for test.service was <age> seconds ago, inside the 1800-second
+throttle window; suppressing`) and submits no mail. That is the only case in
+which a second start is expected to be silent, and it is the one case where
+the state file's presence is not news. Remove the instance's state file under
+`/run/overflow-alert` to send again immediately.
 
 ### Rollback
 
@@ -1737,12 +1915,13 @@ before this section.
 
 ### The alert path canary
 
-Everything above leaves the host by one route: `overflow-alert.sh` submits to
-the local exim daemon, exim relays to the smarthost, the smarthost delivers to
-one mailbox. Nothing on that route reports its own failure, so a route that
-stopped delivering looks exactly like a host with nothing to report.
-`overflow-canary.service`, started daily by `overflow-canary.timer`, is what
-breaks that symmetry.
+Everything above is built around one route leaving the host:
+`overflow-alert.sh` submits to the local exim daemon, exim relays to the
+smarthost, the smarthost delivers to one mailbox — and the subsection above is
+what establishes that it does. Nothing on that route reports its own failure,
+so a route that stopped delivering looks exactly like a host with nothing to
+report. `overflow-canary.service`, started daily by `overflow-canary.timer`,
+is what breaks that symmetry.
 
 The canary runs the same script and the same route, then reads the verdict
 from somewhere the route cannot fake: it submits with `curl -v`, takes the
@@ -1750,10 +1929,8 @@ exim message id off the final `250 OK id=` line, and waits for a line reading
 `<id> Completed` in `/var/log/exim4/mainlog`. A relay that defers, rejects,
 bounces or discards the message logs `defer`, `rejected`, `bounce`,
 `blackhole` or `discarded` against that id instead, and the script names that
-verdict in the report. **The absence of `Completed` is the failure** — which
-is the only observation on this host that can see the smarthost leg at all,
-since a canary addressed to a local mailbox would never leave the box and
-would call the one failure this exists to catch a healthy host.
+verdict in the report. **The absence of `Completed` is the failure**, and it
+is the only observation on this host that can see the smarthost leg at all.
 
 **It reads that log as a member of `adm`, and cannot read it at all without
 that membership.** `/var/log/exim4/mainlog` is `0640 Debian-exim:adm` in a
@@ -1799,13 +1976,14 @@ the relay had never completed a message exim had logged as `Completed` **one
 second after submission** — a false page, on the one channel the maintainer
 trusts, about a host that was healthy.
 
-**What `Completed` means, precisely — and what it does not.** It means the
-smarthost **accepted** the message. That covers the classes worth naming: a
-stopped daemon (curl fails outright), revoked SMTP credentials, a daily
-limit, greylisting, and any 5xx at RCPT or DATA — all of which leave a
-`defer` or `rejected` line and never a `Completed`. What it does **not** cover
-is the most likely way a mail alert path quietly dies: a recipient address
-that is wrong, deleted or converted to a route that silently accepts.
+**What `Completed` means, precisely — and what it does not.** Where the
+message was routed off the host, it means the smarthost **accepted** the
+message. That covers the classes worth naming: a stopped daemon (curl fails
+outright), revoked SMTP credentials, a daily limit, greylisting, and any 5xx
+at RCPT or DATA — all of which leave a `defer` or `rejected` line and never a
+`Completed`. What it does **not** cover is the most likely way a mail alert
+path quietly dies: a recipient address that is wrong, deleted or converted to
+a route that silently accepts.
 
 That case is not detectable from here, and pretending otherwise would be
 worse than saying so. Measured against the real smarthost and an RFC 2606
@@ -1822,6 +2000,18 @@ proves the pipe is open; it cannot prove there is a person at the other end.
 Keep the recipient address somewhere you will notice it is stale, and treat a
 run of missing canary mail as a finding in its own right — the same weight as
 a failed backup.
+
+**One limitation belongs in this subsection rather than in a changelog, because
+this is where a reader decides what the canary is worth.** `Completed` says
+the daemon finished with the message and carries no transport, so a canary
+addressed to a local mailbox reports a healthy path for a message that never
+left this host. `scripts/overflow-canary.sh` does not read the routing line
+and does not distinguish a local write; `scripts/overflow-alert.sh` does, and
+reports the alert as a failure instead. **The alert path proves the message
+left the host. The canary does not.** Nothing in this change alters the canary,
+and a green canary run is not evidence about where its own message went — the
+routing proof for the canary is the `exim -bt` check above, run against
+`/etc/overflow/canary-recipient`.
 
 A dead path is reported out of band, to the Discord webhook in
 `/etc/overflow/canary-discord-webhook` — a channel that shares no leg with the
@@ -1937,8 +2127,12 @@ tail -n 5 /var/log/exim4/mainlog
 
 The journal must name the relay's `Completed` line for the message id it
 submitted, and the exim mainlog must carry a `Completed` line for that same
-id. Confirm the unit did not record an outage, and that the timer is armed
-for the next 03:20 UTC:
+id. Both are about the id, and the id is what makes them evidence — a
+`Completed` line found by browsing the log belongs to some other message. This
+says nothing about whether the message left the host; the limitation above is
+the whole of that, and the `exim -bt` check there is what covers it. Confirm
+the unit did not record an outage, and that the timer is armed for the next
+03:20 UTC:
 
 ```bash
 test ! -e /run/overflow-canary/dead && echo "no outage recorded"
