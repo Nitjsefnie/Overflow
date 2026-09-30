@@ -43,8 +43,8 @@ concurrency:
   # This workflow's OWN rates, from its 484 runs over the same 6.15 days (mean
   # service 1.86 min, mean 78.7 arrivals/day): rho = 0.10, so a `true` would
   # destroy a running analyze job on ~8 a day and the pending slot would be
-  # claimed on ~0.7 a day — an order of magnitude below ci's 26 and 7, because
-  # the job is three times shorter. That is the trade: `true` would save the
+  # claimed on ~0.7 a day — roughly five times below ci's ~15 and ~3 on the
+  # same pull-request arrivals, because the job is three times shorter. That is the trade: `true` would save the
   # unused remainder of a 1.9 minute job on ~8 arrivals a day, and would cost the
   # SARIF upload each time, since a scan cancelled mid-analysis is discarded and
   # the author's next run may not come. One rule for all four bounded workflows is

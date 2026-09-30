@@ -76,18 +76,26 @@ concurrency:
   # this flag removes it, and a `true` makes it strictly worse by also
   # destroying in-flight runs.
   #
-  # RATES, from the 483 ci runs of the 6.13 days ending 2026-09-30 (mean service
-  # 6.58 min). Load is NOT steady, so a single mean is misleading — per-day
-  # arrivals were 5, 0, 215, 122, 78, 17, 46:
-  #   date        arrivals   rho   pending-cancelled   running-cancelled-if-true
-  #   09-26           215   0.98             ~70/day                 ~72/day
-  #   09-27           122   0.56             ~20/day                 ~57/day
-  #   09-28            78   0.36              ~7/day                 ~25/day
-  #   window mean      79   0.36              ~7/day                 ~26/day
-  # (M/M/1 with one waiting place, cross-checked by replaying the real arrival
-  # timestamps: 97 pending cancellations against ~99 predicted over the window.)
-  # For reference, main already shows this mechanism inside per-PR groups: 9 of
-  # 482 completed ci runs concluded cancelled, every one a same-PR self-supersede.
+  # RATES, from the 483 ci runs of the 6.13 days ending 2026-09-30. Only the
+  # 370 pull-request arrivals ever enter `ci-repo-wide`: the 106 push and 7
+  # workflow_dispatch runs key their own github.sha and cannot contend with
+  # anything, so counting them inflated both the arrival rate and rho. Load is
+  # also not steady - per-day all-event arrivals were 5, 0, 215, 122, 78, 17, 46.
+  # M/M/1 with one waiting place over the PR arrivals (mean PR-leg service 6.44
+  # min), where pending-cancelled is n*pi2 and running-cancelled-if-true is
+  # n*(pi1+pi2) - the flag is what adds the second, so it is the larger figure:
+  #   date        PR arrivals   rho   pending-cancelled   running-cancelled-if-true
+  #   09-26               171  0.76             ~43/day                 ~98/day
+  #   09-27                95  0.42             ~11/day                 ~36/day
+  #   09-28                59  0.26              ~3/day                 ~15/day
+  #   window mean           60  0.27              ~3/day                 ~15/day
+  # These are a LOWER bound: a Poisson fit understates a bursty arrival process.
+  # Replaying the real arrival timestamps instead gave materially higher figures
+  # (97 and 134 pending cancellations per window, depending on arrival set and
+  # service-time treatment) and neither replay reproduced stably, so no single
+  # replayed number is quoted. For reference, main already shows the mechanism
+  # inside per-PR groups: 9 of 482 completed ci runs concluded cancelled, every
+  # one a same-PR self-supersede.
   #
   # ON RUNNER MINUTES, stated plainly because the direction is counter-intuitive:
   # `true` would bill FEWER minutes, not more — a destroyed run stops accruing.
