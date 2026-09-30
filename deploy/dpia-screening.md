@@ -112,7 +112,7 @@ Screened against the recognised triggers, with the basis for each result:
 | Trigger | Result | Basis |
 | --- | --- | --- |
 | Scoring or ranking of people | **Triggered** | Settlement credit scoring, credit limits and the enforcement ladder (activities a–c above). |
-| Large-scale processing | No | One deployment, a handful of registered repositories, thousands of ledger rows; the largest historical table was a change log, since pruned. |
+| Large-scale processing | No | One deployment, a handful of registered repositories, thousands of ledger rows; the largest historical table was a change log, since pruned — a running-deployment observation from the 2026-09-30 audit of the live stores, not a property of the reviewed tree. |
 | Systematic monitoring | Partial | Reconciliation re-reads contributor activity on a schedule, but only within repositories registered with a sponsor token, and the processing is disclosed. |
 | Special-category data | None | No health, biometric, genetic, political, religious or similar fields anywhere in the schema (`db/migrations/`). |
 | Combining datasets | Inherent, disclosed | Forge identity is joined to ledger identity — the join is the product: contributor activity is priced into a ledger, and the notice discloses it. |
@@ -129,11 +129,13 @@ arithmetic.
 **No full DPIA is required at this time.** The reasoning, stated so the
 conclusion can be re-derived and challenged:
 
-- Every sanction passes through a human moderator: the enforcement ladder is
+- The enforcement ladder passes through a human moderator: transitions are
   applied by moderators, priced settlements can be contested through
   correction requests decided by a moderator, and balances can be adjusted by
-  hand. Nothing banishes an account's issues from the board without a person
-  having decided the underlying enforcement state.
+  hand. The one fully automated lever is the credit-limit withdrawal — an
+  account's issues leave the board on balance alone once its balance reaches
+  minus the limit — and its review route is the correction-request and
+  manual-adjustment surface above.
 - Scale is small: one deployment, a handful of registered repositories,
   thousands of rows.
 - No special-category data is processed.
