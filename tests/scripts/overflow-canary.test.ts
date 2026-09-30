@@ -72,7 +72,12 @@ const UNRELATED_COMPLETED =
  */
 const hostileMessageId = '1xBuT1-0000"\\0000QH-0Qqz';
 
-type RelayOutcome = "completed" | "deferred" | "deferred-then-completed";
+type RelayOutcome =
+  | "completed"
+  | "deferred"
+  | "deferred-then-completed"
+  | "deferred-then-terminal"
+  | "terminal";
 
 interface SmtpStandIn {
   /** The smtp:// URL the script is pointed at. */
@@ -253,16 +258,16 @@ async function startSmtp(options: {
         if (inData) {
           if (line === ".") {
             inData = false;
-            const logCompletedLater = (): void => {
+            const logLater = (body: string): void => {
               if (options.completeAfterMs === undefined) {
-                logLine(`${messageId} Completed`);
+                logLine(body);
                 return;
               }
               pending.push(
                 new Promise<void>((resolve) => {
                   setTimeout(() => {
                     try {
-                      logLine(`${messageId} Completed`);
+                      logLine(body);
                     } catch (error) {
                       writeFailures.push(error);
                     } finally {
@@ -272,8 +277,31 @@ async function startSmtp(options: {
                 }),
               );
             };
+            const logCompletedLater = (): void => {
+              logLater(`${messageId} Completed`);
+            };
 
-            if (options.outcome === "deferred-then-completed") {
+            if (options.outcome === "deferred-then-terminal") {
+              // A defer, and then an outcome that ends the message. The first
+              // poll iteration can only see the defer, so a search that
+              // settles on the first verdict it meets will report `defer` for
+              // the whole budget and name the wrong cause.
+              messages.push(bufferedData.join("\r\n"));
+              bufferedData = [];
+              logLine(`${messageId} ** defer: 450 Greylisted, retrying later`);
+              logLater(
+                `${messageId} ** bounce: <canary@example.test>: 550 5.1.1 mailbox unavailable`,
+              );
+            } else if (options.outcome === "terminal") {
+              // A bare terminal outcome with no defer in front of it. The
+              // suite previously wrote only `** defer` lines, so nothing
+              // pinned what a terminal verdict does on its own.
+              messages.push(bufferedData.join("\r\n"));
+              bufferedData = [];
+              logLine(
+                `${messageId} *** rejected RCPT <canary@example.test>: 550 5.1.1 unknown user`,
+              );
+            } else if (options.outcome === "deferred-then-completed") {
               // One message id, two outcomes, in the order a real relay
               // produces them when a message is greylisted or answered with a
               // temporary 4xx: the first attempt defers, the retry succeeds.
@@ -1036,32 +1064,21 @@ describe("overflow-canary.sh verdict discrimination", () => {
     }
   });
 
-  it("keeps the Completed check ahead of the failure-token check in the exim-log poll", async () => {
-    // THIS TEST PINS AN ORDERING, not a scenario. If the failure-token check
-    // moves ahead of the Completed check in the poll loop, this goes red and
-    // the canary starts paging on every message the relay defers and then
-    // delivers.
-    //
+  it("a message the relay defers and then completes on retry is not reported dead", async () => {
     // The scenario is one message id with two lines in the log at once: a
     // first attempt deferred, the retry completed. That is what a greylisted
     // or temporary-4xx relay produces routinely, so a verdict read as final
     // on sight turns an ordinary retry into a false dead verdict plus a
     // spurious page on the one signal the maintainer is meant to trust.
     //
-    // The consequence of the ordering is that a named verdict is REMEMBERED,
-    // not conclusive: the poll keeps going for the rest of the budget, and
-    // `Completed` at any point in that budget wins. A verdict only decides
-    // the report when the budget closes with no Completed behind it.
-    //
-    // Worth being precise about what this pins, because the two halves are
-    // easy to conflate. Moving the two blocks past each other is now a NO-OP
-    // - verified, and deliberately so: a provisional verdict must not
-    // short-circuit the poll, so there is nothing for the reordering to
-    // change. What this guards is the failure the reviewer's swap actually
-    // produced in the shipped code, where a verdict WAS conclusive on sight:
-    // the canary paged, and recorded a dead streak, for a message the relay
-    // had delivered. Treating `defer` as final, or breaking on any verdict
-    // before re-reading the log, turns this test red.
+    // What this pins is therefore a BEHAVIOUR, not an ordering: moving the
+    // Completed and failure checks past each other is a no-op, verified
+    // deliberately, because a provisional verdict must not short-circuit the
+    // poll. What breaks here is a verdict becoming conclusive on sight -
+    // treating `defer` as final, or breaking on any verdict before re-reading
+    // the log. That is the failure the reviewer's swap produced in the
+    // shipped code, where the canary paged and recorded a dead streak for a
+    // message the relay had delivered.
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -1080,6 +1097,70 @@ describe("overflow-canary.sh verdict discrimination", () => {
         "a message the relay delivered on retry must not page anyone",
       ).toEqual([]);
       expect(existsSync(fixture.marker)).toBe(false);
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("names the terminal outcome when a defer is followed by a bounce", async () => {
+    // exim records a temporary failure and, if the retry also fails for good,
+    // a terminal one - under the same id. A search that settles on the FIRST
+    // verdict it meets reports `defer` for the whole budget: still a correct
+    // dead verdict, but the wrong cause, named to an operator at three in the
+    // morning, and it burns the entire budget before saying so.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({
+      outcome: "deferred-then-terminal",
+      logPath: fixture.eximLog,
+      completeAfterMs: 300,
+    });
+
+    try {
+      const run = await runCanary(fixture, { smtpUrl: smtp.url, waitSeconds: 20 });
+
+      expect(run.status).toBe(1);
+      const report = JSON.parse(webhook.posts[0]!) as { content: string };
+      expect(report.content, "the terminal outcome is the cause").toContain("bounce");
+      expect(report.content, "the provisional one must not mask it").not.toContain("defer");
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("reports a terminal outcome on its own without spending the budget", async () => {
+    // A terminal verdict ends a message, so it must conclude the poll at once
+    // rather than wait out the budget for a Completed line that will never
+    // come. Without this the canary sits for the full 60 seconds on every
+    // bounce and rejection, and a refactor that made every verdict provisional
+    // would ship silently.
+    //
+    // The suite previously wrote only `** defer` lines, so nothing pinned
+    // this. The elapsed bound below is the rule's one permitted exception to
+    // "never assert a wall-clock margin" - an assertion that something did
+    // NOT happen inside an interval far shorter than it could take - and it
+    // is scaled from the budget the run is given: 20 s of budget, 10 s of
+    // bound, against a short-circuit that finishes in well under a second.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({ outcome: "terminal", logPath: fixture.eximLog });
+
+    try {
+      const startedAt = Date.now();
+      const run = await runCanary(fixture, { smtpUrl: smtp.url, waitSeconds: 20 });
+      const elapsed = Date.now() - startedAt;
+
+      expect(run.status).toBe(1);
+      const report = JSON.parse(webhook.posts[0]!) as { content: string };
+      expect(report.content).toContain("rejected");
+      expect(
+        elapsed,
+        "a terminal outcome must conclude the poll, not run out the budget",
+      ).toBeLessThan(10_000);
     } finally {
       await smtp.close();
       await webhook.close();

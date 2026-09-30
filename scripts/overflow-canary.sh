@@ -219,13 +219,30 @@ else
       # to RETRY the message, so treating it as final would page the
       # maintainer every time a relay greylists. The rest are the outcomes
       # that end a message.
+      #
+      # The search therefore does NOT settle on the first verdict it meets. A
+      # log reading `** defer` and later `bounce` under one id is a message
+      # that deferred once and then failed for good, and a search that stops
+      # at the defer reports the wrong cause and then re-reads the same defer
+      # for the rest of the budget. A terminal token anywhere in the log
+      # wins; `defer` is the fallback for when there is none. `defer` is also
+      # tested FIRST on each line, because exim writes deferrals whose own
+      # reason text contains a terminal word - `** defer rejected: ...` - and
+      # that line is a temporary failure, not a rejection.
       verdict=$(awk -v id="$message_id" '
-        index($0, id) > 0 {
-          rest = substr($0, index($0, id) + length(id))
-          if (match(rest, /(defer|rejected|bounce|blackhole|discarded|Failed)/)) {
-            print substr(rest, RSTART, RLENGTH); exit
+        BEGIN { first = ""; found = 0 }
+        {
+          at = index($0, id)
+          if (at == 0) next
+          rest = substr($0, at + length(id))
+          if (rest ~ /defer/) { if (first == "") first = "defer"; next }
+          if (match(rest, /(rejected|bounce|blackhole|discarded|Failed)/)) {
+            found = 1
+            print substr(rest, RSTART, RLENGTH)
+            exit
           }
         }
+        END { if (found == 0 && first != "") print first }
       ' "$exim_log") || verdict=''
       if [ -n "$verdict" ] && [ "$verdict" != defer ]; then
         reason="the relay recorded $verdict for $message_id and never Completed it, so the smarthost did not take the message"
