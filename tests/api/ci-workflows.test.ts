@@ -346,16 +346,30 @@ fi
       .map((step) => step.uses)).toEqual([
       "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
     ]);
-    // The verify job tests the pull request's merge ref, not main's tip: the
-    // ref input is pinned exactly (with persist-credentials: false, which is
-    // what actions/checkout's fork guard requires before it admits a PR ref
-    // under pull_request_target), so a checkout silently reverted to main's
-    // tip fails here.
-    expect(verify.steps.find((step) => step.uses?.startsWith("actions/checkout@"))?.with)
-      .toEqual({
+    // Exactly two checkouts, each gated to its event. Under pull_request_target
+    // the merge-ref checkout tests the pull request's change (persist-
+    // credentials: false is what actions/checkout's fork guard requires before
+    // it admits a PR ref); under push and workflow_dispatch the plain default
+    // checkout takes the event's own commit — an unconditional ref built from
+    // github.event.pull_request.number resolves null there and broke the
+    // push and dispatch legs (fix round 1, finding A).
+    const verifyCheckouts = verify.steps.filter((step) =>
+      step.uses?.startsWith("actions/checkout@"),
+    );
+    expect(verifyCheckouts, "the verify job must keep exactly two checkouts").toHaveLength(2);
+    expect(verifyCheckouts[0]).toEqual({
+      if: "${{ github.event_name == 'pull_request_target' }}",
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: {
         ref: "refs/pull/${{ github.event.pull_request.number }}/merge",
         "persist-credentials": false,
-      });
+      },
+    });
+    expect(verifyCheckouts[1]).toEqual({
+      if: "${{ github.event_name != 'pull_request_target' }}",
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: { "persist-credentials": false },
+    });
     expect(verify.steps.find((step) => step.uses?.startsWith("actions/setup-node@"))?.with)
       .toEqual(expect.objectContaining({ "node-version": "24.17.0" }));
     expect(verify.steps.map((step) => step.run).filter(Boolean)).toEqual(expect.arrayContaining([
@@ -411,6 +425,7 @@ fi
         },
         {
           name: "Fetch the pull request head",
+          if: "${{ github.event_name == 'pull_request_target' }}",
           env: { PR_NUMBER: "${{ github.event.pull_request.number }}" },
           run: 'git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"',
         },
@@ -434,11 +449,16 @@ tar -xzf "$tarball" actionlint
           run: "pip install --require-hashes -r .github/requirements-zizmor.txt\n",
         },
         {
-          name: "Extract the PR's workflow files as data",
+          name: "Collect the workflow files to lint",
           run: `mkdir -p .github/workflows-pr
-for f in $(git ls-tree --name-only refs/remotes/pr/head:.github/workflows/); do
-  git show "refs/remotes/pr/head:.github/workflows/$f" > ".github/workflows-pr/$f"
-done
+if [ "\${GITHUB_EVENT_NAME}" = pull_request_target ]; then
+  git ls-tree -z --name-only refs/remotes/pr/head:.github/workflows/ |
+    while IFS= read -r -d '' f; do
+      git show "refs/remotes/pr/head:.github/workflows/$f" > ".github/workflows-pr/$f"
+    done
+else
+  cp .github/workflows/*.yml .github/workflows-pr/
+fi
 `,
         },
         {

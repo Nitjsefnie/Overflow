@@ -204,8 +204,13 @@ describe("the verify workflow's migration immutability step", () => {
 
     expect(step, "the verify job must contain the Migration immutability step").toBeDefined();
     expect(step?.if).toBe("${{ github.event_name == 'pull_request_target' }}");
+    expect(
+      step?.env,
+      "the pull request number must reach the fetch through env, never ${{ }} " +
+        "interpolation in the run block",
+    ).toEqual({ PR_NUMBER: "${{ github.event.pull_request.number }}" });
     expect(step?.run).toBe(
-      'git fetch --depth=2 origin "${GITHUB_SHA}"\n' +
+      'git fetch --depth=2 origin "+refs/pull/${PR_NUMBER}/merge"\n' +
         "node scripts/check-migration-edits.ts HEAD^1 HEAD^2\n",
     );
     expect(Boolean(step?.["continue-on-error"])).toBe(false);
@@ -474,7 +479,7 @@ describe("the required workflows' base-freshness step", () => {
 describe("the verify workflow's untrusted-code boundary", () => {
   let workflow: {
     permissions?: unknown;
-    jobs?: { verify?: { steps?: WorkflowStep[] } };
+    jobs?: Record<string, { permissions?: unknown; steps?: WorkflowStep[] }>;
   } = {};
 
   beforeAll(async () => {
@@ -520,15 +525,21 @@ describe("the verify workflow's untrusted-code boundary", () => {
     ).toEqual({ contents: "read" });
   });
 
-  it("checks out the pull request's merge ref with credentials disabled", () => {
+  it("carries exactly two checkouts, each gated to its event", () => {
     const checkouts = (workflow.jobs?.verify?.steps ?? []).filter(
       (step) => step.uses?.startsWith("actions/checkout@"),
     );
 
     expect(
       checkouts,
-      "the verify job must keep exactly one checkout",
-    ).toHaveLength(1);
+      "the verify job must keep exactly two checkouts",
+    ).toHaveLength(2);
+    expect(
+      checkouts[0]?.if,
+      "the PR-tree checkout must be gated to pull_request_target exactly — its ref " +
+        "input reads github.event.pull_request.number, which is null on push and " +
+        "workflow_dispatch and broke those legs (fix round 1, finding A)",
+    ).toBe("${{ github.event_name == 'pull_request_target' }}");
     expect(
       checkouts[0]?.with,
       "the PR-tree checkout must carry persist-credentials: false (actions/checkout's " +
@@ -539,5 +550,30 @@ describe("the verify workflow's untrusted-code boundary", () => {
       ref: "refs/pull/${{ github.event.pull_request.number }}/merge",
       "persist-credentials": false,
     });
+    expect(
+      checkouts[1]?.if,
+      "the plain checkout must be gated to every non-PR event — the pushed main tip " +
+        "and the dispatched ref are checked out by the default checkout, whose ref " +
+        "input is absent and so cannot go null",
+    ).toBe("${{ github.event_name != 'pull_request_target' }}");
+    expect(
+      checkouts[1]?.with,
+      "the plain checkout must carry persist-credentials: false and no ref input",
+    ).toEqual({ "persist-credentials": false });
+  });
+
+  it("confines job-level permission overrides to the calibrate job", () => {
+    const overridden = Object.entries(workflow.jobs ?? {})
+      .filter(([, job]) => job !== undefined && "permissions" in job)
+      .map(([name]) => name);
+
+    expect(
+      overridden,
+      "the only job in ci.yml that may carry its own permissions: override is calibrate " +
+        "(its contents: write is pinned by tests/ci/calibrate-workflow.test.ts and it runs " +
+        "only on push and dispatch); every other job — the PR-reachable verify job included " +
+        "— must inherit the workflow-level { contents: read }, so a job-level elevation " +
+        "anywhere else fails here",
+    ).toEqual(["calibrate"]);
   });
 });
