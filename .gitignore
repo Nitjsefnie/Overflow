@@ -312,6 +312,7 @@ scripts/*
 !scripts/ci-base-freshness.sh
 !scripts/overflow-alert.sh
 !scripts/overflow-canary.sh
+!scripts/overflow-bounce.sh
 !scripts/*.ts
 !scripts/upgrade-webhooks.ts
 !scripts/measure-header-geometry.mjs
