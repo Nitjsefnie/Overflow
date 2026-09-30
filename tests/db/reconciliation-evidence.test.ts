@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+import { writeSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
@@ -203,6 +205,41 @@ describe("durable reconciliation evidence", () => {
       issues: [{ ...rawIssue(), body: undefined }], pullRequests: [{ id: 201, reviews: [], rawDiff: "retained diff" }],
     });
     expect(statements).toBe(1);
+  });
+
+  // Mutant: a no-op guard that let an unchanged document rewrite fact rows —
+  // the issue 853 orphaning shape — regrows the storage measured here. The
+  // old single-document shape fails this property outright: it rewrote the
+  // whole jsonb on every fold and orphaned the old version's TOAST each time
+  // (the before-numbers are recorded in the task report; running this
+  // assertion's shape against main's store watched it grow every fold).
+  it("keeps the evidence storage byte-identical across repeated no-op folds", async () => {
+    const { store, repositoryId, fold } = await materializeRepositoryFixture(sql);
+    // Incompressible hex keeps the rawDiff large through TOAST compression,
+    // so the facts table's TOAST — where issue 853's orphaning lived — is
+    // inside the measured set. pg_total_relation_size covers heap, indexes,
+    // TOAST and the TOAST index of each relation.
+    const rawDiff = randomBytes(65_536).toString("hex");
+    const payload = { ...synchronization(), pullRequests: [{ id: 201, reviews: [], rawDiff }] };
+    const storageSize = async (): Promise<{ evidence: number; facts: number }> => {
+      const [row] = await sql<{ evidence_bytes: string; facts_bytes: string }[]>`
+        select pg_total_relation_size('repository_reconciliation_evidence'::regclass)::int8 as evidence_bytes,
+          pg_total_relation_size('repository_reconciliation_evidence_facts'::regclass)::int8 as facts_bytes
+      `;
+      return { evidence: Number(row!.evidence_bytes), facts: Number(row!.facts_bytes) };
+    };
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold, synchronization: payload }));
+    const afterFirstWrite = await storageSize();
+    for (let pass = 1; pass <= 5; pass += 1) {
+      await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
+        synchronization: { ...payload, expectedVersion: pass } }));
+      expect(await storageSize()).toEqual(afterFirstWrite);
+    }
+    // The passes themselves committed: only the metadata version advanced.
+    expect(await sql`select version from repository_reconciliation_evidence where repository_id = ${repositoryId}`)
+      .toEqual([{ version: 6 }]);
+    writeSync(2, `evidence storage after first write (${repositoryId.slice(0, 8)}): `
+      + `evidence=${afterFirstWrite.evidence} facts=${afterFirstWrite.facts} bytes — byte-identical through 5 no-op folds\n`);
   });
 
   // Mutant: ACCEPT_STALE_CACHE_VERSION.
