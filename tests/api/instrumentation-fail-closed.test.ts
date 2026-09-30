@@ -116,4 +116,26 @@ describe("server instrumentation fail-closed boundary", () => {
     expect(startSweep).not.toHaveBeenCalled();
     expect(exit).not.toHaveBeenCalled();
   });
+
+  it("keeps a DB-transient startup rejection contained — no exit, wiring still starts", async () => {
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv("NEXT_PHASE", "");
+    vi.stubEnv("OVERFLOW_DISABLE_RECONCILIATION_SWEEP", "");
+    resolverFactory.mockReturnValue(null);
+    const failure = new Error("finalizer unavailable");
+    finalizeRuns.mockRejectedValue(failure);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const { register } = await import("@/instrumentation");
+
+    await expect(register()).resolves.toBeUndefined();
+
+    // `registerNodejs` contains the abandoned-run finalizer's own transient
+    // failure (logged, startup continues) — only an escape from the wiring or
+    // the import reaches this file's fatal boundary.
+    expect(exit).not.toHaveBeenCalled();
+    expect(startWorker).toHaveBeenCalledTimes(1);
+    expect(startSweep).toHaveBeenCalledTimes(1);
+    expect(errors.mock.calls.some((call) => call.includes(failure))).toBe(true);
+  });
 });
