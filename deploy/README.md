@@ -2147,3 +2147,203 @@ systemctl daemon-reload
 The two host files may stay: nothing reads them once the canary unit is gone,
 and `/etc/overflow/canary-recipient` is the address a future canary would
 use.
+
+### The bounce watcher
+
+Everything above watches the alert route from the sending side: the alert
+template mails a journal tail when a watched unit fails, and the canary proves
+once a day that the relay accepts a message. What nothing on that side can see
+is the route's own mail coming back. When a message on the alert route cannot
+be delivered, the relay's mailer daemon mails a delivery-failure notification
+back to the envelope sender — `overflow-canary@<fqdn>` or
+`overflow-alert@<fqdn>` — and until those addresses are aliased they are
+unrouteable, so exim refuses the notification outright and every delivery
+failure on the alert route vanishes without a trace (`exim4 -bt`, verified on
+the host 2026-09-30). `overflow-bounce.service`, started every 15 minutes by
+`overflow-bounce.timer`, is the reporting leg for that mail: a root-run oneshot
+that tails root's mail spool from a persisted byte offset and forwards each new
+bounce to the out-of-band Discord webhook the canary already posts to.
+
+With the canary plus this watcher the route distinguishes all three outcomes it
+can have. **Off-host accepted**: silence — the canary's `Completed` line and no
+watcher report. **Local write**: the watcher's Class B report, the class issue
+848 measured at 183 local writes against 5 off-host — a non-DSN message whose
+From header local part is `overflow-alert` or `overflow-canary` is an alert
+that resolved to this host, and a successful local write produces no bounce, so
+this class produces no other signal anywhere on the host. **Remote failure**:
+the watcher's Class A report — a delivery-failure notification that references
+an overflow address.
+
+The acceptance leg is host configuration, and it comes first: `/etc/aliases`
+must gain `overflow-canary: root` and `overflow-alert: root`, then
+`newaliases`. Without it exim refuses the bounces at RCPT and the watcher has
+nothing to read. The obvious cheaper design — piping those two aliases
+straight at the webhook — is rejected on host evidence: Debian's
+`address_pipe` transport sets no `user=`, so an alias pipe runs as
+`Debian-exim`, which cannot read the root-only webhook file. The
+spool-watcher shape keeps the webhook root-only: root reads the spool, root
+posts the report, and no file's permissions move.
+
+The alternatives were priced with their costs in the issue thread. An IMAP or
+POP probe of the recipient mailbox is the definitive remote-mailbox check —
+the only option that observes the mailbox itself — and it needs a Gmail
+app-password credential that does not exist on this host (the credential
+constraint recorded on issue 842), so its cost is one new third-party
+credential plus one poll per canary interval; it is deliberately not
+implemented. Piping the aliases at the webhook is rejected above, on the
+`address_pipe` evidence. Doing nothing is rejected because both of its
+detectors already fail: the heartbeat-stops detector is human-in-the-loop (the
+canary's own closing paragraphs), and the local-write class produces no
+heartbeat gap at all.
+
+#### Prerequisites
+
+The daemon and the webhook file are the canary's own prerequisites; the two
+aliases must not be present yet:
+
+```bash
+systemctl is-active exim4
+test -s /etc/overflow/canary-discord-webhook && echo "webhook file present"
+grep -q '^overflow-canary:' /etc/aliases && echo "overflow-canary alias already present" || echo "overflow-canary alias absent"
+grep -q '^overflow-alert:' /etc/aliases && echo "overflow-alert alias already present" || echo "overflow-alert alias absent"
+```
+
+The first must answer `active`, the second must print its confirmation, and
+each alias line must print `absent`. An alias already present is a decision,
+not a step: an existing entry wins at alias resolution, so appending the line
+this section installs would change nothing and the verification below would
+fail in a way that looks like a broken watcher. Resolve the existing entry
+before installing.
+
+#### Install
+
+The script needs no install step — `/srv/overflow` is a checkout of this
+repository at the deployed revision, so each deploy ships it.
+`scripts/deploy-revision.sh` does not install units and does not edit
+`/etc/aliases`, so every line below is run by hand. Add the two aliases and
+rebuild the alias database, install the two unit files, reload, and enable
+the timer:
+
+```bash
+grep -q '^overflow-canary:' /etc/aliases || printf '%s\n' 'overflow-canary: root' >> /etc/aliases
+grep -q '^overflow-alert:' /etc/aliases || printf '%s\n' 'overflow-alert: root' >> /etc/aliases
+newaliases
+install -o root -g root -m 0644 \
+  /srv/overflow/deploy/overflow-bounce.service /etc/systemd/system/
+install -o root -g root -m 0644 \
+  /srv/overflow/deploy/overflow-bounce.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now overflow-bounce.timer
+systemctl list-timers overflow-bounce.timer --no-pager
+```
+
+#### Verify
+
+First the acceptance leg. Both envelope-sender addresses must route to root's
+mailbox:
+
+```bash
+exim4 -bt overflow-canary@"$(hostname -f)"
+exim4 -bt overflow-alert@"$(hostname -f)"
+```
+
+Each must print an `R: system_aliases for <address>` line — the alias is what
+accepts the mail — and end at the spool delivery, `<address> -> /var/mail/mail`
+with `transport = address_file`, which is how root's own address resolves on
+this host. Then the issue-848 lesson, and the check that fails most often in
+the wrong direction: the alert recipient must still resolve off-host.
+
+```bash
+exim4 -bt "$(cat /etc/overflow/alert-recipient)"
+```
+
+This one must show `R: smarthost for <recipient>` and
+`router = smarthost, transport = remote_smtp_smarthost`. A
+`transport = address_file` resolution here is the issue-848 local-write class —
+the alert is being filed into a local mailbox and never leaves the host — and
+it means the alert path is **not** verified; fix the resolution before
+continuing, because the watcher's Class B report is the only other thing that
+would ever name it.
+
+Then the reporting leg, which posts one real report to the channel — run it
+once, and read this paragraph before running it. The first run initializes the
+offset at the spool's current size and posts nothing: the backlog is cron mail
+that predates the watcher, and it is never re-read (known limitations below).
+Start the unit once for that:
+
+```bash
+systemctl start overflow-bounce.service
+journalctl -u overflow-bounce.service --no-pager -n 20
+```
+
+The journal must show a clean exit and no report. Then deliver one synthetic
+delivery-failure notification through the local daemon — a sendmail one-shot
+message addressed to root only, whose body carries the DSN marker line and the
+string `overflow-canary@`. Nothing is sent to any remote address; the only
+off-host traffic in this step is the webhook post itself:
+
+```bash
+printf '%s\n' \
+  'Subject: [overflow] synthetic delivery-failure notification (verification)' \
+  '' \
+  'This message was created automatically by mail delivery software.' \
+  '' \
+  'A delivery-failure notification arrived for overflow-canary@ - verification marker' \
+  | sendmail root
+tail -n 20 /var/log/exim4/mainlog
+```
+
+The mainlog must show the local delivery into `/var/mail/mail`. Then run the
+watcher once and read the verdict out of band:
+
+```bash
+systemctl start overflow-bounce.service
+journalctl -u overflow-bounce.service --no-pager -n 20
+```
+
+The journal must show a clean exit again, and the Discord channel the webhook
+file names must show one message reading
+`[overflow] a delivery-failure notification arrived for an overflow alert or
+canary message on <host>: [overflow] synthetic delivery-failure notification
+(verification)` — subject-only, because the synthetic body carries no exim
+address-failure marker; that is the same shape a Gmail-format DSN reports
+(known limitations below). That post is the confirmation, and it is what a
+delivered bounce report looks like.
+
+What this verification does **not** prove, so it is not claimed: the watcher
+never re-reads the pre-install backlog, so bounces that arrived before the
+offset was initialized are invisible to it by design; and a partial tail — a
+message caught mid-append — parks the offset at the last complete message and
+costs one timer period, never a missed message.
+
+#### Rollback
+
+Disable the timer, remove both unit files, undo the aliases, and remove the
+state directory:
+
+```bash
+systemctl disable --now overflow-bounce.timer
+rm /etc/systemd/system/overflow-bounce.timer
+rm /etc/systemd/system/overflow-bounce.service
+systemctl daemon-reload
+sed -i -e '/^overflow-canary:/d' -e '/^overflow-alert:/d' /etc/aliases
+newaliases
+rm -rf /var/lib/overflow-bounce
+```
+
+The alert path itself is unchanged by any of it: removing the aliases returns
+the route to refusing bounces for the two sender addresses at RCPT — the
+pre-install behavior this section exists to replace — and the alerts and the
+canary keep working exactly as before.
+
+**Known limitations.** A Gmail-format DSN names its failed recipient
+differently from exim's, so those reports render subject-only — the shape the
+synthetic verification above deliberately shows. A unit that hangs without
+exiting never enters the failed state, so `OnFailure=` never fires for it —
+issue 848's second finding, still open there; the watcher reports the mail the
+path does deliver, never a path that produces none. The watcher reads the
+spool as mbox with exim's own From-escaping assumption, the same assumption
+every mbox reader makes, and a message misread across a boundary is bounded to
+one misclassification. The definitive remote-mailbox check remains the IMAP
+probe priced above, which needs the app-password credential recorded as
+externally blocked on issue 842.

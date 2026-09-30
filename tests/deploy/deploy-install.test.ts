@@ -241,6 +241,32 @@ const otherShellLines = new Set([
   // dead marker would re-create the silence inside the procedure meant to end
   // it.
   "rm -f /run/overflow-canary/dead /run/overflow-canary/canary-fault",
+  // Section 12's bounce-watcher subsection: the two alias-presence prerequisite
+  // checks, the idempotent alias appends and `newaliases`, the two-unit
+  // install with the timer's enable, the routing readbacks for both sender
+  // addresses and for the alert recipient, the offset-initializing first run
+  // and the synthetic DSN's sendmail one-shot with its mainlog readback, and
+  // the rollback's removal of timer, units, aliases and state.
+  "grep -q '^overflow-canary:' /etc/aliases && echo \"overflow-canary alias already present\" || echo \"overflow-canary alias absent\"",
+  "grep -q '^overflow-alert:' /etc/aliases && echo \"overflow-alert alias already present\" || echo \"overflow-alert alias absent\"",
+  "grep -q '^overflow-canary:' /etc/aliases || printf '%s\\n' 'overflow-canary: root' >> /etc/aliases",
+  "grep -q '^overflow-alert:' /etc/aliases || printf '%s\\n' 'overflow-alert: root' >> /etc/aliases",
+  "newaliases",
+  "install -o root -g root -m 0644 /srv/overflow/deploy/overflow-bounce.service /etc/systemd/system/",
+  "install -o root -g root -m 0644 /srv/overflow/deploy/overflow-bounce.timer /etc/systemd/system/",
+  "systemctl enable --now overflow-bounce.timer",
+  "systemctl list-timers overflow-bounce.timer --no-pager",
+  "exim4 -bt overflow-canary@\"$(hostname -f)\"",
+  "exim4 -bt overflow-alert@\"$(hostname -f)\"",
+  "exim4 -bt \"$(cat /etc/overflow/alert-recipient)\"",
+  "systemctl start overflow-bounce.service",
+  "journalctl -u overflow-bounce.service --no-pager -n 20",
+  "printf '%s\\n' 'Subject: [overflow] synthetic delivery-failure notification (verification)' '' 'This message was created automatically by mail delivery software.' '' 'A delivery-failure notification arrived for overflow-canary@ - verification marker' | sendmail root",
+  "systemctl disable --now overflow-bounce.timer",
+  "rm /etc/systemd/system/overflow-bounce.timer",
+  "rm /etc/systemd/system/overflow-bounce.service",
+  "sed -i -e '/^overflow-canary:/d' -e '/^overflow-alert:/d' /etc/aliases",
+  "rm -rf /var/lib/overflow-bounce",
 ].map((line) => tokenizeLines(line)[0].join(" ")));
 
 // The manual fallback's expanded source-attestation gates are explicitly
