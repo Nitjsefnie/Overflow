@@ -2121,12 +2121,15 @@ as not empty, look before removing it by hand.
 
 Stop the listener from the shell that started it, with the job's own control —
 `jobs` to list it, `kill %1` to end it — once the journal line above has been
-read. If
-the unit recorded an outage, clear it so the first scheduled run is judged on
-its own merits:
+read. If the unit recorded an outage, **or refused because it could not read
+the exim log**, clear both state files so the first scheduled run is judged on
+its own merits. `canary-fault` matters as much as `dead` here: a canary that
+was refusing leaves it behind, and a run that finds it will refuse again and
+post nothing — the silence this section exists to end, arriving immediately
+after a procedure whose stated purpose is to un-silence it.
 
 ```bash
-rm -f /run/overflow-canary/dead
+rm -f /run/overflow-canary/dead /run/overflow-canary/canary-fault
 ```
 
 #### Rollback

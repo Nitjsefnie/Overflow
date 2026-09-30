@@ -139,7 +139,13 @@ refuse() {
   if ! mkdir -p "$state_dir"; then
     echo "overflow-canary.sh: could not create state directory $state_dir; not recording the fault" >&2
   elif ! printf '%s\n' "$sent_at" > "$fault_marker"; then
-    echo "overflow-canary.sh: could not write the canary-fault marker $fault_marker; the next run will report again" >&2
+    # The consequence is named, not left to be derived. The report above did
+    # reach the channel, so the operator learns the canary is broken; what they
+    # cannot see from that is that a dead-streak marker written BEFORE this
+    # fault is now unretired, and the dedup comparison will keep honouring it -
+    # so the first real outage after readability returns is the one that gets
+    # swallowed. That is the line's whole job.
+    echo "overflow-canary.sh: could not write the canary-fault marker $fault_marker; the next run will report again, and a dead-streak marker recorded before this fault stays unretired, so the first real outage after readability returns will not be reported" >&2
   fi
 
   return 2
@@ -442,19 +448,29 @@ if [ -e "$marker" ] && [ -e "$fault_marker" ]; then
   if [ -r "$fault_marker" ] && [ -r "$marker" ]; then
     fault_stamp=$(cat "$fault_marker")
     dead_stamp=$(cat "$marker")
+    # EMPTY is listed beside the odd characters, and it has to be: the empty
+    # string is a prefix of every character class, so the guard below accepts it
+    # and it would sort first, read as the older of the two, and let the dedup
+    # hold - the one unusable stamp that silenced the outage. A zero-length
+    # marker is reachable rather than hypothetical: the write is a `>` redirect,
+    # which truncates before `printf` runs, so a write that then fails leaves
+    # exactly this.
     case "$fault_stamp$dead_stamp" in
       *[!0-9A-Za-z:.-]*) ;;
       *)
-        # Both stamps are this script's own `$sent_at` - YYYY-MM-DDTHH:MM:SSZ,
-        # fixed width - so the earliest of the two is the older one, and the
-        # dedup holds only while the recorded outage is the NEWER of them. POSIX
-        # `test` has no string ordering operator, and `sort` under LC_ALL=C is
-        # byte order, which for one fixed-width format is chronological. Equal
-        # stamps count as the outage being the newer word: a fault reported in
-        # the same second says nothing about the path since.
-        oldest=$(printf '%s\n%s\n' "$dead_stamp" "$fault_stamp" | LC_ALL=C sort | head -n 1)
-        if [ "$oldest" = "$fault_stamp" ]; then
-          dedup_holds=1
+        if [ -n "$fault_stamp" ] && [ -n "$dead_stamp" ]; then
+          # Both stamps are this script's own `$sent_at` - YYYY-MM-DDTHH:MM:SSZ,
+          # fixed width - so the earliest of the two is the older one, and the
+          # dedup holds only while the recorded outage is the NEWER of them.
+          # POSIX `test` has no string ordering operator, and `sort` under
+          # LC_ALL=C is byte order, which for one fixed-width format is
+          # chronological. Equal stamps count as the outage being the newer
+          # word: a fault reported in the same second says nothing about the
+          # path since.
+          oldest=$(printf '%s\n%s\n' "$dead_stamp" "$fault_stamp" | LC_ALL=C sort | head -n 1)
+          if [ "$oldest" = "$fault_stamp" ]; then
+            dedup_holds=1
+          fi
         fi
         ;;
     esac

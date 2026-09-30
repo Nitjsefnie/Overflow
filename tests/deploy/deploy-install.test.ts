@@ -236,7 +236,11 @@ const otherShellLines = new Set([
   "rm /etc/overflow/canary-sandbox-probe-webhook",
   "rm -f /etc/overflow/canary-sandbox-probe-received",
   "systemctl show overflow-canary.service -p Environment",
-  "rm -f /run/overflow-canary/dead",
+  // BOTH state files: a canary that was refusing leaves canary-fault behind, and
+  // a run that finds it refuses again and posts nothing, so clearing only the
+  // dead marker would re-create the silence inside the procedure meant to end
+  // it.
+  "rm -f /run/overflow-canary/dead /run/overflow-canary/canary-fault",
 ].map((line) => tokenizeLines(line)[0].join(" ")));
 
 // The manual fallback's expanded source-attestation gates are explicitly

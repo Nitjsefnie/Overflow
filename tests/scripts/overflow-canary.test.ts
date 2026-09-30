@@ -1659,6 +1659,47 @@ describe("overflow-canary.sh when the exim log cannot be read", () => {
     }
   });
 
+  it("reports the outage when the fault marker is empty, rather than trusting a stamp it cannot read", async () => {
+    // The one untrustworthy stamp that used to land on the WRONG side. A
+    // zero-length fault marker is reachable, not hypothetical: the marker is
+    // written through a `>` redirect, which truncates before `printf` runs, so
+    // a write that then fails leaves an empty file nothing removes.
+    //
+    // Every other unusable stamp - truncated, whitespace-corrupt, full of
+    // characters a timestamp never carries - is rejected by the character
+    // guard, and an empty string passes it, being a prefix of every class. So
+    // the empty case fell through to the comparison, sorted first, read as the
+    // OLDER of the two, and concluded the recorded outage was still the newest
+    // word on it: the dedup held and the outage after a stretch of blindness
+    // was swallowed. The cost of getting that backwards is an outage nobody
+    // was told about, so an empty stamp on either side retires the dedup like
+    // every other stamp the run cannot trust.
+    const fixture = makeFixture({ alreadyMarked: true });
+    writeFileSync(fixture.faultMarker, "");
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({ outcome: "deferred", logPath: fixture.eximLog });
+    openFixtureToDroppedIdentity(fixture);
+
+    try {
+      const run = await runCanary(fixture, {
+        smtpUrl: smtp.url,
+        asDroppedIdentity: true,
+      });
+
+      expect(run.status).toBe(1);
+      expect(
+        webhook.posts,
+        "a fault marker the run cannot read a stamp out of must not silence the outage",
+      ).toHaveLength(1);
+      const report = JSON.parse(webhook.posts[0]!) as { content: string };
+      expect(report.content).toContain("not delivering");
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
   it("reports the timeout, not the unreadable log, when the gap closes inside the budget", async () => {
     // The other direction, and the one a latch would get wrong. Remembering the
     // first unreadable moment and reading it at the deadline turns a gap that
