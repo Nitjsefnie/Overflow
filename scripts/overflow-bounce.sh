@@ -83,10 +83,11 @@
 # tail is a concurrent append, not corruption: the cost of waiting is one
 # timer period, and the cost of reading early is a swallowed message. One
 # residual remains, and no byte-local rule can close it: a tear landing
-# exactly after an interior body blank is byte-identical to a terminator,
-# passes this rule, and reports on the prefix - which by then already
-# carries the message's class evidence - with the remainder consumed next
-# run.
+# exactly after an interior body blank is byte-identical to a complete
+# shorter message, passes this rule, and the prefix is classified alone.
+# In both standard bodies the interior blank splits the evidence, so the
+# split-off prefix carries none and the message goes unreported - the
+# offset already past it - bounded to that one exact byte alignment.
 #
 # Any other new message advances the offset silently.
 #

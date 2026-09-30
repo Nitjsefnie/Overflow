@@ -75,4 +75,6 @@ SystemCallErrorNumber=EPERM
 
 StandardOutput=journal
 StandardError=journal
+# Tags the script's journal output with its own identifier, so the
+# watcher's lines filter by name as well as by unit.
 SyslogIdentifier=overflow-bounce

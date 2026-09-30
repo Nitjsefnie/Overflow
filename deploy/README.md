@@ -2268,7 +2268,8 @@ would ever name it.
 Then the reporting leg, which posts one real report to the channel — run it
 once, and read this paragraph before running it. The first run initializes the
 offset at the spool's current size and posts nothing: the backlog is cron mail
-that predates the watcher, and it is never re-read (known limitations below).
+that predates the watcher, and it is never re-read (see what this
+verification does not prove, below).
 Start the unit once for that:
 
 ```bash
@@ -2304,7 +2305,7 @@ journalctl -u overflow-bounce.service --no-pager -n 20
 The journal must show a clean exit again, and the Discord channel the webhook
 file names must show one message reading
 `[overflow] a delivery-failure notification arrived for an overflow alert or
-canary message on <host>: [overflow] synthetic delivery-failure notification
+canary message on <fqdn>: [overflow] synthetic delivery-failure notification
 (verification)` — subject-only, because the synthetic body carries no exim
 address-failure marker; that is the same shape a Gmail-format DSN reports
 (known limitations below). That post is the confirmation, and it is what a

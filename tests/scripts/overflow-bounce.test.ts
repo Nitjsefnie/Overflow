@@ -638,6 +638,66 @@ describe("overflow-bounce.sh torn-tail handling (concurrent append)", () => {
     expect(offsetValue(stateDir)).toBe(spoolSize(spool));
   });
 
+  it("advances past a message torn exactly after an interior body blank and never reports it (interior-blank tear)", () => {
+    const root = makeRoot();
+    const fullDsn = mboxMessage({
+      subject: "bounce torn after an interior body blank",
+      dsn: "exim",
+      failedAddress: overflowCanaryAddress,
+    });
+    // The standard exim body's interior blank: the one between the DSN
+    // marker line and the "A message that you sent" paragraph. Tearing
+    // exactly after it leaves a chunk that ends in a blank and carries two
+    // (separator + interior), so the completion rule reads the prefix as a
+    // complete, shorter message - the documented residual no byte-local
+    // rule can close.
+    const interiorBlankEnd =
+      fullDsn.indexOf("\n\n", fullDsn.indexOf("\n\n") + 2) + 2;
+    const tornDsn = fullDsn.slice(0, interiorBlankEnd);
+    const spool = makeSpool(
+      root,
+      mboxMessage({ subject: cronSubject, body: "settled batch output" }) + tornDsn,
+    );
+    const stateDir = makeStateDir(root);
+    seedOffset(stateDir, "0\n");
+
+    const torn = runBounce({ spool, stateDir });
+
+    // The split-off prefix carries the DSN marker but no overflow
+    // reference - the interior blank sits between them - so it produces no
+    // report, and the offset advances to the tear itself, past the split
+    // prefix.
+    expect(torn.status).toBe(0);
+    expect(torn.posted, "the split-off prefix carries no overflow reference and reports nothing").toBe(false);
+    const sizeAtTear = spoolSize(spool);
+    expect(offsetValue(stateDir), "the offset advances past the split prefix").toBe(sizeAtTear);
+
+    // The append completes. The remainder is a headerless tail with no
+    // From_ line and a single blank: it never completes, and the bounce is
+    // never reported - the outcome the script's residual paragraph
+    // documents.
+    appendToSpool(spool, fullDsn.slice(tornDsn.length));
+
+    const done = runBounce({ spool, stateDir });
+
+    expect(done.status).toBe(0);
+    expect(done.posted, "the completed message must never be reported").toBe(false);
+    expect(offsetValue(stateDir)).toBe(sizeAtTear);
+
+    // A following message sweeps the remainder into the offset; still no
+    // report. The message went unreported for good.
+    appendToSpool(
+      spool,
+      mboxMessage({ subject: cronSubject, body: "mail after the residual tear" }),
+    );
+
+    const swept = runBounce({ spool, stateDir });
+
+    expect(swept.status).toBe(0);
+    expect(swept.posted, "the torn-then-completed bounce is never reported").toBe(false);
+    expect(offsetValue(stateDir)).toBe(spoolSize(spool));
+  });
+
   it("reports a complete trailing message normally when nothing is torn (case 15)", () => {
     const root = makeRoot();
     const spool = makeSpool(
