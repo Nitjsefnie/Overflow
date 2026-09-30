@@ -73,6 +73,7 @@ describe("the board statement's served plan mode", () => {
       select name from pg_prepared_statements
       where statement like '%candidate_sponsors%'
         and statement not like '%pg_prepared_statements%'
+        and name <> 'board_generic_plan_probe'
     `;
     expect(
       named,
