@@ -68,6 +68,83 @@ esac
 
 marker=$state_dir/dead
 
+# The canary's own fault has its own dedup state, and that separation is the
+# whole design. $marker means exactly one thing - "a real outage of the
+# failure-alert path has been reported" - and a run that never reached a
+# verdict must never write it: doing so silences the next real outage, which
+# is the failure this script exists to prevent. A broken canary is still an
+# outage of the operator's visibility, so it is reported on its own channel
+# line and its own file, and a persistently broken canary posts once rather
+# than daily.
+fault_marker=$state_dir/canary-fault
+
+# One out-of-band post, shared by both reports below, so the JSON escaping and
+# the --fail discipline cannot drift between them: a report lost because one of
+# the two paths escaped its payload differently is a report the operator is
+# relying on. Returns curl's status; the caller decides what an undelivered
+# report means for its own state.
+#
+# --fail is load-bearing, not tidiness. Without it curl exits 0 for any HTTP
+# response, so a webhook that answers 404 Unknown Webhook or 401 on a revoked
+# token is recorded as a delivered report, its marker is written for an outage
+# nobody was told about, and every later run of the streak stays silent. That is
+# one report lost followed by permanent quiet, which is the exact failure this
+# script exists to prevent. With it, a refusal is a nonzero exit and takes the
+# branch that leaves the marker unwritten.
+post_report() {
+  report_summary=$1
+  report_payload=$(printf '{"content":"%s"}' "$(printf '%s' "$report_summary" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')")
+
+  printf '%s' "$report_payload" | curl -sS --fail --max-time 15 --connect-timeout 5 \
+    -H 'Content-Type: application/json' \
+    --data-binary @- \
+    "$webhook_url" >/dev/null
+}
+
+# One refusal report, for a run that never reached a verdict. Both call sites -
+# the pre-flight check and the poll-time branch - come through here, so the two
+# cannot drift apart in wording, in dedup state, or in what they leave behind.
+#
+# It is a report and not a silence, because nothing on this host reads the
+# canary's exit status: a canary that quietly stopped checking reproduces, one
+# level up, the exact failure this whole feature exists to end - a route that
+# stopped delivering is indistinguishable from a host with nothing to report.
+# What it must never be is an OUTAGE report, so it carries its own header, which
+# claims the canary is broken and never claims the relay is failing, and its own
+# dedup state, so a canary broken for a week posts once rather than seven times
+# and a real outage is never silenced by it.
+#
+# The dead-streak marker is never written from here. It means "a real outage of
+# the alert path was reported", and a run with no verdict is not one: writing it
+# silences the next real outage, which is the failure this script exists to
+# prevent. It is not removed from here either, and the reasoning for that is at
+# the dedup comparison below.
+#
+# Returns 2; the caller exits with that.
+refuse() {
+  if [ -e "$fault_marker" ]; then
+    echo "overflow-canary.sh: $1; the canary-fault marker $fault_marker already records this refusal, so no second report is posted" >&2
+    return 2
+  fi
+
+  post_status=0
+  post_report "[overflow] the canary on $fqdn cannot run: $1" || post_status=$?
+
+  if [ "$post_status" -ne 0 ]; then
+    echo "overflow-canary.sh: $1; the out-of-band report could not be delivered (curl exited $post_status), so the fault is left unrecorded and the next run reports again" >&2
+    return 2
+  fi
+
+  echo "overflow-canary.sh: $1; the canary itself is broken, reported out of band on its own line rather than as an outage of the alert path" >&2
+  if ! mkdir -p "$state_dir"; then
+    echo "overflow-canary.sh: could not create state directory $state_dir; not recording the fault" >&2
+  elif ! printf '%s\n' "$sent_at" > "$fault_marker"; then
+    echo "overflow-canary.sh: could not write the canary-fault marker $fault_marker; the next run will report again" >&2
+  fi
+
+  return 2
+}
+
 # The recipient file is validated exactly as the alert script validates its
 # own, and for the same reason: a newline or carriage return in the value
 # breaks the To: header out of its line and hands the daemon injected
@@ -126,26 +203,6 @@ case "$webhook_url" in
     ;;
 esac
 
-# The relay verdict is read from the exim mainlog, so a log this process cannot
-# open is a run that can take no verdict at all - and "no verdict" is not "the
-# relay delivered nothing". It is checked HERE, before the submission, for
-# three reasons: the failure is immediate and says which file is at fault
-# rather than costing the whole wait budget to discover; no heartbeat mail goes
-# out that the operator would receive with no explanation attached to it; and
-# a canary that cannot read its own evidence must not go on to pretend it has.
-#
-# This is the deployed defect's own shape, measured on the unit's exact
-# hardening: `grep` of the mainlog under this sandbox answers "Permission
-# denied", the run timed out, and the report named a relay that had completed
-# the message a second earlier. So the refusal below is exit 2 with no post and
-# no dead-streak marker - the same class as a missing host file. It is a fault
-# in the check, not an outage of the path being checked, and a marker written
-# here would silence every later run of a relay that may well be fine.
-if [ ! -r "$exim_log" ]; then
-  echo "overflow-canary.sh: $exim_log is not readable by this process, so the relay verdict could not be taken and nothing was submitted" >&2
-  exit 2
-fi
-
 # Both of these are the only inputs the report and the message carry that the
 # script cannot supply for itself, and under set -e a failing command
 # substitution kills the run at the assignment with nothing in the journal.
@@ -160,6 +217,26 @@ fi
 if ! sent_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ'); then
   echo "overflow-canary.sh: could not read the clock; refusing to stamp a report with an unknown time" >&2
   exit 2
+fi
+
+# The relay verdict is read from the exim mainlog, so a log this process cannot
+# open is a run that can take no verdict at all - and "no verdict" is not "the
+# relay delivered nothing". It is checked HERE, before the submission, for
+# three reasons: the failure is immediate and says which file is at fault
+# rather than costing the whole wait budget to discover; no heartbeat mail goes
+# out that the operator would receive with no explanation attached to it; and
+# a canary that cannot read its own evidence must not go on to pretend it has.
+#
+# This is the deployed defect's own shape, measured on the unit's exact
+# hardening: `grep` of the mainlog under this sandbox answers "Permission
+# denied", the run timed out, and the report named a relay that had completed
+# the message a second earlier. So the check below REFUSES, and refuses as a
+# fault in the canary: exit 2, a report on its own header, and no
+# dead-streak marker. It sits after the two checks above only because the
+# refusal names the host and is stamped like every other report, and both of
+# those are computed there.
+if [ ! -r "$exim_log" ]; then
+  refuse "$exim_log is not readable by this process, so the relay verdict could not be taken and nothing was submitted" || exit $?
 fi
 
 # The subject carries its own marker, [overflow-canary], rather than sharing
@@ -324,48 +401,73 @@ if [ -z "$reason" ]; then
       echo "overflow-canary.sh: the path is healthy but the dead-streak marker $marker could not be removed; the next failure will not report" >&2
     fi
   fi
+  # The fault marker is cleared here and nowhere else, and only by a run that
+  # actually reached a verdict. It says "the canary itself is broken", so the
+  # one thing that must retire it is proof that it works again.
+  if [ -e "$fault_marker" ]; then
+    if ! rm -f "$fault_marker"; then
+      echo "overflow-canary.sh: the path is healthy but the canary-fault marker $fault_marker could not be removed; the next refusal reports again" >&2
+    fi
+  fi
   exit 0
 fi
 
-# A verdict that could not be taken stops here, and it is placed after the
-# healthy exit so a log that went dark and came back inside the budget is
-# still the healthy run it actually was. Everything below this line reports an
-# OUTAGE of the failure-alert path, and a report is headed "the failure-alert
-# path is not delivering": reaching it with a log this process could not read
-# would put a false claim in the maintainer's alert channel and, once the
-# marker were written, silence the real outage that follows. So the refusal
-# exits 2 with the reason in the journal and nothing posted - the same shape
-# as a misconfigured host file, which is what an unreadable log is.
+# A verdict that could not be taken is reported, but never as an outage. It is
+# placed after the healthy exit so a log that went dark and came back inside
+# the budget is still the healthy run it actually was, and before the outage
+# branch so the dead-streak marker below cannot be reached from here - writing
+# that marker for a fault in the check silences the next real outage, which is
+# the failure this script exists to prevent. What it says, and dedups on, is
+# `refuse`'s business, shared with the pre-flight check.
 if [ -n "$verdict_impossible" ]; then
-  echo "overflow-canary.sh: $reason" >&2
-  exit 2
+  refuse "$reason" || exit $?
 fi
 
-if [ -e "$marker" ]; then
+# One report per dead streak, with one exception. $marker is honoured when it
+# is the newest word on the outage: nothing has proven the path healthy since
+# it was written, so a second report would be the same message again. A
+# canary-fault marker NEWER than it is the exception, and the shape is a stamp
+# comparison because both files hold this script's own `$sent_at`. That fault
+# means the canary was blind for a stretch, and an outage reported before the
+# blindness says nothing about the path since: the streak may have been
+# re-established while nothing could see it, and honouring the old marker would
+# swallow the first real outage after readability came back - the same silence,
+# one step later. Neither marker is written or removed from here.
+dedup_holds=1
+if [ -e "$marker" ] && [ -e "$fault_marker" ]; then
+  # Unreadable or oddly shaped stamps retire the dedup rather than trusting it:
+  # the cost of a duplicate report is one message, and the cost of a wrong
+  # silence is an outage nobody was told about.
+  dedup_holds=0
+  if [ -r "$fault_marker" ] && [ -r "$marker" ]; then
+    fault_stamp=$(cat "$fault_marker")
+    dead_stamp=$(cat "$marker")
+    case "$fault_stamp$dead_stamp" in
+      *[!0-9A-Za-z:.-]*) ;;
+      *)
+        # Both stamps are this script's own `$sent_at` - YYYY-MM-DDTHH:MM:SSZ,
+        # fixed width - so the earliest of the two is the older one, and the
+        # dedup holds only while the recorded outage is the NEWER of them. POSIX
+        # `test` has no string ordering operator, and `sort` under LC_ALL=C is
+        # byte order, which for one fixed-width format is chronological. Equal
+        # stamps count as the outage being the newer word: a fault reported in
+        # the same second says nothing about the path since.
+        oldest=$(printf '%s\n%s\n' "$dead_stamp" "$fault_stamp" | LC_ALL=C sort | head -n 1)
+        if [ "$oldest" = "$fault_stamp" ]; then
+          dedup_holds=1
+        fi
+        ;;
+    esac
+  fi
+fi
+
+if [ -e "$marker" ] && [ "$dedup_holds" -eq 1 ]; then
   echo "overflow-canary.sh: $reason; the dead-streak marker $marker already records a reported outage, so no second report is posted" >&2
   exit 1
 fi
 
-# The report is a Discord webhook payload. Backslash and double quote are
-# escaped in every interpolated value, because a host name or an exim id
-# carrying either would otherwise produce a payload Discord rejects - and the
-# report that is lost is the one the operator is relying on.
-#
-# --fail is load-bearing, not tidiness. Without it curl exits 0 for any HTTP
-# response, so a webhook that answers 404 Unknown Webhook or 401 on a revoked
-# token is recorded as a delivered report, the dead-streak marker is written
-# for an outage nobody was told about, and every later run of the streak stays
-# silent. That is one report lost followed by permanent quiet, which is the
-# exact failure this script exists to prevent. With it, a refusal is a
-# nonzero exit and takes the branch below that leaves the marker unwritten.
-summary="[overflow] the failure-alert path on $fqdn is not delivering: $reason"
-payload=$(printf '{"content":"%s"}' "$(printf '%s' "$summary" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')")
-
 post_status=0
-printf '%s' "$payload" | curl -sS --fail --max-time 15 --connect-timeout 5 \
-  -H 'Content-Type: application/json' \
-  --data-binary @- \
-  "$webhook_url" >/dev/null || post_status=$?
+post_report "[overflow] the failure-alert path on $fqdn is not delivering: $reason" || post_status=$?
 
 if [ "$post_status" -ne 0 ]; then
   echo "overflow-canary.sh: $reason; the out-of-band report could not be delivered (curl exited $post_status), so the outage is left unrecorded and the next run reports again" >&2
@@ -377,6 +479,17 @@ if ! mkdir -p "$state_dir"; then
   echo "overflow-canary.sh: could not create state directory $state_dir; not recording the outage" >&2
 elif ! printf '%s\n' "$sent_at" > "$marker"; then
   echo "overflow-canary.sh: could not write the dead-streak marker $marker; the next run will report again" >&2
+fi
+
+# The fault that retired this dedup has now been accounted for by the report
+# above, and this run read the log well enough to take a verdict, so the canary
+# works again and its fault marker goes. Leaving it would retire the dedup on
+# every later run of the streak, which is a daily duplicate rather than a
+# re-announcement of an outage nobody had heard about.
+if [ -e "$fault_marker" ]; then
+  if ! rm -f "$fault_marker"; then
+    echo "overflow-canary.sh: the outage is reported but the canary-fault marker $fault_marker could not be removed; the next run of this streak reports again" >&2
+  fi
 fi
 
 exit 1

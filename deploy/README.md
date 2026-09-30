@@ -1772,12 +1772,25 @@ value left open.
 
 **If that membership is ever wrong, the canary says so instead of blaming the
 relay.** Before it submits anything the script checks that it can read the
-log, and exits 2 with a line naming the file if it cannot: no message is sent,
-no report is posted, and no dead-streak marker is written, because an
-unreadable log is a fault in the check rather than an outage of the path
-being checked. The same check runs again at the deadline, so a log that goes
-unreadable *during* the wait is refused the same way rather than reported as a
-relay that timed out.
+log, and if it cannot, it refuses: exit 2, no message sent, and a report whose
+header is **"the canary on `<host>` cannot run"** — never the outage header
+*"the failure-alert path is not delivering"*, which would be a false claim
+about a relay that may be perfectly healthy. The same check runs again at the
+deadline, so a log that goes unreadable *during* the wait is refused the same
+way rather than reported as a relay that timed out.
+
+The refusal has its own dedup state, `/run/overflow-canary/canary-fault`,
+separate from the dead-streak marker. That separation is deliberate in both
+directions: the fault marker keeps a canary broken for a week to one report
+rather than seven, and **the dead-streak marker is never written by a
+refusal**, because it means "a real outage of the alert path was reported" and
+a run that never reached a verdict is not one — writing it there silences the
+next real outage, which is the failure this whole feature exists to prevent.
+Nothing on this host reads the canary's exit status, which is why a refusal
+posts at all: a canary that quietly stopped checking would be, one level up,
+the same silent route this section exists to end. A healthy run retires the
+fault marker, and so does a run that reports a real outage after a stretch of
+blindness.
 
 That distinction is the whole point, and it was paid for. The canary's first
 production run had neither the membership nor the capability: it could not
@@ -1826,9 +1839,9 @@ as `alert-recipient` is — one line, one address, no CR — and the webhook fil
 must be a single nonempty line. A file that fails either check exits 2 and
 sends nothing, so a misconfiguration is loud in the canary's own journal
 rather than a canary quietly reporting health through a channel it cannot
-reach. The exim mainlog is checked the same way and for the same reason, with
-the same exit 2 and no submission: a log this process cannot read yields no
-verdict, and no verdict is never turned into a report about the relay.
+reach. The exim mainlog is checked before the submission for the same reason,
+and a log this process cannot read yields no verdict — which is reported as
+the canary being broken, never as the relay failing.
 
 #### Prerequisites
 
@@ -1836,13 +1849,18 @@ verdict, and no verdict is never turned into a report about the relay.
 systemctl is-active exim4
 test -s /etc/overflow/canary-recipient && echo "recipient file present"
 test -s /etc/overflow/canary-discord-webhook && echo "webhook file present"
-systemctl show overflow-canary.service -p SupplementaryGroups --value | grep -qw adm && echo "canary reads the exim log as a member of adm" || echo "the canary is NOT in group adm - every run will refuse with the log named as unreadable"
+systemctl show overflow-canary.service -p SupplementaryGroups --value | grep -qx adm && echo "canary reads the exim log as a member of adm" || echo "the canary is NOT in group adm - every run will refuse with the log named as unreadable"
 ```
 
-The second, third and fourth commands must each print their confirmation. If
-the fourth prints its warning, the installed unit is not the one in this
-repository: reinstall it from `/srv/overflow/deploy/overflow-canary.service`
-rather than editing the installed copy, because the reviewed set in
+The second, third and fourth commands must each print their confirmation. The
+fourth is an **exact** match on purpose: `--value` prints the bare `adm` on
+this host and prints an **empty line with exit 0** when the directive is unset,
+so `grep -qx adm` fails closed in both cases, and it also fails on a drifted
+installed copy that has picked up a second group — which `-w` would have
+passed. If the fourth prints its warning, the installed unit is not the one in
+this repository: reinstall it from
+`/srv/overflow/deploy/overflow-canary.service` rather than editing the
+installed copy, because the reviewed set in
 `tests/deploy/canary-units.test.ts` is what keeps the next directive beside
 this one from arriving unnoticed. Create the files with the address and the
 webhook URL and nothing else:
@@ -1927,27 +1945,31 @@ test ! -e /run/overflow-canary/dead && echo "no outage recorded"
 systemctl list-timers overflow-canary.timer --no-pager
 ```
 
-**Read the journal line first, because two different things now look like
-"no `Completed`".** This host's `/etc/logrotate.d/exim4-base` rotates with
-`nocreate`, so the replacement file is created by exim itself when it next
-reopens the path: between the rename and that reopen the path does not exist
-at all. The canary no longer mistakes that for a relay verdict — it refuses
-with exit 2 and a line naming the log as unreadable, and posts nothing. So a
-line naming `/var/log/exim4/mainlog` as not readable is a rotation (or a
-membership that has gone) and **not** an outage to act on, while a line
-naming a relay verdict is a real one. Neither reaches the webhook unless it
-is the second kind, so an unreadable-log refusal leaves the next run free to
-try.
-
 **If a scheduled run ever reports the path dead and the mail route looks
-fine, check for a log rotation before you believe it.** The verdict is a
-single-file read of `/var/log/exim4/mainlog`, and this host rotates it: a
-rotation inside the 60-second wait window moves the `Completed` line to
-`mainlog.1`, where the canary cannot see it, and the run reports dead. It
-fails closed — a rotation can produce a false *dead* verdict but never a
-false healthy one — and the window is a minute wide, so it is rare. Still,
-it is the first thing to rule out, because it is cheap and the alternative is
-chasing a relay that is working:
+fine, check for a log rotation before you believe it — and read the journal
+line before you conclude anything from it, because one rotation can produce
+two different reports.** The verdict is a single-file read of
+`/var/log/exim4/mainlog`, and this host rotates it with `nocreate` (see
+`/etc/logrotate.d/exim4-base`), so the new file is created by exim itself when
+it next reopens the path. Which of the two you get depends on when exim gets
+to it:
+
+- **The path is recreated before the wait closes** — the common case, and the
+  one that reads as an outage. The `Completed` line is sitting in
+  `mainlog.1`, the new `mainlog` is empty but perfectly readable, so the run
+  finds no `Completed`, exits 1 and posts the **not delivering** report. That
+  is a false page, and it fails closed: a rotation can produce a false *dead*
+  verdict but never a false healthy one.
+- **The path is still absent when the 60 seconds run out** — a narrow window
+  between the rename and exim's reopen. The canary cannot read a file that
+  does not exist, so it refuses instead: exit 2 and the **"the canary on
+  `<host>` cannot run"** report, never a claim about the relay.
+
+So the journal line is what tells you which you are looking at, and a line
+naming the log as unreadable is a rotation or a membership that has gone —
+**not** an outage to act on — while a line naming a relay verdict is a real
+one, or a rotation to rule out first. It is cheap, it is rare, and the
+alternative is chasing a relay that is working:
 
 ```bash
 ls -l --time-style=full-iso /var/log/exim4/mainlog /var/log/exim4/mainlog.1
