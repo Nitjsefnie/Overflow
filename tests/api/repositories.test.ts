@@ -1091,6 +1091,7 @@ describe("Overflow token registration", () => {
         return {
           createdAt: new Date("2026-09-05T10:00:00.000Z"),
           expiresAt: new Date("2026-12-04T10:00:00.000Z"),
+          confirmedAt: null,
         };
       });
     const bearerLookup = vi.spyOn(PostgresApiTokenStore.prototype, "findAccountByTokenHash")

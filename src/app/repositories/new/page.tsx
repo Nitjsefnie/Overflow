@@ -21,6 +21,7 @@ export default async function NewRepositoryPage() {
           ? {
             createdAt: tokenSummary.createdAt.toISOString(),
             expiresAt: tokenSummary.expiresAt.toISOString(),
+            confirmedAt: tokenSummary.confirmedAt?.toISOString() ?? null,
             expired: tokenSummary.expired,
           }
           : null}
