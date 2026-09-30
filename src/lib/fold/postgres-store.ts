@@ -22,7 +22,11 @@ import {
 } from "@/lib/fold/reconciliation-fairness";
 import type { GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import {
-  narrowCachedIssueBodies, RECONCILIATION_EVIDENCE_FORMAT,
+  DEFAULT_RECONCILIATION_FACT_BYTE_LIMIT,
+  readReconciliationEvidence,
+  synchronizeReconciliationEvidence,
+} from "@/lib/fold/evidence-facts";
+import {
   type DirtyReconciliationSubject,
   type ReconciliationEvidence,
   type ReconciliationSynchronization,
@@ -356,36 +360,6 @@ export type RepositoryRederivationRequest = {
   rederivationRequestedAt: Date | null;
 };
 
-async function synchronizeReconciliationEvidence(
-  transaction: TransactionClient,
-  repositoryId: string,
-  synchronization: ReconciliationSynchronization,
-): Promise<void> {
-  // Lock a row that exists even before bootstrap so two cold publishers cannot
-  // both pass the absence check. The version compare also fences expired workers.
-  await transaction`select id from registered_repositories where id = ${repositoryId} for update`;
-  const [current] = await transaction<{ version: number; last_full_pass_at: Date }[]>`
-    select version, last_full_pass_at from repository_reconciliation_evidence where repository_id = ${repositoryId}
-  `;
-  if ((current?.version ?? null) !== synchronization.expectedVersion) {
-    throw new Error("Stale reconciliation evidence publisher.");
-  }
-  await transaction`insert into repository_reconciliation_evidence
-    (repository_id, version, format_version, checkpoint, last_full_pass_at, issues, pull_requests)
-    values (${repositoryId}, ${(current?.version ?? 0) + 1}, ${RECONCILIATION_EVIDENCE_FORMAT},
-      ${synchronization.scanStartedAt}, ${synchronization.full ? synchronization.scanStartedAt : current?.last_full_pass_at ?? null},
-      ${transaction.json(narrowCachedIssueBodies(synchronization.issues) as unknown as JSONValue)},
-      ${transaction.json(synchronization.pullRequests as unknown as JSONValue)})
-    on conflict (repository_id) do update set version = excluded.version, format_version = excluded.format_version,
-      checkpoint = excluded.checkpoint, last_full_pass_at = excluded.last_full_pass_at,
-      issues = excluded.issues, pull_requests = excluded.pull_requests`;
-  for (const subject of synchronization.dirtySubjects) {
-    await transaction`delete from repository_reconciliation_dirty_subjects
-      where repository_id = ${repositoryId} and kind = ${subject.kind}
-        and github_subject_id = ${subject.id} and generation = ${subject.generation}`;
-  }
-}
-
 export class PostgresFoldStore implements ReconciliationStore, WebhookDeliveryStore {
   private readonly reconciliationOwnership = new AsyncLocalStorage<{
     repositoryId: string;
@@ -402,6 +376,12 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     private readonly tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY,
     private readonly coordinationSql?: SqlClient,
     private readonly previousTokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS,
+    /**
+     * Store-level tuning, injectable for tests. The only knob today is the
+     * per-fact byte limit the evidence cache omits facts over (default 64 MiB,
+     * shared with the write-batch byte budget).
+     */
+    private readonly options: { reconciliationFactByteLimit?: number } = {},
   ) {}
 
   /**
@@ -1059,7 +1039,8 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
           : "Reconciliation cost publication requires a pending run.");
       }
       if (input.synchronization !== undefined) {
-        await synchronizeReconciliationEvidence(transaction, input.repositoryId, input.synchronization);
+        await synchronizeReconciliationEvidence(transaction, input.repositoryId, input.synchronization,
+          this.options.reconciliationFactByteLimit ?? DEFAULT_RECONCILIATION_FACT_BYTE_LIMIT);
       }
       // A stale snapshot must not replay a pre-claim state over rows an
       // identity claim has since written (issue 446), so resolve the fold's
@@ -1148,14 +1129,10 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   }
 
   public async getReconciliationEvidence(repositoryId: string): Promise<ReconciliationEvidence | null> {
-    const [row] = await this.sql<{
-      version: number; format_version: number; checkpoint: Date; last_full_pass_at: Date;
-      issues: ReconciliationEvidence["issues"]; pull_requests: ReconciliationEvidence["pullRequests"];
-    }[]>`select * from repository_reconciliation_evidence where repository_id = ${repositoryId}`;
-    return row === undefined ? null : {
-      version: row.version, formatVersion: row.format_version, checkpoint: row.checkpoint,
-      lastFullPassAt: row.last_full_pass_at, issues: row.issues, pullRequests: row.pull_requests,
-    };
+    // The document is reassembled from the facts storage by the same module
+    // that splits it — same shape, deterministic order, so the fold's merge
+    // logic is unchanged.
+    return readReconciliationEvidence(this.sql, repositoryId);
   }
 
   public async getDirtyReconciliationSubjects(repositoryId: string): Promise<DirtyReconciliationSubject[]> {

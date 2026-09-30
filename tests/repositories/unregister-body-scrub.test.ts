@@ -210,7 +210,10 @@ async function materializedRows(
   return { issueId: issue!.id, pullRequestId: pullRequest!.id };
 }
 
-/** A legacy (pre-narrowing) evidence cache: wide bodies, a review and a raw diff. */
+/**
+ * A legacy (pre-narrowing) evidence cache: wide bodies, a review and a raw
+ * diff, seeded straight into the facts storage the cache now holds.
+ */
 async function seedWideEvidenceCache(
   repositoryId: string,
 ): Promise<{
@@ -274,18 +277,23 @@ async function seedWideEvidenceCache(
   const pullRequests = [{ id: externalId + 2, reviews: REVIEWS, rawDiff: RAW_DIFF }];
   await sql`
     insert into repository_reconciliation_evidence
-      (repository_id, version, format_version, checkpoint, last_full_pass_at, issues, pull_requests)
-    values (
-      ${repositoryId}, 1, ${RECONCILIATION_EVIDENCE_FORMAT}, now(), now(),
-      ${sql.json(issues)}::jsonb, ${sql.json(pullRequests)}::jsonb
-    )
+      (repository_id, version, format_version, checkpoint, last_full_pass_at)
+    values (${repositoryId}, 1, ${RECONCILIATION_EVIDENCE_FORMAT}, now(), now())
+  `;
+  await sql`
+    insert into repository_reconciliation_evidence_facts (repository_id, kind, subject_key, payload)
+    values
+      (${repositoryId}, 'issue', ${String(issues[0]!.id)}, ${sql.json(issues[0])}::jsonb),
+      (${repositoryId}, 'pull_request', ${String(pullRequests[0]!.id)}, ${sql.json(pullRequests[0])}::jsonb)
   `;
   // jsonb canonicalises key order, so byte-identity is judged on the stored
   // text read back from the database, not on the fixture's own JSON.
   const [stored] = await sql<{ issues_raw: string; pull_requests_raw: string }[]>`
-    select issues::text as issues_raw, pull_requests::text as pull_requests_raw
-    from repository_reconciliation_evidence
-    where repository_id = ${repositoryId}
+    select
+      (select payload::text from repository_reconciliation_evidence_facts
+        where repository_id = ${repositoryId} and kind = 'issue') as issues_raw,
+      (select payload::text from repository_reconciliation_evidence_facts
+        where repository_id = ${repositoryId} and kind = 'pull_request') as pull_requests_raw
   `;
   return { issues, issuesRaw: stored!.issues_raw, pullRequestsRaw: stored!.pull_requests_raw };
 }
@@ -299,19 +307,34 @@ async function evidenceCache(
   pullRequestsRaw: string;
 }> {
   const [row] = await sql<{
-    issues: Array<{ body?: string; comments: Array<{ body: string }>; closingPullRequests: Array<Record<string, unknown>> }>;
-    pull_requests: Array<unknown>;
-    issues_raw: string;
-    pull_requests_raw: string;
+    issues: { body?: string; comments: Array<{ body: string }>; closingPullRequests: Array<Record<string, unknown>> } | null;
+    pull_requests: unknown;
+    issues_raw: string | null;
+    pull_requests_raw: string | null;
   }[]>`
-    select issues, pull_requests, issues::text as issues_raw, pull_requests::text as pull_requests_raw
-    from repository_reconciliation_evidence
-    where repository_id = ${repositoryId}
+    select
+      (select payload from repository_reconciliation_evidence_facts
+        where repository_id = ${repositoryId} and kind = 'issue') as issues,
+      (select payload from repository_reconciliation_evidence_facts
+        where repository_id = ${repositoryId} and kind = 'pull_request') as pull_requests,
+      (select payload::text from repository_reconciliation_evidence_facts
+        where repository_id = ${repositoryId} and kind = 'issue') as issues_raw,
+      (select payload::text from repository_reconciliation_evidence_facts
+        where repository_id = ${repositoryId} and kind = 'pull_request') as pull_requests_raw
   `;
-  if (row === undefined) {
-    throw new Error("The evidence cache row did not survive the unregistration.");
+  // The subselects always produce exactly one row; nulls mean the seeded facts
+  // did not survive whatever this test just did to the repository.
+  if (row === undefined || row.issues_raw === null || row.pull_requests_raw === null) {
+    throw new Error("The evidence cache rows did not survive the unregistration.");
   }
-  return { issues: row.issues, pullRequests: row.pull_requests, issuesRaw: row.issues_raw, pullRequestsRaw: row.pull_requests_raw };
+  // One issue fact and one pull-request fact are seeded; surface the issue
+  // payload as the single-element array the assertions were written against.
+  return {
+    issues: [row.issues!],
+    pullRequests: [row.pull_requests],
+    issuesRaw: row.issues_raw,
+    pullRequestsRaw: row.pull_requests_raw,
+  };
 }
 
 async function insertReconciliationJob(repositoryId: string, state: "PENDING" | "RUNNING"): Promise<void> {

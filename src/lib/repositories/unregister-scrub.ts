@@ -22,8 +22,8 @@ const SETTLEMENT_EVIDENCE_WINDOW_MS = 15 * 60 * 1000;
  * unconditionally: no reader consults them, and a repository that may return
  * through re-registration keeps every identity-bearing column it had.
  *
- * The evidence cache row is rewritten in place only when no fold can still run
- * for the repository:
+ * The evidence cache's issue facts are re-narrowed in place only when no fold
+ * can still run for the repository:
  *
  * 1. **No pending job.** The job runner claims exactly PENDING rows due by
  *    run_after and RUNNING rows whose lease has expired or predates lease
@@ -45,8 +45,8 @@ const SETTLEMENT_EVIDENCE_WINDOW_MS = 15 * 60 * 1000;
  *
  * When either condition fails the cache is left byte-for-byte untouched —
  * never partially scrubbed — and the repository's free text waits for the
- * runbook. The cached `pull_requests` column (reviews and raw diffs, the
- * settlement proof material) is never written on any path.
+ * runbook. The pull-request facts (reviews and raw diffs, the settlement
+ * proof material) are never written on any path.
  */
 export async function scrubRepositoryFreeText(
   transaction: TransactionClient,
@@ -81,18 +81,32 @@ export async function scrubRepositoryFreeText(
     return;
   }
 
-  const [evidence] = await transaction<{ issues: BodyBearingCachedIssue[] }[]>`
-    select issues from repository_reconciliation_evidence where repository_id = ${repositoryId}
+  const issueFacts = await transaction<{ subject_key: string; payload: BodyBearingCachedIssue }[]>`
+    select subject_key, payload from repository_reconciliation_evidence_facts
+    where repository_id = ${repositoryId} and kind = 'issue'
   `;
-  if (evidence === undefined) {
+  if (issueFacts.length === 0) {
     return;
   }
   // The narrowing is idempotent over already-narrowed caches, and the spread it
   // maps with leaves every other cached field — ids, reviews, raw diffs —
-  // exactly as it found them.
-  await transaction`
-    update repository_reconciliation_evidence
-    set issues = ${transaction.json(narrowCachedIssueBodies(evidence.issues) as unknown as JSONValue)}
-    where repository_id = ${repositoryId}
-  `;
+  // exactly as it found them. Only facts the narrowing actually changes are
+  // rewritten; both sides of the comparison come from jsonb round-trips, so
+  // their key order is the database's own canonical order and the serialized
+  // forms are directly comparable.
+  const narrowedFacts = narrowCachedIssueBodies(issueFacts.map(({ payload }) => payload));
+  for (const [index, fact] of issueFacts.entries()) {
+    const narrowed = narrowedFacts[index]!;
+    if (JSON.stringify(narrowed) === JSON.stringify(fact.payload)) {
+      continue;
+    }
+    // The SQL-side distinct guard is defense in depth: the row is not touched
+    // when the stored payload is already jsonb-equal to the narrowed one.
+    await transaction`
+      update repository_reconciliation_evidence_facts
+      set payload = ${transaction.json(narrowed as unknown as JSONValue)}
+      where repository_id = ${repositoryId} and kind = 'issue' and subject_key = ${fact.subject_key}
+        and payload is distinct from ${transaction.json(narrowed as unknown as JSONValue)}
+    `;
+  }
 }

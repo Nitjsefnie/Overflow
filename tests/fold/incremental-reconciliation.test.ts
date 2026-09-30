@@ -57,10 +57,11 @@ describe("incremental reconciliation", () => {
     // The row stops holding body text (issue 681), and the cache write drops
     // the issue body outright, so the sanitized title is the surviving check.
     expect(issueRow).toMatchObject({ title: "Dirty\uFFFDtitle", body: null });
-    const [evidence] = await sql`select issues from repository_reconciliation_evidence where repository_id = ${f.id}`;
-    const cachedIssue = evidence!.issues.find(({ id }: { id: number }) => id === issue.id)!;
-    expect(cachedIssue).toMatchObject({ title: "Dirty\uFFFDtitle" });
-    expect("body" in cachedIssue).toBe(false);
+    const [cachedFact] = await sql<{ payload: { title: string; body?: string } }[]>`
+      select payload from repository_reconciliation_evidence_facts
+      where repository_id = ${f.id} and kind = 'issue' and subject_key = ${String(issue.id)}`;
+    expect(cachedFact!.payload).toMatchObject({ title: "Dirty\uFFFDtitle" });
+    expect("body" in cachedFact!.payload).toBe(false);
   });
 
   it("replaces NUL in forge evidence and derived rows before hashing, including a cached second run", async () => {
@@ -84,19 +85,26 @@ describe("incremental reconciliation", () => {
     expect(issueRow).toMatchObject({ title: "Issue\uFFFDtitle", body: null });
     expect(prRow).toMatchObject({ title: "PR\uFFFDtitle", body: null,
       proof_sha256: createHash("sha256").update("diff\uFFFDbody").digest("hex") });
-    const [evidence] = await sql`select issues, pull_requests from repository_reconciliation_evidence where repository_id = ${f.id}`;
+    const [cachedIssueFact] = await sql<{ payload: { body?: string; comments: Array<{ body: string }>; closingPullRequests: Array<Record<string, unknown>> } }[]>`
+      select payload from repository_reconciliation_evidence_facts
+      where repository_id = ${f.id} and kind = 'issue' and subject_key = ${String(issue.id)}`;
+    const [cachedPrFact] = await sql<{ payload: { id: number; rawDiff: string } }[]>`
+      select payload from repository_reconciliation_evidence_facts
+      where repository_id = ${f.id} and kind = 'pull_request' and subject_key = ${String(pr.id)}`;
+    expect(cachedIssueFact).toBeDefined();
+    expect(cachedPrFact).toBeDefined();
     // New cache writes stop holding body text (issue 681): comment bodies
     // become the fixed placeholder, issue and nested pull request bodies are
     // dropped, and everything else \u2014 sanitized titles and the raw diff \u2014 still
     // round-trips.
-    const cachedIssue = evidence!.issues.find(({ id }: { id: number }) => id === issue.id)!;
+    const cachedIssue = cachedIssueFact!.payload;
     expect(cachedIssue).toMatchObject({
       title: "Issue\uFFFDtitle", comments: [{ body: CACHED_COMMENT_BODY_PLACEHOLDER }],
       closingPullRequests: [{ title: "PR\uFFFDtitle" }],
     });
     expect("body" in cachedIssue).toBe(false);
     expect("body" in cachedIssue.closingPullRequests[0]!).toBe(false);
-    expect(evidence!.pull_requests.find(({ id }: { id: number }) => id === pr.id)).toMatchObject({ rawDiff: "diff\uFFFDbody" });
+    expect(cachedPrFact!.payload).toMatchObject({ id: pr.id, rawDiff: "diff\uFFFDbody" });
 
     f.clock = new Date("2026-09-08T10:02:00Z");
     await f.run();
@@ -178,10 +186,10 @@ describe("incremental reconciliation", () => {
     expect(await closures()).toEqual([{ kind: "NO_CLOSING_PULL_REQUEST" }]);
     // Version 1 retained issues without a closure reason. Keep the upstream
     // timestamp unchanged so only cache invalidation can recover the reason.
-    await sql`update repository_reconciliation_evidence
-      set format_version = 1,
-          issues = (select jsonb_agg(issue - 'stateReason') from jsonb_array_elements(issues) as issue)
-      where repository_id = ${f.id}`;
+    await sql`update repository_reconciliation_evidence set format_version = 1 where repository_id = ${f.id}`;
+    await sql`update repository_reconciliation_evidence_facts
+      set payload = payload - 'stateReason'
+      where repository_id = ${f.id} and kind = 'issue'`;
     issue.stateReason = "NOT_PLANNED";
     f.clock = new Date("2026-09-08T10:02:00Z");
 

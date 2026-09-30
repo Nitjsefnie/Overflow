@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -117,6 +117,64 @@ describe("durable reconciliation evidence", () => {
     expect(await store.getReconciliationEvidence(repositoryId)).toMatchObject({
       version: 3, checkpoint: second, lastFullPassAt: second, issues: [], pullRequests: [],
     });
+  });
+
+  // Mutant: DROPPED_NOOP_GUARD — a pass whose document is unchanged must not
+  // rewrite a single fact row, or every quiet pass rewrites the whole cache
+  // again (issue 853). The AFTER row-level trigger fires only on an actual row
+  // write — a BEFORE trigger would also fire on an insert attempt that the
+  // no-op guard then skips — so a pass that only re-reads passes, and one
+  // rewritten fact fails the test.
+  it("performs no fact writes when a re-synchronized document is unchanged", async () => {
+    const { store, repositoryId, fold } = await materializeRepositoryFixture(sql);
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold, synchronization: synchronization() }));
+    await sql`create function reject_fact_test_write() returns trigger language plpgsql as $$
+      begin raise exception 'injected fact write'; end $$`;
+    await sql`create trigger reject_fact_test_write
+      after insert or update or delete on repository_reconciliation_evidence_facts
+      for each row execute function reject_fact_test_write()`;
+    try {
+      await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
+        synchronization: { ...synchronization(), expectedVersion: 1 } }));
+    } finally {
+      await sql`drop trigger reject_fact_test_write on repository_reconciliation_evidence_facts`;
+      await sql`drop function reject_fact_test_write()`;
+    }
+    // The pass itself committed: the metadata advanced while no fact row moved.
+    expect(await sql`select version from repository_reconciliation_evidence where repository_id = ${repositoryId}`)
+      .toEqual([{ version: 2 }]);
+  });
+
+  // Mutant: the split silently dropping an oversized fact without flagging it, or the
+  // store attempting the oversized write anyway (the issue 850 failure shape).
+  it("omits a fact over the injected byte limit, flags the count, and keeps the rest of the cache", async () => {
+    const { repositoryId, fold } = await materializeRepositoryFixture(sql);
+    // A limit between the small issue's payload size and the oversized one's:
+    // only the large fact crosses it.
+    const store = new PostgresFoldStore(sql, undefined, undefined, undefined, { reconciliationFactByteLimit: 600 });
+    const oversizedIssue = { ...rawIssue(), id: 102, number: 2, title: "x".repeat(1000) };
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    let errorCalls: unknown[][] = [];
+    try {
+      await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
+        synchronization: { ...synchronization(), issues: [rawIssue(), oversizedIssue], pullRequests: [{ id: 201, reviews: [], rawDiff: "retained diff" }] } }));
+    } finally {
+      errorCalls = logged.mock.calls.slice();
+      logged.mockRestore();
+    }
+    expect(errorCalls).toHaveLength(1);
+    expect(String(errorCalls[0]?.[0])).toContain(repositoryId);
+    expect(String(errorCalls[0]?.[0])).toContain("102");
+    expect(await sql`select omitted_oversized_facts from repository_reconciliation_evidence where repository_id = ${repositoryId}`)
+      .toEqual([{ omitted_oversized_facts: 1 }]);
+    expect(await sql`select kind, subject_key from repository_reconciliation_evidence_facts where repository_id = ${repositoryId} order by kind, subject_key`)
+      .toEqual([
+        { kind: "issue", subject_key: "101" },
+        { kind: "pull_request", subject_key: "201" },
+      ]);
+    const cached = await store.getReconciliationEvidence(repositoryId);
+    expect(cached?.issues.map(({ id }) => id)).toEqual([101]);
+    expect(cached?.pullRequests.map(({ id }) => id)).toEqual([201]);
   });
 
   // Mutant: ACCEPT_STALE_CACHE_VERSION.

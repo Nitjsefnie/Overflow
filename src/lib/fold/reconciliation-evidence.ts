@@ -7,7 +7,12 @@ import type {
 } from "@/lib/github/types";
 
 // Earlier evidence may contain unchecked bulk timelines; force a complete refresh.
-export const RECONCILIATION_EVIDENCE_FORMAT = 3;
+// Format 4 moves the two arrays into row-per-fact storage
+// (repository_reconciliation_evidence_facts). The bump is what keeps a
+// metadata row that survived the migration honest: its facts table starts
+// empty, and a matching format would let a partial pass read that emptiness as
+// "nothing cached" instead of forcing the full pass that repopulates it.
+export const RECONCILIATION_EVIDENCE_FORMAT = 4;
 
 /**
  * Fixed nonblank string that replaces every nonblank cached comment body when
