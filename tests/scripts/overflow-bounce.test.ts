@@ -120,6 +120,8 @@ function seedOffset(stateDir: string, value: string): void {
  */
 function mboxMessage(opts: {
   subject: string;
+  /** The From: header, when the test cares about the message's identity. */
+  from?: string;
   dsn?: "exim" | "gmail";
   failedAddress?: string;
   body?: string;
@@ -128,9 +130,11 @@ function mboxMessage(opts: {
     "From MAILER-DAEMON Fri Sep 26 10:00:00 2026",
     "Return-path: <>",
     "Envelope-to: root@bounce.test.example",
-    `Subject: ${opts.subject}`,
-    "",
   ];
+  if (opts.from !== undefined) {
+    lines.push(`From: ${opts.from}`);
+  }
+  lines.push(`Subject: ${opts.subject}`, "");
   if (opts.dsn === "exim") {
     lines.push(
       "This message was created automatically by mail delivery software.",
@@ -172,6 +176,14 @@ function expectedContent(subject: string, failedAddress?: string): string {
     `[overflow] a delivery-failure notification arrived for an overflow ` +
     `alert or canary message on ${fqdn}: ${subject}` +
     (failedAddress !== undefined ? `; ${failedAddress}` : "");
+  return summary.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/** The report text contract for the Class B local-write report. */
+function expectedLocalWriteContent(subject: string): string {
+  const summary =
+    `[overflow] an overflow alert or canary message on ${fqdn} landed in ` +
+    `the local spool instead of delivering off-host: ${subject}`;
   return summary.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
@@ -426,6 +438,74 @@ describe("overflow-bounce.sh report filter", () => {
 
     expect(run.status).toBe(0);
     expect(run.posted, "no overflow reference means no report").toBe(false);
+    expect(offsetValue(stateDir)).toBe(spoolSize(spool));
+  });
+});
+
+describe("overflow-bounce.sh class B (local-write detection)", () => {
+  it("reports a non-DSN alert message whose From local part is overflow-alert (case 11)", () => {
+    const root = makeRoot();
+    const alertSubject = `[overflow] overflow.service failed on ${fqdn}`;
+    const spool = makeSpool(
+      root,
+      mboxMessage({
+        subject: alertSubject,
+        from: `overflow-alert@${fqdn}`,
+        body: `The systemd unit overflow.service failed on host ${fqdn} at 2026-09-26T10:00:00Z.`,
+      }),
+    );
+    const stateDir = makeStateDir(root);
+    seedOffset(stateDir, "0\n");
+
+    const run = runBounce({ spool, stateDir });
+
+    expect(run.status).toBe(0);
+    expect(run.posted, "an alert in the local spool is an undelivered alert").toBe(true);
+    expect(run.argvLines).toEqual(expectedCurlArgv);
+    expect(run.payload).toBe(`{"content":"${expectedLocalWriteContent(alertSubject)}"}`);
+    expect(offsetValue(stateDir)).toBe(spoolSize(spool));
+  });
+
+  it("does not report cron mail quoting [overflow] in its body: the match is the From header, never body text (case 12)", () => {
+    const root = makeRoot();
+    const spool = makeSpool(
+      root,
+      mboxMessage({
+        subject: cronSubject,
+        from: `Cron Daemon <root@${fqdn}>`,
+        body: `[overflow] alert script output mentioning overflow-canary@${fqdn}`,
+      }),
+    );
+    const stateDir = makeStateDir(root);
+    seedOffset(stateDir, "0\n");
+
+    const run = runBounce({ spool, stateDir });
+
+    expect(run.status).toBe(0);
+    expect(run.posted, "body text must never trigger the local-write report").toBe(false);
+    expect(offsetValue(stateDir)).toBe(spoolSize(spool));
+  });
+
+  it("classifies a Mailer-Daemon DSN referencing the alert as class A, not B (case 13)", () => {
+    const root = makeRoot();
+    const spool = makeSpool(
+      root,
+      mboxMessage({
+        subject: dsnSubject,
+        from: `Mailer-Daemon@${fqdn}`,
+        dsn: "exim",
+        failedAddress: overflowAlertAddress,
+      }),
+    );
+    const stateDir = makeStateDir(root);
+    seedOffset(stateDir, "0\n");
+
+    const run = runBounce({ spool, stateDir });
+
+    expect(run.status).toBe(0);
+    expect(run.posted).toBe(true);
+    expect(run.payload).toBe(`{"content":"${expectedContent(dsnSubject, overflowAlertAddress)}"}`);
+    expect(run.payload).not.toContain("landed in the local spool");
     expect(offsetValue(stateDir)).toBe(spoolSize(spool));
   });
 });
