@@ -7,10 +7,22 @@ is responsible for sending them. Operators preserve evidence and carry out the
 agreed containment and recovery. Record what is known, what is inferred and
 what remains unknown; do not put credentials in the incident record.
 
-> **OPEN — maintainer decision:** the private contact address (see #650 and
-> #679). This runbook does not supply an address.
+The private contact route is GitHub's private vulnerability reporting on the
+Nitjsefnie/Overflow repository; its report entry point is
+https://github.com/Nitjsefnie/Overflow/security/advisories/new, and the
+setting was verified enabled on 2026-09-30 (`gh api
+repos/Nitjsefnie/Overflow/private-vulnerability-reporting` returns
+`{"enabled":true}`). Sensitive incident reports and sensitive data-subject
+requests go there; non-sensitive contact stays on the public issue tracker.
+This follows #650 and #679, which remain the source of the contact decision.
 
-> **OPEN — maintainer decision:** where the incident log is kept.
+Nitjsefnie keeps the incident log in `/var/lib/overflow/breach-log/` on the
+service host: a directory owned by root, mode 0700, holding one Markdown
+file per breach, named `YYYY-MM-DD-<short-slug>-UTC.md`. It does not exist
+yet; create it at first use with `install -d -m 0700
+/var/lib/overflow/breach-log`. The log is never committed to the public
+repository and never copied into it. The responding operator writes entries
+as they respond; Nitjsefnie owns the record and its notification decisions.
 
 Private vulnerability reporting: see #642. Alerting: see #651.
 
@@ -358,11 +370,69 @@ without those secrets. Record who may access the evidence and the
 maintainer's decision about its handling; this runbook sets no new retention
 period for incident evidence or database rows.
 
+### Breach-log entries
+
+Every breach gets a timestamped entry in the log, written as the response
+proceeds, including a breach for which notification was not made: Article
+33(5) GDPR requires documenting those too, with the reasons for not
+notifying. The log is the record required by Article 33(5) GDPR, and it
+exists so scope reconstruction and any later supervisory-authority
+verification do not depend on the journal's size-bound retention (a 4 GiB
+cap, the oldest entry months back, rsyslog off, the journal the only copy;
+measured in [Journal retention and immediate
+preservation](#journal-retention-and-immediate-preservation)).
+
+Each entry records:
+
+- **Facts**: what happened and how it was detected; discovery time in UTC;
+  suspected start and end in UTC; systems and data affected.
+- **Effects**: likely and actual effects on the people whose data was
+  involved, for confidentiality, integrity and availability.
+- **Remedial action**: containment and recovery actions taken, by whom, and
+  when.
+- **Notification decision and timing**: whether the supervisory authority
+  was notified and when; whether data subjects were communicated and when;
+  where notification was not made, the reasons for that decision.
+- **Scope reconstruction**: affected account, token-issuance and subject
+  IDs; journal and nginx access-log export time bounds and file locations;
+  evidence access restriction: who may access the evidence and the
+  maintainer's handling decision.
+- **Record-keeping**: who wrote the entry and when; who approved it.
+
 ## Notification decision
 
 Nitjsefnie decides whether notification is required, who receives it, what it
 says and when, and sends it. Present the known scope, affected data/actions,
 impact, evidence gaps and containment status for that decision. Record the
-decision, reasoning, decision time and any notifications actually sent.
-This runbook does not choose a supervisory authority, lawful basis, contact
-address or notification deadline.
+decision, reasoning, decision time and any notifications actually sent; the
+decision and its timing are recorded in the breach log (see
+[Record](#record)).
+
+The supervisory authority is Úřad pro ochranu osobních údajů (ÚOOÚ), the
+Czech Republic's supervisory authority for personal data protection
+(https://uoou.gov.cz). That characterisation is evidence-based, not a legal
+opinion: the controller is Nitjsefnie personally (maintainer decision of
+2026-09-28, recorded in #679), and the evidence of establishment points at
+the Czech Republic, through the maintainer's public GitHub profile and
+organisations (for example Consultest-CZ) and the .cz domains operated by
+the account. Whether that evidence amounts to establishment is
+specialist-dependent in character; the authority above is stated on that
+evidence.
+
+The statutory frame that decision applies, cited as the articles stand in
+the regulation:
+
+- **Article 33 GDPR** (notification to the supervisory authority): notify
+  without undue delay and, where feasible, no later than 72 hours after
+  becoming aware of the breach, unless the breach is unlikely to result in a
+  risk to natural persons' rights and freedoms. Awareness can be established
+  at any point, so the clock is measured from awareness; notification not
+  made within 72 hours is accompanied by reasons for the delay
+  (Article 33(1)).
+- **Article 33(5) GDPR**: document every breach; the breach log (see
+  [Record](#record)) is that record.
+- **Article 34 GDPR** (communication to data subjects): without undue delay
+  where the breach is likely to result in a high risk to their rights and
+  freedoms. Article 34(3) names the exceptions, among them data rendered
+  unintelligible, subsequent measures making the high risk unlikely, and
+  disproportionate effort, where a public communication is made instead.
