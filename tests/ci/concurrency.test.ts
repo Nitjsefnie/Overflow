@@ -17,8 +17,11 @@ import { parse } from "yaml";
  * request lands in a single repository-level group, so at most one run of that
  * workflow is in flight repository-wide and the aggregate stops tracking the
  * open-pull-request count; every other leg keys on its own `github.sha`, so a
- * push to main, a schedule tick and a dispatch each get a private group and
- * nothing the deploy gate reads is ever cancelled by a later event.
+ * push to main gets a private group and nothing the deploy gate reads is ever
+ * cancelled by a later event. A `schedule` tick and a `workflow_dispatch` land
+ * in the same non-PR arm but do NOT get a private group: on a schedule event
+ * `github.sha` is the default branch's tip, which is the very SHA a push run for
+ * that tip carries, so the two share a group. Harmless at one weekly tick.
  *
  * The shared group is paired with `cancel-in-progress: false`, and the flag is
  * what a reader is most likely to get wrong in either direction. GitHub's own
@@ -45,19 +48,27 @@ import { parse } from "yaml";
  * with no `edited`, so that pull request stays blocked until its author pushes
  * again. `false` is strictly better than `true`, never a cure.
  *
- * The rates, from the 483 `ci` runs of the 6.13 days ending 2026-09-30 (mean
- * service 6.58 min). Load is not steady — per-day arrivals 5, 0, 215, 122, 78,
- * 17, 46 — so a window mean alone understates the regime that matters:
+ * The rates. Of the 483 `ci` runs in the 6.13 days ending 2026-09-30, only
+ * the 370 pull-request arrivals ever enter `ci-repo-wide`; the 106 `push` and 7
+ * `workflow_dispatch` runs key their own `github.sha` and cannot contend with
+ * anything, so counting them inflated both the arrival rate and rho. Load is
+ * also not steady — per-day all-event arrivals were 5, 0, 215, 122, 78, 17, 46.
+ * M/M/1 with one waiting place over the PR arrivals, mean PR-leg service 6.44
+ * min, where pending-cancelled is n*pi2 and running-cancelled-if-`true` is
+ * n*(pi1+pi2):
  *
- * | date | arrivals | rho | pending-cancelled | running-cancelled if `true` |
+ * | date | PR arrivals | rho | pending-cancelled | running-cancelled if `true` |
  * |---|---:|---:|---:|---:|
- * | 2026-09-26 | 215 | 0.98 | ~70/day | ~72/day |
- * | 2026-09-27 | 122 | 0.56 | ~20/day | ~57/day |
- * | 2026-09-28 | 78 | 0.36 | ~7/day | ~25/day |
- * | window mean | 79 | 0.36 | ~7/day | ~26/day |
+ * | 2026-09-26 | 171 | 0.76 | ~43/day | ~98/day |
+ * | 2026-09-27 | 95 | 0.42 | ~11/day | ~36/day |
+ * | 2026-09-28 | 59 | 0.26 | ~3/day | ~15/day |
+ * | window mean | 60 | 0.27 | ~3/day | ~15/day |
  *
- * M/M/1 with one waiting place, cross-checked by replaying the real arrival
- * timestamps (97 pending cancellations against ~99 predicted). On `main` the
+ * These are a LOWER bound, because a Poisson fit understates a bursty arrival
+ * process. Replaying the real arrival timestamps instead produced materially
+ * higher figures (97 and 134 pending cancellations per window, depending on
+ * which arrival set and service-time treatment was used), and neither replay
+ * reproduced stably, so no single replayed number is quoted here. On `main` the
  * mechanism already fires inside per-PR groups: 9 of 482 completed `ci` runs
  * concluded cancelled, every one a same-PR self-supersede.
  *
@@ -343,14 +354,14 @@ describe("the bounded workflows", () => {
     for (const [name] of Object.entries(BOUNDED)) {
       expect(
         workflows.get(name)!.concurrency?.group,
-        `${name}'s group must be exactly the parenthesised event-class form: ` +
-          "a literal prefix, then the two pull-request event names in parentheses, " +
-          "then an &&-gated 'repo-wide' arm, then a fall back to github.sha. Two things " +
-          "non-pull-request leg keys on github.sha so that no push to main shares a group with " +
-          "another event — the deploy gate refuses a merged SHA whose check concludes cancelled " +
-          "(issue 474) — and the pull-request arm must be parenthesised, because && binds tighter " +
-          "than || and the unparenthesised form reads as `a || (b && 'repo-wide') || github.sha`, " +
-          "which gives every pull_request run its own SHA group and bounds nothing.",
+        `${name}'s group must be exactly the parenthesised event-class form: a literal prefix, ` +
+          "then the two pull-request event names in parentheses, then an &&-gated 'repo-wide' " +
+          "arm, then a fallback to github.sha. Two things ride on that shape. The non-pull-request " +
+          "leg keys on github.sha so that no push to main shares a group with another event — the " +
+          "deploy gate refuses a merged SHA whose check concludes cancelled (issue 474). And the " +
+          "pull-request arm must be parenthesised, because && binds tighter than ||: the " +
+          "unparenthesised form reads as `a || (b && 'repo-wide') || github.sha`, which gives every " +
+          "pull_request run its own SHA group and bounds nothing.",
       ).toMatch(/^\S+-\$\{\{ \(github\.event_name == 'pull_request' \|\| github\.event_name == 'pull_request_target'\) && 'repo-wide' \|\| github\.sha \}\}$/);
     }
   });
@@ -374,8 +385,10 @@ describe("the bounded workflows", () => {
     // author's own. `verify`, `actionlint` and `ratchet-guard` are the required
     // contexts in .github/required-checks.json and ledger-relay mirrors a run
     // conclusion onto them, so that cancellation blocks a pull request that did
-    // nothing wrong. Measured at the window mean that is ~26 destroyed running
-    // runs a day, ~72 on the busiest measured day.
+    // nothing wrong. Measured over the 370 pull-request arrivals of the 6.13-day
+    // window that is ~15 destroyed running runs a day, ~98 on the busiest
+    // measured day (the 106 push and 7 dispatch runs key their own SHA and never
+    // contend, so they are not in either figure).
     //
     // The message below is careful about what this does and does not buy,
     // because the over-strong version of the claim is the one that was shipped
@@ -509,7 +522,7 @@ describe("the workflows left unbounded", () => {
     }
   });
 
-  it("never cover a workflow that produces a required check", () => {
+  it("never covers a workflow that produces a required check", () => {
     // The mechanical half of the de-bounding guard, and the only one in the
     // suite. Moving ci.yml, actionlint.yml or ratchet-guard.yml out of BOUNDED
     // and reverting its group passes every other assertion here, because the
@@ -550,10 +563,19 @@ describe("the workflows left unbounded", () => {
  * `workflows.has` assertion to name.
  */
 function requiredCheckWorkflows(): string[] {
-  const pins = JSON.parse(
-    readFileSync(resolve(".github/required-checks.json"), "utf8"),
-  ) as Record<string, string>;
-  return [...new Set(Object.values(pins).map((path) => path.split("/").pop()!))];
+  // Typed as `unknown` and narrowed, not as `Record<string, string>`: a future
+  // object- or array-valued entry would otherwise throw a bare TypeError from
+  // `.split` with no actionable message, which reads as a broken test rather
+  // than a contract that needs updating.
+  const pins: unknown = JSON.parse(readFileSync(resolve(".github/required-checks.json"), "utf8"));
+  const paths = pins && typeof pins === "object" ? Object.values(pins) : [];
+  return [
+    ...new Set(
+      paths
+        .filter((value): value is string => typeof value === "string")
+        .map((path) => path.split("/").pop()!),
+    ),
+  ];
 }
 
 /** True when any of the two fork-reachable events appears in a workflow's `on` block. */

@@ -243,9 +243,10 @@ describe("the verify workflow's migration immutability step", () => {
  * DIFFERENT pull request, and `verify` is a required context in
  * `.github/required-checks.json` that `ledger-relay` mirrors a run conclusion
  * onto, so a cancelling flag would let one contributor's push knock down a
- * peer's required check. Measured over the 6.13 days ending 2026-09-30 that
- * would be ~26 destroyed running runs a day at the window mean and ~72 on the
- * busiest measured day.
+ * peer's required check. Measured over the 370 pull-request arrivals of the
+ * 6.13-day window ending 2026-09-30 — the 106 push and 7 dispatch runs key their
+ * own SHA and never contend — that would be ~15 destroyed running runs a day at
+ * the window mean and ~98 on the busiest measured day.
  *
  * What `false` does NOT do, and this comment used to imply it did: it does not
  * prevent cancellation. GitHub still cancels the group's PENDING run when a
@@ -257,9 +258,12 @@ describe("the verify workflow's migration immutability step", () => {
  * group; `false` removes the in-flight half only, and `true` would add it back
  * on top. The honest rates, from the same 483-run window (mean service 6.58
  * min, load not steady — per-day arrivals 5, 0, 215, 122, 78, 17, 46):
- * pending-cancelled ~7/day at the window mean, ~20 on 2026-09-27, ~70 on
- * 2026-09-26's rho=0.98; against 9 such cancellations in the whole window on
- * main, every one a same-PR self-supersede. On runner minutes the direction is
+ * pending-cancelled ~3/day at the window mean, ~11 on 2026-09-27, ~43 on
+ * 2026-09-26's rho=0.76; against 9 such cancellations in the whole window on
+ * main, every one a same-PR self-supersede. Those are a lower bound: a Poisson
+ * fit understates a bursty arrival process, and replays of the real arrival
+ * timestamps ran materially higher, so the residual is not smaller than stated.
+ * On runner minutes the direction is
  * counter-intuitive: `true` would bill FEWER minutes, because a destroyed run
  * stops accruing, so `false` costs minutes and is bought deliberately. The bound
  * is unaffected either way — one running slot caps concurrency at 1 — and a run
