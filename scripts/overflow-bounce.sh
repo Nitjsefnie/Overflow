@@ -62,6 +62,20 @@
 # three outcomes: off-host accepted (silence), local write (Class B), and
 # refused/deferred/remote-dead (Class A).
 #
+# The offset parks at the end of the last COMPLETE message. The spool is
+# appended to concurrently - cron mail lands throughout the day, and the
+# nightly backup's mail lands exactly on the 15-minute grid this watcher
+# runs on - so a read can end mid-append, on a final message whose
+# terminating blank line has not been written yet. Classifying that
+# fragment loses mail twice over: a fragment whose headers and markers
+# already arrived gets reported on content never seen whole, and advancing
+# past a fragment hands the remainder to the next run as a headerless blob
+# no classifier can place - a bounce silently swallowed. So a message
+# without its terminating blank line is left unread until the next run
+# re-reads it whole. A partial tail is a concurrent append, not corruption:
+# the cost of waiting is one timer period, and the cost of reading early is
+# a swallowed message.
+#
 # Any other new message advances the offset silently.
 #
 # Host configuration, read at run time and never committed: the spool path,
@@ -82,6 +96,15 @@ spool=${OVERFLOW_BOUNCE_SPOOL:-/var/mail/mail}
 state_dir=${OVERFLOW_BOUNCE_STATE_DIR:-/var/lib/overflow-bounce}
 webhook_file=${OVERFLOW_BOUNCE_WEBHOOK_FILE:-/etc/overflow/canary-discord-webhook}
 offset_file=$state_dir/offset
+
+# mbox offsets are BYTE counts - the offset file stores wc -c positions and
+# the spool is read with tail -c - so the byte-accounting tools below run in
+# the C locale: awk's length() must count bytes, not multibyte characters,
+# or one non-ASCII subject line would shift every offset computed after it.
+# Classification is unaffected (the markers are ASCII), and the payload
+# keeps the subject's original bytes.
+LC_ALL=C
+export LC_ALL
 
 # The report has to name its host, and the override exists only for tests; a
 # deployed run resolves the FQDN itself, and a resolution failure is fatal
@@ -200,7 +223,30 @@ segment=$tmp_dir/segment
 reports=$tmp_dir/reports
 tail -c +$((offset + 1)) "$spool" > "$segment"
 
-# Split the segment into mbox messages and emit one line per reportable
+# The bytes up to and including the last COMPLETE message. A message is
+# complete when the chunk since its From_ separator ENDS with a blank line -
+# the terminating blank line. An interior blank line (the header/body
+# separator) is not an end: every message carries one, and a torn message's
+# headers can be fully appended while its body is still missing. So the
+# completion point is advanced only where a chunk is seen to end blank: at
+# the next From_ line, or at end-of-file for the final chunk. Whatever the
+# last chunk trails behind is a message caught mid-append: excluded from
+# classification and from the offset advance, and re-read whole next run.
+complete_bytes=$(awk '
+  BEGIN { off = 0; complete = 0; prev_blank = 1 }
+  {
+    if ($0 ~ /^From /) {
+      if (prev_blank) complete = off
+    }
+    prev_blank = ($0 == "")
+    off += length($0) + 1
+  }
+  END { if (prev_blank) complete = off; print complete }
+' "$segment")
+complete_prefix=$tmp_dir/complete
+head -c "$complete_bytes" "$segment" > "$complete_prefix"
+
+# Split the complete prefix into mbox messages and emit one line per reportable
 # bounce: "<A|B><TAB><subject><TAB><failed-address>". The From_ separator
 # line is what mbox writes between messages, and a body line can only start
 # with "From " if the delivering agent failed to escape it - the same
@@ -250,7 +296,7 @@ awk '
     else if (!failed && index($0, "The following address")) failed = 1
   }
   END { emit() }
-' "$segment" > "$reports"
+' "$complete_prefix" > "$reports"
 
 tab=$(printf '\t')
 while IFS="$tab" read -r rclass subject addr; do
@@ -292,13 +338,14 @@ while IFS="$tab" read -r rclass subject addr; do
   fi
 done < "$reports"
 
-# Every message in the batch was examined and every report due was posted:
-# only now does the offset advance. A state directory or offset file that
+# Every complete message in the batch was examined and every report due was
+# posted: only now does the offset advance, and only across the complete
+# prefix - a torn tail stays unread. A state directory or offset file that
 # cannot be written is warned about and the run still exits 0 - the reports
 # went out, and the cost of the lost advance is a duplicate report next run,
 # which the rotation discipline already accepts; failing the unit instead
 # would page over bookkeeping.
-new_offset=$((offset + $(wc -c < "$segment" | tr -d ' ')))
+new_offset=$((offset + complete_bytes))
 if ! mkdir -p "$state_dir"; then
   echo "overflow-bounce.sh: could not create state directory $state_dir; not advancing the offset, so the next run reports the same bounces again" >&2
   exit 0
