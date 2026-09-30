@@ -162,6 +162,10 @@ function mboxMessage(opts: {
   } else {
     lines.push(opts.body ?? "cron output line");
   }
+  // The mbox terminating blank line: a complete message ends with one, and
+  // the script parks the offset before any message that lacks it (case 14).
+  // Tests that need a torn message slice this trailing terminator off.
+  lines.push("");
   return lines.join("\n") + "\n";
 }
 
@@ -506,6 +510,73 @@ describe("overflow-bounce.sh class B (local-write detection)", () => {
     expect(run.posted).toBe(true);
     expect(run.payload).toBe(`{"content":"${expectedContent(dsnSubject, overflowAlertAddress)}"}`);
     expect(run.payload).not.toContain("landed in the local spool");
+    expect(offsetValue(stateDir)).toBe(spoolSize(spool));
+  });
+});
+
+describe("overflow-bounce.sh torn-tail handling (concurrent append)", () => {
+  it("parks the offset at the last complete message when the final message is torn, and reports it once the append completes (case 14)", () => {
+    const root = makeRoot();
+    // The complete message ahead of the torn one is inert: the only
+    // reportable thing in this spool is the torn message, so any post at
+    // all means partial content was classified.
+    const settledMail = mboxMessage({ subject: cronSubject, body: "settled batch output" });
+    // The torn message: everything up to the mbox terminating blank line,
+    // which the concurrent append has not written yet. Its headers, DSN
+    // marker and overflow reference are all present - classification on
+    // partial content is exactly what must not happen.
+    const tornBounce =
+      mboxMessage({
+        subject: "bounce caught mid-append",
+        dsn: "exim",
+        failedAddress: overflowAlertAddress,
+      }).slice(0, -1);
+    const spool = makeSpool(root, settledMail + tornBounce);
+    const stateDir = makeStateDir(root);
+    seedOffset(stateDir, "0\n");
+
+    const torn = runBounce({ spool, stateDir });
+
+    expect(torn.status).toBe(0);
+    expect(torn.posted, "a partial message must not be classified").toBe(false);
+    expect(offsetValue(stateDir)).toBe(spoolSize(spool) - tornBounce.length);
+
+    // The append completes. The next run re-reads the tail whole and
+    // reports the message it previously left parked.
+    appendToSpool(spool, "\n");
+
+    const done = runBounce({ spool, stateDir });
+
+    expect(done.status).toBe(0);
+    expect(done.posted, "the completed message is reported on the next run").toBe(true);
+    expect(done.payload).toBe(
+      `{"content":"${expectedContent("bounce caught mid-append", overflowAlertAddress)}"}`,
+    );
+    expect(offsetValue(stateDir)).toBe(spoolSize(spool));
+  });
+
+  it("reports a complete trailing message normally when nothing is torn (case 15)", () => {
+    const root = makeRoot();
+    const spool = makeSpool(
+      root,
+      mboxMessage({ subject: cronSubject }) +
+        mboxMessage({ subject: cronSubject, body: "burst output" }) +
+        mboxMessage({
+          subject: "trailing complete bounce",
+          dsn: "exim",
+          failedAddress: overflowCanaryAddress,
+        }),
+    );
+    const stateDir = makeStateDir(root);
+    seedOffset(stateDir, "0\n");
+
+    const run = runBounce({ spool, stateDir });
+
+    expect(run.status).toBe(0);
+    expect(run.posted).toBe(true);
+    expect(run.payload).toBe(
+      `{"content":"${expectedContent("trailing complete bounce", overflowCanaryAddress)}"}`,
+    );
     expect(offsetValue(stateDir)).toBe(spoolSize(spool));
   });
 });
