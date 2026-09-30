@@ -420,10 +420,10 @@ fi
         },
         {
           name: "Install actionlint",
-          run: `tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          run: `tarball="actionlint_\${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
 curl -fsSL --retry 3 -o "$tarball" \\
-  "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
-echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+  "https://github.com/rhysd/actionlint/releases/download/v\${ACTIONLINT_VERSION}/\${tarball}"
+echo "\${ACTIONLINT_SHA256}  \${tarball}" | sha256sum -c -
 tar -xzf "$tarball" actionlint
 ./actionlint --version
 `,
@@ -601,8 +601,9 @@ done
     expect(install!.run).not.toContain("upgrade pip");
     expect(install!.run).not.toContain("pip install zizmor");
     // The id is load-bearing: the zizmor step's condition skips the scan only
-    // when the install failed.
-    const zizmor = steps.find((step) => step.run === "zizmor --no-progress .github/workflows/");
+    // when the install failed. The scan targets the extracted PR copies
+    // (.github/workflows-pr/), never the checked-out tree's own workflows.
+    const zizmor = steps.find((step) => step.run === "zizmor --no-progress .github/workflows-pr/");
     expect(zizmor).toBeDefined();
     expect(zizmor!.if).toBe("${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}");
   });

@@ -3,11 +3,22 @@ name: actionlint
 # The gate on the gates. actionlint checks workflow/schema/expression/shell
 # correctness; zizmor independently checks workflow security and supply-chain
 # posture. Both are pinned, and actionlint's archive is checksum-verified.
+#
+# pull_request_target so the definition, the checkout and the tools all come
+# from main: a pull request that edits its own workflow files cannot shape
+# the gate that judges them (issue 822). The PR head is data-only, like
+# ratchet-guard: it enters only as git objects (refs/pull/<N>/head), and is
+# extracted as data into .github/workflows-pr/ with `git show` — never
+# checked out, installed or executed. The `# zizmor: ignore[dangerous-triggers]`
+# annotation marks the trigger for the same reason ratchet-guard.yml's header
+# gives: pull_request_target is dangerous in general and safe here because no
+# pull-request code runs, and the job's token is contents:read-only.
 on:
   push:
     branches: [main]
-  pull_request:
+  pull_request_target:  # zizmor: ignore[dangerous-triggers]
     branches: [main]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 permissions:
@@ -15,7 +26,7 @@ permissions:
 
 concurrency:
   group: actionlint-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 jobs:
   actionlint:
@@ -28,9 +39,22 @@ jobs:
       ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
 
     steps:
+      # Under pull_request_target no ref input at all: GitHub points GITHUB_REF
+      # at the default branch and GITHUB_SHA at its last commit, so the
+      # default checkout is the trusted base — main's tip — never the merge
+      # ref, and actions/checkout's fork guard exempts exactly that. The PR's
+      # own .github/workflows/ is never the lint target; it is fetched below
+      # as git objects and extracted as data.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The head is fetched only as git objects. Values from the event reach
+      # the shell through env:, never through ${{ }} interpolation in run:.
+      - name: Fetch the pull request head
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -50,9 +74,16 @@ jobs:
         run: |
           pip install --require-hashes -r .github/requirements-zizmor.txt
 
+      - name: Extract the PR's workflow files as data
+        run: |
+          mkdir -p .github/workflows-pr
+          for f in $(git ls-tree --name-only refs/remotes/pr/head:.github/workflows/); do
+            git show "refs/remotes/pr/head:.github/workflows/$f" > ".github/workflows-pr/$f"
+          done
+
       - name: actionlint
         id: actionlint
-        run: ./actionlint -color .github/workflows/*.yml
+        run: ./actionlint -color .github/workflows-pr/*.yml
 
       - name: zizmor
         # Still run when actionlint finds a schema issue so one invocation
@@ -60,9 +91,9 @@ jobs:
         if: ${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: zizmor --no-progress .github/workflows/
+        run: zizmor --no-progress .github/workflows-pr/
 
-      # A pull_request run tests refs/pull/N/merge — the head merged with the
+      # A pull_request_target run tests refs/pull/N/merge — the head merged with the
       # base as it stood at event time — and branch protection keeps strict
       # up-to-date checking disabled, so a run that went green against an older
       # main stays green after main advances: the tree GitHub actually lands
@@ -80,7 +111,7 @@ jobs:
       # the repository's merge cadence). Push and workflow_dispatch runs test
       # main itself and skip the gate.
       - name: Base freshness
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request_target' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO_SLUG: ${{ github.repository }}
