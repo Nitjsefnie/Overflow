@@ -101,9 +101,28 @@ case "$webhook_url" in
     ;;
 esac
 
-fqdn=$(hostname -f)
-sent_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+# Both of these are the only inputs the report and the message carry that the
+# script cannot supply for itself, and under set -e a failing command
+# substitution kills the run at the assignment with nothing in the journal.
+# That would give "the canary unit failed" a third meaning - neither a dead
+# path nor a misconfigured host file - tellable only by the absence of a line
+# that should be there. So each refuses loudly instead.
+if ! fqdn=$(hostname -f); then
+  echo "overflow-canary.sh: could not determine the host's FQDN; refusing to run a check that cannot name its host" >&2
+  exit 2
+fi
 
+if ! sent_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ'); then
+  echo "overflow-canary.sh: could not read the clock; refusing to stamp a report with an unknown time" >&2
+  exit 2
+fi
+
+# The subject carries its own marker, [overflow-canary], rather than sharing
+# the alerts' [overflow] prefix. A mailbox rule that pages on "[overflow]" -
+# a common shape on exactly this kind of host - would otherwise page once a
+# day on a message whose own body says no action is needed, and a filter that
+# cries wolf daily is a filter people switch off.
+#
 # curl -v writes its conversation with the daemon to stderr; the message
 # itself is piped in on stdin. The redirections take stderr into the
 # substitution and discard stdout, so what is left to read below is the
@@ -119,7 +138,7 @@ sent_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 submit_status=0
 trace=$(
   {
-    printf 'From: overflow-canary@%s\nTo: %s\nSubject: [overflow] alert-path canary on %s\n\n' \
+    printf 'From: overflow-canary@%s\nTo: %s\nSubject: [overflow-canary] alert-path canary on %s\n\n' \
       "$fqdn" "$recipient" "$fqdn"
     printf 'Failure-alert path canary for host %s at %s.\n\n' "$fqdn" "$sent_at"
     printf 'This message went out by the same route a failure alert takes. Receiving it means\n'

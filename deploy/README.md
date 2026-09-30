@@ -1868,6 +1868,74 @@ rm -rf /tmp/canary-probe-state
 systemctl show overflow-canary.service -p ExecStart -p Environment
 ```
 
+#### Proving the sandbox can reach the out-of-band channel
+
+The two steps above each run one thing: the first drives the real unit, the
+second runs a copy of the script with nothing between it and the host. **The
+only one that exercises the webhook POST from inside
+`overflow-canary.service`'s sandbox is neither of them.** That matters more
+here than it does for the alert template, because the alert unit only ever
+talks to `127.0.0.1` — every socket it opens is loopback — whereas the
+canary has to resolve `discord.com` and complete a TLS connection under
+`ProtectSystem=strict`, `PrivateTmp`, `PrivateDevices`,
+`RestrictAddressFamilies` and `SystemCallFilter=@system-service`.
+`systemd-analyze verify` is a parser, not a runtime, and it will happily
+accept a unit whose seccomp filter or address-family mask blocks the egress.
+
+So prove it at runtime. `PrivateTmp` gives the unit a private `/tmp` and
+`/var/tmp` but does not isolate the loopback interface, so a listener started
+outside the sandbox on `127.0.0.1` is reachable from inside it. The step
+below forces the dead path (SMTP to a closed port) and points the webhook at
+that listener, so the unit posts out of band and records the outage only if
+the sandbox permits the connection. **This proves the network leg of the
+sandbox; it does not send a real Discord message, and it says nothing about
+whether the webhook URL in `/etc/overflow/canary-discord-webhook` is still
+valid** — the first Verify step above is what covers the real channel.
+
+Check the port is free, then install a drop-in that redirects the run. It
+overrides the two paths, so the host's own webhook file is never read,
+written or exposed:
+
+```bash
+ss -ltn | grep 18099 || echo "port 18099 is free"
+install -d -o root -g root -m 0755 /etc/systemd/system/overflow-canary.service.d
+printf '%s\n' 'http://127.0.0.1:18099/probe' > /etc/overflow/canary-sandbox-probe-webhook
+printf '%s\n' '[Service]' 'Environment=OVERFLOW_CANARY_SMTP_URL=smtp://127.0.0.1:1' 'Environment=OVERFLOW_CANARY_WEBHOOK_FILE=/etc/overflow/canary-sandbox-probe-webhook' > /etc/systemd/system/overflow-canary.service.d/sandbox-probe.conf
+systemctl daemon-reload
+```
+
+Start the listener in the background, run the unit, and read what it
+managed to do. The unit must report out of band and leave the marker behind;
+a journal that instead says the report could not be delivered means the
+sandbox is blocking the egress, and that is the finding this step exists to
+surface:
+
+```bash
+python3 -c "import http.server as h;h.HTTPServer(('127.0.0.1',18099),h.BaseHTTPRequestHandler).serve_forever()" &
+systemctl start overflow-canary.service
+journalctl -u overflow-canary.service --no-pager -n 20
+test -e /run/overflow-canary/dead && echo "sandbox reached the out-of-band channel"
+```
+
+Remove the drop-in and the probe file, reload, and confirm the unit is back
+to running its own defaults:
+
+```bash
+rm /etc/systemd/system/overflow-canary.service.d/sandbox-probe.conf
+rm /etc/overflow/canary-sandbox-probe-webhook
+systemctl daemon-reload
+systemctl show overflow-canary.service -p Environment
+```
+
+Stop the listener with `pkill -f 18099` — or from the shell that started it,
+with the job's own control — once the journal line above has been read. If
+the unit recorded an outage, clear it so the first scheduled run is judged on
+its own merits:
+
+```bash
+rm -f /run/overflow-canary/dead
+```
+
 #### Rollback
 
 Disable the timer and remove both files. The alert path itself is unchanged
