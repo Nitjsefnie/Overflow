@@ -180,20 +180,23 @@ async function reconcileRepositoryWhileCoordinated(
 
   // One unresolvable subject must not stall the repository's fold: a deleted
   // issue or pull request can never resolve, and the retry machinery (the sweep
-  // revives FAILED jobs with attempts reset) would retry it forever. A NOT_FOUND
-  // for the subject is definitive, so its dirty row is discarded and the
-  // remaining subjects keep the run alive; any other per-subject failure keeps
-  // whole-run retry semantics. The journal line names the subject's identity and
-  // the failure class only, matching the reconciliation queue's rule against
-  // storing upstream error text.
+  // revives FAILED jobs with attempts reset) would retry it forever. The
+  // classifier names the durable failure class the failure belongs to — a
+  // NOT_FOUND is definitive, and a pull request whose diff GitHub refuses under
+  // its 20000-line cap (a fixed 406) can never read — so its dirty row is
+  // discarded and the remaining subjects keep the run alive; any other
+  // per-subject failure keeps whole-run retry semantics. The journal line names
+  // the subject's identity and the failure class only, matching the
+  // reconciliation queue's rule against storing upstream error text.
   const discardUnresolvableSubject = async (
     failure: unknown,
     kind: DirtyReconciliationSubject["kind"],
     subject: GitHubSubject,
     dirty: DirtyReconciliationSubject | undefined,
-    isSubjectNotFound: (error: unknown) => boolean = isGitHubSubjectNotFoundError,
+    classifyDiscard: (error: unknown) => SubjectDiscardReason | null = notFoundDiscardReason,
   ): Promise<boolean> => {
-    if (!isSubjectNotFound(failure)) return false;
+    const reason = classifyDiscard(failure);
+    if (reason === null) return false;
     if (dirty !== undefined) {
       await dependencies.store.discardDirtyReconciliationSubject({
         repositoryId,
@@ -202,7 +205,7 @@ async function reconcileRepositoryWhileCoordinated(
         generation: dirty.generation,
       });
     }
-    console.error(`Reconciliation of repository ${repositoryId} discarded unresolvable subject kind=${kind} number=${subject.number} reason=NOT_FOUND`);
+    console.error(`Reconciliation of repository ${repositoryId} discarded unresolvable subject kind=${kind} number=${subject.number} reason=${reason}`);
     return true;
   };
 
@@ -346,7 +349,7 @@ async function reconcileRepositoryWhileCoordinated(
               try {
                 issue = await dependencies.github.getIssue(reference, subject);
               } catch (error) {
-                if (!(await discardUnresolvableSubject(error, "ISSUE", subject, dirtyIssueSubjects.get(subject.id), isIssueSubjectGone))) {
+                if (!(await discardUnresolvableSubject(error, "ISSUE", subject, dirtyIssueSubjects.get(subject.id), issueDiscardReason))) {
                   throw error;
                 }
                 continue;
@@ -479,13 +482,22 @@ function carriesCredentialRejection(error: unknown): boolean {
   return false;
 }
 
+// The journal reason a durable per-subject failure class names when its subject
+// joins the discard arm; null means the failure keeps whole-run retry semantics.
+type SubjectDiscardReason = "NOT_FOUND" | "DIFF_TOO_LARGE";
+
 // The reviews read is GraphQL, so a pull request deleted upstream answers
 // the flattened NOT_FOUND message the subject classifier matches; the diff
 // read is REST and answers GitHub's fixed 404 error, which that classifier
-// never sees. The evidence arm treats either shape as the same definitive
-// NOT_FOUND for that pull request — 404 and nothing else.
-function isPullRequestEvidenceGone(error: unknown): boolean {
-  return isGitHubSubjectNotFoundError(error) || (error instanceof GitHubApiError && error.status === 404);
+// never sees. The diff read also answers GitHub's fixed 406 when the diff
+// exceeds the 20000-line cap — a durable refusal no retry can satisfy, since
+// the diff only ever grows until it is split — so it joins the same
+// subject-alone arm under its own reason. Either shape is definitive for
+// that pull request, not a property of the run.
+function pullRequestDiscardReason(error: unknown): SubjectDiscardReason | null {
+  if (error instanceof GitHubApiError && error.status === 406) return "DIFF_TOO_LARGE";
+  if (isGitHubSubjectNotFoundError(error) || (error instanceof GitHubApiError && error.status === 404)) return "NOT_FOUND";
+  return null;
 }
 
 // The ISSUE per-subject read draws the same definitive arm on either forge:
@@ -494,10 +506,17 @@ function isPullRequestEvidenceGone(error: unknown): boolean {
 // GitLab read that loses the issue between endpoints throws GitLabApiError
 // 404. Any of the three is gone for good — a deleted issue can never
 // resolve — and anything else keeps whole-run retry semantics.
-function isIssueSubjectGone(error: unknown): boolean {
+function issueDiscardReason(error: unknown): SubjectDiscardReason | null {
   return isGitHubSubjectNotFoundError(error)
     || (error instanceof GitHubApiError && error.status === 404)
-    || (error instanceof GitLabApiError && error.status === 404);
+    || (error instanceof GitLabApiError && error.status === 404)
+    ? "NOT_FOUND"
+    : null;
+}
+
+// The default classifier: the flattened NOT_FOUND message and nothing else.
+function notFoundDiscardReason(error: unknown): SubjectDiscardReason | null {
+  return isGitHubSubjectNotFoundError(error) ? "NOT_FOUND" : null;
 }
 
 // A pull request's evidence read draws the same subject-alone arm the
@@ -512,10 +531,13 @@ function isIssueSubjectGone(error: unknown): boolean {
 // the next full pass (at most six hours), because refreshed entries merge
 // over the cache and nothing erases a cached subject that stops
 // refreshing. Blank it instead and a probably-transient read failure
-// blanks a settlement's proof to the empty diff. Every other class — a
-// rate limit with its cooldown path, auth, 5xx, network, the GraphQL
+// blanks a settlement's proof to the empty diff. A diff over GitHub's
+// 20000-line cap (a fixed 406 on either evidence leg) deliberately joins
+// this arm beside NOT_FOUND: GitHub durably refuses the diff, so no retry
+// can succeed and the sweep would fail the run forever. Every other class —
+// a rate limit with its cooldown path, auth, 5xx, network, the GraphQL
 // budget held — is transient or run-invalidating and rethrows, keeping
-// whole-run retry; no other class joins this arm.
+// whole-run retry; nothing further joins this arm.
 async function collectPullRequestEvidence(
   github: ReconciliationGateway,
   reference: GitHubRepositoryReference,
@@ -528,7 +550,7 @@ async function collectPullRequestEvidence(
     kind: DirtyReconciliationSubject["kind"],
     subject: GitHubSubject,
     dirty: DirtyReconciliationSubject | undefined,
-    isSubjectNotFound?: (error: unknown) => boolean,
+    classifyDiscard?: (error: unknown) => SubjectDiscardReason | null,
   ) => Promise<boolean>,
   dirtyPullRequestSubjects: ReadonlyMap<number, DirtyReconciliationSubject>,
 ): Promise<Map<number, { reviews: GitHubPullRequestReview[]; rawDiff: string }>> {
@@ -564,7 +586,7 @@ async function collectPullRequestEvidence(
           "PULL_REQUEST",
           pullRequest,
           dirtyPullRequestSubjects.get(pullRequest.id),
-          isPullRequestEvidenceGone,
+          pullRequestDiscardReason,
         ))) {
           throw error;
         }
