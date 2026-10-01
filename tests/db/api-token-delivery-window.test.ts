@@ -71,6 +71,27 @@ describe("the API token delivery window", () => {
     });
   });
 
+  it("reports the confirmation its own statement returned, not a constant", async () => {
+    const sql = getSql();
+    const userId = await insertUser(sql);
+    // The upsert clears the confirmation on both branches, so on this schema the
+    // statement's confirmed_at is always null and a store that returned a
+    // hardcoded null would satisfy every other assertion in this suite. Only a
+    // non-null returned column tells the two apart, so the RESULT carries one
+    // here; the statement itself still runs against the database, and the row it
+    // writes is asserted below to prove the stamp is in the mapping and nowhere
+    // else. What is under test is the store's reading of the row it was given.
+    const returned = new Date("2031-04-05T06:07:08.000Z");
+    const stamping = ((strings: TemplateStringsArray, ...values: unknown[]) =>
+      sql(strings, ...values).then((rows) =>
+        rows.map((row) => ({ ...row, confirmed_at: returned })))) as unknown as Sql;
+
+    const issued = await new PostgresApiTokenStore(stamping).issueToken(userId, mintApiToken().tokenHash);
+
+    expect(issued.confirmedAt).toEqual(returned);
+    expect((await tokenRow(sql, userId)).confirmed_at).toBeNull();
+  });
+
   it("starts the ninety-day lifetime at the first request that authenticates with the value", async () => {
     const sql = getSql();
     const userId = await insertUser(sql);
