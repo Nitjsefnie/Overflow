@@ -56,12 +56,20 @@
 #
 # ...AND THE OPPOSITE REMEDY, FOR AN ORPHANED ENTRY. A `--rebase` merge
 # re-creates the branch's commits, so a baseline generated while the pre-rebase
-# copies were still in the object store records one logical finding at BOTH
-# SHAs. The pre-rebase half does not resolve in the shipped history: it
-# suppresses nothing, and the suite fails on it by name at full depth. There
-# the remedy is to REMOVE that entry and keep the reachable one — the reverse of
-# the case above — after checking `git merge-base --is-ancestor <sha>
-# origin/main` and confirming the survivor is the same finding by file, line
+# copies were still REACHABLE — still on a ref, which is what gitleaks walks,
+# since it reads `git log --all` — records one logical finding at BOTH SHAs. The
+# pre-rebase half is in no history this repository ships, so it suppresses
+# nothing, and the secret-scan workflow's last step fails on it by name.
+#
+# "IN NO SHIPPED HISTORY" IS ABOUT THE REF SET, NOT THE OBJECT STORE, and the
+# difference is the whole diagnosis. A merged pull request's head commit, held on
+# `refs/remotes/pr/*` by whatever generated the baseline, is exactly this shape:
+# gitleaks walked `--all` and recorded it, and no checkout fetches `refs/pull/*`.
+# Where the object survives locally it is PRESENT AND UNREFERENCED — `git
+# cat-file -e` says fine, `git rev-parse` resolves it, and only `git merge-base
+# --is-ancestor` catches it. So the remedy there is to REMOVE that entry and keep
+# the reachable one — the reverse of the case above — after running that ancestry
+# check yourself and confirming the survivor is the same finding by file, line
 # and rule. Never regenerate the whole file to clear an orphan; that absorbs a
 # genuinely new finding and buries it.
 set -euo pipefail

@@ -1,24 +1,26 @@
 #!/usr/bin/env bash
 # Every commit the committed baseline names must be reachable from this
-# checkout's HEAD. An entry that names a commit the repository does not carry is
-# a defect in a tracked artefact: it suppresses nothing (gitleaks walks the real
-# history and never produces a record equal to it), it misleads every reader who
-# consults the baseline to decide what was deliberately allowed, and it will
-# never be found by the scan it belongs to.
+# checkout's HEAD. "Reachable" is a question about the REF SET, not the object
+# store: an entry naming a commit no ref this repository ships contains is a
+# defect in a tracked artefact. It suppresses nothing — gitleaks walks
+# `git log --all`, so it never even produces a record equal to one — it misleads
+# every reader who consults the baseline to decide what was deliberately
+# allowed, and it will never be found by the scan it belongs to.
 #
 # WHY THIS RUNS HERE AND NOT IN THE TEST SUITE. It was a test, and it was a
 # test that could not work: the property is about a COMMIT's reachability, and
 # `.github/workflows/ci.yml` gives the `verify` job `actions/checkout`'s default
 # depth of 1, where September's commits do not exist. Asserted there, the check
 # had two failure modes and both were bad — a baseline naming a commit the
-# repository really has reads as a defect in every contributor's run, and any
-# `--rebase` merge re-stamps the branch's commits and can invalidate an entry
-# after the fact, landing as a RED REQUIRED CHECK ON MAIN for everybody, over a
-# defect that is real but belongs to the weekly sweep that owns it. So it moved
-# to the one environment that has the history: this workflow checks out at
-# `fetch-depth: 0` and ticks weekly, which is the same posture as every other
-# detection signal this repository runs. The blast radius of a stale entry is a
-# red scheduled scan that names the entry, not a red main.
+# repository really does ship, but that a depth-1 checkout never fetched, reads
+# as a defect in every contributor's run; and any `--rebase` merge re-stamps the
+# branch's commits and can invalidate an entry after the fact, landing as a RED
+# REQUIRED CHECK ON MAIN for everybody, over a defect that is real but belongs to
+# the weekly sweep that owns it. So it moved to the one environment that has the
+# history: this workflow checks out at `fetch-depth: 0` and ticks weekly, which
+# is the same posture as every other detection signal this repository runs. The
+# blast radius of a stale entry is a red scheduled scan that names the entry,
+# not a red main.
 #
 # WHY `merge-base --is-ancestor` AND NOT AN EXISTENCE TEST. A `--rebase` merge's
 # discarded pre-image is exactly the commit this check has to catch, and it is
