@@ -11,8 +11,8 @@
 // before it could post anything. Nothing else ever notices such a run: that
 // relay instance was the only thing that would have attested it, so the
 // completion sits unattested forever and branch protection refuses the merge
-// with a message that reads as a misconfiguration. The sweep lives in
-// scripts/ledger-relay-sweep.ts and runs after the mirror has posted.
+// with a message reading as a misconfiguration. The sweep lives in
+// scripts/ledger-relay-sweep.ts.
 //
 //   node scripts/ledger-relay.ts
 //
@@ -23,9 +23,8 @@
 // the trusted main tip — and each context pinned to the triggering run's path
 // is decided from that run's job records and posted as a check-run under an
 // App installation token minted in-process. The App key arrives only through
-// the LEDGER_APP_KEY secret, signs in-process, and is never logged; every
-// failure exits nonzero so a dead relay is visible as a red job, never as
-// silence.
+// the LEDGER_APP_KEY secret and is never logged; every failure exits nonzero so
+// a dead relay is visible as a red job, never as silence.
 
 import { createSign } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -182,6 +181,11 @@ function decideOne(
         "the outcome is relayed to branch protection.",
     };
   }
+  // A job that has not concluded posts PENDING, and the sweep posts pending for a
+  // candidate too, though a candidate is `completed` by selection. Deliberate:
+  // an ABSENT check is what branch protection refuses a merge on, a PENDING one
+  // is what it waits on. So the sweep counts only CONCLUDED App check-runs as
+  // attestations, and the next start supersedes this one.
   return {
     context,
     status: best.status,
@@ -287,9 +291,9 @@ export interface RelayResult {
 
 /**
  * Nothing examined, nothing relayed — what every path that skips the sweep
- * reports. Frozen because it is one shared object handed back by two different
- * early returns into a public result type: a consumer pushing into
- * `sweep.relayed` would otherwise corrupt every later result in the process.
+ * reports. Frozen because both early returns hand back this one object into a
+ * public result type, so a consumer pushing into `sweep.relayed` would corrupt
+ * every later result in the process.
  */
 const NO_SWEEP: SweepOutcome = Object.freeze({ examined: 0, relayed: Object.freeze([]) });
 
@@ -383,30 +387,41 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     posted.push(decision.context);
   }
 
-  // The orphan sweep and the rerun-heal both run after the mirrored decisions
-  // are posted: the mirror — the relay's primary duty — lands even when either
-  // query fails, and a failed heal or sweep still turns the job red on its own.
-  // That is deliberate. The failure issue 885 is about is a heal that quietly
-  // stopped running, which is indistinguishable from a relay with nothing to
-  // do, so neither duty degrades silently and the mirror never pays for them.
-  const sweep = await sweepOrphans({
-    api: sweepApi(deps, repo, auth),
-    decide: decideContexts,
-    pinMap,
-    repo,
-    appId,
-    triggerRunId: run.runId,
-  });
+  // The sweep and the heal both follow the mirrored decisions, so the mirror —
+  // the relay's primary duty — lands whatever they do, and a failure in either
+  // still exits nonzero rather than passing quietly. But both following the
+  // mirror does NOT make them independent: awaiting the sweep first held the
+  // heal hostage to a far larger failure surface (a repository-wide listing
+  // plus up to SWEEP_RUN_LIMIT check-runs GETs on EVERY start, against the
+  // heal's three queries on a rare path). So the heal runs exactly once
+  // whatever the sweep does, and the sweep's failure is rethrown after it.
+  let sweep: SweepOutcome;
+  let sweepError: unknown = undefined;
+  try {
+    sweep = await sweepOrphans({
+      api: sweepApi(deps, repo, auth),
+      decide: decideContexts,
+      pinMap,
+      apiRoot: API_ROOT,
+      repo,
+      appId,
+      triggerRunId: run.runId,
+    });
+  } catch (error) {
+    sweep = NO_SWEEP;
+    sweepError = error;
+  }
 
   const rerunDispatched = await healWithRerun(deps, env, repo, run, auth);
+  if (sweepError !== undefined) throw sweepError;
 
   return { decisions, posted, rerunDispatched, sweep };
 }
 
 /**
  * The sweep's HTTP, over the relay's own bounded-retry call under the App
- * installation token minted above — so the sweep inherits the retry backoff,
- * the API headers and the red-on-failure direction rather than needing its own.
+ * installation token minted above, so it inherits the backoff, the API headers
+ * and the red-on-failure direction rather than needing its own.
  */
 function sweepApi(deps: RelayDeps, repo: string, auth: Record<string, string>): SweepApi {
   const headers = { ...API_HEADERS, ...auth };
@@ -734,11 +749,11 @@ function assertShape(value: string, shape: RegExp, message: string): void {
 }
 
 /**
- * The relay's human-visible success signal, one log line at a time. Pure, so
- * a synthetic result can drive it: the rerun-heal line is the only signal an
- * operator gets that a cancelled run was re-dispatched, and the sweep's
- * summary line is the only signal that orphans are being healed at all, so
- * both are pinned by tests rather than living undrivable in main().
+ * The relay's human-visible success signal, one log line at a time. Pure, so a
+ * synthetic result can drive it: the rerun-heal line is the only signal that a
+ * cancelled run was re-dispatched, and the sweep's summary line the only signal
+ * that orphans are being healed — so both are pinned by tests rather than
+ * living undrivable in main().
  */
 export function renderRelayResult(result: RelayResult): string[] {
   if (result.posted.length === 0) {

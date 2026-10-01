@@ -26,16 +26,19 @@
 
 import type { ContextDecision, RelayJob } from "./ledger-relay.ts";
 
-const API_ROOT = "https://api.github.com";
-
 /**
  * The bound on one sweep: at most this many candidates are examined, so one
- * relay start cannot fan out into an unbounded burst of API calls. Twenty is
- * several times the completions a single relay start can plausibly have
- * missed — GitHub cancels only the previous PENDING run, so a handful of
- * rapid arrivals is the realistic ceiling — while keeping the worst case
- * (twenty candidates over twenty distinct commits) at roughly forty GETs and
- * twenty POSTs.
+ * relay start cannot fan out into an unbounded burst of API calls, and the worst
+ * case (twenty candidates over twenty distinct commits) is roughly forty GETs
+ * and twenty POSTs inside a job with `timeout-minutes: 15`.
+ *
+ * Twenty is not "comfortably more than enough". Measured against this
+ * repository's live listing, the last 100 runs hold 30 producer runs — ten each
+ * of ci, actionlint and ratchet-guard — among 33 ledger-relay runs and 37 others,
+ * so on a busy day the cap IS reached and the sweep examines only the newest
+ * twenty of them. That is the intended trade: the orphan this exists to heal is
+ * always a recent completion, since the last relay start healed everything older
+ * that it could reach, so the newest twenty is where the work is.
  */
 export const SWEEP_RUN_LIMIT = 20;
 
@@ -76,6 +79,8 @@ export interface SweepDeps {
     jobs: readonly RelayJob[],
   ) => ContextDecision[];
   pinMap: Readonly<Record<string, string>>;
+  /** The REST base the caller also uses. Injected rather than named here, so this module never holds a second copy of a constant the two modules would then drift on — and so the dependency stays one-way: a runtime import of it back from scripts/ledger-relay.ts would be a cycle. */
+  apiRoot: string;
   repo: string;
   appId: string;
   /** The run that triggered this relay instance; never swept — the mirror already posted it. */
@@ -176,10 +181,17 @@ export function missingContextsFor(
  */
 export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
   const listing = await deps.api.get<Record<string, unknown>>(
-    `${API_ROOT}/repos/${deps.repo}/actions/runs?per_page=100`,
+    `${deps.apiRoot}/repos/${deps.repo}/actions/runs?per_page=100`,
     "the repository's workflow-run listing for the orphan sweep",
   );
-  const candidates = selectSweepCandidates(listing.workflow_runs, deps.pinMap, deps.triggerRunId);
+  // Guarded like the check-runs listing below, and for the same reason: apiCall
+  // answers undefined on an empty success body, so a 200 with no payload must
+  // read as "no runs" rather than throw a TypeError on the property access.
+  const candidates = selectSweepCandidates(
+    Array.isArray(listing?.workflow_runs) ? listing.workflow_runs : [],
+    deps.pinMap,
+    deps.triggerRunId,
+  );
   // Built as a mutable array and narrowed on return: SweepOutcome is readonly
   // so a consumer cannot push into a result it was handed, but this function
   // is the one place that accumulates.
@@ -195,7 +207,7 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
       if (missing.size === 0) continue;
       const jobs = validateJobs(
         await deps.api.get<Record<string, unknown>>(
-          `${API_ROOT}/repos/${deps.repo}/actions/runs/${candidate.runId}/jobs?filter=latest&per_page=100`,
+          `${deps.apiRoot}/repos/${deps.repo}/actions/runs/${candidate.runId}/jobs?filter=latest&per_page=100`,
           `the job listing of run ${candidate.runId}`,
         ),
       );
@@ -232,9 +244,9 @@ function groupByHeadSha(candidates: readonly SweepCandidate[]): Array<[string, S
 }
 
 /**
- * The names the App itself already holds at one commit — the sweep's whole
- * deduplication evidence, and therefore the one query whose failure direction
- * has to be argued rather than inherited.
+ * The names the App itself already holds at one commit, COUNTING ONLY THE
+ * CONCLUDED ONES — the sweep's whole deduplication evidence, and therefore the
+ * one query whose failure direction has to be argued rather than inherited.
  *
  * The listing is filtered by `app_id` server-side AND by `app.id` here, because
  * a filter the caller cannot see is not a filter: a same-named check-run owned
@@ -247,24 +259,46 @@ function groupByHeadSha(candidates: readonly SweepCandidate[]): Array<[string, S
  * pin.
  *
  * A malformed listing reads as NO attestation rather than throwing — the same
- * asymmetry hasLiveRunOfPath already sets in scripts/ledger-relay.ts. The
- * direction is the safe one here: reading nothing as attested can only cause a
- * duplicate context to be posted, never an orphan to be left in place, and a
- * throw on this query would red a relay job over a response shape GitHub does
- * not document as stable.
+ * asymmetry hasLiveRunOfPath already sets in scripts/ledger-relay.ts.
+ *
+ * The earlier version of this comment argued that the direction was safe
+ * because "reading nothing as attested can only cause a duplicate context to be
+ * posted, never an orphan to be left in place". That was false, and it is worth
+ * recording why, because it is the sentence a future reader would trust when
+ * deciding whether this guard is safe to relax. The claim assumed the only way
+ * a state became unattested-by-the-sweep was an external one. It is not: the
+ * sweep POSTS check-runs, including pending ones, so a state it cannot read as
+ * attested is a state it can create — see the pending-status guard below, whose
+ * defect was exactly this argument taken at face value. The argument is now the
+ * other way round and is the one that holds: reading nothing as attested can at
+ * worst post a duplicate context, which branch protection tolerates, because a
+ * duplicate check-run does not withhold a required context. Reading anything as
+ * attested that is not, can withhold one, which is the failure this whole issue
+ * exists to prevent.
  */
 async function attestedContexts(deps: SweepDeps, headSha: string): Promise<Set<string>> {
   const body = await deps.api.get<Record<string, unknown>>(
-    `${API_ROOT}/repos/${deps.repo}/commits/${headSha}/check-runs?app_id=${deps.appId}&filter=latest&per_page=100`,
+    `${deps.apiRoot}/repos/${deps.repo}/commits/${headSha}/check-runs?app_id=${deps.appId}&filter=latest&per_page=100`,
     `the ledger App's check-runs at ${headSha}`,
   );
   const attested = new Set<string>();
   if (!Array.isArray(body.check_runs)) return attested;
   for (const entry of body.check_runs) {
     if (typeof entry !== "object" || entry === null) continue;
-    const checkRun = entry as { name?: unknown; app?: { id?: unknown } | undefined };
+    const checkRun = entry as {
+      name?: unknown;
+      status?: unknown;
+      app?: { id?: unknown } | undefined;
+    };
     if (typeof checkRun.name !== "string") continue;
     if (String(checkRun.app?.id ?? "") !== deps.appId) continue;
+    // A PENDING check-run is not an attestation, only a placeholder the App
+    // itself posted. Counting it would wedge the candidate: this sweep posts
+    // pending when a jobs listing reports an unfinished job, the NEXT sweep
+    // would read that placeholder back as proof the context was handled, decline
+    // to post the run's real conclusion, and branch protection would wait
+    // forever on a check nothing ever completes.
+    if (checkRun.status === "queued" || checkRun.status === "in_progress") continue;
     attested.add(checkRun.name);
   }
   return attested;
