@@ -97,8 +97,11 @@ describe("the API token delivery window", () => {
     await store.findAccountByTokenHash(tokenHash);
     const first = await tokenRow(sql, userId);
 
-    // Past the throttle, so the second lookup's statement really runs and can
-    // be caught rolling the expiry forward.
+    // Past the throttle, so this second lookup's statement really runs — which
+    // is what makes this the case that pins the `case` guard. Remove that guard
+    // and every later use of a confirmed token hands it a fresh ninety days;
+    // the racing case below cannot catch that, because there the loser of the
+    // row lock never evaluates the expression at all.
     await sql`update api_tokens set last_used_at = now() - interval '2 minutes' where user_id = ${userId}`;
     await expect(store.findAccountByTokenHash(tokenHash)).resolves.toMatchObject({ id: userId });
 
@@ -108,27 +111,36 @@ describe("the API token delivery window", () => {
     expect(second.expires_at).toEqual(await ninetyDaysAfter(sql, first.confirmed_at as Date));
   });
 
-  it("extends the expiry once when the first two uses race each other", async () => {
+  it("leaves one write and one extension when two first uses race each other", async () => {
     const sql = getSql();
     const userId = await insertUser(sql);
     const tokenHash = mintApiToken().tokenHash;
     await new PostgresApiTokenStore(sql).issueToken(userId, tokenHash);
-    // Both statements would write on an unthrottled row, which is the race.
+    // Unthrottled, so both racers would write if both got to.
     await sql`update api_tokens set last_used_at = null where user_id = ${userId}`;
 
     const racers = [postgres(currentDatabaseUrl, { max: 1 }), postgres(currentDatabaseUrl, { max: 1 })];
     try {
-      await Promise.all(
+      const accounts = await Promise.all(
         racers.map((racer) => new PostgresApiTokenStore(racer).findAccountByTokenHash(tokenHash)),
       );
+      // Contention must not cost either caller its account.
+      expect(accounts).toEqual([
+        expect.objectContaining({ id: userId }),
+        expect.objectContaining({ id: userId }),
+      ]);
     } finally {
       await Promise.all(racers.map((racer) => racer.end()));
     }
 
     const row = await tokenRow(sql, userId);
-    // Whichever statement won, the expiry is ninety days from the instant that
-    // statement recorded — never ninety days from a later one.
     expect(row.confirmed_at).toBeInstanceOf(Date);
+    // One statement wrote the row: the loser's UPDATE was skipped by the
+    // throttle WHERE against the winner's committed row, so both stamps carry
+    // the winner's single now(). A second write — from a throttle removed, or
+    // widened — leaves them different instants and fails here.
+    expect(row.last_used_at).toEqual(row.confirmed_at);
+    // And the expiry is ninety days from that statement's recorded confirmation.
     expect(row.expires_at).toEqual(await ninetyDaysAfter(sql, row.confirmed_at as Date));
   });
 
@@ -311,9 +323,12 @@ async function insertUser(sql: Sql): Promise<string> {
   return user.id;
 }
 
-async function tokenRow(sql: Sql, userId: string): Promise<{ expires_at: Date; confirmed_at: Date | null }> {
-  const [row] = await sql<{ expires_at: Date; confirmed_at: Date | null }[]>`
-    select expires_at, confirmed_at from api_tokens where user_id = ${userId}
+async function tokenRow(
+  sql: Sql,
+  userId: string,
+): Promise<{ expires_at: Date; confirmed_at: Date | null; last_used_at: Date | null }> {
+  const [row] = await sql<{ expires_at: Date; confirmed_at: Date | null; last_used_at: Date | null }[]>`
+    select expires_at, confirmed_at, last_used_at from api_tokens where user_id = ${userId}
   `;
   return row;
 }
