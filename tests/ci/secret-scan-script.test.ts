@@ -70,11 +70,16 @@ import {
  * each. The deletion is the design: it is what leaves the tree clean while the
  * history still carries the secret, which is the whole difference between
  * `gitleaks git` and `gitleaks dir`, and between the repository and a subtree.
- * This is the step that was previously unheld and is now held, and it was
- * unheld because the target assertion compared the script's last argv element
- * against `git rev-parse --show-toplevel` in a suite where BOTH SIDES ARE THIS
- * REPOSITORY — a comparison that agrees by construction and so could not fail for
- * a narrowed target.
+ *
+ * What the target assertion ALREADY held, and what it could not: it compared the
+ * script's last argv element against `git rev-parse --show-toplevel`, so a target
+ * narrowed to a subtree went red there too — that is what the assertion is for,
+ * and it is not weakened below. What it could not do is show anything ABOUT the
+ * credential: both sides of that comparison are PATHS, and no secret was ever at
+ * risk behind them, so it established that the scan pointed at the repository
+ * root without ever establishing that anything the scan must find was inside it.
+ * That second half is what this block adds, and it is the half a green run was
+ * able to hide.
  *
  * **Not covered here, and named rather than implied:** gitleaks' own DETECTION —
  * whether a given token matches a given rule, and what the scanner would exit.
@@ -87,12 +92,16 @@ import {
  * planted secret is a git read (`git log -p`, `git grep`, `existsSync`) over a
  * history this suite built, and every assertion about the wiring is the script's
  * own argv, checked against that fixture. A refactor that breaks the
- * COMPOSITION — the subcommand, the target, the rooting — is caught here; one
- * that only breaks gitleaks' rule set is not, and cannot be without the binary.
+ * COMPOSITION — the subcommand, the target, the rooting — is caught here, with
+ * the one limit the block's own comment states: the rooting is demonstrated
+ * through the script's baseline refusal rather than through the production
+ * shape, where the scan step runs from the repository root and the baseline is
+ * present. A refactor that only breaks gitleaks' rule set is not caught, and
+ * cannot be without the binary.
  * What the committed baseline still contributes is the rule set's own output over
  * this repository's real history: 7 findings, every one a test-fixture literal.
  *
- * The three mutants this block is shown red against are named by the
+ * The mutants this block is shown red against are named by the
  * `SECRET_SCAN_TEST_FAULT` table below, which stages a mutated COPY inside the
  * fixture and is inert — and asserted inert — when the variable is unset.
  */
@@ -1105,13 +1114,22 @@ describe("scripts/secret-scan.sh", () => {
    *   **the secret the scan must find is genuinely inside the history the scan is
    *   pointed at, and genuinely outside the reach of any narrower scan.**
    *
-   * The reason it was unheld is worth stating, because it is a shape this file
-   * had been carrying for three rounds: the target assertion compares the
-   * script's last argv element against `git rev-parse --show-toplevel`, and in
-   * this suite BOTH SIDES ARE THIS REPOSITORY. They agree by construction. A
-   * script narrowed to `$REPO_ROOT/tests` — one line, with a plausible
-   * justification ("only our own fixtures trip it, save the time") — passes that
-   * assertion completely, and no secret has ever been put at risk to find out.
+   * The reason it was unheld is worth stating precisely, because the obvious
+   * version of it is false. The pre-existing target assertion — the one on
+   * `walks the WHOLE repository, not a subtree of it`, above — DOES catch a
+   * narrowed target: it compares the script's last argv element against
+   * `git rev-parse --show-toplevel`, and a narrowed target is a different path,
+   * so the equality goes red. That assertion is not weakened here.
+   *
+   * What it could not do is say anything ABOUT THE CREDENTIAL. Both sides of
+   * that comparison are paths, and no secret was ever at risk behind them, so it
+   * established that the scan pointed at the repository root and stopped there.
+   * A narrower statement is also the useful one: the wiring assertions can tell
+   * you WHICH DIRECTORY was handed to the scanner, and nothing at all about
+   * whether anything the scan exists to find was inside it. So the history a
+   * scan walks had never been given a secret to carry, and "green" could not
+   * distinguish a scan that walked the credential from a scan that stepped over
+   * it.
    *
    * So this block builds TWO repositories with REAL COMMITS, plants a secret in
    * an early one, DELETES it in a later one, and runs the REAL
@@ -1124,6 +1142,16 @@ describe("scripts/secret-scan.sh", () => {
    * subtree. A fixture that kept the file would be satisfied by a scan that only
    * ever looked at the tree; this one is not, and the assertions below say so at
    * the git level rather than by asserting anything of a scanner.
+   *
+   * **On how the mis-rooting is caught, stated narrowly because the demonstration
+   * is narrower than the fault.** Rooting `REPO_ROOT` at the caller's working
+   * directory is red here, but through the script's own BASELINE REFUSAL — the
+   * staged copy looks for `.github/gitleaks-baseline.json` under the caller's
+   * directory and refuses. That is the correct catch and it is a real one, but
+   * this block does not demonstrate the production shape, where the scan step
+   * runs from the repository root and the baseline IS present: a mis-rooted
+   * script that found a baseline would have to be caught by the target
+   * assertions below instead, and that path is not exercised here.
    *
    * **What this block does NOT claim.** It never asserts that a secret was
    * found, because no scanner binary is present on this box or in CI's `verify`
@@ -1145,15 +1173,41 @@ describe("scripts/secret-scan.sh", () => {
      * api-key-shaped name, committed in a tracked test file, IS a finding in
      * `.github/gitleaks-baseline.json` — which is the very artefact
      * `.github/workflows/secret-scan.yml` exists to report, and which this file
-     * pins an exact shape for. A committed literal here would also be the one
-     * thing in this repository that could make the weekly scan red for a change
-     * that contains no secret. The fragments are joined at run time, inside the
+     * pins an exact shape for. The fragments are joined at run time, inside the
      * temporary directory, and never leave it.
+     *
+     * **The SHAPE is chosen from evidence in this repository, and the basis is
+     * the committed baseline rather than a scan run.** The two
+     * `generic-api-key` entries in `.github/gitleaks-baseline.json` are findings
+     * gitleaks 8.30.1 really produced over this repository's own history, and
+     * the pinned version's rule fires on a long plain alphanumeric run after an
+     * api-key-shaped assignment — one of them is
+     * `TOKEN_ENCRYPTION_KEY", "<64 hex characters>"`. So this value is 64 hex
+     * characters under the same identifier, which is the shape this rule set
+     * demonstrably flags HERE.
+     *
+     * What that basis does NOT establish, and what is deliberately not claimed:
+     * nobody has run a scanner over this fixture. Constraint 1 forbids
+     * installing one, so it is unverified that 8.30.1 would match THIS value —
+     * the fragments differ from the committed fixture's. It is shaped like a
+     * finding the baseline proves this version produces, which is a claim about
+     * resemblance and not about a verdict, and the property under test is the
+     * script's wiring. Nothing below asserts anything of a scanner either way,
+     * so the fixture's fidelity is not load-bearing for any assertion here.
      *
      * The value is synthetic by construction (fixed, published hex) rather than
      * randomly generated, so a failing run reproduces byte for byte.
      */
-    const PLANTED_SECRET = ["sk_live_", "9f3ca71b", "e05d48c2", "77b0f1ea", "c4d95e03"].join("");
+    const PLANTED_SECRET = [
+      "9f3ca71b",
+      "e05d48c2",
+      "77b0f1ea",
+      "c4d95e03",
+      "a17b63df",
+      "2e8c0b54",
+      "6d3af927",
+      "e84b1c60",
+    ].join("");
 
     /** The line carrying it, written into a file that is later deleted. */
     const PLANTED_PATH = "deploy/service.env";
@@ -1209,6 +1263,16 @@ describe("scripts/secret-scan.sh", () => {
         needle: 'readonly REPO_ROOT="$(dirname -- "$SCRIPT_DIR")"',
         replacement: 'readonly REPO_ROOT="$PWD"',
         description: "the repository root taken from the caller's working directory",
+      },
+      // Not one of the three the brief names, and not a defect anybody would
+      // ship — it is here so the target assertions can be shown to EXPLAIN a
+      // target that is not there. A `statSync` alone raises ENOENT before the
+      // assertion that names the case can speak, so the run went red with a bare
+      // "no such file or directory" and no diagnosis.
+      "missing-target": {
+        needle: '"$REPO_ROOT" || exit $?',
+        replacement: '"$REPO_ROOT/does-not-exist" || exit $?',
+        description: "the scan pointed at a directory that does not exist",
       },
     };
 
@@ -1350,17 +1414,25 @@ describe("scripts/secret-scan.sh", () => {
     });
 
     it("hands the scanner the history subcommand and a target whose history carries the secret", async () => {
-      const { argv, status, output } = await runScript({ script: planted.script });
+      // `GITLEAKS_REPORT_PATH` is set exactly as `.github/workflows/secret-scan.yml`
+      // sets it, so the run below is the workflow's scan step with the checkout
+      // swapped for the fixture — rather than a near-miss of it.
+      const { argv, status, output } = await runScript({ script: planted.script, reportPath: "gitleaks-report.json" });
       expect(
         status,
         `the stub must accept the argv the staged script passed, or the wiring below is untested: ${output}\n` +
           `argv: ${argv.join(" ")}`,
       ).toBe(0);
 
-      expect(argv[0], "`gitleaks git` walks every commit; any other subcommand leaves the planted secret unread").toBe(
+      // The subcommand is `argv[0]` and nothing else, so this one assertion IS
+      // the "`gitleaks dir` reads the working tree" check — `dir` is a subcommand,
+      // and subcommands are only ever the first argument. A whole-argv
+      // `not.toContain("dir")` here would add no detection over this line and
+      // would fail for no reason on any checkout, report path or temporary root
+      // whose path happens to contain those three letters.
+      expect(argv[0], "`gitleaks git` walks every commit; `gitleaks dir` reads the tree, where the planted secret was deleted").toBe(
         "git",
       );
-      expect(argv, "`gitleaks dir` reads the working tree, where the planted secret was deleted").not.toContain("dir");
 
       // The flag set, against the fixture rather than against this checkout: the
       // baseline named here is the one the staged script resolved from its own
@@ -1369,10 +1441,14 @@ describe("scripts/secret-scan.sh", () => {
       expect(argv).toContain("--redact");
       expect(argv).toContain("--no-banner");
       expect(valueAfter(argv, "--report-format")).toBe("json");
+      expect(valueAfter(argv, "--report-path")).toBe("gitleaks-report.json");
 
       const target = argv[argv.length - 1];
+      // `existsSync` first, because `statSync` on a path that is not there throws
+      // — and that ENOENT would replace the explanation below with a bare
+      // "no such file or directory" for a case this message was written for.
       expect(
-        statSync(target).isDirectory(),
+        existsSync(target) && statSync(target).isDirectory(),
         `the scan target '${target}' must be a directory that exists, so the comparisons below cannot be ` +
           "satisfied by a path that is merely spelled the same way",
       ).toBe(true);
@@ -1434,22 +1510,27 @@ describe("scripts/secret-scan.sh", () => {
 
     it("reads a secret-free fixture the same way, which is what gives the planted case teeth", async () => {
       // THE CONTROL. Both fixtures are built by the same function and differ in
-      // one thing: the content of one blob, deleted in both. So the planted
-      // assertion above is a statement about a DIFFERENCE that exists between
-      // two repositories this suite built — not a property both share, which
-      // would make it true-to-true and certify nothing. Without this, "the
-      // history under the target carries the secret" could be satisfied by a
-      // script aimed anywhere at all.
+      // one thing: the content of one blob, deleted in both. The planted test
+      // above establishes that the planted fixture's history carries the secret;
+      // this one establishes that the control's does not. Together they are a
+      // statement about a DIFFERENCE between two repositories this suite built —
+      // not a property both share, which would make the planted case true-to-true
+      // and certify nothing. Without this, "the history under the target carries
+      // the secret" could be satisfied by a script aimed anywhere at all.
+      //
+      // Attacking the control means breaking THIS: point the builder at the
+      // planted value for both fixtures and the two stop differing. That leaves
+      // the planted test green and turns only this one red, which is the shape a
+      // control exists to have.
       const withoutSecret = tryGit(control.repo, "log", "--all", "-p");
       expect(withoutSecret.status, `the control fixture's history must be readable: ${withoutSecret.stderr}`).toBe(0);
-      expect(tryGit(planted.repo, "log", "--all", "-p").stdout).toContain(PLANTED_SECRET);
       expect(
         withoutSecret.stdout,
         "the control fixture's history must NOT carry the planted secret — if it did, the planted fixture would " +
           "prove nothing by asserting something the control shares",
       ).not.toContain(PLANTED_SECRET);
 
-      const clean = await runScript({ script: control.script });
+      const clean = await runScript({ script: control.script, reportPath: "gitleaks-report.json" });
       expect(clean.status, `the stub must accept the argv on the clean fixture too: ${clean.output}`).toBe(0);
       expect(clean.argv[0], "the same subcommand on a clean fixture").toBe("git");
       const cleanTarget = clean.argv[clean.argv.length - 1];
@@ -1460,7 +1541,7 @@ describe("scripts/secret-scan.sh", () => {
       expect(
         walked.stdout,
         "the clean fixture's scanned history must carry no planted secret, so the planted fixture's carrying one " +
-          "is the difference the two assertions above are reading",
+          "is the difference the planted test above is reading",
       ).not.toContain(PLANTED_SECRET);
     });
   });

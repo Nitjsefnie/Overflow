@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -65,5 +66,42 @@ describe("scratch-git helpers under an inherited git environment", () => {
     git(repo, "init", "--quiet");
 
     expect(git(repo, "rev-parse", "--absolute-git-dir")).toBe(join(repo, ".git"));
+  });
+
+  /**
+   * `tryGit` exists so that a read whose NON-ZERO exit is the answer can keep
+   * the status. Its other job is the harder half: a launch that never produced a
+   * status must not be readable as "looked, found nothing".
+   *
+   * Measured on this box, `spawnSync` pointed at a working directory that does
+   * not exist returns `status: null`, `error: spawnSync git ENOENT`, and a
+   * `stdout` that is **null** — not the empty string its type promised. A
+   * helper that passed those fields through gave a caller an object whose
+   * `.stdout` was null, so `expect(result.stdout).not.toContain(secret)` reads
+   * as a PASS: null contains nothing. A scan that never opened the repository
+   * would certify it clean. That is the false green this helper's guard exists
+   * to prevent, so it is asserted here rather than trusted.
+   */
+  it("refuses to report a launch failure as a clean read", async () => {
+    const { tryGit } = await freshHelpers();
+    const missing = join(root, "no-such-directory-938");
+    expect(existsSync(missing), "the case must point at a directory that is genuinely absent").toBe(false);
+
+    let thrown: unknown;
+    let returned: { status: number; stdout: string; stderr: string } | undefined;
+    try {
+      returned = tryGit(missing, "log", "--all", "-p");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(
+      returned,
+      "tryGit must not RETURN for a launch that produced no exit status — a returned object would let " +
+        "`not.toContain(secret)` pass on a repository the test never opened",
+    ).toBeUndefined();
+    expect(String(thrown), "and it must say what it was trying to run, and where").toContain("git log --all -p");
+    expect(String(thrown), "and name the launch failure rather than reporting an empty result").toMatch(
+      /ENOENT|never produced an exit status/,
+    );
   });
 });
