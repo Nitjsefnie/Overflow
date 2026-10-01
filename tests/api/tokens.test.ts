@@ -68,13 +68,20 @@ describe("POST /api/tokens", () => {
     const handler = createApiTokenPostHandler(signedInAs(userId, store));
 
     const response = await handler(mintRequest());
-    const body = (await response.json()) as { token: string; createdAt: string; expiresAt: string };
+    const body = (await response.json()) as {
+      token: string; createdAt: string; expiresAt: string; confirmedAt: string | null;
+    };
 
     expect(response.status).toBe(201);
+    // `confirmedAt` travels so the client can tell the member the value it just
+    // received is still unconfirmed: a mint is never confirmed at the instant it
+    // is handed over, so a non-null here would mean the store confirmed a token
+    // nobody has presented yet.
     expect(body).toEqual({
       token: expect.stringMatching(/^ovf_[A-Za-z0-9_-]{43}$/),
       createdAt: issuedAt.toISOString(),
       expiresAt: expiresAt.toISOString(),
+      confirmedAt: null,
     });
     expect(store.calls).toEqual([{ userId, tokenHash: expect.any(Buffer) }]);
 
@@ -83,6 +90,22 @@ describe("POST /api/tokens", () => {
     const storedHash = store.calls[0].tokenHash;
     expect(storedHash.equals(hashApiToken(body.token) as Buffer)).toBe(true);
     expect(storedHash.equals(Buffer.from(body.token, "utf8"))).toBe(false);
+  });
+
+  it("serialises the store's confirmation stamp as an ISO-8601 instant, not a fixed null", async () => {
+    // A mint is never confirmed at the instant it is handed over, so the body
+    // reads null in practice — which is exactly why a route that hardcoded it
+    // would pass every other assertion here. This store answers a real instant,
+    // so the route has to serialise what it was given.
+    const confirmedAt = new Date("2026-09-05T10:05:00.000Z");
+    const store = recordingStore({ confirmedAt });
+    const handler = createApiTokenPostHandler(signedInAs("member-id", store));
+
+    const response = await handler(mintRequest());
+    const body = (await response.json()) as { confirmedAt: string | null };
+
+    expect(response.status).toBe(201);
+    expect(body.confirmedAt).toBe(confirmedAt.toISOString());
   });
 
   it("returns a structured 401 without a session and never reaches the store", async () => {
@@ -321,7 +344,7 @@ type RecordingStore = ApiTokenIssuer & {
  * is here so that a route resolving an account from a bearer credential leaves
  * a trace the tests can fail on.
  */
-function recordingStore(options: { failure?: boolean } = {}): RecordingStore {
+function recordingStore(options: { failure?: boolean; confirmedAt?: Date | null } = {}): RecordingStore {
   const calls: { userId: string; tokenHash: Buffer }[] = [];
   const accountLookups: Buffer[] = [];
   return {
@@ -332,7 +355,7 @@ function recordingStore(options: { failure?: boolean } = {}): RecordingStore {
       if (options.failure) {
         throw new Error("api_tokens upsert failed");
       }
-      return { createdAt: issuedAt, expiresAt, confirmedAt: null };
+      return { createdAt: issuedAt, expiresAt, confirmedAt: options.confirmedAt ?? null };
     },
     async findAccountByTokenHash(tokenHash) {
       accountLookups.push(tokenHash);
