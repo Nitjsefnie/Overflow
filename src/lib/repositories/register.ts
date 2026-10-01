@@ -1811,8 +1811,8 @@ function githubSetupError(
     step === "retrieve the submitted GitHub repository"
       ? "Unable to retrieve the submitted GitHub repository."
       : `Unable to ${step} on GitHub.`,
-    // Issue 883: only the bounded label read keeps a cause — the other steps fail on
-    // transport or credentials, and those messages must not reach a diagnostic.
+    // Issue 883: only the bounded label read keeps a cause — the other steps fail on transport or
+    // credentials, whose messages must not reach a diagnostic. A thrown value of undefined keeps none.
     step === "read the repository difficulty labels" && !(error instanceof GitHubApiError) ? error : undefined,
   );
 }

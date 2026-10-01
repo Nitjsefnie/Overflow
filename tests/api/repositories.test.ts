@@ -2181,12 +2181,8 @@ function successfulDependencies(
   return {
     actor,
     github: {
-      async getRepository() {
-        return resolvedRepository;
-      },
-      async getRepositoryById() {
-        return resolvedRepository;
-      },
+      async getRepository() { return resolvedRepository; },
+      async getRepositoryById() { return resolvedRepository; },
       async listRepositoryLabels() { if (options.labelFailure !== undefined) throw options.labelFailure; return new Set([...validInput().openingLabels, ...validInput().actualLabels].map(({ label }) => label)); },
       async listWorkflowFiles() { return []; },
       async createWebhook() {
@@ -2216,14 +2212,10 @@ function successfulDependencies(
           : null;
       },
       async findRepositoryRegistrationStateByOwnerName() {
-        return options.unregisterTarget === undefined
-          ? null
-          : { repository: options.unregisterTarget, unregisteredAt: null };
+        return options.unregisterTarget === undefined ? null : { repository: options.unregisterTarget, unregisteredAt: null };
       },
       async findRepositoryRegistrationStateByForgeIdentity() {
-        return options.unregisterForgeTarget === undefined
-          ? null
-          : { repository: options.unregisterForgeTarget, unregisteredAt: null };
+        return options.unregisterForgeTarget === undefined ? null : { repository: options.unregisterForgeTarget, unregisteredAt: null };
       },
       async findRepositoryRegistrationState() {
         return options.existingRepository
@@ -2269,9 +2261,7 @@ function successfulDependencies(
         };
       },
       async saveAbandonedWebhookCleanup() {},
-      async listAbandonedWebhookCleanups() {
-        return [];
-      },
+      async listAbandonedWebhookCleanups() { return []; },
       async clearAbandonedWebhookCleanup() {},
       async findGitLabWebhookTargetByOwnerName(ownerName: string) {
         // Faithful default: the target row is the one the flow already
@@ -2289,9 +2279,7 @@ function successfulDependencies(
     webhook: {
       callbackUrl: "https://overflow.example/api/github/webhooks",
     },
-    async scheduleInitialImport() {
-      return undefined;
-    },
+    async scheduleInitialImport() { return undefined; },
   };
 }
 

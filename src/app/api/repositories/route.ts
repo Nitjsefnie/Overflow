@@ -546,6 +546,10 @@ function forgeIdentityErrorResponse(error: ForgeIdentityError): Response {
   }
 }
 
+/**
+ * The registration error's response, and its one log: a caller reading the three
+ * arms above as pure formatting is not reading the whole function (issue 883).
+ */
 function registrationErrorResponse(error: RepositoryRegistrationError): Response {
   // Issue 883: the response below is the sanitized message the submitter reads,
   // and when a collection-walk bound ended a label read it names neither the

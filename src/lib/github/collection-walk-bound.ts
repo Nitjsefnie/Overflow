@@ -13,16 +13,18 @@
  * ceiling, so a read that was cut off cannot be passed off as a complete one —
  * a caller handed a truncated catalog would go on to refuse a scheme that does
  * exist. How far that message travels belongs to the callers, not to this
- * module, and today it goes no further than they: `githubSetupError` and both
- * repository route handlers map any error that is not a `GitHubApiError` to a
- * generic upstream failure, `RepositoryRegistrationError` carries no `cause`,
- * and none of those three logs. So the walk is bounded and the failure is
- * typed, but nothing here is observable by an operator. The GitLab sibling's
- * label read lands on the same generic 502, which is why adding a log line here
- * alone would make the two providers diverge. That parity is not blanket,
- * though: a throw on the reconciliation path is caught by the worker and logged
- * with the error object it was handed, so this bound is not uniformly silent
- * across the two providers' call sites. The fix belongs at those catches.
+ * module, and the two repository routes that bound a GitHub walk now carry it
+ * that far (issue 883): `githubSetupError` keeps the error it was handed as the
+ * `cause` of the `RepositoryRegistrationError` it returns, the registration
+ * route's error response logs that cause, and the labels route records the
+ * error the walk throws. So the walk is bounded, the failure is typed, and a
+ * trip on either route is visible to an operator. The GitLab sibling's label
+ * read still lands on a generic 502 with nothing recorded, so the two providers
+ * are not yet at parity — that is the GitLab half of the same gap, and the
+ * reason this change is GitHub-only. Parity is not blanket even there: a throw
+ * on the reconciliation path is caught by the worker and logged with the error
+ * object it was handed, so this bound is not uniformly silent across the two
+ * providers' call sites.
  *
  * Sizing, and what each number costs. Both are POLICY values, not measurements
  * of any repository, and the arithmetic between them is load-bearing:
