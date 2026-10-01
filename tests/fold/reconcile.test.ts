@@ -936,6 +936,118 @@ describe("reconcileRepository", () => {
     },
   );
 
+  it.each(["reviews", "diff"] as const)(
+    "completes the run when a merged closing pull request's %s read answers the diff-cap 406, discarding and omitting only that subject",
+    async (failingFetch) => {
+      // GitHub durably refuses a diff over its 20000-line cap with a fixed 406
+      // ("Sorry, the diff exceeded the maximum number of lines"), so no retry
+      // can ever succeed and the failure joins the discard arm: the dirty row
+      // goes, the subject is omitted, and the run completes.
+      const diffCap = new GitHubApiError(406);
+      const dependencies = reconciliationDependencies({
+        github: {
+          listIssues: vi.fn().mockResolvedValue([{
+            ...reconciliationIssue({ id: 101, number: 1 }),
+            closingPullRequests: [
+              reconciliationPullRequest({ id: 201, number: 11 }),
+              reconciliationPullRequest({ id: 202, number: 12 }),
+            ],
+          }]),
+          getPullRequestReviews: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
+            if (failingFetch === "reviews" && number === 11) throw diffCap;
+            return [];
+          }),
+          getPullRequestDiff: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
+            if (failingFetch === "diff" && number === 11) throw diffCap;
+            return `diff ${number}`;
+          }),
+        },
+      });
+      dependencies.store.getDirtyReconciliationSubjects = vi.fn(async () => [
+        { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: 7 },
+      ]);
+      const discard = vi.fn().mockResolvedValue(undefined);
+      dependencies.store.discardDirtyReconciliationSubject = discard;
+      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      try {
+        await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
+        expect(discard).toHaveBeenCalledTimes(1);
+        expect(discard).toHaveBeenCalledWith({
+          repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: 7,
+        });
+        expect(dependencies.store.failRun).not.toHaveBeenCalled();
+        expect(errorLog).toHaveBeenCalledTimes(1);
+        expect(errorLog).toHaveBeenCalledWith(
+          "Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=11 reason=DIFF_TOO_LARGE",
+        );
+        const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
+        expect(materializeInput.synchronization?.pullRequests).toEqual([{ id: 202, reviews: [], rawDiff: "diff 12" }]);
+
+        // The discard is what empties the subject's dirty row, so a subsequent
+        // reconciliation no longer carries it as dirty work and still completes
+        // instead of failing the run again; the journal keeps naming the
+        // subject so the durable skip stays operator-visible.
+        dependencies.store.getDirtyReconciliationSubjects = vi.fn(async () => []);
+        await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
+        expect(dependencies.store.failRun).not.toHaveBeenCalled();
+        expect(errorLog).toHaveBeenNthCalledWith(
+          2,
+          "Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=11 reason=DIFF_TOO_LARGE",
+        );
+        const secondInput = vi.mocked(dependencies.store.materialize).mock.calls[1]![0];
+        expect(secondInput.synchronization?.dirtySubjects).toEqual([]);
+        expect(secondInput.synchronization?.pullRequests).toEqual([{ id: 202, reviews: [], rawDiff: "diff 12" }]);
+      } finally {
+        errorLog.mockRestore();
+      }
+    },
+  );
+
+  it.each(["reviews", "diff"] as const)(
+    "fails the run without discarding when a merged closing pull request's %s read fails with a server error",
+    async (failingFetch) => {
+      // A 5xx is transient: whole-run retry semantics hold and the discard arm
+      // must never swallow it, on either pull-request evidence leg.
+      const serverError = new GitHubApiError(502);
+      const dependencies = reconciliationDependencies({
+        github: {
+          listIssues: vi.fn().mockResolvedValue([{
+            ...reconciliationIssue({ id: 101, number: 1 }),
+            closingPullRequests: [
+              reconciliationPullRequest({ id: 201, number: 11 }),
+              reconciliationPullRequest({ id: 202, number: 12 }),
+            ],
+          }]),
+          getPullRequestReviews: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
+            if (failingFetch === "reviews" && number === 11) throw serverError;
+            return [];
+          }),
+          getPullRequestDiff: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
+            if (failingFetch === "diff" && number === 11) throw serverError;
+            return `diff ${number}`;
+          }),
+        },
+      });
+      dependencies.store.getDirtyReconciliationSubjects = async () => [
+        { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: 7 },
+      ];
+      const discard = vi.fn().mockResolvedValue(undefined);
+      dependencies.store.discardDirtyReconciliationSubject = discard;
+      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      try {
+        await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
+          message: "Unable to reconcile repository.",
+        });
+        expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+        expect(discard).not.toHaveBeenCalled();
+      } finally {
+        errorLog.mockRestore();
+      }
+    },
+  );
+
   it("completes the run when an untracked merged closing pull request's evidence is gone upstream, journaling and omitting without a discard", async () => {
     const notFound = new Error(
       "GitHub GraphQL request failed. NOT_FOUND: Could not resolve to a PullRequest with the number of '12'.",
