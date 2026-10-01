@@ -1756,13 +1756,28 @@ above it.** `R:` names the router that made the decision, and `mail4root` is
 a perfectly good name for a router that then hands the message to a local
 delivery agent. Read the transport.
 
+**On this host, as measured on 2026-10-01, the alert recipient already leaves
+the host.** `exim -bt` above returned `router = smarthost,
+transport = remote_smtp_smarthost` with `host smtp.gmail.com [...] port=587`,
+and the retained logs agree:
+
+```bash
+zcat -f /var/log/exim4/mainlog* | grep -F "$(cat /etc/overflow/alert-recipient)" | grep -oE 'T=[a-z_]+' | sort | uniq -c
+zcat -f /var/log/exim4/mainlog* | grep 'T=address_file' | grep -cF "$(cat /etc/overflow/alert-recipient)"
+```
+
+Five lines, every one `T=remote_smtp_smarthost`, and zero local writes to that
+address. So the routing decision below is one to re-make, not one to make — run
+the two commands again whenever the address changes, and treat a `0` on the
+second as the thing to notice.
+
 If the first shape is what comes back, the decision is yours, and it is not
 the repository's:
 
 - **Route the address off the host.** The configuration the Verify step below
   accepts, and the only one that can page a person.
-- **Keep the local mailbox as a retained record.** Defensible — a root mailbox
-  on the box is a durable record of every failure, and it is one of the reasons
+- **Keep the local mailbox as a retained record.** Defensible — a mailbox on
+  the box is a durable record of every failure, and it is one of the reasons
   this host has an audit trail at all. It carries two obligations you have to
   accept deliberately rather than discover.
 
@@ -1779,19 +1794,26 @@ the repository's:
   starting, and one that cycles more slowly than the window mails once per
   cycle for as long as it keeps cycling.
 
-  The mailbox itself also grows without a rule — no `logrotate` entry on this
-  host covers `/var/mail/mail` — so a retained record is an unbounded one
-  unless you write the rule yourself. Measure the state you are deciding
-  about, and measure where the mail is going while you are there:
-  `ls -l /var/mail/mail` for its size, `grep -c '^From ' /var/mail/mail` for
-  its message count, and the two routing counts —
-  `zcat -f /var/log/exim4/mainlog* | grep -c 'T=address_file'` against
-  `zcat -f /var/log/exim4/mainlog* | grep -c 'T=remote_smtp'` — which are the
-  whole argument in two numbers. They are a snapshot rather than a constant:
-  across the retained rotations on the host this section was written against,
-  573 deliveries went to a local mailbox and 7 left the host. The local figure
-  only climbs as the log fills, and the off-host one is every alert anybody on
-  this host has actually been sent.
+  **The mailbox grows either way, and that obligation is not conditional on
+  this decision.** `/var/mail/mail` on this host is root's own system mail
+  regardless of where the alert recipient routes — every retained
+  `T=address_file` line is `R=mail4root ... => /var/mail/mail
+  <root@vmi3458323.contaboserver.net>`, and the alert address appears in none
+  of them. No `logrotate` entry on this host covers `/var/mail/mail`, so a
+  retained record is an unbounded one unless you write the rule yourself,
+  whether or not it ever holds an alert:
+
+  ```bash
+  ls -l /var/mail/mail                                   # size
+  grep -c '^From ' /var/mail/mail                       # message count
+  zcat -f /var/log/exim4/mainlog* | grep -c 'T=address_file'   # local writes, all mail
+  ```
+
+  Those counts describe **all** mail this host has relayed, not the alert
+  path's share of it. Measured 2026-10-01 they read 528 and 7, and they are a
+  snapshot that only climbs as the log fills — which is exactly why the alert
+  path's own routing is answered by the two commands above rather than by
+  either number.
 
 **The deployment is not verified until an off-host delivery has been
 observed**, not until one was attempted and the daemon accepted it. The Verify
@@ -1814,6 +1836,19 @@ so the readback shows the expanded name — including the template's own
 `.service` suffix, doubled next to the instance — not the raw
 `OnFailure=overflow-alert@%n.service` line the repository's unit files
 carry.
+
+The alert template must also carry the group that lets the script read the exim
+mainlog it decides from:
+
+```bash
+systemctl show overflow-alert@test.service -p SupplementaryGroups --value | grep -qx adm && echo "the alert unit reads the exim log as a member of adm" || echo "the alert unit is NOT in group adm - every alert will wait out its budget, report that it did not leave this host, and record no throttle state"
+```
+
+This is not tidiness: the script follows the accepted message id into
+`/var/log/exim4/mainlog`, which is `0640 Debian-exim:adm`, and the unit's
+`CapabilityBoundingSet=` is empty — so root has neither `CAP_DAC_OVERRIDE` nor
+`CAP_DAC_READ_SEARCH` and is refused the open() without this group. A unit
+missing it mutes the path while making it look broken.
 
 Then send a real message through the whole route with a throwaway instance —
 the instance name need not be a unit that exists, and the message's subject
@@ -1903,6 +1938,20 @@ to — is a failed alert, and so is the `(no routing line)` case. When the
 transport is `remote_smtp_smarthost` or another name not on the list, the
 alert left the host.
 
+**A fourth check, and it is the one that catches a message the relay refused.**
+Exim writes `Completed` when the daemon is *finished* with a message, which
+includes one it gave up on: a bounce, a rejection and a discard all end with the
+same line a successful delivery does. So all three commands above can pass on a
+message that was permanently refused, and the script — which reads a terminal
+verdict before it reads `Completed`, for exactly that reason — will have called
+it a failure. Check for one with `grep -F "<id> **" /var/log/exim4/mainlog` and
+`grep -F "<id> Failed" /var/log/exim4/mainlog`. Either printing nothing is what
+a pass requires. Anything they print is a verdict exim recorded against that
+id, and it is the finding — `rejected`, `bounce`, `blackhole`, `discarded` or
+`Failed` all end the message. The one exception is `** defer`, which is a
+greylist or a temporary 4xx and means the message is still retrying; the script
+keeps waiting for it, and so should you.
+
 **Before you read an absent verdict as a broken relay, check there was a log to
 read.** `/var/log/exim4/mainlog` is rotated daily by
 `/etc/logrotate.d/exim4-base`, and that rule carries **`nocreate`**: rotation
@@ -1966,6 +2015,17 @@ silent, and it is the one case where the state file's presence is not news.
 Remove the instance's state file under `/run/overflow-alert` to send again
 immediately.
 
+**What this step does not check, stated so it is not assumed: the trigger.** It
+proves the delivery half — that when the alert script runs, a message leaves
+this host. It does not prove that anything makes it run. A unit that cannot
+serve does not exit, so it never trips the `OnFailure=` condition the template
+follows, and nothing else on this host observes that state either: a wedged
+`overflow.service` is silent in exactly the same way a healthy one is until
+something asks it a question. So a clean run through every check above is a
+statement about the alert path only. The half this repository does not close is
+noted in the issue, and until it is, treat "the alert path verified" as
+distinct from "a failure would have been reported".
+
 ### Rollback
 
 Revert the two `OnFailure=` lines — re-copy the units without them, or edit
@@ -2003,17 +2063,19 @@ is the only observation on this host that can see the smarthost leg at all.
 **It reads that log as a member of `adm`, and cannot read it at all without
 that membership.** `/var/log/exim4/mainlog` is `0640 Debian-exim:adm` in a
 `2750 Debian-exim:adm` directory, and the canary unit runs with
-`CapabilityBoundingSet=` empty — copied from the alert template beside it,
-where the identical hardening is safe because that unit reads the *journal*
-and never the file. An empty bounding set strips `CAP_DAC_OVERRIDE`, which is
-the only reason a root process could open a file whose group it did not hold.
-The unit therefore carries `SupplementaryGroups=adm`: the ordinary group
-mechanism, no capability, and the group this host's own log files are already
-owned by. It is the one widening in that unit, and it is wider than one file —
-group `adm` also owns the nginx, postgresql, fail2ban, cloud-init, tor,
-privoxy and tinyproxy logs here — so the directive is **pinned** to `adm` in
-`tests/deploy/canary-units.test.ts` rather than admitted by name with its
-value left open.
+`CapabilityBoundingSet=` empty — the same hardening the alert template beside
+it uses, and for the same reason it is not merely safe there. An empty bounding
+set strips `CAP_DAC_OVERRIDE`, which is the only reason a root process could
+open a file whose group it did not hold; `ProtectSystem=strict` is not what
+decides this, because it governs the mount namespace and not file access. The
+alert script reads that same mainlog to decide whether an alert left the host,
+so the alert template carries `SupplementaryGroups=adm` too, pinned to `adm` in
+`tests/deploy/alert-units.test.ts` for the reason given below. Both units
+therefore carry the directive: the ordinary group mechanism, no capability, and
+the group this host's own log files are already owned by. It is wider than one
+file — group `adm` also owns the nginx, postgresql, fail2ban, cloud-init, tor,
+privoxy and tinyproxy logs here — so it is **pinned** to `adm` in both unit
+tests rather than admitted by name with its value left open.
 
 **If that membership is ever wrong, the canary says so instead of blaming the
 relay.** Before it submits anything the script checks that it can read the
