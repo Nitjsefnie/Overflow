@@ -527,6 +527,20 @@ describe("sweepOrphans", () => {
     expect(outcome).toEqual({ examined: 0, relayed: [] });
   });
 
+  it("reads an EMPTY success body on the runs listing as no candidates, not a crash", async () => {
+    // Same family as the malformed listing above, and a distinct input: apiCall
+    // answers `undefined` for an empty 200 body, so the runs listing is not a
+    // bad object here, it is no object at all. Reading `workflow_runs` off that
+    // unguarded throws a TypeError, which turns an ordinary empty response into
+    // a red relay job over a shape GitHub is entitled to send.
+    const { api, requests } = fakeApi({ [RUNS_URL]: undefined });
+    const outcome = await sweepOrphans(deps(api));
+    expect(outcome).toEqual({ examined: 0, relayed: [] });
+    // It read the listing and stopped: no second call, nothing posted.
+    expect(requests).toHaveLength(1);
+    expect(requests.filter((request) => request.method === "POST")).toHaveLength(0);
+  });
+
   it("propagates a failed GET rather than posting blind, so a dead sweep is a red relay job", async () => {
     const { api } = fakeApi({}); // the runs URL has no handler: get throws
     await expect(sweepOrphans(deps(api))).rejects.toThrow(/unexpected fetch/);
