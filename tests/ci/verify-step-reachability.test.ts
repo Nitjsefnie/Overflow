@@ -556,7 +556,7 @@ const DETECT_STEP_NAME = "Detect docs-only change";
 
 /**
  * Every flag the workflow's coverage invocation passes, each asserted
- * separately as a WHOLE TOKEN of the command, never as a substring.
+ * separately as a WHOLE SHELL WORD, never as a substring.
  *
  * The distinction is the whole point. `--coverage` is a prefix of all three
  * reporter flags, so a substring test for it is satisfied by any single
@@ -567,7 +567,11 @@ const DETECT_STEP_NAME = "Detect docs-only change";
  * written. The same holds for `--coverage.include`, which was on the step and
  * pinned nowhere in the repository before this list carried it.
  *
- * So the check is a whitespace-split token membership test, not `includes`.
+ * Splitting on whitespace is what makes the tokens whole words, and it is also
+ * what keeps the assertion indifferent to how the `run:` block is laid out: a
+ * folded `>-` block, extra tabs and re-wrapped lines all arrive here as the same
+ * list of words (measured by the fix round 3 reviewer — reformatting stayed
+ * green at 178/178 and must stay that way).
  */
 const COVERAGE_FLAGS = [
   "--coverage",
@@ -576,6 +580,24 @@ const COVERAGE_FLAGS = [
   "--coverage.reporter=cobertura",
   "--coverage.include='src/**'",
 ];
+
+/**
+ * A command's shell words, each with its quoting removed.
+ *
+ * Quote removal is the ONE normalisation here, and it is deliberate in both
+ * directions. `--coverage.reporter="text"` is the same shell word as
+ * `--coverage.reporter=text`, and asserting on the raw text turned a spelling
+ * difference into a red suite claiming the workflow fails to pass a flag it does
+ * pass. Nothing wider: whitespace is not collapsed beyond splitting into words,
+ * so the layout tolerance above is untouched, and a dropped flag still leaves
+ * no word to find.
+ */
+function shellWords(command: string): string[] {
+  return command
+    .split(/\s+/)
+    .map((word) => word.replaceAll("'", "").replaceAll('"', ""))
+    .filter((word) => word !== "");
+}
 
 /**
  * The steps that compute or publish a coverage artifact. They carry the same
@@ -936,7 +958,15 @@ for (const scenario of SCENARIOS) {
     const testSteps = () => runsContaining(selected(), TEST_SUITE_COMMAND);
     const executedRunSteps = () => selected().filter((step) => step.run !== undefined);
     const coverageInvocations = () =>
-      testSteps().map((step) => step.run ?? "").filter((run) => run.includes("--coverage"));
+      // Every EXECUTED step's run, not just the test steps': a second step
+      // measuring coverage is the same defect as a second test suite — two
+      // measurements, one over the other's output — and restricting the search
+      // to `testSteps()` made appending `--coverage` to an unrelated step
+      // invisible. Token-aware for the same reason the flags are: a substring
+      // here counts every command with a `--coverage.*` flag as a measurement.
+      executedRunSteps()
+        .map((step) => step.run ?? "")
+        .filter((run) => shellWords(run).includes("--coverage"));
 
     it("runs the test suite exactly once", () => {
       // Zero is issue 849's own failure mode: a condition that can never fire
@@ -998,12 +1028,12 @@ for (const scenario of SCENARIOS) {
         // command: check-coverage-floor.ts and the patch-coverage step read
         // what these write, so a dropped flag is a silently unreadable
         // artifact rather than a smaller one.
-        const coverageTokens = (coverageInvocations()[0] ?? "").split(/\s+/);
+        const coverageWords = shellWords(coverageInvocations()[0] ?? "");
         for (const flag of COVERAGE_FLAGS) {
           expect(
-            coverageTokens.includes(flag),
-            `${expectation} — the coverage invocation must pass ${flag} as its own token of the ` +
-              `command, not merely as text inside a longer flag`,
+            coverageWords.includes(shellWords(flag)[0]!),
+            `${expectation} — the coverage invocation must pass ${flag} as its own shell word, ` +
+              `not merely as text inside a longer flag`,
           ).toBe(scenario.coverage);
         }
       },
