@@ -223,6 +223,28 @@ export. The requester can sign in with the same GitHub account and download it
 from the "Your account data" section of their dashboard; otherwise the export
 is held.
 
+### A person who never signed in
+
+A request from a person who never signed in has no account row to delete and no
+dashboard route, so the operator handles it by hand. Identify the person's rows
+by forge login and numeric user id together, never a login alone, across the
+stores the notice's "People who have never signed in" section enumerates:
+tracked-issue and claim-assignee logins and ids, pull request author logins and
+ids, settlements credited to them, the per-repository cache of issue authors,
+assignees, and comment authors, change-log entries, and moderation notes naming
+them. The free text held for such a person is the issue and pull request body
+text written before 2026-09-26 (comment bodies are placeholder-replaced at
+write time), so for each repository holding their text clear those columns with
+the unregister scrub — `scrubRepositoryFreeText` from
+`src/lib/repositories/unregister-scrub.ts`, the same routine unregistration
+runs, which nulls `issues.body` and `pull_requests.body` for the repository.
+If the person also holds an account, handle it as the deletion commands above
+do — pseudonymisation, never a hard delete: the account row keeps its id and
+`github_user_id` while the login is tombstoned and avatar and tokens go, and
+deletion is refused while they sponsor a registration that has not been
+unregistered. Backups taken before the scrub keep the pre-scrub text until each
+dump is pruned — in practice about 15 days, like any pre-deletion dump.
+
 ### Running the commands
 
 On the deployment host, with the deployment's `DATABASE_URL` loaded:
