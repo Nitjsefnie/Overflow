@@ -523,15 +523,19 @@ export async function seedBoardBenchmark(options: SeedOptions): Promise<SeedResu
 
       // Migration 003 moved the settlement's composite FK onto this link
       // table; the seed fills it beside every pull request, exactly as the
-      // materializer does.
-      await tx`insert into pull_request_issues ${tx(
-        world.pullRequests.map((pullRequest) => ({
-          pull_request_id: pullRequest.id,
-          issue_id: pullRequest.issueId,
-          repository_id: pullRequest.repositoryId,
-        })),
-        "pull_request_id", "issue_id", "repository_id",
-      )}`;
+      // materializer does. Chunked like its siblings: unchunked, the insert
+      // binds pullRequests × 3 parameters and crosses Postgres's limit past
+      // ~21.8k pull requests (issue 909).
+      for (const chunk of chunks(world.pullRequests, 1_000)) {
+        await tx`insert into pull_request_issues ${tx(
+          chunk.map((pullRequest) => ({
+            pull_request_id: pullRequest.id,
+            issue_id: pullRequest.issueId,
+            repository_id: pullRequest.repositoryId,
+          })),
+          "pull_request_id", "issue_id", "repository_id",
+        )}`;
+      }
 
       for (const chunk of chunks(world.settlements, 1_000)) {
         await tx`insert into settlements ${tx(
