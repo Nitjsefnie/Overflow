@@ -306,9 +306,10 @@ export async function readReconciliationEvidence(
 ): Promise<ReconciliationEvidence | null> {
   const rows = await sql<{
     version: number; format_version: number; checkpoint: Date; last_full_pass_at: Date;
+    omitted_oversized_facts: number;
     kind: ReconciliationFactKind | null; subject_key: string | null; payload: unknown;
   }[]>`
-    select e.version, e.format_version, e.checkpoint, e.last_full_pass_at,
+    select e.version, e.format_version, e.checkpoint, e.last_full_pass_at, e.omitted_oversized_facts,
       f.kind, f.subject_key, f.payload
     from repository_reconciliation_evidence e
     left join repository_reconciliation_evidence_facts f on f.repository_id = e.repository_id
@@ -332,6 +333,7 @@ export async function readReconciliationEvidence(
     formatVersion: metadata.format_version,
     checkpoint: metadata.checkpoint,
     lastFullPassAt: metadata.last_full_pass_at,
+    omittedOversizedFacts: metadata.omitted_oversized_facts,
     ...mergeEvidenceFacts(factRows),
   };
 }

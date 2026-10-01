@@ -92,7 +92,7 @@ describe("durable reconciliation evidence", () => {
     const restarted = new PostgresFoldStore(sql);
     const cached = await restarted.getReconciliationEvidence(repositoryId);
     expect(cached).toEqual({
-      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: first, lastFullPassAt: first,
+      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: first, lastFullPassAt: first, omittedOversizedFacts: 0,
       issues: [{ ...rawIssue(), body: undefined }], pullRequests: [{ id: 201, reviews: [], rawDiff: "retained diff" }],
     });
     expect(cached!.issues[0]).not.toHaveProperty("body");
@@ -213,7 +213,7 @@ describe("durable reconciliation evidence", () => {
     });
     const document = await readReconciliationEvidence(countingSql, repositoryId);
     expect(document).toEqual({
-      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: first, lastFullPassAt: first,
+      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: first, lastFullPassAt: first, omittedOversizedFacts: 0,
       issues: [{ ...rawIssue(), body: undefined }], pullRequests: [{ id: 201, reviews: [], rawDiff: "retained diff" }],
     });
     expect(statements).toBe(1);

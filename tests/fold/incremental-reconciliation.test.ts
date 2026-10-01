@@ -411,6 +411,33 @@ describe("incremental reconciliation", () => {
     expect((await f.store.getReconciliationEvidence(f.id))?.lastFullPassAt).toEqual(f.clock);
   });
 
+  // Mutant: OMITTED_OVERSIZED_DOES_NOT_FORCE_FULL — a fact omitted as
+  // oversized leaves a hole in the evidence cache, and a quiet partial pass
+  // reading that hole as upstream absence would destroy the subject's
+  // materialized rows (the C1 shape). While any write omitted facts, the
+  // repository folds FULL passes: the view is complete, nothing is removed,
+  // and the cache-hole state never survives into a decision.
+  it("keeps folding full passes while an omitted oversized fact holds the cache hole", async () => {
+    const f = await fixture();
+    // 600 bytes: both priced issues' facts (each carries nested PR evidence)
+    // cross the limit; the label-"future" issue's fact stays under it.
+    f.store = new PostgresFoldStore(sql, encryptionKey, undefined, undefined, { reconciliationFactByteLimit: 600 });
+    await f.run();
+    expect((await derived(f.id)).issues).toHaveLength(2);
+    expect((await f.store.getReconciliationEvidence(f.id))?.issues).toHaveLength(1);
+    const [flagged] = await sql`select omitted_oversized_facts from repository_reconciliation_evidence where repository_id = ${f.id}`;
+    expect(flagged!.omitted_oversized_facts).toBe(2);
+    // Quiet partial pass five minutes later, no upstream change: the hole must
+    // not read as absence, so the pass goes full (no `since` on the scan).
+    f.clock = new Date("2026-09-08T10:05:00Z");
+    await f.run();
+    expect(f.scans.at(-1)).toBeUndefined();
+    expect((await derived(f.id)).issues).toHaveLength(2);
+    expect((await f.store.getReconciliationEvidence(f.id))?.issues).toHaveLength(1);
+    const [stillFlagged] = await sql`select omitted_oversized_facts from repository_reconciliation_evidence where repository_id = ${f.id}`;
+    expect(stillFlagged!.omitted_oversized_facts).toBe(2);
+  });
+
   // Mutants: ADVANCE_FULL_AGE_ON_FAILURE, WATERMARK_BEFORE_MATERIALIZE,
   // CACHE_OUTSIDE_TRANSACTION, DROP_MIDPASS_INVALIDATION.
   it.each(["issue page two", "PR evidence", "materialization", "cooldown"])("keeps synchronization state unchanged after %s failure", async (failure) => {

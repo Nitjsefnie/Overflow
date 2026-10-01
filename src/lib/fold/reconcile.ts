@@ -272,7 +272,12 @@ async function reconcileRepositoryWhileCoordinated(
         dependencies.store.getReconciliationEvidence(repositoryId),
         dependencies.store.getDirtyReconciliationSubjects(repositoryId),
       ]);
+      // While the most recent write omitted oversized facts the cache has
+      // holes; reading a hole as upstream absence would destroy the subject's
+      // materialized rows on a quiet partial pass. Fold full passes until a
+      // pass re-observes everything within the limit and clears the flag.
       const full = cached === null || cached.formatVersion !== RECONCILIATION_EVIDENCE_FORMAT || rederive
+        || cached.omittedOversizedFacts > 0
         || scanStartedAt.getTime() - cached.lastFullPassAt.getTime() >= reconciliationFullRepairMs;
 
       // The stored path is a display name GitHub reassigns to whoever takes it after a
