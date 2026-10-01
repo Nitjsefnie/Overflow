@@ -1041,6 +1041,33 @@ describe("GitLabGateway", () => {
       .rejects.toThrow(/invalid x-next-page/);
   });
 
+  it("refuses an x-next-page header that is not canonical digits instead of jumping pages", async () => {
+    // `Number("1e1")` is 10, so a walk that parses before checking the shape
+    // jumps from page 1 straight to page 10, silently skipping pages 2 through
+    // 9 while the run still reports success. Only page 1 carries the malformed
+    // value and the rest of the walk advances normally — a mock that repeated
+    // it would stop early on the strictly-advancing check instead, and this
+    // test would pass on the unfixed walk for the wrong reason. Bounded mock:
+    // the mutant keeps walking past page 10, so it 503s here and fails fast on
+    // a non-matching error instead of burning the test timeout.
+    let hits = 0;
+    const client = gateway(async (input) => {
+      hits += 1;
+      if (hits > 3) return new Response("pagination walk did not stop", { status: 503 });
+      const requested = Number(new URL(new Request(input).url).searchParams.get("page"));
+      return new Response(JSON.stringify([note]), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "x-next-page": requested === 1 ? "1e1" : String(requested + 1),
+        },
+      });
+    });
+    const repository = { owner: "gitlab-org", name: "gitlab" };
+    await expect(client.listIssueComments(repository, 12))
+      .rejects.toThrow('GitLab returned an invalid x-next-page header: "1e1".');
+  });
+
   it("skips a label event whose label name is empty", async () => {
     const client = gateway(async (input) => {
       const request = new Request(input);

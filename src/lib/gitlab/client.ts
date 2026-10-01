@@ -368,7 +368,7 @@ export class GitLabGateway {
       const next = response.headers.get("x-next-page");
       if (next === null || next === "") break;
       const nextPage = Number(next);
-      if (!Number.isSafeInteger(nextPage) || nextPage <= page) {
+      if (!/^\d+$/.test(next) || !Number.isSafeInteger(nextPage) || nextPage <= page) {
         throw new Error(`GitLab returned an invalid x-next-page header: ${JSON.stringify(next)}.`);
       }
       page = nextPage;
