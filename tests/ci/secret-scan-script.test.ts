@@ -284,8 +284,9 @@ describe(".github/gitleaks-baseline.json", () => {
     // keeps the surrounding source-line context. A `gitlab-pat` finding's match
     // IS the token, so it comes out as the bare literal REDACTED; a
     // `generic-api-key` finding's match is the assignment around it, so the
-    // two such entries read `TOKEN_ENCRYPTION_KEY", "REDACTED"` and
-    // `encrypted_webhook_secret","REDACTED"`. So the two fields are asserted
+    // three such entries read `TOKEN_ENCRYPTION_KEY", "REDACTED"`,
+    // `encrypted_webhook_secret","REDACTED"` and
+    // `TOKEN_ISSUANCE_ID = "REDACTED"`. So the two fields are asserted
     // differently, and the second one is the one that would otherwise have
     // looked untidy and been "corrected" by a hand-edit — which would break the
     // whole-record comparison the baseline exists to drive, because gitleaks
@@ -850,11 +851,11 @@ describe("the git reads that decide whether the deep check runs", () => {
  * This block SKIPS wherever the checkout is shallower than the history it points
  * at, which in practice means CI: `.github/workflows/ci.yml` gives the `verify`
  * job `actions/checkout`'s default depth of 1, and the baseline's entries date
- * from September. The skip is deliberate and reported in the run summary. A
- * `try { … } catch { pass }` here would be the same false green this whole
- * exercise has been about, wearing a name tag: a green CI run would read as
- * coverage the run does not have. See the file header for what each environment
- * does and does not establish.
+ * from September and October. The skip is deliberate and reported in the run
+ * summary. A `try { … } catch { pass }` here would be the same false green this
+ * whole exercise has been about, wearing a name tag: a green CI run would read
+ * as coverage the run does not have. See the file header for what each
+ * environment does and does not establish.
  *
  * What it does NOT do is skip because a commit is missing from a FULL-DEPTH
  * checkout. That is a baseline pointing at a commit this repository does not
