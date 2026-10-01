@@ -315,6 +315,7 @@ scripts/*
 !scripts/container-build.sh
 !scripts/ci-base-freshness.sh
 !scripts/secret-scan.sh
+!scripts/secret-scan-baseline.sh
 !scripts/overflow-alert.sh
 !scripts/overflow-canary.sh
 !scripts/overflow-bounce.sh
