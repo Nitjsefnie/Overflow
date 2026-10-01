@@ -21,7 +21,11 @@ export function CalibrationPanel({ comparison, byRepository = [] }: CalibrationP
         <p className="eyebrow">Paired calibration evidence</p>
         <h1 id="calibration-heading">Calibration comparison</h1>
       </section>
-      <section className="calibration-panel surface shadow-offset" aria-labelledby="calibration-heading">
+      {/* No accessible name: a named section is a landmark region, and naming
+          this one after the page heading gave two regions one name (alert 907).
+          An unnamed section is not a landmark, so the page heading keeps the
+          only "Calibration comparison" region. */}
+      <section className="calibration-panel surface shadow-offset">
         {noSamples ? (
           <p className="empty-copy">Complete paired work to establish calibration.</p>
         ) : null}
