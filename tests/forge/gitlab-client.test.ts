@@ -611,6 +611,50 @@ describe("GitLab collection pagination", () => {
       }]);
     });
   });
+
+  // Issue 879: a 200 whose body is not valid JSON at all — an HTML error page
+  // from an intermediary, or an empty body — escapes the taxonomy as a raw
+  // SyntaxError from an unguarded JSON.parse. Every success-body parse must
+  // fold a parse failure into the module's typed error at the same rank as a
+  // transport failure (status 0, endpoint in `.body`), so a caller's 404-only
+  // catch keeps seeing only 404s and run failure records name the boundary.
+  describe("non-JSON success body", () => {
+    const rawBody = (body: string) => new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+
+    it.each([
+      ["an HTML error page", `<html>gateway error page</html>`],
+      ["an empty body", ""],
+    ])("rejects the labels walk with the typed error on %s", async (_shape, body) => {
+      const { client, requests } = collectionClient(`${projectPath}/labels`, () => rawBody(body));
+      const error = await client.listRepositoryLabels(repository).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(GitLabApiError);
+      expect(error).toMatchObject({ name: "GitLabApiError", status: 0 });
+      expect((error as GitLabApiError).body).toContain("/labels");
+      expect(requests).toHaveLength(1);
+    });
+
+    it("rejects getRepository with the typed error on an HTML error page", async () => {
+      const { client, requests } = collectionClient(projectPath, () => rawBody(`<html>gateway error page</html>`));
+      const error = await client.getRepository(repository).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(GitLabApiError);
+      expect(error).toMatchObject({ name: "GitLabApiError", status: 0 });
+      expect((error as GitLabApiError).body).toContain("/projects/gitlab-org%2Fgitlab");
+      expect(requests).toHaveLength(1);
+    });
+
+    // The control side of the guard: valid JSON 200s must parse exactly as
+    // before through both parse paths — the array walker and the object read.
+    it("still resolves valid JSON through both parse paths", async () => {
+      const labels = collectionClient(`${projectPath}/labels`, () => json([{ name: "settled: 10" }]));
+      await expect(labels.client.listRepositoryLabels(repository)).resolves.toEqual(new Set(["settled: 10"]));
+
+      const byPath = collectionClient(projectPath, () => json(project));
+      await expect(byPath.client.getRepository(repository)).resolves.toMatchObject({
+        id: 278964,
+        fullName: "gitlab-org/gitlab",
+      });
+    });
+  });
 });
 
 describe("GitLabGateway", () => {
