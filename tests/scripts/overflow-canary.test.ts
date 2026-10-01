@@ -45,6 +45,13 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const scriptPath = join(repositoryRoot, "scripts", "overflow-canary.sh");
+/**
+ * The sibling script, read only where a property of BOTH is under test: the
+ * verdict block they share byte for byte. Never executed here - the alert suite
+ * drives it - so nothing in this file can pass on the alert script's
+ * behaviour.
+ */
+const alertScriptPath = join(repositoryRoot, "scripts", "overflow-alert.sh");
 const recipientAddress = "canary-recipient@example.test";
 
 /**
@@ -98,16 +105,22 @@ const deferredRetry = (id: string): string =>
 
 /**
  * A routing line whose `C=` field holds the RELAY's own answer, quoted byte
- * for byte, as every exim 53.13 summary line does - and, as a greylisting
- * smarthost's rejection text really does, a word this suite's classifier
+ * for byte, as every exim 53.13 summary line does - carrying, as a filtering
+ * relay's rejection text plausibly does, a word this suite's classifier
  * otherwise treats as a terminal verdict.
  *
- * The `DN=` field is on the line for the same reason: it is quoted too, so a
- * classifier that scrubs one quoted field and not the other is caught by the
- * same case.
+ * Two things about the shape are load-bearing, and the fixture cannot carry
+ * either of them twice:
+ *
+ * - `DN=` is quoted too, and comes first, so a scrubber that drops one quoted
+ *   span and stops leaves `C=` for the terminal scan to find;
+ * - the `C=` value contains a quote exim has ESCAPED inside it, which is what
+ *   exim writes when the relay's own text carries one. A scrubber that pairs
+ *   quotes naively ends the span at that inner quote and hands everything
+ *   after it - the terminal word included - to the scan.
  */
 const relayAnswerMentioningFailure = (id: string): string =>
-  `${id} => ${recipientAddress} R=smarthost T=remote_smtp_smarthost H=smtp.gmail.com [2a00:1450:4001:c21::6c] TFO CV=yes DN="CN=smtp.gmail.com" A=plain K C="450 4.7.1 Greylisted - bounce threshold not reached"`;
+  `${id} => ${recipientAddress} R=smarthost T=remote_smtp_smarthost H=smtp.gmail.com [2a00:1450:4001:c21::6c] TFO CV=yes DN="CN=smtp.gmail.com" A=plain K C="550 5.7.1 rejected: \\"bounce\\" threshold not reached"`;
 
 type RelayOutcome =
   | "completed"
@@ -115,6 +128,8 @@ type RelayOutcome =
   | "deferred-then-completed"
   | "deferred-then-terminal"
   | "terminal"
+  | "terminal-blackhole"
+  | "terminal-discarded"
   | "retrying"
   | "retrying-then-completed"
   | "connect-failure-detail"
@@ -378,6 +393,19 @@ async function startSmtp(options: {
               logLine(
                 `${messageId} *** rejected RCPT <canary@example.test>: 550 5.1.1 unknown user`,
               );
+            } else if (options.outcome === "terminal-blackhole") {
+              // The two terminal keywords the classifier carries and this
+              // suite had no fixture for. The alert suite pins all five; a
+              // keyword only one of the two copies pins is a keyword a
+              // one-sided edit can drop, and R5's byte-identity is enforced by
+              // a test rather than by a human remembering to run a diff.
+              messages.push(bufferedData.join("\r\n"));
+              bufferedData = [];
+              logLine(`${messageId} ** blackhole: <> <canary@example.test>`);
+            } else if (options.outcome === "terminal-discarded") {
+              messages.push(bufferedData.join("\r\n"));
+              bufferedData = [];
+              logLine(`${messageId} ** discarded: <> <canary@example.test>`);
             } else if (options.outcome === "deferred-then-completed") {
               // One message id, two outcomes, in the order a real relay
               // produces them when a message is greylisted or answered with a
@@ -717,6 +745,38 @@ function runCanary(
  */
 const TERMINAL_BUDGET_SECONDS = 20;
 const TERMINAL_BOUND_MS = (TERMINAL_BUDGET_SECONDS * 1000) / 2;
+
+/**
+ * The budget the retrying cases are waited out on. It is not the deployed one
+ * and does not need to be: what those cases assert is that the poll did not
+ * stop at the first thing it read, and a terminal verdict breaks out at once
+ * whatever the budget is.
+ */
+const RETRYING_BUDGET_SECONDS = 3;
+
+/**
+ * The verdict token a report names, or `undefined` when it names none.
+ *
+ * The reason is this script's product - its only job on a failure is to name
+ * the verdict the classifier reached - so the token IS the output under test.
+ * It is read out by splitting on the two anchors that flank it, the word the
+ * report introduces the name with and the ` for ` that introduces the message
+ * id, and compared by EQUALITY.
+ *
+ * Equality is the whole point. The neighbouring `toContain` pins prove the
+ * token occurs somewhere in the sentence and not that it is the name: they
+ * stay green on a classifier that recorded nothing at all (the run falls back
+ * to "records no Completed line", which contains neither anchor's subject), on
+ * one that recorded the WRONG provisional name - both are legitimate reasons
+ * and both are bugs - and on one that printed a slice of the line at offsets
+ * computed somewhere else. `deferred` also satisfies a `toContain("defer")`.
+ *
+ * Nothing here pins the sentence: only the token between the two anchors is
+ * compared, so rewording the reason around it changes no assertion.
+ */
+function reportedVerdict(reported: string): string | undefined {
+  return /recorded (.+?) for /.exec(reported)?.[1];
+}
 
 /** `runCanary`, with the wall clock alongside it, for the elapsed assertions. */
 async function runTimed(
@@ -1820,16 +1880,6 @@ describe("overflow-canary.sh when the exim log cannot be read", () => {
     }
   });
 });
-
-
-  /**
- * The budget the retrying cases below are waited out on. It is not the
- * deployed one and does not need to be: what these cases assert is that the
- * poll did not stop at the first thing it read, and a terminal verdict breaks
- * out at once whatever the budget is.
- */
-const RETRYING_BUDGET_SECONDS = 3;
-
 describe("overflow-canary.sh on a message the relay is retrying", () => {
   it("keeps polling past a refused connection and reports the retry at the budget", async () => {
     // Section 53.9's whole shape, with nothing behind it: the message is still
@@ -1865,6 +1915,14 @@ describe("overflow-canary.sh on a message the relay is retrying", () => {
         recorder.waits(),
         "a refused connection is a detail line, and must not end the poll on sight",
       ).toBeGreaterThan(0);
+      // The refusal is the thing an operator needs named, and a run that
+      // spent its budget saying only that no Completed line appeared has told
+      // them nothing about why the message stopped. Compared by equality on the
+      // extracted token - see `reportedVerdict` - so a classifier that recorded
+      // nothing, or recorded the deferral behind it instead, fails here.
+      expect(reportedVerdict(JSON.parse(webhook.posts[0]!).content)).toBe(
+        "Failed to connect to",
+      );
     } finally {
       await smtp.close();
       await webhook.close();
@@ -1926,6 +1984,12 @@ describe("overflow-canary.sh on a message the relay is retrying", () => {
         recorder.waits(),
         "the detail line on its own is no more a verdict than one behind a defer",
       ).toBeGreaterThan(0);
+      // Same obligation with nothing behind it to name: the only thing the
+      // log holds is the refused connection, so it is the only thing the
+      // report can be about.
+      expect(reportedVerdict(JSON.parse(webhook.posts[0]!).content)).toBe(
+        "Failed to connect to",
+      );
     } finally {
       await smtp.close();
       await webhook.close();
@@ -1934,10 +1998,12 @@ describe("overflow-canary.sh on a message the relay is retrying", () => {
 
   it("does not read a terminal word out of the relay's own quoted answer", async () => {
     // The `C=` field is the RELAY's answer, quoted byte for byte, and a
-    // greylisting smarthost's rejection text really does carry words like this
-    // one. It is exim's own accounting on the same line - the retrying
-    // delivery - that decides this message, and a scan reading the quotes gets
-    // a verdict exim never gave.
+    // filtering relay's rejection text plausibly carries words like this one -
+    // here a terminal keyword AND a quote exim had to escape inside it, which
+    // is what a naive quote-paired scrub would end the field on. It is exim's
+    // own accounting on the same line - the retrying delivery - that decides
+    // this message, and a scan reading the quotes gets a verdict exim never
+    // gave.
     //
     // The exit status separates the two, because the retry then completes and
     // a run that survived the quoted text has a healthy path to report.
@@ -1959,6 +2025,108 @@ describe("overflow-canary.sh on a message the relay is retrying", () => {
     } finally {
       await smtp.close();
       await webhook.close();
+    }
+  });
+});
+
+describe("overflow-canary.sh naming the verdict it read", () => {
+  it("names a deferral by the token, not by a prefix of it", async () => {
+    // The other provisional outcome, and the one this suite's neighbours pin
+    // with `toContain("defer")` - which a report saying `deferred`, or
+    // `deferrals pending`, satisfies just as well. The pair is what makes the
+    // token exact: `Failed to connect to` and `defer` are two names the
+    // classifier chooses between, and a pin that cannot tell them apart is not
+    // pinning the choice.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({ outcome: "deferred", logPath: fixture.eximLog });
+
+    try {
+      const run = await runCanary(fixture, { smtpUrl: smtp.url, waitSeconds: 1 });
+
+      expect(run.status).toBe(1);
+      expect(reportedVerdict(JSON.parse(webhook.posts[0]!).content)).toBe("defer");
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  // The classifier carries five terminal keywords and this suite had fixtures
+  // for three of them. A keyword only one of the two copies of the block pins
+  // is a keyword a one-sided edit can drop and take the report's cause with it,
+  // and R5's byte-identity is enforced below rather than by a human remembering
+  // to run a diff - so the gap has to close here, in this suite.
+  it.each([
+    ["blackhole", "terminal-blackhole"],
+    ["discarded", "terminal-discarded"],
+  ] as const)(
+    "reports the terminal %s verdict on its own, by name",
+    async (_keyword, outcome) => {
+      const fixture = makeFixture();
+      const webhook = await startWebhook();
+      writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+      const smtp = await startSmtp({ outcome, logPath: fixture.eximLog });
+
+      try {
+        const { run, elapsed } = await runTimed(fixture, {
+          smtpUrl: smtp.url,
+          waitSeconds: TERMINAL_BUDGET_SECONDS,
+        });
+
+        expect(run.status).toBe(1);
+        expect(reportedVerdict(JSON.parse(webhook.posts[0]!).content)).toBe(_keyword);
+        expectConcludedBeforeTheBudget(elapsed);
+      } finally {
+        await smtp.close();
+        await webhook.close();
+      }
+    },
+  );
+});
+
+describe("the two scripts' verdict blocks", () => {
+  /**
+   * The block both scripts classify with, lifted out of each file.
+   *
+   * Keyed on the assignment that opens it and the line that closes it, NOT on
+   * the first `awk` program in the file: the alert script runs a second one
+   * earlier, for the transport, and a range that started there extracts a
+   * program that is not the verdict block and compares two nothing-values as
+   * equal. Two `indexOf` calls, one on each end, cannot do that.
+   */
+  function verdictBlock(source: string): string {
+    const start = source.indexOf('      verdict=$(awk -v id="$message_id" \'');
+    const terminator = '\n      \' "$exim_log") || verdict=\'\'\n';
+    const end = source.indexOf(terminator, start);
+
+    expect(start, "the verdict block was not found").toBeGreaterThan(-1);
+    expect(end, "the verdict block's terminator was not found").toBeGreaterThan(start);
+
+    return source.slice(start, end + terminator.length);
+  }
+
+  it("is byte-identical in both scripts", () => {
+    // The invariant the brief states as a `diff` for a human to run, which is
+    // an instruction rather than a gate: nothing failed when one copy drifted,
+    // because no test looked. Two copies of one classifier can only be edited
+    // together, and this is what makes that true by construction rather than by
+    // discipline.
+    const canary = verdictBlock(readFileSync(scriptPath, "utf8"));
+    const alert = verdictBlock(readFileSync(alertScriptPath, "utf8"));
+
+    expect(canary.length, "the extracted block looks truncated").toBeGreaterThan(0);
+    expect(alert).toBe(canary);
+  });
+
+  it("is present in both scripts rather than only in the one this suite drives", () => {
+    // A guard that passes because one side is empty is a guard that reports
+    // nothing, so the extraction itself is pinned: both blocks have to carry
+    // the rule this issue is about, on both sides.
+    for (const source of [readFileSync(scriptPath, "utf8"), readFileSync(alertScriptPath, "utf8")]) {
+      expect(verdictBlock(source)).toContain("Failed to connect to");
+      expect(verdictBlock(source)).toContain("scrubbed");
     }
   });
 });
