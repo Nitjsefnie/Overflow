@@ -543,6 +543,74 @@ describe("GitLab collection pagination", () => {
       expect(requests).toHaveLength(3);
     });
   });
+
+  // Issue 871: a 200 whose JSON body parses but is not an array — an object
+  // like {"message":"hi"}, or the JSON literal null — must surface as the
+  // module's typed error at the instance-misbehaved rank (status 0, the same
+  // rank as the transport catch) with the endpoint in `.body`, never as a raw
+  // TypeError from the walk's `for...of` with no status and no endpoint.
+  describe("non-array success body", () => {
+    const rawBody = (body: string) => new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+
+    it.each([
+      ["an object body", `{"message":"hi"}`],
+      ["a null body", `null`],
+    ])("rejects listRepositoryLabels with the typed error on %s", async (_shape, body) => {
+      const { client, requests } = collectionClient(`${projectPath}/labels`, () => rawBody(body));
+      const error = await client.listRepositoryLabels(repository).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(GitLabApiError);
+      expect(error).toMatchObject({ name: "GitLabApiError", status: 0 });
+      expect((error as GitLabApiError).body).toContain("/labels");
+      expect(requests).toHaveLength(1);
+    });
+
+    it.each([
+      ["an object body", `{"message":"hi"}`],
+      ["a null body", `null`],
+    ])("rejects getPullRequestClosingIssues with the typed error on %s", async (_shape, body) => {
+      const { client, requests } = collectionClient(`${projectPath}/merge_requests/17/closes_issues`, () => rawBody(body));
+      const error = await client.getPullRequestClosingIssues(repository, { id: 5_500_001, number: 17 })
+        .catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(GitLabApiError);
+      expect(error).toMatchObject({ name: "GitLabApiError", status: 0 });
+      expect((error as GitLabApiError).body).toContain("closes_issues");
+      expect(requests).toHaveLength(1);
+    });
+
+    it.each([
+      ["an object body", `{"message":"hi"}`],
+      ["a null body", `null`],
+    ])("rejects listIssueLabelEvents with the typed error on %s", async (_shape, body) => {
+      const { client, requests } = collectionClient(`${projectPath}/issues/12/resource_label_events`, () => rawBody(body));
+      const error = await client.listIssueLabelEvents(repository, 12).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(GitLabApiError);
+      expect(error).toMatchObject({ name: "GitLabApiError", status: 0 });
+      expect((error as GitLabApiError).body).toContain("resource_label_events");
+      expect(requests).toHaveLength(1);
+    });
+
+    // The control side of the guard: every walker still resolves a valid
+    // array page, so the guard cannot be the reason a good body fails.
+    it("still resolves a valid array body on every guarded walker", async () => {
+      const labels = collectionClient(`${projectPath}/labels`, () => json([{ name: "settled: 10" }]));
+      await expect(labels.client.listRepositoryLabels(repository)).resolves.toEqual(new Set(["settled: 10"]));
+
+      const closing = collectionClient(`${projectPath}/merge_requests/17/closes_issues`, () =>
+        json([{ id: 6_600_001, iid: 12, project_id: 278964 }]));
+      await expect(closing.client.getPullRequestClosingIssues(repository, { id: 5_500_001, number: 17 }))
+        .resolves.toEqual([{ id: 6_600_001, number: 12, repositoryGitHubId: 278964 }]);
+
+      const events = collectionClient(`${projectPath}/issues/12/resource_label_events`, () => json([addedLabelEvent]));
+      await expect(events.client.listIssueLabelEvents(repository, 12)).resolves.toEqual([{
+        kind: "LABELED",
+        id: String(addedLabelEvent.id),
+        actorLogin: addedLabelEvent.user.username,
+        actorGitHubUserId: addedLabelEvent.user.id,
+        label: addedLabelEvent.label.name,
+        createdAt: "2026-09-10T08:00:00.000Z",
+      }]);
+    });
+  });
 });
 
 describe("GitLabGateway", () => {
