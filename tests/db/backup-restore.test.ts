@@ -165,6 +165,16 @@ describe("the backup and restore procedure", () => {
     const youngPartial = join(backupDir, ".overflow-20260102T000000Z.dump.incomplete");
     writeFileSync(youngPartial, "truncated");
 
+    // A real dump older than the 24-hour sweep threshold but well inside the
+    // 14-day retention window: a sweep whose name pattern widened past the
+    // partial grammar would delete it, and the containment check below is
+    // what kills such a mutant. Three days back satisfies both bounds on any
+    // run date; a fixed date would age past retention and break the test.
+    const withinRetentionDump = join(backupDir, "overflow-20260920T000000Z.dump");
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    writeFileSync(withinRetentionDump, "within-retention");
+    utimesSync(withinRetentionDump, threeDaysAgo, threeDaysAgo);
+
     const dumpsBefore = readdirSync(backupDir).filter((name) => /^overflow-.*\.dump$/.test(name));
 
     const result = runScript(backupScript, ["--output-dir", backupDir, "--retention-days", "14"], scriptEnv());
@@ -176,6 +186,15 @@ describe("the backup and restore procedure", () => {
     expect(existsSync(oldPartial), "the old partial").toBe(false);
     expect(existsSync(youngPartial), "the young partial").toBe(true);
 
+    // The sweep's printed line for the reclaimed partial must reach stdout,
+    // and before the final dump-path line (the print half of the two-pass
+    // print-then-delete contract).
+    expect(result.stdout).toContain(oldPartial);
+    expect(
+      result.stdout.indexOf(oldPartial),
+      "the sweep's line for the reclaimed partial precedes the dump path",
+    ).toBeLessThan(result.stdout.indexOf(freshDumpPath!));
+
     const dumpsAfter = readdirSync(backupDir).filter((name) => /^overflow-.*\.dump$/.test(name));
     for (const name of dumpsBefore) {
       expect(dumpsAfter, "real dumps present before the run").toContain(name);
@@ -183,6 +202,24 @@ describe("the backup and restore procedure", () => {
     const freshDumpName = freshDumpPath!.split("/").pop()!;
     expect(dumpsAfter).toContain(freshDumpName);
     expect(statSync(freshDumpPath!).size).toBeGreaterThan(0);
+  });
+
+  it("sweeps crash leftovers even when the dump itself fails", () => {
+    // "Every run begins by sweeping" includes runs whose dump never
+    // completes: a sweep placed after the dump completes would leave this
+    // partial behind on the fail path, so this test pins the placement.
+    const oldPartial = join(backupDir, ".overflow-20260103T000000Z.dump.incomplete");
+    writeFileSync(oldPartial, "truncated");
+    utimesSync(oldPartial, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
+
+    const result = runScript(
+      backupScript,
+      ["--output-dir", backupDir, "--retention-days", "14"],
+      { ...scriptEnv(), OVERFLOW_PG_DUMP: "false" },
+    );
+
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(existsSync(oldPartial), "the partial from the earlier crashed run").toBe(false);
   });
 
   it("refuses to restore onto the database DATABASE_URL names without --allow-live", async () => {

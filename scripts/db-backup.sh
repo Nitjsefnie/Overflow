@@ -111,6 +111,9 @@ fi
 pg_dump_cmd=${OVERFLOW_PG_DUMP:-pg_dump}
 pg_restore_cmd=${OVERFLOW_PG_RESTORE:-pg_restore}
 
+# The stamp has second resolution, so a second run landing in the same UTC
+# second derives the same dump path and its mv replaces the first run's dump.
+# Known and accepted for now; issue 931 tracks it.
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 dump="$output_dir/overflow-$stamp.dump"
 partial="$output_dir/.overflow-$stamp.dump.incomplete"
