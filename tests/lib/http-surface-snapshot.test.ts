@@ -1,9 +1,13 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   baseCommit,
   deriveHttpSurfaceShapes,
   git,
+  repoRoot,
   shapeOf,
   shapesCompatible,
   type HttpShape,
@@ -91,12 +95,13 @@ describe("HTTP surface snapshot", () => {
     const derivedKeys = Object.keys(derived).sort();
     expect(
       derivedKeys,
-      "The derived HTTP surface changed. Acknowledge it in the same change: " +
+      "The derived HTTP surface changed. Record it: " +
         "node --experimental-transform-types --import ./scripts/register-path-aliases.ts " +
-        "scripts/update-http-surface-snapshot.ts --version <new> — it rewrites " +
-        "scripts/http-surface-snapshot.json and moves SERVER_VERSION in src/lib/version.ts, " +
-        "MCP_SERVER_VERSION in src/lib/mcp/protocol.ts, and the MCP snapshot's mcpServerVersion " +
-        "together, so one version keeps covering the HTTP API and the MCP endpoint.",
+        "scripts/update-http-surface-snapshot.ts — an additive change (a new route or a new field) " +
+        "records without moving the server version; removing or retyping a recorded shape is breaking " +
+        "(policy in API.md), so it needs --version <new>, which rewrites scripts/http-surface-snapshot.json " +
+        "and moves SERVER_VERSION in src/lib/version.ts, MCP_SERVER_VERSION in src/lib/mcp/protocol.ts, " +
+        "and the MCP snapshot's mcpServerVersion together.",
     ).toEqual(recordedKeys);
     const incompatible = derivedKeys.filter((key) =>
       !shapesCompatible(snapshot.routes[key]!, derived[key]!),
@@ -119,38 +124,98 @@ describe("HTTP surface snapshot", () => {
   });
 
   it("never changes a recorded shape without moving the server version", () => {
-    const base = baseCommit(process.env.HTTP_SNAPSHOT_BASE_COMMIT, "HTTP");
-    const listing = git(["--literal-pathspecs", "ls-tree", "-z", base, "--", snapshotPath])
-      .split("\0")[0]!;
-    if (listing === "") {
-      // This branch introduces the snapshot, so the base has no surface to compare.
-      return;
-    }
-    const [entry, path] = listing.split("\t", 2);
-    if (path !== snapshotPath || !entry?.startsWith("100644 blob ")) {
-      throw new Error(`${snapshotPath} at ${base} is not a regular file`);
-    }
+    assertNoBreakingRecordedChange(baseCommit(process.env.HTTP_SNAPSHOT_BASE_COMMIT, "HTTP"));
+  });
 
-    let previous: { httpServerVersion: string; routes: Record<string, HttpShape> };
-    try {
-      previous = JSON.parse(git(["show", `${base}:${snapshotPath}`])) as typeof previous;
-    } catch (error) {
-      throw new Error(`${snapshotPath} at ${base} could not be parsed: ${error}`);
-    }
+  it("tolerates an additive recorded change against a synthetic base without a version move", () => {
+    // The branch's natural base has no snapshot file (the branch introduces it),
+    // so a synthetic base commit carries one differing ONLY additively: it
+    // lacks one route the recorded file pins. No ref or worktree file moves —
+    // commit-tree writes a dangling object the base resolver can name.
+    const routes = { ...snapshot.routes };
+    delete routes["GET /api/calibration"];
+    const base = commitSnapshotFixture({
+      httpServerVersion: snapshot.httpServerVersion,
+      routes,
+    });
+    expect(() => assertNoBreakingRecordedChange(base)).not.toThrow();
+  });
 
-    const breaking = Object.entries(previous.routes)
-      .filter(([key, previousShape]) =>
-        !(key in snapshot.routes) || !shapesCompatible(previousShape, snapshot.routes[key]!),
-      )
-      .map(([key]) => key);
-    if (breaking.length === 0) return;
-
-    expect(
-      snapshot.httpServerVersion,
-      `The recorded HTTP surface changed incompatibly relative to ${base.slice(0, 8)} ` +
-        `(${breaking.join(", ")}) but the version did not move (${previous.httpServerVersion}). ` +
-        "Removing or retyping a documented shape is breaking (policy in API.md): move SERVER_VERSION " +
-        "in src/lib/version.ts and record it in scripts/http-surface-snapshot.json in the same change.",
-    ).not.toBe(previous.httpServerVersion);
+  it("fails an incompatible recorded change against a synthetic base without a version move", () => {
+    // The same synthetic fixture, but a recorded field retyped in the base:
+    // the change is breaking, and with the version unmoved the gate must fail.
+    const routes = structuredClone(snapshot.routes);
+    (routes["GET /api/version"] as { version: string }).version = "number";
+    const base = commitSnapshotFixture({
+      httpServerVersion: snapshot.httpServerVersion,
+      routes,
+    });
+    expect(() => assertNoBreakingRecordedChange(base)).toThrow(/version did not move/);
   });
 });
+
+/**
+ * Gate 3's comparison, parameterized by the commit the recorded snapshot is
+ * read against: an additive change (every recorded key still present, every
+ * recorded field still served with a compatible shape) passes without a
+ * version move; a removed or retyped recorded shape passes only when the
+ * recorded version moved. A base without the snapshot file skips — the
+ * branch that introduces the snapshot has no surface to compare.
+ */
+function assertNoBreakingRecordedChange(base: string): void {
+  const listing = git(["--literal-pathspecs", "ls-tree", "-z", base, "--", snapshotPath])
+    .split("\0")[0]!;
+  if (listing === "") {
+    // This branch introduces the snapshot, so the base has no surface to compare.
+    return;
+  }
+  const [entry, path] = listing.split("\t", 2);
+  if (path !== snapshotPath || !entry?.startsWith("100644 blob ")) {
+    throw new Error(`${snapshotPath} at ${base} is not a regular file`);
+  }
+
+  let previous: { httpServerVersion: string; routes: Record<string, HttpShape> };
+  try {
+    previous = JSON.parse(git(["show", `${base}:${snapshotPath}`])) as typeof previous;
+  } catch (error) {
+    throw new Error(`${snapshotPath} at ${base} could not be parsed: ${error}`);
+  }
+
+  const breaking = Object.entries(previous.routes)
+    .filter(([key, previousShape]) =>
+      !(key in snapshot.routes) || !shapesCompatible(previousShape, snapshot.routes[key]!),
+    )
+    .map(([key]) => key);
+  if (breaking.length === 0) return;
+
+  expect(
+    snapshot.httpServerVersion,
+    `The recorded HTTP surface changed incompatibly relative to ${base.slice(0, 8)} ` +
+      `(${breaking.join(", ")}) but the version did not move (${previous.httpServerVersion}). ` +
+      "Removing or retyping a documented shape is breaking (policy in API.md): move SERVER_VERSION " +
+      "in src/lib/version.ts and record it in scripts/http-surface-snapshot.json in the same change.",
+  ).not.toBe(previous.httpServerVersion);
+}
+
+/**
+ * Commits `snapshot` as scripts/http-surface-snapshot.json in a dangling
+ * (ref-free) root commit, so a test can pin HTTP_SNAPSHOT_BASE_COMMIT-style
+ * comparisons at an arbitrary recorded surface without moving any ref.
+ */
+function commitSnapshotFixture(snapshot: { httpServerVersion: string; routes: Record<string, HttpShape> }): string {
+  const index = mkdtempSync(join(tmpdir(), "http-snapshot-fixture-"));
+  const file = join(index, "http-surface-snapshot.json");
+  writeFileSync(file, JSON.stringify(snapshot, null, 2));
+  const blob = gitInput(["hash-object", "-w", file]);
+  const leaf = gitInput(["mktree"], `100644 blob ${blob}\thttp-surface-snapshot.json\n`);
+  const root = gitInput(["mktree"], `040000 tree ${leaf}\tscripts\n`);
+  return gitInput(["commit-tree", root, "-m", "synthetic HTTP snapshot fixture"], "");
+}
+
+function gitInput(args: string[], input?: string): string {
+  const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8", input });
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${result.stderr.trim()}`);
+  }
+  return result.stdout.trim();
+}
