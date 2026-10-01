@@ -10,39 +10,60 @@ import { plural } from "@/lib/plural";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 
 /**
+ * The gateway surface the labels read uses — the full GitHubGateway satisfies
+ * it, and a derivation (or test) can supply the one method structurally.
+ */
+export type LabelsRouteGateway = Pick<GitHubGateway, "listRepositoryLabels">;
+
+/** The forge-identity store surface the GitLab arm reads its credential through. */
+export type LabelsRouteForgeIdentityStore = Pick<PostgresForgeIdentityStore, "getForgeToken">;
+
+export type LabelsRouteSession = {
+  user: { id: string; role: UserRole };
+};
+
+export type LabelsRouteDependencies = {
+  getSession: () => Promise<LabelsRouteSession | null>;
+  getGitHubAccessToken: (userId: string) => Promise<string | null>;
+  createGitHubGateway: (accessToken: string, owner: string) => LabelsRouteGateway;
+  createForgeIdentityStore: (tokenEncryptionKey: string) => LabelsRouteForgeIdentityStore;
+};
+
+/**
  * The repository's existing label names, for the registration form's catalog
  * selectboxes (issue 258). Labels are never created here; a catalog may only
  * pick labels the repository already has, and registration verifies that
  * server-side as the backstop.
  */
-export async function GET(request: Request): Promise<Response> {
-  // rejectUntrustedRequest refuses a request carrying no Origin header, but a
-  // same-origin browser fetch() GET sends none, so guarding this verb would
-  // refuse the read the registration form makes. The session gate is what
-  // limits this route; see the moderation GET routes for the standing pattern.
-  try {
-    const session = await getSession();
-    if (session === null) {
-      return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
-    }
+export function createLabelsGetHandler(dependencies: LabelsRouteDependencies) {
+  return async function getRepositoryLabels(request: Request): Promise<Response> {
+    // rejectUntrustedRequest refuses a request carrying no Origin header, but a
+    // same-origin browser fetch() GET sends none, so guarding this verb would
+    // refuse the read the registration form makes. The session gate is what
+    // limits this route; see the moderation GET routes for the standing pattern.
+    try {
+      const session = await dependencies.getSession();
+      if (session === null) {
+        return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
+      }
 
-    const reference = parseLabelsQuery(request);
-    if (reference === null) {
-      return errorResponse(400, "INVALID_REQUEST", "Invalid repository labels request.");
-    }
-    if ("provider" in reference) {
-      return await gitlabLabelsResponse(session.user.id, reference);
-    }
+      const reference = parseLabelsQuery(request);
+      if (reference === null) {
+        return errorResponse(400, "INVALID_REQUEST", "Invalid repository labels request.");
+      }
+      if ("provider" in reference) {
+        return await gitlabLabelsResponse(dependencies, session.user.id, reference);
+      }
 
-    const accessToken = await new PostgresRepositoryStore().getGitHubAccessToken(session.user.id);
-    if (accessToken === null) {
-      return errorResponse(502, "UPSTREAM_FAILURE", "Unable to read the repository labels on GitHub.");
-    }
+      const accessToken = await dependencies.getGitHubAccessToken(session.user.id);
+      if (accessToken === null) {
+        return errorResponse(502, "UPSTREAM_FAILURE", "Unable to read the repository labels on GitHub.");
+      }
 
-    const gateway = new GitHubGateway({ accessToken, owner: session.user.id });
-    const labels = await readRepositoryLabels(gateway, reference);
-    return Response.json({ labels: [...labels] });
-  } catch (error) {
+      const gateway = dependencies.createGitHubGateway(accessToken, session.user.id);
+      const labels = await readRepositoryLabels(gateway, reference);
+      return Response.json({ labels: [...labels] });
+    } catch (error) {
     // Issue 327: a 401 is GitHub rejecting the authorization Overflow holds —
     // the token expired or was revoked, so retrying cannot fix it. Same
     // credential vocabulary as the registration endpoint's githubSetupError
@@ -80,7 +101,8 @@ export async function GET(request: Request): Promise<Response> {
       );
     }
     return errorResponse(502, "UPSTREAM_FAILURE", "Unable to read the repository labels on GitHub.");
-  }
+    }
+  };
 }
 
 /**
@@ -120,7 +142,7 @@ export async function GET(request: Request): Promise<Response> {
  * gate above — the walk's bound, or a status no arm classified.
  */
 async function readRepositoryLabels(
-  gateway: GitHubGateway,
+  gateway: LabelsRouteGateway,
   reference: { owner: string; name: string },
 ): Promise<Set<string>> {
   try {
@@ -212,6 +234,7 @@ const gitlabProjectNotFoundMessage = "No GitLab project with that id or path is 
  * errors.
  */
 async function gitlabLabelsResponse(
+  dependencies: LabelsRouteDependencies,
   userId: string,
   reference: { provider: "gitlab"; instance: string; project: string },
 ): Promise<Response> {
@@ -248,7 +271,7 @@ async function gitlabLabelsResponse(
 
   let credential: { token: string; identityId: string } | null;
   try {
-    credential = await new PostgresForgeIdentityStore(getSql(), tokenEncryptionKey).getForgeToken(userId, instanceUrl);
+    credential = await dependencies.createForgeIdentityStore(tokenEncryptionKey).getForgeToken(userId, instanceUrl);
   } catch {
     // The identity read is this arm's store read; a failure of it is an
     // upstream problem of the GitLab arm and must not answer with the
@@ -361,7 +384,7 @@ function isGitHubRepositorySegment(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
 }
 
-async function getSession(): Promise<{ user: { id: string; role: UserRole } } | null> {
+async function getSession(): Promise<LabelsRouteSession | null> {
   const { auth } = await import("@/auth");
   const session = await auth();
   const user = session?.user as { id?: unknown; role?: unknown } | undefined;
@@ -370,6 +393,18 @@ async function getSession(): Promise<{ user: { id: string; role: UserRole } } | 
   }
   return { user: { id: user.id, role: user.role } };
 }
+
+/**
+ * The direct export Next.js routes on: a thin wrapper delegating to the
+ * factory with production dependencies, constructed per request exactly as
+ * the pre-refactor handler constructed them.
+ */
+export const GET = createLabelsGetHandler({
+  getSession,
+  getGitHubAccessToken: (userId) => new PostgresRepositoryStore().getGitHubAccessToken(userId),
+  createGitHubGateway: (accessToken, owner) => new GitHubGateway({ accessToken, owner }),
+  createForgeIdentityStore: (tokenEncryptionKey) => new PostgresForgeIdentityStore(getSql(), tokenEncryptionKey),
+});
 
 function errorResponse(status: number, code: string, message: string): Response {
   return Response.json({ error: { code, message } }, { status });

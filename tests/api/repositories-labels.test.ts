@@ -743,6 +743,44 @@ describe("GET /api/repositories/labels (GitLab)", () => {
   });
 });
 
+describe("createLabelsGetHandler (the injected factory)", () => {
+  it("serves the labels read through its injected dependencies", async () => {
+    const handler = labelsRoute.createLabelsGetHandler({
+      getSession: async () => ({ user: { id: "sponsor-id", role: "MEMBER" as const } }),
+      getGitHubAccessToken: async () => "stored-github-oauth-token",
+      createGitHubGateway: () => ({
+        listRepositoryLabels: async () => new Set(["opening:medium", "actual:light"]),
+      }),
+      createForgeIdentityStore: () => ({
+        getForgeToken: async () => ({ token: "gitlab-pat", identityId: "identity-1" }),
+      }),
+    });
+
+    const response = await handler(labelsRequest());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ labels: ["opening:medium", "actual:light"] });
+  });
+
+  it("answers the same structured 401 without a session", async () => {
+    const handler = labelsRoute.createLabelsGetHandler({
+      getSession: async () => null,
+      getGitHubAccessToken: async () => null,
+      createGitHubGateway: () => ({ listRepositoryLabels: async () => new Set() }),
+      createForgeIdentityStore: () => ({
+        getForgeToken: async () => null,
+      }),
+    });
+
+    const response = await handler(labelsRequest());
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
+  });
+});
+
 function gitlabLabelsRequest(project = "group/proj"): Request {
   return labelsRequest(`?provider=gitlab&instance=https://gitlab.example&project=${project}`);
 }
