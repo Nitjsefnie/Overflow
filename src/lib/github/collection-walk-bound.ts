@@ -27,9 +27,10 @@
  *   whole project's lifetime issue listing rather than one repository's label
  *   catalog — a smaller collection does not need a larger budget.
  * - `MAX_WALK_PAGES` is 200. It is the backstop for an instance that answers
- *   with empty or near-empty pages forever: the row count never moves, and
- *   without it that walk is still 200 requests against a collection that will
- *   not end. A legitimate walk reaches it at 10 000 rows and not before.
+ *   with empty or near-empty pages forever: the row count never moves, so the
+ *   row ceiling never fires on that walk and this ceiling is the only thing
+ *   that ends it. Without this ceiling such a walk is unbounded, not 200
+ *   requests. A legitimate walk reaches it at 10 000 rows and not before.
  *
  * The row ceiling must stay below `MAX_WALK_PAGES * 100`, or a full-page walk
  * reaches the page ceiling first and the row ceiling is shadowed by it — dead

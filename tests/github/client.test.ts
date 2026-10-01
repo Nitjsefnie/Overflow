@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubApiError, GitHubGateway } from "@/lib/github/client";
-import { MAX_WALK_ITEMS, MAX_WALK_PAGES } from "@/lib/github/collection-walk-bound";
+import { CollectionWalkBound, MAX_WALK_ITEMS, MAX_WALK_PAGES } from "@/lib/github/collection-walk-bound";
 import { classifyGitHubRateLimit } from "@/lib/github/errors";
 
 describe("GitHubGateway REST transport", () => {
@@ -415,6 +415,35 @@ describe("GitHubGateway collection walk bound", () => {
     const { gateway } = labelGateway(() => labels([{ name: "bug" }, { name: 7 }, { name: null }]));
 
     await expect(gateway.listRepositoryLabels(repository)).resolves.toEqual(new Set(["bug"]));
+  });
+});
+
+// The row ceiling is a MEMORY ceiling, so what the bound still holds at the
+// throw is part of its contract: a page past the budget must be refused BEFORE
+// it is appended, or the rows the budget just rejected are retained anyway. The
+// gateway-level cases above can only see that an error was raised, and an
+// implementation that appends first and checks second still raises one — so the
+// ordering has to be asserted here, on the bound's own retained state.
+describe("the GitHub collection walk bound", () => {
+  it("refuses an oversized page without retaining any of it", () => {
+    const bound = new CollectionWalkBound<{ name: string }>("probe");
+
+    expect(() => bound.add(Array.from({ length: MAX_WALK_ITEMS + 1 }, (_, index) => ({ name: `l-${index}` }))))
+      .toThrow(/rows of probe, past the collection-walk bound/);
+    // Asserted as a LENGTH, not as an empty array: a failure here prints a count
+    // instead of the ten thousand rows the inverted ordering retained.
+    expect(bound.collected).toHaveLength(0);
+  });
+
+  it("keeps a page that lands exactly on the row ceiling", () => {
+    const bound = new CollectionWalkBound<{ name: string }>("probe");
+    const page = Array.from({ length: MAX_WALK_ITEMS }, (_, index) => ({ name: `l-${index}` }));
+
+    bound.add(page);
+
+    expect(bound.collected).toHaveLength(MAX_WALK_ITEMS);
+    expect(bound.collected[0]).toEqual({ name: "l-0" });
+    expect(bound.collected[MAX_WALK_ITEMS - 1]).toEqual({ name: `l-${MAX_WALK_ITEMS - 1}` });
   });
 });
 
