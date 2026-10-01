@@ -315,11 +315,9 @@ describe("GitHubGateway collection walk bound", () => {
   // GitHub clamps `per_page` at 100 on this endpoint and the walk always asks
   // for the maximum, so a full page is 100 rows.
   const fullPage = 100;
-  const maxPages = MAX_WALK_PAGES;
-  const maxRows = MAX_WALK_ITEMS;
-  const fullPagesToTheRowCeiling = maxRows / fullPage;
-  const overPages = new RegExp(`GitHub returned more than ${maxPages} pages`);
-  const overRows = new RegExp(`GitHub returned more than ${maxRows} rows`);
+  const fullPagesToTheRowCeiling = MAX_WALK_ITEMS / fullPage;
+  const overPages = new RegExp(`GitHub returned more than ${MAX_WALK_PAGES} pages`);
+  const overRows = new RegExp(`GitHub returned more than ${MAX_WALK_ITEMS} rows`);
   const repository = { owner: "octo", name: "overflow" };
   const labels = (body: unknown, link?: string) =>
     new Response(JSON.stringify(body), link === undefined ? {} : { headers: { link } });
@@ -341,10 +339,10 @@ describe("GitHubGateway collection walk bound", () => {
   }
 
   it("stops a label walk whose rel=\"next\" is fresh on every page", async () => {
-    const { gateway, requests } = labelGateway((hit) => labels([], nextLink(hit + 1)), maxPages + 5);
+    const { gateway, requests } = labelGateway((hit) => labels([], nextLink(hit + 1)), MAX_WALK_PAGES + 5);
 
     await expect(gateway.listRepositoryLabels(repository)).rejects.toThrow(overPages);
-    expect(requests).toHaveLength(maxPages + 1);
+    expect(requests).toHaveLength(MAX_WALK_PAGES + 1);
   });
 
   it("stops on the row ceiling when the instance only ever sends full pages", async () => {
@@ -352,7 +350,7 @@ describe("GitHubGateway collection walk bound", () => {
     // ceiling can be the one that fires here.
     const { gateway, requests } = labelGateway((hit) =>
       labels(Array.from({ length: fullPage }, (_, index) => ({ name: `label-${hit}-${index}` })), nextLink(hit + 1)),
-      maxPages + 5);
+      MAX_WALK_PAGES + 5);
 
     await expect(gateway.listRepositoryLabels(repository)).rejects.toThrow(overRows);
     expect(requests).toHaveLength(fullPagesToTheRowCeiling + 1);
@@ -362,7 +360,7 @@ describe("GitHubGateway collection walk bound", () => {
   // larger than the engine's argument limit dies with a RangeError long before
   // the typed error can be raised, and a RangeError IS an Error, so the error
   // NAME is what separates the two paths.
-  it.each([maxRows + 1, 150_000])(
+  it.each([MAX_WALK_ITEMS + 1, 150_000])(
     "stops on a single page of %i rows with the typed error, not a stack overflow",
     async (rows) => {
       const { gateway, requests } = labelGateway(() =>
@@ -379,10 +377,10 @@ describe("GitHubGateway collection walk bound", () => {
   // ceiling has done nothing wrong, and its whole collection comes back.
   it("returns a single page that lands exactly on the row ceiling", async () => {
     const { gateway, requests } = labelGateway(() =>
-      labels(Array.from({ length: maxRows }, (_, index) => ({ name: `label-${index}` }))));
+      labels(Array.from({ length: MAX_WALK_ITEMS }, (_, index) => ({ name: `label-${index}` }))));
 
     const found = await gateway.listRepositoryLabels(repository);
-    expect(found.size).toBe(maxRows);
+    expect(found.size).toBe(MAX_WALK_ITEMS);
     expect(requests).toHaveLength(1);
   });
 
@@ -397,7 +395,7 @@ describe("GitHubGateway collection walk bound", () => {
     // A full page holds 100 rows, so on a full-page walk the row ceiling must
     // fire before the page ceiling. If it does not, the row ceiling is shadowed
     // by the page ceiling and can never throw.
-    expect(maxRows).toBeLessThan(maxPages * 100);
+    expect(MAX_WALK_ITEMS).toBeLessThan(MAX_WALK_PAGES * 100);
   });
 
   it("walks a legitimate three-page label catalog to its end", async () => {
