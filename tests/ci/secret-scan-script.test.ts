@@ -1015,8 +1015,13 @@ describe("scripts/secret-scan.sh", () => {
     ).toBe(topLevel);
     // And it must be a directory that exists, so the assertion above cannot be
     // satisfied by a path that happens to be spelled the same way.
+    //
+    // `existsSync` first, because `statSync` on a path that is not there throws —
+    // and that ENOENT would replace the sentence below with a bare "no such file
+    // or directory" for exactly the case it was written for. Same shape, and the
+    // same reason, as the guard on the planted fixture's target further down.
     expect(
-      statSync(target).isDirectory(),
+      existsSync(target) && statSync(target).isDirectory(),
       `the scan target '${target}' must be the repository root and must exist as a directory`,
     ).toBe(true);
   });
