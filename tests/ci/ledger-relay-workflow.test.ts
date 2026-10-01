@@ -20,15 +20,18 @@ import { parse } from "yaml";
  * relay.
  */
 type WorkflowStep = { name?: string; env?: Record<string, string | undefined> };
+type ParsedWorkflow = {
+  permissions?: Record<string, string>;
+  jobs?: Record<string, { steps?: WorkflowStep[] }>;
+};
 
 describe("the ledger relay workflow's pinned App identity", () => {
+  let workflow: ParsedWorkflow = {};
   let steps: WorkflowStep[] = [];
 
   beforeAll(async () => {
     const source = await readFile(resolve(".github/workflows/ledger-relay.yml"), "utf8");
-    const workflow = parse(source) as {
-      jobs?: Record<string, { steps?: WorkflowStep[] }>;
-    };
+    workflow = parse(source) as ParsedWorkflow;
 
     steps = Object.values(workflow.jobs ?? {}).flatMap((job) => job.steps ?? []);
   });
@@ -52,5 +55,22 @@ describe("the ledger relay workflow's pinned App identity", () => {
       "the relay job must carry env LEDGER_INSTALLATION_ID exactly once — the " +
         "installation the step mints its token for",
     ).toEqual(["166057493"]);
+  });
+
+  it("grants the workflow exactly contents: read plus actions: write", () => {
+    expect(
+      workflow.permissions,
+      "the relay workflow must hold exactly contents: read + actions: write — " +
+        "actions:write is the rerun-heal's re-dispatch of a cancelled producer " +
+        "run (issue 861), contents: read is the checkout, and nothing more",
+    ).toEqual({ contents: "read", actions: "write" });
+  });
+
+  it("passes the workflow's own token as RELAY_RERUN_TOKEN exactly once", () => {
+    expect(
+      envValues("RELAY_RERUN_TOKEN"),
+      "the relay step must carry RELAY_RERUN_TOKEN exactly once — the " +
+        "repo-scoped workflow token the rerun-heal authenticates its POST with",
+    ).toEqual(["${{ github.token }}"]);
   });
 });

@@ -2,12 +2,16 @@ name: ledger relay
 
 # Re-posts the three required checks as check-runs owned by the Overflow
 # Ledger GitHub App (app id 5118623), so branch protection can pin each
-# required context to the App instead of the github-actions app. A workflow_run
-# runs this workflow's definition from the default branch's tip, in the default
-# branch's context, so the pin map and the script executed here are always the
-# trusted main tip, never pull-request content. Every GitHub write goes through
-# the App installation token the script mints; the workflow's own token needs
-# and holds only contents: read.
+# required context to the App instead of the github-actions app. As its second
+# duty (issue 861) it heals a run that GitHub cancelled out of the shared
+# pending concurrency slot while its pull request's head is still live: the
+# relay re-dispatches that run, so a cancelled pending run does not strand the
+# PR. A workflow_run runs this workflow's definition from the default branch's
+# tip, in the default branch's context, so the pin map and the script executed
+# here are always the trusted main tip, never pull-request content. Check-run
+# writes go through the App installation token the script mints; the rerun
+# goes through the workflow's own repo-scoped token, which holds contents:
+# read + actions: write.
 on:
   # workflow_run runs this definition from the default branch's tip, in the
   # default branch's context: the checkout, the pin map and the script are
@@ -28,7 +32,15 @@ on:
         type: string
 
 permissions:
+  # actions: write exists only for the rerun-heal (issue 861): when a producer
+  # run was cancelled out of the shared pending concurrency slot while its pull
+  # request's head is still live, the relay re-dispatches it. The rerun
+  # authenticates as this workflow's own repo-scoped github.token, NOT the
+  # ledger App's — the App keeps its narrow permission set — and a rerun
+  # re-enters the producer workflow's repo-wide concurrency group as a new
+  # arrival, so the heal cannot jump any queue.
   contents: read
+  actions: write
 
 concurrency:
   group: ledger-relay
@@ -69,5 +81,7 @@ jobs:
           GITHUB_WORKFLOW_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           GITHUB_WORKFLOW_RUN_HTML_URL: ${{ github.event.workflow_run.html_url }}
           GITHUB_WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
+          GITHUB_WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RELAY_RERUN_TOKEN: ${{ github.token }}
           LEDGER_DISPATCH_RUN_ID: ${{ inputs.run_id }}
         run: node scripts/ledger-relay.ts
