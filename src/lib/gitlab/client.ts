@@ -518,7 +518,9 @@ export class GitLabGateway {
           url: configuration.callbackUrl,
           token: configuration.secret,
           // The events the GitHub side ensures, in GitLab's flag vocabulary.
-          issue_events: true,
+          // GitLab declares `issues_events`; an undeclared `issue_events` is
+          // dropped and the hook is created with the flag at its default.
+          issues_events: true,
           merge_requests_events: true,
           // Deliveries are event-scoped; a push would be noise.
           push_events: false,
@@ -548,7 +550,7 @@ export class GitLabGateway {
         .filter(([key, value]) => key.endsWith("_events") && key !== "issues_events" && typeof value === "boolean"));
       const after = await responseJson<GitLabHookObject>(await this.request(path, {
         method: "PUT", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...subscriptions, issue_events: true, merge_requests_events: true,
+        body: JSON.stringify({ ...subscriptions, issues_events: true, merge_requests_events: true,
           url: configuration.callbackUrl, token: configuration.secret }),
       }));
       if (before.id !== webhookId || after.id !== webhookId || after.url !== configuration.callbackUrl
@@ -579,9 +581,7 @@ export class GitLabGateway {
     await this.request(path, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      // GitLab's request parameter is `issue_events`; the response field is
-      // `issues_events` — the vocabulary difference is GitLab's, not ours.
-      body: JSON.stringify({ issue_events: true, merge_requests_events: true }),
+      body: JSON.stringify({ issues_events: true, merge_requests_events: true }),
     });
   }
 
