@@ -265,25 +265,26 @@ async function attestedContexts(deps: SweepDeps, headSha: string): Promise<Set<s
 }
 
 /**
- * The mirror's check-run body shape (see checkRunBody in ledger-relay.ts),
- * carried by the CANDIDATE's own head SHA and the CANDIDATE's own html_url.
+ * The check-run body both duties post under, against whichever run is being
+ * attested. It lives here because this module may not import a runtime value
+ * from ledger-relay.ts without forming a cycle, so the one-way dependency is
+ * ledger-relay.ts → this module and the shape cannot be duplicated and drift.
  *
- * It is rebuilt here rather than imported because importing it would be a
- * runtime import of ledger-relay.ts, which this module may not take without
- * forming a cycle; the parity is pinned from outside instead — the acceptance
- * case in tests/scripts/ledger-relay.test.ts asserts the swept body field for
- * field against the mirror's own, so the two cannot drift apart silently.
+ * `run` is structural, not a TriggeringRun or a SweepCandidate: the mirror
+ * passes the triggering run, the sweep passes the candidate it is healing, and
+ * the two agree on exactly these two fields — the commit the context attests
+ * and the run whose page explains it.
  */
-function checkRunBody(
+export function checkRunBody(
   decision: ContextDecision,
-  candidate: SweepCandidate,
+  run: { headSha: string; htmlUrl: string },
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     name: decision.context,
-    head_sha: candidate.headSha,
+    head_sha: run.headSha,
     status: decision.status,
     output: { title: decision.title, summary: decision.summary },
-    details_url: candidate.htmlUrl,
+    details_url: run.htmlUrl,
   };
   if (decision.conclusion !== undefined) {
     body.conclusion = decision.conclusion;
@@ -296,4 +297,30 @@ function idOf(value: unknown): string {
   if (typeof value === "number" && Number.isInteger(value)) return String(value);
   if (typeof value === "string" && value !== "") return value;
   return "";
+}
+
+/**
+ * The sweep's own log lines, pure. A relay instance's healing of someone
+ * else's orphan is otherwise invisible — the operator watching a merge sit
+ * blocked sees nothing at all — so each relayed context is named with the run
+ * it came from, which is the handle to reach for when the merge still does not
+ * go through.
+ *
+ * Nothing at all when no candidate was examined: a healthy repository sweeps
+ * clean on every start, and a line printed every time would be noise an
+ * operator learns to skip.
+ */
+export function renderSweepLines(outcome: SweepOutcome): string[] {
+  if (outcome.examined === 0) return [];
+  const lines = [
+    `[ledger-relay] orphan-sweep: examined ${outcome.examined} completed run(s), ` +
+      `relayed ${outcome.relayed.length} context(s)`,
+  ];
+  for (const entry of outcome.relayed) {
+    lines.push(
+      `[ledger-relay] orphan-sweep: relayed ${entry.context} from run ${entry.runId} ` +
+        "(no App check-run existed for it)",
+    );
+  }
+  return lines;
 }
