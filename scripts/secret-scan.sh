@@ -27,7 +27,7 @@
 # by WHOLE-RECORD equality, not by fingerprint. A baseline reduced to
 # `[{"Fingerprint": "..."}]` suppresses nothing at all and the scan still exits
 # 1 — verified against this repository, where the full report suppresses all
-# 11 known findings and the fingerprint-only form suppresses none of them. So
+# 7 known findings and the fingerprint-only form suppresses none of them. So
 # .github/gitleaks-baseline.json is committed exactly as gitleaks emits it:
 # do not hand-edit, reorder or trim it. Regenerate it, whole, and prove the
 # result by re-running with --baseline-path and seeing exit 0.
@@ -53,6 +53,17 @@
 # EXPECTED_CHECKABLE_ENTRIES. Bump it in the same commit, having read the
 # baseline diff. Both assertions on that count run at every checkout depth, so
 # they will not wait for the weekly run to tell you.
+#
+# ...AND THE OPPOSITE REMEDY, FOR AN ORPHANED ENTRY. A `--rebase` merge
+# re-creates the branch's commits, so a baseline generated while the pre-rebase
+# copies were still in the object store records one logical finding at BOTH
+# SHAs. The pre-rebase half does not resolve in the shipped history: it
+# suppresses nothing, and the suite fails on it by name at full depth. There
+# the remedy is to REMOVE that entry and keep the reachable one — the reverse of
+# the case above — after checking `git merge-base --is-ancestor <sha>
+# origin/main` and confirming the survivor is the same finding by file, line
+# and rule. Never regenerate the whole file to clear an orphan; that absorbs a
+# genuinely new finding and buries it.
 set -euo pipefail
 
 # Bump together with .github/workflows/secret-scan.yml.

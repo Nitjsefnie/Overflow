@@ -18,7 +18,7 @@ import { commitFiles, git, hasCommit, isShallowCheckout, scratchGitEnv, showFile
  * taken from `git rev-parse --show-toplevel` at run time rather than from a
  * literal in this file, so a subtree target is red here as well as everywhere
  * else); every property of the committed baseline readable from the file itself;
- * the 4-of-11 coverage ratio this suite pins by equality; the `hasCommit` half of
+ * the 2-of-7 coverage ratio this suite pins by equality; the `hasCommit` half of
  * the redirector shield; and the provenance CHECKER, driven against a repository
  * this suite builds for itself.
  *
@@ -26,7 +26,7 @@ import { commitFiles, git, hasCommit, isShallowCheckout, scratchGitEnv, showFile
  * provenance — that each finding's redacted residue really came from the source
  * line it names. That check reads the blobs the baseline points at, and
  * `.github/workflows/ci.yml`'s `verify` job checks out at `actions/checkout`'s
- * default depth of 1, where those nine September commits do not exist. The test
+ * default depth of 1, where those five September commits do not exist. The test
  * that does it therefore **SKIPS in CI, and the skip is reported in the run
  * summary rather than passing quietly.** In a full-depth checkout it runs. Do not
  * read a green CI run as evidence about the committed baseline's provenance: it
@@ -41,7 +41,7 @@ import { commitFiles, git, hasCommit, isShallowCheckout, scratchGitEnv, showFile
  * **Not covered here:** gitleaks' own detection. A test that stubbed out the
  * scanner and then asserted the scanner finds a secret would prove that the
  * test wrote the expected string into its own fixture, so this suite never does
- * that. Detection is evidenced by the committed baseline itself — 11 findings,
+ * that. Detection is evidenced by the committed baseline itself — 7 findings,
  * every one a test-fixture literal, which is the real scanner's output over the
  * real history — and by the end-to-end demonstration recorded in the pull
  * request body: a high-entropy token planted in a past commit makes the same
@@ -57,13 +57,13 @@ const PINNED_VERSION = "8.30.1";
  * Pinned as a VALUE, not left to a floor of `> 0`, and not merely reported in an
  * assertion message. A Vitest message is emitted only when an assertion fails,
  * so a `> 0` floor plus a message that names the count is invisible on a green
- * run — and stripping the residue from three of the four checkable entries
- * leaves the suite green while any prose about "4 of 11" goes on claiming a pin
+ * run — and stripping the residue from one of the two checkable entries
+ * leaves the suite green while any prose about "2 of 7" goes on claiming a pin
  * that does not exist. This number is that pin.
  *
- * 4 of 11, and the other 7 are `gitlab-pat` findings whose `Match` IS the
+ * 2 of 7, and the other 5 are `gitlab-pat` findings whose `Match` IS the
  * secret: gitleaks replaces the whole match, the residue is empty, and a rule
- * with no residue has nothing that could have been spliced into it. Those 7 are
+ * with no residue has nothing that could have been spliced into it. Those 5 are
  * carried by the redaction, shape and fingerprint assertions, which run at every
  * checkout depth.
  *
@@ -72,7 +72,7 @@ const PINNED_VERSION = "8.30.1";
  * the baseline diff before accepting the new value. It is a measurement of the
  * committed file, not a target to be met.
  */
-const EXPECTED_CHECKABLE_ENTRIES = 4;
+const EXPECTED_CHECKABLE_ENTRIES = 2;
 
 /** One gitleaks finding as the committed baseline carries it. */
 type Finding = {
@@ -151,7 +151,7 @@ describe(".github/gitleaks-baseline.json", () => {
     // keeps the surrounding source-line context. A `gitlab-pat` finding's match
     // IS the token, so it comes out as the bare literal REDACTED; a
     // `generic-api-key` finding's match is the assignment around it, so the
-    // four such entries read `TOKEN_ENCRYPTION_KEY", "REDACTED"` and
+    // two such entries read `TOKEN_ENCRYPTION_KEY", "REDACTED"` and
     // `encrypted_webhook_secret","REDACTED"`. So the two fields are asserted
     // differently, and the second one is the one that would otherwise have
     // looked untidy and been "corrected" by a hand-edit — which would break the
@@ -324,11 +324,11 @@ describe(".github/gitleaks-baseline.json", () => {
       if (runs.length > 0) checked += 1;
     }
     // At least one committed entry must actually exercise a non-empty residue,
-    // or this test would pass on the seven `gitlab-pat` entries alone and pin
+    // or this test would pass on the five `gitlab-pat` entries alone and pin
     // nothing.
     // The SAME constant the deep test pins, asserted here too, because that
     // test SKIPS in CI. With only a `> 0` floor here, stripping the residue from
-    // three of the four checkable entries was green at depth 1 — the coverage
+    // one of the two checkable entries was green at depth 1 — the coverage
     // claim unchecked exactly where nobody local is looking.
     expect(
       checked,
@@ -753,7 +753,7 @@ describe("the committed baseline's provenance, where the history is present", ()
     // The counterpart to the deep check, and it runs at BOTH depths. That is the
     // point: the deep check's own `expect.fail` on an unresolvable commit is a
     // catch-block guard, and a catch block that someone tidies into a `continue`
-    // takes the whole thing with it. For the 7 entries whose Match is a pure
+    // takes the whole thing with it. For the 5 entries whose Match is a pure
     // redaction there is nothing else in the deep loop that could notice — their
     // residue is empty, so the provenance check passes them whatever line they
     // are given. This test notices.
