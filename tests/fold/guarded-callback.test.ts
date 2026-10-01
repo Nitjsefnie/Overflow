@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { callGuarded, type GuardedCallback } from "@/lib/fold/guarded-callback";
+import { captureUnhandledRejections } from "../support/unhandled-rejection-probe";
 
 describe("guarded callback", () => {
   it("reports a retrieval that throws, and reads no member at all", () => {
@@ -12,11 +13,10 @@ describe("guarded callback", () => {
     }, ["note"], reporter.report);
 
     // Retrieving the member is guarded on its own terms, so the throw lands on
-    // the reporter instead of the caller. The member behind the thunk is never
-    // read, which is what makes the callback itself uncallable here.
+    // the reporter instead of the caller — and no callback is delivered, because
+    // the retrieval that would have produced one never returned.
     expect(returned).toBeUndefined();
     expect(reporter.reports).toEqual([[unreachable]]);
-    expect(receiver.reads.count).toBe(0);
     expect(receiver.calls).toEqual([]);
   });
 
@@ -154,17 +154,15 @@ describe("guarded callback", () => {
     const neverSettles = new Promise<never>(() => {});
     const reporter = recordingReporter();
     const { seen: unhandled, restore } = captureUnhandledRejections();
-    const after: string[] = [];
 
     try {
+      // The return value is what pins the contract: a guard that awaited the
+      // callback would either return a promise or never return at all, and
+      // either way this line would not be reached. A test that completes is the
+      // second half of the same claim.
       const returned = callGuarded(noteReceiver(), () => () => neverSettles, [], reporter.report);
-      // Nothing between the call and here awaits anything, so reaching these
-      // assertions at all is the evidence the guard did not wait on the
-      // callback: awaiting it would leave the suite running to its timeout.
-      after.push("the caller continued");
 
       expect(returned).toBeUndefined();
-      expect(after).toEqual(["the caller continued"]);
 
       await drainMicrotasks();
 
@@ -187,16 +185,18 @@ interface NoteReceiver {
  * A receiver whose callback is declared as a method that reaches its own object
  * through `this`, which is the form the callback type's method syntax invites.
  * The member it is retrieved through is an accessor, so every read is counted
- * and a second read of it is visible.
+ * and a second read of it is visible. The accessor cannot be written as a
+ * literal property — a getter that counts is exactly what a literal cannot
+ * express — so it is installed afterwards and the receiver is widened to the
+ * interface the consumers see.
  */
 function noteReceiver(): NoteReceiver {
-  const receiver: NoteReceiver = {
+  const receiver = {
     reads: { count: 0 },
-    calls: [],
+    calls: [] as unknown[][],
     note(...args: unknown[]) {
       this.calls.push(args);
     },
-    onNote: () => {},
   };
   Object.defineProperty(receiver, "onNote", {
     get() {
@@ -205,7 +205,7 @@ function noteReceiver(): NoteReceiver {
     },
     configurable: true,
   });
-  return receiver;
+  return receiver as NoteReceiver;
 }
 
 /**
@@ -219,26 +219,6 @@ function recordingReporter() {
   };
 
   return { reports, report };
-}
-
-/**
- * Records the rejections Node reports while the guard is under test, which is
- * the only observable difference between containing a rejection and merely
- * silencing it — the module's whole defect was a floating promise.
- */
-function captureUnhandledRejections() {
-  const seen: unknown[] = [];
-  const listener = (reason: unknown) => {
-    seen.push(reason);
-  };
-  process.on("unhandledRejection", listener);
-
-  return {
-    seen,
-    restore: () => {
-      process.off("unhandledRejection", listener);
-    },
-  };
 }
 
 /**

@@ -7,6 +7,7 @@ import {
   type ReconciliationSweepDependencies,
   type ReconciliationSweepSchedule,
 } from "@/lib/fold/sweep";
+import { captureUnhandledRejections } from "../support/unhandled-rejection-probe";
 
 // The line the scheduler prints when it could not arm the recurring tick.
 // Asserted as a whole because it is reported instead of being fatal, so the
@@ -1812,25 +1813,6 @@ function signal() {
 // a drain depends on how long anything took.
 function drain() {
   return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-// Captures what Node reports as an unhandled rejection during one test.
-// Installing a listener is also what keeps Node's default from ending the run,
-// so a case that drives a rejection on purpose needs this whether or not it
-// asserts on what was captured.
-function captureUnhandledRejections() {
-  const seen: unknown[] = [];
-  const listener = (reason: unknown) => {
-    seen.push(reason);
-  };
-  process.on("unhandledRejection", listener);
-
-  return {
-    seen,
-    restore: () => {
-      process.off("unhandledRejection", listener);
-    },
-  };
 }
 
 // Replaces the global setInterval for one test, so a test can assert what the
