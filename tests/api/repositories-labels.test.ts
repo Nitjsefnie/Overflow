@@ -543,6 +543,9 @@ describe("GET /api/repositories/labels (GitLab)", () => {
       error: { code: "UPSTREAM_FAILURE", message: "Unable to read the repository labels on GitLab." },
     });
     expect(console.error).toHaveBeenCalledTimes(1);
+    // The log line itself is part of the contract — the fixed phrase an
+    // operator greps the service log for — so it is pinned exactly.
+    expect(vi.mocked(console.error).mock.calls[0]![0]).toBe("Reading the repository labels on GitLab failed.");
     // The recorded argument is the error itself, not a rendering of it: the
     // status is read off the object, and the upstream body rides along with
     // it — what GitLab actually said is what the operator log is for here

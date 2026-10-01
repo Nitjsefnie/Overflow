@@ -13,6 +13,14 @@ describe("isUnclassifiedGitLabFailure", () => {
     expect(isUnclassifiedGitLabFailure(new Error("repository labels: walked past the ceiling"))).toBe(true);
   });
 
+  // The instanceof disjunct's distinguishing corner: the route's arms all
+  // read `error instanceof GitLabApiError && status`, so a foreign,
+  // non-GitLabApiError value carrying an in-set status matched no arm at all
+  // — it is unclassified even though its status is one the route answers for.
+  it("reads a non-GitLabApiError carrying an in-set status as unclassified", () => {
+    expect(isUnclassifiedGitLabFailure({ status: 401 })).toBe(true);
+  });
+
   it.each([0, 500, 503])("reads GitLabApiError status %i as unclassified", (status) => {
     expect(isUnclassifiedGitLabFailure(new GitLabApiError(status))).toBe(true);
   });
