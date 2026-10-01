@@ -49,10 +49,12 @@
 -- A row with no stamp at all is the other population, and it is the defect's
 -- own: a token nobody has used since it was minted, which may be one whose
 -- response never arrived. Those rows are left unconfirmed and clamped to the
--- delivery window. They are also the only rows the clamp can reach, because it
--- runs after the backfill and tests `confirmed_at is null` — the same test of
--- "unconfirmed" the store uses when it confirms a token on first use, so the
--- two cannot drift apart.
+-- delivery window. The clamp tests `confirmed_at is null`, which by the time it
+-- runs is the same population as "no use evidence": the backfill above gives
+-- every row carrying a stamp the stamp as its confirmation, so a row still
+-- unconfirmed here is one the backfill found nothing to confirm. That ordering
+-- is what makes the predicate safe, and the suite pins it by asserting which
+-- rows came out clamped.
 --
 -- Finally the column default moves from the lifetime to the window. The default
 -- exists for one writer: the release that predates the column, whose insert
