@@ -271,6 +271,21 @@ function runAlert(
      */
     deployedBudget?: boolean;
     /**
+     * Leaves OVERFLOW_ALERT_EXIM_LOG out of the environment entirely, so the
+     * run reads the DEPLOYED default path. Same reasoning as `deployedBudget`,
+     * and for the same reason: no assertion over an overridden value can see
+     * the one a deployed run uses.
+     */
+    deployedLogPath?: boolean;
+    /**
+     * Writes the mainlog with mode 000, so it EXISTS and cannot be read - the
+     * state the alert unit is actually in when its supplementary groups do not
+     * grant the log, and the only state that tells `-r` from `-e` apart. Real
+     * permissions, not a simulated one: root bypasses mode bits, so this drops
+     * to an unprivileged uid rather than pretending.
+     */
+    eximLogUnreadable?: boolean;
+    /**
      * How far the clock shim advances per reading. Zero is the real clock.
      * See the shim.
      */
@@ -314,9 +329,24 @@ function runAlert(
     const sleepCallsPath = join(directory, "sleep-calls");
     const stateDir = options.stateDir ?? join(directory, "throttle-state");
     const eximLogPath = join(directory, "mainlog");
-    if (options.eximLog !== null) {
+    if (options.eximLog !== null && !options.deployedLogPath) {
       const lines = options.eximLog ?? deliveredEximLog;
       writeFileSync(eximLogPath, `${lines.join("\n")}\n`);
+    }
+    if (options.eximLogUnreadable) {
+      writeFileSync(eximLogPath, `${(options.eximLog ?? deliveredEximLog).join("\n")}\n`);
+      chmodSync(eximLogPath, 0o000);
+    }
+
+    // Root ignores mode bits, so a mode-000 log is still readable by a root
+    // test run and would test nothing. Dropping the run's privileges is the
+    // honest way to get a file the script genuinely cannot open, and it needs
+    // no extra binary: spawnSync setuid's. Everything the script touches in
+    // this fixture therefore has to be reachable by the unprivileged uid.
+    const dropsPrivileges = Boolean(options.eximLogUnreadable) && process.getuid?.() === 0;
+    if (dropsPrivileges) {
+      chmodSync(directory, 0o777);
+      chmodSync(bin, 0o777);
     }
     const logAppendPath = join(directory, "mainlog-append");
     const grows = options.eximLogGrows;
@@ -331,7 +361,7 @@ function runAlert(
           PATH: `${bin}:/usr/bin:/bin`,
           OVERFLOW_ALERT_RECIPIENT_FILE: recipientFile,
           OVERFLOW_ALERT_STATE_DIR: stateDir,
-          OVERFLOW_ALERT_EXIM_LOG: eximLogPath,
+          ...(options.deployedLogPath ? {} : { OVERFLOW_ALERT_EXIM_LOG: eximLogPath }),
           OVERFLOW_TEST_CURL_ARGV: curlArgvPath,
           OVERFLOW_TEST_CLOCK_CALLS: join(directory, "clock-calls"),
           OVERFLOW_TEST_CLOCK_BASE: join(directory, "clock-base"),
@@ -352,6 +382,7 @@ function runAlert(
             : { OVERFLOW_ALERT_EXIM_WAIT_SECONDS: options.waitSeconds ?? "1" }),
         },
         encoding: "utf8",
+        ...(dropsPrivileges ? { uid: 65534, gid: 65534 } : {}),
       },
     );
     if (result.error) throw result.error;
@@ -544,6 +575,38 @@ describe("overflow-alert.sh delivery verdict", () => {
     },
   );
 
+  it("reports a bounced message as failed even though exim Completed it", () => {
+    // Exim writes Completed when the daemon is FINISHED with a message, which
+    // includes one it gave up on: a bounce, a rejection and a discard all end
+    // with the same line a successful delivery does. So this message carries
+    // an off-host routing line, a permanent refusal and a Completed line all
+    // under one id at once. Reading Completed first records a message the relay
+    // refused as sent, writes the throttle state, and silences the next real
+    // alert for thirty minutes - issue 848's own defect, arriving by the other
+    // route. A terminal verdict is conclusive on sight; defer is not.
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
+      eximLog: [
+        spoolLine(),
+        routingLine("remote_smtp_smarthost"),
+        `${logStamp} ${messageId} ** bounce: <> ${recipientAddress}: 550 unknown user`,
+        completedLine(),
+      ],
+    });
+
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("bounce");
+    expect(existsSync(join(stateDir, unit)), "a refused alert must not silence the next one").toBe(
+      false,
+    );
+  });
+
   it("delivers when the routing line names a remote transport and exim Completed it", () => {
     const stateDir = makeStateDir();
 
@@ -692,7 +755,7 @@ describe("overflow-alert.sh delivery verdict", () => {
     expect(existsSync(join(stateDir, unit))).toBe(false);
   });
 
-  it("treats an unreadable exim mainlog as no delivery rather than as silence to wait on", () => {
+  it("treats an absent exim mainlog as no delivery, and says which file it could not read", () => {
     const stateDir = makeStateDir();
 
     const run = runAlert({
@@ -705,7 +768,33 @@ describe("overflow-alert.sh delivery verdict", () => {
     });
 
     expect(run.status).not.toBe(0);
-    expect(run.stderr).toContain("mainlog");
+    // "unreadable", not the path: the path is interpolated into every one of
+    // these reasons, so naming it cannot tell this route from the others. The
+    // word is unique to the route where the log was never readable at all, so
+    // it is what a run that took the readable route instead would lack.
+    expect(run.stderr).toContain("unreadable");
+    expect(existsSync(join(stateDir, unit))).toBe(false);
+  });
+
+  it("treats a mainlog that EXISTS but cannot be read as no delivery", () => {
+    // The state the alert unit is in when its supplementary groups do not grant
+    // the log: the file is there, with this run's routing and Completed lines
+    // in it, and the script cannot open it. A check on existence rather than
+    // readability would read those lines, find the delivery, and report an
+    // alert that its own log says was refused as sent.
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
+      eximLogUnreadable: true,
+    });
+
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("unreadable");
     expect(existsSync(join(stateDir, unit))).toBe(false);
   });
 
@@ -781,12 +870,20 @@ describe("overflow-alert.sh delivery verdict", () => {
     // exim's log field table gives T three jobs: the TRANSPORT on a routing
     // line, the message SUBJECT on a reception line, and the transport again on
     // a deferred or failed line. The `== ... defer` line below is the spec's own
-    // worked example of a deferral, and a message exim goes on to Complete
-    // without ever accepting it for delivery - which is a bounce, not a
-    // delivery. Both other lines carry a T= naming a REMOTE transport, so a
-    // script that read T= off any line would call this delivered; reading it
-    // off a routing line only leaves no evidence that anything left the host,
-    // and the run has to fail.
+    // worked example of a deferral, and this message has no `=>` line at all -
+    // exim never accepted it for delivery by any transport, and then Completed
+    // it as the daemon finished with it. Both lines carrying a T= name a REMOTE
+    // transport, so a script that read T= off any line would call this
+    // delivered on the strength of a Completed line; reading it off a routing
+    // line only leaves no evidence that anything left the host, and the run has
+    // to fail. What that verdict is is not this case's business - a message
+    // with no routing line has no transport to judge - and the run says which
+    // it saw, which is the `defer`.
+    //
+    // A message that WAS routed off-host and then refused is a different case,
+    // and it is judged by the refused verdict rather than by the missing
+    // routing line: see "reports a bounced message as failed even though exim
+    // Completed it".
     const stateDir = makeStateDir();
 
     const run = runAlert({
@@ -832,6 +929,36 @@ describe("overflow-alert.sh delivery verdict", () => {
     expect(run.stderr, "the deployed default must be the number reported").toContain("60s");
     expect(run.sleeps, "a 60-second budget closes after 59 waits").toBe(59);
     expect(existsSync(join(stateDir, unit))).toBe(false);
+  });
+
+  it("reads the DEPLOYED log path when the variable is absent entirely", () => {
+    // The same hole as the budget default, one line above it in the script, and
+    // every case in this suite sets the override - so nothing could see the
+    // path a deployed run reads. The path is not cosmetic: exim rotates its
+    // mainlog, so a default pointing at a rotation file reads yesterday's
+    // messages, never finds this run's id, and fails every alert after the full
+    // budget with CI green.
+    //
+    // The run therefore judges whatever /var/log/exim4/mainlog happens to be on
+    // the machine, which cannot hold this fixture's id - the id is synthetic and
+    // never appears in a real exim log - so the run fails, and the path it names
+    // in the reason is the one it actually read.
+    const run = runAlert({
+      recipient: validRecipient,
+      waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
+      deployedLogPath: true,
+    });
+
+    expect(run.status).not.toBe(0);
+    expect(run.stderr, "the deployed default path must be the one it read").toContain(
+      "/var/log/exim4/mainlog",
+    );
+    // A rotation file is `mainlog.N`, so the bare name with nothing after it is
+    // what distinguishes today's log from yesterday's. Without this the assertion
+    // above still passes on `mainlog.1`, because the path it names is a prefix.
+    expect(run.stderr, "today's mainlog, not a rotated one").not.toContain("mainlog.");
   });
 
   it("computes the deadline from the budget, not from a number standing beside it", () => {
