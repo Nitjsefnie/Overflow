@@ -20,11 +20,12 @@
 // protection matches a required context by name AND app, so a same-named
 // github-actions check-run leaves the App's context missing.
 //
-// This module imports only TYPES from ledger-relay.ts and receives every
-// runtime value it needs through injected deps, so the two files cannot form a
-// runtime import cycle in either direction.
+// It imports only TYPES, from scripts/ledger-relay-decisions.ts, and receives
+// every runtime value it needs through injected deps. The pure decision layer
+// holds what both duties decide and depends on neither, so neither duty has to
+// import the other and no runtime cycle can form between them.
 
-import type { ContextDecision, RelayJob } from "./ledger-relay.ts";
+import type { ContextDecision, RelayJob } from "./ledger-relay-decisions.ts";
 
 /**
  * The bound on one sweep: at most this many candidates are examined, so one

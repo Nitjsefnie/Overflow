@@ -38,25 +38,19 @@ import {
   type SweepApi,
   type SweepOutcome,
 } from "./ledger-relay-sweep.ts";
+// The pure decision layer. Re-exported below, with `.ts` specifiers, so the
+// surface this entry has always presented is unchanged: a caller importing
+// decideContexts from here keeps working without knowing the layer exists.
+import {
+  decideContexts,
+  PIN_SHAPE,
+  validatePinMap,
+  type ContextDecision,
+  type RelayJob,
+} from "./ledger-relay-decisions.ts";
 
-/** One job of the triggering run, as the jobs listing reports it. The API's field names are kept so the listing's JSON maps straight through. */
-export interface RelayJob {
-  name: string;
-  run_attempt: number;
-  status: "queued" | "in_progress" | "completed";
-  conclusion: string | null;
-}
-
-/** What the relay will post for one required context. */
-export interface ContextDecision {
-  context: string;
-  /** The check-run status to post. */
-  status: "queued" | "in_progress" | "completed";
-  /** The conclusion, present exactly when status is completed. */
-  conclusion?: string;
-  title: string;
-  summary: string;
-}
+export { decideContexts, PIN_SHAPE, validatePinMap };
+export type { ContextDecision, RelayJob };
 
 /** The triggering run's identifying fields, validated on entry. */
 export interface TriggeringRun {
@@ -70,7 +64,6 @@ export interface TriggeringRun {
   runAttempt: number;
 }
 
-export const PIN_SHAPE = /^\.github\/workflows\/[^/]+\.ya?ml$/;
 const SHA_40 = /^[0-9a-f]{40}$/;
 const DIGITS = /^\d+$/;
 const API_ROOT = "https://api.github.com";
@@ -86,123 +79,6 @@ const API_HEADERS = {
 // other 4xx fails immediately, because it will not heal within this job's
 // lifetime.
 const BACKOFF_MS = [1_000, 2_000];
-
-/**
- * The relay's core. Contexts come from the pin map entries whose path equals
- * the triggering run's path, in pin-map order. For each:
- *
- * - jobs named exactly the context: the highest run_attempt decides, and on
- *   an attempt tie a non-success replaces a success — the deploy gate's
- *   tie-break, so a tie can only hold the deploy back;
- * - a job that is not completed posts its pending status, which branch
- *   protection reads as waiting;
- * - a completed job mirrors its conclusion;
- * - jobs exist but none named the context: failure naming the missing job and
- *   the pinned path, so a renamed producer is visible and blocking, not
- *   silence;
- * - no jobs at all: the run-level outcome is the only evidence. success
- *   mirrors as success; any other conclusion (failure, cancelled, or a
- *   workflow-level failure before any job was created) mirrors as failure —
- *   neutral outcomes fail closed.
- */
-export function decideContexts(
-  pinMap: Readonly<Record<string, string>>,
-  runPath: string,
-  runConclusion: string | null,
-  jobs: readonly RelayJob[],
-): ContextDecision[] {
-  const decisions: ContextDecision[] = [];
-  for (const [context, path] of Object.entries(pinMap)) {
-    if (path !== runPath) continue;
-    decisions.push(decideOne(context, runPath, runConclusion, jobs));
-  }
-  return decisions;
-}
-
-function decideOne(
-  context: string,
-  runPath: string,
-  runConclusion: string | null,
-  jobs: readonly RelayJob[],
-): ContextDecision {
-  const candidates = jobs.filter((job) => job.name === context);
-  if (candidates.length === 0) {
-    if (jobs.length > 0) {
-      return {
-        context,
-        status: "completed",
-        conclusion: "failure",
-        title: `${context}: no producing job`,
-        summary:
-          `No job named "${context}" ran in ${runPath}, though the run produced other jobs. ` +
-          "The pinned producer may have been renamed; branch protection stays blocked.",
-      };
-    }
-    if (runConclusion === "success") {
-      return {
-        context,
-        status: "completed",
-        conclusion: "success",
-        title: `${context}: success`,
-        summary:
-          `The triggering run of ${runPath} concluded success with no job records to mirror; ` +
-          "the run-level outcome is relayed.",
-      };
-    }
-    return {
-      context,
-      status: "completed",
-      conclusion: "failure",
-      title: `${context}: workflow-level failure`,
-      summary:
-        `The triggering run of ${runPath} concluded ${conclusionWord(runConclusion)} with no ` +
-        "job records to mirror; the pinned contexts cannot be attested. " +
-        "Branch protection stays blocked.",
-    };
-  }
-  let best = candidates[0];
-  for (const candidate of candidates.slice(1)) {
-    if (
-      candidate.run_attempt > best.run_attempt ||
-      (candidate.run_attempt === best.run_attempt && !isCompletedSuccess(candidate))
-    ) {
-      best = candidate;
-    }
-  }
-  if (best.status === "completed") {
-    const conclusion = best.conclusion ?? "failure";
-    return {
-      context,
-      status: "completed",
-      conclusion,
-      title: `${context}: ${conclusion}`,
-      summary:
-        `Job "${context}" (attempt ${best.run_attempt}) in ${runPath} concluded ${conclusion}; ` +
-        "the outcome is relayed to branch protection.",
-    };
-  }
-  // A job that has not concluded posts PENDING, and the sweep posts pending for a
-  // candidate too, though a candidate is `completed` by selection. Deliberate:
-  // an ABSENT check is what branch protection refuses a merge on, a PENDING one
-  // is what it waits on. So the sweep counts only CONCLUDED App check-runs as
-  // attestations, and the next start supersedes this one.
-  return {
-    context,
-    status: best.status,
-    title: `${context}: ${best.status}`,
-    summary:
-      `Job "${context}" (attempt ${best.run_attempt}) in ${runPath} is ${best.status}; ` +
-      "branch protection waits.",
-  };
-}
-
-function isCompletedSuccess(job: RelayJob): boolean {
-  return job.status === "completed" && job.conclusion === "success";
-}
-
-function conclusionWord(conclusion: string | null): string {
-  return conclusion === null || conclusion === "" ? "without a conclusion" : conclusion;
-}
 
 /** A rerun is capped at this attempt, so a flapping heal cannot ping-pong forever. */
 export const RERUN_ATTEMPT_CAP = 5;
@@ -715,23 +591,6 @@ function contextsFor(pinMap: Readonly<Record<string, string>>, path: string): st
 
 async function readRawPinMap(): Promise<unknown> {
   return JSON.parse(await readFile(".github/required-checks.json", "utf8")) as unknown;
-}
-
-/** The same shape the deploy gate demands: one flat object of workflow paths. */
-export function validatePinMap(value: unknown): Record<string, string> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(".github/required-checks.json must be one JSON object");
-  }
-  const pinMap: Record<string, string> = {};
-  for (const [context, path] of Object.entries(value)) {
-    if (typeof path !== "string" || !PIN_SHAPE.test(path)) {
-      throw new Error(
-        `.github/required-checks.json: the pin for ${context} is not a workflow path: ${JSON.stringify(path)}`,
-      );
-    }
-    pinMap[context] = path;
-  }
-  return pinMap;
 }
 
 function required(env: Record<string, string | undefined>, name: string): string {
