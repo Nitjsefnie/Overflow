@@ -5,6 +5,7 @@ import {
   diffEvidenceFactKeys,
   mergeEvidenceFacts,
   splitEvidenceFacts,
+  type MeasuredReconciliationFact,
   type OversizedReconciliationFact,
   type ReconciliationFact,
 } from "@/lib/fold/evidence-facts";
@@ -47,10 +48,10 @@ describe("splitEvidenceFacts", () => {
     });
     expect(oversized).toEqual([]);
     expect(facts).toEqual([
-      { kind: "issue", subjectKey: "101", payload: issue({ id: 101 }) },
-      { kind: "issue", subjectKey: "102", payload: issue({ id: 102 }) },
-      { kind: "pull_request", subjectKey: "201", payload: pullRequestEvidence(201) },
-      { kind: "pull_request", subjectKey: "202", payload: pullRequestEvidence(202) },
+      { kind: "issue", subjectKey: "101", payload: issue({ id: 101 }), bytes: expect.any(Number) },
+      { kind: "issue", subjectKey: "102", payload: issue({ id: 102 }), bytes: expect.any(Number) },
+      { kind: "pull_request", subjectKey: "201", payload: pullRequestEvidence(201), bytes: expect.any(Number) },
+      { kind: "pull_request", subjectKey: "202", payload: pullRequestEvidence(202), bytes: expect.any(Number) },
     ]);
   });
 
@@ -66,8 +67,8 @@ describe("splitEvidenceFacts", () => {
       { factByteLimit: 500 },
     );
     expect(facts).toEqual([
-      { kind: "issue", subjectKey: "1", payload: small },
-      { kind: "pull_request", subjectKey: "3", payload: pullRequestEvidence(3) },
+      { kind: "issue", subjectKey: "1", payload: small, bytes: expect.any(Number) },
+      { kind: "pull_request", subjectKey: "3", payload: pullRequestEvidence(3), bytes: expect.any(Number) },
     ]);
     expect(oversized).toEqual([
       { kind: "issue", subjectKey: "2", bytes: expect.any(Number) },
@@ -109,7 +110,7 @@ describe("splitEvidenceFacts", () => {
     const first = issue({ id: 7, title: "first" });
     const second = issue({ id: 7, title: "second" });
     const { facts, oversized } = splitEvidenceFacts({ issues: [first, second], pullRequests: [] });
-    expect(facts).toEqual([{ kind: "issue", subjectKey: "7", payload: second }]);
+    expect(facts).toEqual([{ kind: "issue", subjectKey: "7", payload: second, bytes: expect.any(Number) }]);
     expect(oversized).toEqual([]);
   });
 
@@ -129,7 +130,7 @@ describe("splitEvidenceFacts", () => {
     const large = issue({ id: 7, title: "x".repeat(1000) });
     const { facts, oversized } = splitEvidenceFacts({ issues: [large, small], pullRequests: [] }, { factByteLimit: 500 });
     expect(oversized).toEqual([]);
-    expect(facts).toEqual([{ kind: "issue", subjectKey: "7", payload: small }]);
+    expect(facts).toEqual([{ kind: "issue", subjectKey: "7", payload: small, bytes: expect.any(Number) }]);
   });
 });
 
@@ -157,6 +158,16 @@ describe("mergeEvidenceFacts", () => {
 
   it("returns empty arrays for a repository with no facts", () => {
     expect(mergeEvidenceFacts([])).toEqual({ issues: [], pullRequests: [] });
+  });
+
+  // Mutant: the dispatch silently dropping an unknown kind — the fact would
+  // vanish from the reassembled document, and a document that lies about what
+  // is cached is the cache-hole shape the omission flag exists to fence.
+  it("refuses an unknown fact kind instead of silently dropping the fact", () => {
+    expect(() => mergeEvidenceFacts([
+      { kind: "issue", subject_key: "1", payload: issue({ id: 1 }) },
+      { kind: "note", subject_key: "5", payload: issue({ id: 5 }) },
+    ])).toThrow(/unknown reconciliation fact kind/i);
   });
 });
 
@@ -199,15 +210,20 @@ describe("diffEvidenceFactKeys", () => {
 });
 
 describe("chunkEvidenceFactWrites", () => {
-  function factsOf(count: number, diffBytes: number): ReconciliationFact[] {
-    return Array.from({ length: count }, (_, index): ReconciliationFact => ({
-      kind: "issue",
-      subjectKey: String(index + 1),
-      payload: issue({ id: index + 1, title: "p".repeat(Math.max(0, diffBytes)) }),
-    }));
+  function measured(fact: ReconciliationFact): MeasuredReconciliationFact {
+    return { ...fact, bytes: Buffer.byteLength(JSON.stringify(fact.payload), "utf8") };
   }
 
-  function batchBytes(batch: ReconciliationFact[]): number {
+  function factsOf(count: number, diffBytes: number): MeasuredReconciliationFact[] {
+    return Array.from({ length: count }, (_, index): MeasuredReconciliationFact =>
+      measured({
+        kind: "issue",
+        subjectKey: String(index + 1),
+        payload: issue({ id: index + 1, title: "p".repeat(Math.max(0, diffBytes)) }),
+      }));
+  }
+
+  function batchBytes(batch: MeasuredReconciliationFact[]): number {
     return batch.reduce((total, fact) => total + Buffer.byteLength(JSON.stringify(fact.payload), "utf8"), 0);
   }
 
@@ -227,11 +243,11 @@ describe("chunkEvidenceFactWrites", () => {
   });
 
   it("gives a fact larger than the whole budget its own batch rather than dropping it", () => {
-    const big: ReconciliationFact = { kind: "issue", subjectKey: "2", payload: issue({ id: 2, title: "B".repeat(5000) }) };
-    const facts: ReconciliationFact[] = [
-      { kind: "issue", subjectKey: "1", payload: issue({ id: 1 }) },
+    const big = measured({ kind: "issue", subjectKey: "2", payload: issue({ id: 2, title: "B".repeat(5000) }) });
+    const facts = [
+      measured({ kind: "issue", subjectKey: "1", payload: issue({ id: 1 }) }),
       big,
-      { kind: "issue", subjectKey: "3", payload: issue({ id: 3 }) },
+      measured({ kind: "issue", subjectKey: "3", payload: issue({ id: 3 }) }),
     ];
     const batches = chunkEvidenceFactWrites(facts, 100);
     expect(batches.map((batch) => batch.map(({ subjectKey }) => subjectKey))).toEqual([["1"], ["2"], ["3"]]);
