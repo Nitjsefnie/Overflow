@@ -67,6 +67,8 @@ function linkDefinitions(markdown: string): Map<string, string> {
  * - It OVER-reports. The target pattern stops at the first `)`, so a link
  *   whose target contains parentheses is mis-parsed: `[x](file(1).md)` reads
  *   as target `file(1` and is reported as a dead path.
+ * - And one limit of scope rather than of parsing: it reads one line at a
+ *   time, so a link split across a line break is not seen at all.
  *
  * It claims only the spellings listed above, and a caller must not read the
  * name as stronger than that.

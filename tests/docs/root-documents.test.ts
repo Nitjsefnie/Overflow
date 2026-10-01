@@ -141,17 +141,17 @@ describe("root documents", () => {
   });
 
   it("documents the two directions the recogniser is wrong in", () => {
-  // These pin known misbehaviour, not desired behaviour. The doc comment on
-  // `relativeLinks` promises neither direction is handled; if a future change
-  // fixes either, these fail and that is the point — the comment and the
-  // behaviour must not drift apart silently.
-  expect(relativeLinks("See [a [b] c](does-not-exist.md)"), "under-reports").toStrictEqual([]);
-  expect(relativeLinks("See [x](file(1).md)"), "over-reports").toStrictEqual([
-    { line: 1, target: "file(1" },
-  ]);
-});
+    // These pin known misbehaviour, not desired behaviour. The doc comment on
+    // `relativeLinks` promises neither direction is handled; if a future change
+    // fixes either, these fail and that is the point — the comment and the
+    // behaviour must not drift apart silently.
+    expect(relativeLinks("See [a [b] c](does-not-exist.md)"), "under-reports").toStrictEqual([]);
+    expect(relativeLinks("See [x](file(1).md)"), "over-reports").toStrictEqual([
+      { line: 1, target: "file(1" },
+    ]);
+  });
 
-it("reports a failure against the line it occupies in the document, not in the excerpt", () => {
+  it("reports a failure against the line it occupies in the document, not in the excerpt", () => {
     const failures = unresolvedLinks(
       "[dead](does-not-exist.md)\n\n[also dead](#no-such-anchor)",
       "OPERATING.md",
