@@ -112,29 +112,72 @@ describe(".github/gitleaks-baseline.json", () => {
   });
 
   it("leaves nothing but source-line context where the secret was", () => {
-    // Belt and braces for the assertion above, and the shape that a
-    // `--redact`-less regeneration cannot fake. After every REDACTED is removed,
-    // what is left is the identifier the value was assigned to plus the JSON
-    // punctuation between them — the four residues in the current baseline are
-    // the empty string, `TOKEN_ENCRYPTION_KEY", "` and `encrypted_webhook_secret","`.
-    // A real credential in that position is an opaque 40-character token
-    // carrying base64 punctuation, not identifier-and-punctuation, so the
-    // allowed set below admits the context and not a secret.
+    // Belt and braces for the assertion above. A character-count bound alone is
+    // not enough here and this suite shipped one that was not: the longest
+    // identifier-shaped run 8.30.1 actually leaves behind is
+    // `encrypted_webhook_secret` (24 characters), and a real 20-character
+    // GitLab PAT sits comfortably under that, so a bound read off the data
+    // cannot separate them. Splicing a 24-character `glpat-` token beside a
+    // redaction passed a 28-character bound.
     //
-    // The 28-character bound is read off the longest residue actually present
-    // (`encrypted_webhook_secret","` is 28) with headroom, and its job is to
-    // reject a long opaque run, not to be a tight characterisation.
+    // The token itself is NOT written out here, and that is not squeamishness:
+    // it would be a credential-shaped literal in a tracked file, which is
+    // exactly what .github/workflows/secret-scan.yml exists to report. Writing
+    // it into this comment is how the demonstration below found one in this
+    // file on its first run. The rule needs the high-entropy body, so a
+    // placeholder that is merely described is both safe and sufficient to make
+    // the point.
+    //
+    // What does separate them is PROVENANCE, and it is checkable: every
+    // identifier-shaped run the redaction leaves behind is a verbatim slice of
+    // the source line at the commit, file and line this entry records. Source
+    // context came from there. Spliced-in credential material did not, and
+    // wherever it was pasted it will not be found at the coordinates this entry
+    // claims.
+    //
+    // Note the run is not the whole residue. gitleaks also redacts the string
+    // literal ADJACENT to the matched one, so the residue of a `generic-api-key`
+    // finding reads `TOKEN_ENCRYPTION_KEY", ""` — the identifier, then the
+    // punctuation of the two literals with the inner value gone. Only the
+    // identifier runs are contiguous in the source line, and only they are
+    // checked; the punctuation between them cannot be a credential.
+    const sources = new Map<string, string[]>();
     for (const finding of findings) {
-      const residue = finding.Match.replaceAll("REDACTED", "");
+      const key = `${finding.Commit}:${finding.File}`;
+      if (!sources.has(key)) {
+        const blob = spawnSync("git", ["show", `${key}`], { encoding: "utf8" });
+        expect(blob.status, `the baseline names ${key}, which must exist in this repository's history`).toBe(0);
+        sources.set(key, blob.stdout.split("\n"));
+      }
+      const line = sources.get(key)![finding.StartLine - 1] ?? "";
+      for (const run of finding.Match.replaceAll("REDACTED", "").match(/[A-Za-z0-9_]+/g) ?? []) {
+        expect(
+          line,
+          `${finding.Fingerprint} leaves '${run}' around the redaction, and it does not appear in ` +
+            `${finding.File} line ${finding.StartLine} at commit ${finding.Commit}. Whatever is there is ` +
+            "not source context — it is material spliced into the baseline, and a length bound cannot " +
+            "tell that apart from an identifier.",
+        ).toContain(run);
+      }
+    }
+  });
+
+  it("bounds what the redaction can leave, to what 8.30.1 actually emits", () => {
+    // The character-count bound the provenance check above replaces, kept with
+    // its bound TIGHTENED to the measured maximum rather than given headroom:
+    // the longest identifier-shaped run in the current baseline is
+    // `encrypted_webhook_secret` at 24 characters, so 24 is the whole of the
+    // allowance. This is deliberately not the load-bearing assertion — it is the
+    // cheap first filter, and the fact that it cannot by itself tell a
+    // 20-character token from a 20-character identifier is why the provenance
+    // check exists beside it.
+    for (const finding of findings) {
+      const longest = Math.max(0, ...[...finding.Match.replaceAll("REDACTED", "").matchAll(/[A-Za-z0-9_]+/g)].map((match) => match[0].length));
       expect(
-        residue,
-        `Match for ${finding.Fingerprint} leaves '${residue}' around the redaction, which is not ` +
-          "source-line context — an identifier, JSON punctuation and whitespace only",
-      ).toMatch(/^[A-Za-z0-9_"'=:,(){}\[\]. -]*$/);
-      const longestRun = Math.max(0, ...[...residue.matchAll(/[A-Za-z0-9_]+/g)].map((match) => match[0].length));
-      expect(longestRun, `Match for ${finding.Fingerprint} leaves a ${longestRun}-character opaque run`).toBeLessThanOrEqual(
-        28,
-      );
+        longest,
+        `${finding.Fingerprint} leaves a ${longest}-character identifier-shaped run, above the 24 ` +
+          "characters 8.30.1 is measured to leave behind",
+      ).toBeLessThanOrEqual(24);
     }
   });
 
@@ -335,6 +378,11 @@ describe("scripts/secret-scan.sh", () => {
       "the baseline path must resolve to this repository's committed .github/gitleaks-baseline.json",
     ).toBe(baselinePath);
     expect(argv, "--redact is what keeps the report free of secret material").toContain("--redact");
+    expect(
+      argv,
+      "--no-banner keeps the gitleaks banner out of the run log; without it every scheduled run opens " +
+        "with four lines of ASCII art ahead of the scan's own output",
+    ).toContain("--no-banner");
     expect(valueAfter(argv, "--report-format"), "the report must be JSON so the workflow can upload it").toBe("json");
     expect(
       valueAfter(argv, "--report-path"),
@@ -371,6 +419,22 @@ describe("scripts/secret-scan.sh", () => {
     expect(status, "a missing gitleaks must fail the run, not pass it").not.toBe(0);
     expect(output).toMatch(/gitleaks/i);
     expect(existsSync(report), "no report can exist when the scanner never ran").toBe(false);
+    // Pinned to THIS diagnostic, not to a nonzero exit, because that is the
+    // whole reason the `command -v` guard exists next to the version check: the
+    // two are different faults with different fixes. "no gitleaks on PATH" is a
+    // build or wiring problem — the install step did not put a binary where a
+    // later step can resolve one, which is what a job that extracted into the
+    // workspace and exported nothing looks like. "X is on PATH, but this script
+    // is pinned to Y" is a dependency problem, and the fix is a deliberate
+    // version bump plus a baseline regeneration. Deleting the guard collapses
+    // both into the second message, so the wiring fault gets diagnosed as a
+    // scanner upgrade.
+    expect(
+      output,
+      "a missing gitleaks must say so in the guard's own words, so the failure is not read as a " +
+        "version mismatch — the two have different causes and different fixes",
+    ).toMatch(/no gitleaks on PATH/);
+    expect(output, "and it must not be reported as a version mismatch").not.toMatch(/is on PATH, but this/);
   });
 
   it("refuses to scan when the gitleaks on PATH is not the pinned version", async () => {
