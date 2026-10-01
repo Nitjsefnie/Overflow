@@ -37,6 +37,7 @@ describe("GitLab stable message retries", () => {
     const credentialId = "181a4fbb-64d1-44fd-82da-cd191613798c";
     const results: unknown[] = [];
     const route = createGitLabWebhookPostHandler({
+      checkRateLimit: () => true,
       lookupCredential: async () => ({
         repositoryId, credentialId, provider: "gitlab", instanceUrl: "https://gitlab.example.com",
         projectId, secret: "test-secret", webhookId: 4242, configuredAt: null,

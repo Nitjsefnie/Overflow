@@ -8,8 +8,14 @@ import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { webhookSelector, type WebhookCredentialLookup } from "@/lib/webhooks/credentials";
 import { logField } from "@/lib/webhooks/log-field";
 import { readBodyWithinLimit } from "@/lib/http/request-body";
+import {
+  WEBHOOK_RATE_LIMIT_CAPACITY,
+  WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE,
+  createTokenBucket,
+} from "@/lib/webhooks/rate-limit";
 
 export type GitLabWebhookRouteDependencies = {
+  checkRateLimit: () => boolean;
   lookupCredential: WebhookCredentialLookup;
   processWebhook(delivery: GitHubWebhookDelivery, scope: WebhookReceiptScope): Promise<WebhookProcessingResult>;
 };
@@ -23,6 +29,10 @@ const GITLAB_WEBHOOK_BODY_LIMIT_BYTES = 25 * 1024 * 1024; // 25 MiB
 
 export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteDependencies) {
   return async function post(request: Request): Promise<Response> {
+    // The rate limit is answered before any request content is touched: a
+    // declined delivery costs the sender one bucket answer — no header read,
+    // no credential lookup, no body read.
+    if (!dependencies.checkRateLimit()) return new Response(null, { status: 429, headers: { "retry-after": "1" } });
     const event = request.headers.get("x-gitlab-event");
     const deliveryUuid = request.headers.get("x-gitlab-webhook-uuid");
     const token = request.headers.get("x-gitlab-token");
@@ -124,8 +134,19 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
   };
 }
 
+// The receiver's token bucket, built once at module scope and shared by every
+// request this process serves: the bucket IS the receiver's rate limit
+// (issue 852), so it must outlive individual requests — one bucket per
+// receiver, refilled by the wall clock.
+const webhookRateLimiter = createTokenBucket({
+  capacity: WEBHOOK_RATE_LIMIT_CAPACITY,
+  refillPerMinute: WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE,
+  nowMs: () => Date.now(),
+});
+
 export async function POST(request: Request): Promise<Response> {
   return createGitLabWebhookPostHandler({
+    checkRateLimit: () => webhookRateLimiter.admit(),
     lookupCredential: (selector, provider) => new PostgresRepositoryStore().findWebhookCredential(selector, provider),
     processWebhook: async (delivery, scope) => {
       const store = new PostgresFoldStore();

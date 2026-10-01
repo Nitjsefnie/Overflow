@@ -4,6 +4,11 @@ import * as database from "@/lib/db/client";
 import type { SqlClient } from "@/lib/db/types";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createGitLabWebhookPostHandler, POST } from "@/app/api/gitlab/webhooks/route";
+import {
+  WEBHOOK_RATE_LIMIT_CAPACITY,
+  WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE,
+  createTokenBucket,
+} from "@/lib/webhooks/rate-limit";
 import { processWebhook, type WebhookProcessorDependencies } from "@/lib/webhooks/processor";
 
 // The route and the spies must share the same persistence module instances.
@@ -103,6 +108,7 @@ describe("GitLab webhook route", () => {
   ])("dispatches the message identity from $name", async ({ headers, key }) => {
     const deliveries: unknown[] = [];
     const route = createGitLabWebhookPostHandler({
+      checkRateLimit: () => true,
       lookupCredential: async () => webhookCredential("gitlab", secret),
       processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; },
     });
@@ -113,7 +119,7 @@ describe("GitLab webhook route", () => {
 
   it("rejects a 256-character execution header before processing", async () => {
     const processWebhook = vi.fn();
-    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook });
+    const route = createGitLabWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook });
     const response = await route(request(issuePayload, gitlabHeaders({ "x-gitlab-webhook-uuid": "x".repeat(256) })));
     expect(response.status).toBe(400);
     expect(processWebhook).not.toHaveBeenCalled();
@@ -121,7 +127,7 @@ describe("GitLab webhook route", () => {
 
   it("rejects a 256-character Idempotency-Key and accepts a 255-character one", async () => {
     const processWebhook = vi.fn().mockResolvedValue({ status: "PROCESSED" });
-    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook });
+    const route = createGitLabWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook });
 
     const oversized = await route(request(issuePayload, gitlabHeaders({ "idempotency-key": "x".repeat(256) })));
     expect(oversized.status).toBe(400);
@@ -143,6 +149,7 @@ describe("GitLab webhook route", () => {
     const deliveries: unknown[] = [];
     const dependencies = {
       secret,
+      checkRateLimit: () => true,
       lookupCredential: async () => ({
         repositoryId: "test-registration", credentialId: "181a4fbb-64d1-44fd-82da-cd191613798c",
         secret, ...identity, webhookId: 4242, configuredAt: null,
@@ -156,7 +163,7 @@ describe("GitLab webhook route", () => {
 
   it("dispatches a verified issue delivery with the fallback delivery id", async () => {
     const processWebhookMock = vi.fn().mockResolvedValue({ status: "PROCESSED" });
-    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
+    const route = createGitLabWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
 
     const response = await route(request(issuePayload, gitlabHeaders()));
 
@@ -185,7 +192,7 @@ describe("GitLab webhook route", () => {
     { name: "a missing token header", headers: gitlabHeadersWithout("token") },
   ])("answers 400 for $name", async ({ headers }) => {
     const processWebhookMock = vi.fn();
-    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
+    const route = createGitLabWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
     const response = await route(request(issuePayload, headers));
     expect(response.status).toBe(400);
     expect(processWebhookMock).not.toHaveBeenCalled();
@@ -193,7 +200,7 @@ describe("GitLab webhook route", () => {
 
   it("answers 503 when no secret is configured", async () => {
     const processWebhookMock = vi.fn();
-    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => { throw new Error("unavailable key"); }, processWebhook: processWebhookMock });
+    const route = createGitLabWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => { throw new Error("unavailable key"); }, processWebhook: processWebhookMock });
     const response = await route(request(issuePayload, gitlabHeaders()));
     expect(response.status).toBe(503);
     expect(processWebhookMock).not.toHaveBeenCalled();
@@ -207,7 +214,7 @@ describe("GitLab webhook route", () => {
   it("answers 401 for a wrong token without reading the delivery further", async () => {
     const { stream, record } = trackedBodyStream(1);
     const processWebhookMock = vi.fn();
-    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
+    const route = createGitLabWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
     const response = await route(streamRequest(stream, { "x-gitlab-token": "wrong-token" }));
     expect(response.status).toBe(401);
     expect(record.handedOutBytes).toBe(0);
@@ -219,7 +226,7 @@ describe("GitLab webhook route", () => {
   it("answers 401, not 413, for a wrong token on a delivery declared over the cap", async () => {
     const { stream, record } = trackedBodyStream(CHUNK_COUNT);
     const processWebhookMock = vi.fn();
-    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
+    const route = createGitLabWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
     const response = await route(streamRequest(stream, {
       "x-gitlab-token": "wrong-token",
       "content-length": String(WEBHOOK_BODY_LIMIT_BYTES + 1),
@@ -231,7 +238,7 @@ describe("GitLab webhook route", () => {
 
   it("answers 400 for an unparseable body with a valid token", async () => {
     const processWebhookMock = vi.fn();
-    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
+    const route = createGitLabWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
     const response = await route(request("{", gitlabHeaders()));
     expect(response.status).toBe(400);
     expect(processWebhookMock).not.toHaveBeenCalled();
@@ -239,7 +246,7 @@ describe("GitLab webhook route", () => {
 
   it("answers 202 for a merge request delivery and hands the processor its PULL_REQUEST subject", async () => {
     const processWebhookMock = vi.fn().mockResolvedValue({ status: "PROCESSED" });
-    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
+    const route = createGitLabWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
     const response = await route(request(mergeRequestPayload, gitlabHeaders({ "x-gitlab-event": "Merge Request Hook" })));
     expect(response.status).toBe(202);
     expect(processWebhookMock).toHaveBeenCalledExactlyOnceWith({
@@ -256,7 +263,7 @@ describe("GitLab webhook route", () => {
 
   it("answers 400 for an unrecognised object kind", async () => {
     const processWebhookMock = vi.fn();
-    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
+    const route = createGitLabWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
     const response = await route(request(JSON.stringify({ object_kind: "push" }), gitlabHeaders({ "x-gitlab-event": "Push Hook" })));
     expect(response.status).toBe(400);
     expect(processWebhookMock).not.toHaveBeenCalled();
@@ -268,6 +275,7 @@ describe("GitLab webhook route", () => {
     { status: "PROCESSED", answer: 202 },
   ] as const)("answers the $status processing result with $answer", async ({ status, answer }) => {
     const route = createGitLabWebhookPostHandler({
+      checkRateLimit: () => true,
       lookupCredential: async () => webhookCredential("gitlab", secret),
       processWebhook: vi.fn().mockResolvedValue({ status }),
     });
@@ -292,6 +300,7 @@ describe("GitLab webhook route", () => {
 
   it("answers 503 and lets the instance retry when processing fails", async () => {
     const route = createGitLabWebhookPostHandler({
+      checkRateLimit: () => true,
       lookupCredential: async () => webhookCredential("gitlab", secret),
       processWebhook: vi.fn().mockRejectedValue(new Error("upstream connection refused")),
     });
@@ -320,7 +329,7 @@ describe("GitLab webhook route", () => {
     payload.project.path_with_namespace = namespace;
     const rootCause = new Error("upstream connection refused");
     const processWebhookMock = vi.fn().mockRejectedValue(rootCause);
-    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
+    const route = createGitLabWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const response = await route(request(JSON.stringify(payload), gitlabHeaders({
@@ -352,6 +361,7 @@ describe("GitLab webhook route", () => {
 
   it("encodes a terminal escape in both identifiers of the still-in-progress line", async () => {
     const route = createGitLabWebhookPostHandler({
+      checkRateLimit: () => true,
       lookupCredential: async () => webhookCredential("gitlab", secret),
       processWebhook: vi.fn().mockResolvedValue({ status: "IN_PROGRESS" }),
     });
@@ -370,6 +380,75 @@ describe("GitLab webhook route", () => {
     } finally {
       warned.mockRestore();
     }
+  });
+
+  // The GitLab twin of the GitHub receiver's burst guard (issue 852): 429 is
+  // answered from the token bucket before a header is read and before a
+  // credential is looked up. The bucket is the real limiter module's, drained
+  // through the handler itself; timestamps are explicit — no wall clock, no
+  // fake timers.
+  it("declines a burst past capacity with 429 before reading a header or a credential", async () => {
+    const bucket = createTokenBucket({
+      capacity: WEBHOOK_RATE_LIMIT_CAPACITY,
+      refillPerMinute: WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE,
+      nowMs: () => 1_000_000,
+    });
+    const lookupCredential = vi.fn(async () => webhookCredential("gitlab", secret));
+    const route = createGitLabWebhookPostHandler({
+      checkRateLimit: () => bucket.admit(),
+      lookupCredential,
+      processWebhook: vi.fn().mockResolvedValue({ status: "PROCESSED" as const }),
+    });
+
+    const burstStatuses: number[] = [];
+    for (let i = 0; i < WEBHOOK_RATE_LIMIT_CAPACITY; i += 1) {
+      burstStatuses.push((await route(headerlessRequest())).status);
+    }
+    // A headerless delivery is admitted past the limiter and refused next by
+    // the missing headers (400), so admission and refusal stay distinguishable.
+    expect(burstStatuses).toEqual(Array.from({ length: WEBHOOK_RATE_LIMIT_CAPACITY }, () => 400));
+
+    const declined = await route(headerlessRequest());
+    expect(declined.status).toBe(429);
+    expect(declined.headers.get("retry-after")).toBe("1");
+    // 429 precedes the credential lookup — nothing is spent on a declined
+    // delivery beyond the bucket answer itself.
+    expect(lookupCredential).not.toHaveBeenCalled();
+
+    // ... and it precedes the header reads: a fully-formed delivery is also
+    // declined while the bucket is empty.
+    const wellFormed = await route(request(issuePayload, gitlabHeaders()));
+    expect(wellFormed.status).toBe(429);
+    expect(lookupCredential).not.toHaveBeenCalled();
+  });
+
+  // The GitLab twin of the peak-rate replay: a sender at the observed
+  // historical peak (25 deliveries per minute over the 14 days ending
+  // 2026-10-01) must never be declined — the refill rate, one token per
+  // second, outruns it, so the bucket never drains.
+  it("admits a sender at the observed peak of 25 deliveries per minute indefinitely", async () => {
+    let nowMs = 0;
+    const bucket = createTokenBucket({
+      capacity: WEBHOOK_RATE_LIMIT_CAPACITY,
+      refillPerMinute: WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE,
+      nowMs: () => nowMs,
+    });
+    const route = createGitLabWebhookPostHandler({
+      checkRateLimit: () => bucket.admit(),
+      lookupCredential: async () => webhookCredential("gitlab", secret),
+      processWebhook: vi.fn().mockResolvedValue({ status: "PROCESSED" as const }),
+    });
+
+    const statuses: number[] = [];
+    for (let minute = 0; minute < 10; minute += 1) {
+      for (let nth = 0; nth < 25; nth += 1) {
+        nowMs = minute * 60_000 + nth * 2_000 + 500;
+        statuses.push((await route(headerlessRequest())).status);
+      }
+    }
+    // Every delivery is admitted past the limiter (400 = admitted, then
+    // refused for missing headers) — none is declined with 429.
+    expect(statuses).toEqual(Array.from({ length: 250 }, () => 400));
   });
 });
 
@@ -407,6 +486,7 @@ describe("GitLab webhook route: the shared processor and the body cap", () => {
       },
     };
     const route = createGitLabWebhookPostHandler({
+      checkRateLimit: () => true,
       lookupCredential: async () => webhookCredential("gitlab", secret),
       processWebhook: (delivery, scope) => processWebhook(dependencies, delivery, scope),
     });
@@ -422,7 +502,7 @@ describe("GitLab webhook route: the shared processor and the body cap", () => {
   it("rejects a declared oversize delivery with 413 before reading any of the body", async () => {
     const { stream, record } = trackedBodyStream(CHUNK_COUNT);
     const processWebhookMock = vi.fn();
-    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
+    const route = createGitLabWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
     const response = await route(streamRequest(stream, {
       "content-length": String(WEBHOOK_BODY_LIMIT_BYTES + 1),
     }));
@@ -434,7 +514,7 @@ describe("GitLab webhook route: the shared processor and the body cap", () => {
   it("stops reading a delivery with no Content-Length once the body crosses 25 MiB, answering 413", async () => {
     const { stream, record } = trackedBodyStream(CHUNK_COUNT);
     const processWebhookMock = vi.fn();
-    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
+    const route = createGitLabWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
     const response = await route(streamRequest(stream, {}));
     expect(response.status).toBe(413);
     expect(record.handedOutBytes).toBeGreaterThan(WEBHOOK_BODY_LIMIT_BYTES);
@@ -445,7 +525,7 @@ describe("GitLab webhook route: the shared processor and the body cap", () => {
 
   it("accepts a correctly tokened delivery at exactly the 25 MiB ceiling and dispatches it", async () => {
     const processWebhookMock = vi.fn().mockResolvedValue({ status: "PROCESSED" });
-    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
+    const route = createGitLabWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
     // JSON.parse ignores insignificant whitespace, so trailing spaces pad the
     // envelope to exactly the limit's byte length without changing its
     // meaning; the payload is ASCII, so string length equals byte length.
@@ -537,4 +617,13 @@ function streamRequest(
     // no-Content-Length case under test.
     duplex: "half",
   } as RequestInit);
+}
+
+// No headers and no body: the handler's first statement decides the whole
+// answer, so the limiter's ordering ahead of the header reads is observable —
+// an admitted delivery answers 400 here, a declined one 429.
+function headerlessRequest(): Request {
+  return new Request("https://overflow.test/api/gitlab/webhooks?hook=181a4fbb-64d1-44fd-82da-cd191613798c", {
+    method: "POST",
+  });
 }

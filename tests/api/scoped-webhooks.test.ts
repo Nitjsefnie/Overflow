@@ -35,6 +35,7 @@ describe.each(["github", "gitlab"] as const)("%s scoped webhook authentication",
     const deliveries: unknown[] = [];
     const lookups: unknown[] = [];
     const response = await factory({
+      checkRateLimit: () => true,
       lookupCredential: async (selector, expectedProvider) => {
         lookups.push([selector, expectedProvider]);
         return credential;
@@ -48,7 +49,7 @@ describe.each(["github", "gitlab"] as const)("%s scoped webhook authentication",
 
   it("passes the authenticated registration scope to processing", async () => {
     const processWebhook = vi.fn().mockResolvedValue({ status: "PROCESSED" });
-    const response = await factory({ lookupCredential: async () => credential, processWebhook })(request());
+    const response = await factory({ checkRateLimit: () => true, lookupCredential: async () => credential, processWebhook })(request());
     expect(response.status).toBe(202);
     expect(processWebhook).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ repositoryFullName: "renamed/project" }),
@@ -60,6 +61,7 @@ describe.each(["github", "gitlab"] as const)("%s scoped webhook authentication",
     "rejects malformed selector %s before lookup or processing", async (query) => {
       const accesses: string[] = [];
       const response = await factory({
+        checkRateLimit: () => true,
         lookupCredential: async () => { accesses.push("lookup"); return credential; },
         processWebhook: async () => { accesses.push("process"); return { status: "PROCESSED" as const }; },
       })(request(query));
@@ -71,6 +73,7 @@ describe.each(["github", "gitlab"] as const)("%s scoped webhook authentication",
   it("never falls back to the global credential for unknown or legacy hooks", async () => {
     const deliveries: unknown[] = [];
     const response = await factory({
+      checkRateLimit: () => true,
       lookupCredential: async () => null,
       processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; },
     })(request());
@@ -81,6 +84,7 @@ describe.each(["github", "gitlab"] as const)("%s scoped webhook authentication",
   it("sanitizes lookup and decryption failures without processing", async () => {
     const deliveries: unknown[] = [];
     const response = await factory({
+      checkRateLimit: () => true,
       lookupCredential: async () => { throw new Error("synthetic private credential details"); },
       processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; },
     })(request());
