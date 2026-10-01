@@ -443,7 +443,42 @@ describe("the git reads that decide whether the deep check runs", () => {
     if (elsewhere) await rm(elsewhere, { recursive: true, force: true });
   });
 
-  it("reports the ambient checkout, not one named by GIT_DIR", async () => {
+  /**
+   * The environment redirectors the helper's prefix sweep has to exclude, and
+   * whether each is worth a case.
+   *
+   * This is deliberately a LIST and not a single variable. A control scoped to
+   * one instance of a thing cannot see the next instance of that thing, and the
+   * helper is written against the CLASS (`key.startsWith("GIT_")`), not against
+   * `GIT_DIR`. Narrowing the sweep to `key === "GIT_DIR"` leaves this suite
+   * entirely green for as long as only `GIT_DIR` is exercised — which is exactly
+   * what happened until `GIT_COMMON_DIR` was added, and is why the two entries
+   * marked `redirects: true` are the ones carrying the weight.
+   *
+   * `GIT_COMMON_DIR` is the second member that genuinely redirects, and the one a
+   * `GIT_DIR`-only control leaves unpinned. The rest are listed so that a
+   * redirector found later is added here rather than assumed covered: an entry
+   * that cannot redirect is cheap, and one that can is a real control.
+   */
+  const REDIRECTORS = [
+    { variable: "GIT_DIR", value: () => join(elsewhere, "shallow", ".git"), redirects: true },
+    { variable: "GIT_COMMON_DIR", value: () => join(elsewhere, "shallow", ".git"), redirects: true },
+    { variable: "GIT_WORK_TREE", value: () => join(elsewhere, "shallow"), redirects: false },
+    {
+      variable: "GIT_OBJECT_DIRECTORY",
+      value: () => join(elsewhere, "shallow", ".git", "objects"),
+      redirects: false,
+    },
+    {
+      variable: "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+      value: () => join(elsewhere, "shallow", ".git", "objects"),
+      redirects: false,
+    },
+    { variable: "GIT_INDEX_FILE", value: () => join(elsewhere, "shallow", ".git", "index"), redirects: false },
+    { variable: "GIT_NAMESPACE", value: () => "some-namespace", redirects: false },
+  ] as const;
+
+  it("reports the ambient checkout, not one named by a GIT variable", async () => {
     // The ambient checkout's real answers, captured BEFORE anything is poisoned.
     // Comparing the shielded read against a value read while GIT_DIR is set
     // would compare it against the wrong repository, which is the very mistake
@@ -456,39 +491,44 @@ describe("the git reads that decide whether the deep check runs", () => {
     };
     expect(ambient.head, "the ambient checkout must have a HEAD to look for").toMatch(/^[0-9a-f]{40}$/);
 
-    const poisoned = process.env.GIT_DIR;
-    process.env.GIT_DIR = join(elsewhere, "shallow", ".git");
-    try {
-      // The unshielded read first, so the redirect is proven live rather than
-      // inert. If it ever stops answering `true`, everything below would be
-      // passing for the wrong reason, so it is asserted rather than assumed.
-      const unshielded = spawnSync("git", ["rev-parse", "--is-shallow-repository"], {
-        encoding: "utf8",
-        env: process.env,
-      });
-      expect(
-        unshielded.stdout.trim(),
-        "the redirect must actually redirect, or this test proves nothing",
-      ).toBe("true");
+    for (const { variable, value, redirects } of REDIRECTORS) {
+      const saved = process.env[variable];
+      process.env[variable] = value();
+      try {
+        const unshielded = spawnSync("git", ["rev-parse", "--is-shallow-repository"], {
+          encoding: "utf8",
+          env: process.env,
+        }).stdout.trim();
+        if (redirects) {
+          // Asserted, not assumed: a redirector that stops redirecting would
+          // leave the case below passing for the wrong reason, and a control
+          // that cannot fail is not a control.
+          expect(unshielded, `${variable} must genuinely redirect, or this case proves nothing`).toBe("true");
+        }
 
-      vi.resetModules();
-      const shielded = await import("../support/scratch-git");
-      expect(
-        shielded.isShallowCheckout(),
-        "with GIT_DIR pointing at a shallow clone, the shielded read must still answer about the " +
-          "checkout this test is running in. Answering 'shallow' here skips the deep provenance " +
-          "check on a full-depth repository, on a green run.",
-      ).toBe(ambient.shallow);
-      expect(
-        shielded.hasCommit(ambient.head),
-        "with GIT_DIR redirected, hasCommit must still find the ambient checkout's own HEAD",
-      ).toBe(true);
-    } finally {
-      if (poisoned === undefined) delete process.env.GIT_DIR;
-      else process.env.GIT_DIR = poisoned;
+        // A module reload per case, because the environment the helper uses is
+        // snapshotted at import — which is exactly why a GIT_DIR present at
+        // process start is stripped rather than honoured.
+        vi.resetModules();
+        const shielded = await import("../support/scratch-git");
+        expect(
+          shielded.isShallowCheckout(),
+          `with ${variable} pointed elsewhere, the shielded read must still answer about the checkout ` +
+            "this test is running in. Answering 'shallow' here skips the deep provenance check on a " +
+            "full-depth repository, on a green run.",
+        ).toBe(ambient.shallow);
+        expect(
+          shielded.hasCommit(ambient.head),
+          `with ${variable} redirected, hasCommit must still find the ambient checkout's own HEAD`,
+        ).toBe(true);
+      } finally {
+        if (saved === undefined) delete process.env[variable];
+        else process.env[variable] = saved;
+      }
     }
   });
 });
+
 
 /**
  * The committed baseline's own provenance — the same check, over the real
@@ -514,6 +554,21 @@ describe("the committed baseline's provenance, where the history is present", ()
 
   it.skipIf(shallow)("reproduces every residue from the source line its entry records", () => {
     const sources = new Map<string, string[]>();
+    // How many entries this run can ACTUALLY say something about, as opposed to
+    // iterating. `provenanceViolations` returns `[]` for any line — including the
+    // empty string — when a finding's residue has no identifier runs, so an entry
+    // with a pure-redaction `Match` is checked by this loop and can never fail
+    // it. That is semantically correct rather than a hole: a rule whose match IS
+    // the secret leaves nothing that could have been spliced into it, and the
+    // redaction assertions are what carry those entries.
+    //
+    // But it means the loop's length is not its coverage, and without the floor
+    // below a regeneration that moved findings toward residue-free rules would
+    // quietly reduce this check to nothing while it stayed green. The floor says
+    // how many were meaningful so a reader can see the ratio without opening the
+    // baseline; it deliberately does NOT demand that every entry be checkable,
+    // because that is not achievable and asserting it would be a false guarantee.
+    let checked = 0;
     for (const finding of findings) {
       const key = `${finding.Commit}:${finding.File}`;
       if (!sources.has(key)) {
@@ -532,6 +587,14 @@ describe("the committed baseline's provenance, where the history is present", ()
         }
       }
       const line = sources.get(key)![finding.StartLine - 1] ?? "";
+      // Counted from the finding's OWN residue, not from the verdict: a clean
+      // entry has no violations either way, so counting violations would count
+      // defects and read zero on a perfectly good baseline. An entry is
+      // meaningful to this check when its residue carries at least one
+      // identifier run for the checker to account for.
+      if ((finding.Match.replaceAll("REDACTED", "").match(/[A-Za-z0-9_]+/g) ?? []).length > 0) {
+        checked += 1;
+      }
       expect(
         provenanceViolations(finding, line),
         `${finding.Fingerprint} leaves runs around the redaction that do not appear in ` +
@@ -539,6 +602,13 @@ describe("the committed baseline's provenance, where the history is present", ()
           "not source context — it is material spliced into the baseline.",
       ).toEqual([]);
     }
+    expect(
+      checked,
+      `this run verified the provenance of ${checked} of ${findings.length} committed entries. A finding ` +
+        "whose Match is a pure redaction leaves no residue and cannot be checked this way — that is " +
+        "correct, not a gap, and the redaction assertions are what carry those entries. Zero is not " +
+        "correct, though: it means this check examined nothing and still reported green.",
+    ).toBeGreaterThan(0);
   });
 
   it.skipIf(!shallow)("corroborates the checkout's own depth against the objects it holds", () => {
