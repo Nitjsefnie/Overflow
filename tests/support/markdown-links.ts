@@ -9,10 +9,10 @@ import { dirname, resolve } from "node:path";
  * about what GitHub's slug rule is.
  */
 
-export type MarkdownLink = { line: number; target: string };
+type MarkdownLink = { line: number; target: string };
 
 /** Fenced code blocks are not prose: a `[..](..)` inside one is not a link. */
-export function withoutFencedCode(markdown: string): string {
+function withoutFencedCode(markdown: string): string {
   const kept: string[] = [];
   let fenced = false;
   for (const line of markdown.split("\n")) {
@@ -56,11 +56,20 @@ function linkDefinitions(markdown: string): Map<string, string> {
  * because a use whose definition lives in another section is still a use —
  * `unresolvedLinks` does exactly that by reading `document` off disk.
  *
- * This is a recogniser, not a CommonMark parser. It reads inline links on one
- * line at a time and does not model constructs that span them, so a link split
- * across a line break, or nested inside an image's alt text, is not seen. It
- * claims only the spellings above, and a caller must not read the name as
- * stronger than that.
+ * This is a recogniser, not a CommonMark parser, and it is wrong in BOTH
+ * directions. Naming both matters more than fixing either: a false green hides
+ * a dead link, and a false red is the one a reader cannot reconcile, because
+ * the document demonstrably contains no broken link.
+ *
+ * - It UNDER-reports. The link-text pattern stops at the first `]`, so
+ *   bracketed link text defeats it: `See [a [b] c](does-not-exist.md)` yields
+ *   nothing, and a dead link passes silently.
+ * - It OVER-reports. The target pattern stops at the first `)`, so a link
+ *   whose target contains parentheses is mis-parsed: `[x](file(1).md)` reads
+ *   as target `file(1` and is reported as a dead path.
+ *
+ * It claims only the spellings listed above, and a caller must not read the
+ * name as stronger than that.
  */
 export function relativeLinks(
   markdown: string,
