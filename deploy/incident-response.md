@@ -371,15 +371,29 @@ The three cases are different incidents, not one with three names:
   ledger keeps reading and pricing, and merges, labelling and every settings
   change stop until access returns. Nothing already merged or already
   labelled is undone by the platform action itself.
-- **Under an attacker's control.** Treat it as the compromise it is: contain
-  the repository and the App first, following [Contain](#contain), and use
-  this section for the order of everything after that. An attacker holding the
-  account can merge, label, administer branch protection and administer the
-  App for as long as they hold it, and noticing that requires someone outside
-  the account.
+- **Under an attacker's control.** Treat it as the compromise it is, and read
+  the paragraph below before acting: [Contain](#contain) is service-side and
+  cannot reach the account. An attacker holding the account can merge, label,
+  administer branch protection and administer the App for as long as they hold
+  it, and noticing that requires someone outside the account.
 - **Simply absent, nothing wrong yet.** No containment is warranted. The steps
   below still apply from the moment access is genuinely lost, because nothing
   in them is cheap to reverse afterwards.
+
+**Account-side containment is not in this runbook, and in the compromise case
+it is the urgent action.** [Contain](#contain) operates on the running service
+and its database: its steps' operands are `api_tokens`, `users.role` and
+`AUTH_SECRET` in `/etc/overflow`, so they revoke a database-backed API token,
+demote a moderator and invalidate Overflow sessions. None of those is a GitHub
+session, a personal access token, an OAuth authorization, or the App's
+installation and key. What reaches those is GitHub's own account-security
+surface: revoke the account's active sessions, tokens and OAuth authorizations,
+and deal with the App installation there. Nothing in this repository performs
+it and this runbook does not describe it, so it is done by whoever notices the
+compromise first, through whatever route they hold, and no step below is a
+substitute for it. Repository administration is not that surface either: a
+backup admin collaborator administers the repository and the App, and neither
+reaches the account holder's sessions, tokens or recovery contacts.
 
 What keeps running without the account is the instance half of
 [OPERATING.md](../OPERATING.md#governance-single-maintainer-operation): the
@@ -411,7 +425,7 @@ See [OPERATING.md](../OPERATING.md#required-checks-relay) for its operations
 and [deploy/README.md](README.md) section 10 for why the required contexts are
 pinned to that App at all.
 
-**Two limits on that claim, because the honest version is the useful one.**
+**Three limits on that claim, because the honest version is the useful one.**
 The key material and the App itself are different things: a private key whose
 owner record no longer exists mints nothing, and nothing in this repository
 records what GitHub does to an App when its owner's account is deleted. And
@@ -420,7 +434,17 @@ traversable `/etc/overflow` on a relay host, and that an untraversable one
 fails the required checks closed, ties the host file to the required-checks
 path, while the relay workflow reads the Actions environment secret. Whether
 those are one PEM or two copies is not determinable from this repository;
-treat them as two locations to check rather than one.
+treat them as two locations to check rather than one. The third is on the relay
+sentence itself: the job runs under the `overflow-ledger` environment, and a
+GitHub environment can carry required reviewers. If that environment gates runs
+on an approving reviewer, every relay run waits for a human and the personal
+account is back inside the loop — the exact failure the sentence denies. This
+repository does not record that environment's protection rules: `overflow-ledger`
+appears in the relay workflow, in [OPERATING.md](../OPERATING.md#required-checks-relay)
+and in this section, and nowhere else, so nothing here can tell you whether a
+reviewer gate exists. Do not assume the relay fires unattended; read the
+environment's settings before relying on it, and read them from an account that
+survived step 8.
 
 **A backup admin collaborator, if one is ever invited.** Today none is
 invited, and this runbook does not create one. If the maintainer later invites
@@ -450,12 +474,16 @@ action, and as of this writing it has not been done.
    Expect `active` and HTTP `200`. A non-`200` or `inactive` is a host
    problem, not an account problem, and is recovered by the rest of
    [Recover](#recover) regardless of the account's state.
-3. For a compromised account, contain it before recovering anything: with the
-   attacker still holding the account, every later step can be undone by them
-   afterwards. Nothing on the deployment host is answerable to the account, so
-   the host itself needs no action for this case.
-4. Establish what is actually blocked by observation rather than assumption,
-   using an authenticated reader — a maintainer token, or a backup admin's:
+3. For a compromised account, do the account-side containment above first. It
+   is the only action that stops the attacker, and it is not one this runbook
+   can perform, so it does not wait on anything below. Then contain the service
+   side through [Contain](#contain): revoking database-backed API tokens,
+   demoting moderators and invalidating sessions is still worth doing, because
+   a GitHub sign-in the attacker holds mints new sessions and new tokens — but
+   it does not reach the account, and on its own it stops nothing at GitHub.
+4. Best effort, and only if some access to the repository remains — a
+   maintainer's token, or a backup admin's — establish what is actually blocked
+   by observation rather than assumption:
 
    ```bash
    gh api repos/Nitjsefnie/Overflow/collaborators \
@@ -467,19 +495,27 @@ action, and as of this writing it has not been done.
    Both are read-only. The first prints the number of admin collaborators, the
    second prints the required contexts and whether administrators are enforced.
    Neither is answerable without an account holding permission on the
-   repository, which is the definition of the loss. A non-200 or a 404 from
-   either means that token has no permission, not that the setting is absent.
-5. While any access to the repository remains, record the App's key locations
-   and the host file's mode without copying any key material into the incident
-   record:
+   repository, so in the loss case this step cannot be performed and its
+   omission is expected rather than a fault to chase — that is the case the
+   section is written for. A non-200 or a 404 from either means that token has
+   no permission, not that the setting is absent. Run both again in step 8.
+5. Record where the App's key material lives, without copying any of it into
+   the incident record. The host half needs only root on the deployment host
+   and works with no repository access at all:
 
    ```bash
    ls -l /etc/overflow/github-app/private-key.pem
    ```
 
-   The path is absent if the host runs the OAuth-only posture. Record its
-   presence or absence and its mode; never `cat` it, never paste its contents,
-   and never record the environment secret's value.
+   Record the path's presence, its owner, its group and its mode; the file has
+   to stay readable by the account the service runs as, which is why
+   `/etc/overflow` is left traversable on a relay host. The path is absent if
+   the host runs the OAuth-only posture, and that absence is itself the record.
+   The repository half — the `LEDGER_APP_KEY` secret on the `overflow-ledger`
+   environment — is observable only by an account that can read the
+   repository's settings, so record that you could not read it when you could
+   not. Never `cat` the file, never paste its contents, and never record the
+   secret's value.
 6. Independent of the account and therefore still running throughout: the
    service, the webhook receivers, GitHub sign-in, the reconciliation worker
    and automatic settlement pricing. No step in 1 to 5 stops any of them, and
