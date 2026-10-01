@@ -54,8 +54,13 @@ and invalidates the previous one in the same step. Use regeneration if you lose
 the token or it leaks, and replace the credential in your scripts. Keep the token
 private; do not commit it.
 
-A token expires 90 days after it is generated. Regenerating issues a new token
-with a fresh 90-day lifetime; nothing extends an existing token. The panel shows
+A token is issued with a 30-minute delivery window rather than a lifetime: the
+plaintext exists in exactly one response, so a token nobody has ever presented is
+one whose value may never have reached anybody. The first request that
+authenticates with the token's value confirms it and extends it to 90 days
+measured from that request, so the 90 days run from first use, not from
+generation. A token nobody ever presents stops authenticating after 30 minutes.
+Regenerating issues a new token with a fresh delivery window. The panel shows
 when the current token expires, and marks it once it has expired. An expired
 token is refused exactly like one Overflow never issued: HTTP `401` with code
 `UNAUTHENTICATED` and message `The supplied API token was not accepted.` on every
@@ -71,8 +76,12 @@ the session cookie is the only credential, the endpoint is same-origin only: the
 request must carry an `Origin` header equal to the origin of `APP_URL` (its
 scheme, host and port; any path is ignored), and it must either send no body or
 declare `Content-Type: application/json`. Success is HTTP `201` with
-`{ "token": "<new-token>", "createdAt": "<ISO-8601 timestamp>", "expiresAt": "<ISO-8601 timestamp>" }`,
-where `expiresAt` is 90 days after `createdAt`.
+`{ "token": "<new-token>", "createdAt": "<ISO-8601 timestamp>", "expiresAt": "<ISO-8601 timestamp>", "confirmedAt": null }`,
+where `expiresAt` is 30 minutes after `createdAt` and `confirmedAt` is the instant
+a request first authenticated with the token's value, or `null` while nobody has.
+It is always `null` in this response — a mint is unconfirmed at the moment it is
+handed over — so a client that reads it can tell a delivery window apart from a
+started lifetime instead of treating `expiresAt` as a lifetime.
 Failures use `{ "error": { "code": "...", "message": "..." } }`:
 
 | HTTP | Code | Exact message | Meaning / next step |
@@ -333,7 +342,7 @@ status and code, then use the message to distinguish causes:
 | 400 | `INVALID_INPUT` | `Submit one GitHub repository as owner/name or a canonical GitHub URL.` | Correct the repository reference. |
 | 400 | `INVALID_INPUT` | `The repository is missing the difficulty labels <labels>. Create them on GitHub, then register again.` | The repository's existing labels do not include every label the submitted catalog names; `<labels>` is the backticked list of the missing ones. Create those labels on GitHub, then register again. |
 | 400 | `INVALID_INPUT` | Catalog validation message listed below. | Correct the catalog names, labels, or points. |
-| 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid token format or is unknown (including a revoked token, and an expired one — tokens live 90 days and nothing extends them, so an expired token is refused exactly like an unknown one). Check the copied token or generate a replacement in the browser. |
+| 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid token format or is unknown (including a revoked token, and an expired one — an unused token whose 30-minute delivery window closed, or a confirmed token past the 90 days its first use started, so an expired token is refused exactly like an unknown one). Check the copied token or generate a replacement in the browser. |
 | 401 | `UNAUTHENTICATED` | `Sign in is required.` | No recognized bearer credential and no signed-in session. Supply the bearer header or sign in. |
 | 401 | `GITHUB_CREDENTIALS` | `GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to <step>. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry registration.` | GitHub rejected the stored GitHub authorization for the account (expired or revoked); the account's Overflow session is fine. Refresh the authorization by signing out and back in, then retry the registration. `<step>` is `read its granted permissions` when the rejection came from the granted-scope check that precedes every GitHub registration, otherwise the lookup, label-read, or webhook-create step that died. |
 | 403 | `FORBIDDEN` | `The request origin is not allowed.` | A browser (session-cookie) request carried no `Origin` header or one that is not the origin of `APP_URL`. A bearer-token request never reaches this: its origin is not consulted. |
@@ -602,7 +611,7 @@ code, then use the message to distinguish causes:
 
 | HTTP | Code | Exact message | Meaning / next step |
 | --- | --- | --- | --- |
-| 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid token format or is unknown (including a revoked token, and an expired one — tokens live 90 days and nothing extends them, so an expired token is refused exactly like an unknown one). Check the copied token or generate a replacement in the browser. |
+| 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid token format or is unknown (including a revoked token, and an expired one — an unused token whose 30-minute delivery window closed, or a confirmed token past the 90 days its first use started, so an expired token is refused exactly like an unknown one). Check the copied token or generate a replacement in the browser. |
 | 401 | `UNAUTHENTICATED` | `Sign in is required.` | No recognized bearer credential and no signed-in session. Supply the bearer header or sign in. |
 | 403 | `FORBIDDEN` | `A member account is required.` | The credential resolved to an account that no longer exists: the member gate re-reads the account's role from the database at request time, so a session or token outliving its account is refused. |
 | 404 | `NOT_FOUND` | `Settlement proof is not available.` | (`GET /api/settlements/<id>`) No settlement with this id, or the caller is not a party to it. Both are the same refusal. |
