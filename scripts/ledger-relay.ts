@@ -446,6 +446,12 @@ async function findOpenPullRequestAtHead(
  * Condition (e): whether any run of the SAME workflow at the head SHA is
  * queued or in_progress. The runs listing is filtered client-side for the
  * workflow's path and the live statuses.
+ *
+ * A malformed listing reads as "no live run" rather than throwing — the
+ * deliberate asymmetry with findOpenPullRequestAtHead, which throws: the
+ * failure direction is bounded by GitHub's own rerun guard, which refuses a
+ * queued or in_progress run with a 4xx that apiCall throws, so the worst case
+ * is a visible red relay job, never a duplicate dispatch.
  */
 async function hasLiveRunOfPath(
   deps: RelayDeps,
@@ -701,6 +707,30 @@ function assertShape(value: string, shape: RegExp, message: string): void {
   }
 }
 
+/**
+ * The relay's human-visible success signal, one log line at a time. Pure, so
+ * a synthetic result can drive it: the rerun-heal line is the only signal an
+ * operator gets that a cancelled run was re-dispatched, so it is pinned by
+ * tests rather than living undrivable in main().
+ */
+export function renderRelayResult(result: RelayResult): string[] {
+  if (result.posted.length === 0) {
+    return [
+      "[ledger-relay] nothing to relay: no required context is pinned to the triggering run's workflow",
+    ];
+  }
+  const lines = result.decisions.map(
+    (decision) => `[ledger-relay] ${decision.context}: ${decision.conclusion ?? decision.status}`,
+  );
+  if (result.rerunDispatched) {
+    lines.push(
+      "[ledger-relay] rerun-heal: the cancelled run was re-dispatched; " +
+        "its completion event will mirror the real conclusion",
+    );
+  }
+  return lines;
+}
+
 function main(): void {
   runRelay({
     env: process.env,
@@ -708,20 +738,8 @@ function main(): void {
     delayFn: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   }).then(
     (result) => {
-      if (result.posted.length === 0) {
-        console.log(
-          "[ledger-relay] nothing to relay: no required context is pinned to the triggering run's workflow",
-        );
-        return;
-      }
-      for (const decision of result.decisions) {
-        console.log(`[ledger-relay] ${decision.context}: ${decision.conclusion ?? decision.status}`);
-      }
-      if (result.rerunDispatched) {
-        console.log(
-          "[ledger-relay] rerun-heal: the cancelled run was re-dispatched; " +
-            "its completion event will mirror the real conclusion",
-        );
+      for (const line of renderRelayResult(result)) {
+        console.log(line);
       }
     },
     (error: unknown) => {
