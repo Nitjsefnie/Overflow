@@ -1548,5 +1548,46 @@ describe("runRelay", () => {
       );
       expect(delay.delays).toEqual([1000, 2000]);
     });
+
+    it("still runs the rerun-heal when the sweep dies, and still rejects", async () => {
+      // The sweep and the heal are independent duties that both follow the
+      // mirror. Awaiting the sweep before the heal made the heal hostage to a
+      // much larger failure surface: every relay start issues a repository-wide
+      // listing plus up to SWEEP_RUN_LIMIT check-runs GETs, where the heal
+      // issues at most three queries on a rare path. So a dead sweep must cost
+      // the heal nothing — and must still cost the job its nonzero exit, or a
+      // sweep that quietly stopped running would be indistinguishable from a
+      // relay with nothing to do, which is the failure this issue is about.
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([]),
+        { status: 201, body: { id: 1 } },
+        // The sweep's runs listing exhausts its retry and throws…
+        { status: 500, body: { message: "boom" } },
+        { status: 500, body: { message: "boom" } },
+        { status: 500, body: { message: "boom" } },
+        // …and the heal's own queries still run afterwards.
+        pullsListing([pullEntry()]),
+        runsListing([]),
+        { status: 202, body: undefined },
+      ]);
+      const delay = makeDelay();
+      await expect(
+        runRelay({
+          env: cancelledPrEnv(),
+          fetchFn: fetchStub.fn,
+          delayFn: delay.fn,
+          readPinMap: async () => PIN_MAP,
+        }),
+      ).rejects.toThrow(/workflow-run listing/);
+
+      // The heal ran, and it dispatched the rerun.
+      expect(requestTo(fetchStub.requests, PULLS_URL)).toBeDefined();
+      expect(requestTo(fetchStub.requests, RERUN_URL)).toBeDefined();
+      expect(authHeaderOf(requestTo(fetchStub.requests, RERUN_URL))).toBe("Bearer rerun-token");
+      // The sweep ran exactly once, so it spent its own bounded retry and no
+      // more: three 500s, and the heal added none.
+      expect(delay.delays).toEqual([1000, 2000]);
+    });
   });
 });

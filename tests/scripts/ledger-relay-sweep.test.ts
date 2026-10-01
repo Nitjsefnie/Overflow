@@ -230,6 +230,16 @@ function fakeApi(handlers: Record<string, unknown>): {
   return { api, requests };
 }
 
+/**
+ * One App-owned check-run as the listing reports it. Every fixture goes through
+ * this so that `status` cannot be forgotten on the entries that are meant to
+ * count as attestations — the sweep skips PENDING ones, so a fixture without a
+ * status silently means "concluded" for the wrong reason.
+ */
+function appCheckRun(name: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+  return { name, status: "completed", app: { id: Number(APP_ID) }, ...over };
+}
+
 const RUNS_URL = `https://api.github.com/repos/${REPO}/actions/runs?per_page=100`;
 const checkRunsAt = (sha: string) =>
   `https://api.github.com/repos/${REPO}/commits/${sha}/check-runs?app_id=${APP_ID}&filter=latest&per_page=100`;
@@ -251,6 +261,7 @@ const deps = (api: SweepApi, over: Record<string, unknown> = {}) => ({
   api,
   decide: decideContexts,
   pinMap: PIN_MAP,
+  apiRoot: "https://api.github.com",
   repo: REPO,
   appId: APP_ID,
   triggerRunId: "9001",
@@ -268,7 +279,7 @@ describe("sweepOrphans", () => {
   it("relays the context no App check-run exists for, against the candidate's own head SHA and its own run URL", async () => {
     const { api, requests } = fakeApi({
       [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
-      [checkRunsAt(HEAD_SHA)]: { check_runs: [{ name: "verify", app: { id: Number(APP_ID) } }] },
+      [checkRunsAt(HEAD_SHA)]: { check_runs: [appCheckRun("verify")] },
       [jobsUrl("9002")]: {
         jobs: [{ name: "actionlint", run_attempt: 1, status: "completed", conclusion: "success" }],
       },
@@ -351,7 +362,7 @@ describe("sweepOrphans", () => {
     const { api, requests } = fakeApi({
       [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
       [checkRunsAt(HEAD_SHA)]: {
-        check_runs: [{ name: "actionlint", app: { id: Number(APP_ID) } }],
+        check_runs: [appCheckRun("actionlint")],
       },
     });
     const outcome = await sweepOrphans(deps(api));
@@ -360,6 +371,80 @@ describe("sweepOrphans", () => {
       RUNS_URL,
       checkRunsAt(HEAD_SHA),
     ]);
+  });
+
+  it("still relays the real conclusion when the App holds only a PENDING check-run for that context", async () => {
+    // The defect this pins, end to end across two sweeps. A completed
+    // producer run whose jobs listing reports an unfinished job is decided as
+    // PENDING, and the sweep posts that pending check-run. On the next relay
+    // start the same run is honestly completed, so the sweep must post the
+    // real conclusion — but if it counted its own pending placeholder as an
+    // attestation it would relay nothing, and branch protection would wait
+    // forever on a check nothing ever completes. That is the same failure this
+    // issue exists to prevent, reintroduced through the sweep's own output.
+    const pending = { check_runs: [appCheckRun("actionlint", { status: "queued" })] };
+    const jobsPending = {
+      jobs: [{ name: "actionlint", run_attempt: 1, status: "queued", conclusion: null }],
+    };
+    const jobsDone = {
+      jobs: [{ name: "actionlint", run_attempt: 1, status: "completed", conclusion: "success" }],
+    };
+
+    // Sweep #1: nothing attested, the job has not finished. Posts pending.
+    const first = fakeApi({
+      [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
+      [checkRunsAt(HEAD_SHA)]: { check_runs: [] },
+      [jobsUrl("9002")]: jobsPending,
+    });
+    const firstOutcome = await sweepOrphans(deps(first.api));
+    expect(firstOutcome.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
+    expect(first.requests.at(-1)?.body).toMatchObject({
+      name: "actionlint",
+      status: "queued",
+    });
+    expect(Object.hasOwn(first.requests.at(-1)?.body as object, "conclusion")).toBe(false);
+
+    // Sweep #2: the App now holds only that pending placeholder, and the job
+    // has concluded. The placeholder must not be read as an attestation.
+    const second = fakeApi({
+      [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
+      [checkRunsAt(HEAD_SHA)]: pending,
+      [jobsUrl("9002")]: jobsDone,
+    });
+    const secondOutcome = await sweepOrphans(deps(second.api));
+    expect(secondOutcome.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
+    expect(second.requests.at(-1)?.body).toMatchObject({
+      name: "actionlint",
+      status: "completed",
+      conclusion: "success",
+    });
+  });
+
+  it("reads an in_progress App check-run as a placeholder too, not an attestation", async () => {
+    const { api, requests } = fakeApi({
+      [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
+      [checkRunsAt(HEAD_SHA)]: {
+        check_runs: [appCheckRun("actionlint", { status: "in_progress" })],
+      },
+      [jobsUrl("9002")]: { jobs: [] },
+    });
+    const outcome = await sweepOrphans(deps(api));
+    expect(outcome.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
+    expect(requests.at(-1)?.body).toMatchObject({ name: "actionlint", conclusion: "success" });
+  });
+
+  it("still skips a candidate whose contexts hold a CONCLUDED App check-run", async () => {
+    // The control against over-correcting. The pending-status fix must not
+    // degrade into "re-post everything": a concluded check-run is an
+    // attestation and stays one, so this case relays nothing and never reads
+    // the candidate's jobs.
+    const { api, requests } = fakeApi({
+      [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
+      [checkRunsAt(HEAD_SHA)]: { check_runs: [appCheckRun("actionlint")] },
+    });
+    const outcome = await sweepOrphans(deps(api));
+    expect(outcome).toEqual({ examined: 1, relayed: [] });
+    expect(requests.map((request) => request.url)).toEqual([RUNS_URL, checkRunsAt(HEAD_SHA)]);
   });
 
   it("counts only the App's own check-runs as evidence, whatever else is at the commit", async () => {
@@ -371,9 +456,9 @@ describe("sweepOrphans", () => {
       [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
       [checkRunsAt(HEAD_SHA)]: {
         check_runs: [
-          { name: "actionlint", app: { id: 15368 } },
-          { name: "actionlint" },
-          { name: "other", app: { id: Number(APP_ID) } },
+          { name: "actionlint", status: "completed", app: { id: 15368 } },
+          { name: "actionlint", status: "completed" },
+          { name: "other", status: "completed", app: { id: Number(APP_ID) } },
           null,
         ],
       },
