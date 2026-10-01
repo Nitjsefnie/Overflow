@@ -13,7 +13,7 @@ import type {
   GitHubWebhook,
   GitHubWebhookConfiguration,
 } from "@/lib/github/types";
-import { GitLabApiError, responseJsonArray } from "@/lib/gitlab/api-error";
+import { GitLabApiError, responseJson, responseJsonArray } from "@/lib/gitlab/api-error";
 import { CollectionWalkBound } from "@/lib/gitlab/collection-walk-bound";
 import { gitlabApiFetch } from "@/lib/security/gitlab-api-fetch";
 
@@ -157,17 +157,19 @@ export class GitLabGateway {
   }
 
   public async getRepository(repository: GitHubRepositoryReference): Promise<GitHubRepository> {
-    const response = await this.request(`/projects/${segment(`${repository.owner}/${repository.name}`)}`);
-    return toGitHubRepository(await responseJson<GitLabProject>(response));
+    const path = `/projects/${segment(`${repository.owner}/${repository.name}`)}`;
+    const response = await this.request(path);
+    return toGitHubRepository(await responseJson<GitLabProject>(response, path));
   }
 
   public async getRepositoryById(gitlabProjectId: number): Promise<GitHubRepository | null> {
     if (!Number.isSafeInteger(gitlabProjectId) || gitlabProjectId <= 0) {
       throw new Error("GitLab project id must be a positive safe integer.");
     }
+    const path = `/projects/${gitlabProjectId}`;
     let response: GitLabRestResponse;
     try {
-      response = await this.request(`/projects/${gitlabProjectId}`);
+      response = await this.request(path);
     } catch (error) {
       // Only 404 answers "this id is unreachable". Every other failure is an
       // upstream problem, and reading one as a deleted project would retire a
@@ -177,7 +179,7 @@ export class GitLabGateway {
       }
       throw error;
     }
-    return toGitHubRepository(await responseJson<GitLabProject>(response));
+    return toGitHubRepository(await responseJson<GitLabProject>(response, path));
   }
 
   public async listIssues(
@@ -223,18 +225,17 @@ export class GitLabGateway {
   }
 
   public async getIssue(repository: GitHubRepositoryReference, subject: GitHubSubject): Promise<GitHubIssue | null> {
+    const path = `/projects/${segment(`${repository.owner}/${repository.name}`)}/issues/${subject.number}`;
     let response: GitLabRestResponse;
     try {
-      response = await this.request(
-        `/projects/${segment(`${repository.owner}/${repository.name}`)}/issues/${subject.number}`,
-      );
+      response = await this.request(path);
     } catch (error) {
       if (error instanceof GitLabApiError && error.status === 404) {
         return null;
       }
       throw error;
     }
-    const object = await responseJson<GitLabIssueObject>(response);
+    const object = await responseJson<GitLabIssueObject>(response, path);
     if (object.id !== subject.id) {
       throw new Error("GitLab issue identity did not match the dirty subject.");
     }
@@ -362,10 +363,9 @@ export class GitLabGateway {
   }
 
   public async getPullRequest(repository: GitHubRepositoryReference, mergeRequestIid: number): Promise<GitLabMergeRequest> {
-    const response = await this.request(
-      `/projects/${segment(`${repository.owner}/${repository.name}`)}/merge_requests/${mergeRequestIid}`,
-    );
-    const mergeRequest = await responseJson<GitLabMergeRequestObject>(response);
+    const path = `/projects/${segment(`${repository.owner}/${repository.name}`)}/merge_requests/${mergeRequestIid}`;
+    const response = await this.request(path);
+    const mergeRequest = await responseJson<GitLabMergeRequestObject>(response, path);
     return this.withFinalCommitAt(repository, mergeRequestIid, mergeRequest);
   }
 
@@ -495,25 +495,23 @@ export class GitLabGateway {
     repository: GitHubRepositoryReference,
     configuration: GitHubWebhookConfiguration,
   ): Promise<GitHubWebhook> {
-    const response = await this.request(
-      `/projects/${segment(`${repository.owner}/${repository.name}`)}/hooks`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          url: configuration.callbackUrl,
-          token: configuration.secret,
-          // The events the GitHub side ensures, in GitLab's flag vocabulary.
-          // GitLab declares `issues_events`; an undeclared `issue_events` is
-          // dropped and the hook is created with the flag at its default.
-          issues_events: true,
-          merge_requests_events: true,
-          // Deliveries are event-scoped; a push would be noise.
-          push_events: false,
-        }),
-      },
-    );
-    const payload = await responseJson<{ id: number }>(response);
+    const path = `/projects/${segment(`${repository.owner}/${repository.name}`)}/hooks`;
+    const response = await this.request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        url: configuration.callbackUrl,
+        token: configuration.secret,
+        // The events the GitHub side ensures, in GitLab's flag vocabulary.
+        // GitLab declares `issues_events`; an undeclared `issue_events` is
+        // dropped and the hook is created with the flag at its default.
+        issues_events: true,
+        merge_requests_events: true,
+        // Deliveries are event-scoped; a push would be noise.
+        push_events: false,
+      }),
+    });
+    const payload = await responseJson<{ id: number }>(response, path);
     return { id: payload.id };
   }
 
@@ -531,14 +529,14 @@ export class GitLabGateway {
   ): Promise<void> {
     try {
       const path = `/projects/${segment(`${repository.owner}/${repository.name}`)}/hooks/${webhookId}`;
-      const before = await responseJson<GitLabHookObject>(await this.request(path));
+      const before = await responseJson<GitLabHookObject>(await this.request(path), path);
       const subscriptions = Object.fromEntries(Object.entries(before)
         .filter(([key, value]) => key.endsWith("_events") && key !== "issues_events" && typeof value === "boolean"));
       const after = await responseJson<GitLabHookObject>(await this.request(path, {
         method: "PUT", headers: { "content-type": "application/json" },
         body: JSON.stringify({ ...subscriptions, issues_events: true, merge_requests_events: true,
           url: configuration.callbackUrl, token: configuration.secret }),
-      }));
+      }), path);
       if (before.id !== webhookId || after.id !== webhookId || after.url !== configuration.callbackUrl
         || after.issues_events !== true || after.merge_requests_events !== true
         || Object.entries(subscriptions).some(([key, value]) => value === true && (after as unknown as Record<string, unknown>)[key] !== true)) {
@@ -562,7 +560,7 @@ export class GitLabGateway {
       throw new Error("Existing webhook secret must be configured.");
     }
     const path = `/projects/${segment(`${repository.owner}/${repository.name}`)}/hooks/${webhookId}`;
-    const hook = await responseJson<GitLabHookObject>(await this.request(path));
+    const hook = await responseJson<GitLabHookObject>(await this.request(path), path);
     if (hook.issues_events === true && hook.merge_requests_events === true) return;
     await this.request(path, {
       method: "PUT",
@@ -778,8 +776,4 @@ function toGitLabMergeRequest(object: GitLabMergeRequestObject): GitLabMergeRequ
     sourceSha: object.sha,
     squashCommitSha: object.squash_commit_sha,
   };
-}
-
-async function responseJson<T>(response: GitLabRestResponse): Promise<T> {
-  return JSON.parse(response.body) as T;
 }
