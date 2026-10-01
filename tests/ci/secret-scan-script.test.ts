@@ -3,8 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { commitFiles, git } from "../support/scratch-git";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { commitFiles, git, hasCommit, isShallowCheckout, scratchGitEnv, showFileLines } from "../support/scratch-git";
 
 /**
  * Two contracts for issue 900's history scan, and an explicit statement of what
@@ -84,30 +84,19 @@ export function provenanceViolations(finding: Pick<Finding, "Match">, sourceLine
 }
 
 /**
- * Whether THIS CHECKOUT is a shallow clone.
+ * The git reads this suite makes about the checkout it is running in all come
+ * from `tests/support/scratch-git.ts`, which strips every inherited `GIT_*`
+ * variable before invoking git.
  *
- * The question the provenance check below has to ask is about the environment,
- * not about the file under test: "does this checkout have the history it is
- * being asked to read?" Asking it of the baseline instead is how the deep check
- * ended up able to switch itself off — see the companion test's comment.
- *
- * `git rev-parse --is-shallow-repository` is git's own answer and is exactly the
- * condition `.github/workflows/ci.yml` creates when it checks out at
- * `actions/checkout`'s default depth of 1. Anything else this suite derived
- * from the baseline's contents is a property of the thing being tested.
+ * That is not tidiness. The predicate below decides whether the deep provenance
+ * check RUNS, and it used to be a `spawnSync` that inherited the environment:
+ * with `GIT_DIR` pointed at a shallow clone, the predicate and its corroborator
+ * both answered about THAT repository, agreed with each other, and the deep
+ * check skipped on a fully green run in a full-depth checkout. Two witnesses
+ * fed the same source are not independent witnesses — the companion checks
+ * consistency, not correctness, and cannot object when both are consistently
+ * wrong. Stripping the selectors is what makes it an independent one.
  */
-function isShallowCheckout(): boolean {
-  const result = spawnSync("git", ["rev-parse", "--is-shallow-repository"], { encoding: "utf8" });
-  // A git that cannot answer is not a shallow repository as far as this suite is
-  // concerned, so the deep check runs and reports the real problem rather than
-  // skipping itself on the strength of a failed query.
-  return result.status === 0 && result.stdout.trim() === "true";
-}
-
-/** True when this checkout actually carries the commit the finding names. */
-function hasCommit(commit: string): boolean {
-  return spawnSync("git", ["cat-file", "-e", `${commit}^{commit}`], { encoding: "utf8" }).status === 0;
-}
 
 describe(".github/gitleaks-baseline.json", () => {
   let findings: Finding[];
@@ -416,6 +405,92 @@ describe("the provenance check, against a repository this suite builds", () => {
 });
 
 /**
+ * The two git reads that decide whether the deep check runs cannot be steered
+ * from the environment, and this is the executable form of that claim.
+ *
+ * The hole it closes was measured on the previous commit of this file:
+ * `GIT_DIR=<a shallow clone>/.git` in a FULL-DEPTH checkout made
+ * `isShallowCheckout` answer "shallow" and made `hasCommit` consult the same
+ * wrong repository, so the two agreed, the deep provenance check skipped, and
+ * the run was entirely green. The companion test could not object: it checks
+ * consistency, and both witnesses were consistently wrong.
+ *
+ * So the test builds a shallow clone to point at, poisons the environment with
+ * it, and reloads the support module — necessary because the environment it uses
+ * is snapshotted at import, which is exactly why a `GIT_DIR` present at process
+ * start is stripped rather than honoured. It then asserts both directions: the
+ * shielded reads still report the AMBIENT checkout, and an unshielded read over
+ * the same environment demonstrably does not.
+ */
+describe("the git reads that decide whether the deep check runs", () => {
+  let elsewhere = "";
+
+  beforeAll(async () => {
+    elsewhere = await mkdtemp(join(tmpdir(), "gitleaks-redirect-"));
+    const repo = join(elsewhere, "shallow");
+    await mkdir(repo, { recursive: true });
+    // A real repository with real commits, so `rev-parse --is-shallow-repository`
+    // can only answer `true` about it if git is really being pointed there.
+    git(repo, "init", "--quiet", "--initial-branch=main");
+    await commitFiles(repo, { "README.md": "# somewhere else\n" }, "root");
+    // Make it genuinely shallow, so the redirect is detectable rather than a
+    // no-op: a full repository would answer `false` to the same query.
+    const marker = join(repo, ".git", "shallow");
+    await writeFile(marker, `${git(repo, "rev-parse", "HEAD")}\n`, "utf8");
+  });
+
+  afterAll(async () => {
+    if (elsewhere) await rm(elsewhere, { recursive: true, force: true });
+  });
+
+  it("reports the ambient checkout, not one named by GIT_DIR", async () => {
+    // The ambient checkout's real answers, captured BEFORE anything is poisoned.
+    // Comparing the shielded read against a value read while GIT_DIR is set
+    // would compare it against the wrong repository, which is the very mistake
+    // this test exists to catch. The HEAD read carries `env: scratchGitEnv` too,
+    // so it is the ambient checkout's HEAD even for a developer who already runs
+    // with a GIT_DIR exported.
+    const ambient = {
+      shallow: isShallowCheckout(),
+      head: spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", env: scratchGitEnv }).stdout.trim(),
+    };
+    expect(ambient.head, "the ambient checkout must have a HEAD to look for").toMatch(/^[0-9a-f]{40}$/);
+
+    const poisoned = process.env.GIT_DIR;
+    process.env.GIT_DIR = join(elsewhere, "shallow", ".git");
+    try {
+      // The unshielded read first, so the redirect is proven live rather than
+      // inert. If it ever stops answering `true`, everything below would be
+      // passing for the wrong reason, so it is asserted rather than assumed.
+      const unshielded = spawnSync("git", ["rev-parse", "--is-shallow-repository"], {
+        encoding: "utf8",
+        env: process.env,
+      });
+      expect(
+        unshielded.stdout.trim(),
+        "the redirect must actually redirect, or this test proves nothing",
+      ).toBe("true");
+
+      vi.resetModules();
+      const shielded = await import("../support/scratch-git");
+      expect(
+        shielded.isShallowCheckout(),
+        "with GIT_DIR pointing at a shallow clone, the shielded read must still answer about the " +
+          "checkout this test is running in. Answering 'shallow' here skips the deep provenance " +
+          "check on a full-depth repository, on a green run.",
+      ).toBe(ambient.shallow);
+      expect(
+        shielded.hasCommit(ambient.head),
+        "with GIT_DIR redirected, hasCommit must still find the ambient checkout's own HEAD",
+      ).toBe(true);
+    } finally {
+      if (poisoned === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = poisoned;
+    }
+  });
+});
+
+/**
  * The committed baseline's own provenance — the same check, over the real
  * entries, against the real commits they name.
  *
@@ -427,6 +502,11 @@ describe("the provenance check, against a repository this suite builds", () => {
  * exercise has been about, wearing a name tag: a green CI run would read as
  * coverage the run does not have. See the file header for what each environment
  * does and does not establish.
+ *
+ * What it does NOT do is skip because a commit is missing from a FULL-DEPTH
+ * checkout. That is a baseline pointing at a commit this repository does not
+ * have — a defect in a tracked artefact that the weekly scan is the only thing
+ * to notice — so it fails, in the check above, by name.
  */
 describe("the committed baseline's provenance, where the history is present", () => {
   const findings: Finding[] = JSON.parse(readFileSync(resolve(".github/gitleaks-baseline.json"), "utf8"));
@@ -437,9 +517,19 @@ describe("the committed baseline's provenance, where the history is present", ()
     for (const finding of findings) {
       const key = `${finding.Commit}:${finding.File}`;
       if (!sources.has(key)) {
-        const blob = spawnSync("git", ["show", `${key}`], { encoding: "utf8" });
-        expect(blob.status, `the baseline names ${key}, which must exist in this repository's history`).toBe(0);
-        sources.set(key, blob.stdout.split("\n"));
+        try {
+          sources.set(key, showFileLines(finding.Commit, finding.File));
+        } catch (error) {
+          // A baseline naming a commit this repository does not have is a defect
+          // in a tracked artefact, and the weekly scan is the only thing that
+          // would ever notice it. So this FAILS. A skip here would report that
+          // defect as coverage, which is the shape of false green this suite
+          // has spent three rounds removing.
+          expect.fail(
+            `the baseline names ${key}, which must exist in this repository's history: ` +
+              `${(error as Error).message}`,
+          );
+        }
       }
       const line = sources.get(key)![finding.StartLine - 1] ?? "";
       expect(

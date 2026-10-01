@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { scratchGitEnv } from "../support/scratch-git";
 
 /**
  * The shape of .github/workflows/secret-scan.yml, asserted on the PARSED YAML
@@ -504,9 +505,28 @@ describe(".github/workflows/secret-scan.yml", () => {
  * `--no-index` is what makes the answer about the ignore policy rather than
  * about what happens to be staged, so the assertion holds for a file that has
  * not been added yet.
+ *
+ * `env: scratchGitEnv` and the timeout are hygiene rather than a fix for a hole
+ * that exists here, and it is worth saying which is which because the provenance
+ * predicates needed the same option for a real exposure and a reader would
+ * otherwise assume both were the same thing.
+ *
+ * Measured: a `GIT_DIR` redirect does NOT change this function's answer. Git's
+ * ignore precedence puts the working tree's `.gitignore` above both
+ * `info/exclude` and `core.excludesFile`, so the rule that decides a path here is
+ * read from this checkout's own `.gitignore` whichever repository GIT_DIR names.
+ * `GIT_DIR=/a/shallow/clone/.git` and `core.excludesFile` pointed at a
+ * `*`-pattern file both left the answer at 1, exactly as unredirected.
+ *
+ * What the env does block is `GIT_INDEX_FILE` and a user's `core.excludesFile`
+ * reaching the call, which is the same class the helper exists for, and the
+ * timeout is because a synchronous call cannot be preempted by vitest's own
+ * `testTimeout`.
  */
 function checkIgnore(pathname: string): number | null {
   return spawnSync("git", ["check-ignore", "--no-index", "--quiet", pathname], {
     cwd: resolve("."),
+    env: scratchGitEnv,
+    timeout: 10_000,
   }).status;
 }
