@@ -137,9 +137,12 @@ describe("createTokenBucket", () => {
     expect(bucket.admit(1000)).toBe(true);
     expect(bucket.admit(1000)).toBe(false);
     // t=500 is earlier than the bucket's newest t=1000: no negative elapsed
-    // time, no throw, and the bucket keeps the newest time as its refill
-    // anchor.
+    // time, no throw, and the refill anchor stays pinned at the newest
+    // t=1000. The next assertion is what discriminates that: measured from
+    // the anchor, half a second after t=1000 refills only half a token — an
+    // anchor wrongly left at t=500 would refill a full token here.
     expect(bucket.admit(500)).toBe(false);
+    expect(bucket.admit(1500)).toBe(false);
     // One second after the newest t=1000 (not after t=500): exactly one token.
     expect(bucket.admit(2000)).toBe(true);
     expect(bucket.admit(2000)).toBe(false);
