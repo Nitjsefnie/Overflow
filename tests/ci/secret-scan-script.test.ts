@@ -481,18 +481,27 @@ describe(".github/gitleaks-baseline.json", () => {
     // that finding.
     //
     // It fails if the entry is absent, and it fails if the entry is present but
-    // drifted by a single field — which is the failure a hand-typed baseline
-    // entry produces, because the ESCAPING alone is enough to do it: Go's
-    // `encoding/json` writes `<`, `>` and `&` as `&lt;`, `&gt;` and
-    // `&amp;` wherever they appear, and it is the escaped form, not the
-    // character, that is on file. A record that reads identically to the
-    // scanner's output and carries the bare characters instead suppresses
-    // nothing.
+    // drifted by a single field: a column offset, an entropy, a timestamp, an
+    // author's name. That is the failure a hand-typed baseline entry produces,
+    // and the mutation test below is what shows it rather than claims it.
+    //
+    // It does NOT fail on the JSON escaping, and this is worth being precise
+    // about, because the escaping is the first thing a reader notices about this
+    // file and the obvious thing to blame. Go's `encoding/json` writes `<`, `>`
+    // and `&` as the six-character escapes, and the committed file carries that
+    // form — but the comparison happens AFTER decoding, on both sides. Here the
+    // baseline goes through `JSON.parse` and the captured record is a TypeScript
+    // string literal; at gitleaks it is `json.Unmarshal` into `[]Finding` and a
+    // struct compare. Either way the escaped form and the bare character are one
+    // value by the time anything compares them, so a baseline rewritten with bare
+    // characters in its `Message` suppresses the finding exactly as well. That
+    // was measured, not reasoned: with the escapes replaced by bare `<`, `>` and
+    // `&`, this suite stayed green, which is the correct result.
     expect(
       asRecords(findings).some((committed) => wholeRecordEquals(committed, CAPTURED_FINDING)),
       "no committed entry equals the captured scan report field for field. gitleaks 8.30.1 suppresses a finding " +
-        "only on whole-record equality, so a near miss — one column, one timestamp, one wrongly escaped character — " +
-        "leaves the weekly scan red on a history that is otherwise clean.",
+        "only on whole-record equality, so a near miss — one column, one entropy, one timestamp — leaves the " +
+        "weekly scan red on a history that is otherwise clean.",
     ).toBe(true);
   });
 

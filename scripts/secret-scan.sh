@@ -32,6 +32,13 @@
 # do not hand-edit, reorder or trim it. Regenerate it, whole, and prove the
 # result by re-running with --baseline-path and seeing exit 0.
 #
+# "DO NOT REORDER" IS ABOUT THE ENTRIES ALREADY IN THE FILE, NOT ABOUT
+# POSITION. The array is ordered newest-first by `Date`, so a hand-added entry
+# goes AT THE HEAD and the entries already there keep their existing relative
+# order. That is what the procedure below describes, and it is not the reordering
+# this paragraph forbids: moving an entry that is already in the file past
+# another one is.
+#
 # The report is redacted, so the baseline carries no credential material. Its
 # `Match` fields are not literally the string REDACTED, and are not meant to
 # be: gitleaks substitutes the redaction into the secret's place inside the
