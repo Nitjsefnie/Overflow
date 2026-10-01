@@ -156,10 +156,14 @@ describe("guarded callback", () => {
     const { seen: unhandled, restore } = captureUnhandledRejections();
 
     try {
-      // The return value is what pins the contract: a guard that awaited the
-      // callback would either return a promise or never return at all, and
-      // either way this line would not be reached. A test that completes is the
-      // second half of the same claim.
+      // What this pins, exactly: the return value is undefined, so the guard
+      // handed back no promise of its own, and nothing below blocks on the
+      // callback. What it does not pin: that the guard never waits internally.
+      // An async-IIFE rewrite also returns undefined and still reports a
+      // synchronous throw on the same turn — `await expr` evaluates `expr` before
+      // it suspends — so it passes here. Catching that needs a static check, and
+      // it is parked as a coverage gap against the module's doc comment rather
+      // than papered over with a claim these assertions do not support.
       const returned = callGuarded(noteReceiver(), () => () => neverSettles, [], reporter.report);
 
       expect(returned).toBeUndefined();
