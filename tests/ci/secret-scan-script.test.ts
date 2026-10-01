@@ -14,9 +14,13 @@ import { commitFiles, git, hasCommit, isShallowCheckout, scratchGitEnv, showFile
  * **Covered everywhere, at any checkout depth:** the wiring of
  * `scripts/secret-scan.sh` (the version pin, the git-history mode, `--redact`,
  * `--no-banner`, the baseline path, the report path, the exit-code pass-through,
- * and the two refusal diagnostics); every property of the committed baseline
- * readable from the file itself; and the provenance CHECKER, driven against a
- * repository this suite builds for itself.
+ * the two refusal diagnostics, and **the scan target** — the repository root,
+ * taken from `git rev-parse --show-toplevel` at run time rather than from a
+ * literal in this file, so a subtree target is red here as well as everywhere
+ * else); every property of the committed baseline readable from the file itself;
+ * the 4-of-11 coverage ratio this suite pins by equality; the `hasCommit` half of
+ * the redirector shield; and the provenance CHECKER, driven against a repository
+ * this suite builds for itself.
  *
  * **Covered only where the history is present:** the committed baseline's
  * provenance — that each finding's redacted residue really came from the source
@@ -577,10 +581,24 @@ describe("the git reads that decide whether the deep check runs", () => {
    * It is a separate test rather than folded into the case above because it does
    * not degenerate: the redirect points at a *different* repository whose commits
    * are not this checkout's, so an unshielded read fails to find this checkout's
-   * own HEAD in a full-depth and a shallow checkout alike. That is what carries
-   * the whole `GIT_*` sweep when the depth half is vacuous, and it is the
-   * difference between the reviewer's M-f — unshielding `isShallowCheckout`
-   * alone — being red in CI and being green.
+   * own HEAD in a full-depth and a shallow checkout alike.
+   *
+   * **What it does NOT do — and an earlier version of this comment claimed the
+   * opposite, which was measured false.** It cannot notice an unshielded
+   * `isShallowCheckout`. The two are independent reads that share nothing but
+   * this module's env constant, so unshielding one leaves the other untouched
+   * and no assertion here reacts. The reviewer's M-f mutant — `isShallowCheckout`
+   * unshielded alone — is red in a FULL-DEPTH checkout, where the depth half
+   * runs, and green in a shallow one, where it is skipped. CI therefore does
+   * **not** cover the depth half, and the two halves are complementary rather
+   * than redundant: between them the property is covered everywhere it can
+   * actually matter, because the consequence of an unshielded depth read (a
+   * full-depth checkout reporting itself shallow, and the deep check skipping on
+   * a green run) cannot occur in a shallow checkout at all.
+   *
+   * Stated explicitly because the earlier overstatement invited a reader to
+   * conclude the depth test was redundant and delete it — which would make M-f
+   * green in the one environment where its consequence lives.
    */
   it("reports the ambient commits, not one redirected by a GIT variable", async () => {
     const ambientHead = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", env: scratchGitEnv })
@@ -679,18 +697,25 @@ describe("the committed baseline's provenance, where the history is present", ()
           // has spent three rounds removing.
           //
           // `expect.fail` THROWS, so control cannot reach the lookup below —
-          // and the test right above this one now guards the same property
-          // independently. If someone tidies this into a `continue`, the loop
-          // must still fail legibly rather than crash on a missing map entry, so
-          // the lookup is guarded in its own right.
+          // and the test above guards the same property independently. The
+          // backstop under it exists for a **no-op** downgrade of this guard:
+          // downgraded to one, control reaches the lookup, and without the
+          // backstop the loop crashes on a missing map entry with a bare
+          // TypeError that names nothing. (A `continue` downgrade is a
+          // different thing entirely: it skips the loop body, so the lookup is
+          // never reached and the crash cannot happen. The backstop does not
+          // cover that case and is not claimed to.)
           expect.fail(
             `the baseline names ${key}, which must exist in this repository's history: ` +
               `${(error as Error).message}`,
           );
           // Unreachable while `expect.fail` throws, and that is the point: it
-          // exists so that downgrading the guard above to a `continue` still
-          // fails HERE, by name, rather than crashing on a missing map entry
-          // four lines later with a TypeError nobody can act on.
+          // exists so that a NO-OP downgrade of the guard above still fails
+          // HERE, by name, carrying the commit, the file and the reason — rather
+          // than crashing three lines later with a TypeError nobody can act on.
+          // Measured: with a corrupt entry, the guard no-op and this backstop
+          // removed, the failure is the TypeError; with it, the failure names
+          // all three.
           return expect.fail(
             `the baseline names ${key}, but its lines were not read, so there is nothing to check it ` +
               "against. The guard above did not stop the loop.",
