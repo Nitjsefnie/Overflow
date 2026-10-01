@@ -359,19 +359,26 @@ a failed status command in both its forms — the deploy script wraps the same
 call in `|| { …; exit 1; }`, and the manual path says to run it by hand and
 stop if it fails. It matters because `deploy-migration-status.ts` prints
 nothing to stdout when it cannot run at all — `node` off `PATH`, the wrong
-working directory, a database that is not there — and puts the reason on
-stderr with a nonzero status, so an empty listing is both "current" and "could
-not ask", and those are exactly the two ways a stale swap gets certified. The
-`elif` half is the other side of the same command and is not covered by that
-precedent: the script exits `0` whether or not it printed anything, because
-the deploy procedure reads its listing rather than its status, so only the
-output can tell "current" from "behind". The status is captured into a
-variable rather than tested inline with `||` because the second branch has to
-be reached on the same condition — an `|| { …; false; }` in front of it runs
-that branch and then falls straight through the `if` on an empty listing,
-which ends the pasted block `0` and reads as a pass. And nothing here calls
-`exit`: no block in this runbook sets `set -e`, and an `exit` inside a pasted
-block closes the shell the operator is standing in.
+working directory, a database that is not there, a database carrying no
+`schema_migrations` — and puts the reason on stderr with a nonzero status, so
+an empty listing is both "current" and "could not ask". All four are refused
+here, and two of them would have been caught anyway by the row count below,
+which errors on an absent database and on one carrying no `schema_migrations`
+rather than printing a count. The one with nothing behind it is a listing
+that could not be produced at all — `node` off `PATH`, the wrong working
+directory — because the ledger and the tables are intact there, the row count
+answers, and a replacement two migrations behind would have gone live exactly
+as (e.2) exists to prevent. The `elif` half is the other side of the same
+command and is not covered by that precedent: the script exits `0` whether or
+not it printed anything, because the deploy procedure reads its listing rather
+than its status, so only the output can tell "current" from "behind". The
+status is captured into a variable rather than tested inline with `||` because
+the second branch has to be reached on the same condition — an
+`|| { …; false; }` in front of it runs that branch and then falls straight
+through the `if` on an empty listing, which ends the pasted block `0` and
+reads as a pass. And nothing here calls `exit`: no block in this runbook sets
+`set -e`, and an `exit` inside a pasted block closes the shell the operator is
+standing in.
 
 Then the smallest real check that the replacement serves before the rename —
 the app role can authenticate, and the restored tables answer a read — with
@@ -443,8 +450,8 @@ time, 26 public tables matched; the write-active
 `webhook_deliveries` (13,686 vs 13,675) tables had drifted between the dump
 and the live count. Machine time scales with the dump size; the dominant RTO
 terms are the operator steps of (e.2) — create the replacement, migrate it,
-verify, rename, restart the service — so budget tens of minutes including human
-response time, not seconds.
+verify, rename, restart the service — so budget tens of minutes including
+human response time, not seconds.
 
 ## (g) Restore-testing cadence
 
@@ -484,6 +491,9 @@ The template covers `overflow.service` as well as the backup unit
 carry the service itself — but not the other way round. A restore that
 skipped (e.2)'s migration step leaves a service that is up, healthy to every
 data check, and answering `503` at `/api/readiness` on a schema behind its
-build; nothing about that state fails the unit, so nothing alerts. The
-readiness curl in README section 7 is what catches it, at the swap, while the
-operator is still watching.
+build; nothing about that state fails the unit, so nothing alerts. Two checks
+stand between the dump and that state, and neither is the alert route:
+(e.2)'s schema gate refuses the swap before the rename, while the live
+database is untouched and a wrong answer costs a re-run, and the readiness
+curl in README section 7 confirms it end to end once the service is restarted.
+A swap that reached a `503` readiness skipped both.
