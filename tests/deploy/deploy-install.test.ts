@@ -168,6 +168,11 @@ const otherShellLines = new Set([
   "install -o root -g root -m 0644 /srv/overflow/deploy/overflow-backup.service /etc/systemd/system/",
   "systemctl show overflow.service overflow-backup.service -p OnFailure",
   "systemctl start overflow-alert@test.service",
+  "zcat -f /var/log/exim4/mainlog* | grep -F \"$(cat /etc/overflow/alert-recipient)\" | grep -oE 'T=[a-z_]+' | sort | uniq -c",
+  "zcat -f /var/log/exim4/mainlog* | grep 'T=address_file' | grep -cF \"$(cat /etc/overflow/alert-recipient)\"",
+  "ls -l /var/mail/mail",
+  "grep -c '^From ' /var/mail/mail",
+  "zcat -f /var/log/exim4/mainlog* | grep -c 'T=address_file'",
   "journalctl -u overflow-alert@test.service --no-pager -n 20",
   "tail -n 20 /var/log/exim4/mainlog",
   "rm /etc/systemd/system/overflow-alert@.service",
@@ -185,6 +190,7 @@ const otherShellLines = new Set([
   // nothing. The match is exact because --value prints an empty line with exit
   // 0 when the directive is unset, and because -w would pass a drifted copy
   // that had picked up a second group.
+  "systemctl show overflow-alert@test.service -p SupplementaryGroups --value | grep -qx adm && echo \"the alert unit reads the exim log as a member of adm\" || echo \"the alert unit is NOT in group adm - every alert will wait out its budget, report that it did not leave this host, and record no throttle state\"",
   "systemctl show overflow-canary.service -p SupplementaryGroups --value | grep -qx adm && echo \"canary reads the exim log as a member of adm\" || echo \"the canary is NOT in group adm - every run will refuse with the log named as unreadable\"",
   "install -o root -g root -m 0600 /dev/null /etc/overflow/canary-recipient",
   "printf '%s\\n' '<address>' > /etc/overflow/canary-recipient",
