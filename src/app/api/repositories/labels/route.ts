@@ -99,9 +99,24 @@ export async function GET(request: Request): Promise<Response> {
  * and a GitHub 5xx used to be recorded nowhere at all. The classified arms stay
  * silent, and that is the whole of their exemption: each already answered the
  * submitter with a message naming the remedy for what GitHub reported about its
- * own authorization or its own availability. The read is wrapped rather than
- * logged in the caller's catch so the credential read ahead of the walk, whose
- * error can carry the stored token, cannot reach this line.
+ * own authorization or its own availability.
+ *
+ * What this line is handed, and what it must not be handed. The error goes to the
+ * log WHOLE, not rendered: `GitHubApiError` carries the upstream response text as
+ * its own `body` property, capped at 500 characters by its constructor, and what
+ * GitHub actually said about the failure is the part an operator cannot get from
+ * the status. That is the standing design (errors.ts: response diagnostics belong
+ * in service logs and out of serialized API errors), so the sibling registration
+ * diagnostic's redacting, 200-capped rendering is deliberately NOT applied here,
+ * and a test pins both halves — the argument is the error, and its status and body
+ * ride along.
+ *
+ * What must not arrive is a narrower set still. The read is wrapped here rather
+ * than logged in the caller's catch because the credential read ahead of the walk
+ * happens in that catch, and its error can carry the stored token; nothing
+ * between the two gets to log it. The wrap is therefore the only place on this
+ * route where a GitHub failure can be recorded, and what it admits is exactly the
+ * gate above — the walk's bound, or a status no arm classified.
  */
 async function readRepositoryLabels(
   gateway: GitHubGateway,

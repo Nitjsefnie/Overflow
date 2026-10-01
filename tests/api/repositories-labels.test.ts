@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { MAX_WALK_PAGES } from "@/lib/github/collection-walk-bound";
+import { GitHubApiError } from "@/lib/github/errors";
 import * as labelsRoute from "@/app/api/repositories/labels/route";
 
 // Release stores evaluated with this file's mocked database client.
@@ -230,8 +231,15 @@ describe("GET /api/repositories/labels", () => {
 
     await labelsRoute.GET(labelsRequest());
 
-    expect(console.error).toHaveBeenCalled();
-    expect(loggedDiagnostics().join("\n")).toContain("503");
+    // The recorded argument is the error itself, not a rendering of it: the
+    // status is read off the object, and the upstream body rides along with it
+    // — what GitHub actually said is what the operator log is for here (see
+    // readRepositoryLabels' doc comment).
+    const recorded = vi.mocked(console.error).mock.calls.flat();
+    const failure = recorded.find((argument): argument is GitHubApiError => argument instanceof GitHubApiError);
+    expect(failure).toBeDefined();
+    expect(failure?.status).toBe(503);
+    expect(failure?.body).toContain("private-body");
   });
 
   it("answers a GitHub credential rejection with an actionable 401 through the real gateway", async () => {
@@ -654,15 +662,6 @@ function stubGitLabGatewayFailure(error: Error): void {
     return { listRepositoryLabels };
   });
   listRepositoryLabels.mockRejectedValue(error);
-}
-
-/**
- * Every argument every `console.error` call recorded, rendered as text: a
- * diagnostic may carry the failure as the error object rather than inside its
- * message, and a test asks what the log NAMES, not how it is spelled.
- */
-function loggedDiagnostics(): string[] {
-  return vi.mocked(console.error).mock.calls.flat().map((argument) => String(argument));
 }
 
 function memberSession() {
