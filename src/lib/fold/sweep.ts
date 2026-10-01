@@ -34,6 +34,10 @@ export type ReconciliationSweepSchedule = {
   runSweep(): Promise<unknown>;
   finalizeAbandonedRuns?(): Promise<unknown>;
   /**
+   * Prunes expired maintenance rows (receipts, run history). Omit for no pruning.
+   */
+  pruneRetention?(): Promise<unknown>;
+  /**
    * Registers the recurring tick. Omit it for an unrefed setInterval, which is
    * what production takes: nothing wires a scheduler, so this is an injection
    * seam and a failure here is a caller defect. armSweepInterval says what one
@@ -242,7 +246,18 @@ export function startReconciliationSweep(schedule: ReconciliationSweepSchedule):
         } catch (error) {
           console.error("Could not finalize abandoned reconciliation runs during sweep", error);
         }
-        await schedule.runSweep();
+        try {
+          await schedule.runSweep();
+        } finally {
+          try {
+            // Guarded on its own and run even when the sweep of the same tick
+            // failed: neither work costs the other, and a dropped tick drops
+            // both together.
+            await schedule.pruneRetention?.();
+          } catch (error) {
+            console.error("Could not prune expired maintenance rows during sweep", error);
+          }
+        }
       } catch (error) {
         reportSweepFailure(schedule, error);
       } finally {
