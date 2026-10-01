@@ -170,9 +170,9 @@ export function AccountDataNotice() {
           <li>moderation notes, which can name the account that applied a label</li>
         </ul>
         <p>
-          None of the free text is retained: a reconciliation pass writes no issue, pull request, or comment
-          body text, and unregistering a repository scrubs what earlier passes stored (unless a settlement from
-          the last few minutes is still being computed).
+          A reconciliation pass writes no issue, pull request, or comment body text. Body text written before
+          2026-09-26 may persist until the repository is unregistered: unregistering a repository scrubs what
+          earlier passes stored (unless a settlement from the last few minutes is still being computed).
         </p>
         <p>Overflow stores no avatar and no display name for someone who has not signed in.</p>
         <p>

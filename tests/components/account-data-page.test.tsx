@@ -161,6 +161,21 @@ describe("account-data notice page", () => {
     ).not.toBeNull();
   });
 
+  it("states the legacy body-text retention instead of the retracted flat claim", async () => {
+    await renderAccountDataPage();
+
+    const notice = sectionLabelledBy("account-data-non-member-heading").textContent ?? "";
+
+    expect(
+      notice,
+      "the retracted flat claim is gone: pre-2026-09-26 body text can persist while a repository stays registered",
+    ).not.toContain("None of the free text is retained");
+    expect(
+      notice,
+      "the notice states that body text written before 2026-09-26 may persist until the repository is unregistered",
+    ).toMatch(/body text written before 2026-09-26 may persist until the repository is unregistered/i);
+  });
+
   it("places the non-member and server-log sections between access and retention", async () => {
     await renderAccountDataPage();
 
