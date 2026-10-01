@@ -106,9 +106,25 @@ async function expectRefused(pending: Promise<unknown>, refused: new () => Error
   expect(outcome).toBeInstanceOf(refused);
 }
 
-async function loadDeploymentDenyCidrs(): Promise<(env?: NodeJS.ProcessEnv) => string[]> {
+async function loadDeploymentDenyCidrs(): Promise<
+  (env?: NodeJS.ProcessEnv, enumerateInterfaces?: typeof networkInterfaces) => string[]
+> {
   const module = await import("@/lib/security/public-destination-deployment");
   return module.deploymentDenyCidrs;
+}
+
+/**
+ * An interface enumerator as the hardened serving unit sees one: the unit's
+ * `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX` denies AF_NETLINK, libuv's
+ * enumeration socket, so `os.networkInterfaces()` throws this system error in
+ * every serving process (issue 924) while succeeding for an unsandboxed root.
+ */
+function restrictedEnumerator(): ReturnType<typeof networkInterfaces> {
+  throw Object.assign(new Error("A system error occurred: uv_interface_addresses returned Unknown system error 97"), {
+    code: "EAFNOSUPPORT",
+    errno: -97,
+    syscall: "uv_interface_addresses",
+  });
 }
 
 async function loadSingletons(): Promise<{
@@ -131,17 +147,51 @@ async function loadSingletons(): Promise<{
 }
 
 describe("deploymentDenyCidrs", () => {
-  it("seeds the host's public interface addresses when the environment is unset", async () => {
+  it("seeds the host's public interface addresses through the injected enumerator when the environment is unset", async () => {
     const hostPublic = hostPublicAddresses();
     const deploymentDenyCidrs = await loadDeploymentDenyCidrs();
 
-    const entries = deploymentDenyCidrs();
+    const entries = deploymentDenyCidrs(process.env, networkInterfaces);
 
     expect(entries.sort()).toEqual([...hostPublic].sort());
     expect(new Set(entries).size).toBe(entries.length);
     for (const entry of entries) {
       expect(isPublicAddress(entry)).toBe(true);
     }
+  });
+
+  it("degrades to the environment's entries alone when interface enumeration is unavailable", async () => {
+    const deploymentDenyCidrs = await loadDeploymentDenyCidrs();
+
+    // The environment is unset here, so the deny list is empty: a
+    // defense-in-depth default that cannot be discovered degrades to the
+    // env-driven list instead of killing module evaluation (issue 924).
+    expect(deploymentDenyCidrs(process.env, restrictedEnumerator)).toEqual([]);
+  });
+
+  it("warns once, naming the environment variable, when interface enumeration is unavailable", async () => {
+    const deploymentDenyCidrs = await loadDeploymentDenyCidrs();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    // Copied before the restore: vitest's mockRestore resets the call
+    // history, so the recorded calls must be out of the mock by then.
+    let warnings: unknown[][] = [];
+
+    try {
+      expect(deploymentDenyCidrs(process.env, restrictedEnumerator)).toEqual([]);
+      warnings = warn.mock.calls.map((call) => [...call]);
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(warnings).toHaveLength(1);
+    expect(String(warnings[0]?.[0])).toContain("PUBLIC_DESTINATION_DENY_CIDRS");
+  });
+
+  it("never consults interface enumeration when the environment supplies the entries", async () => {
+    process.env[envName] = "8.8.8.8";
+    const deploymentDenyCidrs = await loadDeploymentDenyCidrs();
+
+    expect(deploymentDenyCidrs(process.env, restrictedEnumerator)).toEqual(["8.8.8.8"]);
   });
 
   it("honours the environment's entries exactly, trimmed", async () => {
