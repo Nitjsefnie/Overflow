@@ -27,7 +27,7 @@
 # by WHOLE-RECORD equality, not by fingerprint. A baseline reduced to
 # `[{"Fingerprint": "..."}]` suppresses nothing at all and the scan still exits
 # 1 — verified against this repository, where the full report suppresses all
-# 7 known findings and the fingerprint-only form suppresses none of them. So
+# 8 known findings and the fingerprint-only form suppresses none of them. So
 # .github/gitleaks-baseline.json is committed exactly as gitleaks emits it:
 # do not hand-edit, reorder or trim it. Regenerate it, whole, and prove the
 # result by re-running with --baseline-path and seeing exit 0.
