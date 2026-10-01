@@ -1928,34 +1928,34 @@ const gitlabRollbackIncompleteMessage =
  * as "save error unknown" — the save was declined because another registration
  * holds the GitHub path.
  */
-const arbiterDeclinedSaveCause =
-  "the store's on-conflict arbiter declined the save (another registration holds the GitHub path)";
+const arbiterDeclinedSaveCause = "the store's on-conflict arbiter declined the save (another registration holds the GitHub path)";
 
 /** Hard cap for a rendered save-failure cause, so a diagnostic stays one bounded log line. */
 const describeErrorCauseLimit = 200;
 
 /**
  * Renders a thrown save failure for an operator diagnostic (issue 515):
- * deterministic, single-line, and secret-safe — the rendering may name
- * credentials the error message carried, so they are redacted before the
- * string is capped. This is a log-side rendering only: the thrown
- * ROLLBACK_INCOMPLETE error's public message never carries it.
+ * deterministic, single-line, and secret-safe — credentials the message
+ * carried (connection URLs, password fragments, prefix-shaped bearer
+ * tokens) are redacted before the string is capped. Log-side only: the
+ * thrown ROLLBACK_INCOMPLETE error's public message never carries it.
  */
 export function describeErrorCause(error: unknown): string {
-  const rendered = error instanceof Error && error.message.length > 0
-    ? `${error.name}: ${error.message}`
-    : String(error);
+  const rendered = error instanceof Error && error.message.length > 0 ? `${error.name}: ${error.message}` : String(error);
   return capRenderedCause(redactCredentials(rendered.replace(/[\r\n]+/g, " ")));
 }
 
 /**
- * Replaces `scheme://user:password@host…` with `scheme://***@host…` and any
- * `password=<value>` / `password: <value>` fragment with `password=***`.
+ * Replaces `scheme://user:password@host…` with `scheme://***@host…`, `password=` and
+ * `password:` fragments with `password=***`, and prefix-shaped credentials with `<prefix>***`.
  */
 function redactCredentials(value: string): string {
   return value
     .replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^\s@/]+:[^\s@/]+@/g, "$1***@")
-    .replace(/password(\s*[=:]\s*)[^\s]+/gi, "password=***");
+    .replace(/password(\s*[=:]\s*)[^\s]+/gi, "password=***")
+    .replace(/ovf_[A-Za-z0-9_-]*/g, "ovf_***")
+    .replace(/(gh[posur]_)[A-Za-z0-9_]*/g, "$1***")
+    .replace(/(github_pat_)[A-Za-z0-9_]*/g, "$1***");
 }
 
 function capRenderedCause(value: string): string {
