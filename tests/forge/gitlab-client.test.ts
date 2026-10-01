@@ -655,6 +655,46 @@ describe("GitLab collection pagination", () => {
       });
     });
   });
+
+  // Issue 886: a 200 whose body parses as JSON but is not an object — the
+  // literal null, a quoted string, a number — walks straight through the
+  // single-object parse path into the mappers and dies as a raw TypeError
+  // outside the taxonomy (no status, no endpoint). The single-object path
+  // gets the same shape guard the array path has had since issue 871:
+  // anything that is not a non-null object folds into the typed error at the
+  // instance-misbehaved rank (status 0, the endpoint in `.body`), so the
+  // module's 404-only callers never see it.
+  describe("non-object success body", () => {
+    const rawBody = (body: string) => new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+
+    it("rejects getRepository with the typed error on a null body", async () => {
+      const { client, requests } = collectionClient(projectPath, () => rawBody(`null`));
+      const error = await client.getRepository(repository).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(GitLabApiError);
+      expect(error).toMatchObject({ name: "GitLabApiError", status: 0 });
+      expect((error as GitLabApiError).body).toContain("/projects/gitlab-org%2Fgitlab");
+      expect(requests).toHaveLength(1);
+    });
+
+    it("rejects getRepository with the typed error on a JSON string body", async () => {
+      const { client, requests } = collectionClient(projectPath, () => rawBody(`"a string"`));
+      const error = await client.getRepository(repository).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(GitLabApiError);
+      expect(error).toMatchObject({ name: "GitLabApiError", status: 0 });
+      expect((error as GitLabApiError).body).toContain("/projects/gitlab-org%2Fgitlab");
+      expect(requests).toHaveLength(1);
+    });
+
+    // The control side of the guard: a valid object body still resolves
+    // exactly as before through the guarded single-object read.
+    it("still resolves a valid object body through the guarded read", async () => {
+      const byPath = collectionClient(projectPath, () => json(project));
+      await expect(byPath.client.getRepository(repository)).resolves.toMatchObject({
+        id: 278964,
+        fullName: "gitlab-org/gitlab",
+      });
+    });
+  });
 });
 
 describe("GitLabGateway", () => {
