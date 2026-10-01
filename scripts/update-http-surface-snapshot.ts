@@ -88,7 +88,7 @@ function equal(left: unknown, right: unknown): boolean {
   return JSON.stringify(normalized(left)) === JSON.stringify(normalized(right));
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const args = argv.slice(2);
   if (args.length !== 0 && (args.length !== 2 || args[0] !== "--version" || !args[1] || args[1].startsWith("--"))) {
     console.error(usage);
@@ -96,7 +96,7 @@ function main(): void {
   }
   const requestedVersion = args[1];
 
-  const routes = deriveHttpSurfaceShapes();
+  const routes = await deriveHttpSurfaceShapes();
 
   let snapshot: Snapshot | undefined;
   try {
@@ -170,4 +170,4 @@ function main(): void {
   }
 }
 
-if (argv[1] && import.meta.url === pathToFileURL(argv[1]).href) main();
+if (argv[1] && import.meta.url === pathToFileURL(argv[1]).href) void main();
