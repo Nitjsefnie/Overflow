@@ -184,12 +184,16 @@ export function createReadinessGetHandler(
           return;
         }
         decided = true;
-        if (outcome.status === "unavailable") {
-          const reason =
-            outcome.reason ?? "database: an unavailable probe outcome arrived without a reason";
-          console.error(`Readiness probe failed: ${reason}`);
+        // One consolidated outcome: the reason fallback lives here, so the
+        // body and the journal line derive from the same string.
+        const consolidated: ReadinessProbeOutcome =
+          outcome.status === "unavailable" && outcome.reason === undefined
+            ? { ...outcome, reason: "database: an unavailable probe outcome arrived without a reason" }
+            : outcome;
+        if (consolidated.status === "unavailable") {
+          console.error(`Readiness probe failed: ${consolidated.reason}`);
         }
-        resolve(outcome);
+        resolve(consolidated);
       };
       const cap = setTimeout(
         () =>
