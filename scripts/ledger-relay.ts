@@ -35,6 +35,7 @@ import {
   checkRunBody,
   renderSweepLines,
   sweepOrphans,
+  validateJobs,
   type SweepApi,
   type SweepOutcome,
 } from "./ledger-relay-sweep.ts";
@@ -284,8 +285,13 @@ export interface RelayResult {
   sweep: SweepOutcome;
 }
 
-/** Nothing examined, nothing relayed — what every path that skips the sweep reports. */
-const NO_SWEEP: SweepOutcome = { examined: 0, relayed: [] };
+/**
+ * Nothing examined, nothing relayed — what every path that skips the sweep
+ * reports. Frozen because it is one shared object handed back by two different
+ * early returns into a public result type: a consumer pushing into
+ * `sweep.relayed` would otherwise corrupt every later result in the process.
+ */
+const NO_SWEEP: SweepOutcome = Object.freeze({ examined: 0, relayed: Object.freeze([]) });
 
 /**
  * The entry: resolve the triggering run, read the pin map, mint an
@@ -386,7 +392,6 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   const sweep = await sweepOrphans({
     api: sweepApi(deps, repo, auth),
     decide: decideContexts,
-    parseJobs: validateJobs,
     pinMap,
     repo,
     appId,
@@ -712,28 +717,6 @@ export function validatePinMap(value: unknown): Record<string, string> {
     pinMap[context] = path;
   }
   return pinMap;
-}
-
-function validateJobs(body: Record<string, unknown>): RelayJob[] {
-  if (!Array.isArray(body.jobs)) {
-    throw new Error("the job listing returned no jobs array");
-  }
-  const jobs: RelayJob[] = [];
-  for (const entry of body.jobs) {
-    const job = entry as Partial<RelayJob> | null;
-    if (typeof job?.name !== "string") {
-      throw new Error("the job listing holds an entry without a name");
-    }
-    jobs.push({
-      name: job.name,
-      run_attempt: typeof job.run_attempt === "number" ? job.run_attempt : 1,
-      // An unknown status reads as queued: the check-run then waits rather
-      // than ever passing on something unverified.
-      status: job.status === "in_progress" || job.status === "completed" ? job.status : "queued",
-      conclusion: typeof job.conclusion === "string" ? job.conclusion : null,
-    });
-  }
-  return jobs;
 }
 
 function required(env: Record<string, string | undefined>, name: string): string {

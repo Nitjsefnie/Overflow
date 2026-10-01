@@ -50,9 +50,9 @@ export interface SweepCandidate {
 
 export interface SweepOutcome {
   /** Candidates considered after filtering and the SWEEP_RUN_LIMIT cap. */
-  examined: number;
+  readonly examined: number;
   /** Contexts the sweep posted, in posting order. */
-  relayed: Array<{ context: string; runId: string }>;
+  readonly relayed: ReadonlyArray<{ context: string; runId: string }>;
 }
 
 /**
@@ -75,8 +75,6 @@ export interface SweepDeps {
     runConclusion: string | null,
     jobs: readonly RelayJob[],
   ) => ContextDecision[];
-  /** The relay's own job-listing reader, so a swept run's jobs are read identically. */
-  parseJobs: (body: Record<string, unknown>) => RelayJob[];
   pinMap: Readonly<Record<string, string>>;
   repo: string;
   appId: string;
@@ -182,7 +180,10 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
     "the repository's workflow-run listing for the orphan sweep",
   );
   const candidates = selectSweepCandidates(listing.workflow_runs, deps.pinMap, deps.triggerRunId);
-  const relayed: SweepOutcome["relayed"] = [];
+  // Built as a mutable array and narrowed on return: SweepOutcome is readonly
+  // so a consumer cannot push into a result it was handed, but this function
+  // is the one place that accumulates.
+  const relayed: Array<{ context: string; runId: string }> = [];
 
   for (const [headSha, atHead] of groupByHeadSha(candidates)) {
     const attested = await attestedContexts(deps, headSha);
@@ -192,7 +193,7 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
         missingContextsFor(deps.pinMap, candidate, attested, relayedThisSweep),
       );
       if (missing.size === 0) continue;
-      const jobs = deps.parseJobs(
+      const jobs = validateJobs(
         await deps.api.get<Record<string, unknown>>(
           `${API_ROOT}/repos/${deps.repo}/actions/runs/${candidate.runId}/jobs?filter=latest&per_page=100`,
           `the job listing of run ${candidate.runId}`,
@@ -240,6 +241,11 @@ function groupByHeadSha(candidates: readonly SweepCandidate[]): Array<[string, S
  * by the github-actions app leaves the ledger App's required context unset, and
  * treating it as evidence would keep the orphan exactly where it is.
  *
+ * `filter=latest` is passed explicitly rather than left to the endpoint's
+ * default: the dedup only needs the latest check-run per name, and stating it
+ * means the convergence does not depend on a default this repository does not
+ * pin.
+ *
  * A malformed listing reads as NO attestation rather than throwing — the same
  * asymmetry hasLiveRunOfPath already sets in scripts/ledger-relay.ts. The
  * direction is the safe one here: reading nothing as attested can only cause a
@@ -249,7 +255,7 @@ function groupByHeadSha(candidates: readonly SweepCandidate[]): Array<[string, S
  */
 async function attestedContexts(deps: SweepDeps, headSha: string): Promise<Set<string>> {
   const body = await deps.api.get<Record<string, unknown>>(
-    `${API_ROOT}/repos/${deps.repo}/commits/${headSha}/check-runs?app_id=${deps.appId}&per_page=100`,
+    `${API_ROOT}/repos/${deps.repo}/commits/${headSha}/check-runs?app_id=${deps.appId}&filter=latest&per_page=100`,
     `the ledger App's check-runs at ${headSha}`,
   );
   const attested = new Set<string>();
@@ -290,6 +296,38 @@ export function checkRunBody(
     body.conclusion = decision.conclusion;
   }
   return body;
+}
+
+/**
+ * The relay's job-listing reader, moved here beside checkRunBody — the two
+ * shared plumbing steps both duties need, and the two callers of this one are
+ * the mirror and the sweep below. It sits in this module because the dependency
+ * runs one way: ledger-relay.ts imports from here, so the relay's own reader
+ * can be exported without a cycle in either direction.
+ *
+ * An unknown job status reads as queued: the check-run then waits rather than
+ * ever passing on something unverified.
+ */
+export function validateJobs(body: Record<string, unknown>): RelayJob[] {
+  if (!Array.isArray(body.jobs)) {
+    throw new Error("the job listing returned no jobs array");
+  }
+  const jobs: RelayJob[] = [];
+  for (const entry of body.jobs) {
+    const job = entry as Partial<RelayJob> | null;
+    if (typeof job?.name !== "string") {
+      throw new Error("the job listing holds an entry without a name");
+    }
+    jobs.push({
+      name: job.name,
+      run_attempt: typeof job.run_attempt === "number" ? job.run_attempt : 1,
+      // An unknown status reads as queued: the check-run then waits rather
+      // than ever passing on something unverified.
+      status: job.status === "in_progress" || job.status === "completed" ? job.status : "queued",
+      conclusion: typeof job.conclusion === "string" ? job.conclusion : null,
+    });
+  }
+  return jobs;
 }
 
 /** A run id as a string, whichever way the listing spells it. Empty when it names nothing. */
