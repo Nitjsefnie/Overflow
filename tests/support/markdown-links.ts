@@ -43,17 +43,30 @@ function linkDefinitions(markdown: string): Map<string, string> {
 }
 
 /**
- * Every relative link a renderer would resolve, in document order: the inline
+ * Every relative link this helper recognises, in document order: the inline
  * spellings `[text](target)` and `[text](target "title")`, and the reference
  * spellings `[text][label]`, `[text][]` and the bare `[label]`. A reference
  * use counts only where a definition for its label exists — without one it
  * renders as literal text, not as a link. Absolute URLs and mail links are
  * excluded, as are the definition lines themselves, which declare targets
  * rather than use them.
+ *
+ * `definitions` defaults to the ones declared in `markdown` itself. A caller
+ * checking an excerpt of a larger document passes the whole document here,
+ * because a use whose definition lives in another section is still a use —
+ * `unresolvedLinks` does exactly that by reading `document` off disk.
+ *
+ * This is a recogniser, not a CommonMark parser. It reads inline links on one
+ * line at a time and does not model constructs that span them, so a link split
+ * across a line break, or nested inside an image's alt text, is not seen. It
+ * claims only the spellings above, and a caller must not read the name as
+ * stronger than that.
  */
-export function relativeLinks(markdown: string): MarkdownLink[] {
+export function relativeLinks(
+  markdown: string,
+  definitions: Map<string, string> = linkDefinitions(markdown),
+): MarkdownLink[] {
   const links: MarkdownLink[] = [];
-  const definitions = linkDefinitions(markdown);
   const keep = (target: string, line: number): void => {
     if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return;
     links.push({ line, target });
@@ -64,7 +77,11 @@ export function relativeLinks(markdown: string): MarkdownLink[] {
     for (const match of line.matchAll(/\[[^\]]*\]\(\s*([^)\s]+)[^)]*\)/g)) {
       keep(match[1]!, index + 1);
     }
-    for (const match of line.matchAll(/\[([^\]]+)\](?:\[([^\]]*)\])?/g)) {
+    // The `(?!\()` guard is what keeps `[text](target)`'s text out of the
+    // reference pass: a link's text is not a use of a definition that happens
+    // to share its name. Strictly immediate, because `[label] (as in prose)`
+    // is a legal reference use.
+    for (const match of line.matchAll(/\[([^\]]+)\](?:\[([^\]]*)\])?(?!\()/g)) {
       const label = match[2] === undefined || match[2] === "" ? match[1]! : match[2]!;
       const target = definitions.get(label.toLowerCase());
       if (target !== undefined) keep(target, index + 1);
@@ -103,6 +120,12 @@ export function headingSlugs(markdown: string): Set<string> {
  * targets that document itself. `firstLine` is the line of `document` that the
  * first line of `markdown` sits on, so a failure names a line in the file a
  * reader opens rather than a line inside the excerpt.
+ *
+ * Reference definitions come from `document` as a whole, read off disk, not
+ * from the excerpt: `markdown` is routinely a section of a larger file, and a
+ * use whose definition sits under another heading is still a use. A `document`
+ * that does not exist on disk falls back to the excerpt's own definitions,
+ * which is the whole-document case anyway.
  */
 export function unresolvedLinks(
   markdown: string,
@@ -110,8 +133,12 @@ export function unresolvedLinks(
   repositoryRoot: string,
   firstLine = 1,
 ): string[] {
+  const documentPath = resolve(repositoryRoot, document);
+  const definitions = linkDefinitions(
+    existsSync(documentPath) ? readFileSync(documentPath, "utf8") : markdown,
+  );
   const failures: string[] = [];
-  for (const { line, target } of relativeLinks(markdown)) {
+  for (const { line, target } of relativeLinks(markdown, definitions)) {
     const at = `${document}:${firstLine + line - 1}`;
     const [path, anchor] = target.split("#", 2) as [string, string | undefined];
     const targetPath = path === "" ? resolve(repositoryRoot, document) : resolve(repositoryRoot, dirname(document), path);
