@@ -42,11 +42,31 @@ const replacementToken = `ovf_${"b".repeat(43)}`;
 const now = new Date("2026-09-10T00:00:00.000Z");
 
 /**
- * The three token states, as the database reports them. `confirmedAt` null is
- * the whole distinction: an unconfirmed token carries a delivery window, a
- * confirmed one the ninety-day lifetime measured from its first use.
+ * The four token states, as the database reports them, with the dates the
+ * store would really write. `confirmedAt` null is the whole distinction: an
+ * unconfirmed token's expiry is its created-at plus the thirty-minute delivery
+ * window, never the ninety-day lifetime, so neither unconfirmed fixture may
+ * borrow the ninety-day `expiresAt` — a fixture claiming a never-used token
+ * carried a ninety-day expiry would still satisfy a panel that derived "lapsed"
+ * from the dates instead of from `confirmedAt`, and the suite would stay green
+ * while the real lapsed state rendered wrong.
+ *
+ * `unconfirmed` and `lapsedSummary` are fifteen minutes either side of the
+ * frozen clock, so each one's expiry is consistent with its verdict.
  */
-const unconfirmed = { createdAt, expiresAt, confirmedAt: null, expired: false };
+const unconfirmed = {
+  createdAt: "2026-09-09T23:45:00.000Z",
+  expiresAt: "2026-09-10T00:15:00.000Z",
+  confirmedAt: null,
+  expired: false,
+};
+/** Never used, and the delivery window ran out: expired, but not at ninety days. */
+const lapsedSummary = {
+  createdAt: "2026-09-09T22:00:00.000Z",
+  expiresAt: "2026-09-09T22:30:00.000Z",
+  confirmedAt: null,
+  expired: true,
+};
 const confirmed = { createdAt, expiresAt, confirmedAt, expired: false };
 const expiredSummary = {
   createdAt: "2026-05-01T08:00:00.000Z",
@@ -54,9 +74,11 @@ const expiredSummary = {
   confirmedAt: "2026-05-01T08:05:00.000Z",
   expired: true,
 };
-/** Never used, and the delivery window ran out: expired, but not at ninety days. */
-const lapsedSummary = { createdAt, expiresAt, confirmedAt: null, expired: true };
 const confirmedExpired = { ...confirmed, expired: true };
+
+/** The node a confirmed token contributes and an unconfirmed one does not. */
+const firstUseNode = () => document.getElementById("api-token-first-use-at");
+const renderedTimes = () => document.querySelectorAll("time");
 
 /**
  * The marker element each state contributes, or null when it contributes none.
@@ -182,18 +204,22 @@ describe("API token panel", () => {
         expect(node).toBeVisible();
         expect(node.className.split(/\s+/)).toContain(tone);
       }
-      observed[state] = describedBy(button).join(" ");
+      // What the member can actually see: the state marker they are pointed at,
+      // and whether the token shows a first-use instant at all. Two dead
+      // states share a colour, so for that pair the first-use node is the whole
+      // observable difference — a line that is there for one and missing for
+      // the other, not a sentence that has to be read.
+      observed[state] = `${describedBy(button).join(" ")} | first-used:${firstUseNode() !== null}`;
       unmount();
     }
 
-    // The four states are mutually distinguishable by the link set alone: a
-    // member who never reads a word still cannot confuse a lapsed window with
-    // a reached lifetime.
+    // Four states, four distinct observations: a member who never reads a word
+    // still cannot confuse a lapsed window with a reached lifetime.
     expect(Object.values(observed)).toEqual([
-      "api-token-unconfirmed api-token-revocation",
-      "api-token-window-lapsed api-token-revocation",
-      "api-token-revocation",
-      "api-token-expired api-token-revocation",
+      "api-token-unconfirmed api-token-revocation | first-used:false",
+      "api-token-window-lapsed api-token-revocation | first-used:false",
+      "api-token-revocation | first-used:true",
+      "api-token-expired api-token-revocation | first-used:true",
     ]);
     expect(new Set(Object.values(observed)).size).toBe(cases.length);
   });
@@ -223,6 +249,36 @@ describe("API token panel", () => {
     // Both read as a dead credential, and both are marked "error"; the tone is
     // not the discriminator, the marker is. Both carry it, differently.
     expect(expiredNode.className).toBe(lapsedTone);
+  });
+
+  // The pair above is the one whose colour deliberately does not discriminate,
+  // and a marker id is a DOM handle rather than something a member sees. So the
+  // observable difference is a NODE: a token that has been confirmed shows when
+  // it was first used, and a never-used one shows nothing there. A member can
+  // see that line missing; no sentence has to be read for the distinction to
+  // land, which is what makes the prose above it decoration rather than the
+  // carrier.
+  it("shows a first-use instant for a confirmed token and nothing at all for an unconfirmed one", () => {
+    const insideWindow = render(<ApiTokenPanel summary={unconfirmed} />);
+    expect(firstUseNode()).toBeNull();
+    // Two timestamps on screen — generated and expiry — and nothing claiming use.
+    expect(renderedTimes()).toHaveLength(2);
+    insideWindow.unmount();
+
+    const lapsed = render(<ApiTokenPanel summary={lapsedSummary} />);
+    expect(firstUseNode()).toBeNull();
+    lapsed.unmount();
+
+    const live = render(<ApiTokenPanel summary={confirmed} />);
+    const firstUse = firstUseNode();
+    expect(firstUse).toBeVisible();
+    expect(firstUse!.tagName).toBe("TIME");
+    expect(firstUse).toHaveAttribute("dateTime", confirmedAt);
+    expect(renderedTimes()).toHaveLength(3);
+    live.unmount();
+
+    render(<ApiTokenPanel summary={expiredSummary} />);
+    expect(firstUseNode()).toHaveAttribute("dateTime", expiredSummary.confirmedAt);
   });
 
   it("reads the confirmation out of the mint response instead of assuming it", async () => {

@@ -31,11 +31,18 @@ type ApiTokenStatus = Serialized<StoredApiTokenStatus>;
  * `expired` alone no longer says what it used to: an unconfirmed token fails its
  * delivery window, a confirmed one reaches the lifetime, and both arrive here as
  * `expired: true` (issue 847). The remedy is the same in both cases, so the panel
- * offers the same remedy — but the reason is what the member reads, and the
- * states are kept apart here so nothing downstream can fold them back together.
+ * offers the same remedy — but the reason is not the same, and the states are
+ * kept apart here so nothing downstream can fold them back together.
  *
- * Each state owns one marker element, and the marker is what a test asserts on:
- * the wording of a sentence is free to change, the distinction is not.
+ * Two things make a state observable, and it is worth being exact about which
+ * does what. A state marker is a DOM handle: it says which explanation the
+ * button points at, and a test can follow it, but a member never sees an id. So
+ * the markers alone leave the two dead states — a lapsed window and a reached
+ * lifetime — with the same shape and the same `error` colour, differing only in
+ * a sentence. What a member can see is the first-use line: a confirmed token
+ * says when it was first used, an unconfirmed one has nothing there. That line
+ * being absent is the observable difference, and it is what makes the sentences
+ * decoration rather than the carrier of the distinction.
  */
 type TokenState = "unconfirmed" | "window-lapsed" | "active" | "expired";
 
@@ -146,6 +153,17 @@ export function ApiTokenPanel({ summary, reauthenticateAction }: ApiTokenPanelPr
               {formatUtc(currentSummary.expiresAt)}
             </time>.
           </p>
+          {/* The observable half of the state: present exactly when the token has been
+            confirmed, so "never used" is something a member sees rather than
+            something a sentence has to tell them. */}
+          {currentSummary.confirmedAt === null ? null : (
+            <p id="api-token-first-use">
+              First used{" "}
+              <time id="api-token-first-use-at" dateTime={currentSummary.confirmedAt}>
+                {formatUtc(currentSummary.confirmedAt)}
+              </time>.
+            </p>
+          )}
           {marker === null ? null : (
             <p id={marker.id} className={`feedback ${marker.tone}`}>{explanation}</p>
           )}
