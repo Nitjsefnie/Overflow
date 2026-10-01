@@ -555,17 +555,26 @@ const DETECT_STEP_ID = "detect-docs";
 const DETECT_STEP_NAME = "Detect docs-only change";
 
 /**
- * The flags the workflow's coverage invocation actually passes, each asserted
- * separately. A single `--coverage` substring would be satisfied by
- * `--coverage.reporter=text` alone, so dropping json-summary or cobertura from
- * the step would leave the assertion green while the artifact a later step
- * reads stops being written.
+ * Every flag the workflow's coverage invocation passes, each asserted
+ * separately as a WHOLE TOKEN of the command, never as a substring.
+ *
+ * The distinction is the whole point. `--coverage` is a prefix of all three
+ * reporter flags, so a substring test for it is satisfied by any single
+ * reporter and can never fail — and it is not a redundant pin either: with the
+ * reporters left alone but the bare flag dropped, vitest 5.0.0 writes no
+ * reports directory at all (measured by the fix round 2 reviewer), so the run
+ * measures nothing and every downstream reader is handed a file that was never
+ * written. The same holds for `--coverage.include`, which was on the step and
+ * pinned nowhere in the repository before this list carried it.
+ *
+ * So the check is a whitespace-split token membership test, not `includes`.
  */
-const COVERAGE_REPORTERS = [
+const COVERAGE_FLAGS = [
   "--coverage",
   "--coverage.reporter=text",
   "--coverage.reporter=json-summary",
   "--coverage.reporter=cobertura",
+  "--coverage.include='src/**'",
 ];
 
 /**
@@ -985,14 +994,16 @@ for (const scenario of SCENARIOS) {
 
         expect(coverageInvocations(), expectation).toHaveLength(scenario.coverage ? 1 : 0);
         expect(joined.includes(COVERAGE_FLOOR_COMMAND), expectation).toBe(scenario.coverage);
-        // Every reporter the step passes, one at a time: check-coverage-floor.ts
-        // and the patch-coverage step both read what those flags write, so a
-        // dropped reporter is a silently unreadable artifact.
-        const coverageRun = coverageInvocations()[0] ?? "";
-        for (const reporter of COVERAGE_REPORTERS) {
+        // Every flag the step passes, one at a time, as a whole token of the
+        // command: check-coverage-floor.ts and the patch-coverage step read
+        // what these write, so a dropped flag is a silently unreadable
+        // artifact rather than a smaller one.
+        const coverageTokens = (coverageInvocations()[0] ?? "").split(/\s+/);
+        for (const flag of COVERAGE_FLAGS) {
           expect(
-            coverageRun.includes(reporter),
-            `${expectation} — the coverage invocation must pass ${reporter}`,
+            coverageTokens.includes(flag),
+            `${expectation} — the coverage invocation must pass ${flag} as its own token of the ` +
+              `command, not merely as text inside a longer flag`,
           ).toBe(scenario.coverage);
         }
       },
