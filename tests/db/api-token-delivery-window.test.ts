@@ -82,7 +82,7 @@ describe("the API token delivery window", () => {
     // writes is asserted below to prove the stamp is in the mapping and nowhere
     // else. What is under test is the store's reading of the row it was given.
     const returned = new Date("2031-04-05T06:07:08.000Z");
-    const stamping = ((strings: TemplateStringsArray, ...values: unknown[]) =>
+    const stamping = ((strings: TemplateStringsArray, ...values: never[]) =>
       sql(strings, ...values).then((rows) =>
         rows.map((row) => ({ ...row, confirmed_at: returned })))) as unknown as Sql;
 
