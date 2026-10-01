@@ -195,6 +195,7 @@ describe("GET /api/repositories/labels", () => {
   });
 
   it("answers a 502 for another GitHub API failure through the real gateway", async () => {
+    consoleOutputAllowed.add("error");
     readSession.mockResolvedValue(memberSession());
     stubStoredToken();
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () =>
@@ -211,6 +212,26 @@ describe("GET /api/repositories/labels", () => {
       error: { code: "UPSTREAM_FAILURE", message: "Unable to read the repository labels on GitHub." },
     });
     expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
+  });
+
+  // Issue 890: no arm classifies a 5xx, so it reaches the generic 502 whose
+  // fixed string names neither the status nor anything else about the failure.
+  // The answer is unchanged; what an operator reads is the log, and the status
+  // is what it has to name.
+  it("names the unclassified GitHub status when the labels read answers a 5xx", async () => {
+    consoleOutputAllowed.add("error");
+    readSession.mockResolvedValue(memberSession());
+    stubStoredToken();
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () =>
+      new Response("private-body access-token-should-not-leak", {
+        status: 503,
+        headers: { "x-private": "private-header" },
+      })));
+
+    await labelsRoute.GET(labelsRequest());
+
+    expect(console.error).toHaveBeenCalled();
+    expect(loggedDiagnostics().join("\n")).toContain("503");
   });
 
   it("answers a GitHub credential rejection with an actionable 401 through the real gateway", async () => {
@@ -633,6 +654,15 @@ function stubGitLabGatewayFailure(error: Error): void {
     return { listRepositoryLabels };
   });
   listRepositoryLabels.mockRejectedValue(error);
+}
+
+/**
+ * Every argument every `console.error` call recorded, rendered as text: a
+ * diagnostic may carry the failure as the error object rather than inside its
+ * message, and a test asks what the log NAMES, not how it is spelled.
+ */
+function loggedDiagnostics(): string[] {
+  return vi.mocked(console.error).mock.calls.flat().map((argument) => String(argument));
 }
 
 function memberSession() {

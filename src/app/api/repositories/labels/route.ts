@@ -3,7 +3,7 @@ import type { UserRole } from "@/lib/db/types";
 import { ForgeIdentityError, normalizeInstanceUrl } from "@/lib/forge/identities";
 import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-store";
 import { GitHubGateway } from "@/lib/github/client";
-import { GitHubApiError } from "@/lib/github/errors";
+import { GitHubApiError, classifyGitHubApiFailure, isUnclassifiedGitHubFailure } from "@/lib/github/errors";
 import { GitLabApiError, GitLabGateway } from "@/lib/gitlab/client";
 import { plural } from "@/lib/plural";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
@@ -46,7 +46,7 @@ export async function GET(request: Request): Promise<Response> {
     // the token expired or was revoked, so retrying cannot fix it. Same
     // credential vocabulary as the registration endpoint's githubSetupError
     // (register.ts); the message names the one remedy that refreshes the token.
-    if (error instanceof GitHubApiError && error.status === 401) {
+    if (error instanceof GitHubApiError && classifyGitHubApiFailure(error) === "CREDENTIALS") {
       return errorResponse(401, "GITHUB_CREDENTIALS", "GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to read the repository labels. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry.");
     }
     // Issue 338: a 403 or 404 carrying no rate-limit evidence is GitHub refusing
@@ -56,7 +56,7 @@ export async function GET(request: Request): Promise<Response> {
     // vocabulary as the registration endpoint's githubSetupError (register.ts);
     // a 403 that does carry rate-limit evidence falls through to the
     // rate-limit arm below.
-    if (error instanceof GitHubApiError && !error.rateLimited && (error.status === 403 || error.status === 404)) {
+    if (error instanceof GitHubApiError && classifyGitHubApiFailure(error) === "ACCESS") {
       if (error.status === 404) {
         return errorResponse(
           403,
@@ -70,7 +70,7 @@ export async function GET(request: Request): Promise<Response> {
         "GitHub refused to read the repository labels (HTTP 403). GitHub answers 403 both when the Overflow OAuth application is not yet authorized and when it is temporarily limiting requests, and this response carries nothing that separates the two causes. Wait a minute and retry before changing anything. This may be caused by missing authorization for the Overflow OAuth application. Review Overflow's authorization at https://github.com/settings/applications, then retry.",
       );
     }
-    if (error instanceof GitHubApiError && (error.rateLimited || error.status === 429)) {
+    if (error instanceof GitHubApiError && classifyGitHubApiFailure(error) === "RATE_LIMITED") {
       const delay = error.retryAfterSeconds === null ? "" : ` Retry after ${error.retryAfterSeconds} ${plural(error.retryAfterSeconds, "second")}.`;
       return errorResponse(
         429,
@@ -83,26 +83,25 @@ export async function GET(request: Request): Promise<Response> {
 }
 
 /**
- * The GitHub label walk, with the failures only Overflow can have recorded before
- * they are mapped (issue 883).
+ * The GitHub label walk, with the failures this route records before it maps
+ * them (issues 883, 890).
  *
  * The bound on this walk is the collection-walk bound: it throws a plain `Error`
  * naming the collection and the ceiling the walk stopped at. It is not a
  * `GitHubApiError` at all — no status, no rate-limit evidence — so it matches no
- * arm the caller's catch classifies and reaches the generic 502 with nothing
- * recorded anywhere. That 502 is a fixed string, so the error object is the only
- * thing that carries the collection and the ceiling to an operator.
+ * arm the caller's catch classifies.
  *
- * The conjunct is exactly that exclusion, and it does not reach as far as
- * "everything GitHub reported": a `GitHubApiError` whose status is not 401, 403,
- * 404, 429 or rate-limited also falls through to the generic 502 at the caller's
- * end, and this log stays silent for it. That silence is deliberate — such a
- * status is GitHub's own answer about its own availability rather than a walk
- * Overflow cut short, and it is pinned by a test — but a 500 here answers the
- * submitter a 502 and leaves the operator nothing, which is a gap in its own
- * right. The read is wrapped rather than logged in the caller's catch so the
- * credential read ahead of the walk, whose error can carry the stored token,
- * cannot reach this line.
+ * The gate here is exactly "no arm classified this" (issue 890), which is those
+ * two failures together: the walk's own bound, and a `GitHubApiError` whose
+ * status none of the caller's arms can explain, a 500 among them. Both reach the
+ * generic 502, a fixed string that names neither the collection and ceiling nor
+ * the status, so the error object is the only carrier of either to an operator —
+ * and a GitHub 5xx used to be recorded nowhere at all. The classified arms stay
+ * silent, and that is the whole of their exemption: each already answered the
+ * submitter with a message naming the remedy for what GitHub reported about its
+ * own authorization or its own availability. The read is wrapped rather than
+ * logged in the caller's catch so the credential read ahead of the walk, whose
+ * error can carry the stored token, cannot reach this line.
  */
 async function readRepositoryLabels(
   gateway: GitHubGateway,
@@ -111,7 +110,7 @@ async function readRepositoryLabels(
   try {
     return await gateway.listRepositoryLabels(reference);
   } catch (error) {
-    if (!(error instanceof GitHubApiError)) {
+    if (isUnclassifiedGitHubFailure(error)) {
       console.error("Reading the repository labels on GitHub failed.", error);
     }
     throw error;

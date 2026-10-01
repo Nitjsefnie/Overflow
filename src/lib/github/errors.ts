@@ -49,6 +49,42 @@ export class GitHubApiError extends Error implements GitHubRateLimitDetails {
   }
 }
 
+/**
+ * Which arm of a caller's status classification one GitHub failure reaches.
+ *
+ * The classification is ORDERED, not a set of statuses: rate-limit evidence
+ * outranks the bare access arm, so a 403 carrying it is `RATE_LIMITED` rather
+ * than `ACCESS`, and 429 is reachable through either the evidence or the status.
+ * `UNCLASSIFIED` is whatever reached no arm — a status GitHub answered with that
+ * carries none of the three kinds of evidence the arms read.
+ */
+export type GitHubApiFailure = "CREDENTIALS" | "ACCESS" | "RATE_LIMITED" | "UNCLASSIFIED";
+
+export function classifyGitHubApiFailure(error: GitHubApiError): GitHubApiFailure {
+  if (error.status === 401) return "CREDENTIALS";
+  if (!error.rateLimited && (error.status === 403 || error.status === 404)) return "ACCESS";
+  if (error.rateLimited || error.status === 429) return "RATE_LIMITED";
+  return "UNCLASSIFIED";
+}
+
+/**
+ * Whether no arm classified this failure, and it is therefore worth recording.
+ *
+ * A failure no arm classified reaches its caller as a fixed generic answer that
+ * names nothing but the step that failed — the collection-walk bound's collection
+ * and ceiling, or a GitHub status nothing here can explain, a 500 among them — so
+ * this is the gate that lets the error reach an operator's log. A classified
+ * failure is not silent by omission: the message the caller answered with already
+ * named the remedy for what GitHub reported about its own authorization or its own
+ * availability.
+ *
+ * The three status arms are read from `classifyGitHubApiFailure` rather than
+ * restated here, so this gate cannot drift from the classification it mirrors.
+ */
+export function isUnclassifiedGitHubFailure(error: unknown): boolean {
+  return !(error instanceof GitHubApiError) || classifyGitHubApiFailure(error) === "UNCLASSIFIED";
+}
+
 export function classifyGitHubRateLimit(
   status: number,
   headers: Headers,
