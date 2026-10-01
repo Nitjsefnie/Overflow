@@ -127,6 +127,7 @@ type RelayOutcome =
   | "deferred"
   | "deferred-then-completed"
   | "deferred-then-terminal"
+  | "deferred-then-connect-failure"
   | "terminal"
   | "terminal-blackhole"
   | "terminal-discarded"
@@ -439,6 +440,24 @@ async function startSmtp(options: {
               logLine(connectFailureDetail(messageId));
               logLine(deferredRetry(messageId));
               logCompletedLater();
+            } else if (options.outcome === "deferred-then-connect-failure") {
+              // TWO queue runs under one id, and the order that matters: the
+              // first attempt is deferred for a greylist, and the RETRY meets a
+              // refused connection. Section 53.9 documents the detail line for a
+              // single attempt, ahead of its own deferral; this is the shape
+              // across attempts, where it lands after a provisional line is
+              // already in the log.
+              //
+              // Nothing about either line ends the message, so the outcome the
+              // report names has to be the FIRST provisional one exim wrote -
+              // and a scan that stops skipping detail lines once it has a name
+              // in hand reads the retry's refusal as a terminal `Failed`, which
+              // is this issue's own defect arriving by a different route.
+              messages.push(bufferedData.join("\r\n"));
+              bufferedData = [];
+              logLine(`${messageId} ** defer rejected: greylisted, please retry`);
+              logLine(connectFailureDetail(messageId));
+              logLine(deferredRetry(messageId));
             } else if (options.outcome === "connect-failure-detail") {
               // The detail line with no deferral behind it, which is what the
               // log holds in the window between the refused attempt and the
@@ -1923,6 +1942,48 @@ describe("overflow-canary.sh on a message the relay is retrying", () => {
       expect(reportedVerdict(JSON.parse(webhook.posts[0]!).content)).toBe(
         "Failed to connect to",
       );
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("keeps the FIRST provisional outcome when the retry's refusal is logged after it", async () => {
+    // Two queue runs under one id: a greylist deferral, then a retry whose
+    // connection was refused. Section 53.9 documents the detail line for a
+    // single attempt, ahead of its own deferral, and every other fixture in
+    // this suite has it in that order - so a classifier that skipped detail
+    // lines only until it had a name in hand would pass all of them and read
+    // this retry as a terminal `Failed`.
+    //
+    // Both assertions are load-bearing and they are different properties: the
+    // NAME is the first provisional outcome exim wrote, and the POLL is the
+    // behaviour that name stands for. A classifier that concluded on the
+    // second line gets the name right and still burns the budget differently,
+    // so neither assertion stands in for the other.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({
+      outcome: "deferred-then-connect-failure",
+      logPath: fixture.eximLog,
+    });
+    const recorder = waitRecorder();
+
+    try {
+      const run = await runCanary(fixture, {
+        smtpUrl: smtp.url,
+        waitSeconds: RETRYING_BUDGET_SECONDS,
+        shimBin: recorder.shimBin,
+      });
+
+      expect(run.status).toBe(1);
+      expect(webhook.posts).toHaveLength(1);
+      expect(
+        recorder.waits(),
+        "a refused connection is not a verdict whatever else the log already holds",
+      ).toBeGreaterThan(0);
+      expect(reportedVerdict(JSON.parse(webhook.posts[0]!).content)).toBe("defer");
     } finally {
       await smtp.close();
       await webhook.close();

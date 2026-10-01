@@ -1098,6 +1098,40 @@ describe("overflow-alert.sh delivery verdict", () => {
     expect(reportedVerdict(run.stderr)).toBe("Failed to connect to");
   });
 
+  it("keeps the FIRST provisional outcome when the retry's refusal is logged after it", () => {
+    // Two queue runs under one id: a greylist deferral, then a retry whose
+    // connection was refused. Section 53.9 documents the detail line for a
+    // single attempt, ahead of its own deferral, and every other fixture here
+    // has it in that order - so a classifier that skipped detail lines only
+    // until it had a name in hand would pass all of them and read this retry
+    // as a terminal `Failed`.
+    //
+    // Both assertions are load-bearing and they are different properties: the
+    // NAME is the first provisional outcome exim wrote, and the POLL is the
+    // behaviour that name stands for.
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
+      eximLog: [
+        spoolLine(),
+        routingLine("remote_smtp_smarthost"),
+        `${logStamp} ${messageId} ** defer rejected: greylisted, please retry`,
+        connectFailureDetail(),
+        deferredRetry(),
+      ],
+    });
+
+    expect(run.sleeps, "a refused connection is not a verdict whatever else the log holds").toBe(2);
+    expect(run.status).not.toBe(0);
+    expect(existsSync(join(stateDir, unit))).toBe(false);
+    expect(reportedVerdict(run.stderr)).toBe("defer");
+  });
+
   it("does not read a terminal word out of the relay's own quoted answer", () => {
     // The `C=` field is the RELAY's answer, quoted byte for byte, and a
     // filtering relay's rejection text plausibly carries words like that one -
