@@ -221,6 +221,49 @@ describe("seeding against PostgreSQL", () => {
   });
 });
 
+describe("seeding above the pull_request_issues bind-parameter ceiling", () => {
+  // 220 sponsors × 101 settlements = 22,220 pull requests, so the unchunked
+  // pull_request_issues insert binds 66,660 parameters — over Postgres's
+  // 65,535 limit (issue 909) while staying far below the 36,000-settlement
+  // reproduction scale, keeping this container run cheap.
+  const ABOVE_CEILING: SeedOptions = {
+    repositories: 4,
+    openIssues: 8,
+    sponsors: 220,
+    settlementsPerSponsor: 101,
+    underwaterRepos: 0,
+  };
+
+  let sql: Sql;
+  let container: Awaited<ReturnType<typeof startPostgresContainer>>["container"] | undefined;
+  const originalDatabaseUrl = process.env.DATABASE_URL;
+
+  beforeAll(async () => {
+    const started = await startPostgresContainer({
+      database: "seed_board_benchmark_ceiling", user: "seed_board_benchmark", password: "seed_board_benchmark",
+    });
+    container = started.container;
+    process.env.DATABASE_URL = started.databaseUrl;
+    sql = getSql();
+    await runMigrations();
+    await seedBoardBenchmark(ABOVE_CEILING);
+  });
+
+  afterAll(async () => {
+    await closeSql();
+    await container?.stop();
+    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = originalDatabaseUrl;
+  });
+
+  it("seeds every pull_request_issues row above the 65,535-parameter limit", async () => {
+    const [row] = await sql<{ pull_request_issues: number }[]>`
+      select count(*)::int as pull_request_issues from pull_request_issues
+    `;
+    expect(row.pull_request_issues).toBe(ABOVE_CEILING.sponsors * ABOVE_CEILING.settlementsPerSponsor);
+  });
+});
+
 async function decodeBenchCookie(cookie: string, secret: string) {
   const { decode } = await import("next-auth/jwt");
   return await decode({
