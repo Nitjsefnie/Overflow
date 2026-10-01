@@ -154,6 +154,38 @@ describe("the backup and restore procedure", () => {
     ).toEqual([dumpPath!.split("/").pop()]);
   });
 
+  it("reclaims a crash-leftover partial older than a day and spares young partials and real dumps", () => {
+    // A run killed mid-dump leaves .overflow-<stamp>.dump.incomplete behind;
+    // the next run's sweep must reclaim one older than 24 hours — keyed on
+    // mtime, not the timestamp in the name — while a young partial and every
+    // real dump survive.
+    const oldPartial = join(backupDir, ".overflow-20260101T000000Z.dump.incomplete");
+    writeFileSync(oldPartial, "truncated");
+    utimesSync(oldPartial, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
+    const youngPartial = join(backupDir, ".overflow-20260102T000000Z.dump.incomplete");
+    writeFileSync(youngPartial, "truncated");
+
+    const dumpsBefore = readdirSync(backupDir).filter((name) => /^overflow-.*\.dump$/.test(name));
+
+    const result = runScript(backupScript, ["--output-dir", backupDir, "--retention-days", "14"], scriptEnv());
+
+    expect(result.status, result.stderr).toBe(0);
+    const freshDumpPath = printedDumpPath(result.stdout);
+    expect(freshDumpPath, `stdout was: ${result.stdout}`).toBeDefined();
+
+    expect(existsSync(oldPartial), "the old partial").toBe(false);
+    expect(existsSync(youngPartial), "the young partial").toBe(true);
+
+    const dumpsAfter = readdirSync(backupDir).filter((name) => /^overflow-.*\.dump$/.test(name));
+    for (const name of dumpsBefore) {
+      expect(dumpsAfter, "real dumps present before the run").toContain(name);
+    }
+    const freshDumpName = freshDumpPath!.split("/").pop()!;
+    expect(dumpsAfter).toContain(freshDumpName);
+    expect(dumpsAfter.length).toBe(dumpsBefore.length + 1);
+    expect(statSync(freshDumpPath!).size).toBeGreaterThan(0);
+  });
+
   it("refuses to restore onto the database DATABASE_URL names without --allow-live", async () => {
     const dump = await ensureDump();
     const [before] = await sql`select count(*)::int as count from issues`;
