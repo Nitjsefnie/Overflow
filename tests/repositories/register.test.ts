@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
+import { CollectionWalkBound, MAX_WALK_ITEMS } from "@/lib/github/collection-walk-bound";
 import type { GitHubRepository } from "@/lib/github/types";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
@@ -558,6 +559,37 @@ describe("explicit repository registration", () => {
       message,
     });
     expect(harness.createdRepositories).toEqual([]);
+  });
+
+  // Issue 883: the sanitized message above is the submitter's answer, and it
+  // names neither the collection nor the ceiling when a collection-walk bound
+  // ended the read. The error the wrap was handed is the only carrier of both,
+  // so the wrap keeps it as the cause instead of dropping it.
+  it("preserves the wrapped error as the cause of a sanitized upstream failure", async () => {
+    const harness = createHarness();
+    const bound = new CollectionWalkBound<{ name: string }>("repository difficulty labels");
+    let tripped: unknown;
+    try {
+      bound.add(new Array(MAX_WALK_ITEMS + 1).fill({ name: "size/S" }));
+    } catch (error) {
+      tripped = error;
+    }
+    harness.dependencies.github.listRepositoryLabels = async () => { throw tripped; };
+
+    const error = await registerRepository(harness.dependencies, createInput()).catch((thrown: unknown) => thrown);
+
+    expect(error).toMatchObject({ code: "UPSTREAM_FAILURE" });
+    expect((error as Error).cause).toBe(tripped);
+    expect(String((error as Error).cause)).toContain("repository difficulty labels");
+  });
+
+  // The cause is optional: a registration error raised without one carries no
+  // cause at all, rather than an own `cause: undefined` property that reads as
+  // a wrapped error nobody supplied.
+  it("raises a registration error with no cause when the caller supplies none", () => {
+    const error = new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
+
+    expect(Object.hasOwn(error, "cause")).toBe(false);
   });
 
   it.each([403, 404])("explains lookup HTTP %s without guessing the owner type", async (status) => {
