@@ -37,6 +37,14 @@
 # be: gitleaks substitutes the redaction into the secret's place inside the
 # match and keeps the surrounding source-line context. Trimming a Match field
 # to the bare literal would break the whole-record comparison above.
+#
+# WHEN THE BASELINE NEEDS A NEW ENTRY. It keys on COMMIT SHA, so editing a file
+# that carries a baselined fixture produces a new finding under a new SHA that
+# the committed baseline cannot suppress, and the next scheduled run exits 1 on
+# a change containing no secret. Add that entry to the existing baseline rather
+# than regenerating the file: a wholesale regeneration would also absorb any
+# genuinely new finding and bury it. Read the diff of old against new baseline,
+# and be able to point at every added entry in whatever diff caused it.
 set -euo pipefail
 
 # Bump together with .github/workflows/secret-scan.yml.

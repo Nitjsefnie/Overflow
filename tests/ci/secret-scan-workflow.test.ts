@@ -122,7 +122,23 @@ describe(".github/workflows/secret-scan.yml", () => {
     // header. 0 and 30 are the two minutes everybody picks.
     expect(fields[0], `the minute must be off the top of the hour (got ${fields[0]})`).not.toBe("0");
     expect(fields[0], `the minute must not be the half hour (got ${fields[0]})`).not.toBe("30");
+    // The hour was range-checked and the MINUTE was not, which is how `61` —
+    // a field naming no instant in the week, so a workflow that has silently
+    // stopped running — passed every assertion in this file. A schedule that
+    // cannot fire has to be a failing test.
+    //
+    // `Number` is NaN for `*` and for a step expression like `*/15`, so both are
+    // rejected here too — which is what the off-peak reasoning above wants
+    // anyway, since a step expression would run the scan hourly, not weekly.
+    expect(
+      Number(fields[0]),
+      `the minute must be a real minute, 0-59 (got ${fields[0]}) — an out-of-range minute names no ` +
+        "instant, so the schedule silently never fires and a green run certifies nothing",
+    ).toBeGreaterThanOrEqual(0);
+    expect(Number(fields[0]), `the minute must be at most 59 (got ${fields[0]})`).toBeLessThan(60);
+    expect(fields[0], "and it must be a plain number, not a step expression or a wildcard").toMatch(/^\d+$/);
     expect(Number(fields[1]), "the hour must be a valid UTC hour").toBeLessThan(24);
+    expect(fields[1], "and the hour must be a plain number too").toMatch(/^\d+$/);
   });
 
   it("reads the repository and nothing more", () => {
@@ -228,6 +244,18 @@ describe(".github/workflows/secret-scan.yml", () => {
     const path = upload!.with?.path;
     const named = Array.isArray(path) ? path.join("\n") : String(path ?? "");
     expect(named, "the uploaded artifact must be the gitleaks JSON report").toMatch(/\.json$/);
+    // `error`, not the default `warn`: the run already carries the real
+    // diagnosis in its log when the script refuses before gitleaks runs, so a
+    // silently-missing report costs a human nothing. What it would cost is the
+    // workflow's stated purpose — "a red run leaves the findings where a human
+    // can read them" — quietly becoming "a red run leaves nothing and says
+    // nothing", which is this branch's whole subject wearing a different hat.
+    expect(
+      upload!.with?.["if-no-files-found"],
+      "the upload must fail when the report is absent, so a missing report is a red run and not a " +
+        "silent one. `warn` — the default — makes an absent report invisible on a run that is " +
+        "already red for an unrelated reason.",
+    ).toBe("error");
   });
 
   it("keeps every event value out of run: interpolation", () => {

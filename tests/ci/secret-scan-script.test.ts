@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -45,6 +45,30 @@ import { commitFiles, git, hasCommit, isShallowCheckout, scratchGitEnv, showFile
  */
 
 const PINNED_VERSION = "8.30.1";
+
+/**
+ * How many of the committed baseline's entries carry an identifier residue, and
+ * are therefore genuinely checked by the deep provenance test.
+ *
+ * Pinned as a VALUE, not left to a floor of `> 0`, and not merely reported in an
+ * assertion message. A Vitest message is emitted only when an assertion fails,
+ * so a `> 0` floor plus a message that names the count is invisible on a green
+ * run — and stripping the residue from three of the four checkable entries
+ * leaves the suite green while any prose about "4 of 11" goes on claiming a pin
+ * that does not exist. This number is that pin.
+ *
+ * 4 of 11, and the other 7 are `gitlab-pat` findings whose `Match` IS the
+ * secret: gitleaks replaces the whole match, the residue is empty, and a rule
+ * with no residue has nothing that could have been spliced into it. Those 7 are
+ * carried by the redaction, shape and fingerprint assertions, which run at every
+ * checkout depth.
+ *
+ * A change to this number is a finding, not a chore: it means the baseline was
+ * regenerated, or an entry's rule changed shape, and a reviewer should look at
+ * the baseline diff before accepting the new value. It is a measurement of the
+ * committed file, not a target to be met.
+ */
+const EXPECTED_CHECKABLE_ENTRIES = 4;
 
 /** One gitleaks finding as the committed baseline carries it. */
 type Finding = {
@@ -298,7 +322,17 @@ describe(".github/gitleaks-baseline.json", () => {
     // At least one committed entry must actually exercise a non-empty residue,
     // or this test would pass on the seven `gitlab-pat` entries alone and pin
     // nothing.
-    expect(checked, "no committed entry leaves a non-empty residue to check").toBeGreaterThan(0);
+    // The SAME constant the deep test pins, asserted here too, because that
+    // test SKIPS in CI. With only a `> 0` floor here, stripping the residue from
+    // three of the four checkable entries was green at depth 1 — the coverage
+    // claim unchecked exactly where nobody local is looking.
+    expect(
+      checked,
+      `only ${checked} of ${findings.length} committed entries leave a residue this suite can check, ` +
+        `against a baseline that should yield ${EXPECTED_CHECKABLE_ENTRIES}. A drop is a finding, not a ` +
+        "chore: entries lost the residue that made them checkable, and a green run would keep certifying " +
+        "less than it appears to.",
+    ).toBe(EXPECTED_CHECKABLE_ENTRIES);
   });
 });
 
@@ -478,18 +512,22 @@ describe("the git reads that decide whether the deep check runs", () => {
     { variable: "GIT_NAMESPACE", value: () => "some-namespace", redirects: false },
   ] as const;
 
-  it("reports the ambient checkout, not one named by a GIT variable", async () => {
-    // The ambient checkout's real answers, captured BEFORE anything is poisoned.
-    // Comparing the shielded read against a value read while GIT_DIR is set
-    // would compare it against the wrong repository, which is the very mistake
-    // this test exists to catch. The HEAD read carries `env: scratchGitEnv` too,
-    // so it is the ambient checkout's HEAD even for a developer who already runs
-    // with a GIT_DIR exported.
-    const ambient = {
-      shallow: isShallowCheckout(),
-      head: spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", env: scratchGitEnv }).stdout.trim(),
-    };
-    expect(ambient.head, "the ambient checkout must have a HEAD to look for").toMatch(/^[0-9a-f]{40}$/);
+  /**
+   * The depth half, in the environments where it has teeth.
+   *
+   * A shallow ambient checkout answers "shallow" with or without a redirect, so
+   * comparing the shielded depth read against it is true-to-true and cannot
+   * fail — the previous version of this test ran it there anyway and was
+   * vacuous in CI while looking fully exercised. So the depth half is skipped
+   * where it cannot fail, and the SKIP IS REPORTED rather than the assertion
+   * being quietly softened. Its unshielded control asserts DISAGREEMENT with the
+   * ambient answer, which is what gives the case its bite: if it ever agreed,
+   * this case would be proving nothing and says so.
+   */
+  it.skipIf(isShallowCheckout())("reports the ambient depth, not one redirected by a GIT variable", async () => {
+    const ambient = isShallowCheckout();
+    expect(ambient, "this case only has teeth when the ambient checkout is full depth").toBe(false);
+    let biting = 0;
 
     for (const { variable, value, redirects } of REDIRECTORS) {
       const saved = process.env[variable];
@@ -499,16 +537,21 @@ describe("the git reads that decide whether the deep check runs", () => {
           encoding: "utf8",
           env: process.env,
         }).stdout.trim();
+        // The bite, and only the two variables that genuinely redirect can
+        // carry it — GIT_WORK_TREE and the rest do not move the answer at all,
+        // so a disagreement demanded of them would be a false demand. Those
+        // cases are still exercised, to catch a shield that breaks ordinary
+        // operation, but they carry no bite and are not counted as if they did.
         if (redirects) {
-          // Asserted, not assumed: a redirector that stops redirecting would
-          // leave the case below passing for the wrong reason, and a control
-          // that cannot fail is not a control.
           expect(unshielded, `${variable} must genuinely redirect, or this case proves nothing`).toBe("true");
+          expect(
+            unshielded,
+            `${variable} must produce a DIFFERENT depth answer from the ambient checkout, or the ` +
+              "shielded assertion below is true-to-true and this case certifies nothing",
+          ).not.toBe(String(ambient));
+          biting += 1;
         }
 
-        // A module reload per case, because the environment the helper uses is
-        // snapshotted at import — which is exactly why a GIT_DIR present at
-        // process start is stripped rather than honoured.
         vi.resetModules();
         const shielded = await import("../support/scratch-git");
         expect(
@@ -516,9 +559,61 @@ describe("the git reads that decide whether the deep check runs", () => {
           `with ${variable} pointed elsewhere, the shielded read must still answer about the checkout ` +
             "this test is running in. Answering 'shallow' here skips the deep provenance check on a " +
             "full-depth repository, on a green run.",
-        ).toBe(ambient.shallow);
+        ).toBe(ambient);
+      } finally {
+        if (saved === undefined) delete process.env[variable];
+        else process.env[variable] = saved;
+      }
+    }
+    expect(
+      biting,
+      "no redirector case could have failed here, so this test certifies nothing in this checkout",
+    ).toBeGreaterThan(0);
+  });
+
+  /**
+   * The `hasCommit` half, at EVERY depth.
+   *
+   * It is a separate test rather than folded into the case above because it does
+   * not degenerate: the redirect points at a *different* repository whose commits
+   * are not this checkout's, so an unshielded read fails to find this checkout's
+   * own HEAD in a full-depth and a shallow checkout alike. That is what carries
+   * the whole `GIT_*` sweep when the depth half is vacuous, and it is the
+   * difference between the reviewer's M-f — unshielding `isShallowCheckout`
+   * alone — being red in CI and being green.
+   */
+  it("reports the ambient commits, not one redirected by a GIT variable", async () => {
+    const ambientHead = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", env: scratchGitEnv })
+      .stdout.trim();
+    expect(ambientHead, "the ambient checkout must have a HEAD to look for").toMatch(/^[0-9a-f]{40}$/);
+
+    // The floor, and it holds at BOTH depths: the redirect points at a
+    // different repository, so an unshielded read cannot find this checkout's
+    // HEAD. Only the two genuinely-redirecting variables can show that, and
+    // requiring it of the others would be a false demand — see the depth test's
+    // comment on the same distinction.
+    let biting = 0;
+    for (const { variable, value, redirects } of REDIRECTORS) {
+      const saved = process.env[variable];
+      process.env[variable] = value();
+      try {
+        const unshielded = spawnSync("git", ["cat-file", "-e", `${ambientHead}^{commit}`], {
+          encoding: "utf8",
+          env: process.env,
+        }).status === 0;
+        if (redirects) {
+          expect(
+            unshielded,
+            `${variable} must make an unshielded read lose this checkout's HEAD, or the assertion ` +
+              "below is true-to-true and this case certifies nothing",
+          ).toBe(false);
+          biting += 1;
+        }
+
+        vi.resetModules();
+        const shielded = await import("../support/scratch-git");
         expect(
-          shielded.hasCommit(ambient.head),
+          shielded.hasCommit(ambientHead),
           `with ${variable} redirected, hasCommit must still find the ambient checkout's own HEAD`,
         ).toBe(true);
       } finally {
@@ -526,7 +621,9 @@ describe("the git reads that decide whether the deep check runs", () => {
         else process.env[variable] = saved;
       }
     }
+    expect(biting, "at least one redirector case must have run").toBeGreaterThan(0);
   });
+
 });
 
 
@@ -580,9 +677,23 @@ describe("the committed baseline's provenance, where the history is present", ()
           // would ever notice it. So this FAILS. A skip here would report that
           // defect as coverage, which is the shape of false green this suite
           // has spent three rounds removing.
+          //
+          // `expect.fail` THROWS, so control cannot reach the lookup below —
+          // and the test right above this one now guards the same property
+          // independently. If someone tidies this into a `continue`, the loop
+          // must still fail legibly rather than crash on a missing map entry, so
+          // the lookup is guarded in its own right.
           expect.fail(
             `the baseline names ${key}, which must exist in this repository's history: ` +
               `${(error as Error).message}`,
+          );
+          // Unreachable while `expect.fail` throws, and that is the point: it
+          // exists so that downgrading the guard above to a `continue` still
+          // fails HERE, by name, rather than crashing on a missing map entry
+          // four lines later with a TypeError nobody can act on.
+          return expect.fail(
+            `the baseline names ${key}, but its lines were not read, so there is nothing to check it ` +
+              "against. The guard above did not stop the loop.",
           );
         }
       }
@@ -604,11 +715,46 @@ describe("the committed baseline's provenance, where the history is present", ()
     }
     expect(
       checked,
-      `this run verified the provenance of ${checked} of ${findings.length} committed entries. A finding ` +
-        "whose Match is a pure redaction leaves no residue and cannot be checked this way — that is " +
-        "correct, not a gap, and the redaction assertions are what carry those entries. Zero is not " +
-        "correct, though: it means this check examined nothing and still reported green.",
-    ).toBeGreaterThan(0);
+      `this run verified the provenance of ${checked} of ${findings.length} committed entries, against a ` +
+        `baseline that should yield ${EXPECTED_CHECKABLE_ENTRIES} checkable ones. A finding whose Match ` +
+        "is a pure redaction leaves no residue and cannot be checked this way — that is correct, not a " +
+        "gap, and the redaction assertions are what carry those entries. A DROP is not correct though: it " +
+        "means entries lost the residue that made them checkable, and a green run would keep certifying " +
+        "less than it appears to.",
+    ).toBe(EXPECTED_CHECKABLE_ENTRIES);
+  });
+
+  it("resolves every commit the baseline names, unless this checkout is genuinely shallow", () => {
+    // The counterpart to the deep check, and it runs at BOTH depths. That is the
+    // point: the deep check's own `expect.fail` on an unresolvable commit is a
+    // catch-block guard, and a catch block that someone tidies into a `continue`
+    // takes the whole thing with it. For the 7 entries whose Match is a pure
+    // redaction there is nothing else in the deep loop that could notice — their
+    // residue is empty, so the provenance check passes them whatever line they
+    // are given. This test notices.
+    //
+    // Corrupting a `gitlab-pat` entry's Commit was green once `expect.fail` was
+    // downgraded, which is a double fault, and a double fault is exactly the
+    // kind a reviewer should not have to assume away.
+    const unresolvable = findings.filter((finding) => !hasCommit(finding.Commit)).map((f) => f.Fingerprint);
+    if (isShallowCheckout()) {
+      // A shallow checkout is the one legitimate reason a commit is missing, and
+      // it must genuinely be the reason rather than an assumption.
+      expect(
+        unresolvable.length,
+        "this checkout reports itself shallow, so commits it does not carry are expected — but it " +
+          "resolves every one of them anyway, which means the depth predicate is reporting something " +
+          "other than this checkout's depth.",
+      ).toBeGreaterThan(0);
+    } else {
+      expect(
+        unresolvable,
+        "a full-depth checkout must resolve every commit the baseline names. One it cannot is a " +
+          "baseline pointing at a commit this repository does not have — a defect in a tracked " +
+          "artefact that the weekly scan is the only thing to notice. It is reported here rather than " +
+          "skipped, because a skip would report that defect as coverage.",
+      ).toEqual([]);
+    }
   });
 
   it.skipIf(!shallow)("corroborates the checkout's own depth against the objects it holds", () => {
@@ -787,6 +933,43 @@ describe("scripts/secret-scan.sh", () => {
     // `git` for `dir` would scan the checkout and still exit 0 while every
     // committed-and-then-deleted secret stayed invisible — a green no-op.
     expect(argv, "`gitleaks dir` scans the working tree, not the history").not.toContain("dir");
+  });
+
+  it("walks the WHOLE repository, not a subtree of it", async () => {
+    const { argv, status, output } = await runScript();
+    expect(status, `the stub accepted the argv the script passed: ${output}`).toBe(0);
+    const target = argv[argv.length - 1];
+
+    // The subcommand, the baseline path and the report path were all pinned and
+    // none of them said WHAT is scanned. `gitleaks git <path>` restricts the
+    // history walk to that subtree, so changing the target to "$REPO_ROOT/tests"
+    // is a one-line edit that leaves every other assertion here green — and it
+    // is the entire failure mode this workflow exists to catch, defeated by an
+    // edit a reader would plausibly describe as "only our own fixtures trip it,
+    // save the time". A credential committed to src/, scripts/, a workflow file
+    // or a migration would never be reported.
+    //
+    // The expected value comes from git, not from this file's own idea of where
+    // the repository is, so the two cannot drift into agreement about a wrong
+    // answer the way a hardcoded path would.
+    const topLevel = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      env: scratchGitEnv,
+    }).stdout.trim();
+    expect(topLevel, "the repository root must be resolvable for this assertion to mean anything").toMatch(/^\//);
+
+    expect(
+      target,
+      `the scan must walk the whole repository, not a subtree — it targeted '${target}'. A subtree ` +
+        "target means a credential committed anywhere outside it is never reported and the run is " +
+        "green, which is the whole failure this workflow exists to catch.",
+    ).toBe(topLevel);
+    // And it must be a directory that exists, so the assertion above cannot be
+    // satisfied by a path that happens to be spelled the same way.
+    expect(
+      statSync(target).isDirectory(),
+      `the scan target '${target}' must be the repository root and must exist as a directory`,
+    ).toBe(true);
   });
 
   it("passes the repository's committed baseline, --redact, and a JSON report path", async () => {
