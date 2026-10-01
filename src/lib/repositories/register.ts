@@ -1,5 +1,5 @@
 import { isParticipationEligible, type EnforcementState, type UserRole } from "@/lib/db/types";
-import { GitHubApiError } from "@/lib/github/errors";
+import { GitHubApiError, classifyGitHubApiFailure, isUnclassifiedGitHubFailure } from "@/lib/github/errors";
 import { assessClaimPath, type ClaimPathEvidence, type ClaimPathVerdict } from "@/lib/domain/claim-path";
 import { plural } from "@/lib/plural";
 import {
@@ -1766,7 +1766,7 @@ function githubSetupError(
   step: "retrieve the submitted GitHub repository" | "read the repository difficulty labels" | "create the repository webhook" | "delete the repository webhook",
 ): RepositoryRegistrationError {
   // Issue 93: a 401 means GitHub rejected Overflow's own authorization — not retryable, unlike a 403/404.
-  if (error instanceof GitHubApiError && error.status === 401) {
+  if (error instanceof GitHubApiError && classifyGitHubApiFailure(error) === "CREDENTIALS") {
     return new RepositoryRegistrationError(
       "GITHUB_CREDENTIALS",
       `GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to ${step}. `
@@ -1774,7 +1774,7 @@ function githubSetupError(
     );
   }
 
-  if (error instanceof GitHubApiError && !error.rateLimited && (error.status === 403 || error.status === 404)) {
+  if (error instanceof GitHubApiError && classifyGitHubApiFailure(error) === "ACCESS") {
     let cause = repository?.ownerType === "ORGANIZATION"
       ? `This can happen when the Overflow OAuth application is not approved for that organization. Ask an organization owner to approve it at https://github.com/organizations/${repository.owner}/settings/oauth_application_policy.`
       : "This may be caused by missing authorization for the Overflow OAuth application.";
@@ -1798,7 +1798,7 @@ function githubSetupError(
     );
   }
 
-  if (error instanceof GitHubApiError && (error.rateLimited || error.status === 429)) {
+  if (error instanceof GitHubApiError && classifyGitHubApiFailure(error) === "RATE_LIMITED") {
     const delay = error.retryAfterSeconds === null ? "" : ` Retry after ${error.retryAfterSeconds} ${plural(error.retryAfterSeconds, "second")}.`;
     return new RepositoryRegistrationError(
       "GITHUB_RATE_LIMITED",
@@ -1811,9 +1811,9 @@ function githubSetupError(
     step === "retrieve the submitted GitHub repository"
       ? "Unable to retrieve the submitted GitHub repository."
       : `Unable to ${step} on GitHub.`,
-    // Issue 883: only the bounded label read keeps a cause — the other steps fail on transport or
-    // credentials, whose messages must not reach a diagnostic. A thrown value of undefined keeps none.
-    step === "read the repository difficulty labels" && !(error instanceof GitHubApiError) ? error : undefined,
+    // Issue 883/890: only the bounded label read keeps a cause, and only for a failure no status arm
+    // classified — a walk cut short, or a GitHub status nothing here can explain. A thrown value of undefined keeps none.
+    step === "read the repository difficulty labels" && isUnclassifiedGitHubFailure(error) ? error : undefined,
   );
 }
 

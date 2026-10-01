@@ -583,6 +583,39 @@ describe("explicit repository registration", () => {
     expect(String((error as Error).cause)).toContain("repository labels");
   });
 
+  // Issue 890: a GitHub status no arm classifies reaches the same generic 502,
+  // and its sanitized message names only the step — the status, the one thing
+  // an operator needs, is on the error. So the wrap keeps that one too.
+  it.each([500, 502, 503, 422])("keeps an unclassified GitHub HTTP %s label-read failure as the cause", async (status) => {
+    const harness = createHarness();
+    const failure = new GitHubApiError(status);
+    harness.dependencies.github.listRepositoryLabels = async () => { throw failure; };
+
+    const error = await registerRepository(harness.dependencies, createInput()).catch((thrown: unknown) => thrown);
+
+    expect(error).toMatchObject({ code: "UPSTREAM_FAILURE" });
+    expect((error as Error).cause).toBe(failure);
+    expect(String((error as Error).cause)).toContain(String(status));
+  });
+
+  // The other side of the same gate: a classified status already named its own
+  // remedy in the message the submitter read, so it stays out of the log.
+  it.each([
+    ["401", new GitHubApiError(401)],
+    ["403", new GitHubApiError(403)],
+    ["404", new GitHubApiError(404)],
+    ["429", new GitHubApiError(429)],
+    ["a rate-limited 403", new GitHubApiError(403, true)],
+  ])("drops a classified GitHub HTTP %s label-read failure from the cause", async (_what, failure) => {
+    const harness = createHarness();
+    harness.dependencies.github.listRepositoryLabels = async () => { throw failure; };
+
+    const error = await registerRepository(harness.dependencies, createInput()).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(RepositoryRegistrationError);
+    expect(Object.hasOwn(error as Error, "cause")).toBe(false);
+  });
+
   // The cause is optional: a registration error raised without one carries no
   // cause at all, rather than an own `cause: undefined` property that reads as
   // a wrapped error nobody supplied.

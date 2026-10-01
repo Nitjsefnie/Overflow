@@ -372,6 +372,11 @@ describe("POST /api/repositories", () => {
       [403, {}, "GITHUB_ACCESS", 403, ""],
       [429, {}, "GITHUB_RATE_LIMITED", 429, ""],
     ] satisfies Array<[number, Record<string, string>, string, number, string]>)("classifies GitHub HTTP %s with %j as %s / HTTP %s", async (status, headers, code, responseStatus, delay) => {
+      // A status no arm classifies reaches the generic 502, whose fixed message
+      // names none of it, so on the bounded label read the log is where the
+      // status surfaces (issue 890); the other steps keep their silence.
+      const unclassified = step === "labels" && code === "UPSTREAM_FAILURE";
+      if (unclassified) consoleOutputAllowed.add("error");
       const dependencies = successfulDependencies();
       dependencies.github = failingGitHubGateway(step, status, headers);
       const handler = createRepositoryPostHandler({
@@ -401,6 +406,10 @@ describe("POST /api/repositories", () => {
       expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
       if (code !== "GITHUB_ACCESS") {
         expect(JSON.stringify(body)).not.toMatch(/OAuth|oauth_application_policy/);
+      }
+      if (unclassified) {
+        expect(console.error).toHaveBeenCalled();
+        expect(vi.mocked(console.error).mock.calls.flat().map(String).join("\n")).toContain(String(status));
       }
     });
   });
