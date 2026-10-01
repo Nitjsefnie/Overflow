@@ -2,6 +2,7 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -496,11 +497,29 @@ function runAlert(
     // excuse: the record must exist, and a client that did not identify itself
     // reads as the empty string rather than as a pass.
     if (sent) {
+      const fixtureClient = join(bin, "curl");
       const ranClient = existsSync(clientPath) ? readFileSync(clientPath, "utf8").trim() : "";
       expect(
         ranClient,
         "the submission went through a client other than this run's own recording shim, so it was not mocked; an unreadable record reads as empty, which also fails",
-      ).toBe(join(bin, "curl"));
+      ).toBe(fixtureClient);
+
+      // The equality above is necessary and NOT sufficient, and the gap is a
+      // symlink. `$0` is the path the interpreter was INVOKED as, so a link
+      // planted at the fixture path resolves to itself and answers "yes, that
+      // was me" while the code behind it is something else entirely - which is
+      // the question this block exists to answer, not a question about spelling.
+      //
+      // A regular file at the recorded path is what makes the name mean the
+      // recording client. Missing, a directory and a link all fail here, and
+      // none of the three is a client; the file is written by this fixture on
+      // every run that sent, so there is no state in which its absence is
+      // benign. `lstat` rather than `stat` on purpose: `stat` follows the link
+      // and would report a target that is itself a regular file.
+      expect(
+        existsSync(fixtureClient) && lstatSync(fixtureClient).isFile(),
+        `${fixtureClient} is not a regular file, so the path the client reported cannot be trusted to name the code that ran - a symlink here resolves to itself and passes the comparison above while pointing somewhere else`,
+      ).toBe(true);
     }
     const sleepArgs = existsSync(sleepCallsPath)
       ? readFileSync(sleepCallsPath, "utf8").split("\n").slice(0, -1)
