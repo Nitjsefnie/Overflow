@@ -190,27 +190,41 @@ describe("an API token whose acknowledgement never arrived", () => {
 });
 
 describe(`upgrading across ${deliveryWindowMigration}`, () => {
-  it("adds a nullable confirmed_at and clamps a pre-existing token to the delivery window", async () => {
+  it("confirms a token carrying use evidence and clamps only the one carrying none", async () => {
     const outcome = await onNewDatabase("token_delivery_window_backfill", async (sql) => {
       await runMigrations({ upTo: precedingMigration });
-      const userId = await insertUser(sql);
+      const usedUserId = await insertUser(sql);
+      const untouchedUserId = await insertUser(sql);
+      // Neither names an expiry, so each takes the default this release
+      // inherits before the migration below changes it.
+      const [used] = await sql<{ expires_at: Date }[]>`
+        insert into api_tokens (user_id, token_hash, last_used_at)
+        values (${usedUserId}, ${mintApiToken().tokenHash}, now() - interval '2 hours')
+        returning expires_at
+      `;
       await sql`
         insert into api_tokens (user_id, token_hash)
-        values (${userId}, ${mintApiToken().tokenHash})
+        values (${untouchedUserId}, ${mintApiToken().tokenHash})
       `;
       const [before] = await sql<{ now: Date }[]>`select now()`;
       await runMigrations();
       const [after] = await sql<{ now: Date }[]>`select now()`;
-      const [row] = await sql<{ expires_at: Date; confirmed_at: Date | null }[]>`
-        select expires_at, confirmed_at from api_tokens where user_id = ${userId}
+      const [usedAfter] = await sql<
+        { expires_at: Date; confirmed_at: Date | null; last_used_at: Date | null }[]
+      >`
+        select expires_at, confirmed_at, last_used_at from api_tokens where user_id = ${usedUserId}
+      `;
+      const [untouched] = await sql<{ expires_at: Date; confirmed_at: Date | null }[]>`
+        select expires_at, confirmed_at from api_tokens where user_id = ${untouchedUserId}
       `;
       const [column] = await sql<{ is_nullable: string; data_type: string; column_default: string | null }[]>`
         select is_nullable, data_type, column_default from information_schema.columns
         where table_schema = 'public' and table_name = 'api_tokens' and column_name = 'confirmed_at'
       `;
       return {
-        expiresAt: row.expires_at,
-        confirmedAt: row.confirmed_at,
+        usedExpiresAtBefore: used.expires_at,
+        usedAfter,
+        untouched,
         earliest: await thirtyMinutesAfter(sql, before.now),
         latest: await thirtyMinutesAfter(sql, after.now),
         column,
@@ -220,12 +234,52 @@ describe(`upgrading across ${deliveryWindowMigration}`, () => {
     expect(outcome.column).toEqual({
       is_nullable: "YES", data_type: "timestamp with time zone", column_default: null,
     });
-    // A token issued before this column existed has never been confirmed under
-    // it, so it carries the window rather than a lifetime nobody told its
-    // owner about.
+    // A stamp on this row is a use of the value it currently holds: the
+    // regeneration that replaces a value clears last_used_at in the same
+    // statement. So this one is not an orphan, and its ninety days stand.
+    expect(outcome.usedAfter.confirmed_at).toEqual(outcome.usedAfter.last_used_at);
+    expect(outcome.usedAfter.expires_at).toEqual(outcome.usedExpiresAtBefore);
+    // No stamp at all is the defect's exact population: a token nobody has
+    // used since it was minted, which takes the delivery window.
+    expect(outcome.untouched.confirmed_at).toBeNull();
+    expect(outcome.untouched.expires_at.getTime()).toBeGreaterThanOrEqual(outcome.earliest.getTime());
+    expect(outcome.untouched.expires_at.getTime()).toBeLessThanOrEqual(outcome.latest.getTime());
+  });
+
+  it("gives a writer that names no expiry the delivery window, not the lifetime", async () => {
+    const outcome = await onNewDatabase("token_delivery_window_default", async (sql) => {
+      await runMigrations();
+      const userId = await insertUser(sql);
+      const [before] = await sql<{ now: Date }[]>`select now()`;
+      // The release this migration has to keep working: no expires_at named,
+      // which is the insert 046 gave a default to.
+      const [row] = await sql<{ expires_at: Date; confirmed_at: Date | null }[]>`
+        insert into api_tokens (user_id, token_hash)
+        values (${userId}, ${mintApiToken().tokenHash})
+        returning expires_at, confirmed_at
+      `;
+      const [after] = await sql<{ now: Date }[]>`select now()`;
+      const [expiryColumn] = await sql<{ is_nullable: string }[]>`
+        select is_nullable from information_schema.columns
+        where table_schema = 'public' and table_name = 'api_tokens' and column_name = 'expires_at'
+      `;
+      return {
+        expiresAt: row.expires_at,
+        confirmedAt: row.confirmed_at,
+        isNullable: expiryColumn.is_nullable,
+        earliest: await thirtyMinutesAfter(sql, before.now),
+        latest: await thirtyMinutesAfter(sql, after.now),
+        lifetime: await ninetyDaysAfter(sql, before.now),
+      };
+    });
+
+    // Not null with a default is what lets that insert through at all; the
+    // value is what stops it minting an unconfirmed credential with a lifetime.
+    expect(outcome.isNullable).toBe("NO");
     expect(outcome.confirmedAt).toBeNull();
     expect(outcome.expiresAt.getTime()).toBeGreaterThanOrEqual(outcome.earliest.getTime());
     expect(outcome.expiresAt.getTime()).toBeLessThanOrEqual(outcome.latest.getTime());
+    expect(outcome.expiresAt.getTime()).toBeLessThan(outcome.lifetime.getTime());
   });
 });
 

@@ -4,8 +4,9 @@
  *
  * The one statement of the lifetime in code: the store writes the expiry from
  * it and the token panel states it, so the copy cannot drift from the
- * credential. Migration 046 repeats the value as the column default, which only
- * a writer that predates the column relies on. The clock starts at the first
+ * credential. The column default is the delivery window below, not this
+ * lifetime: the default serves only a writer that predates the column, and a
+ * token it mints is one nobody has confirmed. The clock starts at the first
  * request that authenticates with the value, not at generation; until then the
  * token carries {@link API_TOKEN_DELIVERY_WINDOW_MINUTES} instead.
  *

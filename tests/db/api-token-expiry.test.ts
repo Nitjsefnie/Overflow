@@ -159,8 +159,9 @@ describe("API token expiry in the store", () => {
 
 describe("API token expiry for a writer that states none", () => {
   // The release still serving while a deploy builds, and a rollback target,
-  // issue tokens with this exact statement: it predates the expiry column.
-  it("accepts the previous release's insert and gives the token ninety days", async () => {
+  // issue tokens with this exact statement: it predates the expiry column. Its
+  // token arrives unconfirmed, so the default it inherits is the window.
+  it("accepts the previous release's insert and gives the token the delivery window", async () => {
     const sql = getSql();
     const userId = await insertUser(sql);
 
@@ -172,8 +173,9 @@ describe("API token expiry for a writer that states none", () => {
     `;
     const [after] = await sql<{ now: Date }[]>`select now()`;
 
-    expect(row.expires_at.getTime()).toBeGreaterThanOrEqual((await ninetyDaysAfter(sql, before.now)).getTime());
-    expect(row.expires_at.getTime()).toBeLessThanOrEqual((await ninetyDaysAfter(sql, after.now)).getTime());
+    expect(row.expires_at.getTime()).toBeGreaterThanOrEqual((await thirtyMinutesAfter(sql, before.now)).getTime());
+    expect(row.expires_at.getTime()).toBeLessThanOrEqual((await thirtyMinutesAfter(sql, after.now)).getTime());
+    expect(row.expires_at.getTime()).toBeLessThan((await ninetyDaysAfter(sql, after.now)).getTime());
   });
 });
 
