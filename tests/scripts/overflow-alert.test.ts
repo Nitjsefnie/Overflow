@@ -679,6 +679,39 @@ describe("overflow-alert.sh send stage", () => {
     ]);
   });
 
+  it("hands the client an endpoint containing a space as ONE argument", () => {
+    // The QUOTING of the expansion, which nothing else in this suite observes.
+    //
+    // Every other case drives a value with no whitespace in it, so the
+    // difference between `--url "$smtp_url"` and `--url $smtp_url` is invisible
+    // to all of them: an unquoted expansion with a space-free value produces a
+    // byte-identical argv. That is why the quoting can be dropped without any
+    // case noticing, and nothing else in the repository would notice either -
+    // there is no shellcheck in CI, and this file is the only place the script's
+    // argv is inspected.
+    //
+    // It is not cosmetic. The client reads `--url A --url B` as TWO transfers,
+    // so an endpoint carrying a space submitted unquoted would send the alert
+    // twice rather than once, and the failure would surface as a duplicate page
+    // from a script whose own log claims one submission. The run still exits 0
+    // here, because the verdict is read off the mainlog fixture and the shim
+    // accepts whatever it is handed; only the recorded argv shows the split.
+    const spacedEndpoint = "smtp://127.0.0.1: 25";
+    const run = runAlert({ recipient: validRecipient, smtpUrl: spacedEndpoint });
+
+    expect(run.status).toBe(0);
+    expect(
+      run.argv,
+      "an endpoint with a space must arrive whole, not split into two --url operands",
+    ).toContain(spacedEndpoint);
+    // The split form leaves the halves behind as separate elements, so the
+    // absence of the split is asserted directly rather than inferred from the
+    // containment above.
+    expect(run.argv, "and no fragment of it may appear on its own").not.toContain(
+      "smtp://127.0.0.1:",
+    );
+  });
+
   it("mails headers, the failure line and the journal tail for a valid recipient", () => {
     const run = runAlert({ recipient: validRecipient });
 
