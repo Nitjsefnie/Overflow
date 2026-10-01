@@ -26,14 +26,48 @@ export function withoutFencedCode(markdown: string): string {
   return kept.join("\n");
 }
 
-/** Inline links, `[text](target)`, excluding absolute URLs and mail links. */
+/**
+ * Reference definitions, `[label]: target`, keyed by lowercased label the way
+ * GitHub matches them. A reference use with no definition renders as literal
+ * text, not as a link, so a missing definition is not a broken link and the
+ * lookup misses are dropped rather than reported.
+ */
+function linkDefinitions(markdown: string): Map<string, string> {
+  const definitions = new Map<string, string>();
+  for (const line of withoutFencedCode(markdown).split("\n")) {
+    const definition = line.match(/^\s{0,3}\[([^\]]+)\]:\s*(\S+)/);
+    if (definition === null) continue;
+    definitions.set(definition[1]!.toLowerCase(), definition[2]!);
+  }
+  return definitions;
+}
+
+/**
+ * Every relative link a renderer would resolve, in document order: the inline
+ * spellings `[text](target)` and `[text](target "title")`, and the reference
+ * spellings `[text][label]`, `[text][]` and the bare `[label]`. A reference
+ * use counts only where a definition for its label exists — without one it
+ * renders as literal text, not as a link. Absolute URLs and mail links are
+ * excluded, as are the definition lines themselves, which declare targets
+ * rather than use them.
+ */
 export function relativeLinks(markdown: string): MarkdownLink[] {
   const links: MarkdownLink[] = [];
+  const definitions = linkDefinitions(markdown);
+  const keep = (target: string, line: number): void => {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return;
+    links.push({ line, target });
+  };
   withoutFencedCode(markdown).split("\n").forEach((line, index) => {
-    for (const match of line.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
-      const target = match[1]!;
-      if (/^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
-      links.push({ line: index + 1, target });
+    // A definition line declares a target; it is not itself a use of one.
+    if (/^\s{0,3}\[[^\]]+\]:/.test(line)) return;
+    for (const match of line.matchAll(/\[[^\]]*\]\(\s*([^)\s]+)[^)]*\)/g)) {
+      keep(match[1]!, index + 1);
+    }
+    for (const match of line.matchAll(/\[([^\]]+)\](?:\[([^\]]*)\])?/g)) {
+      const label = match[2] === undefined || match[2] === "" ? match[1]! : match[2]!;
+      const target = definitions.get(label.toLowerCase());
+      if (target !== undefined) keep(target, index + 1);
     }
   });
   return links;
@@ -66,26 +100,32 @@ export function headingSlugs(markdown: string): Set<string> {
  * Every relative link in `markdown` that does not resolve: the target file
  * does not exist, or its anchor names no heading in it. Links resolve exactly
  * as they would in the rendered `document`, so a link with an empty path
- * targets that document itself. The reported `line` counts from the first line
- * of the `markdown` passed, not from the first line of `document` — pass a
- * document, or expect the offset.
+ * targets that document itself. `firstLine` is the line of `document` that the
+ * first line of `markdown` sits on, so a failure names a line in the file a
+ * reader opens rather than a line inside the excerpt.
  */
-export function unresolvedLinks(markdown: string, document: string, repositoryRoot: string): string[] {
+export function unresolvedLinks(
+  markdown: string,
+  document: string,
+  repositoryRoot: string,
+  firstLine = 1,
+): string[] {
   const failures: string[] = [];
   for (const { line, target } of relativeLinks(markdown)) {
+    const at = `${document}:${firstLine + line - 1}`;
     const [path, anchor] = target.split("#", 2) as [string, string | undefined];
     const targetPath = path === "" ? resolve(repositoryRoot, document) : resolve(repositoryRoot, dirname(document), path);
     if (!existsSync(targetPath)) {
-      failures.push(`${document}:${line} links to ${target}, and ${path} does not exist`);
+      failures.push(`${at} links to ${target}, and ${path} does not exist`);
       continue;
     }
     if (anchor === undefined) continue;
     if (!targetPath.endsWith(".md")) {
-      failures.push(`${document}:${line} links to ${target}, an anchor into a file that is not Markdown`);
+      failures.push(`${at} links to ${target}, an anchor into a file that is not Markdown`);
       continue;
     }
     if (!headingSlugs(readFileSync(targetPath, "utf8")).has(anchor)) {
-      failures.push(`${document}:${line} links to ${target}, and no heading in ${path || document} has that anchor`);
+      failures.push(`${at} links to ${target}, and no heading in ${path || document} has that anchor`);
     }
   }
   return failures;

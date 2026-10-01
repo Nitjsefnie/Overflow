@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   headingSlugs,
   relativeLinks,
+  unresolvedLinks,
   unresolvedRelativeLinks,
 } from "../support/markdown-links";
 
@@ -77,6 +78,40 @@ describe("root documents", () => {
     expect(links).toStrictEqual([
       { line: 1, target: "API.md#submit-a-repository" },
       { line: 2, target: "#license" },
+    ]);
+  });
+
+  it("reads the inline and reference spellings of a link, and no others", () => {
+    const links = relativeLinks([
+      "[titled](deploy/README.md \"a title\") and [plain](backup-restore.md)",
+      "[full][here] and [collapsed][] and [bare]",
+      "[undefined][missing] is literal text, not a link",
+      "[remote][away] [mail][post]",
+      "[here]: ../OPERATING.md#environment-reference",
+      "[collapsed]: backup-restore.md",
+      "[bare]: README.md",
+      "[away]: https://example.com/x.md",
+      "[post]: mailto:a@b.c",
+    ].join("\n"));
+    expect(links).toStrictEqual([
+      { line: 1, target: "deploy/README.md" },
+      { line: 1, target: "backup-restore.md" },
+      { line: 2, target: "../OPERATING.md#environment-reference" },
+      { line: 2, target: "backup-restore.md" },
+      { line: 2, target: "README.md" },
+    ]);
+  });
+
+  it("reports a failure against the line it occupies in the document, not in the excerpt", () => {
+    const failures = unresolvedLinks(
+      "[dead](does-not-exist.md)\n\n[also dead](#no-such-anchor)",
+      "OPERATING.md",
+      repositoryRoot,
+      40,
+    );
+    expect(failures).toStrictEqual([
+      "OPERATING.md:40 links to does-not-exist.md, and does-not-exist.md does not exist",
+      "OPERATING.md:42 links to #no-such-anchor, and no heading in OPERATING.md has that anchor",
     ]);
   });
 });
