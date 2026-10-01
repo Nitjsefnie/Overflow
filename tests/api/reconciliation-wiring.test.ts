@@ -150,6 +150,7 @@ describe("production reconciliation wiring", () => {
     const store = createQueueingStore();
     const folded: string[] = [];
     const route = createGitHubWebhookPostHandler({
+      checkRateLimit: () => true,
       lookupCredential: async () => webhookCredential("github", secret),
       processWebhook: (delivery, scope) =>
         processWebhook(

@@ -354,6 +354,7 @@ function routeSender(
     instanceUrl: provider === "gitlab" ? "https://gitlab.example.com" : null,
   };
   const dependencies = {
+    checkRateLimit: () => true,
     lookupCredential: async () => credential,
     processWebhook: (delivery: GitHubWebhookDelivery, scope: WebhookReceiptScope) => processWebhook({ store,
       enqueueReconciliation: (repositoryId, event) => store.enqueueWebhookReconciliation(repositoryId, event),

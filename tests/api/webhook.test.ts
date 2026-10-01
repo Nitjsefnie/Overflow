@@ -7,6 +7,11 @@ import { readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createGitHubWebhookPostHandler, POST } from "@/app/api/github/webhooks/route";
+import {
+  WEBHOOK_RATE_LIMIT_CAPACITY,
+  WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE,
+  createTokenBucket,
+} from "@/lib/webhooks/rate-limit";
 import { processWebhook, type WebhookProcessorDependencies } from "@/lib/webhooks/processor";
 
 // The route and the spies must share the same persistence module instances.
@@ -32,6 +37,7 @@ describe("GitHub webhook route", () => {
     const deliveries: unknown[] = [];
     const dependencies = {
       secret,
+      checkRateLimit: () => true,
       lookupCredential: async () => ({
         repositoryId: "test-registration", credentialId: "181a4fbb-64d1-44fd-82da-cd191613798c",
         secret, provider: "github" as const, instanceUrl: null, projectId: 99,
@@ -50,7 +56,7 @@ describe("GitHub webhook route", () => {
   it.each([undefined, { id: 0, number: 11 }, { id: 201, number: -1 }, { id: 201, number: "11" }])(
     "rejects comment delivery without a valid issue subject, even if it contains a PR subject: %j", async (issue) => {
       const deliveries: unknown[] = [];
-      const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; } });
+      const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; } });
       const response = await route(request(JSON.stringify({ action: "created",
         repository: { id: 42, full_name: "octo/example" }, issue, pull_request: { id: 201, number: 11 },
       }), { "x-github-event": "issue_comment", "x-github-delivery": "invalid-comment-subject" }));
@@ -65,7 +71,7 @@ describe("GitHub webhook route", () => {
   // traffic Overflow chose to ignore and hides real failures.
   it.each(["issues", "issue_comment"])("answers 204 for a deliberately ignored PR-carrying %s envelope", async (event) => {
     const processWebhookMock = vi.fn().mockResolvedValue(undefined);
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
     const response = await route(request(JSON.stringify({
       action: event === "issues" ? "edited" : "created",
       repository: { id: 42, full_name: "octo/example" },
@@ -86,7 +92,7 @@ describe("GitHub webhook route", () => {
   // and no delivery row.
   it.each(["ready_for_review", "converted_to_draft"])("answers 204 for a recognized-but-unmaterialized %s action without processing", async (action) => {
     const processWebhookMock = vi.fn().mockResolvedValue(undefined);
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
     const response = await route(request(JSON.stringify({
       action,
       repository: { id: 42, full_name: "octo/example" },
@@ -98,7 +104,7 @@ describe("GitHub webhook route", () => {
 
   it("answers 400 for a correctly signed unparseable JSON body", async () => {
     const processWebhookMock = vi.fn();
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
     const response = await route(request("{", {
       "x-github-event": "pull_request",
       "x-github-delivery": "bad-json",
@@ -114,7 +120,7 @@ describe("GitHub webhook route", () => {
     { event: "pull_request_review", action: "dismissed", key: "pull_request", kind: "PULL_REQUEST" },
   ])("preserves stable subject identity for $event/$action", async ({ event, action, key, kind }) => {
     const deliveries: unknown[] = [];
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; } });
+    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; } });
     const response = await route(request(JSON.stringify({ action,
       repository: { id: 42, full_name: "octo/example" }, [key]: { id: 201, number: 11, merged: true,
         state: "closed", updated_at: "2026-09-08T10:00:00Z", title: "Issue", body: null,
@@ -130,7 +136,7 @@ describe("GitHub webhook route", () => {
     { id: Number.MAX_SAFE_INTEGER + 1, number: 11 }, { id: 201, number: "11" }])(
     "rejects an invalid subject %j before processing", async (subject) => {
       const deliveries: unknown[] = [];
-      const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; } });
+      const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; } });
       const response = await route(request(JSON.stringify({ action: "closed",
         repository: { id: 42, full_name: "octo/example" }, pull_request: subject,
       }), { "x-github-event": "pull_request", "x-github-delivery": "invalid-subject" }));
@@ -147,7 +153,7 @@ describe("GitHub webhook route", () => {
     { repository: { id: 42, full_name: "octo/example" } },
   ])("rejects unsupported or malformed comment envelopes before queueing: %j", async (payload) => {
     const processed: unknown[] = [];
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { processed.push(delivery); return { status: "PROCESSED" as const }; } });
+    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { processed.push(delivery); return { status: "PROCESSED" as const }; } });
     const response = await route(request(JSON.stringify({ issue: { id: 201, number: 11 }, ...payload }), {
       "x-github-event": "issue_comment", "x-github-delivery": "invalid-comment",
     }));
@@ -172,7 +178,7 @@ describe("GitHub webhook route", () => {
 
   it("verifies raw bytes before parsing JSON and dispatches a supported delivery", async () => {
     const processWebhookMock = vi.fn().mockResolvedValue({ status: "PROCESSED" });
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
 
     const response = await route(
       request(rawPayload, {
@@ -218,6 +224,7 @@ describe("GitHub webhook route", () => {
       },
     };
     const route = createGitHubWebhookPostHandler({
+      checkRateLimit: () => true,
       lookupCredential: async () => webhookCredential("github", secret),
       processWebhook: (delivery, scope) => processWebhook(dependencies, delivery, scope),
     });
@@ -256,6 +263,7 @@ describe("GitHub webhook route", () => {
       },
     };
     const route = createGitHubWebhookPostHandler({
+      checkRateLimit: () => true,
       lookupCredential: async () => webhookCredential("github", secret),
       processWebhook: (delivery, scope) => processWebhook(dependencies, delivery, scope),
     });
@@ -279,7 +287,7 @@ describe("GitHub webhook route", () => {
 
   it("rejects an invalid signature before attempting to parse malformed JSON", async () => {
     const processWebhookMock = vi.fn();
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
 
     const response = await route(
       new Request("https://overflow.test/api/github/webhooks?hook=181a4fbb-64d1-44fd-82da-cd191613798c", {
@@ -300,7 +308,7 @@ describe("GitHub webhook route", () => {
 
   it("requires GitHub delivery headers; a recognized-but-unmaterialized action answers 204 without processing", async () => {
     const processWebhookMock = vi.fn();
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
 
     const missingDelivery = await route(
       request(rawPayload, { "x-github-event": "pull_request" }),
@@ -319,6 +327,7 @@ describe("GitHub webhook route", () => {
 
   it("returns retryable 503 when delivery processing fails", async () => {
     const route = createGitHubWebhookPostHandler({
+      checkRateLimit: () => true,
       lookupCredential: async () => webhookCredential("github", secret),
       processWebhook: vi.fn().mockRejectedValue(new Error("upstream connection refused")),
     });
@@ -343,6 +352,7 @@ describe("GitHub webhook route", () => {
     { status: "PROCESSED", answer: 202 },
   ] as const)("answers the $status processing result with $answer", async ({ status, answer }) => {
     const route = createGitHubWebhookPostHandler({
+      checkRateLimit: () => true,
       lookupCredential: async () => webhookCredential("github", secret),
       processWebhook: vi.fn().mockResolvedValue({ status }),
     });
@@ -375,7 +385,7 @@ describe("GitHub webhook route", () => {
       calls.push(args);
     });
     try {
-      const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+      const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
 
       const response = await route(
         request(rawPayload, {
@@ -409,7 +419,7 @@ describe("GitHub webhook route", () => {
     const fullName = `octo\n\u001b[2J${"a".repeat(5_000)}`;
     const rootCause = new Error("upstream connection refused");
     const processWebhookMock = vi.fn().mockRejectedValue(rootCause);
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const response = await route(request(JSON.stringify({ ...JSON.parse(rawPayload), repository: { id: 42, full_name: fullName } }), {
@@ -440,6 +450,7 @@ describe("GitHub webhook route", () => {
 
   it("encodes a terminal escape in the delivery id of the still-in-progress line", async () => {
     const route = createGitHubWebhookPostHandler({
+      checkRateLimit: () => true,
       lookupCredential: async () => webhookCredential("github", secret),
       processWebhook: vi.fn().mockResolvedValue({ status: "IN_PROGRESS" }),
     });
@@ -481,6 +492,7 @@ describe("GitHub webhook route", () => {
     });
     try {
       const route = createGitHubWebhookPostHandler({
+        checkRateLimit: () => true,
         lookupCredential: async () => webhookCredential("github", secret),
         processWebhook: (delivery, scope) => processWebhook(dependencies, delivery, scope),
       });
@@ -515,7 +527,7 @@ describe("GitHub webhook route", () => {
   it("rejects a declared oversize delivery with 413 before reading any of the body", async () => {
     const { stream, record } = trackedBodyStream(CHUNK_COUNT);
     const processWebhookMock = vi.fn();
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
     const response = await route(streamRequest(stream, {
       "content-length": String(WEBHOOK_BODY_LIMIT_BYTES + 1),
       "x-github-event": "pull_request",
@@ -535,7 +547,7 @@ describe("GitHub webhook route", () => {
   // either path) — both turn this 202 into a 413.
   it("accepts a correctly signed delivery at exactly the 25 MiB ceiling and dispatches it", async () => {
     const processWebhookMock = vi.fn().mockResolvedValue({ status: "PROCESSED" });
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
     // JSON.parse ignores insignificant whitespace, so trailing spaces pad the
     // envelope to exactly the limit's byte length without changing its
     // meaning; the payload is ASCII, so string length equals byte length.
@@ -566,7 +578,7 @@ describe("GitHub webhook route", () => {
   it("stops reading a delivery with no Content-Length once the body crosses 25 MiB, answering 413", async () => {
     const { stream, record } = trackedBodyStream(CHUNK_COUNT);
     const processWebhookMock = vi.fn();
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
     const response = await route(streamRequest(stream, {
       "x-github-event": "pull_request",
       "x-github-delivery": "oversize-stream",
@@ -584,7 +596,7 @@ describe("GitHub webhook route", () => {
   it("stops reading a delivery whose Content-Length lies low once the body crosses 25 MiB, answering 413", async () => {
     const { stream, record } = trackedBodyStream(CHUNK_COUNT);
     const processWebhookMock = vi.fn();
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
     const response = await route(streamRequest(stream, {
       "content-length": "1024",
       "x-github-event": "pull_request",
@@ -603,7 +615,7 @@ describe("GitHub webhook route", () => {
   it("answers 413, not 401, for an oversize delivery with an invalid signature", async () => {
     const { stream, record } = trackedBodyStream(CHUNK_COUNT);
     const processWebhookMock = vi.fn();
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
     const response = await route(streamRequest(stream, {
       "x-github-event": "pull_request",
       "x-github-delivery": "oversize-invalid-signature",
@@ -621,7 +633,7 @@ describe("GitHub webhook route", () => {
   it("treats a null request body as empty: a correctly signed empty body answers 400", async () => {
     const signature = createHmac("sha256", secret).update("").digest("hex");
     const processWebhookMock = vi.fn();
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
     const response = await route(new Request("https://overflow.test/api/github/webhooks?hook=181a4fbb-64d1-44fd-82da-cd191613798c", {
       method: "POST",
       headers: {
@@ -633,6 +645,78 @@ describe("GitHub webhook route", () => {
     }));
     expect(response.status).toBe(400);
     expect(processWebhookMock).not.toHaveBeenCalled();
+  });
+
+  // The receiver answers 429 from the token bucket before it reads a header
+  // and before it looks up a credential (issue 852): a burst past capacity
+  // costs the sender one bucket answer and nothing else. The bucket is the
+  // real limiter module's, drained through the handler itself; timestamps are
+  // explicit — no wall clock, no fake timers.
+  it("declines a burst past capacity with 429 before reading a header or a credential", async () => {
+    const bucket = createTokenBucket({
+      capacity: WEBHOOK_RATE_LIMIT_CAPACITY,
+      refillPerMinute: WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE,
+      nowMs: () => 1_000_000,
+    });
+    const lookupCredential = vi.fn(async () => webhookCredential("github", secret));
+    const route = createGitHubWebhookPostHandler({
+      checkRateLimit: () => bucket.admit(),
+      lookupCredential,
+      processWebhook: vi.fn().mockResolvedValue({ status: "PROCESSED" as const }),
+    });
+
+    const burstStatuses: number[] = [];
+    for (let i = 0; i < WEBHOOK_RATE_LIMIT_CAPACITY; i += 1) {
+      burstStatuses.push((await route(headerlessRequest())).status);
+    }
+    // A headerless delivery is admitted past the limiter and refused next by
+    // the missing headers (400), so admission and refusal stay distinguishable.
+    expect(burstStatuses).toEqual(Array.from({ length: WEBHOOK_RATE_LIMIT_CAPACITY }, () => 400));
+
+    const declined = await route(headerlessRequest());
+    expect(declined.status).toBe(429);
+    expect(declined.headers.get("retry-after")).toBe("1");
+    // 429 precedes the credential lookup — nothing is spent on a declined
+    // delivery beyond the bucket answer itself.
+    expect(lookupCredential).not.toHaveBeenCalled();
+
+    // ... and it precedes the header reads: a fully-formed delivery is also
+    // declined while the bucket is empty.
+    const wellFormed = await route(request(rawPayload, {
+      "x-github-event": "pull_request",
+      "x-github-delivery": "burst-well-formed",
+    }));
+    expect(wellFormed.status).toBe(429);
+    expect(lookupCredential).not.toHaveBeenCalled();
+  });
+
+  // A sender at the observed historical peak (25 deliveries per minute over
+  // the 14 days ending 2026-10-01) must never be declined: the refill rate —
+  // one token per second — outruns it, so the bucket never drains. Explicit
+  // timestamps advance the same real bucket across ten peak-rate minutes.
+  it("admits a sender at the observed peak of 25 deliveries per minute indefinitely", async () => {
+    let nowMs = 0;
+    const bucket = createTokenBucket({
+      capacity: WEBHOOK_RATE_LIMIT_CAPACITY,
+      refillPerMinute: WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE,
+      nowMs: () => nowMs,
+    });
+    const route = createGitHubWebhookPostHandler({
+      checkRateLimit: () => bucket.admit(),
+      lookupCredential: async () => webhookCredential("github", secret),
+      processWebhook: vi.fn().mockResolvedValue({ status: "PROCESSED" as const }),
+    });
+
+    const statuses: number[] = [];
+    for (let minute = 0; minute < 10; minute += 1) {
+      for (let nth = 0; nth < 25; nth += 1) {
+        nowMs = minute * 60_000 + nth * 2_000 + 500;
+        statuses.push((await route(headerlessRequest())).status);
+      }
+    }
+    // Every delivery is admitted past the limiter (400 = admitted, then
+    // refused for missing headers) — none is declined with 429.
+    expect(statuses).toEqual(Array.from({ length: 250 }, () => 400));
   });
 
   it("rejects an invalid signature before constructing production persistence dependencies", async () => {
@@ -731,4 +815,13 @@ function streamRequest(
     // no-Content-Length case under test.
     duplex: "half",
   } as RequestInit);
+}
+
+// No headers and no body: the handler's first statement decides the whole
+// answer, so the limiter's ordering ahead of the header reads is observable —
+// an admitted delivery answers 400 here, a declined one 429.
+function headerlessRequest(): Request {
+  return new Request("https://overflow.test/api/github/webhooks?hook=181a4fbb-64d1-44fd-82da-cd191613798c", {
+    method: "POST",
+  });
 }
