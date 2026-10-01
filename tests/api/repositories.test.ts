@@ -226,7 +226,7 @@ describe("POST /api/repositories", () => {
     consoleOutputAllowed.add("error");
     let tripped: Error | undefined;
     try {
-      new CollectionWalkBound<{ name: string }>("repository difficulty labels").add(new Array(MAX_WALK_ITEMS + 1).fill({ name: "size/S" }));
+      new CollectionWalkBound<{ name: string }>("repository labels").add(new Array(MAX_WALK_ITEMS + 1).fill({ name: "size/S" }));
     } catch (error) {
       tripped = error as Error;
     }
@@ -234,7 +234,7 @@ describe("POST /api/repositories", () => {
 
     const response = await handler(authorizedRequest(validInput(), apiToken));
     expect(response.status).toBe(502);
-    expect(vi.mocked(console.error).mock.calls.flat().join(" ")).toMatch(new RegExp(`${MAX_WALK_ITEMS}.*repository difficulty labels`));
+    expect(vi.mocked(console.error).mock.calls.some((call) => new RegExp(`${MAX_WALK_ITEMS}.*repository labels`).test(String(call[0])))).toBe(true);
   });
 
   it("returns a structured 502 without exposing a GitHub failure", async () => {

@@ -567,7 +567,7 @@ describe("explicit repository registration", () => {
   // so the wrap keeps it as the cause instead of dropping it.
   it("preserves the wrapped error as the cause of a sanitized upstream failure", async () => {
     const harness = createHarness();
-    const bound = new CollectionWalkBound<{ name: string }>("repository difficulty labels");
+    const bound = new CollectionWalkBound<{ name: string }>("repository labels");
     let tripped: unknown;
     try {
       bound.add(new Array(MAX_WALK_ITEMS + 1).fill({ name: "size/S" }));
@@ -580,7 +580,7 @@ describe("explicit repository registration", () => {
 
     expect(error).toMatchObject({ code: "UPSTREAM_FAILURE" });
     expect((error as Error).cause).toBe(tripped);
-    expect(String((error as Error).cause)).toContain("repository difficulty labels");
+    expect(String((error as Error).cause)).toContain("repository labels");
   });
 
   // The cause is optional: a registration error raised without one carries no
