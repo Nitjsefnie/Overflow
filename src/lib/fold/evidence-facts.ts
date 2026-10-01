@@ -33,6 +33,15 @@ export type ReconciliationFact = ReconciliationFactKey & {
   payload: NarrowedCachedIssue | ReconciliationPullRequestEvidence;
 };
 
+/**
+ * A fact together with its measured serialized size, carried out of the split
+ * so the write batching never re-serializes a payload (the split already paid
+ * the JSON.stringify for the byte-limit check).
+ */
+export type MeasuredReconciliationFact = ReconciliationFact & {
+  bytes: number;
+};
+
 /** A fact that was omitted from the cache because its payload exceeded the byte limit. */
 export type OversizedReconciliationFact = ReconciliationFactKey & {
   bytes: number;
@@ -40,8 +49,8 @@ export type OversizedReconciliationFact = ReconciliationFactKey & {
 
 /** The split of one evidence document into the facts to write and the facts to omit. */
 export type EvidenceFactSplit = {
-  /** Facts to store, in stable document order (issues first, then pull requests). */
-  facts: ReconciliationFact[];
+  /** Facts to store, in stable document order (issues first, then pull requests), with measured sizes. */
+  facts: MeasuredReconciliationFact[];
   /** Facts over the byte limit, each with its measured serialized size. */
   oversized: OversizedReconciliationFact[];
 };
@@ -98,7 +107,7 @@ export function splitEvidenceFacts(
       const prior = omitted.findIndex((report) => report.kind === kind && report.subjectKey === subjectKey);
       if (prior >= 0) omitted.splice(prior, 1);
     }
-    facts.set(key, { kind, subjectKey, payload });
+    facts.set(key, { kind, subjectKey, payload, bytes });
   };
 
   for (const issuePayload of document.issues) {
@@ -118,7 +127,10 @@ export function splitEvidenceFacts(
  * deterministic regardless of the rows' physical order.
  *
  * Keys that are not numeric (impossible from this module's own writes) sort
- * after every numeric key, by their text.
+ * after every numeric key, by their text. A row whose kind is neither 'issue'
+ * nor 'pull_request' throws — unreachable through the facts table's CHECK
+ * constraint, and refusing beats silently dropping a fact from the document
+ * the fold treats as its belief about upstream.
  */
 export function mergeEvidenceFacts(
   facts: ReadonlyArray<{ kind: string; subject_key: string; payload: unknown }>,
@@ -138,6 +150,7 @@ export function mergeEvidenceFacts(
   })) {
     if (fact.kind === "issue") issues.push(fact.payload as NarrowedCachedIssue);
     else if (fact.kind === "pull_request") pullRequests.push(fact.payload as ReconciliationPullRequestEvidence);
+    else throw new Error(`Unknown reconciliation fact kind ${fact.kind} for subject ${fact.subject_key}.`);
   }
   return { issues, pullRequests };
 }
@@ -160,23 +173,23 @@ export function diffEvidenceFactKeys(
 
 /**
  * Groups facts into batches whose serialized parameter stays within
- * `maxBatchBytes`, so one write statement never carries more than the byte
- * budget the fact limit already bounds each payload to. A single fact larger
- * than the whole budget gets its own batch rather than being dropped —
- * dropping here would silently lose cache content the split already admitted.
+ * `maxBatchBytes`, over the sizes the split already measured — no payload is
+ * serialized a second time. A single fact larger than the whole budget gets
+ * its own batch rather than being dropped — dropping here would silently lose
+ * cache content the split already admitted.
  */
 export function chunkEvidenceFactWrites(
-  facts: ReadonlyArray<ReconciliationFact>,
+  facts: ReadonlyArray<MeasuredReconciliationFact>,
   maxBatchBytes: number,
-): ReconciliationFact[][] {
+): MeasuredReconciliationFact[][] {
   if (!Number.isFinite(maxBatchBytes) || maxBatchBytes <= 0) {
     throw new Error(`Invalid reconciliation fact batch byte budget ${String(maxBatchBytes)}.`);
   }
-  const batches: ReconciliationFact[][] = [];
-  let current: ReconciliationFact[] = [];
+  const batches: MeasuredReconciliationFact[][] = [];
+  let current: MeasuredReconciliationFact[] = [];
   let currentBytes = 0;
   for (const fact of facts) {
-    const bytes = serializedPayloadBytes(fact.payload);
+    const bytes = fact.bytes;
     if (current.length > 0 && currentBytes + bytes > maxBatchBytes) {
       batches.push(current);
       current = [];
