@@ -1048,6 +1048,44 @@ describe("reconcileRepository", () => {
     },
   );
 
+  it("fails the run without discarding when a dirty GitHub issue read answers the diff-cap 406", async () => {
+    // The issue arm is the deleted-subject class and nothing else: an issue
+    // read has no diff to cap, so a 406 there is not expected and keeps
+    // whole-run retry semantics. This pins the boundary against the pull
+    // request classifier's 406 branch leaking into the issue arm.
+    const diffCap = new GitHubApiError(406);
+    const dependencies = reconciliationDependencies({
+      github: {
+        getIssue: vi.fn(async () => {
+          throw diffCap;
+        }),
+      },
+    });
+    dependencies.store.getReconciliationEvidence = async () => ({
+      version: 1,
+      formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
+      checkpoint: new Date(),
+      lastFullPassAt: new Date(),
+      omittedOversizedFacts: 0,
+      issues: [],
+      pullRequests: [],
+    });
+    dependencies.store.getDirtyReconciliationSubjects = async () => [
+      { kind: "ISSUE" as const, id: 999, number: 42, generation: 7 },
+    ];
+    dependencies.store.discardDirtyReconciliationSubject = vi.fn().mockResolvedValue(undefined);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
+        message: "Unable to reconcile repository.",
+      });
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
   it("completes the run when an untracked merged closing pull request's evidence is gone upstream, journaling and omitting without a discard", async () => {
     const notFound = new Error(
       "GitHub GraphQL request failed. NOT_FOUND: Could not resolve to a PullRequest with the number of '12'.",

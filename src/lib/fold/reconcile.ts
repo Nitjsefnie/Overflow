@@ -490,10 +490,9 @@ type SubjectDiscardReason = "NOT_FOUND" | "DIFF_TOO_LARGE";
 // the flattened NOT_FOUND message the subject classifier matches; the diff
 // read is REST and answers GitHub's fixed 404 error, which that classifier
 // never sees. The diff read also answers GitHub's fixed 406 when the diff
-// exceeds the 20000-line cap — a durable refusal no retry can satisfy, since
-// the diff only ever grows until it is split — so it joins the same
-// subject-alone arm under its own reason. Either shape is definitive for
-// that pull request, not a property of the run.
+// exceeds the 20000-line cap — retrying the same read answers 406 again —
+// so it joins the same subject-alone arm under its own reason. Either shape
+// is definitive for that pull request, not a property of the run.
 function pullRequestDiscardReason(error: unknown): SubjectDiscardReason | null {
   if (error instanceof GitHubApiError && error.status === 406) return "DIFF_TOO_LARGE";
   if (isGitHubSubjectNotFoundError(error) || (error instanceof GitHubApiError && error.status === 404)) return "NOT_FOUND";
