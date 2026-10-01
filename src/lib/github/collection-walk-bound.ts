@@ -17,26 +17,33 @@
  * repository route handlers map any error that is not a `GitHubApiError` to a
  * generic upstream failure, `RepositoryRegistrationError` carries no `cause`,
  * and none of those three logs. So the walk is bounded and the failure is
- * typed, but nothing here is observable by an operator; the GitLab sibling's
- * settled design has the same property, and the fix for it belongs at those
- * catches rather than in a bound.
+ * typed, but nothing here is observable by an operator. The GitLab sibling's
+ * label read lands on the same generic 502, which is why adding a log line here
+ * alone would make the two providers diverge. That parity is not blanket,
+ * though: a throw on the reconciliation path is caught by the worker and logged
+ * with the error object it was handed, so this bound is not uniformly silent
+ * across the two providers' call sites. The fix belongs at those catches.
  *
  * Sizing, and what each number costs. Both are POLICY values, not measurements
  * of any repository, and the arithmetic between them is load-bearing:
  *
  * - GitHub clamps `per_page` at 100 on this endpoint and the walk always asks
  *   for the maximum, so a full page is 100 rows. `MAX_WALK_ITEMS` is 10 000
- *   rows — 100 full pages. It counts rows FETCHED, not distinct names: a page
- *   that repeats rows the walk already has still spends its budget, so the
- *   number of names a walk can return is larger than 10 000, which is the safe
- *   direction to be wrong in. A repository's label catalog is a small
- *   collection by nature: labels are hand-created, deduplicated by name and
- *   rarely reach even the low thousands, so 10 000 sits an order of magnitude
- *   above the largest catalog worth reading and every legitimate walk
- *   completes. It is also a fifteenth of the GitLab sibling's 150 000, which is
- *   sized for a whole project's lifetime issue listing rather than one
- *   repository's label catalog — a smaller collection does not need a larger
- *   budget.
+ *   rows — 100 full pages. It counts rows FETCHED, not distinct names, so
+ *   10 000 is a ceiling on names as well as on rows: a page that re-serves rows
+ *   the walk already holds spends its budget without adding a name, so a walk's
+ *   distinct count lands AT or UNDER the ceiling and never above it. Repeats
+ *   therefore make a walk fail EARLIER than its distinct content warranted
+ *   rather than later, which is the conservative direction to be wrong in — the
+ *   ceiling can trip on a walk that would have returned fewer names than the
+ *   budget allowed, and never lets one through that it should have stopped. A
+ *   repository's label catalog is a small collection by nature: labels are
+ *   hand-created, deduplicated by name and rarely reach even the low thousands,
+ *   so 10 000 sits an order of magnitude above the largest catalog worth reading
+ *   and every legitimate walk completes. It is also a fifteenth of the GitLab
+ *   sibling's 150 000, which is sized for a whole project's lifetime issue
+ *   listing rather than one repository's label catalog — a smaller collection
+ *   does not need a larger budget.
  * - `MAX_WALK_PAGES` is 200. It is the backstop for an instance that answers
  *   with empty or near-empty pages forever: the row count never moves, so the
  *   row ceiling never fires on that walk and this ceiling is the only thing
