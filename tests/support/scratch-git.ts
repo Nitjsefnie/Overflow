@@ -127,26 +127,47 @@ export function showFileLines(commit: string, path: string, cwd?: string): strin
 }
 
 /**
- * Runs git in `repo` and returns its exit status and output WITHOUT throwing.
+ * Runs git in `repo` and returns its exit status and output, WITHOUT throwing on
+ * a NON-ZERO exit.
  *
- * For the reads whose NON-ZERO EXIT IS THE ANSWER — "does this string appear in
- * this history", "does this path exist at HEAD" — where git answers "no" with
+ * For the reads whose failure status is the ANSWER — "does this string appear in
+ * this history", "does this path exist at HEAD" — where git says "no" with
  * status 1 while the helpers above throw. Writing those reads as
- * `try { git(...) } catch { }` throws the status away and makes a genuine
- * failure (status 128, a target that is not a repository at all) indistinguishable
- * from a legitimate "no", which is precisely how a scan that found nothing ends
- * up having certified a target it never opened.
+ * `try { git(...) } catch { }` throws the status away, and status is the whole
+ * of the answer.
  *
- * Same environment as `git` above: every inherited `GIT_*` variable stripped, so
- * a caller cannot be redirected to a different repository by the environment.
+ * It DOES throw when there is no status at all. `spawnSync` returns
+ * `status: null` — and, measured, with **no `stdout` key whatsoever** — when the
+ * binary cannot be launched or the call times out, so a helper that returned
+ * those fields unchanged would hand a caller an `undefined` where its type said
+ * `string`, and the caller's `expect(result.stdout).not.toContain(secret)` would
+ * throw a bare `TypeError` instead of failing an assertion. Worse, coalescing to
+ * `""` would be worse still: an empty string contains nothing, so a launch
+ * failure would satisfy a "found nothing" assertion and certify a repository the
+ * test never opened. Throwing makes "could not look" loud, which is the only
+ * shape in which it cannot be read as "looked, found nothing" — the exact
+ * distinction between status 1 and the failures above this line.
+ *
+ * Same environment as `git`: every inherited `GIT_*` variable stripped, so a
+ * caller cannot be redirected to a different repository by the environment.
  */
-export function tryGit(repo: string, ...args: string[]): { status: number | null; stdout: string; stderr: string } {
+export function tryGit(repo: string, ...args: string[]): { status: number; stdout: string; stderr: string } {
   const result = spawnSync("git", args, {
     cwd: repo,
     encoding: "utf8",
     env: scratchGitEnv,
     timeout: BLOB_READ_TIMEOUT_MS,
   });
+  if (result.status === null) {
+    // Measured on this box, `spawnSync` pointed at a directory that does not
+    // exist returns `status: null`, an `error`, and NO `stdout` at all — so the
+    // declared `string` was a lie on exactly this path, and a caller's
+    // `not.toContain(...)` would have thrown a bare TypeError, or worse, passed.
+    throw new Error(
+      `git ${args.join(" ")} never produced an exit status in ${repo} (status null, stdout ` +
+        `${result.stdout === undefined ? "absent" : "present"}): ${String(result.error ?? result.signal ?? "unknown")}`,
+    );
+  }
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
