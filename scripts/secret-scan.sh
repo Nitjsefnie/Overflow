@@ -42,8 +42,16 @@
 # The report is redacted, so the baseline carries no credential material. Its
 # `Match` fields are not literally the string REDACTED, and are not meant to
 # be: gitleaks substitutes the redaction into the secret's place inside the
-# match and keeps the surrounding source-line context. Trimming a Match field
-# to the bare literal would break the whole-record comparison above.
+# match and keeps the surrounding source-line context.
+#
+# ...AND WHAT TRIMMING ONE ACTUALLY COSTS, WHICH IS NOT THE SCAN. This script
+# passes --redact, and gitleaks' baseline matcher skips a redacted run's `Match`
+# and `Secret` fields outright, so trimming a `Match` down to the bare literal
+# leaves the scan's own suppression working exactly as before. What it does break
+# is tests/ci/secret-scan-script.test.ts, which compares every field — and a bare
+# `Match` also leaves the provenance check with no residue to examine, so the
+# entry drops out of the checkable count and EXPECTED_CHECKABLE_ENTRIES has to
+# move with it. The green scan is the part that will not warn you.
 #
 # WHEN THE BASELINE NEEDS A NEW ENTRY. It keys on COMMIT SHA, so editing a file
 # that carries a baselined fixture produces a new finding under a new SHA that
