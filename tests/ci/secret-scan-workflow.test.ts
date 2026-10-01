@@ -400,7 +400,23 @@ describe(".github/workflows/secret-scan.yml", () => {
         // workflow's literal is pinned by the install-step assertion above.
         GITLEAKS_SHA256: digest,
       };
-      const installed = spawnSync("bash", ["-c", install!.run!], {
+      // `bash -e`, which is what a GitHub runner uses for a `run:` block on
+      // Linux. Not an optimisation: without errexit a failed command in the
+      // middle of the block is not fatal, so `echo … | sha256sum -c -` printing
+      // FAILED would be followed by the next line running and the step exiting
+      // 0 — the test would then pass on an install whose checksum did not
+      // verify. The reviewer's T-4 mutant is exactly that, and it is green
+      // without this flag.
+      //
+      // `pipefail` is deliberately NOT set, because the runner does not set it
+      // either and the point is to reproduce the runner. What makes
+      // `sha256sum -c` safe here is that it is the LAST stage of its pipeline:
+      // under `bash -e` without pipefail a pipeline's status is the last
+      // stage's, so this check is the one whose status the step inherits. That
+      // is a property of the ORDER, not of the flags — an earlier stage
+      // failing while a later one succeeds would be invisible here, and the
+      // downloader's own flags (`-f -sS -L --retry 3`) are what cover that.
+      const installed = spawnSync("bash", ["-e", "-c", install!.run!], {
         cwd: workspace,
         encoding: "utf8",
         env: installEnv,
@@ -425,7 +441,7 @@ describe(".github/workflows/secret-scan.yml", () => {
         FAKE_GITLEAKS_VERSION: FAKE_GITLEAKS_VERSION,
         ...consumer!.env,
       };
-      const consumerResult = spawnSync("bash", ["-c", consumer!.run!], {
+      const consumerResult = spawnSync("bash", ["-e", "-c", consumer!.run!], {
         cwd: workspace,
         encoding: "utf8",
         env: consumerEnv,
