@@ -337,7 +337,10 @@ export function AccountDataNotice() {
             Your linked GitLab identities persist while your account exists, and deletion keeps them; they
             never expire automatically.
           </li>
-          <li>An API token expires 90 days after it is issued; deletion removes it at once.</li>
+          <li>
+            An API token nobody has used yet stops working after 30 minutes; the first request that
+            authenticates with it starts its 90 days. Deletion removes it at once.
+          </li>
           <li>
             Revoking a personal access token on its GitLab instance makes Overflow&apos;s stored copy unusable at
             its next use. It does not delete the linked identity. Only rejected background reconciliation reads —
