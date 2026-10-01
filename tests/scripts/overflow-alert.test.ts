@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -237,11 +237,6 @@ interface AlertRun {
   sleeps: number;
   /** The arguments of each wait, in order, from the sleep shim's record. */
   sleepArgs: string[];
-  /**
-   * The client the script resolved on the PATH it was actually spawned with.
-   * See `resolveCurlOn` and the transport-boundary cases that assert on it.
-   */
-  resolvedCurl: string;
 }
 
 /**
@@ -398,56 +393,68 @@ function runAlert(
 
     // The one spawn of the script in this file, and therefore the one place the
     // transport boundary has to hold. Asserted here rather than in a single
-    // dedicated case so that EVERY run checks it - seventy times over - instead
-    // of one case describing a convention the other seventy could drift away
-    // from. A spawn added elsewhere in this file is not covered by that, which is
-    // why the dedicated cases below exist alongside it: they pin what the check
-    // means and what happens when the fixture directory is not on the PATH at
-    // all, so a second spawner has something to copy rather than reinvent.
-    const spawnPath = `${bin}:/usr/bin:/bin`;
-    const resolvedCurl = resolveCurlOn(spawnPath);
+    // dedicated case so that EVERY run checks it, once per run, instead of one
+    // case describing a convention the others could drift away from.
+    //
+    // The guard reads `childEnv.PATH` and `spawnAlert` hands the child that same
+    // object, so there is ONE derivation of the PATH and the guard's input is
+    // the spawn's input by construction. Deriving it twice - a constant the
+    // guard resolves and a separate string the spawn is handed - is the shape
+    // that let a guard pass while the script reached the real client: the two
+    // can disagree, and nothing notices. `spawnAlert` therefore takes no
+    // environment at all, which makes a divergent PATH a compile error rather
+    // than a silent green.
+    const childEnv = {
+      // `as const` because this object is no longer contextually typed by
+      // `spawnSync`'s parameter: standalone, `NODE_ENV` would widen to `string`
+      // and stop satisfying the repo's `ProcessEnv`.
+      NODE_ENV: "test" as const,
+      OVERFLOW_ALERT_RECIPIENT_FILE: recipientFile,
+      OVERFLOW_ALERT_STATE_DIR: stateDir,
+      ...(options.deployedLogPath ? {} : { OVERFLOW_ALERT_EXIM_LOG: eximLogPath }),
+      ...(options.smtpUrl ? { OVERFLOW_ALERT_SMTP_URL: options.smtpUrl } : {}),
+      OVERFLOW_TEST_CURL_ARGV: curlArgvPath,
+      OVERFLOW_TEST_CLOCK_CALLS: join(directory, "clock-calls"),
+      OVERFLOW_TEST_CLOCK_BASE: join(directory, "clock-base"),
+      OVERFLOW_TEST_CLOCK_STEP: String(options.clockStepSeconds ?? 0),
+      OVERFLOW_TEST_EXIM_LOG: eximLogPath,
+      OVERFLOW_TEST_STALE_ID: options.staleMessageId ?? "",
+      OVERFLOW_TEST_LOG_APPEND: logAppendPath,
+      OVERFLOW_TEST_LOG_APPENDED: join(directory, "mainlog-appended"),
+      OVERFLOW_TEST_MAIL: mailPath,
+      OVERFLOW_TEST_MESSAGE_ID: messageId,
+      OVERFLOW_TEST_NO_ID: options.noId ? "1" : "0",
+      OVERFLOW_TEST_SLEEP_CALLS: sleepCallsPath,
+      OVERFLOW_TEST_SLEEP_REAL: options.realSleepSeconds ?? "",
+      FAKE_CURL_RC: String(options.curlStatus ?? 0),
+      FAKE_JOURNALCTL_RC: String(options.journalStatus ?? 0),
+      ...(options.deployedBudget
+        ? {}
+        : { OVERFLOW_ALERT_EXIM_WAIT_SECONDS: options.waitSeconds ?? "1" }),
+      // PATH last, and written once. Nothing above can set it.
+      PATH: `${bin}:/usr/bin:/bin`,
+    };
+
+    const resolvedCurl = resolveCurlOn(childEnv.PATH);
     expect(
       resolvedCurl,
-      `the script spawned with PATH=${spawnPath} resolves "${resolvedCurl}" instead of this run's recording shim at ${join(
+      `the script spawned with PATH=${childEnv.PATH} resolves "${resolvedCurl}" instead of this run's recording shim at ${join(
         bin,
         "curl",
       )}; a run that reaches the send stage on this PATH hands its message to a real SMTP client`,
     ).toBe(join(bin, "curl"));
 
-    const result = spawnSync(
-      "/bin/sh",
-      [scriptPath, ...(options.args ?? ["overflow.service"])],
-      {
-        env: {
-          NODE_ENV: "test",
-          PATH: spawnPath,
-          OVERFLOW_ALERT_RECIPIENT_FILE: recipientFile,
-          OVERFLOW_ALERT_STATE_DIR: stateDir,
-          ...(options.deployedLogPath ? {} : { OVERFLOW_ALERT_EXIM_LOG: eximLogPath }),
-          ...(options.smtpUrl ? { OVERFLOW_ALERT_SMTP_URL: options.smtpUrl } : {}),
-          OVERFLOW_TEST_CURL_ARGV: curlArgvPath,
-          OVERFLOW_TEST_CLOCK_CALLS: join(directory, "clock-calls"),
-          OVERFLOW_TEST_CLOCK_BASE: join(directory, "clock-base"),
-          OVERFLOW_TEST_CLOCK_STEP: String(options.clockStepSeconds ?? 0),
-          OVERFLOW_TEST_EXIM_LOG: eximLogPath,
-          OVERFLOW_TEST_STALE_ID: options.staleMessageId ?? "",
-          OVERFLOW_TEST_LOG_APPEND: logAppendPath,
-          OVERFLOW_TEST_LOG_APPENDED: join(directory, "mainlog-appended"),
-          OVERFLOW_TEST_MAIL: mailPath,
-          OVERFLOW_TEST_MESSAGE_ID: messageId,
-          OVERFLOW_TEST_NO_ID: options.noId ? "1" : "0",
-          OVERFLOW_TEST_SLEEP_CALLS: sleepCallsPath,
-          OVERFLOW_TEST_SLEEP_REAL: options.realSleepSeconds ?? "",
-          FAKE_CURL_RC: String(options.curlStatus ?? 0),
-          FAKE_JOURNALCTL_RC: String(options.journalStatus ?? 0),
-          ...(options.deployedBudget
-            ? {}
-            : { OVERFLOW_ALERT_EXIM_WAIT_SECONDS: options.waitSeconds ?? "1" }),
-        },
+    // `SpawnSyncReturns<string>` and not `ReturnType<typeof spawnSync>`: the latter
+    // resolves the unparameterised overload and widens `stderr` to
+    // `string | NonSharedBuffer`, which the reads below then reject.
+    const spawnAlert = (scriptArgs: string[]): SpawnSyncReturns<string> =>
+      spawnSync("/bin/sh", scriptArgs, {
+        env: childEnv,
         encoding: "utf8",
         ...(dropsPrivileges ? { uid: 65534, gid: 65534 } : {}),
-      },
-    );
+      });
+
+    const result = spawnAlert([scriptPath, ...(options.args ?? ["overflow.service"])]);
     if (result.error) throw result.error;
     expect(result.signal, `killed by ${result.signal}: ${result.stderr}`).toBeNull();
 
@@ -464,7 +471,6 @@ function runAlert(
       mail: existsSync(mailPath) ? readFileSync(mailPath, "utf8") : "",
       sleeps: sleepArgs.length,
       sleepArgs,
-      resolvedCurl,
     };
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -1136,27 +1142,23 @@ describe("overflow-alert.sh transport boundary", () => {
   // the fixture directory would only prove the string is there, not that the
   // lookup lands on it, and a PATH ordering mistake - the shim directory present
   // but second, behind /usr/bin - satisfies the string check and submits real
-  // mail. So these cases resolve.
-  it("resolves this run's recording shim, not the system client, on the PATH the script is spawned with", () => {
-    const run = runAlert({ recipient: validRecipient });
-
-    // A fixture-local path: mkdtemp under the temp dir, in a directory this
-    // run created and this run removed. The system client is at /usr/bin.
-    expect(run.resolvedCurl).toContain(join(tmpdir(), "overflow-alert-"));
-    expect(
-      run.resolvedCurl,
-      "a run that resolves the system client submits real mail to the production daemon",
-    ).not.toBe("/usr/bin/curl");
-  });
-
+  // mail. So the check in `runAlert` resolves rather than pattern-matches.
+  //
+  // There is no case here asserting the positive half of that. The invariant
+  // already resolves the client's PATH on every run and compares it to this
+  // run's own fixture path with `toBe`, which is strictly stronger than a case
+  // asserting the resolution "contains" a temp prefix and "is not"
+  // /usr/bin/curl - a test that cannot fail while the invariant holds is
+  // documentation wearing a test's clothes, and leaving one in place here would
+  // be the same false signal this file exists to remove.
   it("resolves the system client when the fixture directory is not on the PATH at all", () => {
-    // The counterpart, and what makes the case above discriminating rather than
-    // decorative: the same lookup on a PATH WITHOUT the fixture directory lands
-    // on the real client. That is precisely what a second spawn site added to
-    // this file would do by default, because `PATH: "/usr/bin:/bin"` is the
-    // shape a bare spawn takes - and it is the shape this file already uses for
-    // the two direct date-shim spawns, which is why they are safe only by
-    // happening to run nothing that looks for a client.
+    // What makes the invariant discriminating rather than decorative: the same
+    // lookup on a PATH WITHOUT the fixture directory lands on the real client.
+    // That is precisely what a second spawn site added to this file would do by
+    // default, because `PATH: "/usr/bin:/bin"` is the shape a bare spawn takes -
+    // and it is the shape this file already uses for the two direct date-shim
+    // spawns, which is why they are safe only by happening to run nothing that
+    // looks for a client.
     //
     // The two bare-PATH spawns in this file are the date shim itself, reached
     // by absolute path, and they never run the script. The day one of them runs
