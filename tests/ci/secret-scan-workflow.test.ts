@@ -441,6 +441,14 @@ describe(".github/workflows/secret-scan.yml", () => {
         FAKE_GITLEAKS_VERSION: FAKE_GITLEAKS_VERSION,
         ...consumer!.env,
       };
+      // `-e` on THIS step is inert by construction, and is kept only so the two
+      // blocks are run the way a runner runs them. This step's `run:` is a single
+      // command whose exit status is already the script's own, so there is no
+      // intervening line for errexit to abandon. Do not "simplify" the flags on
+      // one block and not the other, and do not read the install step's `-e` as
+      // load-bearing here: the property it makes observable is "a checksum
+      // mismatch aborts the install step", and that is a conjunction of the flag
+      // and a failing checksum, pinned by the install step's assertions.
       const consumerResult = spawnSync("bash", ["-e", "-c", consumer!.run!], {
         cwd: workspace,
         encoding: "utf8",
