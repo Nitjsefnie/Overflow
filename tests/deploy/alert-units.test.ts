@@ -33,6 +33,12 @@ import {
  * `TimeoutStartSec` is here because the script waits on the exim mainlog for a
  * relay verdict, and a run killed at its timeout reports neither outcome - not
  * the delivery, and not the failure it would have reported instead.
+ *
+ * `SupplementaryGroups` is here because the script READS that log, and the
+ * unit's empty capability bounding set means the group is the whole of the
+ * permission. The alert template stopped reading only the journal when the
+ * script began following a message id into the mainlog to decide whether the
+ * alert left the host; this is the directive that keeps that read possible.
  */
 const REVIEWED_ALERT_SERVICE_KEYS: ReadonlySet<string> = new Set([
   "AmbientCapabilities",
@@ -64,6 +70,7 @@ const REVIEWED_ALERT_SERVICE_KEYS: ReadonlySet<string> = new Set([
   "SystemCallArchitectures",
   "SystemCallErrorNumber",
   "SystemCallFilter",
+  "SupplementaryGroups",
   "TimeoutStartSec",
   "Type",
   "UMask",
@@ -105,6 +112,14 @@ const requiredAlertServiceValues: ReadonlyArray<readonly [string, string]> = [
   // because the number is the whole point: a shorter timeout reintroduces the
   // silent kill, and a longer one hides a hang.
   ["TimeoutStartSec", "120s"],
+  // The script reads /var/log/exim4/mainlog, which is 0640 Debian-exim:adm in a
+  // 2750 Debian-exim:adm directory. The unit's empty CapabilityBoundingSet
+  // takes away root's CAP_DAC_OVERRIDE, so this group is the only thing that
+  // grants the read - measured on this host, the file is unreadable under
+  // `capsh --drop=all` and readable under it with this group. Pinned to the one
+  // group, so widening it to anything else fails here rather than in
+  // production.
+  ["SupplementaryGroups", "adm"],
 ];
 
 /** `[Service]` directives that must be on, in any spelling systemd reads as true. */
@@ -260,5 +275,72 @@ describe("Overflow backup unit failure wiring", () => {
 
   it("stays a oneshot, whose nonzero exit is the failure OnFailure reacts to", () => {
     expectPinnedValue(only("Service", "Type"), "oneshot");
+  });
+});
+
+/**
+ * The alert script's runtime requirements, against the alert unit's sandbox.
+ *
+ * Nothing else in this repository joins those two. The unit-file suites read
+ * `deploy/overflow-alert@.service` as bytes, and the alert script's own suite
+ * runs it with a PATH shim and its own scratch log - so a unit that stopped
+ * being able to read the log the script now depends on would pass every test
+ * here and fail in production, on the one signal the maintainer trusts. The
+ * defect that made this necessary was exactly that: the script began reading
+ * the exim mainlog, and the unit's empty capability bounding set had quietly
+ * stopped allowing it.
+ *
+ * The binding is textual because it has to run in CI, where /var/log/exim4 does
+ * not exist. What is asserted is the relationship, in three parts that each fail
+ * if one of the others moves alone: the script's default log path lives under
+ * the directory whose group the unit has to grant, the script records which
+ * group that is, and the unit grants exactly that group. The file's permissions
+ * are a host fact, measured once rather than asserted here: /var/log/exim4 is
+ * 2750 Debian-exim:adm and its mainlog is 0640 Debian-exim:adm, so root under
+ * an empty CapabilityBoundingSet - no CAP_DAC_OVERRIDE, no CAP_DAC_READ_SEARCH,
+ * and not itself a member of adm - is refused the open().
+ */
+describe("the alert script's read of the exim mainlog, against the alert unit", () => {
+  /** The directory the default log path must live under, and whose group matters. */
+  const eximLogDirectory = "/var/log/exim4";
+
+  /** The group that owns it, and the one the unit therefore has to grant. */
+  const eximLogGroup = "adm";
+
+  let unitSource: Buffer = Buffer.alloc(0);
+  let scriptSource = "";
+
+  beforeAll(async () => {
+    unitSource = await readFile(resolve("deploy/overflow-alert@.service"));
+    scriptSource = await readFile(resolve("scripts/overflow-alert.sh"), "utf8");
+  });
+
+  it("defaults to a log under the directory whose group the unit grants", () => {
+    const logPath = /exim_log=\$\{OVERFLOW_ALERT_EXIM_LOG:-([^}]+)\}/.exec(scriptSource)?.[1];
+
+    expect(logPath, "the script must name a default exim log path").toBeDefined();
+    expect(
+      logPath,
+      "the default log path has to live under the directory whose group the unit grants",
+    ).toMatch(new RegExp(`^${eximLogDirectory}/`));
+  });
+
+  it("grants that group, and grants only it", () => {
+    const assignments = parseUnitFile(unitSource).filter(
+      (entry) => entry.section === "Service" && entry.key === "SupplementaryGroups",
+    );
+
+    expect(assignments, "the unit must grant the group the read needs").toHaveLength(1);
+    expect(assignments[0]!.value).toBe(eximLogGroup);
+  });
+
+  it("is recorded in the script, so the requirement travels with the code that needs it", () => {
+    // The script is where the dependency is discovered, by whoever changes the
+    // log path next. A comment that does not name the group would leave the
+    // next reader to re-derive what a `capsh --drop=all` costs.
+    expect(
+      scriptSource,
+      "the script must record the group its runtime read of the log needs",
+    ).toContain(`SupplementaryGroups=${eximLogGroup}`);
   });
 });

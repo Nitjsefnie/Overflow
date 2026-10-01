@@ -103,9 +103,21 @@ esac
 # budget is how long the relay is given to reach one. Both are overridable
 # only so tests/scripts/overflow-alert.test.ts can drive this script against a
 # scratch log; the alert unit sets no such variable, so a deployed run always
-# reads the default path and waits the default number of seconds. The unit's
-# sandbox is ProtectSystem=strict, which is read-only rather than unreadable,
-# so the mainlog is readable in the deployed unit exactly as it is here.
+# reads the default path and waits the default number of seconds.
+#
+# Reading that path is a RUNTIME REQUIREMENT of this script, and the unit has to
+# grant it: /var/log/exim4/mainlog is 0640 Debian-exim:adm inside a 2750
+# Debian-exim:adm directory. ProtectSystem=strict does not decide that - it
+# governs the mount namespace, not file access - so a run confined by it can
+# still be refused the read. What decides it is the alert unit's empty
+# CapabilityBoundingSet=: root then holds no CAP_DAC_OVERRIDE and no
+# CAP_DAC_READ_SEARCH, and root's own groups are not adm's, so open() is denied.
+# Measured on this host, the same file under `capsh --drop=all` is not readable
+# and under `capsh --drop=all` plus the adm group is. That is why the unit
+# carries SupplementaryGroups=adm, and why a unit change that drops it turns
+# every alert into a 60-second wait followed by a false "did not leave this
+# host" - which records no throttle state and so mails on every cycle of a crash
+# loop. tests/deploy/alert-units.test.ts binds the two halves together.
 exim_log=${OVERFLOW_ALERT_EXIM_LOG:-/var/log/exim4/mainlog}
 
 # The wait budget reaches an arithmetic expansion, where a non-numeric value
@@ -270,27 +282,25 @@ else
         END { if (last != "") print last }
       ' "$exim_log") || transport=''
 
-      if grep -q -F -e "$message_id Completed" "$exim_log" && [ -n "$transport" ]; then
-        if leaves_host "$transport"; then
-          delivered_via=$transport
-          break
-        fi
-        # A local transport is remembered rather than obeyed, on the same
-        # reasoning as `defer` below: one observation does not end the poll
-        # while the budget is still open. The cost is that a locally routed
-        # alert is reported when the budget closes rather than on sight, and
-        # the gain is that the rule stays single - nothing concludes the wait
-        # early except a verdict that ends the message for good.
-        local_transport=$transport
-      fi
-
-      # ORDER MATTERS, and a test pins it. Completed is read first and it is
-      # the only success, but only once a routing line has said the transport
-      # leaves this host. A message that is greylisted, or answered with a
-      # temporary 4xx, is deferred once and then COMPLETED on its retry, and
-      # both lines sit in the log under one id at the same time; a check that
-      # were conclusive on sight would manufacture a dead verdict on the one
-      # signal the operator has to trust.
+      # ORDER MATTERS, and a test pins it: the verdict is read BEFORE the
+      # Completed line below, and the reason is that Completed does not mean
+      # what it looks like. Exim writes it when the daemon is FINISHED with a
+      # message - which includes a message it gave up on. A bounce, a
+      # rejection, a discard and a local hand-off all end with the same line a
+      # successful delivery does. So a message routed off-host, then refused
+      # with a terminal verdict, and then Completed, carries both lines under
+      # one id at once; a check that took Completed first would record that
+      # refused message as sent and silence the next real alert for half an
+      # hour. A terminal verdict is therefore conclusive ON SIGHT.
+      #
+      # `defer` is the one exception, and it is deliberate: it is what exim
+      # writes for a temporary failure - a 4xx, a greylist - and it goes on to
+      # RETRY the message. A greylisted message is deferred once and then
+      # COMPLETED on its retry, both lines under one id at the same time, so a
+      # defer that ended the poll would manufacture a dead verdict on the one
+      # signal the operator has to trust. So the verdict is remembered, not
+      # obeyed: the poll keeps going and Completed at any point in the budget
+      # wins.
       #
       # A named verdict is still worth keeping, so the report says what exim
       # said rather than our own timeout restated. awk's index() is a literal
@@ -298,21 +308,14 @@ else
       # carries no metacharacters by the book, and matching a fixed token after
       # a literal id keeps both properties.
       #
-      # `defer` is deliberately the ONLY provisional token. It is what exim
-      # writes for a temporary failure - a 4xx, a greylist - and it goes on to
-      # RETRY the message, so treating it as final would report a dead alert
-      # every time a relay greylists. The rest are the outcomes that end a
-      # message.
-      #
-      # The search therefore does NOT settle on the first verdict it meets. A
-      # log reading `** defer` and later `bounce` under one id is a message
-      # that deferred once and then failed for good, and a search that stops
-      # at the defer reports the wrong cause and then re-reads the same defer
-      # for the rest of the budget. A terminal token anywhere in the log wins;
-      # `defer` is the fallback for when there is none. `defer` is also tested
-      # FIRST on each line, because exim writes deferrals whose own reason text
-      # contains a terminal word - `** defer rejected: ...` - and that line is
-      # a temporary failure, not a rejection.
+      # The search does not settle on the first verdict it meets. A log reading
+      # `** defer` and later `bounce` under one id is a message that deferred
+      # once and then failed for good, and a search that stopped at the defer
+      # would report the wrong cause. A terminal token anywhere in the log
+      # wins; `defer` is the fallback for when there is none. `defer` is also
+      # tested FIRST on each line, because exim writes deferrals whose own
+      # reason text contains a terminal word - `** defer rejected: ...` - and
+      # that line is a temporary failure, not a rejection.
       verdict=$(awk -v id="$message_id" '
         BEGIN { first = ""; found = 0 }
         {
@@ -329,11 +332,25 @@ else
         END { if (found == 0 && first != "") print first }
       ' "$exim_log") || verdict=''
       if [ -n "$verdict" ] && [ "$verdict" != defer ]; then
-        reason="exim recorded $verdict for $message_id and never Completed it, so the alert did not leave this host"
+        reason="exim recorded $verdict for $message_id, so the relay did not take the alert and the message did not leave this host"
         break
       fi
       if [ -n "$verdict" ]; then
         seen_verdict=$verdict
+      fi
+
+      if grep -q -F -e "$message_id Completed" "$exim_log" && [ -n "$transport" ]; then
+        if leaves_host "$transport"; then
+          delivered_via=$transport
+          break
+        fi
+        # A local transport is remembered rather than obeyed, on the same
+        # reasoning as `defer` above: one observation does not end the poll
+        # while the budget is still open. The cost is that a locally routed
+        # alert is reported when the budget closes rather than on sight, and
+        # the gain is that the rule stays single - nothing concludes the wait
+        # early except a verdict that ends the message for good.
+        local_transport=$transport
       fi
     fi
     if [ "$(date +%s)" -ge "$deadline" ]; then

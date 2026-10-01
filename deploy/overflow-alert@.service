@@ -20,13 +20,16 @@ Type=oneshot
 # The unit's timeout has to be stated here because the host does not state it:
 # this oneshot inherits systemd's DefaultTimeoutStartSec, and this host's is
 # commented out in /etc/systemd/system.conf, so the inherited default is 90s.
-# The script's own worst case lands exactly on that - curl's --max-time is 30
-# seconds and the script then waits up to 60 for a relay verdict off the exim
-# mainlog - so an unlucky run is killed with nothing to show. A oneshot killed
-# at its timeout gives the operator a `failed` unit and NEITHER line the script
-# would have written: not the delivery it would have reported, and not the
-# failed delivery it would have reported instead. 120s leaves the script's own
-# bound the one that decides the outcome.
+# The script's own worst case is ABOVE that, not equal to it: its submission
+# carries a 30s --max-time, and the verdict poll then spends up to 60s checking
+# once a second, with the deadline tested before each wait rather than after,
+# so the final iteration overshoots by a wait plus a spawn. 90s is therefore not
+# a ceiling the script respects. Spending the whole budget is also not an
+# unlucky case: a greylisted relay, or one that is down, does it every time. A
+# oneshot killed at its timeout gives the operator a `failed` unit and NEITHER
+# line the script would have written: not the delivery it would have reported,
+# and not the failed delivery it would have reported instead. 120s leaves the
+# script's own bound as the thing that decides the outcome.
 TimeoutStartSec=120s
 
 # Runs as root, like the backup unit: the recipient file is root-only and is
@@ -48,6 +51,26 @@ RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictRealtime=yes
 RestrictNamespaces=yes
+
+# One supplementary group, and it is load-bearing rather than tidiness. The
+# script follows the accepted message id into /var/log/exim4/mainlog and reads
+# the transport off the routing line there, because a submission the daemon
+# merely spooled is not an alert that arrived. That file is 0640 Debian-exim:adm
+# in a 2750 Debian-exim:adm directory.
+#
+# ProtectSystem=strict does not grant that read - it governs the mount
+# namespace, not file access. The empty CapabilityBoundingSet above is what
+# does: root then holds no CAP_DAC_OVERRIDE and no CAP_DAC_READ_SEARCH, and
+# root's own groups are not adm's, so open() is refused. Measured on this host:
+# the same file is unreadable under `capsh --drop=all` and readable under
+# `capsh --drop=all` with this group. The canary unit reads the same log the
+# same way and carries the same directive.
+#
+# Without it every alert waits out its whole verdict budget, reports that it
+# did not leave this host, exits nonzero, and writes no throttle state - so a
+# unit cycling slower than the start limit mails once per cycle instead of once
+# per 30 minutes, and reports each one as failed.
+SupplementaryGroups=adm
 
 # The whole filesystem is read-only except the one directory the throttle
 # state needs: RuntimeDirectory= stands up /run/overflow-alert for each run
