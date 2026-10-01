@@ -1,5 +1,26 @@
 [
  {
+  "RuleID": "generic-api-key",
+  "Description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+  "StartLine": 18,
+  "EndLine": 18,
+  "StartColumn": 8,
+  "EndColumn": 65,
+  "Match": "TOKEN_ISSUANCE_ID = \"REDACTED\"",
+  "Secret": "REDACTED",
+  "File": "tests/moderation/writer-credential.test.ts",
+  "SymlinkFile": "",
+  "Commit": "efe1207df09dbad2d95b7e5c7502ae8d7f46e697",
+  "Link": "https://github.com/Nitjsefnie/Overflow/blob/efe1207df09dbad2d95b7e5c7502ae8d7f46e697/tests/moderation/writer-credential.test.ts#L18",
+  "Entropy": 3.617861,
+  "Author": "Nitjsefnie",
+  "Email": "zmatek.peter@gmail.com",
+  "Date": "2026-10-01T19:25:15Z",
+  "Message": "Pin the three pure boundaries issue 905 left untested\n\nrepository-ownership, writer-credential and session-recovery-reasons had\nno reference anywhere in tests/, so the coverage floor stayed green with\nnone of their own boundary logic pinned. Each new suite kills real mutants\nof the behaviour its module documents:\n\n- belongsToRegisteredRepository is keyed on GitHub's numeric repository id\n  and on nothing else. The fixtures carry the names the real call sites\n  carry, so a name-keyed implementation has the names to be wrong with —\n  a renamed repository and a freed-name impostor are both refused only by\n  the id comparison, and ids that share digits or sit one apart stay\n  distinct.\n- credentialTokenId decides the token-id column from the KIND, so a session\n  reference that also carries an issuance still records the ('session',\n  NULL) pair the 054 CHECK accepts and ('session', \u003cid\u003e) rejects;\n  credentialKind returns null rather than undefined for a writer with no\n  request behind it.\n- toSessionRecoveryReason accepts the declared literals and nothing else:\n  a near miss in case, in whitespace, a longer word starting with a\n  literal, an unknown word, and a non-string all come back undefined.\n\nCo-Authored-By: Space Bunny Alpha \u003cnoreply@openrouter.ai\u003e",
+  "Tags": [],
+  "Fingerprint": "efe1207df09dbad2d95b7e5c7502ae8d7f46e697:tests/moderation/writer-credential.test.ts:generic-api-key:18"
+ },
+ {
   "RuleID": "gitlab-pat",
   "Description": "Identified a GitLab Personal Access Token, risking unauthorized access to GitLab repositories and codebase exposure.",
   "StartLine": 195,

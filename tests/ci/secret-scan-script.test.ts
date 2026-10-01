@@ -25,7 +25,7 @@ import {
  * taken from `git rev-parse --show-toplevel` at run time rather than from a
  * literal in this file, AND, against the built fixtures below, the history the
  * target resolves to); every property of the committed baseline readable from the file itself;
- * the 2-of-7 coverage ratio this suite pins by equality; the `hasCommit` half of
+ * the 3-of-8 coverage ratio this suite pins by equality; the `hasCommit` half of
  * the redirector shield; and the provenance CHECKER, driven against a repository
  * this suite builds for itself.
  *
@@ -33,11 +33,12 @@ import {
  * provenance — that each finding's redacted residue really came from the source
  * line it names. That check reads the blobs the baseline points at, and
  * `.github/workflows/ci.yml`'s `verify` job checks out at `actions/checkout`'s
- * default depth of 1, where those five September commits do not exist. The test
- * that does it therefore **SKIPS in CI, and the skip is reported in the run
- * summary rather than passing quietly.** In a full-depth checkout it runs. Do not
- * read a green CI run as evidence about the committed baseline's provenance: it
- * is evidence about the checker, and about the file's own contents.
+ * default depth of 1, where the six commits the baseline's eight entries name do
+ * not exist. The test that does it therefore **SKIPS in CI, and the skip is
+ * reported in the run summary rather than passing quietly.** In a full-depth
+ * checkout it runs. Do not read a green CI run as evidence about the committed
+ * baseline's provenance: it is evidence about the checker, and about the file's
+ * own contents.
  *
  * **Covered here no longer, and by design: whether the baseline's commits are
  * REACHABLE.** That assertion used to sit in this file, at both depths, and it
@@ -99,7 +100,7 @@ import {
  * present. A refactor that only breaks gitleaks' rule set is not caught, and
  * cannot be without the binary.
  * What the committed baseline still contributes is the rule set's own output over
- * this repository's real history: 7 findings, every one a test-fixture literal.
+ * this repository's real history: 8 findings, every one a test-fixture literal.
  *
  * The mutants this block is shown red against are named by the
  * `SECRET_SCAN_TEST_FAULT` table below, which stages a mutated COPY inside the
@@ -115,11 +116,11 @@ const PINNED_VERSION = "8.30.1";
  * Pinned as a VALUE, not left to a floor of `> 0`, and not merely reported in an
  * assertion message. A Vitest message is emitted only when an assertion fails,
  * so a `> 0` floor plus a message that names the count is invisible on a green
- * run — and stripping the residue from one of the two checkable entries
- * leaves the suite green while any prose about "2 of 7" goes on claiming a pin
+ * run — and stripping the residue from one of the three checkable entries
+ * leaves the suite green while any prose about "3 of 8" goes on claiming a pin
  * that does not exist. This number is that pin.
  *
- * 2 of 7, and the other 5 are `gitlab-pat` findings whose `Match` IS the
+ * 3 of 8, and the other 5 are `gitlab-pat` findings whose `Match` IS the
  * secret: gitleaks replaces the whole match, the residue is empty, and a rule
  * with no residue has nothing that could have been spliced into it. Those 5 are
  * carried by the redaction, shape and fingerprint assertions, which run at every
@@ -130,7 +131,7 @@ const PINNED_VERSION = "8.30.1";
  * the baseline diff before accepting the new value. It is a measurement of the
  * committed file, not a target to be met.
  */
-const EXPECTED_CHECKABLE_ENTRIES = 2;
+const EXPECTED_CHECKABLE_ENTRIES = 3;
 
 /** One gitleaks finding as the committed baseline carries it. */
 type Finding = {
@@ -142,6 +143,74 @@ type Finding = {
   Fingerprint: string;
   StartLine: number;
 };
+
+/**
+ * The one finding the confirming scan reported, captured VERBATIM from run
+ * 36933083415 — the `secret-scan` workflow, artifact `gitleaks-report`, artifact
+ * id 11196757504, uploaded 2026-10-01.
+ *
+ * The capture is a `gitleaks git --report-format json` run over this
+ * repository's whole history with NO `--baseline-path`, so what is recorded
+ * here is the scanner's own output and not a record written by hand.
+ *
+ * It is embedded rather than read from a path outside the repository because
+ * the assertions it drives have to hold at EVERY checkout depth, and a test
+ * reading a scratch directory would fail in CI — which, for an assertion whose
+ * whole job is to establish that the weekly scan is green, is a false red in
+ * the one place nobody local is looking.
+ *
+ * What it records is a finding in `tests/moderation/writer-credential.test.ts`
+ * line 18 at commit `efe1207d`, from the high-entropy UUID literal that commit
+ * introduced. The fixture was later reshaped to the tree's low-entropy
+ * convention, so no branch tip trips the rule any more — but the scan walks
+ * history, so the historical occurrence stands until the baseline records it.
+ */
+const CAPTURED_FINDING: Record<string, unknown> = {
+  RuleID: "generic-api-key",
+  Description: "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+  StartLine: 18,
+  EndLine: 18,
+  StartColumn: 8,
+  EndColumn: 65,
+  Match: "TOKEN_ISSUANCE_ID = \"REDACTED\"",
+  Secret: "REDACTED",
+  File: "tests/moderation/writer-credential.test.ts",
+  SymlinkFile: "",
+  Commit: "efe1207df09dbad2d95b7e5c7502ae8d7f46e697",
+  Link: "https://github.com/Nitjsefnie/Overflow/blob/efe1207df09dbad2d95b7e5c7502ae8d7f46e697/tests/moderation/writer-credential.test.ts#L18",
+  Entropy: 3.617861,
+  Author: "Nitjsefnie",
+  Email: "zmatek.peter@gmail.com",
+  Date: "2026-10-01T19:25:15Z",
+  Message: "Pin the three pure boundaries issue 905 left untested\n\nrepository-ownership, writer-credential and session-recovery-reasons had\nno reference anywhere in tests/, so the coverage floor stayed green with\nnone of their own boundary logic pinned. Each new suite kills real mutants\nof the behaviour its module documents:\n\n- belongsToRegisteredRepository is keyed on GitHub's numeric repository id\n  and on nothing else. The fixtures carry the names the real call sites\n  carry, so a name-keyed implementation has the names to be wrong with —\n  a renamed repository and a freed-name impostor are both refused only by\n  the id comparison, and ids that share digits or sit one apart stay\n  distinct.\n- credentialTokenId decides the token-id column from the KIND, so a session\n  reference that also carries an issuance still records the ('session',\n  NULL) pair the 054 CHECK accepts and ('session', <id>) rejects;\n  credentialKind returns null rather than undefined for a writer with no\n  request behind it.\n- toSessionRecoveryReason accepts the declared literals and nothing else:\n  a near miss in case, in whitespace, a longer word starting with a\n  literal, an unknown word, and a non-string all come back undefined.\n\nCo-Authored-By: Space Bunny Alpha <noreply@openrouter.ai>",
+  Tags: [],
+  Fingerprint: "efe1207df09dbad2d95b7e5c7502ae8d7f46e697:tests/moderation/writer-credential.test.ts:generic-api-key:18",
+};
+
+/**
+ * Whole-record equality — the comparison gitleaks 8.30.1 performs against a
+ * baseline entry, and deliberately not fingerprint equality, which suppresses
+ * nothing at all.
+ *
+ * The UNION of the two records' key sets is walked, so a field dropped from
+ * either side is a mismatch rather than a field nobody looked at. Values go
+ * through `JSON.stringify`, which is what makes `Tags` compare by CONTENT: the
+ * committed record's `[]` and the emitted record's `[]` are two distinct arrays
+ * holding the same nothing, and identity comparison would call them different
+ * forever.
+ */
+function wholeRecordEquals(committed: Record<string, unknown>, captured: Record<string, unknown>): boolean {
+  const keys = new Set([...Object.keys(committed), ...Object.keys(captured)]);
+  for (const key of keys) {
+    if (JSON.stringify(committed[key] ?? null) !== JSON.stringify(captured[key] ?? null)) return false;
+  }
+  return true;
+}
+
+/** The parsed baseline as whole records, which is the shape the comparison above is written against. */
+function asRecords(entries: Finding[]): Record<string, unknown>[] {
+  return entries as unknown as Record<string, unknown>[];
+}
 
 /**
  * The provenance check, as a pure function so it can be exercised against a
@@ -392,7 +461,7 @@ describe(".github/gitleaks-baseline.json", () => {
     // nothing.
     // The SAME constant the deep test pins, asserted here too, because that
     // test SKIPS in CI. With only a `> 0` floor here, stripping the residue from
-    // one of the two checkable entries was green at depth 1 — the coverage
+    // one of the three checkable entries was green at depth 1 — the coverage
     // claim unchecked exactly where nobody local is looking.
     expect(
       checked,
@@ -401,6 +470,71 @@ describe(".github/gitleaks-baseline.json", () => {
         "chore: entries lost the residue that made them checkable, and a green run would keep certifying " +
         "less than it appears to.",
     ).toBe(EXPECTED_CHECKABLE_ENTRIES);
+  });
+
+  it("carries the captured scan report whole-record, which is the equality gitleaks suppresses on", () => {
+    // The POSITIVE half of the acceptance criterion, and the one that has to run
+    // at every checkout depth: with the captured record committed, the weekly
+    // scan has a baseline entry it can match, and this is the same whole-record
+    // equality it matches on. A green here is a green for the real scanner on
+    // that finding.
+    //
+    // It fails if the entry is absent, and it fails if the entry is present but
+    // drifted by a single field — which is the failure a hand-typed baseline
+    // entry produces, because the ESCAPING alone is enough to do it: Go's
+    // `encoding/json` writes `<`, `>` and `&` as `&lt;`, `&gt;` and
+    // `&amp;` wherever they appear, and it is the escaped form, not the
+    // character, that is on file. A record that reads identically to the
+    // scanner's output and carries the bare characters instead suppresses
+    // nothing.
+    expect(
+      asRecords(findings).some((committed) => wholeRecordEquals(committed, CAPTURED_FINDING)),
+      "no committed entry equals the captured scan report field for field. gitleaks 8.30.1 suppresses a finding " +
+        "only on whole-record equality, so a near miss — one column, one timestamp, one wrongly escaped character — " +
+        "leaves the weekly scan red on a history that is otherwise clean.",
+    ).toBe(true);
+  });
+
+  it("stops matching the captured record the moment the entry is removed, or one field of it moves", () => {
+    // The NEGATIVE half, DEMONSTRATED rather than asserted about. The acceptance
+    // criterion has two halves — with the entry the scan is green, without it the
+    // scan reds — and gitleaks is not installed on this box, so the only honest
+    // way to show the second half is to take the committed baseline apart here
+    // and watch the comparison above stop holding.
+    //
+    // Three single-field mutations rather than one, because a matcher that reads
+    // only some fields still rejects a mutation of a field it never looked at,
+    // and these three are a column offset, an entropy and a timestamp — the
+    // shapes a finding actually carries, and the ones a "tidied" entry drifts on.
+    const committed = asRecords(findings);
+    const matches = (entries: Record<string, unknown>[]) => entries.some((entry) => wholeRecordEquals(entry, CAPTURED_FINDING));
+
+    const without = committed.filter((entry) => !wholeRecordEquals(entry, CAPTURED_FINDING));
+    expect(
+      committed.length - without.length,
+      `the baseline holds ${committed.length - without.length} entries equal to the captured record; it must hold 1`,
+    ).toBe(1);
+    expect(
+      matches(without),
+      "with that one entry removed, nothing else in the baseline may match it — this is the half of the acceptance " +
+        "that reds the scan, and it has to be shown rather than claimed",
+    ).toBe(false);
+
+    const mutations: [string, unknown][] = [
+      ["StartColumn", 9],
+      ["Entropy", 3.617862],
+      ["Date", "2026-10-01T19:25:16Z"],
+    ];
+    for (const [field, value] of mutations) {
+      const mutated = committed.map((entry) =>
+        wholeRecordEquals(entry, CAPTURED_FINDING) ? { ...entry, [field]: value } : entry,
+      );
+      expect(
+        matches(mutated),
+        `moving ${field} to ${String(value)} must break the whole-record match: gitleaks compares every field, so a ` +
+          "single-field drift suppresses nothing and the scan stays red",
+      ).toBe(false);
+    }
   });
 });
 
@@ -821,6 +955,51 @@ describe("the committed baseline's provenance, where the history is present", ()
         "means entries lost the residue that made them checkable, and a green run would keep certifying " +
         "less than it appears to.",
     ).toBe(EXPECTED_CHECKABLE_ENTRIES);
+  });
+
+  it.skipIf(shallow)("pins the source the captured entry names, at the commit it names", () => {
+    // The captured record's THIRD claim: that it describes something. A baseline
+    // entry is a statement about a line in a blob at a commit, and a record that
+    // matches the scanner's output field for field can still name a commit this
+    // repository cannot reach or a line that does not carry its residue — at
+    // which point it is a copy of a finding rather than a record of one, and the
+    // weekly sweep's reachability step is where that surfaces, days later.
+    //
+    // It reads git rather than the file for the reason the rest of this block
+    // does, and it inherits the block's skip: at `actions/checkout`'s default
+    // depth of 1 these commits are not present, and a skip is reported in the run
+    // summary where a silent pass would not be.
+    const entry = asRecords(findings).find((committed) => wholeRecordEquals(committed, CAPTURED_FINDING));
+    expect(
+      entry,
+      "the baseline carries no entry equal to the captured report record, so there is no source here to pin",
+    ).toBeDefined();
+    const { Commit, File, RuleID, Fingerprint, Match, StartLine } = entry as unknown as Finding;
+
+    expect(Commit, "the captured entry must name a full commit SHA, not an abbreviation").toMatch(/^[0-9a-f]{40}$/);
+
+    const ancestry = spawnSync("git", ["merge-base", "--is-ancestor", Commit, "HEAD"], {
+      encoding: "utf8",
+      env: scratchGitEnv,
+      timeout: 10_000,
+    });
+    expect(
+      ancestry.status,
+      `${Commit} must be an ancestor of HEAD, or scripts/secret-scan-baseline.sh fails the weekly sweep on a ` +
+        "committed entry",
+    ).toBe(0);
+
+    const line = showFileLines(Commit, File)[StartLine - 1] ?? "";
+    const runs = Match.replaceAll("REDACTED", "").match(/[A-Za-z0-9_]+/g) ?? [];
+    expect(runs, `the captured entry leaves no identifier residue, so nothing can be pinned to a source line`).not.toHaveLength(0);
+    for (const run of runs) {
+      expect(
+        line,
+        `the captured entry's residue \`${run}\` must be a verbatim slice of ${File} line ${StartLine} at ${Commit}`,
+      ).toContain(run);
+    }
+    expect(provenanceViolations({ Match }, line)).toEqual([]);
+    expect(Fingerprint, `the fingerprint must be the shape 8.30.1 emits`).toBe(`${Commit}:${File}:${RuleID}:${StartLine}`);
   });
 });
 
