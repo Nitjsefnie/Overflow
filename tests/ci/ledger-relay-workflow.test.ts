@@ -73,4 +73,13 @@ describe("the ledger relay workflow's pinned App identity", () => {
         "repo-scoped workflow token the rerun-heal authenticates its POST with",
     ).toEqual(["${{ github.token }}"]);
   });
+
+  it("passes the triggering run's attempt as GITHUB_WORKFLOW_RUN_ATTEMPT exactly once", () => {
+    expect(
+      envValues("GITHUB_WORKFLOW_RUN_ATTEMPT"),
+      "the relay step must carry GITHUB_WORKFLOW_RUN_ATTEMPT exactly once — " +
+        "the triggering run's attempt number, which the rerun-heal's attempt " +
+        "cap compares against (issue 861)",
+    ).toEqual(["${{ github.event.workflow_run.run_attempt }}"]);
+  });
 });

@@ -960,6 +960,39 @@ describe("runRelay", () => {
       ]);
     });
 
+    it("still posts the mirrored decisions before rejecting when a heal query fails", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([]),
+        { status: 201, body: { id: 1 } },
+        { fail: new TypeError("fetch failed") },
+        { fail: new TypeError("fetch failed") },
+        { fail: new TypeError("fetch failed") },
+      ]);
+      const delay = makeDelay();
+      await expect(
+        runRelay({
+          env: cancelledPrEnv(),
+          fetchFn: fetchStub.fn,
+          delayFn: delay.fn,
+          readPinMap: async () => PIN_MAP,
+        }),
+      ).rejects.toThrow(/pull requests associated/);
+
+      // The mirror — the relay's primary duty — is already on GitHub when the
+      // heal's PR lookup dies: the check-run POST preceded the rejection.
+      const [checkRun] = bodiesOf(fetchStub.requests);
+      expect(checkRun).toMatchObject({
+        name: "verify",
+        status: "completed",
+        conclusion: "failure",
+        head_sha: HEAD_SHA,
+      });
+      // No rerun was dispatched, and the heal's bounded retry was spent.
+      expect(requestTo(fetchStub.requests, RERUN_URL)).toBeUndefined();
+      expect(delay.delays).toEqual([1000, 2000]);
+    });
+
     it("heals through the dispatch path using the fetched run's run_attempt", async () => {
       const fetchStub = makeFetch([
         token(),
