@@ -106,6 +106,14 @@ export type ReconciliationEvidence = {
   formatVersion: number;
   checkpoint: Date;
   lastFullPassAt: Date;
+  /**
+   * How many facts the most recent write omitted from this cache as oversized.
+   * While it is above zero the cache has holes, so a partial pass could read
+   * an omitted subject's absence as upstream removal and destroy its
+   * materialized rows; the fold therefore folds full passes until a pass
+   * re-observes everything within the limit and clears the flag.
+   */
+  omittedOversizedFacts: number;
   issues: NarrowedCachedIssue[];
   pullRequests: ReconciliationPullRequestEvidence[];
 };
