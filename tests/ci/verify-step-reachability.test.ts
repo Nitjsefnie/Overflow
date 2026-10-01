@@ -1,0 +1,930 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { beforeAll, describe, expect, it } from "vitest";
+import { parse } from "yaml";
+
+/**
+ * Issue 849: every contract suite over `.github/workflows/ci.yml` asserted that
+ * the verify job's test steps EXIST. None of them asserted that those steps
+ * RUN, because `if:` was never evaluated by anything. The audit campaign
+ * (domain D17) rewrote each of the three `if:` expressions guarding the test
+ * steps so that it can never fire on a pull request, and all three mutations
+ * left the entire `tests/ci/` surface green — the third disables both test
+ * steps at once, so the job concludes green having executed zero of 6 646
+ * tests.
+ *
+ * The gap is specifically REACHABILITY, and the controls say so: mutating what
+ * a step RUNS is killed by an existing suite, so these suites are not inert.
+ * What no existing suite could see is a step that is present in the YAML and
+ * never selected, which is the only shape in which a merge gate stops gating.
+ *
+ * So this suite is a STEP-SELECTION SIMULATION rather than a wiring pin. It
+ * implements the subset of GitHub's expression language ci.yml actually uses,
+ * evaluates each verify step's `if:` against a context for each event the
+ * workflow can receive, and asserts over the command sequence GitHub would
+ * execute. A condition that cannot fire is then not a string in a file but a
+ * step that is absent from the selected list, and the assertions below are
+ * about that list.
+ *
+ * TWO RULES SHAPE THE EVALUATOR, and both exist because a silent `false` would
+ * reproduce the very defect this suite closes:
+ *
+ * 1. **An expression the parser does not understand THROWS**, naming the
+ *    expression. A parser that returned `false` for something it could not
+ *    parse would make every step look unreachable, and the suite's verdicts
+ *    would then be an artefact of the parser's ignorance rather than a fact
+ *    about ci.yml — the assertions would pass or fail for reasons that have
+ *    nothing to do with the workflow. For the same reason a context value that
+ *    is not a scalar throws rather than coercing, and a property path rooted
+ *    at something that is not a GitHub context throws rather than resolving to
+ *    null: `githbu.event_name` is a typo, and a typo that reads as "no such
+ *    context" is a step that silently stops running.
+ * 2. **Absent is null, and null is falsy but not equal to a non-numeric
+ *    string.** `steps.detect-docs.outputs.docs_only` is null before the
+ *    detect step has run, and `... != 'true'` must still hold then — that is
+ *    what lets the test step run at all.
+ *
+ * Reordering tolerance is deliberate: the assertions are membership plus the
+ * one order that carries meaning (migrations before tests), never an absolute
+ * index, so moving an unrelated step cannot fail the suite.
+ */
+
+/* -------------------------------------------------------------------------- */
+/* Half 1 — the expression evaluator and the step selector                      */
+/* -------------------------------------------------------------------------- */
+
+/** A verify-job step as this suite reads it. `if` and `continue-on-error` are
+ *  typed as `unknown` because they are precisely the two fields a mutation
+ *  rewrites into a shape this suite must fail on rather than read past. */
+type WorkflowStep = {
+  name?: string;
+  id?: string;
+  run?: string;
+  uses?: string;
+  if?: unknown;
+  "continue-on-error"?: unknown;
+};
+
+/**
+ * Everything a GitHub expression operand can hold once evaluated. Objects and
+ * arrays are deliberately absent: an object in operand position has no
+ * meaning, and inventing one (coercing to `"[object Object]"`, comparing by
+ * identity) would let an expression compare two different objects and learn
+ * nothing. Resolution throws instead.
+ */
+export type ExpressionValue = string | number | boolean | null;
+
+/** A context object that property paths resolve against. */
+export type ActionsContext = Record<string, unknown>;
+
+/** The job status the status functions report. A step's own `if:` defaults to
+ *  `success()`, so `success` is the only status the scenario selector uses. */
+export type JobStatus = "success" | "failure" | "cancelled";
+
+/**
+ * The contexts GitHub exposes. A path rooted outside this list is a typo or an
+ * unimplemented context and throws; a path rooted inside it and naming a key
+ * that is absent resolves to null, which is the case
+ * `steps.detect-docs.outputs.docs_only != 'true'` depends on before
+ * detect-docs has run.
+ */
+const CONTEXT_ROOTS = [
+  "env",
+  "github",
+  "inputs",
+  "job",
+  "jobs",
+  "matrix",
+  "needs",
+  "runner",
+  "secrets",
+  "steps",
+  "strategy",
+  "vars",
+];
+
+/** The status functions, and what each reports for a job status. `always()` is
+ *  the only one that is not a comparison. */
+const STATUS_FUNCTIONS: Record<string, (status: JobStatus) => boolean> = {
+  success: (status) => status === "success",
+  always: () => true,
+  failure: (status) => status === "failure",
+  cancelled: (status) => status === "cancelled",
+};
+
+type Token =
+  | { kind: "punct"; text: string }
+  | { kind: "string"; text: string; value: string }
+  | { kind: "number"; text: string; value: number }
+  | { kind: "word"; text: string }
+  | { kind: "end"; text: "" };
+
+/**
+ * Identifiers may contain `-`, because GitHub's contexts do: `steps.detect-docs`
+ * and `inputs.simulate-refused-raise` are the two this repository ships, and
+ * both are property names rather than subtractions.
+ */
+const WORD = /^[A-Za-z_][A-Za-z0-9_-]*/;
+const NUMBER = /^-?[0-9]+(?:\.[0-9]+)?/;
+const PUNCTUATION = ["(", ")", "!", "."];
+const BINARY_PUNCTUATION = ["==", "!=", "&&", "||"];
+
+function tokenize(source: string): Token[] {
+  const tokens: Token[] = [];
+  let index = 0;
+  while (index < source.length) {
+    const character = source[index];
+    if (/\s/.test(character)) {
+      index += 1;
+      continue;
+    }
+    if (character === "'") {
+      const start = index;
+      index += 1;
+      let value = "";
+      let terminated = false;
+      while (index < source.length) {
+        const inner = source[index];
+        if (inner === "'") {
+          // GitHub escapes a quote inside a string literal by doubling it.
+          if (source[index + 1] === "'") {
+            value += "'";
+            index += 2;
+            continue;
+          }
+          index += 1;
+          terminated = true;
+          break;
+        }
+        value += inner;
+        index += 1;
+      }
+      if (!terminated) throw new Error(`unterminated string literal starting at offset ${start}`);
+      tokens.push({ kind: "string", text: source.slice(start, index), value });
+      continue;
+    }
+    if (/[0-9]/.test(character) || (character === "-" && /[0-9]/.test(source[index + 1] ?? ""))) {
+      const matched = NUMBER.exec(source.slice(index))?.[0];
+      if (!matched) throw new Error(`malformed number at offset ${index}`);
+      index += matched.length;
+      tokens.push({ kind: "number", text: matched, value: Number(matched) });
+      continue;
+    }
+    if (/[A-Za-z_]/.test(character)) {
+      const matched = WORD.exec(source.slice(index))?.[0];
+      if (!matched) throw new Error(`malformed name at offset ${index}`);
+      index += matched.length;
+      tokens.push({ kind: "word", text: matched });
+      continue;
+    }
+    const pair = source.slice(index, index + 2);
+    if (BINARY_PUNCTUATION.includes(pair)) {
+      tokens.push({ kind: "punct", text: pair });
+      index += 2;
+      continue;
+    }
+    if (PUNCTUATION.includes(character)) {
+      tokens.push({ kind: "punct", text: character });
+      index += 1;
+      continue;
+    }
+    throw new Error(`unexpected character ${JSON.stringify(character)} at offset ${index}`);
+  }
+  tokens.push({ kind: "end", text: "" });
+  return tokens;
+}
+
+type Node =
+  | { kind: "literal"; value: ExpressionValue }
+  | { kind: "status"; name: string }
+  | { kind: "path"; segments: string[] }
+  | { kind: "not"; operand: Node }
+  | { kind: "and"; left: Node; right: Node }
+  | { kind: "or"; left: Node; right: Node }
+  | { kind: "compare"; operator: "==" | "!="; left: Node; right: Node };
+
+/**
+ * Recursive descent over the subset ci.yml uses, lowest precedence first:
+ * `||`, then `&&`, then `==`/`!=`, then unary `!`, then a primary.
+ *
+ * The precedence split between `||` and `&&` is the one that matters here and
+ * is the trap the ci.yml concurrency comment already names: `a || b && c`
+ * parses as `a || (b && c)`, so the parenthesised form the workflow ships is
+ * the only thing keeping the pull-request arm of that group from falling
+ * through. A parser that got this backwards would silently misread the shape
+ * it is supposed to model, which is why `&&` binding tighter is asserted
+ * directly below.
+ */
+function parseExpression(source: string): Node {
+  const tokens = tokenize(source);
+  let cursor = 0;
+  const peek = () => tokens[cursor];
+  const take = () => tokens[cursor++];
+
+  function primary(): Node {
+    const token = peek();
+    if (token.kind === "punct" && token.text === "(") {
+      take();
+      const inner = disjunction();
+      if (!(peek().kind === "punct" && peek().text === ")")) {
+        throw new Error(`expected ) to close the parenthesised expression`);
+      }
+      take();
+      return inner;
+    }
+    if (token.kind === "string") {
+      take();
+      return { kind: "literal", value: token.value };
+    }
+    if (token.kind === "number") {
+      take();
+      return { kind: "literal", value: token.value };
+    }
+    if (token.kind === "word") {
+      take();
+      if (token.text === "true") return { kind: "literal", value: true };
+      if (token.text === "false") return { kind: "literal", value: false };
+      if (token.text === "null") return { kind: "literal", value: null };
+      if (peek().kind === "punct" && peek().text === "(") {
+        take();
+        if (!(peek().kind === "punct" && peek().text === ")")) {
+          throw new Error(`function ${token.text}() is called with arguments; this evaluator implements only the argument-less status functions`);
+        }
+        take();
+        if (!Object.hasOwn(STATUS_FUNCTIONS, token.text)) {
+          throw new Error(
+            `${token.text}() is not implemented here — the subset is success(), always(), failure() and cancelled()`,
+          );
+        }
+        return { kind: "status", name: token.text };
+      }
+      const segments = [token.text];
+      while (peek().kind === "punct" && peek().text === ".") {
+        take();
+        const segment = peek();
+        if (segment.kind !== "word") {
+          throw new Error(`expected a property name after '.'`);
+        }
+        take();
+        segments.push(segment.text);
+      }
+      return { kind: "path", segments };
+    }
+    throw new Error(`expected a value, found ${JSON.stringify(token.text || "the end of the expression")}`);
+  }
+
+  function negation(): Node {
+    if (peek().kind === "punct" && peek().text === "!") {
+      take();
+      return { kind: "not", operand: negation() };
+    }
+    return primary();
+  }
+
+  function equality(): Node {
+    let left = negation();
+    while (peek().kind === "punct" && (peek().text === "==" || peek().text === "!=")) {
+      const operator = take().text === "==" ? "==" : "!=";
+      left = { kind: "compare", operator, left, right: negation() };
+    }
+    return left;
+  }
+
+  function conjunction(): Node {
+    let left = equality();
+    while (peek().kind === "punct" && peek().text === "&&") {
+      take();
+      left = { kind: "and", left, right: equality() };
+    }
+    return left;
+  }
+
+  function disjunction(): Node {
+    let left = conjunction();
+    while (peek().kind === "punct" && peek().text === "||") {
+      take();
+      left = { kind: "or", left, right: conjunction() };
+    }
+    return left;
+  }
+
+  const node = disjunction();
+  if (peek().kind !== "end") {
+    throw new Error(`unexpected trailing input ${JSON.stringify(peek().text)}`);
+  }
+  return node;
+}
+
+/** GitHub's truthiness: an empty string, `0`, `null` and the literal string
+ *  `'false'` are falsy; every other value is truthy. `!` and the short-circuit
+ *  operators all coerce through here. */
+function toBoolean(value: ExpressionValue): boolean {
+  if (value === null) return false;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  return value !== "" && value !== "false";
+}
+
+/**
+ * GitHub's loose equality: same-type values compare by value, with strings
+ * compared case-insensitively; values of DIFFERENT types are cast to numbers
+ * and compared as numbers.
+ *
+ * The cast is what the whole suite turns on, so it is worth being explicit
+ * about the case it decides. `steps.detect-docs.outputs.docs_only != 'true'`
+ * compares, on a pull request where detect-docs has already run, the string
+ * `'false'` with the string `'true'` — same type, unequal, so `!=` holds and
+ * the test step is selected. Before that step has run the left side is null,
+ * which is a different type: null casts to 0, `'true'` casts to NaN, and NaN
+ * equals nothing, so `!=` still holds. A strict equality, or a null that
+ * compared equal to any string, would break the first selected step of the
+ * job instead of the mutation this suite exists to catch.
+ */
+function castToNumber(value: ExpressionValue): number {
+  if (value === null) return 0;
+  if (typeof value === "boolean") return value ? 1 : 0;
+  if (typeof value === "number") return value;
+  return value.trim() === "" ? 0 : Number(value);
+}
+
+function looseEquals(left: ExpressionValue, right: ExpressionValue): boolean {
+  if (typeof left === "string" && typeof right === "string") {
+    return left.toLowerCase() === right.toLowerCase();
+  }
+  if (left === null && right === null) return true;
+  if (typeof left === "number" && typeof right === "number") return left === right;
+  if (typeof left === "boolean" && typeof right === "boolean") return left === right;
+  const leftNumber = castToNumber(left);
+  const rightNumber = castToNumber(right);
+  return Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber === rightNumber;
+}
+
+/** A context value as an operand, or undefined when it is not a scalar — which
+ *  includes an absent key, resolved by the caller to null. */
+function asScalar(value: unknown): ExpressionValue | undefined {
+  if (value === null) return null;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  return undefined;
+}
+
+function resolvePath(segments: string[], context: ActionsContext): ExpressionValue {
+  const [root, ...rest] = segments;
+  if (!CONTEXT_ROOTS.includes(root)) {
+    throw new Error(
+      `${root} is not a context this evaluator resolves; a path rooted outside a GitHub context is a typo, and reading it as null would disable every step that uses it`,
+    );
+  }
+  let current: unknown = context[root];
+  for (const segment of rest) {
+    if (current === null || current === undefined) return null;
+    if (typeof current !== "object") {
+      throw new Error(`cannot read ${segment} from a non-object value reached by ${segments.join(".")}`);
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  if (current === undefined) return null;
+  const scalar = asScalar(current);
+  if (scalar === undefined) {
+    throw new Error(
+      `${segments.join(".")} resolved to a ${Array.isArray(current) ? "list" : "mapping"}, which has no scalar meaning in an expression`,
+    );
+  }
+  return scalar;
+}
+
+function evaluate(node: Node, context: ActionsContext, status: JobStatus): ExpressionValue {
+  switch (node.kind) {
+    case "literal":
+      return node.value;
+    case "status":
+      return STATUS_FUNCTIONS[node.name]!(status);
+    case "path":
+      return resolvePath(node.segments, context);
+    case "not":
+      return !toBoolean(evaluate(node.operand, context, status));
+    // `&&` and `||` RETURN AN OPERAND in GitHub's language, they do not coerce
+    // to boolean. `a && b` is `b` when `a` is truthy and `a` otherwise; `a ||
+    // b` is `a` when truthy and `b` otherwise. ci.yml depends on that shape in
+    // its concurrency group, where `&& 'repo-wide' || github.sha` selects the
+    // literal string 'repo-wide' rather than the boolean true.
+    case "and": {
+      const left = evaluate(node.left, context, status);
+      return toBoolean(left) ? evaluate(node.right, context, status) : left;
+    }
+    case "or": {
+      const left = evaluate(node.left, context, status);
+      return toBoolean(left) ? left : evaluate(node.right, context, status);
+    }
+    case "compare": {
+      const equal = looseEquals(
+        evaluate(node.left, context, status),
+        evaluate(node.right, context, status),
+      );
+      return node.operator === "==" ? equal : !equal;
+    }
+    default:
+      throw new Error("unreachable node");
+  }
+}
+
+/** Strips a `${{ … }}` wrapper. A bare expression is used as it stands, which
+ *  is the form a workflow_dispatch input default or a non-wrapped `if:` uses. */
+function unwrap(expression: string): string {
+  const trimmed = expression.trim();
+  return trimmed.startsWith("${{") && trimmed.endsWith("}}")
+    ? trimmed.slice(3, -2).trim()
+    : trimmed;
+}
+
+/**
+ * Evaluates one GitHub Actions expression against a context and returns the
+ * OPERAND it yields, not a boolean — the caller coerces with GitHub's rules.
+ *
+ * Throws, always naming the expression, on anything it cannot parse, on a
+ * function or context it does not implement, and on a value it cannot coerce.
+ * It never returns `false` to mean "I did not understand this": see the header
+ * for why that would be the defect this suite exists to close.
+ */
+export function evaluateExpression(
+  expression: string,
+  context: ActionsContext = {},
+  status: JobStatus = "success",
+): ExpressionValue {
+  try {
+    return evaluate(parseExpression(unwrap(expression)), context, status);
+  } catch (error) {
+    throw new Error(
+      `cannot evaluate the GitHub Actions expression ${JSON.stringify(String(expression))}: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+}
+
+/** Whether GitHub would select this step in this context.
+ *
+ *  - A step with no `if:` is selected: no failures are assumed, and the only
+ *    job this suite simulates has every step succeeding.
+ *  - A `continue-on-error` step IS selected. Selection is about whether the
+ *    runner executes the step at all; whether its failure gates anything is a
+ *    separate question, and the assertions below ask it separately. Folding
+ *    the second question into this one would make the suite unable to say that
+ *    a tolerated step does not gate. */
+function isSelected(step: WorkflowStep, context: ActionsContext, status: JobStatus): boolean {
+  if (step.if === undefined) return true;
+  if (typeof step.if === "boolean") return step.if;
+  if (typeof step.if !== "string") {
+    throw new Error(
+      `the \`if:\` of step ${JSON.stringify(step.name ?? step.uses ?? step.id ?? "unnamed")} must be a ` +
+        `string expression or a boolean, not ${JSON.stringify(step.if)}`,
+    );
+  }
+  return toBoolean(evaluateExpression(step.if, context, status));
+}
+
+/**
+ * The steps GitHub would execute, in file order, for a given context.
+ *
+ * It says nothing about WHICH steps matter: it returns what is selected, and
+ * the assertions below decide what must be among them. A selector that knew
+ * which steps were the test steps would re-introduce the coupling this suite
+ * exists to remove — the assertions would be reading a list built to satisfy
+ * them.
+ */
+export function selectSteps(
+  steps: readonly WorkflowStep[],
+  context: ActionsContext,
+  status: JobStatus = "success",
+): WorkflowStep[] {
+  return steps.filter((step) => isSelected(step, context, status));
+}
+
+/* -------------------------------------------------------------------------- */
+/* Half 2 — the assertions, over the executed command sequence                   */
+/* -------------------------------------------------------------------------- */
+
+type Scenario = {
+  /** How the assertion messages name the run. */
+  label: string;
+  event: string;
+  /** What `scripts/docs-only.ts` wrote into `detect-docs`'s output. */
+  docsOnly: "true" | "false";
+  /** Whether the coverage measurement is expected to run — the two-branch
+   *  design ci.yml ships, written out as data so a reviewer reads the expected
+   *  outcome per run rather than deriving it from the branch under test. */
+  coverage: boolean;
+};
+
+const SCENARIOS: Scenario[] = [
+  {
+    label: "a pull request carrying a code change",
+    event: "pull_request_target",
+    docsOnly: "false",
+    coverage: true,
+  },
+  {
+    label: "a pull request carrying a docs-only change",
+    event: "pull_request_target",
+    docsOnly: "true",
+    coverage: false,
+  },
+  { label: "a push to main", event: "push", docsOnly: "false", coverage: true },
+  {
+    label: "a workflow_dispatch",
+    event: "workflow_dispatch",
+    docsOnly: "false",
+    coverage: true,
+  },
+];
+
+const TEST_SUITE_COMMAND = "pnpm test --run";
+const COVERAGE_FLOOR_COMMAND = "node scripts/check-coverage-floor.ts";
+const MIGRATE_COMMAND = "pnpm db:migrate";
+const DETECT_STEP_ID = "detect-docs";
+const DETECT_STEP_NAME = "Detect docs-only change";
+
+const BASE_SHA = "1".repeat(40);
+const MERGE_SHA = "2".repeat(40);
+const PUSH_BEFORE = "3".repeat(40);
+
+/**
+ * The context GitHub would present for a scenario. It is deliberately complete
+ * for the event — a push carries `github.event.before`, a pull request carries
+ * `github.event.pull_request.number`, neither carries the other's — so that an
+ * expression reading a key this event does not have resolves to null the way
+ * the runner's would.
+ */
+function contextFor(scenario: Scenario): ActionsContext {
+  const event =
+    scenario.event === "pull_request_target"
+      ? { pull_request: { number: 849, base: { sha: BASE_SHA, ref: "main" }, head: { sha: MERGE_SHA } } }
+      : scenario.event === "push"
+        ? { before: PUSH_BEFORE }
+        : {};
+  return {
+    github: {
+      event_name: scenario.event,
+      sha: scenario.event === "pull_request_target" ? BASE_SHA : MERGE_SHA,
+      ref: "refs/heads/main",
+      repository: "Nitjsefnie/Overflow",
+      run_id: "4242",
+      token: "not-a-real-token",
+      event,
+    },
+    inputs: { base: "", "simulate-refused-raise": false },
+    steps: { [DETECT_STEP_ID]: { outputs: { docs_only: scenario.docsOnly } } },
+    needs: {},
+    env: {},
+    job: { status: "success" },
+    runner: { os: "Linux" },
+  };
+}
+
+function label(step: WorkflowStep): string {
+  return step.name ?? step.uses ?? step.id ?? "(unnamed step)";
+}
+
+function runsContaining(steps: readonly WorkflowStep[], needle: string): WorkflowStep[] {
+  return steps.filter((step) => (step.run ?? "").includes(needle));
+}
+
+let verify: { steps: WorkflowStep[]; outputs: Record<string, unknown> };
+
+beforeAll(async () => {
+  const source = await readFile(resolve(".github/workflows/ci.yml"), "utf8");
+  const workflow = parse(source) as {
+    jobs?: { verify?: { steps?: WorkflowStep[]; outputs?: Record<string, unknown> } };
+  };
+
+  verify = {
+    steps: workflow.jobs?.verify?.steps ?? [],
+    outputs: workflow.jobs?.verify?.outputs ?? {},
+  };
+});
+
+describe("the workflow file this suite simulates", () => {
+  it("is parsed, not read as bytes, and the verify job is not empty", () => {
+    // Without this the assertions below are vacuous: a relocated jobs key, a
+    // rename, or a broken read would leave an empty step list and every
+    // selection assertion would pass by finding nothing to run.
+    expect(verify.steps.length).toBeGreaterThan(0);
+  });
+});
+
+describe("the step selector", () => {
+  const context = contextFor(SCENARIOS[0]!);
+
+  it("selects a step with no condition", () => {
+    const selected = selectSteps([{ name: "unconditional", run: "true" }], context);
+    expect(selected.map(label)).toEqual(["unconditional"]);
+  });
+
+  it("drops a step whose condition is false in this context, and keeps one whose condition holds", () => {
+    const steps: WorkflowStep[] = [
+      { name: "held", if: "${{ github.event_name == 'pull_request_target' }}" },
+      { name: "dropped", if: "${{ github.event_name == 'push' }}" },
+      { name: "bare boolean", if: false },
+    ];
+    expect(selectSteps(steps, context).map(label)).toEqual(["held"]);
+  });
+
+  it("selects a continue-on-error step whose condition holds", () => {
+    // Selection is about EXECUTION. A tolerated step still runs; whether it
+    // gates the merge is asserted separately over the same list, and folding
+    // the two together would make this suite unable to report the difference.
+    const steps: WorkflowStep[] = [
+      {
+        name: "tolerated",
+        "continue-on-error": true,
+        if: "${{ success() }}",
+      },
+    ];
+    expect(selectSteps(steps, context).map(label)).toEqual(["tolerated"]);
+  });
+
+  it("returns the selected steps in file order", () => {
+    const steps: WorkflowStep[] = [
+      { name: "first" },
+      { name: "second", if: "${{ false }}" },
+      { name: "third" },
+    ];
+    expect(selectSteps(steps, context).map(label)).toEqual(["first", "third"]);
+  });
+});
+
+describe("the expression evaluator", () => {
+  const push = contextFor(SCENARIOS[2]!);
+  const pullRequest = contextFor(SCENARIOS[0]!);
+
+  it("returns the operand of && and || rather than a boolean", () => {
+    // GitHub's && and || yield a VALUE. An evaluator using JavaScript's
+    // boolean && and || would answer `true` here and silently misread every
+    // ternary-shaped expression ci.yml writes.
+    expect(evaluateExpression("'a' && 'b'")).toBe("b");
+    expect(evaluateExpression("'a' || 'b'")).toBe("a");
+    expect(evaluateExpression("'' && 'b'")).toBe("");
+    expect(evaluateExpression("false && 'b'")).toBe(false);
+    expect(evaluateExpression("false || 'b'")).toBe("b");
+    expect(evaluateExpression("true || 'b'")).toBe(true);
+  });
+
+  it("binds && tighter than ||, which is why ci.yml's group parenthesises", () => {
+    // The exact shape of ci.yml's concurrency group, on both legs of its
+    // event-class split. If the precedence were reversed, `a && b || c` would
+    // read as `a && (b || c)` and the pull-request arm would swallow the
+    // fallback.
+    const group = "(github.event_name == 'push' && 'repo-wide') || github.sha";
+    expect(evaluateExpression(group, push)).toBe("repo-wide");
+    expect(evaluateExpression(group, pullRequest)).toBe(BASE_SHA);
+    expect(evaluateExpression("false && 'x' || 'y'")).toBe("y");
+    expect(evaluateExpression("true || 'x' && 'y'")).toBe(true);
+  });
+
+  it("reads a step output that has not been written as null, and still satisfies != 'true'", () => {
+    // The case the whole verify job hangs on: the output is absent, so it must
+    // be falsy-but-unequal rather than equal.
+    const empty: ActionsContext = {};
+    expect(evaluateExpression("steps.detect-docs.outputs.docs_only", empty)).toBeNull();
+    expect(evaluateExpression("steps.detect-docs.outputs.docs_only != 'true'", empty)).toBe(true);
+    expect(evaluateExpression("steps.detect-docs.outputs.docs_only == 'true'", empty)).toBe(false);
+  });
+
+  it("reads a nested step output that has been written", () => {
+    expect(evaluateExpression("steps.detect-docs.outputs.docs_only", pullRequest)).toBe("false");
+  });
+
+  it("resolves the dotted paths ci.yml reads, event by event", () => {
+    expect(evaluateExpression("github.event_name", pullRequest)).toBe("pull_request_target");
+    expect(evaluateExpression("github.sha", pullRequest)).toBe(BASE_SHA);
+    expect(evaluateExpression("github.event.pull_request.number", pullRequest)).toBe(849);
+    expect(evaluateExpression("github.event.before", pullRequest)).toBeNull();
+    expect(evaluateExpression("github.event.before", push)).toBe(PUSH_BEFORE);
+    expect(evaluateExpression("inputs.base", pullRequest)).toBe("");
+    expect(evaluateExpression("inputs.simulate-refused-raise", pullRequest)).toBe(false);
+    expect(evaluateExpression("github.event.pull_request.base.sha", pullRequest)).toBe(BASE_SHA);
+  });
+
+  it("coerces the literal string 'false' to falsy, and every other string to truthy", () => {
+    // A step whose `if:` evaluates to the STRING 'false' does not run, which
+    // is a different rule from JavaScript's truthiness and is easy to get
+    // wrong in the direction that lets a step through.
+    expect(evaluateExpression("!'false'")).toBe(true);
+    expect(evaluateExpression("!'true'")).toBe(false);
+    expect(evaluateExpression("!''")).toBe(true);
+    expect(evaluateExpression("!'docs_only'")).toBe(false);
+    expect(evaluateExpression("!0")).toBe(true);
+    expect(evaluateExpression("!1")).toBe(false);
+    expect(evaluateExpression("!null")).toBe(true);
+    expect(evaluateExpression("!false")).toBe(true);
+  });
+
+  it("reports the job status through success(), always(), failure() and cancelled()", () => {
+    expect(evaluateExpression("success()", pullRequest, "success")).toBe(true);
+    expect(evaluateExpression("success()", pullRequest, "failure")).toBe(false);
+    expect(evaluateExpression("always()", pullRequest, "cancelled")).toBe(true);
+    expect(evaluateExpression("failure()", pullRequest, "failure")).toBe(true);
+    expect(evaluateExpression("failure()", pullRequest, "success")).toBe(false);
+    expect(evaluateExpression("cancelled()", pullRequest, "cancelled")).toBe(true);
+    expect(evaluateExpression("success() && steps.detect-docs.outputs.docs_only != 'true'", pullRequest)).toBe(
+      true,
+    );
+  });
+
+  it("compares strings case-insensitively and casts across types", () => {
+    expect(evaluateExpression("github.event_name == 'PULL_REQUEST_TARGET'", pullRequest)).toBe(true);
+    expect(evaluateExpression("github.event.pull_request.number == '849'", pullRequest)).toBe(true);
+    expect(evaluateExpression("inputs.simulate-refused-raise == true", pullRequest)).toBe(false);
+  });
+
+  it("accepts a bare expression as well as a ${{ }} wrapper", () => {
+    expect(evaluateExpression("github.event_name == 'push'", push)).toBe(true);
+    expect(evaluateExpression("${{ github.event_name == 'push' }}", push)).toBe(true);
+  });
+
+  it("throws, naming the expression, on anything it cannot parse", () => {
+    // Every one of these must THROW. A parser that answered `false` instead
+    // would report every step that reads it as unreachable, and the suite's
+    // verdicts would then be a fact about the parser rather than about ci.yml.
+    for (const bad of [
+      "",
+      "'unterminated",
+      "github.event_name ==",
+      "github.event_name == 'push' trailing",
+      "github.event_name === 'push'",
+      "github.event_name == inputs.base &&",
+      "(github.event_name == 'push'",
+      "github..event_name",
+      "hashFiles('**/package-lock.json')",
+      "github.event.pull_request.number = 1",
+      "steps.detect-docs.outputs.docs_only > 'true'",
+    ]) {
+      const thrown = captureError(() => evaluateExpression(bad, pullRequest));
+      // The `.not.toBe("")` is load-bearing rather than belt-and-braces: for
+      // the empty expression `toContain("")` would hold for any string at all,
+      // including the "" a non-throwing evaluation returns here.
+      expect(thrown, `evaluateExpression(${JSON.stringify(bad)}) must throw, never answer false`).not.toBe(
+        "",
+      );
+      expect(thrown, `the failure must name the expression ${JSON.stringify(bad)}`).toContain(bad);
+    }
+  });
+
+  it("throws rather than treating a mistyped context root as absent", () => {
+    // `githbu.event_name` is a typo, and reading it as null would make every
+    // step using it look unreachable — or, in a `!=` test, reachable for the
+    // wrong reason. Either way the run stops gating without saying so.
+    const thrown = captureError(() => evaluateExpression("githbu.event_name == 'push'", push));
+    expect(thrown).toContain("githbu");
+  });
+
+  it("throws rather than coercing a mapping, which has no scalar meaning", () => {
+    const thrown = captureError(() =>
+      evaluateExpression("github.event.pull_request == 'x'", pullRequest),
+    );
+    expect(thrown).toContain("mapping");
+  });
+});
+
+describe("the docs-only detection the scenarios above assume", () => {
+  it("is produced by exactly one step, under the id the gated steps read", () => {
+    // Without this the scenarios are fabricated: an evaluator fed a context
+    // the workflow never wires says nothing about what CI does. The three
+    // conditions below are all `steps.detect-docs.outputs.docs_only`, so if
+    // that output belonged to some other step, or to two, every reachability
+    // assertion above would be reasoning about a fiction.
+    const producers = verify.steps.filter((step) => step.id === DETECT_STEP_ID);
+    expect(
+      producers.map(label),
+      `exactly one step of the verify job may carry \`id: ${DETECT_STEP_ID}\` — the three test and ` +
+        `coverage steps read its output by that id, and a second producer makes that output ` +
+        `ambiguous`,
+    ).toEqual([DETECT_STEP_NAME]);
+    expect(
+      producers[0]?.run ?? "",
+      "the docs-only producer must be the step that runs scripts/docs-only.ts",
+    ).toContain("node scripts/docs-only.ts");
+    expect(
+      producers[0]?.if,
+      "the docs-only producer must run unconditionally — a condition on it means the output the " +
+        "test steps read may never be written at all",
+    ).toBeUndefined();
+  });
+
+  it("is what the job publishes as its docs_only output", () => {
+    // The calibrate job's own condition reads `needs.verify.outputs.docs_only`,
+    // so the value has to be republished under that exact name.
+    expect(verify.outputs.docs_only).toBe(`\${{ steps.${DETECT_STEP_ID}.outputs.docs_only }}`);
+  });
+
+  it("is selected in every scenario, so its output exists before the steps that read it", () => {
+    for (const scenario of SCENARIOS) {
+      const selected = selectSteps(verify.steps, contextFor(scenario));
+      expect(
+        selected.some((step) => step.id === DETECT_STEP_ID),
+        `on ${scenario.event} with docs_only=${scenario.docsOnly} the detect step must be among the ` +
+          `executed steps; the conditions below read its output, which only exists once it has run`,
+      ).toBe(true);
+    }
+  });
+});
+
+for (const scenario of SCENARIOS) {
+  describe(`the verify job's executed steps when CI runs ${scenario.label}`, () => {
+    const selected = () => selectSteps(verify.steps, contextFor(scenario));
+    const testSteps = () => runsContaining(selected(), TEST_SUITE_COMMAND);
+    const executedRunSteps = () => selected().filter((step) => step.run !== undefined);
+    const coverageInvocations = () =>
+      testSteps().map((step) => step.run ?? "").filter((run) => run.includes("--coverage"));
+
+    it("runs the test suite exactly once", () => {
+      // Zero is issue 849's own failure mode: a condition that can never fire
+      // leaves the step in the file, so every presence assertion in tests/ci/
+      // stays green while CI executes no tests. Two is a different bug — the
+      // suite would run twice against the same database — and neither count is
+      // acceptable, which is why this asserts the cardinality and not a
+      // substring.
+      expect(
+        testSteps().map(label),
+        `on ${scenario.event} with docs_only=${scenario.docsOnly}, exactly one executed step may ` +
+          `invoke \`${TEST_SUITE_COMMAND}\`. Zero means the gate stopped gating with nothing failing; ` +
+          `two means the suite runs twice against one database. Steps that execute a command here: ` +
+          `${executedRunSteps().map(label).join(", ") || "none"}`,
+      ).toHaveLength(1);
+    });
+
+    it("applies the migrations before it runs the tests", () => {
+      // The suite cannot pass against a schema it never applied. Ordering is
+      // asserted as the one relative order that carries meaning; no absolute
+      // index is pinned anywhere in this file, so moving an unrelated step
+      // cannot fail it.
+      const selectedSteps = selected();
+      const migrate = selectedSteps.findIndex((step) => (step.run ?? "").includes(MIGRATE_COMMAND));
+      const test = selectedSteps.findIndex((step) => (step.run ?? "").includes(TEST_SUITE_COMMAND));
+
+      expect(
+        migrate,
+        `on ${scenario.event} the verify job must execute \`${MIGRATE_COMMAND}\``,
+      ).toBeGreaterThan(-1);
+      expect(
+        test,
+        `on ${scenario.event} the verify job must execute \`${TEST_SUITE_COMMAND}\``,
+      ).toBeGreaterThan(-1);
+      expect(
+        migrate,
+        `on ${scenario.event} the migrations must be applied before the tests run — a suite that ` +
+          `runs against a schema it never applied can pass against the wrong database`,
+      ).toBeLessThan(test);
+    });
+
+    it(
+      scenario.coverage
+        ? "measures coverage alongside the tests"
+        : "measures no coverage at all, because the change cannot move coverage",
+      () => {
+        const joined = selected()
+          .flatMap((step) => (step.run ? [step.run] : []))
+          .join("\n");
+        const expectation =
+          `on ${scenario.event} with docs_only=${scenario.docsOnly} the coverage measurement ` +
+          `${scenario.coverage ? "must run" : "must not run"}: a docs-only change compares the same ` +
+          `tree against itself, and a run that measured it anyway would report a number that means ` +
+          `nothing. Steps that execute a command here: ${executedRunSteps().map(label).join(", ") || "none"}`;
+
+        expect(coverageInvocations(), expectation).toHaveLength(scenario.coverage ? 1 : 0);
+        expect(joined.includes(COVERAGE_FLOOR_COMMAND), expectation).toBe(scenario.coverage);
+      },
+    );
+
+    it("tolerates the failure of no test or coverage step", () => {
+      // Selected is not the same as gating: a step may be selected and still
+      // have its failure ignored, which would leave the same green conclusion
+      // this suite exists to deny, one level up.
+      for (const step of [
+        ...testSteps(),
+        ...runsContaining(selected(), COVERAGE_FLOOR_COMMAND),
+      ]) {
+        expect(
+          step["continue-on-error"],
+          `${label(step)} runs on ${scenario.event} and must not be continue-on-error — a tolerated ` +
+            `failure does not gate the merge`,
+        ).toBeFalsy();
+      }
+      expect(
+        [...testSteps(), ...runsContaining(selected(), COVERAGE_FLOOR_COMMAND)].length,
+        `on ${scenario.event} at least one test or coverage step must exist to carry this check`,
+      ).toBeGreaterThan(0);
+    });
+  });
+}
+
+/** The message an expression evaluation failed with, or "" if it did not throw. */
+function captureError(run: () => unknown): string {
+  try {
+    run();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return "";
+}
