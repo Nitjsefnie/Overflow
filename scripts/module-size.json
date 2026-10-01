@@ -13,7 +13,7 @@
     "src/lib/dashboard/queries.ts": 1546,
     "src/lib/fold/postgres-store.ts": 2707,
     "src/lib/fold/repository-fold.ts": 1475,
-    "src/lib/github/client.ts": 1518,
+    "src/lib/github/client.ts": 1487,
     "src/lib/moderation/credit-adjustment-store.ts": 827,
     "src/lib/repositories/register.ts": 2046,
     "tests/db/schema.test.ts": 5074,
