@@ -14,18 +14,36 @@ const {
   GitLabGateway,
   listRepositoryLabels,
   GitLabApiError,
+  isUnclassifiedGitLabFailure,
 } = vi.hoisted(() => {
   class GitLabApiError extends Error {
-    public constructor(public readonly status: number) {
+    public readonly body: string | null;
+
+    public constructor(
+      public readonly status: number,
+      body: string | null = null,
+    ) {
       super(`GitLab API request failed with status ${status}.`);
+      this.name = "GitLabApiError";
+      this.body = body === null ? null : body.slice(0, 500);
     }
   }
+  // The same gate the real predicate applies (api-error.ts): not a
+  // GitLabApiError at all, or a status none of the labels route's arms
+  // classify. The route under test imports its predicate from
+  // @/lib/gitlab/api-error, so this module is mocked over the SAME fake class
+  // the gateway failures are built from — the real predicate's instanceof
+  // would never recognize a fake instance and every failure would read as
+  // unclassified.
+  const isUnclassifiedGitLabFailure = (error: unknown): boolean =>
+    !(error instanceof GitLabApiError) || ![401, 403, 404, 429].includes(error.status);
   return {
     readSession: vi.fn(),
     getForgeToken: vi.fn(),
     GitLabGateway: vi.fn(),
     listRepositoryLabels: vi.fn(),
     GitLabApiError,
+    isUnclassifiedGitLabFailure,
   };
 });
 vi.mock("@/auth", () => ({ auth: readSession }));
@@ -36,6 +54,7 @@ vi.mock("@/lib/forge/postgres-identities-store", () => ({
   },
 }));
 vi.mock("@/lib/gitlab/client", () => ({ GitLabGateway, GitLabApiError }));
+vi.mock("@/lib/gitlab/api-error", () => ({ GitLabApiError, isUnclassifiedGitLabFailure }));
 
 beforeEach(() => {
   readSession.mockReset().mockResolvedValue(null);
@@ -481,13 +500,19 @@ describe("GET /api/repositories/labels (GitLab)", () => {
     expect(getForgeToken).not.toHaveBeenCalled();
   });
 
+  // Issue 892: a 500 has its own test below — no arm classifies it, so it is
+  // the route's one logged GitLab failure. These rows are exactly the
+  // classified set, and classified failures stay silent: each row's message
+  // already names the remedy, so the only operator-facing record is the
+  // answer itself. The assertion pins that silence on each row (and the
+  // file's afterEach harness fails any run where unexpected console output
+  // leaks anywhere).
   it.each([
     [401, 403, "FORBIDDEN", "GitLab refused the labels read through your linked identity (HTTP 401). The identity may have been revoked; re-link it on the dashboard's Forge identities page, then retry."],
     [403, 403, "FORBIDDEN", "GitLab refused the labels read through your linked identity (HTTP 403). The identity may have been revoked; re-link it on the dashboard's Forge identities page, then retry."],
     [404, 404, "NOT_FOUND", "No GitLab project with that id or path is visible through your linked identity. Check the project id or path and that the identity still has access, then retry."],
     [429, 429, "RATE_LIMITED", "GitLab rate-limited the labels read (HTTP 429). Please retry later."],
-    [500, 502, "UPSTREAM_FAILURE", "Unable to read the repository labels on GitLab."],
-  ])("maps a GitLab HTTP %s upstream failure to %s %s", async (upstreamStatus, expectedStatus, expectedCode, expectedMessage) => {
+  ])("maps a GitLab HTTP %s upstream failure to %s %s and logs nothing", async (upstreamStatus, expectedStatus, expectedCode, expectedMessage) => {
     readSession.mockResolvedValue(memberSession());
     stubLinkedIdentity();
     stubGitLabGatewayFailure(new GitLabApiError(upstreamStatus));
@@ -497,6 +522,84 @@ describe("GET /api/repositories/labels (GitLab)", () => {
 
     expect(response.status).toBe(expectedStatus);
     expect(body).toEqual({ error: { code: expectedCode, message: expectedMessage } });
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  // Issue 892: no arm classifies a 5xx, so it reaches the generic 502 whose
+  // fixed string names neither the status nor anything else about the
+  // failure. The answer is unchanged; what an operator reads is the log, and
+  // the status is what it has to name.
+  it("logs the unclassified GitLab status when the labels read answers a 5xx", async () => {
+    consoleOutputAllowed.add("error");
+    readSession.mockResolvedValue(memberSession());
+    stubLinkedIdentity();
+    stubGitLabGatewayFailure(new GitLabApiError(500, "gitlab-500-upstream-diagnostic"));
+
+    const response = await labelsRoute.GET(gitlabLabelsRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(body).toEqual({
+      error: { code: "UPSTREAM_FAILURE", message: "Unable to read the repository labels on GitLab." },
+    });
+    expect(console.error).toHaveBeenCalledTimes(1);
+    // The recorded argument is the error itself, not a rendering of it: the
+    // status is read off the object, and the upstream body rides along with
+    // it — what GitLab actually said is what the operator log is for here
+    // (see readGitLabLabels' doc comment).
+    const failure = vi.mocked(console.error).mock.calls.flat()
+      .find((argument): argument is InstanceType<typeof GitLabApiError> => argument instanceof GitLabApiError);
+    expect(failure).toBeDefined();
+    expect(failure?.status).toBe(500);
+    expect(failure?.body).toContain("gitlab-500-upstream-diagnostic");
+  });
+
+  // The collection-walk bound throws a plain Error — no status, no endpoint —
+  // so it matches no arm either, and it logs the same way while the answer
+  // stays the generic 502 (the GitHub-side walk-bound test's mirror).
+  it("logs the collection-walk bound's plain error when the GitLab labels walk trips it", async () => {
+    consoleOutputAllowed.add("error");
+    readSession.mockResolvedValue(memberSession());
+    stubLinkedIdentity();
+    stubGitLabGatewayFailure(new Error("repository labels: walked past the ceiling of 500 pages"));
+
+    const response = await labelsRoute.GET(gitlabLabelsRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(body).toEqual({
+      error: { code: "UPSTREAM_FAILURE", message: "Unable to read the repository labels on GitLab." },
+    });
+    const boundError = vi.mocked(console.error).mock.calls.flat()
+      .find((argument): argument is Error => argument instanceof Error);
+    expect(boundError?.message).toContain("repository labels");
+    expect(boundError?.message).toContain("ceiling");
+  });
+
+  // Status 0 is the client's transport rank — an unreachable instance, an
+  // unparsable body, a structurally wrong success body — never an HTTP status
+  // GitLab sent, so no arm explains it and it logs like any other
+  // unclassified failure.
+  it("logs a transport-rank GitLab failure (status 0) like any other unclassified failure", async () => {
+    consoleOutputAllowed.add("error");
+    readSession.mockResolvedValue(memberSession());
+    stubLinkedIdentity();
+    stubGitLabGatewayFailure(
+      new GitLabApiError(0, "GitLab returned an unparsable body from /projects/group%2Fproj/labels."),
+    );
+
+    const response = await labelsRoute.GET(gitlabLabelsRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(body).toEqual({
+      error: { code: "UPSTREAM_FAILURE", message: "Unable to read the repository labels on GitLab." },
+    });
+    const failure = vi.mocked(console.error).mock.calls.flat()
+      .find((argument): argument is InstanceType<typeof GitLabApiError> => argument instanceof GitLabApiError);
+    expect(failure).toBeDefined();
+    expect(failure?.status).toBe(0);
+    expect(failure?.body).toContain("unparsable body");
   });
 
   it("returns a structured 400 carrying the normalization refusal for a malformed instance URL", async () => {

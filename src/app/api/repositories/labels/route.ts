@@ -4,6 +4,7 @@ import { ForgeIdentityError, normalizeInstanceUrl } from "@/lib/forge/identities
 import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-store";
 import { GitHubGateway } from "@/lib/github/client";
 import { GitHubApiError, classifyGitHubApiFailure, isUnclassifiedGitHubFailure } from "@/lib/github/errors";
+import { isUnclassifiedGitLabFailure } from "@/lib/gitlab/api-error";
 import { GitLabApiError, GitLabGateway } from "@/lib/gitlab/client";
 import { plural } from "@/lib/plural";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
@@ -264,18 +265,11 @@ async function gitlabLabelsResponse(
 
   const gateway = new GitLabGateway({ instanceUrl, token: credential.token });
   try {
-    let labels: Set<string>;
-    if ("id" in project) {
-      // The numeric form has no owner/name until the id resolves; a null is
-      // the gateway's "unreachable project" verdict, answered exactly like
-      // the labels read's own 404 below.
-      const repository = await gateway.getRepositoryById(project.id);
-      if (repository === null) {
-        return errorResponse(404, "NOT_FOUND", gitlabProjectNotFoundMessage);
-      }
-      labels = await gateway.listRepositoryLabels({ owner: repository.owner, name: repository.name });
-    } else {
-      labels = await gateway.listRepositoryLabels(project);
+    const labels = await readGitLabLabels(gateway, project);
+    if (labels === null) {
+      // The numeric form's `null` is the gateway's "unreachable project"
+      // verdict — answered exactly like the labels read's own 404.
+      return errorResponse(404, "NOT_FOUND", gitlabProjectNotFoundMessage);
     }
     return Response.json({ labels: [...labels] });
   } catch (error) {
@@ -297,6 +291,69 @@ async function gitlabLabelsResponse(
       );
     }
     return errorResponse(502, "UPSTREAM_FAILURE", "Unable to read the repository labels on GitLab.");
+  }
+}
+
+/**
+ * The GitLab label walk, with the failures this route records before it maps
+ * them (issue 892).
+ *
+ * The bound on this walk is the collection-walk bound: it throws a plain `Error`
+ * naming the collection and the ceiling the walk stopped at. It is not a
+ * `GitLabApiError` at all — no status, no endpoint — so it matches no arm the
+ * caller's catch classifies.
+ *
+ * The gate here is exactly "no arm classified this", which is those two
+ * failures together: the walk's own bound, and a `GitLabApiError` whose status
+ * none of the caller's arms can explain, a 500 among them. Both reach the
+ * generic 502, a fixed string that names neither the collection and ceiling
+ * nor the status, so the error object is the only carrier of either to an
+ * operator — and a GitLab 5xx used to be recorded nowhere at all. The
+ * classified arms stay silent, and that is the whole of their exemption: each
+ * already answered the submitter with a message naming the remedy for what
+ * GitLab reported about its own identity or its own availability.
+ *
+ * What this line is handed, and what it must not be handed. The error goes to
+ * the log WHOLE, not rendered: `GitLabApiError` carries the upstream response
+ * text as its own `body` property, capped at 500 characters by its
+ * constructor, and what GitLab actually said about the failure is the part an
+ * operator cannot get from the status. That is the standing design (api-error:
+ * response diagnostics belong in service logs and out of serialized API
+ * errors), so the diagnostic rides along unredacted, and a test pins both
+ * halves — the argument is the error, and its status and body ride along.
+ *
+ * The wrap is where the walk lives, and the only place its unclassified
+ * failures are recorded. This arm's credential read — the linked identity's
+ * token lookup — sits ahead of the try in its own catch, whose failure
+ * answers the GitLab-worded 502 itself, so nothing sensitive can pass through
+ * the caller's catch here.
+ *
+ * The numeric form's `null` repository verdict is returned as `null`, not
+ * thrown: it is the gateway's "unreachable project" answer — a verdict about
+ * the project, not a failure of the read — and the caller keeps its 404
+ * mapping for it. It logs as nothing.
+ */
+async function readGitLabLabels(
+  gateway: GitLabGateway,
+  project: { id: number } | { owner: string; name: string },
+): Promise<Set<string> | null> {
+  try {
+    if ("id" in project) {
+      // The numeric form has no owner/name until the id resolves; a null is
+      // the gateway's "unreachable project" verdict, returned as null so the
+      // caller answers it with the labels read's own 404.
+      const repository = await gateway.getRepositoryById(project.id);
+      if (repository === null) {
+        return null;
+      }
+      return await gateway.listRepositoryLabels({ owner: repository.owner, name: repository.name });
+    }
+    return await gateway.listRepositoryLabels(project);
+  } catch (error) {
+    if (isUnclassifiedGitLabFailure(error)) {
+      console.error("Reading the repository labels on GitLab failed.", error);
+    }
+    throw error;
   }
 }
 
