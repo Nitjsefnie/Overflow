@@ -86,8 +86,15 @@ describe("API token usage and issuance identity", () => {
 
   it("confirms an unconfirmed token whose last stamp is inside the throttle", async () => {
     const { sql, store, tokenHash, tokenId, userId } = await issue();
+    // Pinned 50 milliseconds behind the statement's own clock: the lookup's
+    // write lands at least one round trip later, and two writes inside one
+    // wall-clock millisecond floor to equal getTime() values — the collision
+    // this read once flaked on. Fifty milliseconds stays inside the throttle's
+    // minute, so the scenario is unchanged, and the unconfirmed path bypasses
+    // the throttle regardless (confirmed_at is null).
     const [before] = await sql<{ last_used_at: Date }[]>`
-      update api_tokens set last_used_at = now() where id = ${tokenId} returning last_used_at
+      update api_tokens set last_used_at = now() - interval '50 milliseconds'
+      where id = ${tokenId} returning last_used_at
     `;
 
     await expect(store.findAccountByTokenHash(tokenHash)).resolves.toMatchObject({ id: userId });
@@ -97,9 +104,36 @@ describe("API token usage and issuance identity", () => {
     `;
     // The throttle governs the hot auth path of a token already in use. An
     // unconfirmed one still has its confirmation to record, so the statement
-    // writes, and the stamp moves forward rather than being held back.
+    // writes, and the stamp moves strictly forward: the setup pinned the old
+    // value behind a 50-millisecond seam, so equality would mean the lookup
+    // held the stamp back or wrote it backward — not that it merely reused
+    // the tick.
     expect(after.confirmed_at).toBeInstanceOf(Date);
     expect(after.last_used_at.getTime()).toBeGreaterThan(before.last_used_at.getTime());
+  });
+
+  it("never moves the stamp back when the capture and the write share a tick", async () => {
+    const { sql, tokenHash, userId, tokenId } = await issue();
+    // The collision the read above must not flake on, forced instead of hoped
+    // for or feared: one transaction carries one transaction_timestamp, so the
+    // setup write and the lookup's write land on the same tick by
+    // construction — the same millisecond, to the microsecond.
+    await sql.begin(async (tx) => {
+      const [before] = await tx`
+        update api_tokens set last_used_at = now() where id = ${tokenId} returning last_used_at
+      `;
+      await expect(new PostgresApiTokenStore(tx as unknown as Sql).findAccountByTokenHash(tokenHash))
+        .resolves.toMatchObject({ id: userId });
+      const [after] = await tx`
+        select confirmed_at, last_used_at from api_tokens where id = ${tokenId}
+      `;
+      expect(after.confirmed_at).toBeInstanceOf(Date);
+      // Forward or equal, never back. Equality is the honest result on a
+      // shared tick — the same one that floored to the collision above — so
+      // the strict read would fail here every run; what the intent forbids is
+      // a stamp behind the one the row already had.
+      expect(after.last_used_at.getTime()).toBeGreaterThanOrEqual(before.last_used_at.getTime());
+    });
   });
 
   it.each(["1 second", "0 seconds"])("neither returns nor stamps a token expired %s ago", async (age) => {
