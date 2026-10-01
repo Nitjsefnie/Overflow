@@ -12,8 +12,8 @@ export { REAUTHENTICATION_WINDOW_MS, AUTHENTICATION_CLOCK_SKEW_MS } from "@/lib/
  * script. The token authenticates as the account on every route that accepts
  * a bearer token, moderation and override decisions included for a moderator;
  * the session-only routes (this one, forge identities, repository labels)
- * refuse it. It expires a fixed lifetime after it is minted, and the 201 body
- * says when.
+ * refuse it. It carries a delivery window until its holder first presents it
+ * and a lifetime from that request, and the 201 body says where it stands.
  *
  * The 201 body is the only place in the product where a plaintext token ever
  * appears: the store receives its hash, nothing logs it, and no error carries
@@ -101,15 +101,26 @@ export function createApiTokenPostHandler(
     const { token, tokenHash } = mintApiToken();
     let createdAt: Date;
     let expiresAt: Date;
+    let confirmedAt: Date | null;
     try {
       const store = await dependencies.createTokenStore();
-      ({ createdAt, expiresAt } = await store.issueToken(session.user.id, tokenHash));
+      ({ createdAt, expiresAt, confirmedAt } = await store.issueToken(session.user.id, tokenHash));
     } catch {
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to issue an API token.");
     }
 
+    // `confirmedAt` travels with the plaintext because it is what tells the
+    // holder the token's clock has not started yet: the ninety days are measured
+    // from the first request that authenticates with this value, and a mint is
+    // always unconfirmed at the instant it is handed over. A client that knows
+    // that can say so, instead of reading the delivery window as a lifetime.
     return Response.json(
-      { token, createdAt: createdAt.toISOString(), expiresAt: expiresAt.toISOString() },
+      {
+        token,
+        createdAt: createdAt.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+        confirmedAt: confirmedAt?.toISOString() ?? null,
+      },
       { status: 201 },
     );
   };
