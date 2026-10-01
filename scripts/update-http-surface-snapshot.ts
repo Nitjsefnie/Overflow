@@ -2,20 +2,23 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { argv, exit } from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { deriveHttpSurfaceShapes, type HttpShape } from "./http-surface-derive.ts";
+import { deriveHttpSurfaceShapes, shapesCompatible, type HttpShape } from "./http-surface-derive.ts";
 
 /**
  * Records the HTTP surface snapshot and moves the server version with it
- * (issue 912). The decision ladder mirrors the MCP updater's
- * decideSnapshotUpdate: an unchanged surface with everything aligned is
- * in-sync; a drifted protocol version refuses with the repair remedy; a
- * changed surface refuses without --version (surface-refuse), refuses the
- * recorded version (same-version-refuse), and otherwise records — and a
- * record moves the four version-bearing artifacts together: the HTTP
- * snapshot, SERVER_VERSION (src/lib/version.ts), MCP_SERVER_VERSION
- * (src/lib/mcp/protocol.ts), and the mcpServerVersion field of
- * scripts/mcp-surface-snapshot.json, so one version keeps covering the HTTP
- * API and the MCP endpoint (tests/lib/api-version.test.ts pins the pair).
+ * (issue 912). The decision ladder is compatibility-directed (the API.md
+ * "Stability and versioning" policy): an unchanged surface with everything
+ * aligned is in-sync; a drifted protocol version refuses with the repair
+ * remedy; an ADDITIVE surface change records without a version decision
+ * (adding a route or a field is not breaking, so no version move is needed);
+ * an INCOMPATIBLE surface change refuses without --version
+ * (surface-refuse), refuses the recorded version (same-version-refuse), and
+ * otherwise records — and a versioned record moves the four version-bearing
+ * artifacts together: the HTTP snapshot, SERVER_VERSION
+ * (src/lib/version.ts), MCP_SERVER_VERSION (src/lib/mcp/protocol.ts), and
+ * the mcpServerVersion field of scripts/mcp-surface-snapshot.json, so one
+ * version keeps covering the HTTP API and the MCP endpoint
+ * (tests/lib/api-version.test.ts pins the pair).
  */
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -52,15 +55,37 @@ export function replaceConstAssignment(source: string, name: string, version: st
   return source.replace(assignmentPattern(name), () => buildConstAssignment(name, version));
 }
 
-type UpdateDecision = "in-sync" | "drift-refuse" | "repair" | "surface-refuse" | "same-version-refuse" | "record";
+type UpdateDecision =
+  | "in-sync"
+  | "drift-refuse"
+  | "repair"
+  | "surface-refuse"
+  | "same-version-refuse"
+  | "record-additive"
+  | "record";
 
+/**
+ * The compatibility-directed ladder: an additive change (every recorded key
+ * still derived, every recorded field still served) records without a version
+ * decision, because adding a route or a field is not breaking; removing or
+ * retyping a recorded shape refuses without --version. An explicit --version
+ * alongside an additive change is honored and moves the four artifacts.
+ */
 export function decideSnapshotUpdate(input: {
   surfaceChanged: boolean;
+  surfaceCompatible: boolean;
   snapshotVersion?: string;
   requestedVersion?: string;
   protocolVersion?: string;
 }): UpdateDecision {
   if (input.surfaceChanged) {
+    if (input.surfaceCompatible) {
+      return input.requestedVersion === undefined
+        ? input.snapshotVersion === input.protocolVersion
+          ? "record-additive"
+          : "drift-refuse"
+        : "record";
+    }
     if (!input.requestedVersion) return "surface-refuse";
     if (input.snapshotVersion === input.requestedVersion) return "same-version-refuse";
     return "record";
@@ -106,6 +131,14 @@ async function main(): Promise<void> {
   }
 
   const surfaceChanged = !equal(routes, snapshot?.routes);
+  // Compatibility direction: every recorded key and field must still be
+  // derived with a compatible shape; derived-only routes and fields are
+  // additive. A missing snapshot file is compatible with nothing, so a first
+  // record keeps demanding --version.
+  const surfaceCompatible = snapshot !== undefined
+    && Object.entries(snapshot.routes).every(([key, recorded]) =>
+      key in routes && shapesCompatible(recorded, routes[key]!),
+    );
   if (surfaceChanged) {
     const previous = new Set(Object.keys(snapshot?.routes ?? {}));
     const current = new Set(Object.keys(routes));
@@ -122,6 +155,7 @@ async function main(): Promise<void> {
   const serverVersion = readConstAssignment(readFileSync(versionPath, "utf8"), "SERVER_VERSION");
   const decision = decideSnapshotUpdate({
     surfaceChanged,
+    surfaceCompatible,
     snapshotVersion: snapshot?.httpServerVersion,
     requestedVersion,
     protocolVersion: serverVersion,
@@ -131,8 +165,20 @@ async function main(): Promise<void> {
     exit(1);
   }
   if (decision === "same-version-refuse") {
-    console.error("the version must move when the surface changes");
+    console.error("the version must move when a recorded shape is removed or retyped");
     exit(1);
+  }
+  if (decision === "record-additive") {
+    writeFileSync(
+      snapshotPath,
+      `${JSON.stringify({ httpServerVersion: snapshot!.httpServerVersion, routes }, null, 2)}\n`,
+    );
+    console.log(
+      "Recorded the additive HTTP surface change into scripts/http-surface-snapshot.json; " +
+        "the server version stands (adding a route or a field is not breaking). " +
+        "Removing or retyping a recorded shape still needs --version <new>.",
+    );
+    exit(0);
   }
   if (decision === "drift-refuse") {
     console.error(
