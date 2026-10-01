@@ -364,13 +364,24 @@ sole admin collaborator, the only account that branch protection's
 belongs to. This section is what to do when that account is gone or held by
 someone else.
 
-The three cases are different incidents, not one with three names:
+The four cases are different incidents, not one with four names:
 
-- **Deleted, or locked by platform action.** The platform action reaches the
-  account, not the host and not the database. The service keeps serving, the
-  ledger keeps reading and pricing, and merges, labelling and every settings
-  change stop until access returns. Nothing already merged or already
-  labelled is undone by the platform action itself.
+- **Deleted.** Do not assume anything survives, and fork or clone before
+  anything else. This is a personal repository — `Nitjsefnie` is the owner as a
+  user account, not an organization ([OPERATING.md](../OPERATING.md#governance-single-maintainer-operation))
+  — so what GitHub does to the repository when its owner's account is deleted
+  is a separate question, and nothing in this repository records the answer
+  (see the fourth limit below). What a reader must not conclude is that nothing
+  needs preserving: the fold prices settlements from issue labels and comment
+  history read off this repository, so the repository is the settlement
+  evidence, and a service that keeps serving proves nothing about it. The
+  account is unrecoverable by this runbook; treat the repository as evidence
+  first and the account second.
+- **Locked by platform action.** The platform action reaches the account, not
+  the host and not the database. The service keeps serving, the ledger keeps
+  reading and pricing, and merges, labelling and every settings change stop
+  until access returns. Nothing already merged or already labelled is undone by
+  the platform action itself, because none of it lived in the account.
 - **Under an attacker's control.** Treat it as the compromise it is, and read
   the paragraph below before acting: [Contain](#contain) is service-side and
   cannot reach the account. An attacker holding the account can merge, label,
@@ -395,13 +406,17 @@ substitute for it. Repository administration is not that surface either: a
 backup admin collaborator administers the repository and the App, and neither
 reaches the account holder's sessions, tokens or recovery contacts.
 
-What keeps running without the account is the instance half of
+In the locked, attacker-controlled and absent cases, what keeps running without
+the account is the instance half of
 [OPERATING.md](../OPERATING.md#governance-single-maintainer-operation): the
 service under systemd, the webhook receivers, GitHub sign-in, the
 reconciliation worker and its six-hour sweep, and automatic settlement pricing
 from repository labels. What stops is the codebase half: merges, issue triage,
 `offered:` and `settled:` labelling, deployment, secret rotation, and any
-change to branch protection, a registration's webhook or the App.
+change to branch protection, a registration's webhook or the App. The deleted
+case is not covered by that list: two of its five entries read the repository,
+so whether they keep working is the same question the deleted bullet declines
+to answer. Take the fork or clone first and work from what survives.
 
 **The App's own credentials are not the personal account's session, and that
 is verified in two independent places.** The reconciliation path mints a
@@ -413,10 +428,14 @@ OAuth token of the maintainer's. The file is named by
 [deploy/README.md](README.md)'s *Create the environment file* section; the
 implementation is `readGitHubAppAuthConfig` in
 [src/lib/github/app-installation-auth.ts](../src/lib/github/app-installation-auth.ts),
-imported only by the Node reconciliation wiring. Either variable unset or
-empty is the OAuth-only posture, and in that posture the independence does not
-hold: the fold falls back to the sponsor's OAuth token, which is a personal
-credential. The relay is the second place: its workflow reads the App key from
+imported only by the Node reconciliation wiring. The independence does not
+hold in either of the two postures [deploy/README.md](README.md) names: either
+variable unset or empty is the OAuth-only posture, and — with both set — a
+repository the App is not installed on still falls back to the sponsor's OAuth
+token, which is a personal credential. This repository has the installation,
+so neither posture is expected here; a host that does not is running on a
+personal credential for that repository whatever its variables say. The relay
+is the second place, and does not depend on either posture: its workflow reads the App key from
 the repository's `overflow-ledger` environment secret and pins the App id and
 installation id in the workflow definition itself, so the check-runs that
 satisfy branch protection keep being posted whenever a producer run completes
@@ -425,26 +444,38 @@ See [OPERATING.md](../OPERATING.md#required-checks-relay) for its operations
 and [deploy/README.md](README.md) section 10 for why the required contexts are
 pinned to that App at all.
 
-**Three limits on that claim, because the honest version is the useful one.**
-The key material and the App itself are different things: a private key whose
-owner record no longer exists mints nothing, and nothing in this repository
-records what GitHub does to an App when its owner's account is deleted. And
-[deploy/README.md](README.md)'s note that the App private key lives under a
-traversable `/etc/overflow` on a relay host, and that an untraversable one
-fails the required checks closed, ties the host file to the required-checks
-path, while the relay workflow reads the Actions environment secret. Whether
-those are one PEM or two copies is not determinable from this repository;
-treat them as two locations to check rather than one. The third is on the relay
-sentence itself: the job runs under the `overflow-ledger` environment, and a
-GitHub environment can carry required reviewers. If that environment gates runs
-on an approving reviewer, every relay run waits for a human and the personal
-account is back inside the loop — the exact failure the sentence denies. This
-repository does not record that environment's protection rules: `overflow-ledger`
-appears in the relay workflow, in [OPERATING.md](../OPERATING.md#required-checks-relay)
-and in this section, and nowhere else, so nothing here can tell you whether a
-reviewer gate exists. Do not assume the relay fires unattended; read the
-environment's settings before relying on it, and read them from an account that
-survived step 8.
+**Four limits on that claim, because the honest version is the useful one.**
+
+1. **Key material is not App identity.** They are different things: a private
+   key whose owner record no longer exists mints nothing, and nothing in this
+   repository records what GitHub does to an App when its owner's account is
+   deleted.
+2. **One PEM or two copies.** [deploy/README.md](README.md)'s note that the
+   App private key lives under a traversable `/etc/overflow` on a relay host,
+   and that an untraversable one fails the required checks closed, ties the
+   host file to the required-checks path, while the relay workflow reads the
+   Actions environment secret. Whether those are one PEM or two is not
+   determinable from this repository; treat them as two locations to check
+   rather than one.
+3. **The relay may not fire unattended.** The job runs under the
+   `overflow-ledger` environment, and a GitHub environment can carry required
+   reviewers. If that environment gates runs on an approving reviewer, every
+   relay run waits for a human and the personal account is back inside the loop
+   — the exact failure the sentence denies. This repository does not record
+   that environment's protection rules: `overflow-ledger` appears in the relay
+   workflow, in [OPERATING.md](../OPERATING.md#required-checks-relay) and in
+   this section, and nowhere else, so nothing here can tell you whether a
+   reviewer gate exists. Do not assume the relay fires unattended; read the
+   environment's settings before relying on it, and read them from an account
+   that survived step 8.
+4. **What account deletion does to the repository is unrecorded too.** The
+   first limit hedges about the App; the same event raises the same question
+   about this repository, and nothing in this repository answers it either. The
+   reviewer of this section could not confirm from the tree whether GitHub
+   deletes a personal repository with its owner's account, and neither could
+   this runbook's author, so the deleted case above assumes nothing survives.
+   Treat the fork or clone as the first action rather than the fallback, because
+   the cost of having been wrong is the settlement evidence.
 
 **A backup admin collaborator, if one is ever invited.** Today none is
 invited, and this runbook does not create one. If the maintainer later invites
@@ -460,7 +491,7 @@ action, and as of this writing it has not been done.
 
 **The procedure, in order.**
 
-1. Establish which of the three cases above this is, and record the UTC
+1. Establish which of the four cases above this is, and record the UTC
    discovery time, before touching anything. Everything else depends on it:
    absence needs no change, compromise needs containment first.
 2. Confirm the instance side is unaffected, on the host, as root:
@@ -520,7 +551,8 @@ action, and as of this writing it has not been done.
    service, the webhook receivers, GitHub sign-in, the reconciliation worker
    and automatic settlement pricing. No step in 1 to 5 stops any of them, and
    none of steps 1 to 5 needs a merge, a label or a settings change to
-   complete.
+   complete. In the deleted case, treat the last two as conditional on what the
+   fork or clone turned out to contain.
 7. Blocked until access returns: merges, triage, `offered:` and `settled:`
    labelling, deployment, secret rotation, moderator roster changes, and any
    correction request only a moderator can grant or decline. A `settled:` label
