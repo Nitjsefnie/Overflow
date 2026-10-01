@@ -126,6 +126,30 @@ export function showFileLines(commit: string, path: string, cwd?: string): strin
   return result.stdout.split("\n");
 }
 
+/**
+ * Runs git in `repo` and returns its exit status and output WITHOUT throwing.
+ *
+ * For the reads whose NON-ZERO EXIT IS THE ANSWER — "does this string appear in
+ * this history", "does this path exist at HEAD" — where git answers "no" with
+ * status 1 while the helpers above throw. Writing those reads as
+ * `try { git(...) } catch { }` throws the status away and makes a genuine
+ * failure (status 128, a target that is not a repository at all) indistinguishable
+ * from a legitimate "no", which is precisely how a scan that found nothing ends
+ * up having certified a target it never opened.
+ *
+ * Same environment as `git` above: every inherited `GIT_*` variable stripped, so
+ * a caller cannot be redirected to a different repository by the environment.
+ */
+export function tryGit(repo: string, ...args: string[]): { status: number | null; stdout: string; stderr: string } {
+  const result = spawnSync("git", args, {
+    cwd: repo,
+    encoding: "utf8",
+    env: scratchGitEnv,
+    timeout: BLOB_READ_TIMEOUT_MS,
+  });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
 /** Writes `files` (repo-relative path to content), commits them all, and returns the new HEAD SHA. */
 export async function commitFiles(
   repo: string,
