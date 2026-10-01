@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { commitFiles, git, hasCommit, isShallowCheckout, scratchGitEnv, showFileLines } from "../support/scratch-git";
+import { commitFiles, git, isShallowCheckout, scratchGitEnv, showFileLines } from "../support/scratch-git";
 
 /**
  * Two contracts for issue 900's history scan, and an explicit statement of what
@@ -31,6 +31,21 @@ import { commitFiles, git, hasCommit, isShallowCheckout, scratchGitEnv, showFile
  * summary rather than passing quietly.** In a full-depth checkout it runs. Do not
  * read a green CI run as evidence about the committed baseline's provenance: it
  * is evidence about the checker, and about the file's own contents.
+ *
+ * **Covered here no longer, and by design: whether the baseline's commits are
+ * REACHABLE.** That assertion used to sit in this file, at both depths, and it
+ * could not work where it sat: the property is about a commit's place in the
+ * history, `verify` checks out one commit deep, and any `--rebase` merge
+ * re-stamps the branch's commits — so the next merge to orphan an entry landed
+ * as a red required check on `main` for every open pull request, over a defect
+ * that is real but belongs to the weekly sweep. It is now
+ * `scripts/secret-scan-baseline.sh`, the last step of
+ * `.github/workflows/secret-scan.yml`, which checks out at `fetch-depth: 0`,
+ * names the offending fingerprint and commit when it fails, and is executed end
+ * to end by `tests/ci/secret-scan-workflow.test.ts` — so the check is exercised
+ * by a test rather than discovered on the next weekly tick. Nothing here was
+ * weakened to make room for the move; the two tests are gone, and their
+ * property is asserted in the one environment that can observe it.
  *
  * The checker is the part covered everywhere, and it is covered by planting the
  * defect it exists to catch — a finding whose residue is material spliced in
@@ -124,6 +139,12 @@ export function provenanceViolations(finding: Pick<Finding, "Match">, sourceLine
  * fed the same source are not independent witnesses — the companion checks
  * consistency, not correctness, and cannot object when both are consistently
  * wrong. Stripping the selectors is what makes it an independent one.
+ *
+ * The corroborating half of that pair — the test that asserted the depth
+ * predicate by checking that the objects really were absent — went to the
+ * workflow with the reachability assertion it stood behind. What is left here
+ * is the predicate itself and the cases that pin it against every `GIT_*`
+ * redirector, which is what the deep check's own RUN/SKIP decision rests on.
  */
 
 describe(".github/gitleaks-baseline.json", () => {
@@ -660,8 +681,16 @@ describe("the git reads that decide whether the deep check runs", () => {
  *
  * What it does NOT do is skip because a commit is missing from a FULL-DEPTH
  * checkout. That is a baseline pointing at a commit this repository does not
- * have — a defect in a tracked artefact that the weekly scan is the only thing
- * to notice — so it fails, in the check above, by name.
+ * have — a defect in a tracked artefact — so the guard inside the loop below
+ * fails on it, by name, carrying the commit and the file. Where that defect is
+ * REPORTED, though, is the secret-scan workflow's last step: the assertion that
+ * every commit the baseline names is reachable from HEAD used to live here too,
+ * and it was in the one environment that cannot observe it (see the file
+ * header). It is now `scripts/secret-scan-baseline.sh`, which runs where
+ * `fetch-depth: 0` has the history, and `tests/ci/secret-scan-workflow.test.ts`
+ * executes that script end to end. The guard below is the second witness, in
+ * the environment that can see it at all — a full-depth checkout — and the two
+ * cannot be merged, because only one of them can run where the commits are.
  */
 describe("the committed baseline's provenance, where the history is present", () => {
   const findings: Finding[] = JSON.parse(readFileSync(resolve(".github/gitleaks-baseline.json"), "utf8"));
@@ -691,14 +720,16 @@ describe("the committed baseline's provenance, where the history is present", ()
           sources.set(key, showFileLines(finding.Commit, finding.File));
         } catch (error) {
           // A baseline naming a commit this repository does not have is a defect
-          // in a tracked artefact, and the weekly scan is the only thing that
-          // would ever notice it. So this FAILS. A skip here would report that
-          // defect as coverage, which is the shape of false green this suite
-          // has spent three rounds removing.
+          // in a tracked artefact, and the weekly secret scan's reachability step
+          // is where that defect is reported. So this FAILS too, in the one
+          // environment that can see it. A skip here would report the defect as
+          // coverage, which is the shape of false green this suite has spent
+          // three rounds removing.
           //
-          // `expect.fail` THROWS, so control cannot reach the lookup below —
-          // and the test above guards the same property independently. The
-          // backstop under it exists for a **no-op** downgrade of this guard:
+          // `expect.fail` THROWS, so control cannot reach the lookup below — and
+          // the workflow's own step guards the same property independently, in a
+          // full-history checkout and without needing one. The backstop under it
+          // exists for a **no-op** downgrade of this guard:
           // downgraded to one, control reaches the lookup, and without the
           // backstop the loop crashes on a missing map entry with a bare
           // TypeError that names nothing. (A `continue` downgrade is a
@@ -747,65 +778,6 @@ describe("the committed baseline's provenance, where the history is present", ()
         "means entries lost the residue that made them checkable, and a green run would keep certifying " +
         "less than it appears to.",
     ).toBe(EXPECTED_CHECKABLE_ENTRIES);
-  });
-
-  it("resolves every commit the baseline names, unless this checkout is genuinely shallow", () => {
-    // The counterpart to the deep check, and it runs at BOTH depths. That is the
-    // point: the deep check's own `expect.fail` on an unresolvable commit is a
-    // catch-block guard, and a catch block that someone tidies into a `continue`
-    // takes the whole thing with it. For the 5 entries whose Match is a pure
-    // redaction there is nothing else in the deep loop that could notice — their
-    // residue is empty, so the provenance check passes them whatever line they
-    // are given. This test notices.
-    //
-    // Corrupting a `gitlab-pat` entry's Commit was green once `expect.fail` was
-    // downgraded, which is a double fault, and a double fault is exactly the
-    // kind a reviewer should not have to assume away.
-    const unresolvable = findings.filter((finding) => !hasCommit(finding.Commit)).map((f) => f.Fingerprint);
-    if (isShallowCheckout()) {
-      // A shallow checkout is the one legitimate reason a commit is missing, and
-      // it must genuinely be the reason rather than an assumption.
-      expect(
-        unresolvable.length,
-        "this checkout reports itself shallow, so commits it does not carry are expected — but it " +
-          "resolves every one of them anyway, which means the depth predicate is reporting something " +
-          "other than this checkout's depth.",
-      ).toBeGreaterThan(0);
-    } else {
-      expect(
-        unresolvable,
-        "a full-depth checkout must resolve every commit the baseline names. One it cannot is a " +
-          "baseline pointing at a commit this repository does not have — a defect in a tracked " +
-          "artefact that the weekly scan is the only thing to notice. It is reported here rather than " +
-          "skipped, because a skip would report that defect as coverage.",
-      ).toEqual([]);
-    }
-  });
-
-  it.skipIf(!shallow)("corroborates the checkout's own depth against the objects it holds", () => {
-    // The companion to the skip above, and it exists to pin the PREDICATE, not
-    // the baseline. The skip is taken on the checkout's word that it is shallow;
-    // this asserts that the word is true, by checking that the objects really are
-    // absent. That is what makes the pair self-pinning: a predicate hardcoded to
-    // "shallow" makes this test RUN in a full-depth checkout, where nothing is
-    // unresolvable, and it fails there.
-    //
-    // It is deliberately not a tautology. Under the old predicate — derived from
-    // the baseline's own `Commit` values — a corrupted entry naming a commit this
-    // repository does not have turned the deep check off in a FULL-DEPTH checkout
-    // and the run stayed green, because a broken baseline and a shallow checkout
-    // produced the same green and the same skip. The predicate is now a property
-    // of the environment, so that entry is no longer a way to disable anything: at
-    // full depth the deep check runs, and its own `expect(blob.status)` fires.
-    const unresolvable = findings.filter((finding) => !hasCommit(finding.Commit)).map((f) => f.Fingerprint);
-    expect(
-      unresolvable,
-      "this checkout reports itself shallow, and the provenance check above was skipped on that word — " +
-        "but every commit the baseline names resolves here. Either the depth predicate is reporting " +
-        "something other than this checkout's depth, or the skip above was taken for a reason that does " +
-        "not hold. Either way the committed baseline's provenance is unverified by this run and nothing " +
-        "above said so.",
-    ).not.toEqual([]);
   });
 });
 

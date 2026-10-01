@@ -1,12 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { scratchGitEnv } from "../support/scratch-git";
+import { commitFiles, git, scratchGitEnv } from "../support/scratch-git";
 
 /**
  * The shape of .github/workflows/secret-scan.yml, asserted on the PARSED YAML
@@ -505,11 +505,220 @@ describe(".github/workflows/secret-scan.yml", () => {
     }
   });
 
+  it("checks the baseline's commits for reachability, as a step that can end the run", () => {
+    const step = scan.steps.find((candidate) => /scripts\/secret-scan-baseline\.sh/.test(candidate.run ?? ""));
+    expect(step, "no step runs the baseline-reachability check").toBeDefined();
+    expect(step!.name, "a step that can fail the run must be named, or its red is anonymous in the log").toBeTruthy();
+    // Not gated. A `if: always()` here would invert the check into a
+    // decoration: it runs after a failure the same way it runs after a success,
+    // which is fine for the report upload and wrong for this.
+    expect(
+      step!.if ?? "",
+      "the reachability step must not be gated — it is the step whose nonzero exit ends the run",
+    ).not.toMatch(/always\(\)|failure\(\)|!cancelled|cancelled\(\)/);
+    // Last, not first, and deliberately. An unreachable entry does not make the
+    // scan WRONG — gitleaks walks the real history, so such an entry suppresses
+    // nothing and the scan still reports whatever is really there — but in the
+    // common `--rebase` case it is HALF of a pair whose other half is what
+    // suppresses the finding, so the scan's own report is the other half of this
+    // diagnosis. Failing before it would discard the evidence a human needs, and
+    // would fail the upload with "file not found" beside the real diagnostic.
+    const scanStep = scan.steps.findIndex((candidate) => /bash scripts\/secret-scan\.sh/.test(candidate.run ?? ""));
+    const uploadStep = scan.steps.findIndex((candidate) => candidate.uses?.startsWith("actions/upload-artifact@"));
+    const reachabilityStep = scan.steps.indexOf(step!);
+    expect(scanStep, "no scan step to order against").toBeGreaterThan(-1);
+    expect(uploadStep, "no upload step to order against").toBeGreaterThan(-1);
+    expect(reachabilityStep, "the reachability step must come after the scan").toBeGreaterThan(scanStep);
+    expect(reachabilityStep, "the reachability step must come after the report upload, so a red run still leaves the report").toBeGreaterThan(uploadStep);
+  });
+
+  /**
+   * The reachability step, EXECUTED.
+   *
+   * Everything above asserts the step's SHAPE from the parsed YAML. That is not
+   * evidence the step works: a step whose `run:` block is a `grep` for a string,
+   * or whose comparison is inverted, satisfies every shape assertion above and
+   * reports a clean baseline as an orphaned one — or, worse, the reverse, on a
+   * weekly tick nobody is watching. So this executes the step's own `run:` block
+   * verbatim, the way the sibling install/scan test executes those two, against a
+   * repository this suite builds with real commits.
+   *
+   * It builds one rather than reading the committed baseline for the same reason
+   * the provenance checker does: the committed baseline names five September
+   * commits of THIS repository, so a case that has to fail cannot use them
+   * without first poisoning a tracked file, and a case that has to pass cannot use
+   * them at all in any checkout shallower than September.
+   */
+  describe("the reachability step, executed against repositories this suite builds", () => {
+    const SCRIPT = "scripts/secret-scan-baseline.sh";
+    const step = () => {
+      const found = scan.steps.find((candidate) => /scripts\/secret-scan-baseline\.sh/.test(candidate.run ?? ""));
+      expect(found, "no step runs the baseline-reachability check").toBeDefined();
+      return found!;
+    };
+
+    let root = "";
+    /**
+     * A commit that is present in the object store but is NOT an ancestor of
+     * HEAD. This is the shape the check exists for rather than the easier
+     * one: a `--rebase` merge's discarded pre-image is exactly this — a commit
+     * git still holds and that `rev-parse` resolves, which a bare
+     * `hasCommit`-style existence test would wave through. Building it as a side
+     * branch is how a real one is shaped, and it is why the check asks
+     * `merge-base --is-ancestor` rather than `cat-file -e`.
+     */
+    let unmerged = "";
+    /** An ancestor of HEAD, so the positive direction has something real to pass on. */
+    let reachable = "";
+
+    const finding = (commit: string, file: string) => ({
+      RuleID: "generic-api-key",
+      Description: "fixture",
+      StartLine: 116,
+      EndLine: 116,
+      Match: 'TOKEN_ENCRYPTION_KEY", "REDACTED"',
+      Secret: "REDACTED",
+      File: file,
+      Commit: commit,
+      Fingerprint: `${commit}:${file}:generic-api-key:116`,
+    });
+
+    /** Run the step's `run:` block verbatim in `repoPath`, with `baseline` as its committed file. */
+    const runStep = (repoPath: string, baseline: unknown) => {
+      writeFileSync(join(repoPath, ".github", "gitleaks-baseline.json"), `${JSON.stringify(baseline, null, 1)}\n`, "utf8");
+      return spawnSync("bash", ["-e", "-c", step().run!], {
+        cwd: repoPath,
+        encoding: "utf8",
+        // `scratchGitEnv` already carries this session's NODE_ENV and strips
+        // every inherited GIT_* selector, so the step runs against the
+        // repository it was pointed at and nothing can redirect it elsewhere.
+        env: scratchGitEnv,
+      });
+    };
+
+    beforeAll(async () => {
+      root = await mkdtemp(join(tmpdir(), "secret-scan-reachability-"));
+      const repoPath = join(root, "checkout");
+      await mkdir(repoPath, { recursive: true });
+      git(repoPath, "init", "--quiet", "--initial-branch=main");
+      await commitFiles(repoPath, { "README.md": "# checkout\n" }, "root");
+      reachable = await commitFiles(repoPath, { "a.txt": "a\n" }, "an ancestor");
+      git(repoPath, "checkout", "--quiet", "-b", "side");
+      unmerged = await commitFiles(repoPath, { "b.txt": "b\n" }, "on a branch that is never merged");
+      git(repoPath, "checkout", "--quiet", "main");
+      // Staged last, so the history above is the history git actually has. The
+      // script resolves its repository from its OWN location, which is what makes
+      // a staged copy the checkout as far as the step is concerned.
+      await mkdir(join(repoPath, "scripts"), { recursive: true });
+      await mkdir(join(repoPath, ".github"), { recursive: true });
+      await copyFile(resolve(SCRIPT), join(repoPath, SCRIPT));
+    });
+
+    afterAll(async () => {
+      if (root) await rm(root, { recursive: true, force: true });
+    });
+
+    it("passes when every commit the baseline names is an ancestor of HEAD", () => {
+      const result = runStep(join(root, "checkout"), [
+        finding(reachable, "tests/security/token-cipher.test.ts"),
+      ]);
+      expect(
+        result.status,
+        `the step must pass on a baseline naming only reachable commits:\n${result.stdout}\n${result.stderr}`,
+      ).toBe(0);
+      // Not a bare exit code: a step that exited 0 without reading the baseline
+      // would satisfy that too, so it has to say what it checked.
+      expect(result.stdout, "the step must report how many entries it checked").toMatch(/1\b/);
+    });
+
+    it("fails, naming the fingerprint and the commit, on an entry that is not an ancestor of HEAD", () => {
+      const orphan = finding(unmerged, "tests/security/orphan.test.ts");
+      const result = runStep(join(root, "checkout"), [
+        finding(reachable, "tests/security/token-cipher.test.ts"),
+        orphan,
+      ]);
+      expect(
+        result.status,
+        "a baseline naming a commit that is not an ancestor of HEAD is a defect in a tracked artefact, and " +
+          "this step is the only thing that ever notices it",
+      ).not.toBe(0);
+      // Both halves, in one substring. Asserting the fingerprint alone would be
+      // satisfied by any message echoing the commit, because gitleaks builds the
+      // fingerprint out of it; asserting the commit alone would not say WHICH
+      // entry. The exact expected sentence is what a human reads at 04:41 on a
+      // Wednesday, so it is what is pinned.
+      expect(
+        `${result.stdout}\n${result.stderr}`,
+        "the failure must name the entry's fingerprint AND the commit it names",
+      ).toContain(`${orphan.Fingerprint} names commit ${unmerged}`);
+      expect(`${result.stdout}\n${result.stderr}`).toMatch(/not an ancestor/i);
+    });
+
+    it("fails, by name, on an entry whose commit this checkout does not carry at all", () => {
+      const absent = "0123456789abcdef0123456789abcdef01234567";
+      const orphan = finding(absent, "tests/security/never-committed.test.ts");
+      const result = runStep(join(root, "checkout"), [finding(reachable, "tests/security/token-cipher.test.ts"), orphan]);
+      expect(result.status, "an entry naming a commit absent from the checkout is the same defect").not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`, "the two faults have different fixes, so they get different messages").toContain(
+        `${orphan.Fingerprint} names commit ${absent}`,
+      );
+      expect(`${result.stdout}\n${result.stderr}`).not.toMatch(/not an ancestor/i);
+    });
+
+    it("refuses to answer in a shallow checkout, where every verdict would be a false alarm", async () => {
+      // Its own repository, because making this one shallow would poison the
+      // cases above. A shallow checkout cannot distinguish "this repository does
+      // not have the commit" from "this checkout was not fetched far enough", so
+      // the honest answer there is to refuse rather than to report a defect that
+      // is not there — which is what a step this one would otherwise do weekly,
+      // if anyone ever pointed it at a shallow checkout.
+      const shallowPath = join(root, "shallow");
+      await mkdir(shallowPath, { recursive: true });
+      git(shallowPath, "init", "--quiet", "--initial-branch=main");
+      const head = await commitFiles(shallowPath, { "README.md": "# shallow\n" }, "root");
+      await mkdir(join(shallowPath, "scripts"), { recursive: true });
+      await mkdir(join(shallowPath, ".github"), { recursive: true });
+      await copyFile(resolve(SCRIPT), join(shallowPath, SCRIPT));
+      // What `git clone --depth N` leaves behind: the boundary commit listed in
+      // .git/shallow, which is what makes `rev-parse --is-shallow-repository`
+      // answer true. A real shallow clone rather than a stubbed answer, so the
+      // guard is shown to read the property and not a variable.
+      await writeFile(join(shallowPath, ".git", "shallow"), `${head}\n`, "utf8");
+
+      const result = runStep(shallowPath, [finding(head, "tests/security/token-cipher.test.ts")]);
+      expect(result.status, "the step must refuse rather than report a false orphan").not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`, "and it must say why, naming the depth it needs").toMatch(/shallow/i);
+    });
+
+    it("cannot pass on a baseline it did not read", () => {
+      // A vacuous pass is the failure this whole repository keeps removing. Two
+      // shapes, because they fail for different reasons and only one of them is
+      // quiet:
+      //
+      //  - `[]` is a document jq READS SUCCESSFULLY and that yields no entries
+      //    to, so nothing rejects it and the loop simply iterates zero times.
+      //    This is the vacuous pass itself, and the step guards it.
+      //  - `{findings: []}` is a document jq cannot index, so it dies at the read
+      //    and the step's guard never runs. Also correct — it fails loudly — but
+      //    for a different reason, so it is not asked to carry the guard's
+      //    message.
+      const empty = runStep(join(root, "checkout"), []);
+      expect(empty.status, "the step must not report success on a baseline it read nothing from").not.toBe(0);
+      expect(`${empty.stdout}\n${empty.stderr}`, "and it must say it checked nothing").toMatch(
+        /checked nothing|no entries|nothing to check/i,
+      );
+
+      const reshaped = runStep(join(root, "checkout"), { findings: [] });
+      expect(reshaped.status, "the step must not report success on a baseline that is not the array gitleaks emits").not.toBe(0);
+    });
+  });
+
   it("is tracked under the deny-by-default ignore policy", () => {
     for (const path of [
       ".github/workflows/secret-scan.yml",
       ".github/gitleaks-baseline.json",
       "scripts/secret-scan.sh",
+      "scripts/secret-scan-baseline.sh",
     ]) {
       expect(
         checkIgnore(path),
