@@ -78,12 +78,31 @@ export class PostgresApiTokenStore {
         select id, user_id from api_tokens
         where token_hash = ${tokenHash} and expires_at > now()
       ), stamped as (
-        -- Every expression on the right-hand side reads the row's PRE-image, so
-        -- the confirmed_at test below judges the state this statement found and
-        -- not the one it is writing. That is what makes two concurrent first
-        -- uses idempotent: the loser of the row lock re-reads the winner's
-        -- commit, finds confirmed_at set, and leaves expires_at alone, so the
-        -- lifetime is measured from the FIRST use and never rolled forward.
+        -- Two guards keep a token's expiry from rolling forward, and they cover
+        -- different paths. Neither is redundant; removing either re-opens a way
+        -- to extend a confirmed token.
+        --
+        -- The case expression guards the SEQUENTIAL path, which is the one a
+        -- real account produces: this lookup wrote last_used_at a minute or
+        -- more ago, so the WHERE below admits the statement, the UPDATE really
+        -- runs, and without the case it would hand the token a fresh ninety
+        -- days on every subsequent use. Every expression on the right-hand
+        -- side reads the row's PRE-image, so the test judges the state this
+        -- statement found rather than the one it is writing: a row that was
+        -- already confirmed keeps the expiry it had.
+        --
+        -- The WHERE's throttle is what protects the CONCURRENT path, and it does
+        -- so by skipping rather than by evaluating: of two first uses racing
+        -- for the row, the loser blocks on the lock, and on waking re-reads the
+        -- winner's committed row and re-tests the WHERE against it, where
+        -- confirmed_at is set and last_used_at is fresh. The loser's UPDATE is
+        -- never executed, so it never evaluates expires_at at all. (Under READ
+        -- COMMITTED that re-read is EvalPlanQual; the point is which guard
+        -- fires, not what the re-read is called.)
+        --
+        -- confirmed_at is null sits in the WHERE as well, so an unconfirmed
+        -- token is confirmed on its first use however recently the last one was
+        -- stamped, rather than waiting out the throttle to record the proof.
         update api_tokens set
           confirmed_at = coalesce(confirmed_at, now()),
           expires_at = case when confirmed_at is null
