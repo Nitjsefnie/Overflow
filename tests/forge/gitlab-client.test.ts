@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_WALK_ITEMS, MAX_WALK_PAGES } from "@/lib/gitlab/collection-walk-bound";
 import { GitLabGateway, GitLabApiError } from "@/lib/gitlab/client";
 
 describe("scoped GitLab hook configuration", () => {
@@ -408,6 +409,84 @@ describe("GitLab collection pagination", () => {
       : new Response("unavailable", { status: 503 }));
     await expect(client.getPullRequest(repository, 17)).rejects.toMatchObject({ name: "GitLabApiError", status: 503 });
     expect(requests).toHaveLength(2);
+  });
+
+  // Issue 869: a walk ends only when the instance stops advertising a
+  // continuation. Every guard above rejects a REPEATED continuation — a
+  // repeated cursor, a repeated target, a non-advancing page — and none of
+  // them can reject one that is fresh on EVERY response. The bound is what
+  // makes such a walk terminate, and it terminates it loudly.
+  describe("collection walk bound", () => {
+    // GitLab clamps `per_page` at 100 on every list endpoint, and the walker
+    // always asks for the maximum, so a full page is 100 rows.
+    const fullPage = 100;
+    const fullPagesToTheRowCeiling = MAX_WALK_ITEMS / fullPage;
+    const overPages = new RegExp(`GitLab returned more than ${MAX_WALK_PAGES} pages`);
+    const overRows = new RegExp(`GitLab returned more than ${MAX_WALK_ITEMS} rows`);
+
+    it("stops a keyset walk whose cursor is fresh on every page", async () => {
+      const { client, requests } = collectionClient(`${projectPath}/issues`, (_, hit) =>
+        json([], { "x-next-cursor": `fresh-${hit}` }), MAX_WALK_PAGES + 5);
+
+      await expect(client.listIssues(repository)).rejects.toThrow(overPages);
+      expect(requests).toHaveLength(MAX_WALK_PAGES + 1);
+    });
+
+    it("stops an offset walk whose page number keeps increasing", async () => {
+      const { client, requests } = collectionClient(`${projectPath}/merge_requests/17/closes_issues`, (_, hit) =>
+        json([], { "x-next-page": String(hit + 1) }), MAX_WALK_PAGES + 5);
+
+      await expect(client.getPullRequestClosingIssues(repository, { id: 5_500_001, number: 17 }))
+        .rejects.toThrow(overPages);
+      expect(requests).toHaveLength(MAX_WALK_PAGES + 1);
+    });
+
+    it("stops a per-issue notes walk whose page number keeps increasing", async () => {
+      const { client, requests } = collectionClient(`${projectPath}/issues/12/notes`, (_, hit) =>
+        json([], { "x-next-page": String(hit + 1) }), MAX_WALK_PAGES + 5);
+
+      await expect(client.listIssueComments(repository, 12)).rejects.toThrow(overPages);
+      expect(requests).toHaveLength(MAX_WALK_PAGES + 1);
+    });
+
+    it("stops a per-issue label-events walk whose page number keeps increasing", async () => {
+      const { client, requests } = collectionClient(`${projectPath}/issues/12/resource_label_events`, (_, hit) =>
+        json([], { "x-next-page": String(hit + 1) }), MAX_WALK_PAGES + 5);
+
+      await expect(client.listIssueLabelEvents(repository, 12)).rejects.toThrow(overPages);
+      expect(requests).toHaveLength(MAX_WALK_PAGES + 1);
+    });
+
+    it("stops on the row ceiling when the instance only ever sends full pages", async () => {
+      // The page ceiling would allow twice this many requests, so only the row
+      // ceiling can be the one that fires here.
+      const { client, requests } = collectionClient(`${projectPath}/labels`, (_, hit) =>
+        json(Array.from({ length: fullPage }, (_, index) => ({ name: `label-${hit}-${index}` })),
+          { "x-next-page": String(hit + 1) }), MAX_WALK_PAGES + 5);
+
+      await expect(client.listRepositoryLabels(repository)).rejects.toThrow(overRows);
+      expect(requests).toHaveLength(fullPagesToTheRowCeiling + 1);
+    });
+
+    it("walks a legitimate three-page offset collection to its end", async () => {
+      const { client, requests } = collectionClient(`${projectPath}/merge_requests/17/closes_issues`, (_, hit) => hit < 3
+        ? json([{ id: 6_600_000 + hit, iid: 20 + hit, project_id: 278964 }], { "x-next-page": String(hit + 1) })
+        : json([{ id: 6_600_003, iid: 23, project_id: 278964 }]), 3);
+
+      const closing = await client.getPullRequestClosingIssues(repository, { id: 5_500_001, number: 17 });
+      expect(closing.map((item) => item.number)).toEqual([21, 22, 23]);
+      expect(requests).toHaveLength(3);
+    });
+
+    it("walks a legitimate three-page per-issue collection to its end", async () => {
+      const { client, requests } = collectionClient(`${projectPath}/issues/12/notes`, (_, hit) => hit < 3
+        ? json([{ ...note, id: 300 + hit }], { "x-next-page": String(hit + 1) })
+        : json([{ ...note, id: 303 }]), 3);
+
+      const comments = await client.listIssueComments(repository, 12);
+      expect(comments.map((comment) => comment.id)).toEqual(["301", "302", "303"]);
+      expect(requests).toHaveLength(3);
+    });
   });
 });
 
