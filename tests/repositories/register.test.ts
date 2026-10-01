@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
+import { classifyGitHubRateLimit, GitHubApiError, isUnclassifiedGitHubFailure } from "@/lib/github/errors";
 import { CollectionWalkBound, MAX_WALK_ITEMS } from "@/lib/github/collection-walk-bound";
 import type { GitHubRepository } from "@/lib/github/types";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
@@ -700,7 +700,14 @@ describe("explicit repository registration", () => {
       [500, 0, " Retry after 0 seconds."],
     ] as const)("prioritizes throttling for HTTP %s with retry delay %s", async (status, retryAfterSeconds, delay) => {
       const harness = createHarness({ owner: "Real-Owner", ownerType: "ORGANIZATION" });
-      harness.dependencies.github[step] = async () => { throw new GitHubApiError(status, true, retryAfterSeconds); };
+      // The same error the fake gateway throws, put to the gate directly, because
+      // the arms above return before the gate is ever consulted on this path: this
+      // is the shape where rate-limit evidence outranks a status, so a gate
+      // restated as a plain status set would answer true here and log a failure
+      // the caller has already answered with its remedy (issue 890).
+      const throttled = new GitHubApiError(status, true, retryAfterSeconds);
+      expect(isUnclassifiedGitHubFailure(throttled)).toBe(false);
+      harness.dependencies.github[step] = async () => { throw throttled; };
 
       await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
         code: "GITHUB_RATE_LIMITED",
