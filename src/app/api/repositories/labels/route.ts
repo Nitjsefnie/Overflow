@@ -83,17 +83,26 @@ export async function GET(request: Request): Promise<Response> {
 }
 
 /**
- * The GitHub label walk, with its non-GitHub failures recorded before they are
- * mapped (issue 883).
+ * The GitHub label walk, with the failures only Overflow can have recorded before
+ * they are mapped (issue 883).
  *
- * Every arm in the caller's catch maps an error GitHub itself reported, and each
- * already answers with its own actionable message. What is left reaching the
- * generic 502 is this walk failing on Overflow's own account — the
- * collection-walk bound's plain `Error`, which names the collection and the
- * ceiling the walk stopped at. The 502 is a fixed string, so the error object is
- * the only thing that carries that to an operator, and the read is bounded to
- * this one call so the log stays the walk's: a credential read that fails, or a
- * GitHub-reported status, must not appear in it.
+ * The bound on this walk is the collection-walk bound: it throws a plain `Error`
+ * naming the collection and the ceiling the walk stopped at. It is not a
+ * `GitHubApiError` at all — no status, no rate-limit evidence — so it matches no
+ * arm the caller's catch classifies and reaches the generic 502 with nothing
+ * recorded anywhere. That 502 is a fixed string, so the error object is the only
+ * thing that carries the collection and the ceiling to an operator.
+ *
+ * The conjunct is exactly that exclusion, and it does not reach as far as
+ * "everything GitHub reported": a `GitHubApiError` whose status is not 401, 403,
+ * 404, 429 or rate-limited also falls through to the generic 502 at the caller's
+ * end, and this log stays silent for it. That silence is deliberate — such a
+ * status is GitHub's own answer about its own availability rather than a walk
+ * Overflow cut short, and it is pinned by a test — but a 500 here answers the
+ * submitter a 502 and leaves the operator nothing, which is a gap in its own
+ * right. The read is wrapped rather than logged in the caller's catch so the
+ * credential read ahead of the walk, whose error can carry the stored token,
+ * cannot reach this line.
  */
 async function readRepositoryLabels(
   gateway: GitHubGateway,
