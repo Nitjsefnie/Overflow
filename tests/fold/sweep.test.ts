@@ -62,6 +62,92 @@ describe("scheduled reconciliation sweep", () => {
     expect(errors.mock.calls[0]?.[1]).toBe(failure);
   });
 
+  it("prunes expired maintenance rows on each tick, after that tick's sweep", async () => {
+    vi.stubEnv("OVERFLOW_SKIP_STARTUP_RECONCILIATION", "1");
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const timer = createTimer();
+    const events: string[] = [];
+    startReconciliationSweep({
+      runSweep: async () => { events.push("enqueue"); },
+      pruneRetention: async () => { events.push("prune"); },
+      schedule: timer.schedule,
+    });
+    await timer.settle();
+    expect(events).toEqual([]);
+    await timer.tick();
+    await timer.tick();
+    expect(events).toEqual(["enqueue", "prune", "enqueue", "prune"]);
+  });
+
+  it("prunes on the startup pass too, after its sweep", async () => {
+    const timer = createTimer();
+    const events: string[] = [];
+    startReconciliationSweep({
+      runSweep: async () => { events.push("enqueue"); },
+      pruneRetention: async () => { events.push("prune"); },
+      schedule: timer.schedule,
+    });
+    await timer.settle();
+    expect(events).toEqual(["enqueue", "prune"]);
+  });
+
+  it("logs a prune failure and still runs the sweep on that and later ticks", async () => {
+    vi.stubEnv("OVERFLOW_SKIP_STARTUP_RECONCILIATION", "1");
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const timer = createTimer();
+    const events: string[] = [];
+    const failure = new Error("retention prune unavailable");
+    startReconciliationSweep({
+      runSweep: async () => { events.push("enqueue"); },
+      pruneRetention: async () => { throw failure; },
+      schedule: timer.schedule,
+    });
+    await timer.tick();
+    await timer.tick();
+    // The prune failing costs neither the sweep of its own tick nor a later
+    // tick's — the line is the only notice the prune did not run.
+    expect(events).toEqual(["enqueue", "enqueue"]);
+    expect(errors).toHaveBeenCalledTimes(2);
+    expect(errors.mock.calls[0]?.[0]).toBe("Could not prune expired maintenance rows during sweep");
+    expect(errors.mock.calls[0]?.[1]).toBe(failure);
+  });
+
+  it("still prunes when the sweep of the same tick fails", async () => {
+    vi.stubEnv("OVERFLOW_SKIP_STARTUP_RECONCILIATION", "1");
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const timer = createTimer();
+    const events: string[] = [];
+    const failures: unknown[] = [];
+    const failure = new Error("Active repositories could not be listed");
+    startReconciliationSweep({
+      runSweep: async () => {
+        events.push("enqueue");
+        throw failure;
+      },
+      onSweepFailure: (error) => { failures.push(error); },
+      pruneRetention: async () => { events.push("prune"); },
+      schedule: timer.schedule,
+    });
+    await timer.tick();
+    expect(events).toEqual(["enqueue", "prune"]);
+    expect(failures).toEqual([failure]);
+  });
+
+  it("still sweeps when pruneRetention is omitted", async () => {
+    vi.stubEnv("OVERFLOW_SKIP_STARTUP_RECONCILIATION", "1");
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const timer = createTimer();
+    let sweeps = 0;
+    startReconciliationSweep({
+      runSweep: async () => { sweeps += 1; },
+      schedule: timer.schedule,
+    });
+    await timer.tick();
+    expect(sweeps).toBe(1);
+  });
+
   it("skips only the startup pass when explicitly opted out, retaining the six-hour recovery sweep", async () => {
     vi.stubEnv("OVERFLOW_SKIP_STARTUP_RECONCILIATION", "1");
     const warnings: unknown[][] = [];

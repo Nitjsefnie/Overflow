@@ -11,7 +11,7 @@ import { validDifficultyScheme } from "../support/difficulty-scheme";
  * reconciliation, and that the sweep enqueues under its own reason.
  */
 
-const { enqueued, startSweep, startWorker, sweep, drain, resolveToken, markRejected, finalizeRuns, workSql, coordinationSql } = vi.hoisted(() => ({
+const { enqueued, startSweep, startWorker, sweep, drain, resolveToken, markRejected, finalizeRuns, pruneRows, workSql, coordinationSql } = vi.hoisted(() => ({
   enqueued: [] as { repositoryId: string; reason: string }[],
   startSweep: vi.fn(),
   startWorker: vi.fn(),
@@ -20,11 +20,13 @@ const { enqueued, startSweep, startWorker, sweep, drain, resolveToken, markRejec
   resolveToken: vi.fn(),
   markRejected: vi.fn(),
   finalizeRuns: vi.fn(),
+  pruneRows: vi.fn(),
   workSql: vi.fn(),
   coordinationSql: vi.fn(),
 }));
 
 vi.mock("@/lib/fold/abandoned-runs", () => ({ finalizeAbandonedRuns: finalizeRuns }));
+vi.mock("@/lib/retention/prune", () => ({ pruneExpiredMaintenanceRows: pruneRows }));
 
 vi.mock("@/lib/fold/reconciliation-worker", async (importActual) => ({
   ...(await importActual<typeof import("@/lib/fold/reconciliation-worker")>()),
@@ -95,6 +97,13 @@ beforeEach(() => {
   resolveToken.mockReset().mockResolvedValue({ token: "token-a", identityId: "identity-a" });
   markRejected.mockReset().mockResolvedValue(undefined);
   finalizeRuns.mockReset().mockResolvedValue({ finalized: 0, skippedLocked: 0 });
+  pruneRows.mockReset().mockResolvedValue({
+    processedReceipts: 0,
+    failedReceipts: 0,
+    abandonedPendingReceipts: 0,
+    expiredRuns: 0,
+    changesOfExpiredRuns: 0,
+  });
 });
 
 afterEach(() => {
@@ -146,6 +155,14 @@ describe("server instrumentation", () => {
     finalizeRuns.mockClear();
     await schedule.finalizeAbandonedRuns!();
     expect(finalizeRuns).toHaveBeenCalledExactlyOnceWith(workSql, coordinationSql);
+
+    // The retention prune is wired the same way: a real member that reaches
+    // the prune against the server's own database client.
+    expect(schedule.pruneRetention).toBeTypeOf("function");
+    pruneRows.mockClear();
+    await schedule.pruneRetention!();
+    expect(pruneRows).toHaveBeenCalledExactlyOnceWith(workSql);
+
     await schedule.runSweep();
     const dependencies = sweep.mock.calls[0]![0] as { enqueue(id: string): Promise<unknown> };
     await dependencies.enqueue("repository-1");

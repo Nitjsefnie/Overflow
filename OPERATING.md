@@ -79,6 +79,16 @@ Both forges must be able to reach their callback URLs over public HTTPS. Every r
 
 The production deployment runs the application as a dedicated unprivileged system account rather than as root, under a systemd unit that keeps the filesystem read-only apart from the one cache directory Next writes at runtime. `deploy/overflow.service` is that unit, and `deploy/README.md` is the procedure that stands it up on a host, deploys a new revision under it, and rolls it back. `tests/deploy/unit-file.test.ts` fails if the unit loses any of that hardening.
 
+### Data retention
+
+Webhook delivery receipts and reconciliation run history are pruned automatically, so neither grows without bound. Three windows cover webhook receipts: a PROCESSED receipt is deleted 30 days after it was processed, a FAILED one 90 days after, and an abandoned PENDING receipt — one whose delivery was never finalized and whose processing lease has expired — 90 days after it was received. Reconciliation run history keeps terminal runs (COMPLETED or FAILED) for 90 days after completion, together with their `reconciliation_changes` rows, which go first because the foreign key to the run has no cascade.
+
+Never pruned: a PENDING run at any age (it can still be claimed and completed), and a PENDING receipt whose processing lease has not expired — a live lease means a redelivery can still resume it. A change row is deleted only through its run's expiry, never by its own age.
+
+The pruning is safe for its consumers: receipt deduplication reads only PROCESSED receipts, and a pruned receipt's late redelivery simply reprocesses, because reconciliation is idempotent from the forge's source of truth; runs are read only while PENDING and for account export, whose mapping tolerates a shortened history; and nothing in the application reads `reconciliation_changes`.
+
+The prune runs on the reconciliation sweep tick — once at startup and then every six hours — and reports what it deleted on one info line per tick. It is disabled together with the sweep by setting `OVERFLOW_DISABLE_RECONCILIATION_SWEEP` to any non-empty value.
+
 ## Failure alerts and off-host copies
 
 Two parts of an instance's data survival belong to the maintainer rather than to the software: keeping an off-host copy of the backups, and learning when a backup or the service itself fails. The on-host dump in `/var/backups/overflow` sits on the same disk as the database it protects, so it is not the only copy of the data that cannot be rebuilt from GitHub — accounts, encrypted credentials, moderation history, audits, corrections, API tokens and credit adjustments. Copying dumps off the host and owning the alert delivery below are the maintainer's responsibilities.

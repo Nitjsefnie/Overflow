@@ -263,6 +263,9 @@ src/lib/overrides/*
 src/lib/repositories/*
 !src/lib/repositories/*.ts
 !src/lib/repositories/upgrade-webhooks.ts
+!src/lib/retention/
+src/lib/retention/*
+!src/lib/retention/*.ts
 !src/lib/security/
 src/lib/security/*
 !src/lib/security/*.ts

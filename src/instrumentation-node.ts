@@ -48,6 +48,7 @@ export async function registerNodejs(): Promise<void> {
   const { finalizeAbandonedRuns } = await import("@/lib/fold/abandoned-runs");
   const { reconcileRepositoryAsSponsor } = await import("@/lib/fold/reconcile-as-sponsor");
   const { PostgresForgeIdentityStore } = await import("@/lib/forge/postgres-identities-store");
+  const { pruneExpiredMaintenanceRows } = await import("@/lib/retention/prune");
   const { getSql, getCoordinationSql } = await import("@/lib/db/client");
   const store = new PostgresFoldStore();
   try {
@@ -120,6 +121,13 @@ export async function registerNodejs(): Promise<void> {
 
   startReconciliationSweep({
     finalizeAbandonedRuns: () => finalizeAbandonedRuns(getSql(), getCoordinationSql()),
+    pruneRetention: async () => {
+      const result = await pruneExpiredMaintenanceRows(getSql());
+      // One line per tick, so an operator sees the prune ran rather than
+      // inferring it from the absence of complaints.
+      console.info("Retention prune", result);
+      return result;
+    },
     runSweep: async () => {
       const summary = await sweepReconciliations({
         listActiveRepositoryIds: () => store.listActiveRepositoryIds(),
