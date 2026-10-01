@@ -468,6 +468,47 @@ describe("GitLab collection pagination", () => {
       expect(requests).toHaveLength(fullPagesToTheRowCeiling + 1);
     });
 
+    // The row check must run BEFORE the rows are appended: spreading a page
+    // larger than the engine's argument limit dies with a RangeError long
+    // before the typed error can be raised. The cliff sits around 125 000
+    // elements — measured on one request — so every size listed here is past
+    // both the ceiling and that cliff, and each must take the typed path.
+    it.each([MAX_WALK_ITEMS + 1, 200_000, 250_000, 300_000])(
+      "stops on a single page of %i rows with the typed error, not a stack overflow",
+      async (rows) => {
+        const { client, requests } = collectionClient(`${projectPath}/labels`, () =>
+          json(Array.from({ length: rows }, (_, index) => ({ name: `label-${index}` }))));
+
+        await expect(client.listRepositoryLabels(repository)).rejects.toThrow(overRows);
+        expect(requests).toHaveLength(1);
+      });
+
+    // The other side of the same boundary: a walk that lands EXACTLY on the
+    // ceiling has done nothing wrong, and its whole collection comes back.
+    // This is the retained-whole cost the ceiling's comment claims, asserted.
+    it("returns a single page that lands exactly on the row ceiling", async () => {
+      const { client, requests } = collectionClient(`${projectPath}/labels`, () =>
+        json(Array.from({ length: MAX_WALK_ITEMS }, (_, index) => ({ name: `label-${index}` }))));
+
+      const labels = await client.listRepositoryLabels(repository);
+      expect(labels.size).toBe(MAX_WALK_ITEMS);
+      expect(requests).toHaveLength(1);
+    });
+
+    // The two ceilings are a POLICY choice, not a runtime derivation, and both
+    // request-count assertions above are built FROM the constants — so a mutant
+    // that quietly lowers either one shrinks what a legitimate walk may read
+    // while every behavioural test stays green. Pin the values, and pin the
+    // invariant that keeps the row ceiling reachable at all.
+    it("pins the walk ceilings this module ships", () => {
+      expect(MAX_WALK_PAGES).toBe(2_000);
+      expect(MAX_WALK_ITEMS).toBe(150_000);
+      // A full page holds 100 rows, so on a full-page walk the row ceiling must
+      // fire before the page ceiling. If it does not, the row ceiling is
+      // shadowed by the page ceiling and can never throw.
+      expect(MAX_WALK_ITEMS).toBeLessThan(MAX_WALK_PAGES * 100);
+    });
+
     it("walks a legitimate three-page offset collection to its end", async () => {
       const { client, requests } = collectionClient(`${projectPath}/merge_requests/17/closes_issues`, (_, hit) => hit < 3
         ? json([{ id: 6_600_000 + hit, iid: 20 + hit, project_id: 278964 }], { "x-next-page": String(hit + 1) })
