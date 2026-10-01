@@ -190,8 +190,38 @@ describe("deploymentDenyCidrs", () => {
   it("never consults interface enumeration when the environment supplies the entries", async () => {
     process.env[envName] = "8.8.8.8";
     const deploymentDenyCidrs = await loadDeploymentDenyCidrs();
+    const enumerator = vi.fn(restrictedEnumerator);
 
-    expect(deploymentDenyCidrs(process.env, restrictedEnumerator)).toEqual(["8.8.8.8"]);
+    expect(deploymentDenyCidrs(process.env, enumerator)).toEqual(["8.8.8.8"]);
+    // The value alone would survive a mutant that hoists the enumeration
+    // above the env branch; the non-consultation is the contract.
+    expect(enumerator).not.toHaveBeenCalled();
+  });
+
+  it("degrades the same way for any enumeration failure, not only the address-family one", async () => {
+    const deploymentDenyCidrs = await loadDeploymentDenyCidrs();
+    // A different system error from the same call: a unit whose sandbox
+    // answers EPERM (or anything else) re-opens the startup crash if the
+    // degradation ever narrows to one errno.
+    const denied = (): ReturnType<typeof networkInterfaces> => {
+      throw Object.assign(new Error("A system error occurred: uv_interface_addresses returned Unknown system error 1"), {
+        code: "EPERM",
+        errno: -1,
+        syscall: "uv_interface_addresses",
+      });
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let warnings: unknown[][] = [];
+
+    try {
+      expect(deploymentDenyCidrs(process.env, denied)).toEqual([]);
+      warnings = warn.mock.calls.map((call) => [...call]);
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(warnings).toHaveLength(1);
+    expect(String(warnings[0]?.[0])).toContain("PUBLIC_DESTINATION_DENY_CIDRS");
   });
 
   it("honours the environment's entries exactly, trimmed", async () => {
