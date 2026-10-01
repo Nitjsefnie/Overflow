@@ -1,19 +1,38 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { commitFiles, git } from "../support/scratch-git";
 
 /**
- * Two contracts for issue 900's history scan, and one honest statement of what
- * this suite does NOT cover.
+ * Two contracts for issue 900's history scan, and an explicit statement of what
+ * this suite covers in each environment it runs in — because those differ, and a
+ * reader who assumes they do not is exactly the reader this suite is for.
  *
- * **Covered here:** the committed baseline's integrity (it is the full redacted
- * report gitleaks 8.30.1 requires, and it carries no secret material), and the
- * wiring of `scripts/secret-scan.sh` — the version pin, the git-history mode,
- * `--redact`, the baseline path, the report path, and the pass-through of the
- * scanner's exit code.
+ * **Covered everywhere, at any checkout depth:** the wiring of
+ * `scripts/secret-scan.sh` (the version pin, the git-history mode, `--redact`,
+ * `--no-banner`, the baseline path, the report path, the exit-code pass-through,
+ * and the two refusal diagnostics); every property of the committed baseline
+ * readable from the file itself; and the provenance CHECKER, driven against a
+ * repository this suite builds for itself.
+ *
+ * **Covered only where the history is present:** the committed baseline's
+ * provenance — that each finding's redacted residue really came from the source
+ * line it names. That check reads the blobs the baseline points at, and
+ * `.github/workflows/ci.yml`'s `verify` job checks out at `actions/checkout`'s
+ * default depth of 1, where those nine September commits do not exist. The test
+ * that does it therefore **SKIPS in CI, and the skip is reported in the run
+ * summary rather than passing quietly.** In a full-depth checkout it runs. Do not
+ * read a green CI run as evidence about the committed baseline's provenance: it
+ * is evidence about the checker, and about the file's own contents.
+ *
+ * The checker is the part covered everywhere, and it is covered by planting the
+ * defect it exists to catch — a finding whose residue is material spliced in
+ * beside a redaction — in a real commit the suite creates, and watching it be
+ * rejected. A guard only ever run against data known to be clean has never been
+ * shown to reject anything.
  *
  * **Not covered here:** gitleaks' own detection. A test that stubbed out the
  * scanner and then asserted the scanner finds a secret would prove that the
@@ -37,6 +56,37 @@ type Finding = {
   Fingerprint: string;
   StartLine: number;
 };
+
+/**
+ * The provenance check, as a pure function so it can be exercised against a
+ * repository this suite builds rather than against whatever history the ambient
+ * checkout happens to carry.
+ *
+ * A finding's `Match` is a fragment of a source line with the secret
+ * substituted away, so every identifier-shaped run left in it must be a verbatim
+ * slice of the line the finding records. Source context came from there;
+ * credential material spliced in beside the redaction did not, and will not be
+ * found at those coordinates.
+ *
+ * Returns the offending runs, so a caller can say WHICH run was not accounted
+ * for rather than only that something was not.
+ *
+ * The residue is deliberately not compared as one substring: gitleaks also
+ * redacts the string literal adjacent to the matched one, so a
+ * `generic-api-key` residue reads `TOKEN_ENCRYPTION_KEY", ""` — the identifier,
+ * the punctuation of two literals, and the inner value gone. Only the identifier
+ * runs are contiguous in the line; the punctuation between them cannot be a
+ * credential, so it is not checked.
+ */
+export function provenanceViolations(finding: Pick<Finding, "Match">, sourceLine: string): string[] {
+  const residue = finding.Match.replaceAll("REDACTED", "");
+  return (residue.match(/[A-Za-z0-9_]+/g) ?? []).filter((run) => !sourceLine.includes(run));
+}
+
+/** True when this checkout actually carries the commit the finding names. */
+function hasCommit(commit: string): boolean {
+  return spawnSync("git", ["cat-file", "-e", `${commit}^{commit}`], { encoding: "utf8" }).status === 0;
+}
 
 describe(".github/gitleaks-baseline.json", () => {
   let findings: Finding[];
@@ -112,53 +162,36 @@ describe(".github/gitleaks-baseline.json", () => {
   });
 
   it("leaves nothing but source-line context where the secret was", () => {
-    // Belt and braces for the assertion above. A character-count bound alone is
-    // not enough here and this suite shipped one that was not: the longest
-    // identifier-shaped run 8.30.1 actually leaves behind is
-    // `encrypted_webhook_secret` (24 characters), and a real 20-character
-    // GitLab PAT sits comfortably under that, so a bound read off the data
-    // cannot separate them. Splicing a 24-character `glpat-` token beside a
-    // redaction passed a 28-character bound.
+    // The half of the provenance contract that needs no history: a residue may
+    // only be identifier-shaped runs and the punctuation of the literals around
+    // them. This is the cheap first filter, and it holds at any checkout depth.
+    //
+    // The half that needs history — that each run really came from the source
+    // line the entry records — is `provenanceViolations` below, exercised
+    // against a repository this suite builds, and then against the committed
+    // entries where the history is present.
+    //
+    // A character-count bound cannot do this job, and this suite shipped one
+    // that tried: the longest identifier-shaped run 8.30.1 actually leaves
+    // behind is `encrypted_webhook_secret` at 24 characters, and a real
+    // 20-character GitLab PAT sits comfortably under that, so a bound read off
+    // the data cannot tell the two apart. Splicing such a token beside a
+    // redaction passed a 28-character bound, and would still pass a 24-character
+    // one. Provenance can, because the token is not on the line.
     //
     // The token itself is NOT written out here, and that is not squeamishness:
     // it would be a credential-shaped literal in a tracked file, which is
     // exactly what .github/workflows/secret-scan.yml exists to report. Writing
-    // it into this comment is how the demonstration below found one in this
-    // file on its first run. The rule needs the high-entropy body, so a
-    // placeholder that is merely described is both safe and sufficient to make
-    // the point.
-    //
-    // What does separate them is PROVENANCE, and it is checkable: every
-    // identifier-shaped run the redaction leaves behind is a verbatim slice of
-    // the source line at the commit, file and line this entry records. Source
-    // context came from there. Spliced-in credential material did not, and
-    // wherever it was pasted it will not be found at the coordinates this entry
-    // claims.
-    //
-    // Note the run is not the whole residue. gitleaks also redacts the string
-    // literal ADJACENT to the matched one, so the residue of a `generic-api-key`
-    // finding reads `TOKEN_ENCRYPTION_KEY", ""` — the identifier, then the
-    // punctuation of the two literals with the inner value gone. Only the
-    // identifier runs are contiguous in the source line, and only they are
-    // checked; the punctuation between them cannot be a credential.
-    const sources = new Map<string, string[]>();
+    // one into this comment is how the round-1 demonstration found one in this
+    // file. The rule needs the high-entropy body, so a placeholder that is
+    // merely described is both safe and sufficient to make the point.
     for (const finding of findings) {
-      const key = `${finding.Commit}:${finding.File}`;
-      if (!sources.has(key)) {
-        const blob = spawnSync("git", ["show", `${key}`], { encoding: "utf8" });
-        expect(blob.status, `the baseline names ${key}, which must exist in this repository's history`).toBe(0);
-        sources.set(key, blob.stdout.split("\n"));
-      }
-      const line = sources.get(key)![finding.StartLine - 1] ?? "";
-      for (const run of finding.Match.replaceAll("REDACTED", "").match(/[A-Za-z0-9_]+/g) ?? []) {
-        expect(
-          line,
-          `${finding.Fingerprint} leaves '${run}' around the redaction, and it does not appear in ` +
-            `${finding.File} line ${finding.StartLine} at commit ${finding.Commit}. Whatever is there is ` +
-            "not source context — it is material spliced into the baseline, and a length bound cannot " +
-            "tell that apart from an identifier.",
-        ).toContain(run);
-      }
+      const residue = finding.Match.replaceAll("REDACTED", "");
+      expect(
+        residue,
+        `${finding.Fingerprint} leaves '${residue}' around the redaction, which is not source-line ` +
+          "context — an identifier, the punctuation of the literals around it, and whitespace only",
+      ).toMatch(/^[A-Za-z0-9_"'=:,(){}\[\]. -]*$/);
     }
   });
 
@@ -216,6 +249,185 @@ describe(".github/gitleaks-baseline.json", () => {
     // recorded twice, which usually means a baseline assembled by hand.
     const fingerprints = findings.map((finding) => finding.Fingerprint);
     expect(new Set(fingerprints).size, "duplicate fingerprints in the baseline").toBe(fingerprints.length);
+  });
+
+  it("is accepted by the provenance check, on the real entries, at any depth", () => {
+    // The POSITIVE direction, on the committed data, and at every checkout
+    // depth — which the block at the end of this file cannot be, because that
+    // one needs the history.
+    //
+    // It matters because a checker that rejects everything would satisfy every
+    // rejection test while being useless, and the only thing that catches an
+    // inverted checker where the history is absent is this. The line is
+    // assembled from the entry's own residue rather than read from git, so what
+    // is under test is the checker and the real `Match` values, not the blobs.
+    let checked = 0;
+    for (const finding of findings) {
+      const runs = finding.Match.replaceAll("REDACTED", "").match(/[A-Za-z0-9_]+/g) ?? [];
+      const line = `const value = "${runs.join("")}";`;
+      expect(
+        provenanceViolations(finding, line),
+        `${finding.Fingerprint} leaves ${runs.join(", ") || "nothing"} around the redaction, and those ` +
+          "runs are source context, so a line carrying them must satisfy the provenance check",
+      ).toEqual([]);
+      if (runs.length > 0) checked += 1;
+    }
+    // At least one committed entry must actually exercise a non-empty residue,
+    // or this test would pass on the seven `gitlab-pat` entries alone and pin
+    // nothing.
+    expect(checked, "no committed entry leaves a non-empty residue to check").toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The provenance check, exercised against a repository this suite builds.
+ *
+ * It is the only test of this contract that runs at EVERY checkout depth, so it
+ * is where the guard is actually shown to work. The committed baseline's own
+ * provenance is checked in the next block and that check needs the history; this
+ * one needs a repository the suite owns, so it holds at depth 1 and at full
+ * depth alike.
+ *
+ * The shape follows `tests/ci/docs-only-step.test.ts`, which builds its own
+ * origin with real commits rather than reading the ambient checkout — the
+ * distinction that matters here, because the ambient checkout's depth is
+ * whatever it happens to be and CI's is 1.
+ */
+describe("the provenance check, against a repository this suite builds", () => {
+  let root = "";
+  let repo = "";
+  /** The line the synthetic commit's fixture file carries, read back from git. */
+  let sourceLine = "";
+
+  // The synthetic source line. Its VALUE is a deliberately inert placeholder,
+  // not a plausible credential: a 32-character hex string under an
+  // api-key-shaped name trips gitleaks' `generic-api-key` rule, which is how the
+  // round-1 demonstration found one in this file and then how the round-2
+  // demonstration found this one. The check below only needs the IDENTIFIER to
+  // be on the line, so the value can be something no scanner will ever want.
+  const SOURCE = [
+    'import { describe, it } from "vitest";',
+    'describe("fixtures", () => {',
+    '  it("names a key", () => {',
+    '    vi.stubEnv("TOKEN_ENCRYPTION_KEY", "inert-placeholder");',
+    "  });",
+    "});",
+  ].join("\n");
+
+  const finding = (match: string): Pick<Finding, "Match"> => ({ Match: match });
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "gitleaks-provenance-"));
+    repo = join(root, "origin");
+    await mkdir(repo, { recursive: true });
+    git(repo, "init", "--quiet", "--initial-branch=main");
+    const sha = await commitFiles(repo, { "tests/fixtures/keys.test.ts": `${SOURCE}\n` }, "fixture");
+    // Read the line back out of the object database rather than reusing the
+    // string above, so the check is exercised on a line that genuinely came
+    // from a commit — the way the committed baseline's own entries would be.
+    sourceLine = git(repo, "show", `${sha}:tests/fixtures/keys.test.ts`).split("\n")[3];
+  });
+
+  afterAll(async () => {
+    if (root) await rm(root, { recursive: true, force: true });
+  });
+
+  it("accepts the residue gitleaks actually leaves, so the check is not vacuous", () => {
+    // The positive case, and it is the one that makes the negative cases mean
+    // something. A checker that rejects everything would pass every rejection
+    // test below while being useless.
+    expect(sourceLine, "the synthetic commit must carry the line the fixtures read").toContain("TOKEN_ENCRYPTION_KEY");
+    expect(provenanceViolations(finding('TOKEN_ENCRYPTION_KEY", "REDACTED"'), sourceLine)).toEqual([]);
+    // And the shape a rule produces when its match IS the secret: nothing left.
+    expect(provenanceViolations(finding("REDACTED"), sourceLine)).toEqual([]);
+  });
+
+  it("rejects a token spliced in beside the redaction, at the length that beat a bound", () => {
+    // The reviewer planted exactly this shape and a 28-character bound let it
+    // through. 20 characters is under the tightened 24 bound too, so the
+    // character count cannot reject it and only provenance can — which is why
+    // the bound is the cheap first filter and this is the guard.
+    const planted = "Ab3dEf9hIj2kLm4nOp6q";
+    expect(planted.length).toBe(20);
+    expect(planted.length).toBeLessThan(24);
+    expect(
+      provenanceViolations(finding(`${planted}REDACTED`), sourceLine),
+      "a token of this length beside a redaction is not source context",
+    ).toEqual([planted]);
+  });
+
+  it("rejects a short token too, which is where a length bound cannot follow", () => {
+    // 12 characters, well under any bound read off the committed data. Only
+    // provenance rejects this, which is why it is the check that ships.
+    const planted = "Ab3dEf9hIj2k";
+    expect(planted.length).toBeLessThan(24);
+    expect(provenanceViolations(finding(`${planted}REDACTED`), sourceLine)).toEqual([planted]);
+  });
+
+  it("rejects an identifier taken from a different line of the same file", () => {
+    // A reviewer reading the entry would see a plausible source identifier; only
+    // the line it names gives it away.
+    const planted = "gitleaks_provenance";
+    expect(provenanceViolations(finding(`${planted}REDACTED`), sourceLine)).toEqual([planted]);
+  });
+
+  it("names every offending run, not merely that one exists", () => {
+    // A baseline with two splices must report both, so a fix is verifiable
+    // without re-deriving which material was planted. The separator matters:
+    // pasted with nothing between them the two bodies read as ONE identifier
+    // run, which is itself the shape a hand-paste produces.
+    const planted = ["Ab3dEf9hIj2kLm4nOp6q", "Ab3dEf9hIj2k"];
+    expect(provenanceViolations(finding(`${planted.join('", "')}REDACTED`), sourceLine)).toEqual(planted);
+  });
+});
+
+/**
+ * The committed baseline's own provenance — the same check, over the real
+ * entries, against the real commits they name.
+ *
+ * This block SKIPS wherever the checkout is shallower than the history it points
+ * at, which in practice means CI: `.github/workflows/ci.yml` gives the `verify`
+ * job `actions/checkout`'s default depth of 1, and the baseline's entries date
+ * from September. The skip is deliberate and reported in the run summary. A
+ * `try { … } catch { pass }` here would be the same false green this whole
+ * exercise has been about, wearing a name tag: a green CI run would read as
+ * coverage the run does not have. See the file header for what each environment
+ * does and does not establish.
+ */
+describe("the committed baseline's provenance, where the history is present", () => {
+  const findings: Finding[] = JSON.parse(readFileSync(resolve(".github/gitleaks-baseline.json"), "utf8"));
+  const missing = findings.filter((finding) => !hasCommit(finding.Commit));
+  const shallow = missing.length > 0;
+
+  it.skipIf(shallow)("reproduces every residue from the source line its entry records", () => {
+    const sources = new Map<string, string[]>();
+    for (const finding of findings) {
+      const key = `${finding.Commit}:${finding.File}`;
+      if (!sources.has(key)) {
+        const blob = spawnSync("git", ["show", `${key}`], { encoding: "utf8" });
+        expect(blob.status, `the baseline names ${key}, which must exist in this repository's history`).toBe(0);
+        sources.set(key, blob.stdout.split("\n"));
+      }
+      const line = sources.get(key)![finding.StartLine - 1] ?? "";
+      expect(
+        provenanceViolations(finding, line),
+        `${finding.Fingerprint} leaves runs around the redaction that do not appear in ` +
+          `${finding.File} line ${finding.StartLine} at commit ${finding.Commit}. Whatever is there is ` +
+          "not source context — it is material spliced into the baseline.",
+      ).toEqual([]);
+    }
+  });
+
+  it.skipIf(!shallow)("reports which entries this checkout could not verify", () => {
+    // The inverse skip, and it exists so the block is never silently empty: a
+    // checkout with no history says out loud that it checked nothing.
+    expect(
+      missing.map((finding) => finding.Fingerprint),
+      "this checkout cannot read the commits the baseline names, so the provenance check above did " +
+        "not run. A CI run at depth 1 establishes that the provenance CHECKER works and that the " +
+        "baseline's own fields are consistent — not that the committed residues came from the lines " +
+        "they name.",
+    ).not.toEqual([]);
   });
 });
 
