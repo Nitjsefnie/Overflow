@@ -414,9 +414,10 @@ reconciliation worker and its six-hour sweep, and automatic settlement pricing
 from repository labels. What stops is the codebase half: merges, issue triage,
 `offered:` and `settled:` labelling, deployment, secret rotation, and any
 change to branch protection, a registration's webhook or the App. The deleted
-case is not covered by that list: two of its five entries read the repository,
-so whether they keep working is the same question the deleted bullet declines
-to answer. Take the fork or clone first and work from what survives.
+case is not covered by that list: at least two of its five entries read the
+repository, so whether they keep working is the same question the deleted
+bullet declines to answer. Take the fork or clone first and work from what
+survives.
 
 **The App's own credentials are not the personal account's session, and that
 is verified in two independent places.** The reconciliation path mints a
