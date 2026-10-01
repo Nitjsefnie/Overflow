@@ -335,9 +335,20 @@ function toBoolean(value: ExpressionValue): boolean {
 }
 
 /**
- * GitHub's loose equality: same-type values compare by value, with strings
- * compared case-insensitively; values of DIFFERENT types are cast to numbers
- * and compared as numbers.
+ * GitHub's DOCUMENTED loose equality, which is what this implements: values of
+ * the same type compare by value, with strings compared case-insensitively, and
+ * values of DIFFERENT types are cast to numbers and compared as numbers.
+ *
+ * What it does NOT claim is that this is the whole of the runner's behaviour.
+ * The documentation does not enumerate every case the implementation carries —
+ * `'true' == true` is the sort of undocumented residue that is often reported
+ * and is not modelled here — and nothing in this file has been cross-checked
+ * against a live Actions run, so the residue is UNVERIFIED rather than absent.
+ * The direction of that uncertainty is the benign one for this suite: an
+ * unmodelled case can only make an assertion red that a real run would keep,
+ * not green that a real run would break, so it can block a legitimate refactor
+ * and cannot let a wrong merge through. That is a reading of the rule, not a
+ * measurement of the runner.
  *
  * The cast is what the whole suite turns on, so it is worth being explicit
  * about the case it decides. `steps.detect-docs.outputs.docs_only != 'true'`
@@ -608,6 +619,13 @@ function shellWords(command: string): string[] {
  * Each is recognised by what it does rather than by its name, so a rename does
  * not fail the suite: the script one runs, and the artifact name the other two
  * upload.
+ *
+ * A hand-written table is a hole in itself, and every campaign run against this
+ * file so far was scoped to the WORKFLOW, which is structurally unable to reach
+ * a deletion in here: deleting the entry for the patch-coverage report turns the
+ * mutation that entry was written to catch green, with the test count unmoved.
+ * The completeness assertion below is what closes it, and it closes it by
+ * comparing this table against the workflow rather than trusting it.
  */
 const COVERAGE_ARTIFACTS: { label: string; matches: (step: WorkflowStep) => boolean }[] = [
   {
@@ -623,6 +641,26 @@ const COVERAGE_ARTIFACTS: { label: string; matches: (step: WorkflowStep) => bool
     matches: (step) => step.with?.name === "coverage-summary",
   },
 ];
+
+/**
+ * Whether a step reads or writes something under `coverage/` — the directory the
+ * reporters write and the floor reads. This is the WORKFLOW side of the
+ * completeness assertion, derived from the parsed steps by what they name rather
+ * than by any key the table above carries, so a table entry cannot be removed and
+ * the remainder quietly become the definition.
+ *
+ * It is deliberately broader than the table: it says nothing about which script
+ * computes an artifact or which artifact is uploaded, only that a step touches
+ * the coverage directory. `scripts/check-coverage-floor.ts` does not match
+ * (nothing in its `run:` names a path under `coverage/`), and neither does the
+ * test suite's invocation, whose `--coverage.include='src/**'` names no artifact
+ * — so the derivation and the table agree at three steps without sharing a key.
+ */
+function namesCoverageArtifact(step: WorkflowStep): boolean {
+  return [step.run ?? "", String(step.with?.path ?? ""), String(step.with?.name ?? "")]
+    .join(" ")
+    .includes("coverage/");
+}
 
 const BASE_SHA = "1".repeat(40);
 const MERGE_SHA = "2".repeat(40);
@@ -679,18 +717,27 @@ function captureError(run: () => unknown): string {
   return "";
 }
 
-let verify: { steps: WorkflowStep[]; outputs: Record<string, unknown> };
+let verify: { steps: WorkflowStep[]; outputs: Record<string, unknown>; if: unknown };
+let declaredEvents: string[] = [];
 
 beforeAll(async () => {
   const source = await readFile(resolve(".github/workflows/ci.yml"), "utf8");
   const workflow = parse(source) as {
-    jobs?: { verify?: { steps?: WorkflowStep[]; outputs?: Record<string, unknown> } };
+    // Typed as `unknown` and narrowed rather than assumed: `on:` is a trigger
+    // map whose keys are the events, and a `schedule:` or a bare-list spelling
+    // would arrive as a different shape entirely. The assertion below reads
+    // the keys, so a shape it cannot read fails there rather than here.
+    on: unknown;
+    jobs?: { verify?: { steps?: WorkflowStep[]; outputs?: Record<string, unknown>; if?: unknown } };
   };
 
   verify = {
     steps: workflow.jobs?.verify?.steps ?? [],
     outputs: workflow.jobs?.verify?.outputs ?? {},
+    if: workflow.jobs?.verify?.if,
   };
+  declaredEvents =
+    workflow.on && typeof workflow.on === "object" ? Object.keys(workflow.on) : [];
 });
 
 describe("the workflow file this suite simulates", () => {
@@ -699,6 +746,42 @@ describe("the workflow file this suite simulates", () => {
     // rename, or a broken read would leave an empty step list and every
     // selection assertion would pass by finding nothing to run.
     expect(verify.steps.length).toBeGreaterThan(0);
+  });
+
+  it("gates nothing at the JOB level, so every step below is reached by step selection", () => {
+    // The one layer this suite cannot recover by selecting steps. A step-level
+    // `if:` that never fires removes that step, and the scenario assertions
+    // below notice; a job-level `if:` that never fires removes every step at
+    // once and leaves each of them selected, because selection here is computed
+    // from the step list and knows nothing about the job that owns it. A `verify`
+    // job that could be skipped posts no required check at all, and the merge
+    // gate reads the missing context rather than a red one — so the condition is
+    // asserted absent rather than modelled.
+    expect(
+      verify.if,
+      "the verify job must carry no `if:`. A job-level condition is invisible to step " +
+        "selection: the step list is identical whether the job runs or not, so every scenario " +
+        "assertion in this file would stay green while the job carrying the test suite never " +
+        "ran. Unlike a step-level condition there is nothing to recover from — the gate is " +
+        "the job, not the steps in it.",
+    ).toBeUndefined();
+  });
+
+  it("declares exactly the events the scenarios cover", () => {
+    // The scenarios are a hand-written list, so a trigger added to `on:` would
+    // arrive with no scenario, no context and no assertions: an event the
+    // workflow receives, about which this file would then say nothing. Equality
+    // in both directions — a new trigger fails here, a removed one fails here,
+    // and a scenario for an event the workflow cannot receive fails here too.
+    const covered = [...new Set(SCENARIOS.map((scenario) => scenario.event))].sort();
+
+    expect(
+      covered,
+      "the scenarios above must cover exactly the events `on:` declares, one per trigger and " +
+        "none for an event the workflow cannot receive. A trigger with no scenario asserts " +
+        "nothing about what it executes; a scenario for an undeclared event asserts nothing " +
+        "about anything.",
+    ).toEqual([...declaredEvents].sort());
   });
 });
 
@@ -845,6 +928,22 @@ describe("the expression evaluator", () => {
     expect(evaluateExpression("inputs.simulate-refused-raise == true", pullRequest)).toBe(false);
   });
 
+  it("casts a missing value to zero when the comparison crosses types", () => {
+    // `castToNumber`'s null branch, which nothing else here pins: the string
+    // branch does `value.trim()`, so a null reaching it throws rather than
+    // casting. An absent `github.event.before` is exactly the value that
+    // reaches it, so these two assertions are the difference between a cast and
+    // a TypeError on every pull request.
+    expect(evaluateExpression("github.event.before == 0", pullRequest)).toBe(true);
+    expect(evaluateExpression("github.event.before == 1", pullRequest)).toBe(false);
+    // The empty string casts to zero on the same rule, so null and '' are equal.
+    expect(evaluateExpression("github.event.before == ''", pullRequest)).toBe(true);
+    expect(evaluateExpression("github.event.before != ''", pullRequest)).toBe(false);
+    // And the same value on the other side of the comparison, where the cast
+    // runs on the literal rather than on the resolved path.
+    expect(evaluateExpression("0 == github.event.before", pullRequest)).toBe(true);
+  });
+
   it("accepts a bare expression as well as a ${{ }} wrapper", () => {
     expect(evaluateExpression("github.event_name == 'push'", push)).toBe(true);
     expect(evaluateExpression("${{ github.event_name == 'push' }}", push)).toBe(true);
@@ -949,6 +1048,42 @@ describe("the docs-only detection the scenarios above assume", () => {
           `executed steps; the conditions below read its output, which only exists once it has run`,
       ).toBe(true);
     }
+  });
+
+  it("lists exactly the verify steps that touch a coverage artifact, so the table cannot be shrunk", () => {
+    // COVERAGE_ARTIFACTS decides what the per-scenario assertion below is about,
+    // and a table nobody checks against the workflow is a table that can be
+    // edited to stop asserting anything. Deleting an entry does not fail any
+    // assertion here — the workflow side is unchanged, so the step is simply no
+    // longer checked, and the mutation that entry existed to catch goes green
+    // with the test count unmoved.
+    //
+    // Equality in BOTH directions, against a derivation that shares no key with
+    // the table: adding an entry for a step that touches nothing fails, and a
+    // step added to the workflow that the table does not list fails, which is
+    // the direction that matters — a new coverage step would otherwise arrive
+    // with no reachability expectation at all.
+    const inWorkflow = verify.steps.filter(namesCoverageArtifact);
+    const matched = verify.steps.filter((step) =>
+      COVERAGE_ARTIFACTS.some((artifact) => artifact.matches(step)),
+    );
+
+    for (const artifact of COVERAGE_ARTIFACTS) {
+      expect(
+        verify.steps.filter(artifact.matches),
+        `the COVERAGE_ARTIFACTS entry for ${artifact.label} must match exactly one step; an entry ` +
+          `matching none is dead and one matching several makes the per-scenario expectation ` +
+          `ambiguous`,
+      ).toHaveLength(1);
+    }
+    expect(
+      matched.map(label),
+      "COVERAGE_ARTIFACTS must list exactly the verify-job steps that name something under " +
+        "coverage/ — every one of the steps that reads or writes an artifact, and nothing else. " +
+        "Delete an entry and the workflow mutation it was written to catch goes green while this " +
+        "file still passes; add an entry for a step that touches no artifact and this fails. " +
+        `Steps the workflow actually carries: ${inWorkflow.map(label).join(", ") || "none"}`,
+    ).toEqual(inWorkflow.map(label));
   });
 });
 
