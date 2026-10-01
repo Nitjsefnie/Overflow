@@ -1,9 +1,12 @@
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { dirname } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  baseCommit,
+  firstParentOfMerge,
+  git,
+  pickBase,
+} from "../../scripts/http-surface-derive.ts";
 import { MCP_SERVER_VERSION } from "@/lib/mcp/protocol";
 import { defineMcpTools, type McpToolDependencies } from "@/lib/mcp/tools";
 
@@ -27,67 +30,7 @@ const dependencies: McpToolDependencies = {
 const snapshot = JSON.parse(
   readFileSync(new URL("../../scripts/mcp-surface-snapshot.json", import.meta.url), "utf8"),
 ) as { mcpServerVersion: string; tools: unknown[] };
-const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const snapshotPath = "scripts/mcp-surface-snapshot.json";
-
-function git(args: string[]): string {
-  const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8" });
-  if (result.status !== 0) {
-    throw new Error(`git ${args.join(" ")} failed: ${result.error?.message ?? result.stderr.trim()}`);
-  }
-  return result.stdout.trim();
-}
-
-function firstParentOfMerge(fields: string[]): string | undefined {
-  // CI merge refs and rebase merges use first parent; ordinary local HEADs fall through to merge-base.
-  return fields.length >= 3 ? fields[1] : undefined;
-}
-
-function pickBase({
-  parentFields,
-  mergeBase,
-  headParentResolved,
-}: {
-  parentFields: string[];
-  mergeBase?: string;
-  headParentResolved?: string;
-}): string | undefined {
-  const firstParent = firstParentOfMerge(parentFields);
-  if (firstParent !== undefined) return firstParent;
-  if (mergeBase && mergeBase !== parentFields[0]) return mergeBase;
-  return headParentResolved;
-}
-
-function baseCommit(): string {
-  const override = process.env.MCP_SNAPSHOT_BASE_COMMIT;
-  if (override !== undefined) {
-    return git(["rev-parse", "--verify", "--end-of-options", `${override}^{commit}`]);
-  }
-
-  const parentFields = git(["rev-list", "--parents", "-n", "1", "HEAD"]).split(" ");
-  const mergeParent = pickBase({ parentFields });
-  if (mergeParent !== undefined) return mergeParent;
-
-  const result = spawnSync("git", ["merge-base", "HEAD", "origin/main"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-  });
-  const mergeBase = result.status === 0 ? result.stdout.trim() || undefined : undefined;
-  const branchBase = pickBase({ parentFields, mergeBase });
-  if (branchBase !== undefined) return branchBase;
-
-  const parentResult = spawnSync("git", ["rev-parse", "--verify", "HEAD^1"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-  });
-  const headParentResolved = parentResult.status === 0 ? parentResult.stdout.trim() || undefined : undefined;
-  const base = pickBase({ parentFields, mergeBase, headParentResolved });
-  if (base !== undefined) return base;
-  throw new Error(
-    "The MCP snapshot base could not be resolved; git fetch origin main, " +
-      "and if this is a shallow checkout fetch full history with git fetch --unshallow.",
-  );
-}
 
 describe("MCP tool surface snapshot", () => {
   it("records the served names, descriptions, and input schemas", () => {
@@ -108,7 +51,7 @@ describe("MCP tool surface snapshot", () => {
   });
 
   it("never changes the recorded surface without moving the server version", () => {
-    const base = baseCommit();
+    const base = baseCommit(process.env.MCP_SNAPSHOT_BASE_COMMIT, "MCP");
     const listing = git(["--literal-pathspecs", "ls-tree", "-z", base, "--", snapshotPath])
       .split("\0")[0]!;
     if (listing === "") {
