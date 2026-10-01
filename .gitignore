@@ -386,6 +386,9 @@ tests/lib/*
 !tests/lib/validation/
 tests/lib/validation/*
 !tests/lib/validation/*.ts
+!tests/lib/gitlab/
+tests/lib/gitlab/*
+!tests/lib/gitlab/api-error.test.ts
 !tests/members/
 tests/members/*
 !tests/members/*.ts

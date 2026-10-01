@@ -26,6 +26,34 @@ export class GitLabApiError extends Error {
 }
 
 /**
+ * Whether no arm of the labels route's GitLab classification explains this
+ * failure, and it is therefore worth recording (issue 892).
+ *
+ * The classified set is exactly what the repository-labels route's GitLab arm
+ * maps to a structured answer (route.ts, `gitlabLabelsResponse`'s catch):
+ * 401 and 403 → 403 FORBIDDEN, 404 → 404 NOT_FOUND, 429 → 429 RATE_LIMITED. A
+ * failure no arm classified reaches the submitter as a fixed generic 502 that
+ * names nothing but the step that failed — the collection-walk bound's plain
+ * `Error`, or a status GitLab answered with that the route has no arm for, a
+ * 500 among them — so this is the gate that lets the error reach an operator's
+ * log. Status 0 is the module's transport rank (an unreachable instance, an
+ * unparsable or structurally wrong success body), never a status GitLab sent,
+ * so it is unclassified here like any other status the route does not answer
+ * for.
+ *
+ * A classified failure is not silent by omission: the message the route
+ * answered with already named the remedy for what GitLab reported about the
+ * submitter's own identity or its own availability.
+ *
+ * This set is the LABELS ROUTE's classification, not the module's: a future
+ * consumer classifying a different set must parameterize this gate rather than
+ * widen it silently.
+ */
+export function isUnclassifiedGitLabFailure(error: unknown): boolean {
+  return !(error instanceof GitLabApiError) || ![401, 403, 404, 429].includes(error.status);
+}
+
+/**
  * A 200 whose body fails to parse as JSON at all — an HTML error page from an
  * intermediary, or an empty body (issue 879) — is the instance misbehaving,
  * one step earlier than 871's non-array body: the parse throws a raw
