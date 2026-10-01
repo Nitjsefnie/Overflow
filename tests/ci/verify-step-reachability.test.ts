@@ -44,6 +44,14 @@ import { parse } from "yaml";
  *    detect step has run, and `... != 'true'` must still hold then — that is
  *    what lets the test step run at all.
  *
+ * ONE LIMITATION is deliberate and stated rather than modelled: the selector
+ * assumes every preceding step succeeded, which is what GitHub's implicit
+ * `success()` on a step carrying no `if:` means, and it never simulates a
+ * cancelled or failed job. A status function's suppression of that requirement
+ * is therefore invisible to it — `!cancelled()` appended to a test step's
+ * condition, or `always()`, would leave every verdict below unchanged even
+ * though it changes what a cancelled run executes.
+ *
  * Reordering tolerance is deliberate: the assertions are membership plus the
  * one order that carries meaning (migrations before tests), never an absolute
  * index, so moving an unrelated step cannot fail the suite.
@@ -61,6 +69,7 @@ type WorkflowStep = {
   id?: string;
   run?: string;
   uses?: string;
+  with?: Record<string, unknown>;
   if?: unknown;
   "continue-on-error"?: unknown;
 };
@@ -545,6 +554,45 @@ const MIGRATE_COMMAND = "pnpm db:migrate";
 const DETECT_STEP_ID = "detect-docs";
 const DETECT_STEP_NAME = "Detect docs-only change";
 
+/**
+ * The flags the workflow's coverage invocation actually passes, each asserted
+ * separately. A single `--coverage` substring would be satisfied by
+ * `--coverage.reporter=text` alone, so dropping json-summary or cobertura from
+ * the step would leave the assertion green while the artifact a later step
+ * reads stops being written.
+ */
+const COVERAGE_REPORTERS = [
+  "--coverage",
+  "--coverage.reporter=text",
+  "--coverage.reporter=json-summary",
+  "--coverage.reporter=cobertura",
+];
+
+/**
+ * The steps that compute or publish a coverage artifact. They carry the same
+ * `docs_only != 'true'` condition as the test steps, and rewriting only one of
+ * those conditions leaves every assertion this file made before fix round 1
+ * green — the artifact simply stops existing while the job concludes green.
+ *
+ * Each is recognised by what it does rather than by its name, so a rename does
+ * not fail the suite: the script one runs, and the artifact name the other two
+ * upload.
+ */
+const COVERAGE_ARTIFACTS: { label: string; matches: (step: WorkflowStep) => boolean }[] = [
+  {
+    label: "the patch coverage report",
+    matches: (step) => (step.run ?? "").includes("scripts/patch-coverage.ts"),
+  },
+  {
+    label: "the patch coverage upload",
+    matches: (step) => step.with?.name === "patch-coverage",
+  },
+  {
+    label: "the coverage summary upload",
+    matches: (step) => step.with?.name === "coverage-summary",
+  },
+];
+
 const BASE_SHA = "1".repeat(40);
 const MERGE_SHA = "2".repeat(40);
 const PUSH_BEFORE = "3".repeat(40);
@@ -588,6 +636,16 @@ function label(step: WorkflowStep): string {
 
 function runsContaining(steps: readonly WorkflowStep[], needle: string): WorkflowStep[] {
   return steps.filter((step) => (step.run ?? "").includes(needle));
+}
+
+/** The message a run failed with, or "" if it did not throw. */
+function captureError(run: () => unknown): string {
+  try {
+    run();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return "";
 }
 
 let verify: { steps: WorkflowStep[]; outputs: Record<string, unknown> };
@@ -651,6 +709,24 @@ describe("the step selector", () => {
       { name: "third" },
     ];
     expect(selectSteps(steps, context).map(label)).toEqual(["first", "third"]);
+  });
+
+  it("propagates an evaluator failure rather than reporting the step as unselected", () => {
+    // Every `if:` ci.yml ships today parses, so a selector that caught the
+    // evaluator's throw and answered "not selected" would leave all of this
+    // green: the mutation is invisible until the workflow grows an expression
+    // the parser cannot read, which is exactly when the suite must be loudest.
+    // The silent false is the defect this file exists to close, so the failure
+    // travels out of the selector instead of stopping inside it.
+    const thrown = captureError(() =>
+      selectSteps([{ name: "x", if: "githbu.event_name == 'push'" }], context),
+    );
+
+    expect(
+      thrown,
+      "selectSteps must not swallow an evaluator failure; a mistyped context root is a fact about " +
+        "the workflow file, not about whether the runner selects the step",
+    ).toContain("githbu");
   });
 });
 
@@ -785,6 +861,21 @@ describe("the expression evaluator", () => {
     );
     expect(thrown).toContain("mapping");
   });
+
+  it("throws rather than reading a property off a scalar reached mid-path", () => {
+    // `inputs.base` resolves to a string, and JavaScript would happily answer
+    // `"".length` with a number. That number is a silent falsy operand
+    // produced by an expression nobody wrote — the class this file's header
+    // forbids — so the walk refuses to index anything that is not a context
+    // mapping. Delete the guard and nothing else in this file notices, because
+    // no `if:` ci.yml ships reaches a scalar this way; this is the test that
+    // makes the guard load-bearing rather than decorative.
+    const thrown = captureError(() =>
+      evaluateExpression("inputs.base.length", { inputs: { base: "" } }),
+    );
+
+    expect(thrown).toContain("inputs.base");
+  });
 });
 
 describe("the docs-only detection the scenarios above assume", () => {
@@ -894,8 +985,42 @@ for (const scenario of SCENARIOS) {
 
         expect(coverageInvocations(), expectation).toHaveLength(scenario.coverage ? 1 : 0);
         expect(joined.includes(COVERAGE_FLOOR_COMMAND), expectation).toBe(scenario.coverage);
+        // Every reporter the step passes, one at a time: check-coverage-floor.ts
+        // and the patch-coverage step both read what those flags write, so a
+        // dropped reporter is a silently unreadable artifact.
+        const coverageRun = coverageInvocations()[0] ?? "";
+        for (const reporter of COVERAGE_REPORTERS) {
+          expect(
+            coverageRun.includes(reporter),
+            `${expectation} — the coverage invocation must pass ${reporter}`,
+          ).toBe(scenario.coverage);
+        }
       },
     );
+
+    it("computes and publishes the coverage artifacts exactly when it measures coverage", () => {
+      // The three steps that carry `docs_only != 'true'` without running a
+      // test: a mutation on any one of them leaves all ten files in tests/ci/
+      // green (fix round 1, finding 4), because nothing asserted over their
+      // EXECUTION before this.
+      const selectedSteps = selected();
+      for (const artifact of COVERAGE_ARTIFACTS) {
+        const matching = verify.steps.filter(artifact.matches);
+
+        expect(
+          matching,
+          `the verify job must carry exactly one step that produces ${artifact.label}, so the ` +
+            `expectation below is about a step rather than about nothing`,
+        ).toHaveLength(1);
+        expect(
+          selectedSteps.includes(matching[0]!),
+          `on ${scenario.event} with docs_only=${scenario.docsOnly} ${artifact.label} must ` +
+            `${scenario.coverage ? "" : "not "}execute: it carries the same docs_only condition as ` +
+            `the test steps, and a condition that never fires leaves the artifact unproduced while ` +
+            `the job concludes green`,
+        ).toBe(scenario.coverage);
+      }
+    });
 
     it("tolerates the failure of no test or coverage step", () => {
       // Selected is not the same as gating: a step may be selected and still
@@ -917,14 +1042,4 @@ for (const scenario of SCENARIOS) {
       ).toBeGreaterThan(0);
     });
   });
-}
-
-/** The message an expression evaluation failed with, or "" if it did not throw. */
-function captureError(run: () => unknown): string {
-  try {
-    run();
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
-  return "";
 }
