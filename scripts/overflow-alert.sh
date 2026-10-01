@@ -325,10 +325,11 @@ else
       #
       # A QUOTED field is excluded from the search altogether, for the same
       # reason one step further out: DN= and C= carry the peer's own answer byte
-      # for byte, so a smarthost whose rejection text happens to carry a
-      # terminal word - and a greylisting one really does - would be read as a
-      # verdict exim never gave. What is left after the quoted spans are
-      # dropped is exim's own accounting of what happened to the message.
+      # for byte, so a relay whose rejection text happens to carry a terminal
+      # word - a filtering relay's policy answer is the ordinary way that
+      # happens - would be read as a verdict exim never gave. What is left after
+      # the quoted spans are dropped, escapes included, is exim's own accounting
+      # of what happened to the message.
       #
       # A named verdict is still worth keeping, so the report says what exim
       # said rather than our own timeout restated. awk's index() is a literal

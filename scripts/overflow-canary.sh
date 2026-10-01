@@ -347,11 +347,12 @@ else
       # never was a verdict. The rest are the outcomes that end a message.
       #
       # A QUOTED field is left out for the same reason, one step further out:
-      # DN= and C= carry the peer's own answer byte for byte, so a smarthost
-      # whose rejection text happens to carry a terminal word - and a
-      # greylisting one really does - would be read as a verdict exim never
-      # gave. Quoted text is dropped before anything is matched, and what is
-      # left is exim's own accounting of what happened to the message.
+      # DN= and C= carry the peer's own answer byte for byte, so a relay whose
+      # rejection text happens to carry a terminal word - a filtering relay's
+      # policy answer is the ordinary way that happens - would be read as a
+      # verdict exim never gave. Quoted text is dropped before anything is
+      # matched, escapes included, and what is left is exim's own accounting
+      # of what happened to the message.
       #
       # The search therefore does NOT settle on the first verdict it meets. A
       # log reading `** defer` and later `bounce` under one id is a message

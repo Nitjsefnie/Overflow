@@ -99,14 +99,22 @@ const deferredRetry = (id: string = messageId): string =>
 
 /**
  * A routing line whose `C=` field holds the RELAY's own answer, quoted byte for
- * byte the way exim's log field table writes it - and, as a greylisting
- * smarthost's rejection text really does, carrying a word this classifier
- * otherwise reads as a terminal verdict. The `DN=` field is quoted for the
- * same reason and is on the line so a scrubber that handles one quoted field
- * and not the next is caught by the same case.
+ * byte the way exim's log field table writes it - carrying, as a filtering
+ * relay's rejection text plausibly does, a word this classifier otherwise
+ * reads as a terminal verdict.
+ *
+ * Two things about the shape are load-bearing, and the fixture cannot carry
+ * either of them twice:
+ *
+ * - `DN=` is quoted too, and comes first, so a scrubber that drops one quoted
+ *   span and stops leaves `C=` for the terminal scan to find;
+ * - the `C=` value contains a quote exim has ESCAPED inside it, which is what
+ *   exim writes when the relay's own text carries one. A scrubber that pairs
+ *   quotes naively ends the span at that inner quote and hands everything
+ *   after it - the terminal word included - to the scan.
  */
 const relayAnswerMentioningFailure = (id: string = messageId): string =>
-  `${logStamp} ${id} => ${recipientAddress} R=smarthost T=remote_smtp_smarthost H=smtp.gmail.com [2a00:1450:4001:c21::6c] TFO CV=yes DN="CN=smtp.gmail.com" A=plain K C="450 4.7.1 Greylisted - bounce threshold not reached"`;
+  `${logStamp} ${id} => ${recipientAddress} R=smarthost T=remote_smtp_smarthost H=smtp.gmail.com [2a00:1450:4001:c21::6c] TFO CV=yes DN="CN=smtp.gmail.com" A=plain K C="550 5.7.1 rejected: \\"bounce\\" threshold not reached"`;
 
 /** The fixture every send-stage and throttle case starts from. */
 const deliveredEximLog = [
@@ -598,6 +606,31 @@ function seedState(stateDir: string, unit: string, timestamp: number): void {
 /** The valid single-line recipient every send-path test starts from. */
 const validRecipient = `${recipientAddress}\n`;
 
+/**
+ * The verdict token the run's reason names, or `undefined` when it names none.
+ *
+ * The reason is this script's product - on a failure its only job is to name
+ * the verdict the classifier reached - so the token IS the output under test.
+ * It is read out by splitting on the two anchors that flank it, the word the
+ * reason introduces the name with and the ` for ` that introduces the message
+ * id, and compared by EQUALITY.
+ *
+ * Equality is the whole point. The neighbouring `toContain` pins prove the
+ * token occurs somewhere in the line and not that it is the name: they stay
+ * green on a classifier that recorded nothing at all (the budget branch falls
+ * back to "records no Completed line", which carries neither anchor's subject),
+ * on one that recorded the WRONG provisional name - both are legitimate
+ * reasons and both are bugs - and on one that printed a slice of the line at
+ * offsets computed somewhere else. `deferred` also satisfies
+ * `toContain("defer")`.
+ *
+ * Nothing here pins the sentence: only the token between the two anchors is
+ * compared, so rewording the reason around it changes no assertion.
+ */
+function reportedVerdict(stderr: string): string | undefined {
+  return /recorded (.+?) for /.exec(stderr)?.[1];
+}
+
 describe("overflow-alert.sh argument contract", () => {
   it.each([
     ["no", []],
@@ -904,6 +937,32 @@ describe("overflow-alert.sh delivery verdict", () => {
     expect(run.status).toBe(0);
   });
 
+  it("names a deferral by the token, not by a prefix of it", () => {
+    // The other provisional outcome, pinned exactly where the case above pins
+    // it by substring - `deferred` or `deferrals pending` satisfies that just as
+    // well. The two names are what the classifier chooses between on a line
+    // carrying both, so a pin that cannot tell them apart is not pinning the
+    // choice. The case above is left exactly as it is; this one is additional.
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
+      eximLog: [
+        spoolLine(),
+        routingLine("remote_smtp_smarthost"),
+        deferredRetry(),
+      ],
+    });
+
+    expect(run.status).not.toBe(0);
+    expect(reportedVerdict(run.stderr)).toBe("defer");
+    expect(existsSync(join(stateDir, unit))).toBe(false);
+  });
+
   it("fails naming the defer when the budget closes with no Completed behind it", () => {
     const stateDir = makeStateDir();
 
@@ -981,6 +1040,12 @@ describe("overflow-alert.sh delivery verdict", () => {
     expect(existsSync(join(stateDir, unit)), "an undelivered alert must not silence the next").toBe(
       false,
     );
+    // The refusal is the thing an operator needs named, and a run that spent
+    // its budget saying only that no Completed line appeared has told them
+    // nothing about why the message stopped. Compared by equality on the
+    // extracted token - see `reportedVerdict` - so a classifier that recorded
+    // nothing, or recorded the deferral behind it instead, fails here.
+    expect(reportedVerdict(run.stderr)).toBe("Failed to connect to");
   });
 
   it("delivers when the retry connects, though the refused attempt was logged first", () => {
@@ -1027,15 +1092,21 @@ describe("overflow-alert.sh delivery verdict", () => {
     expect(run.sleeps, "the detail line on its own is no more a verdict").toBe(2);
     expect(run.status).not.toBe(0);
     expect(existsSync(join(stateDir, unit))).toBe(false);
+    // Same obligation with nothing behind it to name: the only thing the log
+    // holds is the refused connection, so it is the only thing the reason can
+    // be about.
+    expect(reportedVerdict(run.stderr)).toBe("Failed to connect to");
   });
 
   it("does not read a terminal word out of the relay's own quoted answer", () => {
     // The `C=` field is the RELAY's answer, quoted byte for byte, and a
-    // greylisting smarthost's rejection text really does carry words like that
-    // one. It is exim's own accounting on the same line - a delivery it is
-    // going to retry - that decides this message, and the retry that follows
-    // is what completes it. A scan reading the quotes gets a verdict exim
-    // never gave, and calls a delivered alert undelivered.
+    // filtering relay's rejection text plausibly carries words like that one -
+    // here a terminal keyword AND a quote exim had to escape inside it, which is
+    // what a naive quote-paired scrub would end the field on. It is exim's own
+    // accounting on the same line - a delivery it is going to retry - that
+    // decides this message, and the retry that follows is what completes it. A
+    // scan reading the quotes gets a verdict exim never gave, and calls a
+    // delivered alert undelivered.
     const stateDir = makeStateDir();
 
     const run = runAlert({
