@@ -139,6 +139,27 @@ const terminalRejectionQuotingAConnectFailure = (id: string = messageId): string
 const lowercaseConnectFailure = (id: string = messageId): string =>
   `${logStamp} ${id} failed to connect to socket 10.0.0.1 for remote_smtp_smarthost transport: Connection timed out`;
 
+/**
+ * An UNFLAGGED detail line that carries `**` inside a quoted field.
+ *
+ * The property pinned here is the ANCHOR in the classifier's flag test: `**`
+ * counts as the flag only where it follows the id, so a `**` a remote wrote
+ * into its own quoted answer cannot turn a detail line into a terminal one.
+ * Read the sequence anywhere in the line instead of at its start, and a
+ * smarthost whose answer carries the DSN asterisk notation - `** 5.7.1 blocked`,
+ * which it is free to say - would make every unflagged detail line below it a
+ * terminal `Failed`, which is this issue's inverted cause arriving by the
+ * other door.
+ *
+ * Exim does not write this exact line: section 53.9 puts the detail line on a
+ * line of its own with no quoted field before it. The fixture is built from a
+ * real routing line on this host with the detail text appended, because it is
+ * the only shape in which a quoted `**` and an unquoted keyword can share a
+ * line at all - which is exactly the aperture the anchor closes.
+ */
+const detailLineBesideAQuotedFlag = (id: string = messageId): string =>
+  `${logStamp} ${id} => ${recipientAddress} R=smarthost T=remote_smtp_smarthost H=smtp.gmail.com [2a00:1450:4001:c21::6c] TFO CV=yes DN="CN=smtp.gmail.com" A=plain K C="** 5.7.1 blocked by policy" Failed to connect to smtp.gmail.com [2a00:1450:4001:c21::6c]: Connection refused`;
+
 /** The fixture every send-stage and throttle case starts from. */
 const deliveredEximLog = [
   foreignCompleted,
@@ -1145,6 +1166,28 @@ describe("overflow-alert.sh delivery verdict", () => {
     expect(run.sleeps, "a `**` flag is conclusive on sight").toBe(0);
     expect(run.status).not.toBe(0);
     expect(reportedVerdict(run.stderr)).toBe("rejected");
+    expect(existsSync(join(stateDir, unit))).toBe(false);
+  });
+
+  it("reads a quoted `**` as the relay's words, not as exim's flag", () => {
+    // The anchor, pinned. `flagged` must be true only where `**` FOLLOWS the
+    // id; a `**` a smarthost wrote into its own quoted answer must not make an
+    // unflagged detail line terminal. One detail line, no flag, so the run
+    // waits its budget out and names the refusal.
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
+      eximLog: [spoolLine(), detailLineBesideAQuotedFlag()],
+    });
+
+    expect(run.sleeps, "a `**` inside a quoted answer is not the flag").toBe(2);
+    expect(run.status).not.toBe(0);
+    expect(reportedVerdict(run.stderr)).toBe("Failed to connect to");
     expect(existsSync(join(stateDir, unit))).toBe(false);
   });
 

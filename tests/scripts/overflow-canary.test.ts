@@ -149,6 +149,28 @@ const terminalRejectionQuotingAConnectFailure = (id: string): string =>
 const lowercaseConnectFailure = (id: string): string =>
   `${id} failed to connect to socket 10.0.0.1 for remote_smtp_smarthost transport: Connection timed out`;
 
+/**
+ * An UNFLAGGED detail line that carries `**` inside a quoted field.
+ *
+ * The property pinned here is the ANCHOR in the classifier's flag test: `**`
+ * counts as the flag only where it follows the id, so a `**` a remote wrote
+ * into its own quoted answer cannot turn a detail line into a terminal one.
+ * This is the same inverted cause the flag-based fix exists to prevent, one
+ * step further out: read the sequence anywhere in the line instead of at its
+ * start, and a smarthost whose answer contains the DSN asterisk notation -
+ * `** 5.7.1 blocked`, which it is free to say - would make every unflagged
+ * detail line below it a terminal `Failed`.
+ *
+ * Exim does not write this exact line. Section 53.9 puts the detail line on a
+ * line of its own, with no quoted field before it, and the fields a real
+ * `=>` line carries come after the verb rather than before the detail text.
+ * The fixture is built from a real routing line on this host with the detail
+ * text appended, and it exists to isolate the anchor: it is the only shape in
+ * which a quoted `**` and an unquoted keyword can be on one line at all.
+ */
+const detailLineBesideAQuotedFlag = (id: string): string =>
+  `${id} => ${recipientAddress} R=smarthost T=remote_smtp_smarthost H=smtp.gmail.com [2a00:1450:4001:c21::6c] TFO CV=yes DN="CN=smtp.gmail.com" A=plain K C="** 5.7.1 blocked by policy" Failed to connect to smtp.gmail.com [2a00:1450:4001:c21::6c]: Connection refused`;
+
 type RelayOutcome =
   | "completed"
   | "deferred"
@@ -159,6 +181,7 @@ type RelayOutcome =
   | "terminal-blackhole"
   | "terminal-mentioning-connect-failure"
   | "lowercase-connect-failure"
+  | "connect-failure-detail-beside-quoted-flag"
   | "terminal-discarded"
   | "retrying"
   | "retrying-then-completed"
@@ -476,6 +499,12 @@ async function startSmtp(options: {
               messages.push(bufferedData.join("\r\n"));
               bufferedData = [];
               logLine(terminalRejectionQuotingAConnectFailure(messageId));
+            } else if (options.outcome === "connect-failure-detail-beside-quoted-flag") {
+              // One line, no flag, a `**` the RELAY wrote inside its own quoted
+              // answer, and the detail text outside it.
+              messages.push(bufferedData.join("\r\n"));
+              bufferedData = [];
+              logLine(detailLineBesideAQuotedFlag(messageId));
             } else if (options.outcome === "lowercase-connect-failure") {
               // The same refused socket in this build's other spelling, and on
               // its own. It ends nothing, and it carries none of the terminal
@@ -2164,6 +2193,44 @@ describe("overflow-canary.sh when the flag and the words disagree", () => {
       expect(run.status).toBe(1);
       expect(reportedVerdict(JSON.parse(webhook.posts[0]!).content)).toBe("rejected");
       expectConcludedBeforeTheBudget(elapsed);
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("reads a quoted `**` as the relay's words, not as exim's flag", async () => {
+    // The anchor, pinned. `flagged` must be true only where `**` FOLLOWS the id,
+    // so a `**` a smarthost wrote into its own quoted answer cannot make an
+    // unflagged detail line terminal. Nothing here is retrying-and-refused
+    // twice over: there is one detail line and it carries no flag, so the run
+    // waits its budget out and names the refusal - the whole inverted cause,
+    // one step further out than the one round 3 fixed.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({
+      outcome: "connect-failure-detail-beside-quoted-flag",
+      logPath: fixture.eximLog,
+    });
+    const recorder = waitRecorder();
+
+    try {
+      const run = await runCanary(fixture, {
+        smtpUrl: smtp.url,
+        waitSeconds: RETRYING_BUDGET_SECONDS,
+        shimBin: recorder.shimBin,
+      });
+
+      expect(run.status).toBe(1);
+      expect(webhook.posts).toHaveLength(1);
+      expect(
+        recorder.waits(),
+        "a `**` inside a quoted answer is not the flag, and the line is still a detail line",
+      ).toBeGreaterThan(0);
+      expect(reportedVerdict(JSON.parse(webhook.posts[0]!).content)).toBe(
+        "Failed to connect to",
+      );
     } finally {
       await smtp.close();
       await webhook.close();
