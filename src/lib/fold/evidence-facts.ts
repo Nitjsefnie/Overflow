@@ -86,7 +86,7 @@ export function splitEvidenceFacts(
     throw new Error(`Invalid reconciliation fact byte limit ${String(factByteLimit)}.`);
   }
 
-  const facts = new Map<string, ReconciliationFact>();
+  const facts = new Map<string, MeasuredReconciliationFact>();
   const omitted: OversizedReconciliationFact[] = [];
   const consider = (kind: ReconciliationFactKind, subjectKey: string, payload: NarrowedCachedIssue | ReconciliationPullRequestEvidence): void => {
     const key = `${kind}\u0000${subjectKey}`;
