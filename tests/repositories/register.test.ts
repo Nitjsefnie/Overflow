@@ -1592,6 +1592,32 @@ describe("describing a save failure's cause for operator diagnostics", () => {
     expect(describeErrorCause(new Error("auth failed: password: hunter2"))).toBe("Error: auth failed: password=***");
   });
 
+  it("redacts a minted-shape ovf_ token so no material survives", () => {
+    const token = `ovf_${"a".repeat(20)}SECRETMATERIAL${"b".repeat(9)}`;
+    const rendered = describeErrorCause(new Error(`token rejected: ${token}`));
+    expect(rendered).toContain("ovf_***");
+    expect(rendered).not.toContain("SECRETMATERIAL");
+  });
+
+  it("redacts even a truncated ovf_-prefixed string — any ovf_ string is secret", () => {
+    expect(describeErrorCause(new Error("malformed token: ovf_short-material"))).toBe(
+      "Error: malformed token: ovf_***",
+    );
+  });
+
+  it("redacts GitHub token prefixes while keeping the shape", () => {
+    expect(describeErrorCause(new Error("push denied: ghp_SECRETMATERIAL1"))).toBe("Error: push denied: ghp_***");
+    expect(describeErrorCause(new Error("pat rejected: github_pat_SECRETMATERIAL2"))).toBe(
+      "Error: pat rejected: github_pat_***",
+    );
+  });
+
+  it("leaves a message without credential shapes unredacted", () => {
+    expect(describeErrorCause(new Error("repo overflow_watcher unreachable"))).toBe(
+      "Error: repo overflow_watcher unreachable",
+    );
+  });
+
   it("caps the rendering at 200 characters and drops the tail", () => {
     const rendered = describeErrorCause(new Error("x".repeat(400) + " OVERFLOW-MARKER"));
     expect(rendered).toHaveLength(200);
