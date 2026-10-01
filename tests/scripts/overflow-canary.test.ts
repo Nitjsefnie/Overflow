@@ -122,6 +122,33 @@ const deferredRetry = (id: string): string =>
 const relayAnswerMentioningFailure = (id: string): string =>
   `${id} => ${recipientAddress} R=smarthost T=remote_smtp_smarthost H=smtp.gmail.com [2a00:1450:4001:c21::6c] TFO CV=yes DN="CN=smtp.gmail.com" A=plain K C="550 5.7.1 rejected: \\"bounce\\" threshold not reached"`;
 
+/**
+ * A TERMINAL line whose reason text happens to quote a connection failure.
+ *
+ * Section 53.5 is explicit that the two-character flag after the id is the
+ * verdict, and this line is the case where the text and the flag disagree: the
+ * `**` says the address bounced, and the rejection reason exim copies out of
+ * the remote's answer happens to name a refused socket. Nothing in exim writes
+ * both a terminal flag and a 53.9 detail line - the detail line carries no flag
+ * at all - so the flag decides this line and the words in it are the relay's.
+ */
+const terminalRejectionQuotingAConnectFailure = (id: string): string =>
+  `${id} ** rejected: RCPT TO:<${recipientAddress}>: 550 Failed to connect to mail1.example [192.0.2.1]: Connection refused`;
+
+/**
+ * The SAME failure in the spelling this exim build actually emits for a
+ * refused socket when the failure is not the one section 53.9 documents:
+ * `failed to connect to socket %s for %s transport: %s`, lowercase, in
+ * `/usr/sbin/exim4`'s own strings beside the capitalised variant.
+ *
+ * It is a different case from the line above, and the difference is the whole
+ * point: the terminal keywords are matched case-sensitively, so this line
+ * carries none of them and can never be read as a verdict. Pinned so a
+ * case-insensitive future edit is a visible change rather than an accident.
+ */
+const lowercaseConnectFailure = (id: string): string =>
+  `${id} failed to connect to socket 10.0.0.1 for remote_smtp_smarthost transport: Connection timed out`;
+
 type RelayOutcome =
   | "completed"
   | "deferred"
@@ -130,6 +157,8 @@ type RelayOutcome =
   | "deferred-then-connect-failure"
   | "terminal"
   | "terminal-blackhole"
+  | "terminal-mentioning-connect-failure"
+  | "lowercase-connect-failure"
   | "terminal-discarded"
   | "retrying"
   | "retrying-then-completed"
@@ -440,6 +469,21 @@ async function startSmtp(options: {
               logLine(connectFailureDetail(messageId));
               logLine(deferredRetry(messageId));
               logCompletedLater();
+            } else if (options.outcome === "terminal-mentioning-connect-failure") {
+              // A bounce, whose reason text quotes a refused socket. The run
+              // must conclude on sight and name the rejection, not wait out
+              // the budget naming a retry.
+              messages.push(bufferedData.join("\r\n"));
+              bufferedData = [];
+              logLine(terminalRejectionQuotingAConnectFailure(messageId));
+            } else if (options.outcome === "lowercase-connect-failure") {
+              // The same refused socket in this build's other spelling, and on
+              // its own. It ends nothing, and it carries none of the terminal
+              // keywords, so the run waits its budget out with no verdict to
+              // report.
+              messages.push(bufferedData.join("\r\n"));
+              bufferedData = [];
+              logLine(lowercaseConnectFailure(messageId));
             } else if (options.outcome === "deferred-then-connect-failure") {
               // TWO queue runs under one id, and the order that matters: the
               // first attempt is deferred for a greylist, and the RETRY meets a
@@ -2083,6 +2127,84 @@ describe("overflow-canary.sh on a message the relay is retrying", () => {
       expect(run.status).toBe(0);
       expect(webhook.posts, "the relay's own words are not a verdict").toEqual([]);
       expect(existsSync(fixture.marker)).toBe(false);
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+});
+
+describe("overflow-canary.sh when the flag and the words disagree", () => {
+  it("concludes on a rejection whose reason text names a refused socket", async () => {
+    // Section 53.5 makes the two-character flag the verdict, and this is the
+    // line where that matters: `** rejected` against a message whose rejection
+    // reason happens to quote a refused connection. Exim never writes a line
+    // that is both a terminal failure and a 53.9 detail line - the detail line
+    // carries no flag at all - so nothing here is retrying and the verdict was
+    // conclusive the moment exim wrote it.
+    //
+    // Both assertions are load-bearing. A classifier that lets the detail-line
+    // text win on a flagged line takes the WHOLE budget to say it, and names a
+    // retrying relay for a message exim rejected: the cause inverted, on the
+    // one report whose job is to give an operator the cause.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({
+      outcome: "terminal-mentioning-connect-failure",
+      logPath: fixture.eximLog,
+    });
+
+    try {
+      const { run, elapsed } = await runTimed(fixture, {
+        smtpUrl: smtp.url,
+        waitSeconds: TERMINAL_BUDGET_SECONDS,
+      });
+
+      expect(run.status).toBe(1);
+      expect(reportedVerdict(JSON.parse(webhook.posts[0]!).content)).toBe("rejected");
+      expectConcludedBeforeTheBudget(elapsed);
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("waits out the budget on the lowercase refused-socket line, which ends nothing", async () => {
+    // This exim build emits a lowercase `failed to connect to socket ...`
+    // beside the capitalised one, and the terminal keywords are matched
+    // case-sensitively - so this line carries none of them. It must not be
+    // read as a verdict, and there is nothing provisional to name either: the
+    // run simply reaches its budget with the message still undelivered.
+    //
+    // The pin is on the DIRECTION: a case-insensitive edit to the alternation
+    // would turn this line into a terminal keyword and this test would catch it
+    // by the elapsed bound rather than leaving it invisible.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({
+      outcome: "lowercase-connect-failure",
+      logPath: fixture.eximLog,
+    });
+    const recorder = waitRecorder();
+
+    try {
+      const run = await runCanary(fixture, {
+        smtpUrl: smtp.url,
+        waitSeconds: RETRYING_BUDGET_SECONDS,
+        shimBin: recorder.shimBin,
+      });
+
+      expect(run.status).toBe(1);
+      expect(webhook.posts).toHaveLength(1);
+      expect(recorder.waits(), "a line that names no verdict must not end the poll").toBeGreaterThan(
+        0,
+      );
+      expect(
+        reportedVerdict(JSON.parse(webhook.posts[0]!).content),
+        "no token here is terminal and none is provisional, so no name is recorded",
+      ).toBeUndefined();
     } finally {
       await smtp.close();
       await webhook.close();

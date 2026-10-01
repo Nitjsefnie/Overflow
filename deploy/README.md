@@ -1648,7 +1648,10 @@ follow, exim wrote a verdict against the id that ends the message for good
 with no `Completed` behind it, or the message was routed to a transport that
 stays on this host. A `defer` is deliberately not a failure on its own — that
 is a temporary failure exim goes on to retry, so the script keeps waiting
-through it and a greylist does not manufacture a dead alert.
+through it and a greylist does not manufacture a dead alert. Neither is a
+`Failed to connect to` line, the detail exim writes when the smarthost refuses
+the connection (section 53.9): that message is queued for its retry too, and it
+counts as a failure only where exim put a `**` flag on the same line.
 
 That definition is what the throttle keys on. Each failed unit is throttled to
 one message per 30 minutes, and **the record is written only after the alert
@@ -1948,9 +1951,16 @@ it a failure. Check for one with `grep -F "<id> **" /var/log/exim4/mainlog` and
 `grep -F "<id> Failed" /var/log/exim4/mainlog`. Either printing nothing is what
 a pass requires. Anything they print is a verdict exim recorded against that
 id, and it is the finding — `rejected`, `bounce`, `blackhole`, `discarded` or
-`Failed` all end the message. The one exception is `** defer`, which is a
-greylist or a temporary 4xx and means the message is still retrying; the script
-keeps waiting for it, and so should you.
+`Failed` all end the message. There are **two** exceptions, and both mean the
+message is queued and retrying rather than finished: `** defer`, a greylist or
+a temporary 4xx; and `Failed to connect to`, the detail line exim writes when a
+smarthost refuses the connection (section 53.9 of the exim specification),
+written *before* the deferral for the same id. The script keeps waiting through
+both, and so should you — and the second counts as an exception only on a line
+carrying **no** two-character flag. Where exim rejected the message and the
+rejection reason happens to quote a refused connection
+(`** rejected: … 550 Failed to connect to …`), the flag wins and the message is
+finished.
 
 **Before you read an absent verdict as a broken relay, check there was a log to
 read.** `/var/log/exim4/mainlog` is rotated daily by
@@ -2057,7 +2067,10 @@ exim message id off the final `250 OK id=` line, and waits for a line reading
 `<id> Completed` in `/var/log/exim4/mainlog`. A relay that defers, rejects,
 bounces or discards the message logs `defer`, `rejected`, `bounce`,
 `blackhole` or `discarded` against that id instead, and the script names that
-verdict in the report. **The absence of `Completed` is the failure**, and it
+verdict in the report. A `Failed to connect to` line is not one of those: it is
+the detail a refused connection leaves behind (section 53.9), the message is
+still queued, and the script waits it out rather than calling it dead.
+**The absence of `Completed` is the failure**, and it
 is the only observation on this host that can see the smarthost leg at all.
 
 **It reads that log as a member of `adm`, and cannot read it at all without

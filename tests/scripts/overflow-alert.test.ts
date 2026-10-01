@@ -116,6 +116,29 @@ const deferredRetry = (id: string = messageId): string =>
 const relayAnswerMentioningFailure = (id: string = messageId): string =>
   `${logStamp} ${id} => ${recipientAddress} R=smarthost T=remote_smtp_smarthost H=smtp.gmail.com [2a00:1450:4001:c21::6c] TFO CV=yes DN="CN=smtp.gmail.com" A=plain K C="550 5.7.1 rejected: \\"bounce\\" threshold not reached"`;
 
+/**
+ * A TERMINAL line whose reason text happens to quote a connection failure.
+ *
+ * Section 53.5 is explicit that the two-character flag after the id is the
+ * verdict, and this is the case where the text and the flag disagree: the `**`
+ * says the address bounced, and the rejection reason exim copies out of the
+ * remote's answer happens to name a refused socket. Exim never writes a line
+ * that is both a terminal failure and a 53.9 detail line - the detail line
+ * carries no flag at all - so the flag decides this line.
+ */
+const terminalRejectionQuotingAConnectFailure = (id: string = messageId): string =>
+  `${logStamp} ${id} ** rejected: RCPT TO:<${recipientAddress}>: 550 Failed to connect to mail1.example [192.0.2.1]: Connection refused`;
+
+/**
+ * The SAME failure in the spelling this exim build actually emits beside the
+ * capitalised one: `failed to connect to socket %s for %s transport: %s`,
+ * lowercase, in `/usr/sbin/exim4`'s own strings. The terminal keywords are
+ * matched case-sensitively, so this line carries none of them and can never be
+ * read as a verdict - which is what the case that uses it pins.
+ */
+const lowercaseConnectFailure = (id: string = messageId): string =>
+  `${logStamp} ${id} failed to connect to socket 10.0.0.1 for remote_smtp_smarthost transport: Connection timed out`;
+
 /** The fixture every send-stage and throttle case starts from. */
 const deliveredEximLog = [
   foreignCompleted,
@@ -1096,6 +1119,57 @@ describe("overflow-alert.sh delivery verdict", () => {
     // holds is the refused connection, so it is the only thing the reason can
     // be about.
     expect(reportedVerdict(run.stderr)).toBe("Failed to connect to");
+  });
+
+  it("concludes on a rejection whose reason text names a refused socket", () => {
+    // Section 53.5 makes the two-character flag the verdict, and this is the
+    // line where that matters: `** rejected` against a message whose rejection
+    // reason happens to quote a refused connection. Exim never writes a line
+    // that is both a terminal failure and a 53.9 detail line - the detail line
+    // carries no flag at all - so nothing here is retrying.
+    //
+    // Both assertions are load-bearing: a classifier that lets the detail-line
+    // text win on a flagged line spends the WHOLE budget naming a retrying
+    // relay for a message exim rejected, and the throttle state is left
+    // unwritten either way - so the state file cannot see it and only the sleep
+    // record and the named cause can.
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      waitSeconds: "3",
+      eximLog: [spoolLine(), routingLine("remote_smtp_smarthost"), terminalRejectionQuotingAConnectFailure()],
+    });
+
+    expect(run.sleeps, "a `**` flag is conclusive on sight").toBe(0);
+    expect(run.status).not.toBe(0);
+    expect(reportedVerdict(run.stderr)).toBe("rejected");
+    expect(existsSync(join(stateDir, unit))).toBe(false);
+  });
+
+  it("waits out the budget on the lowercase refused-socket line, which ends nothing", () => {
+    // The lowercase sibling this exim build emits beside the capitalised one.
+    // It carries none of the case-sensitive terminal keywords, so it is not a
+    // verdict; and there is nothing provisional to name either, so the run
+    // reaches its budget with the message still undelivered. The pin is on the
+    // direction: a case-insensitive alternation would read this as terminal and
+    // the sleep record would catch it.
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
+      eximLog: [spoolLine(), routingLine("remote_smtp_smarthost"), lowercaseConnectFailure()],
+    });
+
+    expect(run.sleeps, "a line naming no verdict must not end the poll").toBe(2);
+    expect(run.status).not.toBe(0);
+    expect(reportedVerdict(run.stderr)).toBeUndefined();
+    expect(existsSync(join(stateDir, unit))).toBe(false);
   });
 
   it("keeps the FIRST provisional outcome when the retry's refusal is logged after it", () => {
