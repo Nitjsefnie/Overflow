@@ -237,6 +237,38 @@ interface AlertRun {
   sleeps: number;
   /** The arguments of each wait, in order, from the sleep shim's record. */
   sleepArgs: string[];
+  /**
+   * The client the script resolved on the PATH it was actually spawned with.
+   * See `resolveCurlOn` and the transport-boundary cases that assert on it.
+   */
+  resolvedCurl: string;
+}
+
+/**
+ * Which `curl` a PATH resolves to, resolved the way the shell that runs the
+ * script resolves it: by SEARCHING that PATH, not by reading a string out of it.
+ *
+ * This is the observable the transport boundary is actually made of. The suite's
+ * safety does not rest on the script's endpoint - it rests on the client the
+ * script finds when it goes looking for `curl`, because the shim opens no socket
+ * under any case. A PATH that lost the fixture's directory would hand the script
+ * the real /usr/bin/curl, and the endpoint override added alongside this would
+ * not help: a bare PATH resolves to the production daemon no matter what URL the
+ * script was told to use.
+ *
+ * So the property worth asserting is not that a constant appears in the spawn's
+ * environment, which a comment could satisfy and a later edit could quietly drop.
+ * It is that the lookup, performed the way the script performs it, lands inside
+ * this run's own fixture.
+ */
+function resolveCurlOn(pathValue: string): string {
+  const probe = spawnSync("/bin/sh", ["-c", "command -v curl"], {
+    env: { NODE_ENV: "test", PATH: pathValue },
+    encoding: "utf8",
+  });
+  if (probe.error) throw probe.error;
+
+  return probe.stdout.trim();
 }
 
 function runAlert(
@@ -364,13 +396,31 @@ function runAlert(
     const grows = options.eximLogGrows;
     writeFileSync(logAppendPath, grows && grows.length > 0 ? `${grows.join("\n")}\n` : "");
 
+    // The one spawn of the script in this file, and therefore the one place the
+    // transport boundary has to hold. Asserted here rather than in a single
+    // dedicated case so that EVERY run checks it - seventy times over - instead
+    // of one case describing a convention the other seventy could drift away
+    // from. A spawn added elsewhere in this file is not covered by that, which is
+    // why the dedicated cases below exist alongside it: they pin what the check
+    // means and what happens when the fixture directory is not on the PATH at
+    // all, so a second spawner has something to copy rather than reinvent.
+    const spawnPath = `${bin}:/usr/bin:/bin`;
+    const resolvedCurl = resolveCurlOn(spawnPath);
+    expect(
+      resolvedCurl,
+      `the script spawned with PATH=${spawnPath} resolves "${resolvedCurl}" instead of this run's recording shim at ${join(
+        bin,
+        "curl",
+      )}; a run that reaches the send stage on this PATH hands its message to a real SMTP client`,
+    ).toBe(join(bin, "curl"));
+
     const result = spawnSync(
       "/bin/sh",
       [scriptPath, ...(options.args ?? ["overflow.service"])],
       {
         env: {
           NODE_ENV: "test",
-          PATH: `${bin}:/usr/bin:/bin`,
+          PATH: spawnPath,
           OVERFLOW_ALERT_RECIPIENT_FILE: recipientFile,
           OVERFLOW_ALERT_STATE_DIR: stateDir,
           ...(options.deployedLogPath ? {} : { OVERFLOW_ALERT_EXIM_LOG: eximLogPath }),
@@ -414,6 +464,7 @@ function runAlert(
       mail: existsSync(mailPath) ? readFileSync(mailPath, "utf8") : "",
       sleeps: sleepArgs.length,
       sleepArgs,
+      resolvedCurl,
     };
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -1068,6 +1119,55 @@ describe("overflow-alert.sh delivery verdict", () => {
 
     expect(run.sleeps, "the budget is the thing being spent here").toBeGreaterThan(0);
     expect(run.sleepArgs).toEqual(run.sleepArgs.map(() => "1"));
+  });
+});
+
+describe("overflow-alert.sh transport boundary", () => {
+  // WHAT MAKES THIS SUITE SAFE, pinned as behaviour rather than as a convention.
+  //
+  // Nothing here submits a message, and the reason is one line of `runAlert`:
+  // the client the script finds is a shim that opens no socket. That single fact
+  // is the whole boundary, and until now nothing asserted it - a comment did,
+  // and `sent` reported its consequences only after a run had already reached the
+  // send stage on whatever client it found.
+  //
+  // The observable is therefore which `curl` the script RESOLVED, looked up the
+  // way the script looks it up. Asserting that the spawn's environment contains
+  // the fixture directory would only prove the string is there, not that the
+  // lookup lands on it, and a PATH ordering mistake - the shim directory present
+  // but second, behind /usr/bin - satisfies the string check and submits real
+  // mail. So these cases resolve.
+  it("resolves this run's recording shim, not the system client, on the PATH the script is spawned with", () => {
+    const run = runAlert({ recipient: validRecipient });
+
+    // A fixture-local path: mkdtemp under the temp dir, in a directory this
+    // run created and this run removed. The system client is at /usr/bin.
+    expect(run.resolvedCurl).toContain(join(tmpdir(), "overflow-alert-"));
+    expect(
+      run.resolvedCurl,
+      "a run that resolves the system client submits real mail to the production daemon",
+    ).not.toBe("/usr/bin/curl");
+  });
+
+  it("resolves the system client when the fixture directory is not on the PATH at all", () => {
+    // The counterpart, and what makes the case above discriminating rather than
+    // decorative: the same lookup on a PATH WITHOUT the fixture directory lands
+    // on the real client. That is precisely what a second spawn site added to
+    // this file would do by default, because `PATH: "/usr/bin:/bin"` is the
+    // shape a bare spawn takes - and it is the shape this file already uses for
+    // the two direct date-shim spawns, which is why they are safe only by
+    // happening to run nothing that looks for a client.
+    //
+    // The two bare-PATH spawns in this file are the date shim itself, reached
+    // by absolute path, and they never run the script. The day one of them runs
+    // the script instead, this is the resolution it would get.
+    const resolved = resolveCurlOn("/usr/bin:/bin");
+
+    expect(resolved, "the system client is on the machine").not.toBe("");
+    expect(
+      resolved,
+      "which is exactly what the check inside runAlert refuses, so the failure names a real client rather than an expectation",
+    ).not.toContain(join(tmpdir(), "overflow-alert-"));
   });
 });
 
