@@ -27,6 +27,7 @@
 !.github/dependabot.yml
 !.github/required-checks.json
 !.github/requirements-zizmor.txt
+!.github/gitleaks-baseline.json
 !.github/codeql-config.yml
 !.github/ISSUE_TEMPLATE/
 .github/ISSUE_TEMPLATE/*
@@ -313,6 +314,7 @@ scripts/*
 !scripts/db-restore.sh
 !scripts/container-build.sh
 !scripts/ci-base-freshness.sh
+!scripts/secret-scan.sh
 !scripts/overflow-alert.sh
 !scripts/overflow-canary.sh
 !scripts/overflow-bounce.sh

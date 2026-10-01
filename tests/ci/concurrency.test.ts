@@ -209,6 +209,15 @@ const UNBOUNDED_BY_CHOICE = new Map<string, { reason: string; group: string; "ca
     },
   ],
   [
+    "secret-scan.yml",
+    {
+      reason:
+        "This workflow has NO pull_request and NO pull_request_target trigger — it is schedule and workflow_dispatch only — so BOTH arms that would make it unbounded are dead: the pull_request arm of its group always resolves null and falls through to github.ref, and its cancel-in-progress test is never true, so nothing this workflow receives can ever cancel anything through that flag. The group is therefore already per-ref on a schedule tick. Its findings run is also not reproducible from a later push the way a metered CI leg is: a red run is the only record that a credential is in this history, and cancelling the queued run loses that record until the next weekly tick.",
+      group: "secret-scan-${{ github.event.pull_request.number || github.ref }}",
+      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    },
+  ],
+  [
     "dependency-audit.yml",
     {
       reason:
