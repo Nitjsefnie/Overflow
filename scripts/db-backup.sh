@@ -9,6 +9,11 @@
 # place; the path is printed on stdout. Dumps matching overflow-*.dump that are
 # older than --retention-days (default 14) are pruned after a successful dump.
 #
+# A run killed before its mv leaves its .overflow-<stamp>.dump.incomplete
+# partial behind. Every run begins by sweeping leftover partials older than 24
+# hours (-mtime +0) out of the output directory and deleting them; real dumps
+# matching overflow-*.dump are never touched by the sweep.
+#
 # The output directory comes from --output-dir, else OVERFLOW_BACKUP_DIR, else
 # /var/backups/overflow; a missing directory is created root-only (0700).
 #
@@ -90,6 +95,17 @@ fi
 if [ ! -d "$output_dir" ]; then
     mkdir -p "$output_dir"
     chmod 0700 "$output_dir"
+fi
+
+# A crash killed before the mv leaves its partial behind, and the EXIT trap
+# only ever cleans the current run's. Reclaim leftovers older than a day
+# (-mtime +0), print then delete like the retention prune below. The name is
+# anchored to the leading dot and the .dump.incomplete suffix, so a real dump
+# can never match.
+leftovers=$(find "$output_dir" -maxdepth 1 -type f -name '.overflow-*.dump.incomplete' -mtime +0)
+if [ -n "$leftovers" ]; then
+    printf '%s\n' "$leftovers"
+    find "$output_dir" -maxdepth 1 -type f -name '.overflow-*.dump.incomplete' -mtime +0 -delete
 fi
 
 pg_dump_cmd=${OVERFLOW_PG_DUMP:-pg_dump}

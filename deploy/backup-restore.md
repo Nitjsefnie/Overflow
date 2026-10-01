@@ -138,7 +138,9 @@ defense in depth for the same property, not the mechanism.
 `db-backup.sh` prunes `overflow-*.dump` files older than 14 days
 (`--retention-days`, default 14) after each successful dump — 15 daily dumps
 are retained at the steady state, and nothing not matching `overflow-*.dump`
-in the directory is ever deleted. The first real backup was
+in the directory is ever deleted. The exception: partials named
+`.overflow-*.dump.incomplete` older than one day are reclaimed by the next
+run's sweep. The first real backup was
 `overflow-20260910T154923Z.dump` (22.7 MB), taken during the 2026-09-10 drill;
 it later aged out under the 14-day retention policy.
 
