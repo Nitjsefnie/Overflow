@@ -74,12 +74,51 @@ const UNRELATED_COMPLETED =
  */
 const hostileMessageId = '1xBuT1-0000"\\0000QH-0Qqz';
 
+/**
+ * The two lines exim writes when a smarthost refuses the connection, in the
+ * order it writes them, from the worked example in section 53.9 of the exim
+ * specification.
+ *
+ * Neither ends the message. The detail line carries no two-character flag at
+ * all - it is not a verdict - and the defer that follows it means the message
+ * is still queued for its retry, so the FIRST line a scan reaches is the one
+ * that never was a verdict. A scan that concludes on it reports a relay that
+ * is retrying correctly as dead, and pages on the one signal the operator is
+ * meant to trust.
+ *
+ * The bodies are returned without the timestamp `logLine` below writes, so
+ * they compose with it the way every other fixture body does.
+ */
+const connectFailureDetail = (id: string): string =>
+  `${id} Failed to connect to smtp.gmail.com [2a00:1450:4001:c21::6c]: Connection refused`;
+
+/** The deferral section 53.9 records immediately after that detail line. */
+const deferredRetry = (id: string): string =>
+  `${id} == ${recipientAddress} R=smarthost T=remote_smtp_smarthost defer (1): Connection refused`;
+
+/**
+ * A routing line whose `C=` field holds the RELAY's own answer, quoted byte
+ * for byte, as every exim 53.13 summary line does - and, as a greylisting
+ * smarthost's rejection text really does, a word this suite's classifier
+ * otherwise treats as a terminal verdict.
+ *
+ * The `DN=` field is on the line for the same reason: it is quoted too, so a
+ * classifier that scrubs one quoted field and not the other is caught by the
+ * same case.
+ */
+const relayAnswerMentioningFailure = (id: string): string =>
+  `${id} => ${recipientAddress} R=smarthost T=remote_smtp_smarthost H=smtp.gmail.com [2a00:1450:4001:c21::6c] TFO CV=yes DN="CN=smtp.gmail.com" A=plain K C="450 4.7.1 Greylisted - bounce threshold not reached"`;
+
 type RelayOutcome =
   | "completed"
   | "deferred"
   | "deferred-then-completed"
   | "deferred-then-terminal"
-  | "terminal";
+  | "terminal"
+  | "retrying"
+  | "retrying-then-completed"
+  | "connect-failure-detail"
+  | "smarthost-answer-mentions-failure";
 
 interface SmtpStandIn {
   /** The smtp:// URL the script is pointed at. */
@@ -351,6 +390,45 @@ async function startSmtp(options: {
               logLine(
                 `${messageId} ** defer rejected: greylisted, retrying in 120 seconds`,
               );
+              logCompletedLater();
+            } else if (options.outcome === "retrying") {
+              // Section 53.9's shape, whole: a connection the smarthost
+              // refused, the detail line exim writes for it, and the defer
+              // that leaves the message queued. Nothing ends the message, so
+              // nothing here may end the poll.
+              messages.push(bufferedData.join("\r\n"));
+              bufferedData = [];
+              logLine(connectFailureDetail(messageId));
+              logLine(deferredRetry(messageId));
+            } else if (options.outcome === "retrying-then-completed") {
+              // The same refusal, answered on the retry. The detail line and
+              // the defer are the first things the poll can see, and the
+              // Completed line only lands after it has already waited - so
+              // this is the case where a scan that concludes on the detail
+              // line pages an operator about a message that was delivered.
+              messages.push(bufferedData.join("\r\n"));
+              bufferedData = [];
+              logLine(connectFailureDetail(messageId));
+              logLine(deferredRetry(messageId));
+              logCompletedLater();
+            } else if (options.outcome === "connect-failure-detail") {
+              // The detail line with no deferral behind it, which is what the
+              // log holds in the window between the refused attempt and the
+              // deferral exim writes for it. Nothing here ends the message,
+              // and nothing here may end the poll.
+              messages.push(bufferedData.join("\r\n"));
+              bufferedData = [];
+              logLine(connectFailureDetail(messageId));
+            } else if (options.outcome === "smarthost-answer-mentions-failure") {
+              // The refusal text the RELAY wrote, inside the C= field exim
+              // quotes it into, on a routing line exim itself wrote about a
+              // delivery it is going to retry. The word in the quotes is the
+              // relay's, not exim's accounting, so it decides nothing - and
+              // the retry afterwards is what settles this message.
+              messages.push(bufferedData.join("\r\n"));
+              bufferedData = [];
+              logLine(relayAnswerMentioningFailure(messageId));
+              logLine(deferredRetry(messageId));
               logCompletedLater();
             } else if (options.outcome === "completed") {
               messages.push(bufferedData.join("\r\n"));
@@ -1743,6 +1821,148 @@ describe("overflow-canary.sh when the exim log cannot be read", () => {
   });
 });
 
+
+  /**
+ * The budget the retrying cases below are waited out on. It is not the
+ * deployed one and does not need to be: what these cases assert is that the
+ * poll did not stop at the first thing it read, and a terminal verdict breaks
+ * out at once whatever the budget is.
+ */
+const RETRYING_BUDGET_SECONDS = 3;
+
+describe("overflow-canary.sh on a message the relay is retrying", () => {
+  it("keeps polling past a refused connection and reports the retry at the budget", async () => {
+    // Section 53.9's whole shape, with nothing behind it: the message is still
+    // in the queue and exim is going to try again, so there is no verdict to
+    // read at all. The absence of a Completed line is still an outage at the
+    // budget - this asserts nothing about that - what it pins is that the
+    // detail line exim writes BEFORE its deferral is not a verdict, which is
+    // shown by the poll surviving it.
+    //
+    // `waits` is a record the run produced, not a duration measured from the
+    // outside: a classifier that concludes on the detail line breaks out of
+    // the loop before it ever waits, so it records nothing.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({ outcome: "retrying", logPath: fixture.eximLog });
+    const recorder = waitRecorder();
+
+    try {
+      const run = await runCanary(fixture, {
+        smtpUrl: smtp.url,
+        waitSeconds: RETRYING_BUDGET_SECONDS,
+        shimBin: recorder.shimBin,
+      });
+
+      expect(run.status).toBe(1);
+      expect(
+        webhook.posts,
+        "a message the relay never Completed is a dead alert path, retrying or not",
+      ).toHaveLength(1);
+      expect(existsSync(fixture.marker)).toBe(true);
+      expect(
+        recorder.waits(),
+        "a refused connection is a detail line, and must not end the poll on sight",
+      ).toBeGreaterThan(0);
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("reports a message delivered on the retry as healthy, though the refused attempt was logged first", async () => {
+    // The same two lines, and then the retry connects. This is the case the
+    // page was spurious FOR: the run that concludes on the detail line records
+    // an outage and marks it, so every later run of the streak posts nothing
+    // and the operator is told the alert path is broken on a route that is
+    // delivering. The exit status is the observable that separates the two -
+    // there is nothing to read out of the report to compare it against.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({
+      outcome: "retrying-then-completed",
+      logPath: fixture.eximLog,
+      completeAfterMs: 1200,
+    });
+
+    try {
+      const run = await runCanary(fixture, { smtpUrl: smtp.url, waitSeconds: 30 });
+
+      expect(run.status).toBe(0);
+      expect(webhook.posts, "a message delivered on retry must not page anyone").toEqual([]);
+      expect(existsSync(fixture.marker)).toBe(false);
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("keeps polling on the refused connection alone, with no deferral behind it", async () => {
+    // The window between the refused attempt and the deferral exim writes for
+    // it, which is what the log holds whenever the run reads it early. Nothing
+    // in it ends the message, so nothing in it may end the poll - the same
+    // treatment a defer already gets.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({
+      outcome: "connect-failure-detail",
+      logPath: fixture.eximLog,
+    });
+    const recorder = waitRecorder();
+
+    try {
+      const run = await runCanary(fixture, {
+        smtpUrl: smtp.url,
+        waitSeconds: RETRYING_BUDGET_SECONDS,
+        shimBin: recorder.shimBin,
+      });
+
+      expect(run.status).toBe(1);
+      expect(webhook.posts).toHaveLength(1);
+      expect(
+        recorder.waits(),
+        "the detail line on its own is no more a verdict than one behind a defer",
+      ).toBeGreaterThan(0);
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("does not read a terminal word out of the relay's own quoted answer", async () => {
+    // The `C=` field is the RELAY's answer, quoted byte for byte, and a
+    // greylisting smarthost's rejection text really does carry words like this
+    // one. It is exim's own accounting on the same line - the retrying
+    // delivery - that decides this message, and a scan reading the quotes gets
+    // a verdict exim never gave.
+    //
+    // The exit status separates the two, because the retry then completes and
+    // a run that survived the quoted text has a healthy path to report.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({
+      outcome: "smarthost-answer-mentions-failure",
+      logPath: fixture.eximLog,
+      completeAfterMs: 1200,
+    });
+
+    try {
+      const run = await runCanary(fixture, { smtpUrl: smtp.url, waitSeconds: 30 });
+
+      expect(run.status).toBe(0);
+      expect(webhook.posts, "the relay's own words are not a verdict").toEqual([]);
+      expect(existsSync(fixture.marker)).toBe(false);
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+});
+
 /**
  * A shim directory holding one command that fails, so the script's own
  * dependency on it can be broken. PATH is the script's only seam for these:
@@ -1754,6 +1974,34 @@ function shimDir(failing: string): string {
   writeFileSync(join(directory, failing), `#!/bin/sh\nexit 1\n`, { mode: 0o755 });
 
   return directory;
+}
+
+/**
+ * A shim directory whose `sleep` records every wait before really taking it,
+ * so "the poll kept going" can be read off an interaction the run produced
+ * rather than off a wall-clock margin.
+ *
+ * This is the `shimDir` seam above with a different command in it, not a second
+ * fixture harness: the script's only wait is the poll's, PATH is the only
+ * thing that redirects it, and `runCanary` already takes this directory. The
+ * real sleep still happens, because the deadline the canary closes is computed
+ * from the real clock - shortening it would make the run, not the measurement,
+ * dishonest.
+ */
+function waitRecorder(): { shimBin: string; waits: () => number } {
+  const directory = sharedScratch("waits");
+  const record = join(directory, "waits");
+  writeFileSync(
+    join(directory, "sleep"),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(record)}\n/bin/sleep "$@"\n`,
+    { mode: 0o755 },
+  );
+
+  return {
+    shimBin: directory,
+    waits: () =>
+      existsSync(record) ? readFileSync(record, "utf8").split("\n").filter(Boolean).length : 0,
+  };
 }
 
 describe("overflow-canary.sh when the host cannot describe itself", () => {

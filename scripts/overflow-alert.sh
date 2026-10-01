@@ -306,7 +306,7 @@ else
       # refused message as sent and silence the next real alert for half an
       # hour. A terminal verdict is therefore conclusive ON SIGHT.
       #
-      # `defer` is the one exception, and it is deliberate: it is what exim
+      # `defer` is an exception, and it is deliberate: it is what exim
       # writes for a temporary failure - a 4xx, a greylist - and it goes on to
       # RETRY the message. A greylisted message is deferred once and then
       # COMPLETED on its retry, both lines under one id at the same time, so a
@@ -314,6 +314,21 @@ else
       # signal the operator has to trust. So the verdict is remembered, not
       # obeyed: the poll keeps going and Completed at any point in the budget
       # wins.
+      #
+      # `Failed to connect to` is an exception on the same terms, and section
+      # 53.9 of the exim specification is why: it records that line as the
+      # DETAIL written ahead of the `== <address> ... defer` line for the same
+      # id, for a message that stays queued and is retried. The first line a
+      # scan reaches is therefore the one that never was a verdict, and a scan
+      # that concludes on it reports a relay that is retrying correctly as one
+      # that has stopped delivering.
+      #
+      # A QUOTED field is excluded from the search altogether, for the same
+      # reason one step further out: DN= and C= carry the peer's own answer byte
+      # for byte, so a smarthost whose rejection text happens to carry a
+      # terminal word - and a greylisting one really does - would be read as a
+      # verdict exim never gave. What is left after the quoted spans are
+      # dropped is exim's own accounting of what happened to the message.
       #
       # A named verdict is still worth keeping, so the report says what exim
       # said rather than our own timeout restated. awk's index() is a literal
@@ -325,29 +340,50 @@ else
       # `** defer` and later `bounce` under one id is a message that deferred
       # once and then failed for good, and a search that stopped at the defer
       # would report the wrong cause. A terminal token anywhere in the log
-      # wins; `defer` is the fallback for when there is none. `defer` is also
-      # tested FIRST on each line, because exim writes deferrals whose own
-      # reason text contains a terminal word - `** defer rejected: ...` - and
-      # that line is a temporary failure, not a rejection.
+      # wins; the provisional ones are the fallback for when there is none.
+      # They are also tested FIRST on each line, because exim writes
+      # deferrals whose own reason text contains a terminal word - `** defer
+      # rejected: ...` - and a refused connection followed by the error that
+      # refused it, and neither of those lines ends the message.
       verdict=$(awk -v id="$message_id" '
         BEGIN { first = ""; found = 0 }
         {
           at = index($0, id)
           if (at == 0) next
           rest = substr($0, at + length(id))
-          if (rest ~ /defer/) { if (first == "") first = "defer"; next }
-          if (match(rest, /(rejected|bounce|blackhole|discarded|Failed)/)) {
+          # A QUOTED field is text exim did not write: it is the answer from the
+          # far end, byte for byte, so a terminal word inside one is a remote
+          # verdict and not an exim one. Every quoted span is dropped before
+          # anything is matched, backslash escapes included. Exim closes every
+          # quote it opens, so an unterminated one cannot swallow the line.
+          scrubbed = rest
+          while (match(scrubbed, /"([^"\\]|\\.)*"/)) {
+            scrubbed = substr(scrubbed, 1, RSTART - 1) " " substr(scrubbed, RSTART + RLENGTH)
+          }
+          # Section 53.9: a DETAIL line, written before the `== ... defer` for
+          # the same id, on a message that stays queued. Provisional, like defer.
+          if (scrubbed ~ /Failed to connect to/) {
+            if (first == "") first = "Failed to connect to"
+            next
+          }
+          if (scrubbed ~ /defer/) { if (first == "") first = "defer"; next }
+          if (match(scrubbed, /(rejected|bounce|blackhole|discarded|Failed)/)) {
             found = 1
-            print substr(rest, RSTART, RLENGTH)
+            print substr(scrubbed, RSTART, RLENGTH)
             exit
           }
         }
         END { if (found == 0 && first != "") print first }
       ' "$exim_log") || verdict=''
-      if [ -n "$verdict" ] && [ "$verdict" != defer ]; then
-        reason="exim recorded $verdict for $message_id, so the relay did not take the alert and the message did not leave this host"
-        break
-      fi
+      # Both provisional tokens mean exim is still RETRYING this message, so
+      # they are remembered and reported rather than obeyed.
+      case "$verdict" in
+        '' | defer | 'Failed to connect to') ;;
+        *)
+          reason="exim recorded $verdict for $message_id, so the relay did not take the alert and the message did not leave this host"
+          break
+          ;;
+      esac
       if [ -n "$verdict" ]; then
         seen_verdict=$verdict
       fi

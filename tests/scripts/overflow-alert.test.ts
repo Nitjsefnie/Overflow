@@ -84,6 +84,30 @@ const completedLine = (id: string = messageId): string =>
 const spoolLine = (id: string = messageId): string =>
   `${logStamp} ${id} <= overflow-alert@${fqdn} U=root P=esmtp S=1421`;
 
+/**
+ * Exim's own connection-failure detail, in the shape section 53.9 of the
+ * specification gives it: written BEFORE the deferral for the same id, for a
+ * message that is still queued, and carrying no two-character flag - it is not
+ * a verdict at all, it is the reason the deferral below it is written.
+ */
+const connectFailureDetail = (id: string = messageId): string =>
+  `${logStamp} ${id} Failed to connect to smtp.gmail.com [2a00:1450:4001:c21::6c]: Connection refused`;
+
+/** The deferral section 53.9 records immediately after that detail line. */
+const deferredRetry = (id: string = messageId): string =>
+  `${logStamp} ${id} == ${recipientAddress} R=smarthost T=remote_smtp_smarthost defer (1): Connection refused`;
+
+/**
+ * A routing line whose `C=` field holds the RELAY's own answer, quoted byte for
+ * byte the way exim's log field table writes it - and, as a greylisting
+ * smarthost's rejection text really does, carrying a word this classifier
+ * otherwise reads as a terminal verdict. The `DN=` field is quoted for the
+ * same reason and is on the line so a scrubber that handles one quoted field
+ * and not the next is caught by the same case.
+ */
+const relayAnswerMentioningFailure = (id: string = messageId): string =>
+  `${logStamp} ${id} => ${recipientAddress} R=smarthost T=remote_smtp_smarthost H=smtp.gmail.com [2a00:1450:4001:c21::6c] TFO CV=yes DN="CN=smtp.gmail.com" A=plain K C="450 4.7.1 Greylisted - bounce threshold not reached"`;
+
 /** The fixture every send-stage and throttle case starts from. */
 const deliveredEximLog = [
   foreignCompleted,
@@ -925,6 +949,106 @@ describe("overflow-alert.sh delivery verdict", () => {
       expect(existsSync(join(stateDir, unit))).toBe(false);
     },
   );
+
+  it("keeps waiting past a refused connection and reports the retry at the budget", () => {
+    // Section 53.9's shape, whole: the detail line exim writes for a refused
+    // connection, and the deferral that leaves the message queued. Neither
+    // ends the message, so neither may end the poll - and a run that concludes
+    // on the detail line reports a relay that is retrying correctly as one
+    // that has stopped delivering.
+    //
+    // `sleeps` is a record the run produced rather than a duration measured
+    // from outside: a conclusive verdict breaks out of the loop before it ever
+    // waits, so it records nothing at all.
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
+      eximLog: [
+        spoolLine(),
+        routingLine("remote_smtp_smarthost"),
+        connectFailureDetail(),
+        deferredRetry(),
+      ],
+    });
+
+    expect(run.sleeps, "a refused connection is a detail line, not a verdict").toBe(2);
+    expect(run.status).not.toBe(0);
+    expect(existsSync(join(stateDir, unit)), "an undelivered alert must not silence the next").toBe(
+      false,
+    );
+  });
+
+  it("delivers when the retry connects, though the refused attempt was logged first", () => {
+    // The same two lines, and then the retry reaches the relay. This is the
+    // case the false verdict was harmful FOR: the run concludes on the detail
+    // line, reports the alert undelivered, and writes the throttle state - so
+    // every real failure in the next window is suppressed. The exit status
+    // and the state file are what separate the two, with nothing to read out
+    // of the reason string.
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      waitSeconds: "3",
+      eximLog: [
+        spoolLine(),
+        routingLine("remote_smtp_smarthost"),
+        connectFailureDetail(),
+        deferredRetry(),
+      ],
+      eximLogGrows: [completedLine()],
+    });
+
+    expect(run.status).toBe(0);
+    expect(existsSync(join(stateDir, unit)), "a delivered alert records its send").toBe(true);
+  });
+
+  it("keeps waiting on the refused connection alone, with no deferral behind it", () => {
+    // The window between the refused attempt and the deferral exim writes for
+    // it, which is what the log holds whenever the run reads it early. Nothing
+    // in it ends the message, so nothing in it may end the poll.
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
+      eximLog: [spoolLine(), routingLine("remote_smtp_smarthost"), connectFailureDetail()],
+    });
+
+    expect(run.sleeps, "the detail line on its own is no more a verdict").toBe(2);
+    expect(run.status).not.toBe(0);
+    expect(existsSync(join(stateDir, unit))).toBe(false);
+  });
+
+  it("does not read a terminal word out of the relay's own quoted answer", () => {
+    // The `C=` field is the RELAY's answer, quoted byte for byte, and a
+    // greylisting smarthost's rejection text really does carry words like that
+    // one. It is exim's own accounting on the same line - a delivery it is
+    // going to retry - that decides this message, and the retry that follows
+    // is what completes it. A scan reading the quotes gets a verdict exim
+    // never gave, and calls a delivered alert undelivered.
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      waitSeconds: "3",
+      eximLog: [spoolLine(), relayAnswerMentioningFailure(), deferredRetry()],
+      eximLogGrows: [completedLine()],
+    });
+
+    expect(run.status).toBe(0);
+    expect(existsSync(join(stateDir, unit)), "a delivered alert records its send").toBe(true);
+  });
 
   it("fails when exim never writes a Completed line within the budget", () => {
     const stateDir = makeStateDir();
