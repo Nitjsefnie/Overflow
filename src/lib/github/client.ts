@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
+import { CollectionWalkBound } from "@/lib/github/collection-walk-bound";
 import { githubWebhookEvents } from "@/lib/github/webhook-schema";
 import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
 import { checkGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
@@ -363,7 +364,7 @@ export class GitHubGateway implements ForgeGateway {
    * name what is missing; nothing here creates labels.
    */
   public async listRepositoryLabels(repository: GitHubRepositoryReference): Promise<Set<string>> {
-    const labels = new Set<string>();
+    const bound = new CollectionWalkBound<{ name: string }>("repository labels");
     let page = 1;
     let hasNextPage = true;
 
@@ -371,16 +372,15 @@ export class GitHubGateway implements ForgeGateway {
       const response = await this.request(
         `/repos/${segment(repository.owner)}/${segment(repository.name)}/labels?per_page=100&page=${page}`,
       );
-      const payload = await responseJson<Array<{ name: string }>>(response);
-      for (const label of payload) {
-        if (typeof label.name === "string") {
-          labels.add(label.name);
-        }
-      }
+      bound.add(await responseJson<Array<{ name: string }>>(response));
       hasNextPage = hasNextLink(response.headers.get("link"));
       page += 1;
     }
 
+    const labels = new Set<string>();
+    for (const label of bound.collected) {
+      if (typeof label.name === "string") labels.add(label.name);
+    }
     return labels;
   }
 

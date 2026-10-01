@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubApiError, GitHubGateway } from "@/lib/github/client";
+import { MAX_WALK_ITEMS, MAX_WALK_PAGES } from "@/lib/github/collection-walk-bound";
 import { classifyGitHubRateLimit } from "@/lib/github/errors";
 
 describe("GitHubGateway REST transport", () => {
@@ -303,6 +304,119 @@ describe("GitHubGateway REST transport", () => {
       gateway.getPullRequestDiff({ owner: "octo", name: "overflow" }, 4),
     ).resolves.toBe("diff --git a/a.ts b/a.ts");
     expect(request?.headers.get("accept")).toBe("application/vnd.github.v3.diff");
+  });
+});
+
+// Issue 878: a label walk ends only when the instance stops advertising a
+// continuation, and a rel="next" that is fresh on EVERY response is not a
+// repeated one, so nothing about the Link header itself can stop it. The bound
+// is what makes such a walk terminate, and it terminates it loudly.
+describe("GitHubGateway collection walk bound", () => {
+  // GitHub clamps `per_page` at 100 on this endpoint and the walk always asks
+  // for the maximum, so a full page is 100 rows.
+  const fullPage = 100;
+  const maxPages = MAX_WALK_PAGES;
+  const maxRows = MAX_WALK_ITEMS;
+  const fullPagesToTheRowCeiling = maxRows / fullPage;
+  const overPages = new RegExp(`GitHub returned more than ${maxPages} pages`);
+  const overRows = new RegExp(`GitHub returned more than ${maxRows} rows`);
+  const repository = { owner: "octo", name: "overflow" };
+  const labels = (body: unknown, link?: string) =>
+    new Response(JSON.stringify(body), link === undefined ? {} : { headers: { link } });
+  const nextLink = (page: number) => `</repos/octo/overflow/labels?per_page=100&page=${page}>; rel="next"`;
+
+  // A hard transport cap turns a missing loop guard into a prompt, visible
+  // failure: an unbounded walk answers with the 503 below instead of hanging.
+  function labelGateway(respond: (hit: number) => Response, cap = 3) {
+    const requests: Request[] = [];
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (input, init) => {
+        requests.push(new Request(input, init));
+        if (requests.length > cap) return new Response("request cap exceeded", { status: 503 });
+        return respond(requests.length);
+      },
+    });
+    return { gateway, requests };
+  }
+
+  it("stops a label walk whose rel=\"next\" is fresh on every page", async () => {
+    const { gateway, requests } = labelGateway((hit) => labels([], nextLink(hit + 1)), maxPages + 5);
+
+    await expect(gateway.listRepositoryLabels(repository)).rejects.toThrow(overPages);
+    expect(requests).toHaveLength(maxPages + 1);
+  });
+
+  it("stops on the row ceiling when the instance only ever sends full pages", async () => {
+    // The page ceiling would allow twice this many requests, so only the row
+    // ceiling can be the one that fires here.
+    const { gateway, requests } = labelGateway((hit) =>
+      labels(Array.from({ length: fullPage }, (_, index) => ({ name: `label-${hit}-${index}` })), nextLink(hit + 1)),
+      maxPages + 5);
+
+    await expect(gateway.listRepositoryLabels(repository)).rejects.toThrow(overRows);
+    expect(requests).toHaveLength(fullPagesToTheRowCeiling + 1);
+  });
+
+  // The row check must run BEFORE the rows are appended: spreading a page
+  // larger than the engine's argument limit dies with a RangeError long before
+  // the typed error can be raised, and a RangeError IS an Error, so the error
+  // NAME is what separates the two paths.
+  it.each([maxRows + 1, 150_000])(
+    "stops on a single page of %i rows with the typed error, not a stack overflow",
+    async (rows) => {
+      const { gateway, requests } = labelGateway(() =>
+        labels(Array.from({ length: rows }, (_, index) => ({ name: `label-${index}` }))));
+
+      const error = await gateway.listRepositoryLabels(repository).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).name).toBe("Error");
+      expect((error as Error).message).toMatch(overRows);
+      expect(requests).toHaveLength(1);
+    });
+
+  // The other side of the same boundary: a walk that lands EXACTLY on the
+  // ceiling has done nothing wrong, and its whole collection comes back.
+  it("returns a single page that lands exactly on the row ceiling", async () => {
+    const { gateway, requests } = labelGateway(() =>
+      labels(Array.from({ length: maxRows }, (_, index) => ({ name: `label-${index}` }))));
+
+    const found = await gateway.listRepositoryLabels(repository);
+    expect(found.size).toBe(maxRows);
+    expect(requests).toHaveLength(1);
+  });
+
+  // The two ceilings are a POLICY choice, not a runtime derivation, and both
+  // request-count assertions above are built FROM them — so a mutant that
+  // quietly lowers either one shrinks what a legitimate walk may read while
+  // every behavioural test stays green. Pin the values, and pin the invariant
+  // that keeps the row ceiling reachable at all.
+  it("pins the walk ceilings this module ships", () => {
+    expect(MAX_WALK_PAGES).toBe(200);
+    expect(MAX_WALK_ITEMS).toBe(10_000);
+    // A full page holds 100 rows, so on a full-page walk the row ceiling must
+    // fire before the page ceiling. If it does not, the row ceiling is shadowed
+    // by the page ceiling and can never throw.
+    expect(maxRows).toBeLessThan(maxPages * 100);
+  });
+
+  it("walks a legitimate three-page label catalog to its end", async () => {
+    const { gateway, requests } = labelGateway((hit) => hit < 3
+      ? labels([{ name: `label-${hit}` }], nextLink(hit + 1))
+      : labels([{ name: "label-3" }]));
+
+    await expect(gateway.listRepositoryLabels(repository)).resolves.toEqual(
+      new Set(["label-1", "label-2", "label-3"]),
+    );
+    expect(requests).toHaveLength(3);
+  });
+
+  // The bound collects raw rows; a name that is not a string is still not a
+  // label, and bounding the walk must not change what the Set holds.
+  it("skips a label row whose name is not a string", async () => {
+    const { gateway } = labelGateway(() => labels([{ name: "bug" }, { name: 7 }, { name: null }]));
+
+    await expect(gateway.listRepositoryLabels(repository)).resolves.toEqual(new Set(["bug"]));
   });
 });
 
