@@ -83,6 +83,27 @@ export function provenanceViolations(finding: Pick<Finding, "Match">, sourceLine
   return (residue.match(/[A-Za-z0-9_]+/g) ?? []).filter((run) => !sourceLine.includes(run));
 }
 
+/**
+ * Whether THIS CHECKOUT is a shallow clone.
+ *
+ * The question the provenance check below has to ask is about the environment,
+ * not about the file under test: "does this checkout have the history it is
+ * being asked to read?" Asking it of the baseline instead is how the deep check
+ * ended up able to switch itself off — see the companion test's comment.
+ *
+ * `git rev-parse --is-shallow-repository` is git's own answer and is exactly the
+ * condition `.github/workflows/ci.yml` creates when it checks out at
+ * `actions/checkout`'s default depth of 1. Anything else this suite derived
+ * from the baseline's contents is a property of the thing being tested.
+ */
+function isShallowCheckout(): boolean {
+  const result = spawnSync("git", ["rev-parse", "--is-shallow-repository"], { encoding: "utf8" });
+  // A git that cannot answer is not a shallow repository as far as this suite is
+  // concerned, so the deep check runs and reports the real problem rather than
+  // skipping itself on the strength of a failed query.
+  return result.status === 0 && result.stdout.trim() === "true";
+}
+
 /** True when this checkout actually carries the commit the finding names. */
 function hasCommit(commit: string): boolean {
   return spawnSync("git", ["cat-file", "-e", `${commit}^{commit}`], { encoding: "utf8" }).status === 0;
@@ -162,16 +183,28 @@ describe(".github/gitleaks-baseline.json", () => {
   });
 
   it("leaves nothing but source-line context where the secret was", () => {
-    // The half of the provenance contract that needs no history: a residue may
-    // only be identifier-shaped runs and the punctuation of the literals around
-    // them. This is the cheap first filter, and it holds at any checkout depth.
+    // A residue may only be identifier-shaped runs and the punctuation of the
+    // literals around them. This holds at any checkout depth, and it catches a
+    // class the provenance check STRUCTURALLY CANNOT see, so it is load-bearing
+    // rather than a first filter:
+    //
+    //   `provenanceViolations` inspects only `[A-Za-z0-9_]+` runs. A `Match` of
+    //   `REDACTED/path` yields the single run `path`; that one is rejected when
+    //   the line does not contain it. But a `Match` of `<REDACTED>` yields NO
+    //   runs at all, so provenance returns `[]` and passes — and so does the
+    //   `toContain("REDACTED")` assertion beside it. Only this one rejects it.
+    //   The same holds for any residue whose identifier runs are empty and whose
+    //   offending material is punctuation.
+    //
+    // Where the two overlap — a spliced alphanumeric token — they agree, and
+    // drift between them shows up as a red test rather than a silent divergence.
     //
     // The half that needs history — that each run really came from the source
     // line the entry records — is `provenanceViolations` below, exercised
     // against a repository this suite builds, and then against the committed
     // entries where the history is present.
     //
-    // A character-count bound cannot do this job, and this suite shipped one
+    // A character-count bound cannot do that job, and this suite shipped one
     // that tried: the longest identifier-shaped run 8.30.1 actually leaves
     // behind is `encrypted_webhook_secret` at 24 characters, and a real
     // 20-character GitLab PAT sits comfortably under that, so a bound read off
@@ -179,11 +212,12 @@ describe(".github/gitleaks-baseline.json", () => {
     // redaction passed a 28-character bound, and would still pass a 24-character
     // one. Provenance can, because the token is not on the line.
     //
-    // The token itself is NOT written out here, and that is not squeamishness:
-    // it would be a credential-shaped literal in a tracked file, which is
-    // exactly what .github/workflows/secret-scan.yml exists to report. Writing
-    // one into this comment is how the round-1 demonstration found one in this
-    // file. The rule needs the high-entropy body, so a placeholder that is
+    // No token is written out in this file, and that is not squeamishness: it
+    // would be a credential-shaped literal in a tracked file, which is exactly
+    // what .github/workflows/secret-scan.yml exists to report. Writing one into
+    // this comment is how the round-1 demonstration found one in this file, and
+    // a credential-shaped FIXTURE is how the round-2 demonstration found
+    // another. The rule needs the high-entropy body, so a placeholder that is
     // merely described is both safe and sufficient to make the point.
     for (const finding of findings) {
       const residue = finding.Match.replaceAll("REDACTED", "");
@@ -396,8 +430,7 @@ describe("the provenance check, against a repository this suite builds", () => {
  */
 describe("the committed baseline's provenance, where the history is present", () => {
   const findings: Finding[] = JSON.parse(readFileSync(resolve(".github/gitleaks-baseline.json"), "utf8"));
-  const missing = findings.filter((finding) => !hasCommit(finding.Commit));
-  const shallow = missing.length > 0;
+  const shallow = isShallowCheckout();
 
   it.skipIf(shallow)("reproduces every residue from the source line its entry records", () => {
     const sources = new Map<string, string[]>();
@@ -418,15 +451,29 @@ describe("the committed baseline's provenance, where the history is present", ()
     }
   });
 
-  it.skipIf(!shallow)("reports which entries this checkout could not verify", () => {
-    // The inverse skip, and it exists so the block is never silently empty: a
-    // checkout with no history says out loud that it checked nothing.
+  it.skipIf(!shallow)("corroborates the checkout's own depth against the objects it holds", () => {
+    // The companion to the skip above, and it exists to pin the PREDICATE, not
+    // the baseline. The skip is taken on the checkout's word that it is shallow;
+    // this asserts that the word is true, by checking that the objects really are
+    // absent. That is what makes the pair self-pinning: a predicate hardcoded to
+    // "shallow" makes this test RUN in a full-depth checkout, where nothing is
+    // unresolvable, and it fails there.
+    //
+    // It is deliberately not a tautology. Under the old predicate — derived from
+    // the baseline's own `Commit` values — a corrupted entry naming a commit this
+    // repository does not have turned the deep check off in a FULL-DEPTH checkout
+    // and the run stayed green, because a broken baseline and a shallow checkout
+    // produced the same green and the same skip. The predicate is now a property
+    // of the environment, so that entry is no longer a way to disable anything: at
+    // full depth the deep check runs, and its own `expect(blob.status)` fires.
+    const unresolvable = findings.filter((finding) => !hasCommit(finding.Commit)).map((f) => f.Fingerprint);
     expect(
-      missing.map((finding) => finding.Fingerprint),
-      "this checkout cannot read the commits the baseline names, so the provenance check above did " +
-        "not run. A CI run at depth 1 establishes that the provenance CHECKER works and that the " +
-        "baseline's own fields are consistent — not that the committed residues came from the lines " +
-        "they name.",
+      unresolvable,
+      "this checkout reports itself shallow, and the provenance check above was skipped on that word — " +
+        "but every commit the baseline names resolves here. Either the depth predicate is reporting " +
+        "something other than this checkout's depth, or the skip above was taken for a reason that does " +
+        "not hold. Either way the committed baseline's provenance is unverified by this run and nothing " +
+        "above said so.",
     ).not.toEqual([]);
   });
 });
