@@ -89,10 +89,13 @@ export async function pruneExpiredMaintenanceRows(sql: SqlClient): Promise<Reten
     returning id
   `;
 
-  // Then the runs, under the identical predicate as the statement above, so
-  // the pair deletes changes and runs for exactly the same set: whatever the
-  // first statement measured, the second deletes. PENDING runs never match,
-  // at any age, and completed_at NULL never matches either.
+  // Then the runs, under the same predicate as the statement above. The two
+  // statements read now() a hair apart, so a run crossing the 90-day
+  // boundary between the two reads keeps its changes in the first statement
+  // and is deleted by this one, which fails on the FK — an error the sweep's
+  // own guard contains, and the next tick's prune deletes the pair. PENDING
+  // runs never match, at any age, and completed_at NULL never matches
+  // either.
   const expiredRuns = await sql`
     delete from reconciliation_runs
     where status in ('COMPLETED', 'FAILED')
