@@ -213,6 +213,62 @@ describe("readiness endpoint", () => {
     });
     expect(errorSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("redacts credential-shaped error text out of the body and the journal line", async () => {
+    const errorSpy = spyOnProbeJournal();
+    const handler = createReadinessGetHandler({
+      probe: async () => {
+        throw new Error("connect failed: postgresql://overflow:pw@10.0.0.9/overflow");
+      },
+      now: () => 0,
+    });
+
+    const response = await handler();
+
+    const body = await response.json();
+    expect(body.status).toBe("unavailable");
+    expect(String(body.reason)).toContain("***@");
+    expect(String(body.reason)).not.toContain("pw@");
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(String(errorSpy.mock.calls[0][0])).toContain("***@");
+    expect(String(errorSpy.mock.calls[0][0])).not.toContain("pw@");
+    expect(errorSpy.mock.calls[0][0]).toBe(`Readiness probe failed: ${body.reason}`);
+  });
+
+  it("does not log again when a late race loser settles after the hard cap", async () => {
+    vi.useFakeTimers();
+    try {
+      const errorSpy = spyOnProbeJournal();
+      const probe = () =>
+        new Promise<ReadinessProbeOutcome>((resolve) => {
+          // Settles an unavailable outcome one tick past the cap: the race's
+          // late loser. A ready loser could not catch a dropped guard, which
+          // only misbehaves when the loser logs.
+          setTimeout(
+            () => resolve({ status: "unavailable", reason: "database: late loser" }),
+            3100,
+          );
+        });
+      const handler = createReadinessGetHandler({ probe, now: () => 0 });
+
+      const pending = handler();
+      await vi.advanceTimersByTimeAsync(3000);
+      const response = await pending;
+
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({ status: "unavailable", reason: hardCapReason });
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      // The loser's settlement lands: consumed without resolving or logging
+      // again. Assert what the code did — the spy count and the reason —
+      // never a timing value.
+      await vi.advanceTimersByTimeAsync(100);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0][0]).toBe(`Readiness probe failed: ${hardCapReason}`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("missingMigrations", () => {
