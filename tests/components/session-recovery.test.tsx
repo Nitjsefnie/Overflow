@@ -101,11 +101,12 @@ describe("session recovery route", () => {
   it("narrows a repeated reason search param instead of handing the array to the view", async () => {
     const page = (await SessionPage({
       searchParams: Promise.resolve({ reason: ["stale", "unavailable"] }),
-    })) as ReactElement<{ reason: unknown }>;
+    })) as ReactElement<{ children: ReactElement<{ reason: unknown }> }>;
 
     // The rendered branch alone cannot see this: an array is not "unavailable" either, so a page that
-    // forwards the array still renders the fallback. Read the prop the view was handed.
-    expect(page.props.reason).toBeUndefined();
+    // forwards the array still renders the fallback. Read the prop the view was handed — on the child,
+    // not on the shell, which is handed children and nothing else and would read undefined either way.
+    expect(page.props.children.props.reason).toBeUndefined();
     render(page);
 
     expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/clear this sign-in and start again/i);

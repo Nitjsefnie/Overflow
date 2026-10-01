@@ -51,7 +51,16 @@ describe("unhandled rejection probe", () => {
       // listener registered once from one registered for good, and only the
       // second tells them apart. Both are floated with no handler anywhere, so
       // Node reports them — which is the only thing the listener exists to
-      // observe, and the reason it must be installed before they are created.
+      // observe.
+      //
+      // What keeps floating them here safe is NOT this probe's own listener. It
+      // is vitest's, which is already installed before anything in this file
+      // installs anything — the baseline the first test's count is taken against
+      // is non-zero — so these rejections land in vitest's bucket and fail this
+      // suite. Deleting the probe's `process.on` has been observed to turn every
+      // test in this file red, each naming the listener that caught its
+      // rejections — not into a hang, and not into a dead worker. Anything added
+      // here that floats a rejection is safe for that same reason.
       void Promise.reject(first);
       void Promise.reject(second);
 

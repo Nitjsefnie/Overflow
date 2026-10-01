@@ -50,10 +50,9 @@ describe("belongsToRegisteredRepository", () => {
     const observation = registered({ observedOwnerName: RENAMED_TO_NAME });
 
     expect(belongsToRegisteredRepository(observation, pullRequest())).toBe(true);
-    // Nothing but the id is consulted: the two names above differ, so a decision
-    // that read `ownerName` would answer false here and unsettle work already
-    // credited in this repository's own tracker.
-    expect(observation.ownerName).not.toBe(observation.observedOwnerName);
+    // Nothing but the id is consulted: `RENAMED_TO_NAME` and `REGISTERED_NAME`
+    // above differ, so a decision that read `ownerName` would answer false here
+    // and unsettle work already credited in this repository's own tracker.
   });
 
   it("counts a pull request whose name matches the registered one as foreign once the id differs", () => {
@@ -79,6 +78,17 @@ describe("belongsToRegisteredRepository", () => {
     ).toBe(false);
   });
 
+  // Recorded so it is not re-derived: a `String(a) === String(b)` comparison and an
+  // `Object.is(a, b)` comparison are equivalent-in-practice here and cannot be
+  // killed by any case. Both differ from `===` only on `NaN` and on `-0`, and
+  // neither reaches this function: the registered id is `toSafeInteger(row.
+  // github_repository_id)` at `src/lib/fold/postgres-store.ts:2604`, which throws
+  // on `NaN`, and a closing pull request's id is `repositoryGitHubId(node)` at
+  // `src/lib/github/client.ts:1308`, which throws unless it is a safe integer
+  // greater than zero. The predicate itself is pure and takes plain numbers, so
+  // the cases below are synthetic by construction; the argument above is only that
+  // no real id narrows which mutants are reachable.
+
   // A numeric id is a whole number, so one id can be a prefix of another's
   // digits. Comparing them as text — or accepting one that merely starts with the
   // other — confuses a repository with an id that only looks like it.
@@ -91,6 +101,16 @@ describe("belongsToRegisteredRepository", () => {
     expect(
       belongsToRegisteredRepository(registered({ githubRepositoryId: id }), pullRequest({ repositoryGitHubId: foreign })),
     ).toBe(false);
+  });
+
+  // Neither operand is a presence flag, so a falsy id is an id like any other and
+  // not an absent repository. A truthiness guard around the comparison — the shape
+  // `Boolean(a && b && a === b)` takes — answers false for the one pair that is
+  // genuinely equal, which unsettles this repository's own closing pull requests.
+  it("counts id 0 as its own match rather than as an absent repository", () => {
+    expect(
+      belongsToRegisteredRepository(registered({ githubRepositoryId: 0 }), pullRequest({ repositoryGitHubId: 0 })),
+    ).toBe(true);
   });
 
   it("refuses neighbouring ids, which no transfer or rename produces", () => {
