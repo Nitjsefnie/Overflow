@@ -24,7 +24,19 @@ export type AccountExportAccount = {
   hasStoredGitHubToken: boolean;
 };
 
-export type AccountExportApiToken = { createdAt: string; expiresAt: string; lastUsedAt: string | null };
+export type AccountExportApiToken = {
+  createdAt: string;
+  expiresAt: string;
+  lastUsedAt: string | null;
+  /**
+   * The instant a request first authenticated with this token's value, or null
+   * while nobody has. What separates an unconfirmed token's short delivery
+   * window from the 90 days its first use starts, so a member reading the
+   * export can tell a lapsed window apart from a credential superseded by a
+   * forgotten regeneration.
+   */
+  confirmedAt: string | null;
+};
 
 export type AccountExportForgeIdentity = {
   id: string;
@@ -252,12 +264,23 @@ async function loadForgeIdentities(
 }
 
 async function loadApiToken(sql: ExportClient, userId: string): Promise<AccountExportApiToken | null> {
-  const [row] = await sql<{ created_at: Date; expires_at: Date; last_used_at: Date | null }[]>`
-    select created_at, expires_at, last_used_at from api_tokens where user_id = ${userId}
+  const [row] = await sql<{
+    created_at: Date;
+    expires_at: Date;
+    last_used_at: Date | null;
+    confirmed_at: Date | null;
+  }[]>`
+    select created_at, expires_at, last_used_at, confirmed_at
+    from api_tokens where user_id = ${userId}
   `;
   return row === undefined
     ? null
-    : { createdAt: iso(row.created_at), expiresAt: iso(row.expires_at), lastUsedAt: isoOrNull(row.last_used_at) };
+    : {
+        createdAt: iso(row.created_at),
+        expiresAt: iso(row.expires_at),
+        lastUsedAt: isoOrNull(row.last_used_at),
+        confirmedAt: isoOrNull(row.confirmed_at),
+      };
 }
 
 function setSection(document: AccountExport, path: string, rows: AccountExportRow[]): void {
