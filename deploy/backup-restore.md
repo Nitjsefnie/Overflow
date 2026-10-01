@@ -408,8 +408,15 @@ rename: nothing has been swapped, the live `overflow` is exactly as it was,
 and the whole recovery is `systemctl start overflow.service` — the database
 was never touched, only the service was stopped. Fix whatever the gate named,
 the migration it could not apply or the listing it could not produce, and run
-this section again from the top. The replacement is disposable until the
-rename; the old database is not.
+this section again from the top, starting from `sudo -u postgres dropdb
+overflow_replacement`. The replacement is disposable until the rename and the
+live database is not, and a half-restored replacement cannot simply be
+restored over: `--clean` drops only the objects the dump names, so a table a
+migration has added since the dump still holds its foreign key onto the parent
+the restore is trying to drop, the second restore errors out on that drop and
+leaves less behind than it started with, and the retry ends in a worse state
+than the refusal it was recovering from. Drop the database and the section
+starts again from an empty one.
 
 Then the smallest real check that the replacement serves before the rename —
 the app role can authenticate, and the restored tables answer a read — with
