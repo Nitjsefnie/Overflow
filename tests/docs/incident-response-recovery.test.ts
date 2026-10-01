@@ -75,7 +75,10 @@ describe("incident response account-loss recovery", () => {
   });
 
   it("carries relative links for the resolution check below to read", () => {
-    expect(relativeLinks(recoverySection().body).length).toBeGreaterThan(0);
+    expect(
+      relativeLinks(recoverySection().body).length,
+      `"${recoveryHeading}" in ${document} carries no relative link, so the resolution check below passes on an empty set and pins nothing`,
+    ).toBeGreaterThan(0);
   });
 
   it("resolves every relative link in the recovery section to a file and, with an anchor, to a heading", () => {
