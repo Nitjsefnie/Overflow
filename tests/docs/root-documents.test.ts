@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
@@ -100,6 +101,43 @@ describe("root documents", () => {
       { line: 2, target: "backup-restore.md" },
       { line: 2, target: "README.md" },
     ]);
+  });
+
+  it("does not read an inline link's text as a reference use", () => {
+    // `[appx]` here is the link's text, not a reference use. With a definition
+    // for `appx` sitting unused further down, reading it as a use reports the
+    // definition's target against this line — a dead target on a live link.
+    const links = relativeLinks([
+      "See [appx](README.md) for the appendix.",
+      "",
+      "[appx]: does-not-exist.md",
+    ].join("\n"));
+    expect(links).toStrictEqual([{ line: 1, target: "README.md" }]);
+  });
+
+  it("resolves a reference use whose definition lives outside the excerpt", () => {
+    // Shaped like the section-scoped caller: an excerpt cut at a heading, whose
+    // reference use names a definition declared under a later heading.
+    const root = mkdtempSync(join(tmpdir(), "markdown-links-"));
+    try {
+      writeFileSync(join(root, "doc.md"), [
+        "## Section under test",
+        "",
+        "A [cross-section][appx] reference use.",
+        "",
+        "## Elsewhere",
+        "",
+        "[appx]: does-not-exist.md",
+      ].join("\n"));
+      const lines = readFileSync(join(root, "doc.md"), "utf8").split("\n");
+      const start = lines.indexOf("## Section under test");
+      const excerpt = lines.slice(start + 1, lines.indexOf("## Elsewhere")).join("\n");
+      expect(unresolvedLinks(excerpt, "doc.md", root, start + 2)).toStrictEqual([
+        "doc.md:3 links to does-not-exist.md, and does-not-exist.md does not exist",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("reports a failure against the line it occupies in the document, not in the excerpt", () => {
