@@ -114,6 +114,13 @@ const localTransports = [
 
 const curlShim = [
   "#!/bin/sh",
+  // $0 is the RESOLVED path of the client the interpreter chose - the whole path
+  // it was invoked as, not the bare name it was looked up by. That makes it the
+  // one thing this fixture can report about itself that no PATH analysis can
+  // fake: what actually ran. Written outside the trace conditional below so it
+  // is reported by every run that reached the client, including the ones that
+  // then answer with no id or a nonzero status.
+  `printf '%s\\n' "$0" > "$OVERFLOW_TEST_CLIENT"`,
   `printf '%s\\n' "$@" > "$OVERFLOW_TEST_CURL_ARGV"`,
   `cat > "$OVERFLOW_TEST_MAIL"`,
   `if [ "\${OVERFLOW_TEST_NO_ID:-0}" -eq 0 ]; then`,
@@ -364,6 +371,7 @@ function runAlert(
     if (options.recipient !== undefined) writeFileSync(recipientFile, options.recipient);
 
     const curlArgvPath = join(directory, "curl-argv");
+    const clientPath = join(directory, "client");
     const mailPath = join(directory, "mail.eml");
     const sleepCallsPath = join(directory, "sleep-calls");
     const stateDir = options.stateDir ?? join(directory, "throttle-state");
@@ -402,8 +410,16 @@ function runAlert(
     // guard resolves and a separate string the spawn is handed - is the shape
     // that let a guard pass while the script reached the real client: the two
     // can disagree, and nothing notices. `spawnAlert` therefore takes no
-    // environment at all, which makes a divergent PATH a compile error rather
-    // than a silent green.
+    // environment, so there is no second derivation to write.
+    //
+    // That is a tightening, not a proof, and the difference is worth being exact
+    // about: a divergent PATH is now a compile error only as long as the
+    // signature stays one-parameter. Widening `spawnAlert` with an ordinary
+    // optional override, or writing to `childEnv` after this check, typechecks
+    // clean - the signature enforces the current shape, not the property. That
+    // is why the post-spawn check further down exists and why neither is
+    // described as sufficient on its own: this one proves what the PATH resolves
+    // to BEFORE the child runs, and that observation catches what ran AFTER.
     const childEnv = {
       // `as const` because this object is no longer contextually typed by
       // `spawnSync`'s parameter: standalone, `NODE_ENV` would widen to `string`
@@ -414,6 +430,7 @@ function runAlert(
       ...(options.deployedLogPath ? {} : { OVERFLOW_ALERT_EXIM_LOG: eximLogPath }),
       ...(options.smtpUrl ? { OVERFLOW_ALERT_SMTP_URL: options.smtpUrl } : {}),
       OVERFLOW_TEST_CURL_ARGV: curlArgvPath,
+      OVERFLOW_TEST_CLIENT: clientPath,
       OVERFLOW_TEST_CLOCK_CALLS: join(directory, "clock-calls"),
       OVERFLOW_TEST_CLOCK_BASE: join(directory, "clock-base"),
       OVERFLOW_TEST_CLOCK_STEP: String(options.clockStepSeconds ?? 0),
@@ -460,6 +477,31 @@ function runAlert(
 
     // Read the shims' captures before the fixture directory is removed.
     const sent = existsSync(curlArgvPath);
+
+    // WHAT ACTUALLY RAN, observed after the fact rather than predicted before.
+    //
+    // The invariant above reasons about a snapshot: it resolves the PATH and
+    // compares it to this run's fixture. A snapshot cannot survive an edit that
+    // changes what the child receives afterwards - an extra parameter on
+    // `spawnAlert`, or a write to `childEnv` between the guard and the spawn.
+    // Both of those typecheck perfectly well, so `pnpm typecheck` stays silent
+    // on both and only this observation catches them: the client the interpreter
+    // chose reports its own resolved path, and that path is checked against the
+    // fixture the suite built.
+    //
+    // Gated on `sent`, and the gate is load-bearing rather than defensive. A run
+    // that exits before the send stage ran no client at all, so there is no
+    // record to read and asserting unconditionally would false-fail every
+    // validation and throttle-suppression case. A run that DID send has no
+    // excuse: the record must exist, and a client that did not identify itself
+    // reads as the empty string rather than as a pass.
+    if (sent) {
+      const ranClient = existsSync(clientPath) ? readFileSync(clientPath, "utf8").trim() : "";
+      expect(
+        ranClient,
+        "the submission went through a client other than this run's own recording shim, so it was not mocked; an unreadable record reads as empty, which also fails",
+      ).toBe(join(bin, "curl"));
+    }
     const sleepArgs = existsSync(sleepCallsPath)
       ? readFileSync(sleepCallsPath, "utf8").split("\n").slice(0, -1)
       : [];
