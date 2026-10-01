@@ -6,7 +6,9 @@ import {
   decideRerun,
   mintAppJwt,
   RERUN_ATTEMPT_CAP,
+  renderRelayResult,
   runRelay,
+  type ContextDecision,
   type RelayJob,
 } from "../../scripts/ledger-relay.ts";
 
@@ -149,6 +151,46 @@ describe("decideRerun", () => {
     const live = { state: "open", headSha: HEAD };
     expect(decideRerun(healRun({ runAttempt: RERUN_ATTEMPT_CAP }), live, false)).toBe(false);
     expect(decideRerun(healRun({ runAttempt: RERUN_ATTEMPT_CAP - 1 }), live, false)).toBe(true);
+  });
+});
+
+describe("renderRelayResult", () => {
+  const decision: ContextDecision = {
+    context: "verify",
+    status: "completed",
+    conclusion: "failure",
+    title: "verify: workflow-level failure",
+    summary: "summary",
+  };
+
+  it("renders one line per posted decision and names the rerun-heal when it dispatched", () => {
+    const lines = renderRelayResult({
+      decisions: [decision],
+      posted: ["verify"],
+      rerunDispatched: true,
+    });
+    expect(lines).toEqual([
+      "[ledger-relay] verify: failure",
+      "[ledger-relay] rerun-heal: the cancelled run was re-dispatched; " +
+        "its completion event will mirror the real conclusion",
+    ]);
+  });
+
+  it("renders no rerun-heal line when the heal did not dispatch", () => {
+    const lines = renderRelayResult({
+      decisions: [decision],
+      posted: ["verify"],
+      rerunDispatched: false,
+    });
+    expect(lines).toEqual(["[ledger-relay] verify: failure"]);
+    expect(lines.some((line) => line.includes("rerun-heal"))).toBe(false);
+  });
+
+  it("renders only the nothing-to-relay line when nothing was posted", () => {
+    const lines = renderRelayResult({ decisions: [], posted: [], rerunDispatched: false });
+    expect(lines).toEqual([
+      "[ledger-relay] nothing to relay: no required context is pinned to the triggering run's workflow",
+    ]);
   });
 });
 
@@ -991,6 +1033,50 @@ describe("runRelay", () => {
       // No rerun was dispatched, and the heal's bounded retry was spent.
       expect(requestTo(fetchStub.requests, RERUN_URL)).toBeUndefined();
       expect(delay.delays).toEqual([1000, 2000]);
+    });
+
+    it("rejects when the PR listing is not an array", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([]),
+        { status: 201, body: { id: 1 } },
+        { status: 200, body: { message: "not an array" } },
+      ]);
+      await expect(
+        runRelay({
+          env: cancelledPrEnv(),
+          fetchFn: fetchStub.fn,
+          delayFn: makeDelay().fn,
+          readPinMap: async () => PIN_MAP,
+        }),
+      ).rejects.toThrow(/returned no array/);
+      // The heal never reached a decision, so no rerun.
+      expect(requestTo(fetchStub.requests, RERUN_URL)).toBeUndefined();
+    });
+
+    it("treats a non-array workflow-run listing as no live run and heals, bounded by the rerun endpoint's own guard", async () => {
+      // Asymmetry, pinned as the code stands: findOpenPullRequestAtHead
+      // THROWS on a non-array listing, while hasLiveRunOfPath reads one as
+      // "no live run" and lets the heal proceed. The direction is bounded:
+      // GitHub's rerun endpoint refuses a queued or in_progress run with a
+      // 4xx, which apiCall throws, so the worst case is a visible red relay
+      // job, never a duplicate dispatch.
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([]),
+        { status: 201, body: { id: 1 } },
+        pullsListing([pullEntry()]),
+        { status: 200, body: { total_count: 1, workflow_runs: { not: "an array" } } },
+        { status: 202, body: undefined },
+      ]);
+      const result = await runRelay({
+        env: cancelledPrEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+      expect(result.rerunDispatched).toBe(true);
+      expect(authHeaderOf(requestTo(fetchStub.requests, RERUN_URL))).toBe("Bearer rerun-token");
     });
 
     it("heals through the dispatch path using the fetched run's run_attempt", async () => {
