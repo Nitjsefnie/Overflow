@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
+import { MAX_WALK_PAGES } from "@/lib/github/collection-walk-bound";
 import * as labelsRoute from "@/app/api/repositories/labels/route";
 
 // Release stores evaluated with this file's mocked database client.
@@ -45,12 +46,20 @@ beforeEach(() => {
   }
 });
 
+// A test whose subject legitimately emits server-side output (the
+// collection-walk bound diagnostic, issue 883) names the method here before
+// acting, and the teardown skips it.
+const consoleOutputAllowed = new Set<string>();
+
 afterEach(() => {
   try {
     for (const method of ["log", "info", "warn", "error", "debug"] as const) {
-      expect(console[method]).not.toHaveBeenCalled();
+      if (!consoleOutputAllowed.has(method)) {
+        expect(console[method]).not.toHaveBeenCalled();
+      }
     }
   } finally {
+    consoleOutputAllowed.clear();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
@@ -331,6 +340,35 @@ describe("GET /api/repositories/labels", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ labels: ["size/S", "size/M", "size/L"] });
     expect(fetchGitHub).toHaveBeenCalledTimes(2);
+  });
+
+  // Issue 883: a walk that trips the collection-walk bound answers the same
+  // generic 502 as any other upstream failure, and the bound's own message —
+  // the collection it was reading and the ceiling it stopped at — is the only
+  // thing that tells the two apart. The walk here is the real one: an instance
+  // that advertises a continuation on every response never stops on its own.
+  it("logs the collection-walk bound's error when a label walk trips the bound", async () => {
+    consoleOutputAllowed.add("error");
+    readSession.mockResolvedValue(memberSession());
+    stubStoredToken();
+    const fetchGitHub = vi.fn<typeof fetch>(async () => new Response(
+      JSON.stringify([{ name: "size/S" }]),
+      { status: 200, headers: { link: '<https://api.github.com/repos/octo/overflow/labels?per_page=100&page=2>; rel="next"' } },
+    ));
+    vi.stubGlobal("fetch", fetchGitHub);
+
+    const response = await labelsRoute.GET(labelsRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(body).toEqual({ error: { code: "UPSTREAM_FAILURE", message: "Unable to read the repository labels on GitHub." } });
+    expect(fetchGitHub).toHaveBeenCalledTimes(MAX_WALK_PAGES + 1);
+    // The message IS the contract here: which collection was being walked and
+    // which ceiling ended it are what an operator reads the log for.
+    const logged = vi.mocked(console.error).mock.calls.flat();
+    const boundError = logged.find((argument): argument is Error => argument instanceof Error);
+    expect(boundError?.message).toContain("repository labels");
+    expect(boundError?.message).toContain(String(MAX_WALK_PAGES));
   });
 
   it("strips a .git suffix from the name before reading the labels", async () => {

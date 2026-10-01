@@ -39,7 +39,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const gateway = new GitHubGateway({ accessToken, owner: session.user.id });
-    const labels = await gateway.listRepositoryLabels(reference);
+    const labels = await readRepositoryLabels(gateway, reference);
     return Response.json({ labels: [...labels] });
   } catch (error) {
     // Issue 327: a 401 is GitHub rejecting the authorization Overflow holds —
@@ -79,6 +79,33 @@ export async function GET(request: Request): Promise<Response> {
       );
     }
     return errorResponse(502, "UPSTREAM_FAILURE", "Unable to read the repository labels on GitHub.");
+  }
+}
+
+/**
+ * The GitHub label walk, with its non-GitHub failures recorded before they are
+ * mapped (issue 883).
+ *
+ * Every arm in the caller's catch maps an error GitHub itself reported, and each
+ * already answers with its own actionable message. What is left reaching the
+ * generic 502 is this walk failing on Overflow's own account — the
+ * collection-walk bound's plain `Error`, which names the collection and the
+ * ceiling the walk stopped at. The 502 is a fixed string, so the error object is
+ * the only thing that carries that to an operator, and the read is bounded to
+ * this one call so the log stays the walk's: a credential read that fails, or a
+ * GitHub-reported status, must not appear in it.
+ */
+async function readRepositoryLabels(
+  gateway: GitHubGateway,
+  reference: { owner: string; name: string },
+): Promise<Set<string>> {
+  try {
+    return await gateway.listRepositoryLabels(reference);
+  } catch (error) {
+    if (!(error instanceof GitHubApiError)) {
+      console.error("Reading the repository labels on GitHub failed.", error);
+    }
+    throw error;
   }
 }
 

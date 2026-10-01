@@ -280,9 +280,10 @@ export type RepositoryUnregisterApiResult = {
 export class RepositoryRegistrationError extends Error {
   public constructor(
     public readonly code: "CONFLICT" | "FORBIDDEN" | "GITHUB_ACCESS" | "GITHUB_CREDENTIALS" | "GITHUB_RATE_LIMITED" | "INVALID_INPUT" | "NOT_FOUND" | "ROLLBACK_INCOMPLETE" | "UPSTREAM_FAILURE",
-    message: string,
+    message: string, cause?: unknown,
   ) {
-    super(message);
+    // Issue 883: the message is the submitter's; the cause is what the wrap was handed. Omitted installs none.
+    super(message, cause === undefined ? undefined : { cause });
     this.name = "RepositoryRegistrationError";
   }
 }
@@ -1764,10 +1765,7 @@ function githubSetupError(
   repository: GitHubRepository | null,
   step: "retrieve the submitted GitHub repository" | "read the repository difficulty labels" | "create the repository webhook" | "delete the repository webhook",
 ): RepositoryRegistrationError {
-  // Issue 93: a 401 says GitHub rejected the authorization Overflow itself holds — the token
-  // expired or was revoked, unlike a 403/404, which is about the repository or the
-  // application's approval. Retrying cannot fix the token, so the message carries the one
-  // remedy that refreshes it.
+  // Issue 93: a 401 means GitHub rejected Overflow's own authorization — not retryable, unlike a 403/404.
   if (error instanceof GitHubApiError && error.status === 401) {
     return new RepositoryRegistrationError(
       "GITHUB_CREDENTIALS",
@@ -1788,9 +1786,8 @@ function githubSetupError(
       const observation = `GitHub answered 404 for the request to ${step}. GitHub returns 404 rather than 403 when it will not reveal a resource, which can indicate missing authorization. The repository may also have been renamed, moved or deleted${repository === null ? "" : " since it was looked up"}.`;
       return new RepositoryRegistrationError("GITHUB_ACCESS", `${observation}${authorizationRemedies}`);
     }
-    // Issue 97: a 403 that carries no rate-limit evidence cannot separate a missing
-    // authorization from a secondary rate limit — GitHub answers 403 both ways. State the
-    // ambiguity and lead with the transient remedy; the settings remedies follow.
+    // Issue 97: a 403 with no rate-limit evidence cannot separate a missing authorization
+    // from a secondary rate limit — GitHub answers 403 both ways. Lead with the retry.
     return new RepositoryRegistrationError(
       "GITHUB_ACCESS",
       `GitHub refused to ${step} (HTTP 403). `
@@ -1814,6 +1811,9 @@ function githubSetupError(
     step === "retrieve the submitted GitHub repository"
       ? "Unable to retrieve the submitted GitHub repository."
       : `Unable to ${step} on GitHub.`,
+    // Issue 883: only the bounded label read keeps a cause — the other steps fail on
+    // transport or credentials, and those messages must not reach a diagnostic.
+    step === "read the repository difficulty labels" && !(error instanceof GitHubApiError) ? error : undefined,
   );
 }
 

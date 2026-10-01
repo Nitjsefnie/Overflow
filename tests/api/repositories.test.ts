@@ -12,6 +12,7 @@ import {
 } from "../support/trusted-origin";
 import { createGitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
 import { GitHubApiError } from "@/lib/github/errors";
+import { CollectionWalkBound, MAX_WALK_ITEMS } from "@/lib/github/collection-walk-bound";
 import { GitHubGateway } from "@/lib/github/client";
 import { POST as mintToken } from "@/app/api/tokens/route";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
@@ -218,6 +219,22 @@ describe("POST /api/repositories", () => {
     await expect(response.json()).resolves.toEqual({
       error: { code: "CONFLICT", message: "This GitHub repository is already registered." },
     });
+  });
+
+  // Issue 883: only the preserved cause names the collection and the ceiling.
+  it("logs the preserved cause when a wrapped label read tripped the collection-walk bound", async () => {
+    consoleOutputAllowed.add("error");
+    let tripped: Error | undefined;
+    try {
+      new CollectionWalkBound<{ name: string }>("repository difficulty labels").add(new Array(MAX_WALK_ITEMS + 1).fill({ name: "size/S" }));
+    } catch (error) {
+      tripped = error as Error;
+    }
+    const { handler } = tokenFixture(tokenAccount, { labelFailure: tripped });
+
+    const response = await handler(authorizedRequest(validInput(), apiToken));
+    expect(response.status).toBe(502);
+    expect(vi.mocked(console.error).mock.calls.flat().join(" ")).toMatch(new RegExp(`${MAX_WALK_ITEMS}.*repository difficulty labels`));
   });
 
   it("returns a structured 502 without exposing a GitHub failure", async () => {
@@ -2127,6 +2144,7 @@ type SuccessfulDependenciesOptions = {
   canAdminister?: boolean;
   existingRepository?: boolean;
   webhookFailure?: boolean;
+  labelFailure?: unknown;
   /** What the store answers for a catalog change: a result, or an error to raise. */
   catalogChange?: RepositoryCatalogChange | Error;
   /** The registration the by-owner-name lookup holds; absent when nothing holds the path. */
@@ -2169,9 +2187,7 @@ function successfulDependencies(
       async getRepositoryById() {
         return resolvedRepository;
       },
-      async listRepositoryLabels() {
-        return new Set([...validInput().openingLabels, ...validInput().actualLabels].map(({ label }) => label));
-      },
+      async listRepositoryLabels() { if (options.labelFailure !== undefined) throw options.labelFailure; return new Set([...validInput().openingLabels, ...validInput().actualLabels].map(({ label }) => label)); },
       async listWorkflowFiles() { return []; },
       async createWebhook() {
         if (options.webhookFailure) {

@@ -23,6 +23,7 @@ import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { plural } from "@/lib/plural";
 import {
   changeRepositoryCatalog,
+  describeErrorCause,
   unregisterRepository,
   RepositoryRegistrationError,
   registerRepository,
@@ -546,6 +547,15 @@ function forgeIdentityErrorResponse(error: ForgeIdentityError): Response {
 }
 
 function registrationErrorResponse(error: RepositoryRegistrationError): Response {
+  // Issue 883: the response below is the sanitized message the submitter reads,
+  // and when a collection-walk bound ended a label read it names neither the
+  // collection that was walked nor the ceiling it stopped at. The wrap keeps that
+  // error as the cause — and only that one, the bounded read whose error is worth
+  // a diagnostic — so it is rendered here: `describeErrorCause` redacts and caps
+  // it, the same rendering the abandonment diagnostic emits.
+  if (error.cause !== undefined) {
+    console.error(`Repository registration failed: ${describeErrorCause(error.cause)}`);
+  }
   switch (error.code) {
     case "INVALID_INPUT":
       return errorResponse(400, error.code, error.message);
