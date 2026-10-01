@@ -1,10 +1,21 @@
 // Inbound rate limiting for the webhook receivers (issue 852). Each receiver
-// keeps one token bucket per sender identity; a delivery is admitted only
-// when a token is available, and everything else is declined with 429 so the
-// sender retries with backoff. This module is the pure mechanism: a standard
-// token bucket with a lazy refill and an injectable clock — no I/O, no
-// database, no throw paths. The route wiring (bucket-per-key, 429 mapping)
-// is the caller's.
+// keeps a single token bucket SHARED by all of its senders: a delivery is
+// admitted only when a token is available, and everything else is declined
+// with 429 so the sender retries with backoff.
+//
+// The sharing is deliberate. Senders are unauthenticated at this boundary, so
+// a per-sender key would have to be derived from the request IP — trivially
+// spoofable, and every spoofed identity gets its own fresh budget. A shared
+// total bound is the stricter guarantee against the defect the issue actually
+// reports: unbounded aggregate spend against the database. The accepted
+// tradeoff is that a sustained flood competes for every refilled token, so
+// legitimate deliveries can be delayed; the senders' retry behavior and the
+// reconciliation sweeps bound that delay.
+//
+// This module is the pure mechanism: a standard token bucket with a lazy
+// refill and an injectable clock — no I/O, no database, no throw paths. The
+// route wiring (one shared bucket per receiver, the 429 mapping) is the
+// caller's.
 //
 // Standard token bucket: refilling is a function of elapsed time alone and
 // happens on every admit, whether or not it succeeds — a declined caller's
