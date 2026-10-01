@@ -203,6 +203,19 @@ leaves_host() {
   esac
 }
 
+# The submission endpoint is an INPUT rather than a literal written into the curl
+# invocation, so it is overridable through OVERFLOW_ALERT_SMTP_URL exactly as the
+# recipient file, the mainlog, the wait budget and the state directory below are.
+# The alert unit sets no such variable, so a deployed run always submits to the
+# local exim daemon named in the default.
+#
+# It is worth saying what that buys, because it is not the client shim the suite
+# already relies on: while the endpoint was a literal, nothing outside this script
+# could point a run at anything but that one address, so no stand-in could be
+# used to observe the submission itself. It buys the ability to; the suite as it
+# stands keeps driving the shimmed client, which opens no socket either way.
+smtp_url=${OVERFLOW_ALERT_SMTP_URL:-smtp://127.0.0.1:25}
+
 # curl -v writes its conversation with the daemon to stderr; the message itself
 # is piped in on stdin. The redirections take stderr into the substitution and
 # discard stdout, so what is left to read below is the trace and nothing else.
@@ -223,7 +236,7 @@ trace=$(
     echo "Last journal entries for the failed unit (current boot):"
     journalctl -b -u "$unit" --no-pager -n 200 || echo "(reading the journal failed)"
   } | curl -v --no-progress-meter --max-time 30 --connect-timeout 5 \
-    --url smtp://127.0.0.1:25 \
+    --url "$smtp_url" \
     --mail-from "overflow-alert@$fqdn" \
     --mail-rcpt "$recipient" \
     --upload-file - 2>&1 1>/dev/null
