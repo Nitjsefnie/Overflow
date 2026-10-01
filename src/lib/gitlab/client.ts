@@ -13,8 +13,11 @@ import type {
   GitHubWebhook,
   GitHubWebhookConfiguration,
 } from "@/lib/github/types";
+import { GitLabApiError, responseJsonArray } from "@/lib/gitlab/api-error";
 import { CollectionWalkBound } from "@/lib/gitlab/collection-walk-bound";
 import { gitlabApiFetch } from "@/lib/security/gitlab-api-fetch";
+
+export { GitLabApiError } from "@/lib/gitlab/api-error";
 
 const defaultTimeoutMs = 10_000;
 
@@ -29,24 +32,6 @@ export type GitLabMergeRequest = GitHubPullRequest & {
   sourceSha: string | null;
   squashCommitSha: string | null;
 };
-
-export class GitLabApiError extends Error {
-  public readonly body: string | null;
-
-  public constructor(
-    public readonly status: number,
-    body: string | null = null,
-  ) {
-    super(`GitLab API request failed with status ${status}.`);
-    this.name = "GitLabApiError";
-    this.body = body === null ? null : body.slice(0, 500);
-  }
-
-  // Keep response diagnostics in service logs, out of serialized API errors.
-  public toJSON() {
-    return { name: this.name, status: this.status };
-  }
-}
 
 type GitLabProject = {
   id: number;
@@ -118,7 +103,7 @@ type GitLabNoteObject = {
   system?: boolean;
 };
 
-type GitLabRestResponse = {
+export type GitLabRestResponse = {
   status: number;
   headers: Headers;
   body: string;
@@ -364,7 +349,7 @@ export class GitLabGateway {
       const response = await this.request(
         `/projects/${segment(`${repository.owner}/${repository.name}`)}/issues/${issueIid}/${collection}?per_page=100&page=${page}`,
       );
-      items.add(await responseJson<T[]>(response));
+      items.add(await responseJsonArray<T>(response, `issues/${issueIid}/${collection}`));
       const next = response.headers.get("x-next-page");
       if (next === null || next === "") break;
       const nextPage = Number(next);
@@ -641,7 +626,7 @@ export class GitLabGateway {
         cursors.add(cursor);
       }
       const response = await this.request(`${target.pathname.slice(api.pathname.length - 1)}${target.search}`);
-      items.add(await responseJson<T[]>(response));
+      items.add(await responseJsonArray<T>(response, path));
       const link = nextLink(response.headers.get("link"));
       if (link !== null) {
         let next: URL;

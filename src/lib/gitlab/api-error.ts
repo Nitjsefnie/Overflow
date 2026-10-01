@@ -1,0 +1,45 @@
+import type { GitLabRestResponse } from "@/lib/gitlab/client";
+
+/**
+ * The gateway's error taxonomy, extracted verbatim from client.ts (issue 871):
+ * every upstream failure shape the module recognizes folds into this class —
+ * an HTTP status, or status 0 with a fixed diagnostic body for a transport
+ * failure or, now, a structurally wrong success response. `message` carries
+ * only the status; the diagnostic travels in `.body`, truncated to 500.
+ */
+export class GitLabApiError extends Error {
+  public readonly body: string | null;
+
+  public constructor(
+    public readonly status: number,
+    body: string | null = null,
+  ) {
+    super(`GitLab API request failed with status ${status}.`);
+    this.name = "GitLabApiError";
+    this.body = body === null ? null : body.slice(0, 500);
+  }
+
+  // Keep response diagnostics in service logs, out of serialized API errors.
+  public toJSON() {
+    return { name: this.name, status: this.status };
+  }
+}
+
+/**
+ * Issue 871: a 200 whose JSON body parses but is not an array — an object,
+ * or the JSON literal null — is an instance misbehaving, not a shape the
+ * walker can consume. Letting it reach `CollectionWalkBound.add` dies with a
+ * raw TypeError outside the taxonomy (no status, no endpoint), so it is
+ * recognized here and folded into the same typed rank as a transport failure:
+ * status 0 — never a fabricated HTTP status the server never sent — with the
+ * endpoint in `.body`, so run failure records name the failed boundary. The
+ * endpoint arrives explicitly from the walker; the walk's ceilings contract
+ * in CollectionWalkBound is not changed by it.
+ */
+export async function responseJsonArray<T>(response: GitLabRestResponse, path: string): Promise<T[]> {
+  const parsed: unknown = JSON.parse(response.body);
+  if (!Array.isArray(parsed)) {
+    throw new GitLabApiError(0, `GitLab returned a non-array body from ${path}.`);
+  }
+  return parsed as T[];
+}
