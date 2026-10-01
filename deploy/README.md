@@ -2069,7 +2069,8 @@ bounces or discards the message logs `defer`, `rejected`, `bounce`,
 `blackhole` or `discarded` against that id instead, and the script names that
 verdict in the report. A `Failed to connect to` line is not one of those: it is
 the detail a refused connection leaves behind (section 53.9), the message is
-still queued, and the script waits it out rather than calling it dead.
+still queued, and the script waits it out rather than calling it dead — unless
+exim put a `**` on that same line, which makes it a verdict again.
 **The absence of `Completed` is the failure**, and it
 is the only observation on this host that can see the smarthost leg at all.
 
