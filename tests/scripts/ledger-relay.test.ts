@@ -1218,7 +1218,7 @@ describe("runRelay", () => {
   // --- The orphan sweep (issue 885) ---
 
   const SWEEP_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs?per_page=100";
-  const CHECK_RUNS_AT_HEAD_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${HEAD_SHA}/check-runs?app_id=5118623&per_page=100`;
+  const CHECK_RUNS_AT_HEAD_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${HEAD_SHA}/check-runs?app_id=5118623&filter=latest&per_page=100`;
   const APP_ID = "5118623";
 
   /**
@@ -1338,6 +1338,42 @@ describe("runRelay", () => {
       ]);
     });
 
+    it("authenticates every sweep call as the App, the same as the mirror's", async () => {
+      // The sweep's HTTP is assembled by sweepApi() in scripts/ledger-relay.ts,
+      // and the sweep's own unit tests cannot see it: they inject their own
+      // SweepApi from a URL map, so the headers the production constructor
+      // puts on the wire were unasserted — dropping `...auth` from that
+      // constructor left every test green and would send each sweep read and
+      // write unauthenticated. This is the runRelay-level seam where the real
+      // constructor is in play, and it is where the neighbour the rerun-heal
+      // already pins (RUNS_AT_HEAD_URL) is pinned too.
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([job({})]),
+        { status: 201, body: { id: 1 } },
+        sweepListing([sweepRun(9002, { path: PATH_ACTIONLINT })]),
+        checkRunsListing([]),
+        jobsListing([job({ name: "actionlint" })]),
+        { status: 201, body: { id: 2 } },
+      ]);
+      const result = await runRelay({
+        env: relayEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      expect(result.sweep.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
+      expect(authHeaderOf(requestTo(fetchStub.requests, SWEEP_RUNS_URL))).toBe(
+        "Bearer installation-token",
+      );
+      // The sweep's own POST, read off the request that followed it rather than
+      // off CHECK_RUNS_URL, which the mirror also posts to.
+      expect(authHeaderOf(requestsTo(fetchStub.requests, CHECK_RUNS_URL)[1])).toBe(
+        "Bearer installation-token",
+      );
+    });
+
     it("does not repost a context the App already attested at that head", async () => {
       const fetchStub = makeFetch([
         token(),
@@ -1409,7 +1445,7 @@ describe("runRelay", () => {
       expect(
         requestsTo(
           fetchStub.requests,
-          `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${otherSha}/check-runs?app_id=${APP_ID}&per_page=100`,
+          `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${otherSha}/check-runs?app_id=${APP_ID}&filter=latest&per_page=100`,
         ),
       ).toHaveLength(1);
     });
