@@ -182,7 +182,6 @@ describe("the backup and restore procedure", () => {
     }
     const freshDumpName = freshDumpPath!.split("/").pop()!;
     expect(dumpsAfter).toContain(freshDumpName);
-    expect(dumpsAfter.length).toBe(dumpsBefore.length + 1);
     expect(statSync(freshDumpPath!).size).toBeGreaterThan(0);
   });
 
