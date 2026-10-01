@@ -15,8 +15,8 @@ import { credentialKind, credentialTokenId } from "@/lib/moderation/writer-crede
  * happens to carry.
  */
 
-const TOKEN_ISSUANCE_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
-const SECOND_ISSUANCE_ID = "9c858901-8a57-4791-81fe-4c455b099bc9";
+const TOKEN_ISSUANCE_ID = "00000000-0000-4000-8000-0000000000e2";
+const SECOND_ISSUANCE_ID = "00000000-0000-4000-8000-0000000000e3";
 
 function credentialColumns(credential: RouteCredentialReference | null): [string | null, string | null] {
   return [credentialKind(credential), credentialTokenId(credential)];
