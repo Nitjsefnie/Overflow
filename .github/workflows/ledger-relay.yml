@@ -6,7 +6,11 @@ name: ledger relay
 # duty (issue 861) it heals a run that GitHub cancelled out of the shared
 # pending concurrency slot while its pull request's head is still live: the
 # relay re-dispatches that run, so a cancelled pending run does not strand the
-# PR. A workflow_run runs this workflow's definition from the default branch's
+# PR. As its third duty (issue 885) it sweeps for the completions whose OWN
+# relay instance was cancelled out of that slot before it could post anything —
+# the orphan sweep in scripts/ledger-relay-sweep.ts, deduplicated against the
+# App's own check-runs at each candidate commit. A workflow_run runs this
+# workflow's definition from the default branch's
 # tip, in the default branch's context, so the pin map and the script executed
 # here are always the trusted main tip, never pull-request content. Check-run
 # writes go through the App installation token the script mints; the rerun
@@ -44,8 +48,15 @@ permissions:
 
 concurrency:
   group: ledger-relay
-  # Never cancel a queued relay run: a cancelled relay posts no check-runs,
-  # and a missing check-run blocks every open pull request.
+  # `false` keeps this workflow's RUNNING instance alive when a newer arrival
+  # joins the group. It does NOT keep a PENDING one: GitHub keeps at most one
+  # pending run per concurrency group and cancels the previous pending run
+  # whenever a newer one arrives, whatever this flag says (the repository
+  # documents that in tests/ci/concurrency.test.ts). So two producer runs
+  # completing close together still cancel one of these instances before it
+  # posts, and the completion that triggered it would otherwise be orphaned
+  # forever with no App check-run for it. That is what the relay's third duty
+  # (issue 885) is for: every start sweeps for those orphans and heals them.
   cancel-in-progress: false
 
 jobs:
