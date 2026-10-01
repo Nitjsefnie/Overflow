@@ -346,6 +346,17 @@ else
       # is retried. The first line a scan reaches is therefore the one that
       # never was a verdict. The rest are the outcomes that end a message.
       #
+      # Provisional means provisional ON AN UNFLAGGED LINE, and the flag is the
+      # discriminator rather than the words. Section 53.5 makes the two-character
+      # flag the verdict, and the same detail text appears inside the rejection
+      # reason on a `**` line - a remote answer exim copies out verbatim, which a
+      # filtering smarthost is free to word any way it likes. Nothing exim writes
+      # is both a terminal failure and a 53.9 detail line, so where the two could
+      # disagree the flag is right and the text is hearsay. `** defer` is the one
+      # case the flag cannot settle, and it is why the defer test in the block is
+      # unconditional: a greylisted address is a temporary failure with a
+      # terminal word in its own reason text.
+      #
       # A QUOTED field is left out for the same reason, one step further out:
       # DN= and C= carry the peer's own answer byte for byte, so a relay whose
       # rejection text happens to carry a terminal word - a filtering relay's
@@ -379,13 +390,27 @@ else
           while (match(scrubbed, /"([^"\\]|\\.)*"/)) {
             scrubbed = substr(scrubbed, 1, RSTART - 1) " " substr(scrubbed, RSTART + RLENGTH)
           }
-          # Section 53.9: a DETAIL line, written before the `== ... defer` for
-          # the same id, on a message that stays queued. Provisional, like defer.
-          if (scrubbed ~ /Failed to connect to/) {
+          # Section 53.5: the two-character flag after the id IS the verdict -
+          # `**` a delivery that failed, `==` one that is deferred. Read off the
+          # UNSCRUBBED line, because the flag is exim own text and cannot be
+          # inside a quoted field.
+          flagged = (rest ~ /^[ \t]*\*\*/)
+          # `defer` is tested first and UNCONDITIONALLY, because exim does write
+          # `** defer rejected: ...`: a greylist whose own reason text carries a
+          # terminal word is still a temporary failure, and the flag cannot tell
+          # that one from `** rejected`.
+          if (scrubbed ~ /defer/) { if (first == "") first = "defer"; next }
+          # Section 53.9 detail lines carry NO flag at all - exim never writes
+          # one line that is both a terminal failure and a detail line - so the
+          # FLAG is what makes this provisional, not the words. On a `**` line
+          # those words are part of a failure exim is reporting, and letting
+          # them win there would name a retrying relay for a message that was
+          # rejected: the cause inverted, on the report whose whole job is to
+          # give an operator the cause.
+          if (!flagged && scrubbed ~ /Failed to connect to/) {
             if (first == "") first = "Failed to connect to"
             next
           }
-          if (scrubbed ~ /defer/) { if (first == "") first = "defer"; next }
           if (match(scrubbed, /(rejected|bounce|blackhole|discarded|Failed)/)) {
             found = 1
             print substr(scrubbed, RSTART, RLENGTH)
