@@ -75,8 +75,16 @@ describe("the identity link's default transport", () => {
     const response = await identityLinkFetch(`http://${urlHost(host)}:${listener.port}/`);
 
     // The bytes themselves, not a length: a transport that truncated to the cap
-    // would still answer with this many bytes.
-    expect(Buffer.from(await response.arrayBuffer())).toEqual(answer);
+    // would still answer this many bytes. Compared with a memcmp rather than
+    // `toEqual`: a deep compare of two 1 MiB buffers costs ~3s on every green
+    // run and does not terminate when it fails. This keeps the diagnostic
+    // bounded -- the length, and the first index the two disagree at -- instead
+    // of diffing a megabyte.
+    const received = Buffer.from(await response.arrayBuffer());
+    const differsAt = received.equals(answer)
+      ? -1
+      : received.findIndex((byte, index) => byte !== answer[index]);
+    expect({ length: received.length, differsAt }).toEqual({ length: answer.length, differsAt: -1 });
     expect(listener.connections).toBe(1);
   });
 
