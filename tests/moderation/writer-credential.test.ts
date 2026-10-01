@@ -55,6 +55,28 @@ describe("the credential columns a privileged-action row records", () => {
     expect(credentialColumns(sessionCarryingAnIssuance)).toEqual(["session", null]);
   });
 
+  it("records the issuance id as it stands, with no truthiness filter applied to it", () => {
+    // A filter here is the ('session', <id>) failure mode mirrored: a falsy id
+    // collapsed to null turns a token row into the ('token', NULL) pair, which is
+    // a pair the CHECK refuses — so the id crosses as the reference carries it, or
+    // it does not cross at all.
+    const tokenCarryingEmptyIssuance: RouteCredentialReference = { kind: "token", tokenId: "" };
+
+    expect(credentialColumns(tokenCarryingEmptyIssuance)).toEqual(["token", ""]);
+  });
+
+  it("records a kind the CHECK does not accept verbatim rather than as one it does", () => {
+    // The CHECK takes exactly 'session', 'token' and null, and a reference is a
+    // plain object the gate built, so a kind outside that set is reachable in
+    // principle. Recording it as written is what makes the CHECK refuse the row:
+    // normalizing it to 'session' instead would write a pair the database accepts
+    // for a credential that was in fact neither, which is the misattribution this
+    // column exists to prevent.
+    const undeclaredKind = { kind: "api_key" } as unknown as RouteCredentialReference;
+
+    expect(credentialColumns(undeclaredKind)).toEqual(["api_key", null]);
+  });
+
   it("records each token reference's own issuance, keeping the kind column the same across issuances", () => {
     const first: RouteCredentialReference = { kind: "token", tokenId: TOKEN_ISSUANCE_ID };
     const second: RouteCredentialReference = { kind: "token", tokenId: SECOND_ISSUANCE_ID };
