@@ -445,6 +445,15 @@ describe("the GitHub collection walk bound", () => {
     expect(bound.collected[0]).toEqual({ name: "l-0" });
     expect(bound.collected[MAX_WALK_ITEMS - 1]).toEqual({ name: `l-${MAX_WALK_ITEMS - 1}` });
   });
+
+  // Both ceilings carry the collection the constructor was given, so neither
+  // message can be hardcoded to the one collection the gateway happens to walk.
+  it("names the collection it was given when the page budget runs out", () => {
+    const bound = new CollectionWalkBound<{ name: string }>("probe");
+    for (let page = 0; page < MAX_WALK_PAGES; page += 1) bound.add([]);
+
+    expect(() => bound.add([])).toThrow(/pages of probe, past the collection-walk bound/);
+  });
 });
 
 describe("GitHubGateway workflow files", () => {
