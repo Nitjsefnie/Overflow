@@ -1,0 +1,186 @@
+{
+  "httpServerVersion": "1.0.0",
+  "routes": {
+    "GET /api/version": {
+      "version": "string"
+    },
+    "GET /api/readiness": {
+      "status": "string"
+    },
+    "POST /api/tokens": {
+      "confirmedAt": "null",
+      "createdAt": "string",
+      "expiresAt": "string",
+      "token": "string"
+    },
+    "GET /api/dashboard": {
+      "availableHeadroom": "number",
+      "earnedTotal": "number",
+      "enforcementNotices": {
+        "createdAt": "string",
+        "id": "string",
+        "newState": "string",
+        "priorState": "string",
+        "reason": "string"
+      },
+      "enforcementState": "string",
+      "givenTotal": "number",
+      "openAudit": {
+        "id": "string",
+        "openedAt": "string"
+      },
+      "openClaims": {
+        "assigneeGitHubLogin": "string",
+        "id": "string",
+        "issueNumber": "number",
+        "openingLabel": "string",
+        "openingName": "string",
+        "repositoryName": "string",
+        "reservePoints": "number",
+        "title": "string",
+        "url": "string"
+      },
+      "recentSettlements": {
+        "credits": "number",
+        "id": "string",
+        "issueNumber": "number",
+        "issueTitle": "string",
+        "issueUrl": "string",
+        "proofSha256": "string",
+        "pullRequestNumber": "number",
+        "pullRequestTitle": "string",
+        "pullRequestUrl": "string",
+        "repositoryName": "string",
+        "reviewRounds": "number",
+        "settledAt": "string",
+        "status": "string"
+      },
+      "registeredRepositories": {
+        "active": "boolean",
+        "actualName": "string",
+        "id": "string",
+        "openingName": "string",
+        "ownerName": "string",
+        "reconciliationLastFailureAt": "string",
+        "reconciliationState": "string",
+        "unavailableReason": "null",
+        "visibility": "string"
+      },
+      "reservedPoints": "number",
+      "settledBalance": "number"
+    },
+    "GET /api/issues": {
+      "assigneeGitHubLogin": "null",
+      "availableHeadroom": "number",
+      "claimState": "string",
+      "comparisonPoints": "number",
+      "createdAt": "string",
+      "id": "string",
+      "issueNumber": "number",
+      "openingLabel": "string",
+      "openingName": "string",
+      "repositoryName": "string",
+      "reservePoints": "number",
+      "sponsorLogin": "string",
+      "title": "string",
+      "url": "string"
+    },
+    "GET /api/settlements": {
+      "balanceEffect": "number",
+      "credits": "number",
+      "id": "string",
+      "issueNumber": "number",
+      "issueTitle": "string",
+      "issueUrl": "string",
+      "repositoryName": "string",
+      "reviewRounds": "number",
+      "settledAt": "string",
+      "status": "string"
+    },
+    "GET /api/settlements/<id>": {
+      "corrections": {
+        "createdAt": "string",
+        "decidedAt": "null",
+        "decidedById": "null",
+        "decisionReason": "null",
+        "id": "string",
+        "issueId": "string",
+        "reason": "string",
+        "requesterId": "string",
+        "settledPoints": "null",
+        "state": "string"
+      },
+      "settlement": {
+        "actualName": "string",
+        "balanceEffect": "number",
+        "credits": "number",
+        "id": "string",
+        "issueNumber": "number",
+        "issueTitle": "string",
+        "issueUrl": "string",
+        "mergeCommitOid": "string",
+        "mergedAt": "string",
+        "openingComparisonPoints": "number",
+        "openingLabel": "string",
+        "openingName": "string",
+        "proofSha256": "string",
+        "pullRequestNumber": "number",
+        "pullRequestTitle": "string",
+        "pullRequestUrl": "string",
+        "repositoryName": "string",
+        "reviewRounds": "number",
+        "settledAt": "string",
+        "settledLabel": "string",
+        "settledLabelActorLogin": "string",
+        "settledLabelAppliedAt": "string",
+        "settledLabelEventId": "string",
+        "settledPoints": "number",
+        "settledRationaleActorLogin": "string",
+        "settledRationaleCommentedAt": "string",
+        "settledRationaleCommentId": "string",
+        "status": "string"
+      }
+    },
+    "GET /api/calibration": {
+      "byRepository": {
+        "comparison": {
+          "differenceBetweenMeans": "number",
+          "outsider": {
+            "count": "number",
+            "meanDelta": "number",
+            "medianDelta": "number"
+          },
+          "selfWork": {
+            "count": "number",
+            "meanDelta": "number",
+            "medianDelta": "number"
+          }
+        },
+        "githubRepositoryId": "number",
+        "repositoryName": "string"
+      },
+      "comparison": {
+        "differenceBetweenMeans": "number",
+        "outsider": {
+          "count": "number",
+          "meanDelta": "number",
+          "medianDelta": "number"
+        },
+        "selfWork": {
+          "count": "number",
+          "meanDelta": "number",
+          "medianDelta": "number"
+        }
+      },
+      "selfWork": {
+        "actualPoints": "number",
+        "id": "string",
+        "issueNumber": "number",
+        "issueTitle": "string",
+        "mergedAt": "string",
+        "openingComparisonPoints": "number",
+        "repositoryName": "string"
+      }
+    }
+  }
+}
