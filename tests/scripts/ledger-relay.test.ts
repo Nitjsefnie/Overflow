@@ -11,6 +11,7 @@ import {
   type ContextDecision,
   type RelayJob,
 } from "../../scripts/ledger-relay.ts";
+import { SWEEP_RUN_LIMIT } from "../../scripts/ledger-relay-sweep.ts";
 
 /**
  * The ledger relay (issue 708): decideContexts mirrors the triggering run's
@@ -168,6 +169,7 @@ describe("renderRelayResult", () => {
       decisions: [decision],
       posted: ["verify"],
       rerunDispatched: true,
+      sweep: { examined: 0, relayed: [] },
     });
     expect(lines).toEqual([
       "[ledger-relay] verify: failure",
@@ -181,13 +183,73 @@ describe("renderRelayResult", () => {
       decisions: [decision],
       posted: ["verify"],
       rerunDispatched: false,
+      sweep: { examined: 0, relayed: [] },
     });
     expect(lines).toEqual(["[ledger-relay] verify: failure"]);
     expect(lines.some((line) => line.includes("rerun-heal"))).toBe(false);
   });
 
+  it("appends the sweep summary and one line per relayed context, after the rerun-heal line", () => {
+    const lines = renderRelayResult({
+      decisions: [decision],
+      posted: ["verify"],
+      rerunDispatched: true,
+      sweep: {
+        examined: 3,
+        relayed: [
+          { context: "actionlint", runId: "36822699261" },
+          { context: "ratchet-guard", runId: "36822699262" },
+        ],
+      },
+    });
+    expect(lines).toEqual([
+      "[ledger-relay] verify: failure",
+      "[ledger-relay] rerun-heal: the cancelled run was re-dispatched; " +
+        "its completion event will mirror the real conclusion",
+      "[ledger-relay] orphan-sweep: examined 3 completed run(s), relayed 2 context(s)",
+      "[ledger-relay] orphan-sweep: relayed actionlint from run 36822699261 " +
+        "(no App check-run existed for it)",
+      "[ledger-relay] orphan-sweep: relayed ratchet-guard from run 36822699262 " +
+        "(no App check-run existed for it)",
+    ]);
+  });
+
+  it("renders the sweep summary alone when the sweep examined candidates and healed nothing", () => {
+    // The line an operator reads to tell "the sweep ran and there was nothing
+    // to heal" from "the sweep never ran" — so it is pinned, not left to the
+    // sweep module's own tests.
+    const lines = renderRelayResult({
+      decisions: [decision],
+      posted: ["verify"],
+      rerunDispatched: false,
+      sweep: { examined: 4, relayed: [] },
+    });
+    expect(lines).toEqual([
+      "[ledger-relay] verify: failure",
+      "[ledger-relay] orphan-sweep: examined 4 completed run(s), relayed 0 context(s)",
+    ]);
+  });
+
+  it("renders no sweep line at all when nothing was examined", () => {
+    // A healthy repository sweeps clean on every relay start; a line printed
+    // every time would be noise an operator learns to skip.
+    const lines = renderRelayResult({
+      decisions: [decision],
+      posted: ["verify"],
+      rerunDispatched: false,
+      sweep: { examined: 0, relayed: [] },
+    });
+    expect(lines).toEqual(["[ledger-relay] verify: failure"]);
+    expect(lines.some((line) => line.includes("orphan-sweep"))).toBe(false);
+  });
+
   it("renders only the nothing-to-relay line when nothing was posted", () => {
-    const lines = renderRelayResult({ decisions: [], posted: [], rerunDispatched: false });
+    const lines = renderRelayResult({
+      decisions: [],
+      posted: [],
+      rerunDispatched: false,
+      sweep: { examined: 0, relayed: [] },
+    });
     expect(lines).toEqual([
       "[ledger-relay] nothing to relay: no required context is pinned to the triggering run's workflow",
     ]);
@@ -462,6 +524,7 @@ describe("runRelay", () => {
       token(),
       jobsListing([job({ run_attempt: 3 })]),
       { status: 201, body: { id: 1 } },
+      noSweepRuns(),
     ]);
     const delay = makeDelay();
     const result = await runRelay({
@@ -476,6 +539,7 @@ describe("runRelay", () => {
       TOKEN_URL,
       JOBS_URL,
       CHECK_RUNS_URL,
+      SWEEP_RUNS_URL,
     ]);
 
     const [mint, jobsRequest] = fetchStub.requests;
@@ -509,7 +573,7 @@ describe("runRelay", () => {
   });
 
   it("sends the GitHub API media type and api-version headers on every call", async () => {
-    const fetchStub = makeFetch([token(), jobsListing([job({})]), { status: 201, body: { id: 1 } }]);
+    const fetchStub = makeFetch([token(), jobsListing([job({})]), { status: 201, body: { id: 1 } }, noSweepRuns()]);
     await runRelay({
       env: relayEnv(),
       fetchFn: fetchStub.fn,
@@ -529,6 +593,7 @@ describe("runRelay", () => {
       token(),
       jobsListing([job({ status: "in_progress", conclusion: null })]),
       { status: 201, body: { id: 1 } },
+      noSweepRuns(),
     ]);
     const result = await runRelay({
       env: relayEnv(),
@@ -548,6 +613,7 @@ describe("runRelay", () => {
       token(),
       jobsListing([job({})]),
       { status: 201, body: { id: 1 } },
+      noSweepRuns(),
     ]);
     await runRelay({
       env: relayEnv({ GITHUB_WORKFLOW_RUN_HEAD_SHA: prHeadSha }),
@@ -564,6 +630,7 @@ describe("runRelay", () => {
       jobsListing([job({})]),
       { status: 500, body: { message: "boom" } },
       { status: 201, body: { id: 1 } },
+      noSweepRuns(),
     ]);
     const delay = makeDelay();
     const result = await runRelay({
@@ -584,6 +651,7 @@ describe("runRelay", () => {
       jobsListing([job({})]),
       { fail: new TypeError("fetch failed") },
       { status: 201, body: { id: 1 } },
+      noSweepRuns(),
     ]);
     const delay = makeDelay();
     const result = await runRelay({
@@ -660,6 +728,7 @@ describe("runRelay", () => {
       },
       jobsListing([job({})]),
       { status: 201, body: { id: 1 } },
+      noSweepRuns(),
     ]);
     const delay = makeDelay();
     const result = await runRelay({
@@ -682,6 +751,7 @@ describe("runRelay", () => {
       RUN_URL,
       JOBS_URL,
       CHECK_RUNS_URL,
+      SWEEP_RUNS_URL,
     ]);
     expect(bodiesOf(fetchStub.requests).every((body) => body.head_sha === HEAD_SHA)).toBe(true);
   });
@@ -797,6 +867,7 @@ describe("runRelay", () => {
         token(),
         jobsListing([]),
         { status: 201, body: { id: 1 } },
+        noSweepRuns(),
         pullsListing([pullEntry()]),
         runsListing([runEntry({ path: PATH_ACTIONLINT, status: "in_progress" })]),
         { status: 202, body: undefined },
@@ -845,6 +916,7 @@ describe("runRelay", () => {
         token(),
         jobsListing([]),
         { status: 201, body: { id: 1 } },
+        noSweepRuns(),
         pullsListing([{ state: "open", head: { sha: "d".repeat(40) } }]),
       ]);
       const result = await runRelay({
@@ -864,6 +936,7 @@ describe("runRelay", () => {
         TOKEN_URL,
         JOBS_URL,
         CHECK_RUNS_URL,
+        SWEEP_RUNS_URL,
         PULLS_URL,
       ]);
     });
@@ -873,6 +946,7 @@ describe("runRelay", () => {
         token(),
         jobsListing([]),
         { status: 201, body: { id: 1 } },
+        noSweepRuns(),
         pullsListing([pullEntry()]),
         runsListing([
           runEntry({ path: PATH_ACTIONLINT, status: "in_progress" }),
@@ -895,7 +969,7 @@ describe("runRelay", () => {
     });
 
     it("rejects loudly, before any heal query, when RELAY_RERUN_TOKEN is missing on a cancelled PR run", async () => {
-      const fetchStub = makeFetch([token(), jobsListing([]), { status: 201, body: { id: 1 } }]);
+      const fetchStub = makeFetch([token(), jobsListing([]), { status: 201, body: { id: 1 } }, noSweepRuns()]);
       await expect(
         runRelay({
           env: relayEnv({
@@ -920,6 +994,7 @@ describe("runRelay", () => {
         jobsListing([]),
         { status: 201, body: { id: 1 } },
         { status: 201, body: { id: 2 } },
+      noSweepRuns(),
         pullsListing([pullEntry()]),
         runsListing([]),
         { status: 202, body: undefined },
@@ -945,7 +1020,7 @@ describe("runRelay", () => {
     });
 
     it("does not heal at the attempt cap and never queries the head", async () => {
-      const fetchStub = makeFetch([token(), jobsListing([]), { status: 201, body: { id: 1 } }]);
+      const fetchStub = makeFetch([token(), jobsListing([]), { status: 201, body: { id: 1 } }, noSweepRuns()]);
       const result = await runRelay({
         env: cancelledPrEnv({ GITHUB_WORKFLOW_RUN_ATTEMPT: "5" }),
         fetchFn: fetchStub.fn,
@@ -959,6 +1034,7 @@ describe("runRelay", () => {
         TOKEN_URL,
         JOBS_URL,
         CHECK_RUNS_URL,
+        SWEEP_RUNS_URL,
       ]);
     });
 
@@ -967,6 +1043,7 @@ describe("runRelay", () => {
         token(),
         jobsListing([]),
         { status: 201, body: { id: 1 } },
+        noSweepRuns(),
         pullsListing([pullEntry()]),
         runsListing([]),
         { status: 202, body: undefined },
@@ -982,7 +1059,7 @@ describe("runRelay", () => {
     });
 
     it("never heals a cancelled push run", async () => {
-      const fetchStub = makeFetch([token(), jobsListing([]), { status: 201, body: { id: 1 } }]);
+      const fetchStub = makeFetch([token(), jobsListing([]), { status: 201, body: { id: 1 } }, noSweepRuns()]);
       const result = await runRelay({
         env: cancelledPrEnv({
           GITHUB_WORKFLOW_RUN_EVENT: "push",
@@ -999,6 +1076,7 @@ describe("runRelay", () => {
         TOKEN_URL,
         JOBS_URL,
         CHECK_RUNS_URL,
+        SWEEP_RUNS_URL,
       ]);
     });
 
@@ -1007,6 +1085,7 @@ describe("runRelay", () => {
         token(),
         jobsListing([]),
         { status: 201, body: { id: 1 } },
+        noSweepRuns(),
         { fail: new TypeError("fetch failed") },
         { fail: new TypeError("fetch failed") },
         { fail: new TypeError("fetch failed") },
@@ -1040,6 +1119,7 @@ describe("runRelay", () => {
         token(),
         jobsListing([]),
         { status: 201, body: { id: 1 } },
+        noSweepRuns(),
         { status: 200, body: { message: "not an array" } },
       ]);
       await expect(
@@ -1065,6 +1145,7 @@ describe("runRelay", () => {
         token(),
         jobsListing([]),
         { status: 201, body: { id: 1 } },
+        noSweepRuns(),
         pullsListing([pullEntry()]),
         { status: 200, body: { total_count: 1, workflow_runs: { not: "an array" } } },
         { status: 202, body: undefined },
@@ -1096,6 +1177,7 @@ describe("runRelay", () => {
         },
         jobsListing([]),
         { status: 201, body: { id: 1 } },
+        noSweepRuns(),
         pullsListing([pullEntry()]),
         runsListing([]),
         { status: 202, body: undefined },
@@ -1125,10 +1207,310 @@ describe("runRelay", () => {
         RUN_URL,
         JOBS_URL,
         CHECK_RUNS_URL,
+        SWEEP_RUNS_URL,
         PULLS_URL,
         RUNS_AT_HEAD_URL,
         RERUN_URL,
       ]);
+    });
+  });
+
+  // --- The orphan sweep (issue 885) ---
+
+  const SWEEP_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs?per_page=100";
+  const CHECK_RUNS_AT_HEAD_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${HEAD_SHA}/check-runs?app_id=5118623&per_page=100`;
+  const APP_ID = "5118623";
+
+  /**
+   * A repository-wide listing entry. `id` is numeric exactly as the REST API
+   * reports it, so the candidate filter has to compare it as a string.
+   */
+  function sweepRun(
+    id: number,
+    over: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      id,
+      path: PATH_CI,
+      status: "completed",
+      conclusion: "success",
+      head_sha: HEAD_SHA,
+      html_url: `https://github.com/Nitjsefnie/Overflow/actions/runs/${id}`,
+      ...over,
+    };
+  }
+
+  /** The runs listing the sweep reads: newest first, as the REST API returns it. */
+  function sweepListing(runs: Array<Record<string, unknown>>): Outcome {
+    return { status: 200, body: { total_count: runs.length, workflow_runs: runs } };
+  }
+
+  /** The App's own check-runs at a commit, as the filtered listing returns them. */
+  function checkRunsListing(names: Array<string>): Outcome {
+    return {
+      status: 200,
+      body: {
+        total_count: names.length,
+        check_runs: names.map((name) => ({ name, app: { id: Number(APP_ID) } })),
+      },
+    };
+  }
+
+  /** A listing that answers the runs sweep with nothing at all. */
+  function noSweepRuns(): Outcome {
+    return sweepListing([]);
+  }
+
+  describe("orphan sweep (issue 885)", () => {
+    it("relays the context whose own relay instance was cancelled, at the orphan's own head SHA", async () => {
+      // Two producer runs complete within seconds of each other. GitHub keeps
+      // one PENDING run per concurrency group and cancels the previous pending
+      // run whatever `cancel-in-progress` says, so the relay instance triggered
+      // by run 9002 is destroyed before it posts anything — and 9002's
+      // completion is orphaned forever: no App check-run for it exists, and
+      // branch protection refuses the merge with a message that reads as a
+      // misconfiguration. This is the case the sweep exists for.
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([job({ run_attempt: 3 })]),
+        { status: 201, body: { id: 1 } },
+        // The sweep: the repository-wide listing, holding both completions.
+        sweepListing([
+          sweepRun(9001, { path: PATH_CI }),
+          sweepRun(9002, { path: PATH_ACTIONLINT }),
+        ]),
+        // At HEAD_SHA the App holds only verify — nothing ever attested
+        // actionlint, because the relay instance that would have posted it was
+        // cancelled while pending.
+        checkRunsListing(["verify"]),
+        jobsListing([job({ name: "actionlint" })]),
+        { status: 201, body: { id: 2 } },
+      ]);
+      const result = await runRelay({
+        env: relayEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      // The mirror is untouched: the triggering run still posts exactly its own
+      // context, under its own head SHA.
+      expect(result.posted).toEqual(["verify"]);
+
+      // The orphan is healed. This assertion is placed before the outcome
+      // assertion on purpose: with no sweep in place, `result.sweep` does not
+      // exist at all, and a TypeError reading it would reproduce "the sweep is
+      // missing" rather than the defect this issue filed — that no App
+      // check-run exists for the orphaned completion, which branch protection
+      // reads as "was not set by the expected GitHub app".
+      expect(
+        bodiesOf(fetchStub.requests),
+        "the orphaned completion 9002 must get its own actionlint check-run at its own head SHA",
+      ).toContainEqual(
+        expect.objectContaining({ name: "actionlint", head_sha: HEAD_SHA }),
+      );
+      expect(result.sweep.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
+    });
+
+    it("leaves a normal single-completion relay unchanged and reads no check-runs", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([job({})]),
+        { status: 201, body: { id: 1 } },
+        noSweepRuns(),
+      ]);
+      const result = await runRelay({
+        env: relayEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      expect(result.posted).toEqual(["verify"]);
+      expect(result.sweep).toEqual({ examined: 0, relayed: [] });
+      // Nothing to dedupe against: with no candidate at all the sweep issues no
+      // check-runs GET, so the mirror's own request set grows by exactly one.
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([
+        TOKEN_URL,
+        JOBS_URL,
+        CHECK_RUNS_URL,
+        SWEEP_RUNS_URL,
+      ]);
+    });
+
+    it("does not repost a context the App already attested at that head", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([job({})]),
+        { status: 201, body: { id: 1 } },
+        sweepListing([
+          sweepRun(9001, { path: PATH_CI }),
+          sweepRun(9002, { path: PATH_ACTIONLINT }),
+        ]),
+        checkRunsListing(["verify", "actionlint"]),
+      ]);
+      const result = await runRelay({
+        env: relayEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      expect(result.sweep.examined).toBe(1);
+      expect(result.sweep.relayed).toEqual([]);
+      // The candidate is examined but skipped entirely: no jobs GET, no POST.
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([
+        TOKEN_URL,
+        JOBS_URL,
+        CHECK_RUNS_URL,
+        SWEEP_RUNS_URL,
+        CHECK_RUNS_AT_HEAD_URL,
+      ]);
+      expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(1);
+    });
+
+    it("reads the App's check-runs once per distinct head SHA however many candidates sit at it", async () => {
+      const otherSha = "e".repeat(40);
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([job({})]),
+        { status: 201, body: { id: 1 } },
+        // Four candidates over two head SHAs.
+        sweepListing([
+          sweepRun(9002, { path: PATH_ACTIONLINT }),
+          sweepRun(9003, { path: PATH_ACTIONLINT }),
+          sweepRun(9004, { path: PATH_ACTIONLINT, head_sha: otherSha }),
+          sweepRun(9005, { path: PATH_ACTIONLINT, head_sha: otherSha }),
+        ]),
+        checkRunsListing([]),
+        jobsListing([job({ name: "actionlint" })]),
+        { status: 201, body: { id: 2 } },
+        // The first candidate at HEAD_SHA already relayed actionlint there, so
+        // the second is skipped without a second jobs GET.
+        { status: 200, body: { total_count: 0, check_runs: [] } },
+        jobsListing([job({ name: "actionlint" })]),
+        { status: 201, body: { id: 3 } },
+      ]);
+      const result = await runRelay({
+        env: relayEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      expect(result.sweep.examined).toBe(4);
+      // Two posts: one per head SHA, not one per candidate. The second
+      // candidate at each SHA finds its context already relayed by the first.
+      expect(result.sweep.relayed).toEqual([
+        { context: "actionlint", runId: "9002" },
+        { context: "actionlint", runId: "9004" },
+      ]);
+      expect(requestsTo(fetchStub.requests, CHECK_RUNS_AT_HEAD_URL)).toHaveLength(1);
+      expect(
+        requestsTo(
+          fetchStub.requests,
+          `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${otherSha}/check-runs?app_id=${APP_ID}&per_page=100`,
+        ),
+      ).toHaveLength(1);
+    });
+
+    it("never sweeps a run nothing is pinned to, a run that has not completed, or the triggering run itself", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([job({})]),
+        { status: 201, body: { id: 1 } },
+        sweepListing([
+          // The triggering run's own id, as a completed pinned run.
+          sweepRun(9001, { path: PATH_CI }),
+          // Pinned to nothing.
+          sweepRun(9002, { path: ".github/workflows/dependency-audit.yml" }),
+          // Pinned, but still running.
+          sweepRun(9003, { path: PATH_ACTIONLINT, status: "in_progress" }),
+          // Pinned, completed, but with no head SHA and no html_url: nothing
+          // could be posted for it.
+          sweepRun(9004, { path: PATH_ACTIONLINT, head_sha: "", html_url: "" }),
+          sweepRun(9005, { path: PATH_ACTIONLINT }),
+        ]),
+        checkRunsListing(["actionlint"]),
+      ]);
+      const result = await runRelay({
+        env: relayEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      expect(result.sweep.examined).toBe(1);
+      expect(result.sweep.relayed).toEqual([]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([
+        TOKEN_URL,
+        JOBS_URL,
+        CHECK_RUNS_URL,
+        SWEEP_RUNS_URL,
+        CHECK_RUNS_AT_HEAD_URL,
+      ]);
+    });
+
+    it("caps the sweep at SWEEP_RUN_LIMIT candidates however many the listing holds", async () => {
+      const many = Array.from({ length: SWEEP_RUN_LIMIT + 7 }, (_unused, index) =>
+        sweepRun(9000 + index, {
+          path: PATH_ACTIONLINT,
+          head_sha: index.toString(16).padStart(40, "0"),
+        }),
+      );
+      const outcomes: Outcome[] = [
+        token(),
+        jobsListing([job({})]),
+        { status: 201, body: { id: 1 } },
+        sweepListing(many),
+      ];
+      // Every distinct head SHA is read once, and the cap bounds the rest.
+      for (let index = 0; index < SWEEP_RUN_LIMIT; index += 1) {
+        outcomes.push(checkRunsListing([]), jobsListing([job({ name: "actionlint" })]));
+        outcomes.push({ status: 201, body: { id: 100 + index } });
+      }
+      const fetchStub = makeFetch(outcomes);
+      const result = await runRelay({
+        env: relayEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      expect(SWEEP_RUN_LIMIT).toBe(20);
+      expect(result.sweep.examined).toBe(SWEEP_RUN_LIMIT);
+      // Exactly the capped candidates, and one post each.
+      expect(result.sweep.relayed).toHaveLength(SWEEP_RUN_LIMIT);
+      expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(
+        SWEEP_RUN_LIMIT + 1,
+      );
+    });
+
+    it("is visible when it dies, and never costs the mirror its posting", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([job({})]),
+        { status: 201, body: { id: 1 } },
+        { status: 500, body: { message: "boom" } },
+        { status: 500, body: { message: "boom" } },
+        { status: 500, body: { message: "boom" } },
+      ]);
+      const delay = makeDelay();
+      await expect(
+        runRelay({
+          env: relayEnv(),
+          fetchFn: fetchStub.fn,
+          delayFn: delay.fn,
+          readPinMap: async () => PIN_MAP,
+        }),
+      ).rejects.toThrow(/workflow-run listing/);
+
+      // The mirror — the relay's primary duty — is already on GitHub when the
+      // sweep dies: its check-run POST preceded the rejection.
+      expect(bodiesOf(fetchStub.requests)).toContainEqual(
+        expect.objectContaining({ name: "verify", head_sha: HEAD_SHA }),
+      );
+      expect(delay.delays).toEqual([1000, 2000]);
     });
   });
 });

@@ -6,6 +6,13 @@
 // the shared pending concurrency slot while its pull request's head is still
 // live: the relay re-dispatches that run, so a cancelled pending run does not
 // strand the PR.
+// As its third duty (issue 885) it sweeps for ORPHANS — completed producer runs
+// whose own relay instance was itself cancelled out of that same pending slot
+// before it could post anything. Nothing else ever notices such a run: that
+// relay instance was the only thing that would have attested it, so the
+// completion sits unattested forever and branch protection refuses the merge
+// with a message that reads as a misconfiguration. The sweep lives in
+// scripts/ledger-relay-sweep.ts and runs after the mirror has posted.
 //
 //   node scripts/ledger-relay.ts
 //
@@ -23,6 +30,14 @@
 import { createSign } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+
+import {
+  checkRunBody,
+  renderSweepLines,
+  sweepOrphans,
+  type SweepApi,
+  type SweepOutcome,
+} from "./ledger-relay-sweep.ts";
 
 /** One job of the triggering run, as the jobs listing reports it. The API's field names are kept so the listing's JSON maps straight through. */
 export interface RelayJob {
@@ -265,7 +280,12 @@ export interface RelayResult {
   posted: string[];
   /** True when the rerun-heal dispatched a fresh run (issue 861). */
   rerunDispatched: boolean;
+  /** What the orphan sweep found and healed (issue 885). */
+  sweep: SweepOutcome;
 }
+
+/** Nothing examined, nothing relayed — what every path that skips the sweep reports. */
+const NO_SWEEP: SweepOutcome = { examined: 0, relayed: [] };
 
 /**
  * The entry: resolve the triggering run, read the pin map, mint an
@@ -289,8 +309,9 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   const [, repoName] = repo.split("/");
   if (trigger.kind === "workflow_run" && contextsFor(pinMap, trigger.run.path).length === 0) {
     // Nothing is pinned to this run's workflow; there is nothing to relay and
-    // no reason to mint a token.
-    return { decisions: [], posted: [], rerunDispatched: false };
+    // no reason to mint a token. A run nothing is pinned to never had a
+    // check-run to orphan either, so the sweep has no part in this path.
+    return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
   }
 
   const jwt = mintAppJwt(appId, appKey, Date.now());
@@ -325,7 +346,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     );
     run = triggeringRunFromApi(fetched);
     if (contextsFor(pinMap, run.path).length === 0) {
-      return { decisions: [], posted: [], rerunDispatched: false };
+      return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
     }
   }
 
@@ -356,12 +377,48 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     posted.push(decision.context);
   }
 
-  // The rerun-heal runs after the mirrored decisions are posted: the mirror —
-  // the relay's primary duty — lands even when a heal query fails, and a
-  // failed heal still turns the job red on its own.
+  // The orphan sweep and the rerun-heal both run after the mirrored decisions
+  // are posted: the mirror — the relay's primary duty — lands even when either
+  // query fails, and a failed heal or sweep still turns the job red on its own.
+  // That is deliberate. The failure issue 885 is about is a heal that quietly
+  // stopped running, which is indistinguishable from a relay with nothing to
+  // do, so neither duty degrades silently and the mirror never pays for them.
+  const sweep = await sweepOrphans({
+    api: sweepApi(deps, repo, auth),
+    decide: decideContexts,
+    parseJobs: validateJobs,
+    pinMap,
+    repo,
+    appId,
+    triggerRunId: run.runId,
+  });
+
   const rerunDispatched = await healWithRerun(deps, env, repo, run, auth);
 
-  return { decisions, posted, rerunDispatched };
+  return { decisions, posted, rerunDispatched, sweep };
+}
+
+/**
+ * The sweep's HTTP, over the relay's own bounded-retry call under the App
+ * installation token minted above — so the sweep inherits the retry backoff,
+ * the API headers and the red-on-failure direction rather than needing its own.
+ */
+function sweepApi(deps: RelayDeps, repo: string, auth: Record<string, string>): SweepApi {
+  const headers = { ...API_HEADERS, ...auth };
+  return {
+    get: <T,>(url: string, what: string) => apiCall<T>(deps, { url, method: "GET", headers }, what),
+    postCheckRun: (body, what) =>
+      apiCall<unknown>(
+        deps,
+        {
+          url: `${API_ROOT}/repos/${repo}/check-runs`,
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        },
+        what,
+      ),
+  };
 }
 
 /**
@@ -481,20 +538,6 @@ async function hasLiveRunOfPath(
     }
   }
   return false;
-}
-
-function checkRunBody(decision: ContextDecision, run: TriggeringRun): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    name: decision.context,
-    head_sha: run.headSha,
-    status: decision.status,
-    output: { title: decision.title, summary: decision.summary },
-    details_url: run.htmlUrl,
-  };
-  if (decision.conclusion !== undefined) {
-    body.conclusion = decision.conclusion;
-  }
-  return body;
 }
 
 interface ApiRequest {
@@ -710,8 +753,9 @@ function assertShape(value: string, shape: RegExp, message: string): void {
 /**
  * The relay's human-visible success signal, one log line at a time. Pure, so
  * a synthetic result can drive it: the rerun-heal line is the only signal an
- * operator gets that a cancelled run was re-dispatched, so it is pinned by
- * tests rather than living undrivable in main().
+ * operator gets that a cancelled run was re-dispatched, and the sweep's
+ * summary line is the only signal that orphans are being healed at all, so
+ * both are pinned by tests rather than living undrivable in main().
  */
 export function renderRelayResult(result: RelayResult): string[] {
   if (result.posted.length === 0) {
@@ -728,6 +772,7 @@ export function renderRelayResult(result: RelayResult): string[] {
         "its completion event will mirror the real conclusion",
     );
   }
+  lines.push(...renderSweepLines(result.sweep));
   return lines;
 }
 
