@@ -145,6 +145,22 @@ describe("API token usage and issuance identity", () => {
     const exported = await exportAccount(sql, githubUserId);
     expect(exported?.apiToken).toEqual({
       createdAt: summary.createdAt.toISOString(), expiresAt: summary.expiresAt.toISOString(), lastUsedAt,
+      confirmedAt: null,
     });
+  });
+
+  it("exports the confirmation a first use recorded", async () => {
+    const { sql, store, tokenHash, githubUserId, userId } = await issue();
+    await store.findAccountByTokenHash(tokenHash);
+    const [stored] = await sql<{ confirmed_at: Date }[]>`
+      select confirmed_at from api_tokens where user_id = ${userId}
+    `;
+
+    const exported = await exportAccount(sql, githubUserId);
+
+    // What separates a token whose window lapsed from one whose lifetime
+    // started; without it the export shows the same document for both.
+    expect(stored!.confirmed_at).toBeInstanceOf(Date);
+    expect(exported?.apiToken?.confirmedAt).toEqual(stored!.confirmed_at.toISOString());
   });
 });
