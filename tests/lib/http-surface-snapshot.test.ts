@@ -15,6 +15,54 @@ const snapshot = JSON.parse(
   readFileSync(new URL("../../scripts/http-surface-snapshot.json", import.meta.url), "utf8"),
 ) as { httpServerVersion: string; routes: Record<string, HttpShape> };
 
+const compatibilityCases: readonly {
+  label: string;
+  recorded: HttpShape;
+  derived: HttpShape;
+  compatible: boolean;
+}[] = [
+  { label: "the same scalar", recorded: "string", derived: "string", compatible: true },
+  { label: "a changed scalar", recorded: "string", derived: "number", compatible: false },
+  {
+    label: "a pinned field the derived shape dropped",
+    recorded: { a: "string" },
+    derived: {},
+    compatible: false,
+  },
+  {
+    label: "a derived-only field as additive",
+    recorded: { a: "string" },
+    derived: { a: "string", b: "number" },
+    compatible: true,
+  },
+  {
+    label: "a nested type change",
+    recorded: { a: { b: "string" } },
+    derived: { a: { b: "number" } },
+    compatible: false,
+  },
+  {
+    label: "a nested object turned scalar",
+    recorded: { a: { b: "string" } },
+    derived: { a: "string" },
+    compatible: false,
+  },
+  { label: "a pinned null held", recorded: { a: "null" }, derived: { a: "null" }, compatible: true },
+  { label: "a pinned null widened", recorded: { a: "null" }, derived: { a: "number" }, compatible: false },
+  {
+    label: "a pinned list element type changed",
+    recorded: "string",
+    derived: "number",
+    compatible: false,
+  },
+  {
+    label: "an unpinned empty list revealed",
+    recorded: "unknown",
+    derived: "string",
+    compatible: true,
+  },
+];
+
 describe("HTTP surface snapshot", () => {
   it.each([
     { label: "a string", value: "x", shape: "string" },
@@ -33,48 +81,7 @@ describe("HTTP surface snapshot", () => {
     expect(shapeOf(value)).toEqual(shape);
   });
 
-  it.each([
-    { label: "the same scalar", recorded: "string", derived: "string", compatible: true },
-    { label: "a changed scalar", recorded: "string", derived: "number", compatible: false },
-    {
-      label: "a pinned field the derived shape dropped",
-      recorded: { a: "string" },
-      derived: {},
-      compatible: false,
-    },
-    {
-      label: "a derived-only field as additive",
-      recorded: { a: "string" },
-      derived: { a: "string", b: "number" },
-      compatible: true,
-    },
-    {
-      label: "a nested type change",
-      recorded: { a: { b: "string" } },
-      derived: { a: { b: "number" } },
-      compatible: false,
-    },
-    {
-      label: "a nested object turned scalar",
-      recorded: { a: { b: "string" } },
-      derived: { a: "string" },
-      compatible: false,
-    },
-    { label: "a pinned null held", recorded: { a: "null" }, derived: { a: "null" }, compatible: true },
-    { label: "a pinned null widened", recorded: { a: "null" }, derived: { a: "number" }, compatible: false },
-    {
-      label: "a pinned list element type changed",
-      recorded: "string",
-      derived: "number",
-      compatible: false,
-    },
-    {
-      label: "an unpinned empty list revealed",
-      recorded: "unknown",
-      derived: "string",
-      compatible: true,
-    },
-  ])("judges $label $compatible", ({ recorded, derived, compatible }) => {
+  it.each(compatibilityCases)("judges $label $compatible", ({ recorded, derived, compatible }) => {
     expect(shapesCompatible(recorded, derived)).toBe(compatible);
   });
 
