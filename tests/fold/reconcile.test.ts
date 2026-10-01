@@ -710,6 +710,7 @@ describe("reconcileRepository", () => {
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date(),
       lastFullPassAt: new Date(),
+      omittedOversizedFacts: 0,
       issues: [],
       pullRequests: [],
     });
@@ -764,6 +765,7 @@ describe("reconcileRepository", () => {
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date(),
       lastFullPassAt: new Date(),
+      omittedOversizedFacts: 0,
       issues: [],
       pullRequests: [],
     });
@@ -812,6 +814,7 @@ describe("reconcileRepository", () => {
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date(),
       lastFullPassAt: new Date(),
+      omittedOversizedFacts: 0,
       issues: [],
       pullRequests: [],
     });
@@ -849,6 +852,7 @@ describe("reconcileRepository", () => {
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date(),
       lastFullPassAt: new Date(),
+      omittedOversizedFacts: 0,
       issues: [],
       pullRequests: [],
     });
@@ -1000,6 +1004,7 @@ describe("reconcileRepository", () => {
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date(),
       lastFullPassAt: new Date(),
+      omittedOversizedFacts: 0,
       issues: [],
       pullRequests: [{ id: 201, reviews: [cachedReview], rawDiff: "cached diff" }],
     });
@@ -1065,6 +1070,7 @@ describe("reconcileRepository", () => {
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date(),
       lastFullPassAt: new Date(),
+      omittedOversizedFacts: 0,
       issues: [referencedIssue],
       pullRequests: [
         { id: 201, reviews: [cachedReview], rawDiff: "cached diff 201" },
@@ -1167,6 +1173,7 @@ describe("reconcileRepository", () => {
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date(),
       lastFullPassAt: new Date(),
+      omittedOversizedFacts: 0,
       issues: [],
       pullRequests: [],
     });
