@@ -13,6 +13,7 @@ import type {
   GitHubWebhook,
   GitHubWebhookConfiguration,
 } from "@/lib/github/types";
+import { CollectionWalkBound } from "@/lib/gitlab/collection-walk-bound";
 import { gitlabApiFetch } from "@/lib/security/gitlab-api-fetch";
 
 const defaultTimeoutMs = 10_000;
@@ -357,13 +358,13 @@ export class GitLabGateway {
     issueIid: number,
     collection: "resource_label_events" | "notes",
   ): Promise<T[]> {
-    const items: T[] = [];
+    const items = new CollectionWalkBound<T>(`issue ${issueIid} ${collection}`);
     let page = 1;
     for (;;) {
       const response = await this.request(
         `/projects/${segment(`${repository.owner}/${repository.name}`)}/issues/${issueIid}/${collection}?per_page=100&page=${page}`,
       );
-      items.push(...await responseJson<T[]>(response));
+      items.add(await responseJson<T[]>(response));
       const next = response.headers.get("x-next-page");
       if (next === null || next === "") break;
       const nextPage = Number(next);
@@ -372,7 +373,7 @@ export class GitLabGateway {
       }
       page = nextPage;
     }
-    return items;
+    return items.collected;
   }
 
   public async getPullRequest(repository: GitHubRepositoryReference, mergeRequestIid: number): Promise<GitLabMergeRequest> {
@@ -618,7 +619,7 @@ export class GitLabGateway {
   private async listAllPages<T>(path: string, mode: "keyset" | "offset"): Promise<T[]> {
     // Pagination controls are endpoint-specific. A server Link is authoritative;
     // header fallbacks update the current query without losing opaque parameters.
-    const items: T[] = [];
+    const items = new CollectionWalkBound<T>(path);
     const api = new URL(`${this.instanceUrl}/api/v4/`);
     const separator = path.includes("?") ? "&" : "?";
     const parameters = mode === "keyset"
@@ -640,7 +641,7 @@ export class GitLabGateway {
         cursors.add(cursor);
       }
       const response = await this.request(`${target.pathname.slice(api.pathname.length - 1)}${target.search}`);
-      items.push(...await responseJson<T[]>(response));
+      items.add(await responseJson<T[]>(response));
       const link = nextLink(response.headers.get("link"));
       if (link !== null) {
         let next: URL;
@@ -676,7 +677,7 @@ export class GitLabGateway {
       }
       target.searchParams.set(mode === "keyset" ? "cursor" : "page", next);
     }
-    return items;
+    return items.collected;
   }
 }
 
