@@ -366,19 +366,24 @@ someone else.
 
 The four cases are different incidents, not one with four names:
 
-- **Deleted.** Fork or clone before anything else, and expect the repository,
-  the App and the username to be gone. Deleting a personal account deletes
-  every repository that account owns and frees the username — GitHub platform
-  behaviour, documented under *Deleting your personal account* in GitHub Docs,
-  not an Overflow policy. This is a personal repository — `Nitjsefnie` is the
-  owner as a user account, not an organization
-  ([OPERATING.md](../OPERATING.md#governance-single-maintainer-operation)) — so
-  it goes with the account, and it is the settlement evidence: the fold prices
-  settlements from issue labels and comment history read off it. A service that
-  keeps serving says nothing about whether the evidence survived. Because the
-  username is freed rather than reserved, this runbook's account is not
-  recoverable by re-registering it; treat the repository as evidence first and
-  the account second.
+- **Deleted.** If any access remains, fork or clone before anything else — while
+  it does, this repository is public, so an anonymous clone needs no account at
+  all. Then expect the repository, the App and the username to be gone.
+  Deleting a personal account deletes every repository that account owns and
+  frees the username — GitHub platform behaviour, documented under *Deleting
+  your personal account* in GitHub Docs, not an Overflow policy. This is a
+  personal repository — `Nitjsefnie` is the owner as a user account, not an
+  organization ([OPERATING.md](../OPERATING.md#governance-single-maintainer-operation))
+  — so it goes with the account, and it is the settlement evidence: the fold
+  prices settlements from issue labels and comment history read off it. A
+  service that keeps serving says nothing about whether the evidence survived.
+  If the account has already gone, no clone is left to take and the settlement
+  evidence is not recoverable: the code survives in the deployment tree's own
+  clone at `/srv/overflow` ([deploy/README.md](README.md) section 5), but issues,
+  labels, comments and pull-request history do not. Because the username is
+  freed rather than reserved, this runbook's account is not recoverable by
+  re-registering it either; treat the repository as evidence first and the
+  account second.
 - **Locked by platform action.** The platform action reaches the account, not
   the host and not the database. The service keeps serving, the ledger keeps
   reading and pricing, and merges, labelling and every settings change stop
@@ -421,8 +426,9 @@ of its five entries read this repository, and the deleted case removes the
 repository. The reconciliation worker and automatic settlement pricing
 therefore stop with it — not because of the account, but because their source is
 gone — while the service, the webhook receivers and GitHub sign-in run on the
-deployment host and keep running. Fork or clone first: the fork is what the
-surviving three have to work from.
+deployment host and keep running. If any access remains, take the fork or clone
+first: it is the only copy of the settlement evidence that will exist, while
+the three entries that survive run on the host without it.
 
 **The App's own credentials are not the personal account's session, and that
 is verified in two independent places.** The reconciliation path mints a
@@ -451,7 +457,8 @@ and [deploy/README.md](README.md) section 10 for why the required contexts are
 pinned to that App at all.
 
 **Four limits on that claim, because the honest version is the useful one.**
-Each is now a stated fact, not an open question.
+Each is a stated fact. Three say what to do about it; the second also states
+what cannot be known, and that is the part that constrains the rotation.
 
 1. **A deleted account takes the App with it.** The Overflow Ledger App belongs
    to `Nitjsefnie`, and installations under a deleted personal account are
@@ -459,9 +466,10 @@ Each is now a stated fact, not an open question.
    This is not an unknown any more, and the consequence is worth stating
    plainly: after a deletion there is no App, so the relay has no identity to
    post check-runs as, and no required check is satisfied by anyone, the App
-   having been the only producer branch protection accepts. Nothing on the
-   deployment host substitutes for it, and the username is freed rather than
-   reserved, so the App is not recoverable by re-registering.
+   having been the only producer branch protection accepts. The deployment
+   host holds that App's key, not the App: the identity belongs to the account,
+   and the account is gone. And the username is freed rather than reserved, so
+   the App is not recoverable by re-registering either.
 2. **The host PEM and the Actions secret are a possibly-divergent pair.** The
    `LEDGER_APP_KEY` secret was provisioned from the App's private key at the
    #708 setup, and the file at `GITHUB_APP_PRIVATE_KEY_PATH` is where the
