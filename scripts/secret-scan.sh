@@ -45,6 +45,14 @@
 # than regenerating the file: a wholesale regeneration would also absorb any
 # genuinely new finding and bury it. Read the diff of old against new baseline,
 # and be able to point at every added entry in whatever diff caused it.
+#
+# ...AND EXPECT A SECOND RED, WHICH IS CORRECT. An added entry whose Match keeps
+# source context around the redaction — a generic-api-key finding does, a
+# gitlab-pat one does not — is one more entry the provenance check can
+# meaningfully examine, and tests/ci/secret-scan-script.test.ts pins that count as
+# EXPECTED_CHECKABLE_ENTRIES. Bump it in the same commit, having read the
+# baseline diff. Both assertions on that count run at every checkout depth, so
+# they will not wait for the weekly run to tell you.
 set -euo pipefail
 
 # Bump together with .github/workflows/secret-scan.yml.
