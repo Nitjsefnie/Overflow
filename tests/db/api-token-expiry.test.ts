@@ -216,7 +216,7 @@ describe(`upgrading across ${expiryMigration}`, () => {
         values (${userId}, ${mintApiToken().tokenHash}, now() - interval '400 days')
       `;
       const [before] = await sql<{ now: Date }[]>`select now()`;
-      // Stopped at 046: 057 clamps every existing token to the delivery window,
+      // Stopped at 046: 058 clamps every existing token to the delivery window,
       // which is its own assertion, in tests/db/api-token-delivery-window.test.ts.
       await runMigrations({ upTo: expiryMigration });
       const [after] = await sql<{ now: Date }[]>`select now()`;
