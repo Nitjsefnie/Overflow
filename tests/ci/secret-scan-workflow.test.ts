@@ -544,10 +544,11 @@ describe(".github/workflows/secret-scan.yml", () => {
    * repository this suite builds with real commits.
    *
    * It builds one rather than reading the committed baseline for the same reason
-   * the provenance checker does: the committed baseline names five September
-   * commits of THIS repository, so a case that has to fail cannot use them
-   * without first poisoning a tracked file, and a case that has to pass cannot use
-   * them at all in any checkout shallower than September.
+   * the provenance checker does: the committed baseline's eight entries name six
+   * commits of THIS repository, five of them from September and one from October,
+   * so a case that has to fail cannot use them without first poisoning a tracked
+   * file, and a case that has to pass cannot use them at all in any checkout
+   * shallower than the oldest of them.
    */
   describe("the reachability step, executed against repositories this suite builds", () => {
     const SCRIPT = "scripts/secret-scan-baseline.sh";
