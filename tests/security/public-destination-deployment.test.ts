@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { networkInterfaces } from "node:os";
+import { describe, expect, it, vi } from "vitest";
 import { isPublicAddress } from "@/lib/security/public-destination";
 import { listen, useLoopbackListeners } from "../support/loopback-listener";
 import {
