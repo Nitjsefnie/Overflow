@@ -202,10 +202,12 @@ describe("GitLab repository registration", () => {
     expect(`${hookPost.method} ${new URL(hookPost.url).pathname}`).toBe("POST /api/v4/projects/gitlab-org%2Fgitlab/hooks");
     expect(hookPost.headers.get("authorization")).toBe("Bearer glpat-live");
     const hookBody = JSON.parse(await hookPost.text()) as Record<string, unknown>;
-    expect(hookBody).toMatchObject({
+    // Exact parameter map: GitLab declares `issues_events` and has no
+    // `issue_events`, so a singular key is dropped and the flag stays default.
+    expect(hookBody).toEqual({
       url: expect.stringMatching(/^https:\/\/overflow\.example\/api\/gitlab\/webhooks\?hook=[0-9a-f-]{36}$/),
       token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
-      issue_events: true,
+      issues_events: true,
       merge_requests_events: true,
       push_events: false,
     });

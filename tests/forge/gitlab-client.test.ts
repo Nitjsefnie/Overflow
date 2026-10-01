@@ -13,16 +13,30 @@ describe("scoped GitLab hook configuration", () => {
     let remote = { id: 81, url: "https://old.test/hook", token: "old", issues_events: true,
       merge_requests_events: true, push_events: true };
     const methods: string[] = [];
+    const putBodies: unknown[] = [];
     const gateway = new GitLabGateway({ instanceUrl: "https://gitlab.test", token: "synthetic-pat", fetch: async (input, init) => {
       const request = new Request(input, init);
       methods.push(request.method);
-      if (request.method === "PUT") remote = { ...remote, ...await request.json() };
+      if (request.method === "PUT") {
+        const body = await request.clone().json();
+        putBodies.push(body);
+        remote = { ...remote, ...body };
+      }
       return Response.json({ ...remote, token: undefined });
     } });
     await gateway.configureWebhook?.({ owner: "group", name: "project" }, 81,
       { callbackUrl: "https://overflow.test/hook?hook=scoped", secret: "scoped-token" });
     expect(methods).toEqual(["GET", "PUT"]);
     expect(remote).toMatchObject({ url: "https://overflow.test/hook?hook=scoped", token: "scoped-token", push_events: true });
+    // Exact parameter map: the flag GitLab declares is `issues_events`; a
+    // singular `issue_events` alongside it would be dropped as undeclared.
+    expect(putBodies[0]).toEqual({
+      merge_requests_events: true,
+      push_events: true,
+      issues_events: true,
+      url: "https://overflow.test/hook?hook=scoped",
+      token: "scoped-token",
+    });
   });
 
   it.each(["id", "url", "events", "preserved event"])("rejects a configured GitLab hook with incorrect %s", async (wrong) => {
@@ -1104,15 +1118,18 @@ index 0123456..789abcd 100644
       { callbackUrl: "https://overflow.example/api/github/webhooks", secret: "s3cret" },
     );
     expect(webhook).toEqual({ id: 77 });
-    expect(bodies[0]).toMatchObject({
+    // Exact parameter map, not a subset: GitLab's "add a webhook" body declares
+    // `issues_events` and has no `issue_events`, so an undeclared key is dropped
+    // and the hook is created with the flag at its database default.
+    expect(bodies[0]).toEqual({
       url: "https://overflow.example/api/github/webhooks",
       token: "s3cret",
-      issue_events: true,
+      issues_events: true,
       merge_requests_events: true,
       push_events: false,
     });
     await client.ensureWebhookEvents({ owner: "gitlab-org", name: "gitlab" }, 77, "s3cret");
-    expect(bodies[1]).toMatchObject({ issue_events: true, merge_requests_events: true });
+    expect(bodies[1]).toEqual({ issues_events: true, merge_requests_events: true });
     await expect(client.deleteWebhook({ owner: "gitlab-org", name: "gitlab" }, 77)).resolves.toBeUndefined();
   });
 
