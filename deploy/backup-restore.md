@@ -241,8 +241,9 @@ application first so no writes go to the old database mid-swap:
 systemctl stop overflow.service
 ```
 
-Create the replacement owned by the application role and restore **as the
-application role**, using its own `DATABASE_URL`:
+As root and from the deployment tree (`/srv/overflow`), create the replacement
+owned by the application role and restore **as the application role**, using
+its own `DATABASE_URL`: every command below is relative to that tree.
 `--no-owner` then makes the app role own every restored object, which is the
 production shape, so this path needs no ownership fixups at all.
 
@@ -293,17 +294,19 @@ The restore carries no privileges: `--no-privileges` skips every ACL the
 dump recorded, so the replacement database has neither section (b)'s
 backup-role table SELECT nor its DEFAULT PRIVILEGES, and the first nightly
 backup after the swap would fail with "permission denied" for
-`overflow_backup`. Re-apply section (b)'s grants to the replacement now — after
-the migration above, not before it. `GRANT SELECT ON ALL TABLES IN SCHEMA
-public` is a snapshot of the tables that exist at the moment it runs, so
-running it first leaves the migration's new tables to the `ALTER DEFAULT
-PRIVILEGES` half alone, and that half is deliberately narrow: it covers
-objects the application role creates in `public` and nothing else. A table
-created under any other role, or outside `public`, would carry no
-backup-role `SELECT` at all, and that same first-nightly-backup failure would
-arrive one step later instead of being prevented. Migrating first makes the
-snapshot cover the whole schema whatever ends up creating it. As superuser,
-connected to the replacement:
+`overflow_backup`. Re-apply section (b)'s grants to the replacement now, after
+the migration above rather than before it. `GRANT SELECT ON ALL TABLES IN
+SCHEMA public` is a snapshot of the tables that exist at the moment it runs;
+reaching objects created after it is the `ALTER DEFAULT PRIVILEGES` half's
+job, and that half covers objects the application role creates in `public` and
+nothing else. On this path that is enough — migrations run as the application
+role, in `public`, so a swap made in the other order would still leave the
+backup role able to read every table the migration added, and the order is not
+covering a failure this path has today. It is the general rule written down:
+migrate, then grant, so the snapshot covers the whole schema whatever ends up
+creating it, so a future migration creating an object under another role, or
+outside `public`, is covered by the same block rather than by default
+privileges. As superuser, connected to the replacement:
 
 ```bash
 sudo -u postgres psql -d overflow_replacement <<'SQL'
@@ -328,24 +331,47 @@ The target (`overflow_replacement`) differs from the database the URL names
 answers "can the app role read" and says nothing about "can the served build
 run", and those are exactly the two things a stale restore separates: the
 count passes on the database the readiness endpoint refuses.
-`scripts/deploy-migration-status.ts` prints one `<name><TAB><marker>` line for
-every migration the tree carries that this database does not record, and prints
-nothing at all when the database is current:
+`scripts/deploy-migration-status.ts` prints one line per migration the tree
+carries that this database does not record — the name, a tab, then a marker:
+`-`, or `review` when the file carries the literal `overflow: mixed-version
+review` — and prints nothing at all when the database is current. Here the
+listing says only one thing: which migrations the swap would go live without.
+The marker is the deploy procedure's own mixed-version signal
+([README.md section 10](README.md#10-deploying-a-new-revision)) and it does not
+bind a restore — the previous release is stopped, so nothing serves against the
+old schema while this runs, and there is no mixed-version window to review:
 
 ```bash
 pending="$(DATABASE_URL="$replacement_url" node scripts/deploy-migration-status.ts)"
-if [ -n "$pending" ]; then
-  printf 'the replacement is behind the tree by:\n%s\n' "$pending"
+status=$?
+if [ "$status" -ne 0 ]; then
+  printf 'could not list the pending migrations; the replacement is NOT verified — do not swap it in\n' >&2
+  false
+elif [ -n "$pending" ]; then
+  printf 'the replacement is behind the tree by:\n%s\ndo not swap it in — re-run the migration block above from /srv/overflow, then this gate\n' "$pending"
   false
 fi
 ```
 
-Two properties of that gate are deliberate. It tests the OUTPUT, not the
-script's exit status: `deploy-migration-status.ts` exits `0` whether or not it
-printed anything, because the deploy procedure reads its listing rather than
-its status, so only the output can fail a stale replacement here. And it ends
-in `false` rather than `exit 1` — no block in this runbook sets `set -e`, and
-an `exit` inside a pasted block closes the shell the operator is standing in.
+Three properties of that gate are deliberate. The status half follows
+[README.md section 10](README.md#10-deploying-a-new-revision), which stops on
+a failed status command in both its forms — the deploy script wraps the same
+call in `|| { …; exit 1; }`, and the manual path says to run it by hand and
+stop if it fails. It matters because `deploy-migration-status.ts` prints
+nothing to stdout when it cannot run at all — `node` off `PATH`, the wrong
+working directory, a database that is not there — and puts the reason on
+stderr with a nonzero status, so an empty listing is both "current" and "could
+not ask", and those are exactly the two ways a stale swap gets certified. The
+`elif` half is the other side of the same command and is not covered by that
+precedent: the script exits `0` whether or not it printed anything, because
+the deploy procedure reads its listing rather than its status, so only the
+output can tell "current" from "behind". The status is captured into a
+variable rather than tested inline with `||` because the second branch has to
+be reached on the same condition — an `|| { …; false; }` in front of it runs
+that branch and then falls straight through the `if` on an empty listing,
+which ends the pasted block `0` and reads as a pass. And nothing here calls
+`exit`: no block in this runbook sets `set -e`, and an `exit` inside a pasted
+block closes the shell the operator is standing in.
 
 Then the smallest real check that the replacement serves before the rename —
 the app role can authenticate, and the restored tables answer a read — with
