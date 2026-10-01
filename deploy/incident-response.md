@@ -366,17 +366,19 @@ someone else.
 
 The four cases are different incidents, not one with four names:
 
-- **Deleted.** Do not assume anything survives, and fork or clone before
-  anything else. This is a personal repository — `Nitjsefnie` is the owner as a
-  user account, not an organization ([OPERATING.md](../OPERATING.md#governance-single-maintainer-operation))
-  — so what GitHub does to the repository when its owner's account is deleted
-  is a separate question, and nothing in this repository records the answer
-  (see the fourth limit below). What a reader must not conclude is that nothing
-  needs preserving: the fold prices settlements from issue labels and comment
-  history read off this repository, so the repository is the settlement
-  evidence, and a service that keeps serving proves nothing about it. The
-  account is unrecoverable by this runbook; treat the repository as evidence
-  first and the account second.
+- **Deleted.** Fork or clone before anything else, and expect the repository,
+  the App and the username to be gone. Deleting a personal account deletes
+  every repository that account owns and frees the username — GitHub platform
+  behaviour, documented under *Deleting your personal account* in GitHub Docs,
+  not an Overflow policy. This is a personal repository — `Nitjsefnie` is the
+  owner as a user account, not an organization
+  ([OPERATING.md](../OPERATING.md#governance-single-maintainer-operation)) — so
+  it goes with the account, and it is the settlement evidence: the fold prices
+  settlements from issue labels and comment history read off it. A service that
+  keeps serving says nothing about whether the evidence survived. Because the
+  username is freed rather than reserved, this runbook's account is not
+  recoverable by re-registering it; treat the repository as evidence first and
+  the account second.
 - **Locked by platform action.** The platform action reaches the account, not
   the host and not the database. The service keeps serving, the ledger keeps
   reading and pricing, and merges, labelling and every settings change stop
@@ -414,10 +416,13 @@ reconciliation worker and its six-hour sweep, and automatic settlement pricing
 from repository labels. What stops is the codebase half: merges, issue triage,
 `offered:` and `settled:` labelling, deployment, secret rotation, and any
 change to branch protection, a registration's webhook or the App. The deleted
-case is not covered by that list: at least two of its five entries read the
-repository, so whether they keep working is the same question the deleted
-bullet declines to answer. Take the fork or clone first and work from what
-survives.
+case is not covered by that list, and the reason is now settled: at least two
+of its five entries read this repository, and the deleted case removes the
+repository. The reconciliation worker and automatic settlement pricing
+therefore stop with it — not because of the account, but because their source is
+gone — while the service, the webhook receivers and GitHub sign-in run on the
+deployment host and keep running. Fork or clone first: the fork is what the
+surviving three have to work from.
 
 **The App's own credentials are not the personal account's session, and that
 is verified in two independent places.** The reconciliation path mints a
@@ -446,37 +451,44 @@ and [deploy/README.md](README.md) section 10 for why the required contexts are
 pinned to that App at all.
 
 **Four limits on that claim, because the honest version is the useful one.**
+Each is now a stated fact, not an open question.
 
-1. **Key material is not App identity.** They are different things: a private
-   key whose owner record no longer exists mints nothing, and nothing in this
-   repository records what GitHub does to an App when its owner's account is
-   deleted.
-2. **One PEM or two copies.** [deploy/README.md](README.md)'s note that the
-   App private key lives under a traversable `/etc/overflow` on a relay host,
-   and that an untraversable one fails the required checks closed, ties the
-   host file to the required-checks path, while the relay workflow reads the
-   Actions environment secret. Whether those are one PEM or two is not
-   determinable from this repository; treat them as two locations to check
-   rather than one.
-3. **The relay may not fire unattended.** The job runs under the
-   `overflow-ledger` environment, and a GitHub environment can carry required
-   reviewers. If that environment gates runs on an approving reviewer, every
-   relay run waits for a human and the personal account is back inside the loop
-   — the exact failure the sentence denies. This repository does not record
-   that environment's protection rules: `overflow-ledger` appears in the relay
-   workflow, in [OPERATING.md](../OPERATING.md#required-checks-relay) and in
-   this section, and nowhere else, so nothing here can tell you whether a
-   reviewer gate exists. Do not assume the relay fires unattended; read the
-   environment's settings before relying on it, and read them from an account
-   that survived step 8.
-4. **What account deletion does to the repository is unrecorded too.** The
-   first limit hedges about the App; the same event raises the same question
-   about this repository, and nothing in this repository answers it either. The
-   reviewer of this section could not confirm from the tree whether GitHub
-   deletes a personal repository with its owner's account, and neither could
-   this runbook's author, so the deleted case above assumes nothing survives.
-   Treat the fork or clone as the first action rather than the fallback, because
-   the cost of having been wrong is the settlement evidence.
+1. **A deleted account takes the App with it.** The Overflow Ledger App belongs
+   to `Nitjsefnie`, and installations under a deleted personal account are
+   removed with it — the same GitHub Docs page, the same platform behaviour.
+   This is not an unknown any more, and the consequence is worth stating
+   plainly: after a deletion there is no App, so the relay has no identity to
+   post check-runs as, and no required check is satisfied by anyone, the App
+   having been the only producer branch protection accepts. Nothing on the
+   deployment host substitutes for it, and the username is freed rather than
+   reserved, so the App is not recoverable by re-registering.
+2. **The host PEM and the Actions secret are a possibly-divergent pair.** The
+   `LEDGER_APP_KEY` secret was provisioned from the App's private key at the
+   #708 setup, and the file at `GITHUB_APP_PRIVATE_KEY_PATH` is where the
+   reconciliation path reads that key from. Whether the two hold the same bytes
+   cannot be proven in either direction, because Actions secret values and
+   their fingerprints are never returned by the API — so this section does not
+   claim one key and does not claim two. Nothing depends on the answer today,
+   because both authenticate as the App independently. A rotation MUST update
+   both as one operation: treat them as equal because rotation discipline keeps
+   them equal, not because anything here verifies it.
+3. **The relay fires unattended today, and a gate would change that.** Read
+   from the GitHub API, the `overflow-ledger` environment's only protection
+   rule is `branch_policy` — protected branches, `can_admins_bypass` false —
+   and there is no required-reviewer rule. So nothing stands between a producer
+   run completing and the relay posting the required check-runs, which is the
+   independence the paragraph above claims. Adding a required-reviewer rule
+   would be a settings change, and it is held as a pair with the backup-admin
+   invite below: the maintainer's own action, not a commit, and this runbook
+   deliberately does not carry the procedure. If that gate is ever added, every
+   relay run waits for a human and the personal account is back inside the loop.
+4. **A deleted account takes the repository with it,** by the same platform
+   behaviour and the same citation. That makes the relay's independence moot
+   rather than false: the workflow can still run and still mint a token, but
+   there is no repository left to post a check-run against and no branch left
+   to protect. Nothing recovers the settlement evidence except the fork or
+   clone taken before the account went, which is why the deleted case puts that
+   first.
 
 **A backup admin collaborator, if one is ever invited.** Today none is
 invited, and this runbook does not create one. If the maintainer later invites
@@ -552,8 +564,8 @@ action, and as of this writing it has not been done.
    service, the webhook receivers, GitHub sign-in, the reconciliation worker
    and automatic settlement pricing. No step in 1 to 5 stops any of them, and
    none of steps 1 to 5 needs a merge, a label or a settings change to
-   complete. In the deleted case, treat the last two as conditional on what the
-   fork or clone turned out to contain.
+   complete. In the deleted case the last two stop, because the repository they
+   read is gone; the first three run on the deployment host and do not.
 7. Blocked until access returns: merges, triage, `offered:` and `settled:`
    labelling, deployment, secret rotation, moderator roster changes, and any
    correction request only a moderator can grant or decline. A `settled:` label
@@ -571,9 +583,11 @@ action, and as of this writing it has not been done.
    sanctioned key-rotation procedure and it names `TOKEN_ENCRYPTION_KEY`
    specifically; it does not extend to the App key and must not be applied to
    it. Until the App-key rotation is written, treat that key as unreplaceable
-   in practice: the locations holding it are the host path configured by
-   `GITHUB_APP_PRIVATE_KEY_PATH` and the `LEDGER_APP_KEY` environment secret
-   the relay workflow reads, and a rotation would have to change both.
+   in practice. One constraint on that future rotation is already settled, and
+   is what the second limit above means operationally: it must replace the host
+   PEM under `/etc/overflow/github-app/` and the `LEDGER_APP_KEY` environment
+   secret together, as one operation, because nothing verifies that the two
+   hold the same bytes today.
 
 ## Record
 
