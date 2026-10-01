@@ -200,8 +200,25 @@ for t in $(sudo -u postgres psql -d overflow -tAc \
 done
 ```
 
+A restored copy is EXPECTED to lag the tree, and by how much is the drift
+between the dump and the deploys since it was taken — the same count of
+migrations (e.2) has to apply before its replacement can serve, which is why
+the drill records it. `scripts/deploy-migration-status.ts` prints one line
+per migration the tree carries that the database it names does not record,
+and prints nothing at all when there is no lag; point it at the scratch copy
+the way (e.2) points at its replacement — the environment is already loaded
+from this section's first block, so only the database name changes:
+
+```bash
+scratch_url="${DATABASE_URL%/*}/$scratch"
+DATABASE_URL="$scratch_url" node scripts/deploy-migration-status.ts
+```
+
+The scratch copy is NOT migrated: the drill compares data, and migrating it
+would measure nothing about the restore. The migration step belongs to (e.2).
 Record the outputs — dump bytes, backup and restore durations, per-table
-counts, pg_restore stderr — in the drill log. Append the entry to
+counts, pg_restore stderr, the pending-migration listing above — in the drill
+log. Append the entry to
 `/var/backups/overflow/drill-log.md` (root:root `0600`). Then clean up,
 keeping the dump:
 
@@ -236,12 +253,57 @@ bash scripts/db-restore.sh overflow_replacement \
   /var/backups/overflow/overflow-<stamp>.dump
 ```
 
+The restored copy carries the schema the dump was taken with, and a dump
+carries `schema_migrations` as of the moment it ran — 01:30 UTC, before
+whatever deploys have landed since. Deploys apply migrations
+([README.md section 10](README.md#10-deploying-a-new-revision)), so a restored
+database is normally behind the tree, and that is exactly the state the
+readiness endpoint refuses: it answers `200` only when every migration the
+served build bundles is recorded applied, so a schema behind the build answers
+`503 {"status":"unavailable"}` while a row count still passes. Migrate the
+replacement before anything else touches it:
+
+```bash
+cd /srv/overflow
+replacement_url="${DATABASE_URL%/*}/overflow_replacement"
+DATABASE_URL="$replacement_url" pnpm db:migrate
+```
+
+Three things about that block are traps rather than preferences:
+
+- **The inline assignment wins over the tree's `.env`.** `db:migrate` is
+  `node --env-file-if-exists=.env scripts/migrate.ts`, and `node --env-file`
+  does not override a variable already present in the process environment —
+  so the replacement is the target even on a tree that carries a `.env`
+  naming production.
+- **It runs from `/srv/overflow`, not from a checkout.** The migrations
+  applied must be the ones the SERVING build bundles, and
+  `src/lib/db/migration-manifest.ts` is the served build's own record of them,
+  pinned equal to `db/migrations/*.sql` by
+  `tests/db/migration-manifest.test.ts`. A restore driven from any other tree
+  can leave a schema the readiness probe still refuses.
+- **It runs before the rename, not after.** The live `overflow` is untouched
+  while it runs, the replacement is still verifiable under its own name, and a
+  failing migration aborts before anything has been swapped. The readiness
+  endpoint cannot answer at this point — the service is stopped — so the
+  schema gate below is the pre-rename check, and the end-to-end confirmation
+  stays where deploy/README.md section 7 puts it, after the restart.
+
 The restore carries no privileges: `--no-privileges` skips every ACL the
 dump recorded, so the replacement database has neither section (b)'s
 backup-role table SELECT nor its DEFAULT PRIVILEGES, and the first nightly
 backup after the swap would fail with "permission denied" for
-`overflow_backup`. Re-apply section (b)'s grants to the replacement before
-the rename (as superuser, connected to the replacement):
+`overflow_backup`. Re-apply section (b)'s grants to the replacement now — after
+the migration above, not before it. `GRANT SELECT ON ALL TABLES IN SCHEMA
+public` is a snapshot of the tables that exist at the moment it runs, so
+running it first leaves the migration's new tables to the `ALTER DEFAULT
+PRIVILEGES` half alone, and that half is deliberately narrow: it covers
+objects the application role creates in `public` and nothing else. A table
+created under any other role, or outside `public`, would carry no
+backup-role `SELECT` at all, and that same first-nightly-backup failure would
+arrive one step later instead of being prevented. Migrating first makes the
+snapshot cover the whole schema whatever ends up creating it. As superuser,
+connected to the replacement:
 
 ```bash
 sudo -u postgres psql -d overflow_replacement <<'SQL'
@@ -262,13 +324,35 @@ cluster has revoked it; every statement is idempotent.
 
 The target (`overflow_replacement`) differs from the database the URL names
 (`overflow`), so no `--allow-live` is needed. Verify as in (e.1), with
-`overflow_replacement` in the scratch's place. The smallest real check that
-the replacement serves before the rename — the app role can authenticate,
-and the restored tables answer a read — with the environment already
-loaded from the restore block above:
+`overflow_replacement` in the scratch's place, schema first. A row count
+answers "can the app role read" and says nothing about "can the served build
+run", and those are exactly the two things a stale restore separates: the
+count passes on the database the readiness endpoint refuses.
+`scripts/deploy-migration-status.ts` prints one `<name><TAB><marker>` line for
+every migration the tree carries that this database does not record, and prints
+nothing at all when the database is current:
 
 ```bash
-psql "${DATABASE_URL%/*}/overflow_replacement" -tAc "select count(*) from issues"
+pending="$(DATABASE_URL="$replacement_url" node scripts/deploy-migration-status.ts)"
+if [ -n "$pending" ]; then
+  printf 'the replacement is behind the tree by:\n%s\n' "$pending"
+  false
+fi
+```
+
+Two properties of that gate are deliberate. It tests the OUTPUT, not the
+script's exit status: `deploy-migration-status.ts` exits `0` whether or not it
+printed anything, because the deploy procedure reads its listing rather than
+its status, so only the output can fail a stale replacement here. And it ends
+in `false` rather than `exit 1` — no block in this runbook sets `set -e`, and
+an `exit` inside a pasted block closes the shell the operator is standing in.
+
+Then the smallest real check that the replacement serves before the rename —
+the app role can authenticate, and the restored tables answer a read — with
+the environment and `$replacement_url` already loaded from the blocks above:
+
+```bash
+psql "$replacement_url" -tAc "select count(*) from issues"
 ```
 
 It must print a row count, not an error. Then swap the names and start the
@@ -332,8 +416,8 @@ time, 26 public tables matched; the write-active
 `repository_reconciliation_dirty_subjects` (29 production vs 25 scratch) and
 `webhook_deliveries` (13,686 vs 13,675) tables had drifted between the dump
 and the live count. Machine time scales with the dump size; the dominant RTO
-terms are the operator steps of (e.2) — create the replacement, verify,
-rename, restart the service — so budget tens of minutes including human
+terms are the operator steps of (e.2) — create the replacement, migrate it,
+verify, rename, restart the service — so budget tens of minutes including human
 response time, not seconds.
 
 ## (g) Restore-testing cadence
@@ -368,3 +452,12 @@ nightly backup can fail for weeks unnoticed — an expired backup-role
 password, or the grants gap section (e.2) warns about: a swap that skipped
 the grants fails the first nightly backup with "permission denied" for
 `overflow_backup`.
+
+The template covers `overflow.service` as well as the backup unit
+([README.md section 12](README.md#12-failure-alerts)), so an alert can also
+carry the service itself — but not the other way round. A restore that
+skipped (e.2)'s migration step leaves a service that is up, healthy to every
+data check, and answering `503` at `/api/readiness` on a schema behind its
+build; nothing about that state fails the unit, so nothing alerts. The
+readiness curl in README section 7 is what catches it, at the swap, while the
+operator is still watching.
