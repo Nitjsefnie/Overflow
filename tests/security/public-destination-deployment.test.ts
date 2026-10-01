@@ -1,9 +1,14 @@
-import type { IncomingMessage, Server, ServerResponse } from "node:http";
-import { createServer } from "node:http";
-import { isIP } from "node:net";
-import { networkInterfaces } from "node:os";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { isPublicAddress } from "@/lib/security/public-destination";
+import { listen, useLoopbackListeners } from "../support/loopback-listener";
+import {
+  denyCidrsEnvName as envName,
+  expectRefused,
+  hostPublicAddresses,
+  reachedResponder,
+  urlHost,
+  useDeploymentDenyCidrs,
+} from "../support/public-destination-harness";
 
 /**
  * The deployment seeding of the outbound fetch guard (issue 899): what
@@ -13,98 +18,14 @@ import { isPublicAddress } from "@/lib/security/public-destination";
  * arranging the environment — that is also what makes a wiring regression
  * observable: unwire the deny composition and the acceptance fixture below
  * connects to its own listener instead of refusing it.
+ *
+ * The harness — the deny-list environment's lifecycle, the host addresses, the
+ * listener, the refusal assertion — is `tests/support`, shared with
+ * `identity-link-fetch.test.ts`.
  */
 
-const envName = "PUBLIC_DESTINATION_DENY_CIDRS";
-
-const openListeners: { close(): Promise<void> }[] = [];
-
-let ambientEnvValue: string | undefined;
-
-beforeEach(() => {
-  vi.resetModules();
-  ambientEnvValue = process.env[envName];
-  delete process.env[envName];
-});
-
-afterEach(async () => {
-  if (ambientEnvValue === undefined) {
-    delete process.env[envName];
-  } else {
-    process.env[envName] = ambientEnvValue;
-  }
-  await Promise.all(openListeners.splice(0).map((listener) => listener.close()));
-  vi.resetModules();
-});
-
-/**
- * The host's own public interface addresses — the ones the address class
- * admits, and the ones the unset-environment seed names. Empty where the host
- * has none (a CI runner behind private interfaces), which skips the
- * public-address fixtures below: a destination the class permits must route
- * locally for the test to stay network-free, and only the host's own public
- * address does — a self-connect answers over loopback.
- */
-function hostPublicAddresses(): string[] {
-  const found: string[] = [];
-  for (const addresses of Object.values(networkInterfaces())) {
-    for (const entry of addresses ?? []) {
-      if (!entry.internal && isPublicAddress(entry.address)) {
-        found.push(entry.address);
-      }
-    }
-  }
-  return [...new Set(found)];
-}
-
-/** Brackets an IPv6 literal for use as a URL host; passes anything else through. */
-function urlHost(address: string): string {
-  return isIP(address) === 6 ? `[${address}]` : address;
-}
-
-type Listener = { port: number; connections(): number; close(): Promise<void> };
-
-async function listenOn(host: string): Promise<Listener> {
-  const server: Server = createServer((_request: IncomingMessage, response: ServerResponse) => {
-    response.end("reached");
-  });
-  let connections = 0;
-  server.on("connection", () => {
-    connections += 1;
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, host, () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (address === null || typeof address === "string") {
-    throw new Error("listener has no port");
-  }
-  const listener: Listener = {
-    port: address.port,
-    connections: () => connections,
-    close: () =>
-      new Promise<void>((resolve) => {
-        server.closeAllConnections();
-        server.close(() => resolve());
-      }),
-  };
-  openListeners.push(listener);
-  return listener;
-}
-
-/** Awaits a rejection and pins it as the guard's one refusal class. */
-async function expectRefused(pending: Promise<unknown>, refused: new () => Error): Promise<void> {
-  const outcome = await pending.then(
-    () => "resolved" as const,
-    (error: unknown) => error,
-  );
-  expect(outcome).not.toBe("resolved");
-  expect(outcome).toBeInstanceOf(refused);
-}
+useDeploymentDenyCidrs();
+useLoopbackListeners();
 
 async function loadDeploymentDenyCidrs(): Promise<
   (env?: NodeJS.ProcessEnv, enumerateInterfaces?: typeof networkInterfaces) => string[]
@@ -265,12 +186,12 @@ describe("the deployment-wired singletons", () => {
       context.skip();
       return;
     }
-    const listener = await listenOn(host);
+    const listener = await listen(host, reachedResponder);
     const { gitlabApiFetch, identityLinkFetch, DestinationRefusedError: RefusedError } = await loadSingletons();
 
     await expectRefused(gitlabApiFetch(`http://${urlHost(host)}:${listener.port}/`), RefusedError);
     await expectRefused(identityLinkFetch(`http://${urlHost(host)}:${listener.port}/`), RefusedError);
-    expect(listener.connections()).toBe(0);
+    expect(listener.connections).toBe(0);
   });
 
   it("complete a fetch to a public destination the deny list does not name", async (context) => {
@@ -282,12 +203,12 @@ describe("the deployment-wired singletons", () => {
     // An override that does not name the host: the wiring must carry the
     // environment's list into the transports without broadening it.
     process.env[envName] = "8.8.8.8";
-    const listener = await listenOn(host);
+    const listener = await listen(host, reachedResponder);
     const { gitlabApiFetch } = await loadSingletons();
 
     const response = await gitlabApiFetch(`http://${urlHost(host)}:${listener.port}/`);
 
     expect(await response.text()).toBe("reached");
-    expect(listener.connections()).toBe(1);
+    expect(listener.connections).toBe(1);
   });
 });

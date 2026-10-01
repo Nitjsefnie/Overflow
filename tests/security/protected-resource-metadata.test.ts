@@ -3,13 +3,14 @@ import { protectedResourceMetadata } from "@/lib/security/protected-resource-met
 import { trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
 
 /**
- * The protected-resource metadata document itself, at the boundary the two
- * `.well-known` routes call it from: what a deployment with no trusted origin
- * hands back, and exactly which resource and bearer methods it names when it
- * does. The routes pin the same document over the wire; this file pins it at
- * the module boundary, where `null` is the answer and a 500 is not — a
- * degenerate document instead of `null` would serialize as a 200 and tell a
- * discovery client the deployment's resource was named by nothing.
+ * The one boundary of the protected-resource metadata document that no other
+ * suite sees (issue 905): the resource is built from the origin
+ * `readTrustedOrigin` derives, not from `APP_URL` itself. A deployment that
+ * configures a path or a query serves one origin, and a client told to fetch
+ * the configured URL would fetch something that is not this MCP endpoint. Both
+ * routes already pin the document over the wire and `request-origin.test.ts`
+ * pins every way `APP_URL` fails to name an origin, so this file holds that
+ * single case and the module-level null it propagates is left to them.
  *
  * `readTrustedOrigin` reads `APP_URL` at call time, so the environment is the
  * seam here and the module needs no mock.
@@ -18,39 +19,16 @@ import { trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
 useTrustedOrigin();
 
 describe("the protected-resource metadata document", () => {
-  it("names this deployment's MCP endpoint at the trusted origin", () => {
+  it("names the origin APP_URL carries at the MCP endpoint, not APP_URL itself", () => {
     // The top-level useTrustedOrigin() stubs APP_URL for every test in this
-    // file; the override here wins for this test and afterEach unstubs it.
-    vi.stubEnv("APP_URL", trustedOrigin);
-
-    expect(protectedResourceMetadata()).toEqual({
-      resource: `${trustedOrigin}/api/mcp`,
-      bearer_methods_supported: ["header"],
-    });
-  });
-
-  it("names the origin APP_URL carries, not the APP_URL itself", () => {
-    // A deployment configured with a path and a query still serves one origin,
-    // so the resource a client is told to fetch is that origin's MCP endpoint.
+    // file; the override here wins for this test and afterEach unstubs it. The
+    // whole document is compared, so the header bearer method is pinned with
+    // the resource, and a method added beside it dies on the same assertion.
     vi.stubEnv("APP_URL", "https://overflow.example/mcp?tenant=1");
 
     expect(protectedResourceMetadata()).toEqual({
       resource: `${trustedOrigin}/api/mcp`,
       bearer_methods_supported: ["header"],
     });
-  });
-
-  it.each([
-    ["unset", undefined],
-    ["empty", ""],
-    ["blank", "   "],
-    ["unparsable", "not a url"],
-    ["an opaque origin", "data:text/plain,hello"],
-  ])("is null when APP_URL is %s", (_name, appUrl) => {
-    vi.stubEnv("APP_URL", appUrl);
-
-    // Null rather than a document: there is no resource to name, and a
-    // document naming one would be a lie the caller would serve at 200.
-    expect(protectedResourceMetadata()).toBeNull();
   });
 });
