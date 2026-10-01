@@ -1605,11 +1605,16 @@ describe("describing a save failure's cause for operator diagnostics", () => {
     );
   });
 
-  it("redacts GitHub token prefixes while keeping the shape", () => {
-    expect(describeErrorCause(new Error("push denied: ghp_SECRETMATERIAL1"))).toBe("Error: push denied: ghp_***");
-    expect(describeErrorCause(new Error("pat rejected: github_pat_SECRETMATERIAL2"))).toBe(
-      "Error: pat rejected: github_pat_***",
-    );
+  it("redacts a ghp_ token while keeping the prefix", () => {
+    const rendered = describeErrorCause(new Error("push denied: ghp_SECRETMATERIAL1"));
+    expect(rendered).toBe("Error: push denied: ghp_***");
+    expect(rendered).not.toContain("SECRETMATERIAL");
+  });
+
+  it("redacts a github_pat_ token while keeping the prefix", () => {
+    const rendered = describeErrorCause(new Error("pat rejected: github_pat_SECRETMATERIAL2"));
+    expect(rendered).toBe("Error: pat rejected: github_pat_***");
+    expect(rendered).not.toContain("SECRETMATERIAL");
   });
 
   it("leaves a message without credential shapes unredacted", () => {
