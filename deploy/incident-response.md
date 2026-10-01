@@ -174,8 +174,9 @@ Expect `active`; perform the readiness check in [Recover](#recover). Once the
 new process holds only the new secret, old JWT sessions cannot be decrypted
 and users must sign in again. Restarting without changing `AUTH_SECRET` does
 not invalidate them. This does not revoke database-backed API tokens or
-resolve compromised GitHub access. Do not restore a compromised auth secret
-as a recovery shortcut.
+resolve compromised GitHub access; the latter is handled in [Account loss and
+account compromise](#account-loss-and-account-compromise). Do not restore a
+compromised auth secret as a recovery shortcut.
 
 ## Scope
 
@@ -352,6 +353,158 @@ is refused, the demoted account cannot moderate, and old sessions require
 sign-in after an auth-secret rotation. Readiness alone proves none of those
 containment properties. Re-scope the journal and database after recovery to
 look for continued unauthorized activity; keep the incident open if it recurs.
+
+### Account loss and account compromise
+
+Every step elsewhere in this runbook that ends in a merge, a label or a
+settings change needs the maintainer's GitHub account, `Nitjsefnie`. That
+account is the repository owner — a user account, not an organization — the
+sole admin collaborator, the only account that branch protection's
+`enforce_admins` setting reaches, and the account the Overflow Ledger App
+belongs to. This section is what to do when that account is gone or held by
+someone else.
+
+The three cases are different incidents, not one with three names:
+
+- **Deleted, or locked by platform action.** The platform action reaches the
+  account, not the host and not the database. The service keeps serving, the
+  ledger keeps reading and pricing, and merges, labelling and every settings
+  change stop until access returns. Nothing already merged or already
+  labelled is undone by the platform action itself.
+- **Under an attacker's control.** Treat it as the compromise it is: contain
+  the repository and the App first, following [Contain](#contain), and use
+  this section for the order of everything after that. An attacker holding the
+  account can merge, label, administer branch protection and administer the
+  App for as long as they hold it, and noticing that requires someone outside
+  the account.
+- **Simply absent, nothing wrong yet.** No containment is warranted. The steps
+  below still apply from the moment access is genuinely lost, because nothing
+  in them is cheap to reverse afterwards.
+
+What keeps running without the account is the instance half of
+[OPERATING.md](../OPERATING.md#governance-single-maintainer-operation): the
+service under systemd, the webhook receivers, GitHub sign-in, the
+reconciliation worker and its six-hour sweep, and automatic settlement pricing
+from repository labels. What stops is the codebase half: merges, issue triage,
+`offered:` and `settled:` labelling, deployment, secret rotation, and any
+change to branch protection, a registration's webhook or the App.
+
+**The App's own credentials are not the personal account's session, and that
+is verified in two independent places.** The reconciliation path mints a
+short-lived RS256 JWT from a PEM file on the host and exchanges it for an
+installation token; it never presents a session, a personal access token or an
+OAuth token of the maintainer's. The file is named by
+`GITHUB_APP_PRIVATE_KEY_PATH`, at the host value
+`/etc/overflow/github-app/private-key.pem`, beside `GITHUB_APP_ID`, in
+[deploy/README.md](README.md)'s *Create the environment file* section; the
+implementation is `readGitHubAppAuthConfig` in
+[src/lib/github/app-installation-auth.ts](../src/lib/github/app-installation-auth.ts),
+imported only by the Node reconciliation wiring. Either variable unset or
+empty is the OAuth-only posture, and in that posture the independence does not
+hold: the fold falls back to the sponsor's OAuth token, which is a personal
+credential. The relay is the second place: its workflow reads the App key from
+the repository's `overflow-ledger` environment secret and pins the App id and
+installation id in the workflow definition itself, so the check-runs that
+satisfy branch protection keep being posted whenever a producer run completes
+and GitHub triggers the relay, with no personal account involved in the run.
+See [OPERATING.md](../OPERATING.md#required-checks-relay) for its operations
+and [deploy/README.md](README.md) section 10 for why the required contexts are
+pinned to that App at all.
+
+**Two limits on that claim, because the honest version is the useful one.**
+The key material and the App itself are different things: a private key whose
+owner record no longer exists mints nothing, and nothing in this repository
+records what GitHub does to an App when its owner's account is deleted. And
+[deploy/README.md](README.md)'s note that the App private key lives under a
+traversable `/etc/overflow` on a relay host, and that an untraversable one
+fails the required checks closed, ties the host file to the required-checks
+path, while the relay workflow reads the Actions environment secret. Whether
+those are one PEM or two copies is not determinable from this repository;
+treat them as two locations to check rather than one.
+
+**A backup admin collaborator, if one is ever invited.** Today none is
+invited, and this runbook does not create one. If the maintainer later invites
+a second admin collaborator, that person can merge a pull request, apply
+`offered:` and `settled:` labels, administer branch protection, administer the
+Overflow Ledger App including rotating its key and its installation, and
+rotate a registration's webhook secret. That person cannot act as the
+repository owner — there is no organization owner to escalate to, because this
+is a personal repository — and cannot recover the personal account itself;
+only GitHub's account-recovery process reaches that. Inviting one is a
+repository settings change rather than a commit, it is the maintainer's
+action, and as of this writing it has not been done.
+
+**The procedure, in order.**
+
+1. Establish which of the three cases above this is, and record the UTC
+   discovery time, before touching anything. Everything else depends on it:
+   absence needs no change, compromise needs containment first.
+2. Confirm the instance side is unaffected, on the host, as root:
+
+   ```bash
+   systemctl is-active overflow.service
+   curl --connect-timeout 5 --max-time 30 -fsS -o /dev/null -w '%{http_code}\n' \
+     http://127.0.0.1:3000/api/readiness
+   ```
+
+   Expect `active` and HTTP `200`. A non-`200` or `inactive` is a host
+   problem, not an account problem, and is recovered by the rest of
+   [Recover](#recover) regardless of the account's state.
+3. For a compromised account, contain it before recovering anything: with the
+   attacker still holding the account, every later step can be undone by them
+   afterwards. Nothing on the deployment host is answerable to the account, so
+   the host itself needs no action for this case.
+4. Establish what is actually blocked by observation rather than assumption,
+   using an authenticated reader — a maintainer token, or a backup admin's:
+
+   ```bash
+   gh api repos/Nitjsefnie/Overflow/collaborators \
+     --jq '[.[] | select(.permissions.admin)] | length'
+   gh api repos/Nitjsefnie/Overflow/branches/main/protection \
+     --jq '{required: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled}'
+   ```
+
+   Both are read-only. The first prints the number of admin collaborators, the
+   second prints the required contexts and whether administrators are enforced.
+   Neither is answerable without an account holding permission on the
+   repository, which is the definition of the loss. A non-200 or a 404 from
+   either means that token has no permission, not that the setting is absent.
+5. While any access to the repository remains, record the App's key locations
+   and the host file's mode without copying any key material into the incident
+   record:
+
+   ```bash
+   ls -l /etc/overflow/github-app/private-key.pem
+   ```
+
+   The path is absent if the host runs the OAuth-only posture. Record its
+   presence or absence and its mode; never `cat` it, never paste its contents,
+   and never record the environment secret's value.
+6. Independent of the account and therefore still running throughout: the
+   service, the webhook receivers, GitHub sign-in, the reconciliation worker
+   and automatic settlement pricing. No step in 1 to 5 stops any of them, and
+   none of steps 1 to 5 needs a merge, a label or a settings change to
+   complete.
+7. Blocked until access returns: merges, triage, `offered:` and `settled:`
+   labelling, deployment, secret rotation, moderator roster changes, and any
+   correction request only a moderator can grant or decline. A `settled:` label
+   cannot be applied and its rationale comment cannot be posted, so a merge
+   closes no settlement in the fold; leave such an issue open rather than
+   closing it by hand.
+8. When access returns, verify it is the maintainer's own and not an attacker
+   still holding the account — new sessions, new SSH and signing keys, and the
+   account's own recovery contacts — before treating anything as recovered.
+   Then return to [Contain](#contain) for whatever containment the compromise
+   case required, and record the whole of it under [Record](#record).
+9. Rotating the App's private key is a separate maintainer-held item, and this
+   runbook deliberately does not carry that procedure.
+   [deploy/README.md](README.md) section 11 is the repository's only
+   sanctioned key-rotation procedure and it names `TOKEN_ENCRYPTION_KEY`
+   specifically; it does not extend to the App key and must not be applied to
+   it. Until the App-key rotation is written, treat that key as unreplaceable
+   in practice: the locations holding it are the host path configured by
+   `GITHUB_APP_PRIVATE_KEY_PATH` and the `LEDGER_APP_KEY` environment secret
+   the relay workflow reads, and a rotation would have to change both.
 
 ## Record
 
