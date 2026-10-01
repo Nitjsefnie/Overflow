@@ -16,7 +16,9 @@ import { guardedRequests, useTrustedOrigin } from "../support/trusted-origin";
 // transport a module builds by calling it treats the IPv4 loopback as public,
 // and a loopback listener can stand in for a public GitLab. The mock passes
 // each caller's options through untouched and builds no transport of its own,
-// so each cap is the one the production module asked for.
+// so each cap is the one the production module asked for — every option but
+// the deny list, which it drops because its own permission seam may not stand
+// beside one.
 //
 // The link route accepts only an https instance, and the listeners here have
 // no certificate, so the wrapped transport carries a request for an
@@ -41,7 +43,14 @@ vi.mock("@/lib/security/public-destination", async (importOriginal) => {
     return url;
   };
   const createPublicFetch: typeof actual.createPublicFetch = (options) => {
-    const guarded = actual.createPublicFetch({ ...options, isPermittedAddress: loopbackPermitted });
+    // The deployment deny list rides in on the transports this mock replaces,
+    // and it may not stand beside the mock's own permission seam, so it is
+    // dropped rather than passed through.
+    const guarded = actual.createPublicFetch({
+      ...options,
+      denyCidrs: undefined,
+      isPermittedAddress: loopbackPermitted,
+    });
     return ((input: string | URL | Request, init?: RequestInit) =>
       guarded(overLoopbackHttp(input), init)) as typeof fetch;
   };

@@ -9,6 +9,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { getDefaultAutoSelectFamily, isIP, setDefaultAutoSelectFamily, type Socket } from "node:net";
+import { networkInterfaces } from "node:os";
 import { inspect } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -133,6 +134,31 @@ function scriptedLookup(answers: string[][]): { lookup: typeof dnsLookup; calls:
 }
 
 const refusalMessage = "The destination was refused.";
+
+/**
+ * The host's own public interface addresses — the ones the address class
+ * admits, and the ones a deployment's deny list names (issue 899). Empty
+ * where the host has none (a CI runner behind private interfaces), which
+ * skips the public-address fixtures below: a destination the class permits
+ * must route locally for the test to stay network-free, and only the host's
+ * own public address does — a self-connect answers over loopback.
+ */
+function hostPublicAddresses(): string[] {
+  const found: string[] = [];
+  for (const addresses of Object.values(networkInterfaces())) {
+    for (const entry of addresses ?? []) {
+      if (!entry.internal && isPublicAddress(entry.address)) {
+        found.push(entry.address);
+      }
+    }
+  }
+  return [...new Set(found)];
+}
+
+/** Brackets an IPv6 literal for use as a URL host; passes anything else through. */
+function urlHost(address: string): string {
+  return isIP(address) === 6 ? `[${address}]` : address;
+}
 
 /**
  * Awaits a rejection and pins it as the one refusal: the refusal class, the
@@ -689,5 +715,127 @@ describe("honouring the abort signal", () => {
         (response) => response.text(),
       ),
     ).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
+
+describe("with a deny list of extra refused destinations", () => {
+  // The deny list may only ever refuse more, so a case whose GREEN outcome is
+  // a refusal must aim at a destination the unfixed transport would have
+  // dialled: the host's own public interface address, which a self-connect
+  // answers over loopback. Where the host has none (a CI runner), the
+  // public-address cases have no local stand-in and skip.
+  const hostPublic = hostPublicAddresses();
+  const publicCase = hostPublic[0];
+
+  it("refuses construction when a deny list is supplied beside an explicit permission check", () => {
+    expect(
+      () => createPublicFetch({ isPermittedAddress: loopbackPermitted, denyCidrs: ["8.8.8.8"], maxBodyBytes: bodyLimit }),
+    ).toThrow(TypeError);
+  });
+
+  it.each([
+    ["nonsense"],
+    ["300.1.2.3"],
+    ["8.8.8.8/33"],
+    ["8.8.8.8/-1"],
+    ["8.8.8.8/"],
+    ["8.8.8.8/8/8"],
+    ["8.8.8.8/0x8"],
+    ["[::1]"],
+  ])("refuses construction on the invalid deny-list entry %j", (entry) => {
+    expect(() => createPublicFetch({ denyCidrs: [entry], maxBodyBytes: bodyLimit })).toThrow(TypeError);
+  });
+
+  it("accepts bare addresses and CIDR subnets of either family", () => {
+    expect(() =>
+      createPublicFetch({
+        denyCidrs: ["8.8.8.8", "8.8.0.0/16", "2001:db8::/32", "::1", "0.0.0.0/8"],
+        maxBodyBytes: bodyLimit,
+      }),
+    ).not.toThrow();
+  });
+
+  it("keeps an explicit permission check beside an empty deny list", async () => {
+    const listener = await listen("127.0.0.1");
+    const guardedFetch = createPublicFetch({
+      isPermittedAddress: loopbackPermitted,
+      denyCidrs: [],
+      maxBodyBytes: bodyLimit,
+    });
+
+    const response = await guardedFetch(`http://127.0.0.1:${listener.port}/`);
+
+    expect(await response.text()).toBe("reached");
+    expect(listener.connections).toBe(1);
+  });
+
+  it("refuses an IP literal the deny list contains, before connecting", async (context) => {
+    if (publicCase === undefined) {
+      context.skip();
+      return;
+    }
+    const listener = await listen(publicCase);
+    const guardedFetch = createPublicFetch({ denyCidrs: [publicCase], maxBodyBytes: bodyLimit });
+
+    await expectRefusal(guardedFetch(`http://${urlHost(publicCase)}:${listener.port}/`), [
+      publicCase,
+      String(listener.port),
+    ]);
+    expect(listener.connections).toBe(0);
+  });
+
+  it("refuses an IP literal a deny-list subnet covers", async (context) => {
+    if (publicCase === undefined) {
+      context.skip();
+      return;
+    }
+    const listener = await listen(publicCase);
+    const prefix = isIP(publicCase) === 4 ? 24 : 64;
+    const guardedFetch = createPublicFetch({ denyCidrs: [`${publicCase}/${prefix}`], maxBodyBytes: bodyLimit });
+
+    await expectRefusal(guardedFetch(`http://${urlHost(publicCase)}:${listener.port}/`), [
+      publicCase,
+      String(listener.port),
+    ]);
+    expect(listener.connections).toBe(0);
+  });
+
+  it("refuses a hostname whose resolved answer the deny list contains", async (context) => {
+    if (publicCase === undefined) {
+      context.skip();
+      return;
+    }
+    const listener = await listen(publicCase);
+    const { lookup } = scriptedLookup([[publicCase]]);
+    const guardedFetch = createPublicFetch({ lookup, denyCidrs: [publicCase], maxBodyBytes: bodyLimit });
+
+    await expectRefusal(guardedFetch(`http://gitlab.rebind.test:${listener.port}/`), [
+      publicCase,
+      String(listener.port),
+    ]);
+    expect(listener.connections).toBe(0);
+  });
+
+  it("completes a fetch whose destination the deny list does not contain", async (context) => {
+    if (publicCase === undefined) {
+      context.skip();
+      return;
+    }
+    const listener = await listen(publicCase);
+    const guardedFetch = createPublicFetch({ denyCidrs: ["8.8.8.8"], maxBodyBytes: bodyLimit });
+
+    const response = await guardedFetch(`http://${urlHost(publicCase)}:${listener.port}/`);
+
+    expect(await response.text()).toBe("reached");
+    expect(listener.connections).toBe(1);
+  });
+
+  it("refuses a class-refused destination exactly as a deny-free transport does", async () => {
+    const listener = await listen("127.0.0.1");
+    const { lookup } = scriptedLookup([["127.0.0.1"]]);
+    const guardedFetch = createPublicFetch({ lookup, denyCidrs: ["8.8.8.8"], maxBodyBytes: bodyLimit });
+
+    await expectRefusal(guardedFetch(`http://gitlab.rebind.test:${listener.port}/`), ["127.0.0.1", "8.8.8.8"]);
+    expect(listener.connections).toBe(0);
   });
 });

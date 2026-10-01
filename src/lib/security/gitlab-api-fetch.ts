@@ -1,4 +1,5 @@
 import { createPublicFetch } from "@/lib/security/public-destination";
+import { deploymentDenyCidrs } from "@/lib/security/public-destination-deployment";
 
 /**
  * The GitLab API gateway's default transport: the same refusal of non-public
@@ -7,5 +8,12 @@ import { createPublicFetch } from "@/lib/security/public-destination";
  * merge requests carry long descriptions can exceed the default 1 MiB, and a
  * reconciliation read must not fail on an ordinary page; 64 MiB still bounds
  * what one answer may hold in memory.
+ *
+ * The deployment's own public addresses are denied alongside the non-public
+ * ones, so a member-chosen instance URL cannot name the host itself (issue
+ * 899).
  */
-export const gitlabApiFetch: typeof fetch = createPublicFetch({ maxBodyBytes: 64 * 1024 * 1024 });
+export const gitlabApiFetch: typeof fetch = createPublicFetch({
+  maxBodyBytes: 64 * 1024 * 1024,
+  denyCidrs: deploymentDenyCidrs(),
+});

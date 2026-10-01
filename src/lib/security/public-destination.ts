@@ -11,9 +11,14 @@
  * never reaches `lookup`, so a literal is judged before the request is made.
  * TLS still validates against the hostname; nothing is rewritten to an IP.
  *
- * Every refusal — a non-public address, any redirect, an oversize body —
- * rejects with the same `DestinationRefusedError`, whose message names
- * neither the address nor the rule that fired.
+ * Every refusal — a non-public address, a deny-listed address, any redirect,
+ * an oversize body — rejects with the same `DestinationRefusedError`, whose
+ * message names neither the address nor the rule that fired.
+ *
+ * A deployment may seed the transport with its own addresses (`denyCidrs`,
+ * built by `public-destination-deployment`) so that a member-chosen
+ * destination cannot name the host itself: the address class alone admits
+ * them, so the deny list only ever refuses more.
  */
 
 import { lookup as dnsLookup } from "node:dns";
@@ -106,14 +111,86 @@ type PublicFetchOptions = {
   lookup?: typeof dnsLookup;
   /** Test seam: decides which addresses may be connected to. */
   isPermittedAddress?: (address: string) => boolean;
+  /**
+   * Destinations to refuse beyond the public-address class: bare IPv4/IPv6
+   * addresses or CIDR subnets. The list only ever refuses more, and a
+   * nonempty one beside an explicit `isPermittedAddress` throws at
+   * construction — an option pair that would leave one of its halves
+   * unapplied is a miswiring, not a default to paper over.
+   */
+  denyCidrs?: string[];
   /** The most response body read before refusing; each caller sizes it to its answers. */
   maxBodyBytes: number;
 };
 
+/**
+ * Whether the deny list names this address. The bracketed form a URL host
+ * carries (`[::1]`) is accepted, as `isPublicAddress` does.
+ */
+function checkDenyList(denyList: BlockList, address: string): boolean {
+  const bare = address.startsWith("[") && address.endsWith("]") ? address.slice(1, -1) : address;
+  switch (isIP(bare)) {
+    case 4:
+      return denyList.check(bare, "ipv4");
+    case 6:
+      return denyList.check(bare, "ipv6");
+    default:
+      return false;
+  }
+}
+
+function invalidDenyEntry(entry: string): TypeError {
+  return new TypeError(
+    `Invalid deny-list entry ${JSON.stringify(entry)}: expected a bare IPv4 or IPv6 address or a CIDR subnet.`,
+  );
+}
+
+/**
+ * Builds the deny list behind `denyCidrs`: each entry is a bare IPv4/IPv6
+ * address or a CIDR subnet (`198.51.100.0/24`); anything else throws. Node
+ * masks a subnet entry to its base address itself, so an entry need not be
+ * written in base form.
+ */
+export function denyListFromCidrs(entries: string[]): BlockList {
+  const denyList = new BlockList();
+  for (const entry of entries) {
+    const slash = entry.indexOf("/");
+    const address = slash === -1 ? entry : entry.slice(0, slash);
+    const prefixText = slash === -1 ? null : entry.slice(slash + 1);
+    const family = isIP(address);
+    if (family === 0 || (prefixText !== null && !/^\d+$/.test(prefixText))) {
+      throw invalidDenyEntry(entry);
+    }
+    const prefix = prefixText === null ? undefined : Number(prefixText);
+    if (prefix !== undefined && prefix > (family === 4 ? 32 : 128)) {
+      throw invalidDenyEntry(entry);
+    }
+    if (prefix === undefined) {
+      denyList.addAddress(address, family === 4 ? "ipv4" : "ipv6");
+    } else {
+      denyList.addSubnet(address, prefix, family === 4 ? "ipv4" : "ipv6");
+    }
+  }
+  return denyList;
+}
+
 export function createPublicFetch(options: PublicFetchOptions): typeof fetch {
   const lookup = options.lookup ?? dnsLookup;
-  const isPermittedAddress = options.isPermittedAddress ?? isPublicAddress;
   const { maxBodyBytes } = options;
+  const denyList =
+    options.denyCidrs === undefined || options.denyCidrs.length === 0
+      ? null
+      : denyListFromCidrs(options.denyCidrs);
+  if (options.isPermittedAddress !== undefined && denyList !== null) {
+    throw new TypeError(
+      "Passing both isPermittedAddress and denyCidrs would leave one of them unapplied; supply one of the two.",
+    );
+  }
+  const isPermittedAddress =
+    options.isPermittedAddress ??
+    (denyList === null
+      ? isPublicAddress
+      : (address: string): boolean => isPublicAddress(address) && !checkDenyList(denyList, address));
   // Agents of this transport's own, so a pooled keep-alive socket is only ever
   // one whose address this transport's guard approved. An idle pooled socket
   // is closed after a few seconds rather than whenever the remote chooses:
