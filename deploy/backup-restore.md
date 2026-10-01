@@ -205,19 +205,42 @@ between the dump and the deploys since it was taken — the same count of
 migrations (e.2) has to apply before its replacement can serve, which is why
 the drill records it. `scripts/deploy-migration-status.ts` prints one line
 per migration the tree carries that the database it names does not record,
-and prints nothing at all when there is no lag; point it at the scratch copy
+and prints nothing at all when there is no lag. Point it at the scratch copy
 the way (e.2) points at its replacement — the environment is already loaded
-from this section's first block, so only the database name changes:
+from this section's first block, so only the database name changes — but read
+the copy as the application role, and the restore left it unreadable to that
+role: `db-restore.sh` runs with `--no-owner --no-privileges`, so every table
+in the scratch belongs to `postgres` with default ACLs and the application
+role holds nothing on it. Grant it the read (as superuser, the same identity
+the comparison loop above already uses, which is why that loop is unaffected):
+
+```bash
+sudo -u postgres psql -q -d "$scratch" \
+  -c "GRANT USAGE ON SCHEMA public TO overflow_app; GRANT SELECT ON ALL TABLES IN SCHEMA public TO overflow_app"
+```
+
+then the listing, with its status recorded alongside it:
 
 ```bash
 scratch_url="${DATABASE_URL%/*}/$scratch"
-DATABASE_URL="$scratch_url" node scripts/deploy-migration-status.ts
+pending="$(DATABASE_URL="$scratch_url" node scripts/deploy-migration-status.ts)"
+status=$?
+printf 'pending migrations in %s (listing exit %s):\n%s\n' \
+  "$scratch" "$status" "${pending:-(none)}"
 ```
+
+That `printf` is what makes the recording trustworthy rather than merely
+present. A listing that could not be produced prints nothing, which is exactly
+what no lag also prints, so the two would otherwise reach the drill log
+looking alike — the same trap (e.2)'s gate refuses on for the same reason.
+Carrying the command's exit status in the line distinguishes them: `0` beside
+`(none)` is a current copy, and any other value beside it is a listing that
+never arrived, which is a failed drill step and not a measurement.
 
 The scratch copy is NOT migrated: the drill compares data, and migrating it
 would measure nothing about the restore. The migration step belongs to (e.2).
 Record the outputs — dump bytes, backup and restore durations, per-table
-counts, pg_restore stderr, the pending-migration listing above — in the drill
+counts, pg_restore stderr, the pending-migration line above — in the drill
 log. Append the entry to
 `/var/backups/overflow/drill-log.md` (root:root `0600`). Then clean up,
 keeping the dump:
@@ -379,6 +402,14 @@ through the `if` on an empty listing, which ends the pasted block `0` and
 reads as a pass. And nothing here calls `exit`: no block in this runbook sets
 `set -e`, and an `exit` inside a pasted block closes the shell the operator is
 standing in.
+
+A refusal here is a cheap state to be in, because it happens before the
+rename: nothing has been swapped, the live `overflow` is exactly as it was,
+and the whole recovery is `systemctl start overflow.service` — the database
+was never touched, only the service was stopped. Fix whatever the gate named,
+the migration it could not apply or the listing it could not produce, and run
+this section again from the top. The replacement is disposable until the
+rename; the old database is not.
 
 Then the smallest real check that the replacement serves before the rename —
 the app role can authenticate, and the restored tables answer a read — with
