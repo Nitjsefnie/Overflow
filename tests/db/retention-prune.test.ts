@@ -134,6 +134,12 @@ describe("retention prune", () => {
     // deletes nothing the age gate has not measured.
     const failedWithoutCompletion = await seedRun({ status: "FAILED" });
     const pendingAncient = await seedRun({ status: "PENDING", startedDaysAgo: 200 });
+    // PENDING with a completion timestamp is not a state the application
+    // writes either, but the schema allows it (no check constraint on
+    // reconciliation_runs), and it is exactly the row only the status filter
+    // refuses: with completed_at set, the age gate alone would pass it, so
+    // this seed is what kills a status list that grew a 'PENDING'.
+    const pendingWithCompletion = await seedRun({ status: "PENDING", completedDaysAgo: 200 });
 
     const changeOfCompletedExpired = await seedChange(completedExpired);
     const changeOfFailedExpired = await seedChange(failedExpired);
@@ -141,6 +147,7 @@ describe("retention prune", () => {
     // rows' own age is never the predicate.
     const changeOfRecentRun = await seedChange(completedRecent, { createdDaysAgo: 200 });
     const changeOfPendingRun = await seedChange(pendingAncient);
+    const changeOfPendingWithCompletion = await seedChange(pendingWithCompletion, { createdDaysAgo: 200 });
 
     await expect(pruneExpiredMaintenanceRows(sql)).resolves.toEqual({
       processedReceipts: 0,
@@ -154,10 +161,12 @@ describe("retention prune", () => {
     expect(await runExists(completedRecent)).toBe(true);
     expect(await runExists(failedWithoutCompletion)).toBe(true);
     expect(await runExists(pendingAncient)).toBe(true);
+    expect(await runExists(pendingWithCompletion)).toBe(true);
     expect(await changeExists(changeOfCompletedExpired)).toBe(false);
     expect(await changeExists(changeOfFailedExpired)).toBe(false);
     expect(await changeExists(changeOfRecentRun)).toBe(true);
     expect(await changeExists(changeOfPendingRun)).toBe(true);
+    expect(await changeExists(changeOfPendingWithCompletion)).toBe(true);
   });
 
   it("deletes nothing on the second pass and reports zeros", async () => {
