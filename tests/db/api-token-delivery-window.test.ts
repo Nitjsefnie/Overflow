@@ -10,9 +10,12 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { mintApiToken } from "@/lib/security/api-token";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
-const deliveryWindowMigration = "057_api_token_delivery_window.sql";
+// 058, not 057: main took 057 for the fold evidence-facts migration while this
+// branch was open, so the delivery window renumbered to keep the filename ahead
+// of the guard in scripts/migrate.ts, which keys on filename.
+const deliveryWindowMigration = "058_api_token_delivery_window.sql";
 
-/** The migration applied immediately before 057, whatever lands between 056 and it. */
+/** The migration applied immediately before 058, whatever lands between 057 and it. */
 const precedingMigration = (() => {
   const names = readdirSync(
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../db/migrations"),
