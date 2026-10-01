@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { GitHubApiError, GitHubGateway } from "@/lib/github/client";
 import { CollectionWalkBound, MAX_WALK_ITEMS, MAX_WALK_PAGES } from "@/lib/github/collection-walk-bound";
 import { classifyGitHubRateLimit } from "@/lib/github/errors";
+import { GitHubResponseTooLargeError, MAX_SUCCESS_BODY_BYTES } from "@/lib/github/response-text";
 
 describe("GitHubGateway REST transport", () => {
   it("uses GitHub's versioned API headers when reading one explicitly named repository", async () => {
@@ -1007,4 +1008,68 @@ describe("GitHubGateway repository resolution by id", () => {
       expect(requestedUrls).toEqual([]);
     },
   );
+});
+
+describe("GitHubGateway success-body byte cap", () => {
+  const cap = MAX_SUCCESS_BODY_BYTES;
+
+  // Streams one chunk of exactly the cap and then one further byte, and never
+  // closes: enforcing the cap must reject before the next read, so a client
+  // that buffers whole instead hangs on the next read until the deadline and
+  // fails this test through the timeout error rather than passing it.
+  it("rejects a success body over the cap with a typed error and cancels the stream", async () => {
+    let cancelled = false;
+    let pulls = 0;
+    const capChunk = new Uint8Array(cap);
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      timeoutMs: 250,
+      fetch: async () => new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulls += 1;
+          if (pulls === 1) controller.enqueue(capChunk);
+          else if (pulls === 2) controller.enqueue(new Uint8Array([120]));
+          // Never closes: full buffering instead of the cap would hang the
+          // next read until the deadline and reject with the timeout error.
+        },
+        cancel() { cancelled = true; },
+      }, { highWaterMark: 0 })),
+    });
+
+    const error = await gateway.getRepository({ owner: "octo", name: "overflow" }).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(GitHubResponseTooLargeError);
+    expect((error as Error).name).toBe("GitHubResponseTooLargeError");
+    expect((error as Error).message).not.toContain("test-access-token");
+    expect(cancelled).toBe(true);
+    expect(pulls).toBe(2);
+  });
+
+  it("buffers a success body just under the cap and delivers it intact", async () => {
+    const repository = {
+      id: 42,
+      name: "overflow",
+      full_name: "octo/overflow",
+      private: false,
+      html_url: "https://github.com/octo/overflow",
+      owner: { login: "octo" },
+      permissions: { admin: true },
+    };
+    const skeleton = JSON.stringify({ ...repository, pad: "" });
+    const body = JSON.stringify({ ...repository, pad: "p".repeat(cap - 1 - skeleton.length) });
+    expect(body.length).toBe(cap - 1); // ASCII throughout, so code units are bytes
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => new Response(body),
+    });
+
+    await expect(gateway.getRepository({ owner: "octo", name: "overflow" })).resolves.toMatchObject({
+      id: 42,
+      name: "overflow",
+    });
+  });
+
+  it("pins the success-body byte cap above the write-time fact limit", () => {
+    expect(Number.isFinite(MAX_SUCCESS_BODY_BYTES)).toBe(true);
+    expect(MAX_SUCCESS_BODY_BYTES).toBeGreaterThan(64 * 1024 * 1024);
+  });
 });
