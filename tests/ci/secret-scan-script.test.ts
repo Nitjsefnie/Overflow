@@ -1539,7 +1539,16 @@ describe("scripts/secret-scan.sh", () => {
       expect(clean.status, `the stub must accept the argv on the clean fixture too: ${clean.output}`).toBe(0);
       expect(clean.argv[0], "the same subcommand on a clean fixture").toBe("git");
       const cleanTarget = clean.argv[clean.argv.length - 1];
-      expect(realpathSync(cleanTarget), "the same target resolution on a clean fixture").toBe(realpathSync(control.repo));
+      // `existsSync` first, for the same reason as the two siblings above: on a
+      // target that is not there `realpathSync` raises a bare ENOENT, and this
+      // file's convention is that a reader scanning a failure finds the sentence
+      // written for the case rather than the raw syscall. The `=== true` form
+      // keeps the message a sentence instead of a diff between two long paths.
+      expect(
+        existsSync(cleanTarget) && realpathSync(cleanTarget) === realpathSync(control.repo),
+        `the clean fixture's scan target '${cleanTarget}' must be a directory that exists and must be the ` +
+          "fixture repository itself, so the planted and clean cases are reading the same target resolution",
+      ).toBe(true);
 
       const walked = tryGit(cleanTarget, "log", "--all", "-p", "--", ".");
       expect(walked.status, `the clean target's history must be readable: ${walked.stderr}`).toBe(0);
