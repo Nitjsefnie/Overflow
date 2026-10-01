@@ -29,6 +29,31 @@ import {
   type ApiTokenRouteDependencies,
   type ApiTokenRouteSession,
 } from "../src/app/api/tokens/route.ts";
+import {
+  createRepositoryDeleteHandler,
+  createRepositoryPatchHandler,
+  createRepositoryPostHandler,
+} from "../src/app/api/repositories/route.ts";
+import {
+  createLabelsGetHandler,
+} from "../src/app/api/repositories/labels/route.ts";
+import {
+  createForgeIdentitiesDeleteHandler,
+  createForgeIdentitiesGetHandler,
+  createForgeIdentitiesPostHandler,
+} from "../src/app/api/forge-identities/route.ts";
+import { createAccountDeleteHandler } from "../src/app/api/account/route.ts";
+import { createAccountExportPostHandler } from "../src/app/api/account/export/route.ts";
+import {
+  fixtureAccountDeleteRouteDependencies,
+  fixtureAccountExportRouteDependencies,
+  fixtureForgeIdentitiesRouteDependencies,
+  fixtureLabelsRouteDependencies,
+  fixtureMemberId,
+  fixtureNowMs,
+  fixtureRegistrationInput,
+  fixtureRepositoryRouteDependencies,
+} from "./http-surface-fixtures.ts";
 
 /**
  * The HTTP surface snapshot's shared machinery (issue 912): what the recorded
@@ -193,10 +218,10 @@ export function baseCommit(envOverride: string | undefined, label: string): stri
 // ---------------------------------------------------------------------------
 
 /** Every derivation stub answers as this account. */
-const memberId = "00000000-0000-4000-8000-000000000001";
+const memberId = fixtureMemberId;
 
 /** A fixed instant the timestamp-bearing stubs derive from — no wall clock in a snapshot. */
-const derivationNowMs = Date.parse("2026-01-15T12:00:00.000Z");
+const derivationNowMs = fixtureNowMs;
 
 const memberDependencies = {
   getSession: async () => ({ user: { id: memberId, role: "MEMBER" as const } }),
@@ -210,6 +235,22 @@ async function bodyShape(response: Response): Promise<HttpShape> {
 
 function memberRequest(path: string): Request {
   return new Request(`https://overflow.example${path}`);
+}
+
+/**
+ * A same-origin JSON mutation request: the origin guard demands `Origin` equal
+ * to APP_URL's origin, and the media-type guard demands JSON when a body
+ * declares a type.
+ */
+function mutationRequest(path: string, method: string, body?: unknown): Request {
+  return new Request(`https://overflow.example${path}`, {
+    method,
+    headers: {
+      origin: "https://overflow.example",
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
 }
 
 /**
@@ -506,15 +547,109 @@ async function deriveGetCalibration(): Promise<HttpShape> {
   return bodyShape(await createCalibrationGetHandler(dependencies)(memberRequest("/api/calibration")));
 }
 
+async function derivePostRepositories(): Promise<HttpShape> {
+  return withAppUrl(async () =>
+    bodyShape(
+      await createRepositoryPostHandler(fixtureRepositoryRouteDependencies())(
+        mutationRequest("/api/repositories", "POST", fixtureRegistrationInput),
+      ),
+    ),
+  );
+}
+
+async function derivePatchRepositories(): Promise<HttpShape> {
+  return withAppUrl(async () =>
+    bodyShape(
+      await createRepositoryPatchHandler(fixtureRepositoryRouteDependencies())(
+        mutationRequest("/api/repositories", "PATCH", fixtureRegistrationInput),
+      ),
+    ),
+  );
+}
+
+async function deriveDeleteRepositories(): Promise<HttpShape> {
+  return withAppUrl(async () =>
+    bodyShape(
+      await createRepositoryDeleteHandler(fixtureRepositoryRouteDependencies())(
+        mutationRequest("/api/repositories", "DELETE", { repositoryUrl: "octo/overflow" }),
+      ),
+    ),
+  );
+}
+
+async function deriveGetRepositoryLabels(): Promise<HttpShape> {
+  return bodyShape(
+    await createLabelsGetHandler(fixtureLabelsRouteDependencies())(
+      memberRequest("/api/repositories/labels?owner=octo&name=overflow"),
+    ),
+  );
+}
+
+async function deriveGetForgeIdentities(): Promise<HttpShape> {
+  return bodyShape(await createForgeIdentitiesGetHandler(fixtureForgeIdentitiesRouteDependencies())());
+}
+
+async function derivePostForgeIdentities(): Promise<HttpShape> {
+  return withAppUrl(async () =>
+    bodyShape(
+      await createForgeIdentitiesPostHandler(fixtureForgeIdentitiesRouteDependencies())(
+        mutationRequest("/api/forge-identities", "POST", {
+          instanceUrl: "https://gitlab.example",
+          token: "glpat-stub",
+        }),
+      ),
+    ),
+  );
+}
+
+async function deriveDeleteForgeIdentities(): Promise<HttpShape> {
+  return withAppUrl(async () =>
+    bodyShape(
+      await createForgeIdentitiesDeleteHandler(fixtureForgeIdentitiesRouteDependencies())(
+        mutationRequest("/api/forge-identities", "DELETE", { id: "00000000-0000-4000-8000-000000000020" }),
+      ),
+    ),
+  );
+}
+
+async function deriveDeleteAccount(): Promise<HttpShape> {
+  return withAppUrl(async () =>
+    bodyShape(
+      await createAccountDeleteHandler(fixtureAccountDeleteRouteDependencies())(
+        mutationRequest("/api/account", "DELETE", { confirmLogin: "member" }),
+      ),
+    ),
+  );
+}
+
+async function derivePostAccountExport(): Promise<HttpShape> {
+  return withAppUrl(async () =>
+    bodyShape(
+      await createAccountExportPostHandler(fixtureAccountExportRouteDependencies())(
+        mutationRequest("/api/account/export", "POST"),
+      ),
+    ),
+  );
+}
+
 /**
- * The documented routes Task 1 of the snapshot pins, keyed "METHOD /path" in
- * the spelling API.md documents dynamic segments with (<id> for [id]).
+ * The documented routes the snapshot pins, keyed "METHOD /path" in the
+ * spelling API.md documents dynamic segments with (<id> for [id]).
  */
 export async function deriveHttpSurfaceShapes(): Promise<Record<string, HttpShape>> {
   return {
     "GET /api/version": await deriveGetVersion(),
     "GET /api/readiness": await deriveGetReadiness(),
     "POST /api/tokens": await derivePostTokens(),
+    "POST /api/repositories": await derivePostRepositories(),
+    "PATCH /api/repositories": await derivePatchRepositories(),
+    "DELETE /api/repositories": await deriveDeleteRepositories(),
+    "GET /api/repositories/labels": await deriveGetRepositoryLabels(),
+    "GET /api/forge-identities": await deriveGetForgeIdentities(),
+    "POST /api/forge-identities": await derivePostForgeIdentities(),
+    "DELETE /api/forge-identities": await deriveDeleteForgeIdentities(),
+    "DELETE /api/account": await deriveDeleteAccount(),
+    "POST /api/account/export": await derivePostAccountExport(),
     "GET /api/dashboard": await deriveGetDashboard(),
     "GET /api/issues": await deriveGetIssues(),
     "GET /api/settlements": await deriveGetSettlements(),

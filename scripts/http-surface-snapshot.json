@@ -13,6 +13,199 @@
       "expiresAt": "string",
       "token": "string"
     },
+    "POST /api/repositories": {
+      "claimPath": "string",
+      "initialImportScheduled": "boolean",
+      "repository": {
+        "githubRepositoryId": "number",
+        "githubWebhookId": "number",
+        "id": "string",
+        "ownerName": "string",
+        "sponsorId": "string",
+        "visibility": "string"
+      }
+    },
+    "PATCH /api/repositories": {
+      "changed": "boolean",
+      "effectiveFrom": "string",
+      "repository": {
+        "githubRepositoryId": "number",
+        "githubWebhookId": "number",
+        "id": "string",
+        "ownerName": "string",
+        "sponsorId": "string",
+        "visibility": "string"
+      },
+      "versionNumber": "number"
+    },
+    "DELETE /api/repositories": {
+      "alreadyUnregistered": "boolean",
+      "repository": {
+        "githubRepositoryId": "number",
+        "githubWebhookId": "number",
+        "id": "string",
+        "ownerName": "string",
+        "sponsorId": "string",
+        "visibility": "string"
+      },
+      "webhookDeleted": "boolean"
+    },
+    "GET /api/repositories/labels": {
+      "labels": "string"
+    },
+    "GET /api/forge-identities": {
+      "identities": {
+        "forgeLogin": "string",
+        "id": "string",
+        "instanceUrl": "string",
+        "provider": "string",
+        "tokenFailedAt": "null",
+        "verifiedAt": "string"
+      }
+    },
+    "POST /api/forge-identities": {
+      "identity": {
+        "forgeLogin": "string",
+        "id": "string",
+        "instanceUrl": "string",
+        "provider": "string",
+        "tokenFailedAt": "null",
+        "verifiedAt": "string"
+      }
+    },
+    "DELETE /api/forge-identities": {
+      "deleted": "boolean"
+    },
+    "DELETE /api/account": {
+      "deleted": "boolean"
+    },
+    "POST /api/account/export": {
+      "account": {
+        "avatarUrl": "null",
+        "confirmedMiscalibrationCount": "number",
+        "createdAt": "string",
+        "deletedAt": "null",
+        "enforcementState": "string",
+        "githubLogin": "string",
+        "githubUserId": "number",
+        "hasStoredGitHubToken": "boolean",
+        "id": "string",
+        "role": "string",
+        "updatedAt": "string"
+      },
+      "apiToken": {
+        "confirmedAt": "null",
+        "createdAt": "string",
+        "expiresAt": "string",
+        "lastUsedAt": "null"
+      },
+      "authoredPullRequests": {
+        "createdAt": "string",
+        "id": "string"
+      },
+      "calibrationAudits": {
+        "asAccount": {
+          "createdAt": "string",
+          "id": "string"
+        },
+        "asModerator": {
+          "createdAt": "string",
+          "id": "string"
+        },
+        "asReporter": {
+          "createdAt": "string",
+          "id": "string"
+        }
+      },
+      "exportedAt": "string",
+      "forgeIdentities": {
+        "createdAt": "string",
+        "forgeLogin": "string",
+        "forgeUserId": "number",
+        "hasStoredToken": "boolean",
+        "id": "string",
+        "instanceUrl": "string",
+        "provider": "string",
+        "tokenFailedAt": "null",
+        "verifiedAt": "string"
+      },
+      "formatVersion": "number",
+      "moderationCreditAdjustmentLines": {
+        "createdAt": "string",
+        "id": "string"
+      },
+      "moderationCreditAdjustments": {
+        "createdAt": "string",
+        "id": "string"
+      },
+      "moderationEvents": {
+        "asActor": {
+          "createdAt": "string",
+          "id": "string"
+        },
+        "asTarget": {
+          "createdAt": "string",
+          "id": "string"
+        }
+      },
+      "moderatorRoleChanges": {
+        "asActor": {
+          "createdAt": "string",
+          "id": "string"
+        },
+        "asTarget": {
+          "createdAt": "string",
+          "id": "string"
+        }
+      },
+      "reconciliationRuns": {
+        "asGraphqlCostSponsor": {
+          "createdAt": "string",
+          "id": "string"
+        },
+        "asRequester": {
+          "createdAt": "string",
+          "id": "string"
+        }
+      },
+      "repositoryReconciliationUsage": {
+        "createdAt": "string",
+        "id": "string"
+      },
+      "selfWorkCalibrations": {
+        "createdAt": "string",
+        "id": "string"
+      },
+      "settlementOverrideRequests": {
+        "asDecider": {
+          "createdAt": "string",
+          "id": "string"
+        },
+        "asRequester": {
+          "createdAt": "string",
+          "id": "string"
+        }
+      },
+      "settlements": {
+        "asCreditor": {
+          "createdAt": "string",
+          "id": "string"
+        },
+        "asDebtor": {
+          "createdAt": "string",
+          "id": "string"
+        }
+      },
+      "sponsoredRepositories": {
+        "active": "boolean",
+        "createdAt": "string",
+        "id": "string",
+        "instanceUrl": "null",
+        "ownerName": "string",
+        "provider": "string",
+        "unregisteredAt": "null"
+      }
+    },
     "GET /api/dashboard": {
       "availableHeadroom": "number",
       "earnedTotal": "number",
