@@ -3,7 +3,9 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   decideContexts,
+  decideRerun,
   mintAppJwt,
+  RERUN_ATTEMPT_CAP,
   runRelay,
   type RelayJob,
 } from "../../scripts/ledger-relay.ts";
@@ -13,7 +15,9 @@ import {
  * producing jobs into per-context decisions; mintAppJwt shapes the GitHub App
  * JWT; runRelay mints an installation token, reads the jobs listing and posts
  * one check-run per pinned context — all through an injected fetch, never the
- * network.
+ * network. Issue 861 adds the rerun-heal: decideRerun is the pure decision,
+ * and runRelay dispatches the rerun for a cancelled pending PR run at a live,
+ * unmatched head.
  */
 
 const PATH_CI = ".github/workflows/ci.yml";
@@ -34,6 +38,119 @@ function job(over: Partial<RelayJob>): RelayJob {
     ...over,
   };
 }
+
+describe("decideRerun", () => {
+  const HEAD = "c".repeat(40);
+
+  function healRun(
+    over: Partial<{ conclusion: string | null; event: string; runAttempt: number; headSha: string }> = {},
+  ) {
+    return { conclusion: "cancelled", event: "pull_request", runAttempt: 1, headSha: HEAD, ...over };
+  }
+
+  it.each([
+    [
+      "heals a cancelled pending pull_request run at a live, unmatched head",
+      healRun(),
+      { state: "open", headSha: HEAD },
+      false,
+      true,
+    ],
+    [
+      "heals a cancelled pull_request_target run at a live, unmatched head",
+      healRun({ event: "pull_request_target" }),
+      { state: "open", headSha: HEAD },
+      false,
+      true,
+    ],
+    [
+      "does not heal a superseded head — the open PR's tip has moved on",
+      healRun(),
+      { state: "open", headSha: "d".repeat(40) },
+      false,
+      false,
+    ],
+    [
+      "does not heal a closed PR at the head",
+      healRun(),
+      { state: "closed", headSha: HEAD },
+      false,
+      false,
+    ],
+    [
+      "does not heal when no PR is associated with the head",
+      healRun(),
+      null,
+      false,
+      false,
+    ],
+    [
+      "does not heal a push run",
+      healRun({ event: "push" }),
+      { state: "open", headSha: HEAD },
+      false,
+      false,
+    ],
+    [
+      "does not heal a workflow_dispatch run",
+      healRun({ event: "workflow_dispatch" }),
+      { state: "open", headSha: HEAD },
+      false,
+      false,
+    ],
+    [
+      "does not heal a successful run",
+      healRun({ conclusion: "success" }),
+      { state: "open", headSha: HEAD },
+      false,
+      false,
+    ],
+    [
+      "does not heal a failed run",
+      healRun({ conclusion: "failure" }),
+      { state: "open", headSha: HEAD },
+      false,
+      false,
+    ],
+    [
+      "does not heal a run without a conclusion",
+      healRun({ conclusion: null }),
+      { state: "open", headSha: HEAD },
+      false,
+      false,
+    ],
+    [
+      "does not heal a run at the attempt cap",
+      healRun({ runAttempt: 5 }),
+      { state: "open", headSha: HEAD },
+      false,
+      false,
+    ],
+    [
+      "heals a run just under the attempt cap",
+      healRun({ runAttempt: 4 }),
+      { state: "open", headSha: HEAD },
+      false,
+      true,
+    ],
+    [
+      "does not heal when a live run of the same workflow already holds the head",
+      healRun(),
+      { state: "open", headSha: HEAD },
+      true,
+      false,
+    ],
+  ])("%s", (_name, run, pr, liveRunExists, expected) => {
+    expect(decideRerun(run, pr, liveRunExists)).toBe(expected);
+  });
+
+  it("caps exactly at RERUN_ATTEMPT_CAP, which is 5", () => {
+    expect(RERUN_ATTEMPT_CAP).toBe(5);
+    const live = { state: "open", headSha: HEAD };
+    expect(decideRerun(healRun({ runAttempt: RERUN_ATTEMPT_CAP }), live, false)).toBe(false);
+    expect(decideRerun(healRun({ runAttempt: RERUN_ATTEMPT_CAP - 1 }), live, false)).toBe(true);
+  });
+});
 
 describe("decideContexts", () => {
   it("returns decisions only for the contexts pinned to the triggering run's path", () => {
@@ -584,5 +701,315 @@ describe("runRelay", () => {
     expect(result.decisions).toEqual([]);
     expect(result.posted).toEqual([]);
     expect(fetchStub.requests).toHaveLength(0);
+  });
+
+  // --- The rerun-heal (issue 861) ---
+
+  const PULLS_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${HEAD_SHA}/pulls?per_page=100`;
+  const RUNS_AT_HEAD_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs?head_sha=${HEAD_SHA}&per_page=100`;
+  const RERUN_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs/${RUN_ID}/rerun`;
+
+  function pullEntry(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return { state: "open", head: { sha: HEAD_SHA }, ...over };
+  }
+
+  function pullsListing(pulls: Array<Record<string, unknown>>): Outcome {
+    return { status: 200, body: pulls };
+  }
+
+  function runEntry(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return { path: PATH_CI, status: "queued", conclusion: null, ...over };
+  }
+
+  function runsListing(runs: Array<Record<string, unknown>>): Outcome {
+    return { status: 200, body: { total_count: runs.length, workflow_runs: runs } };
+  }
+
+  function cancelledPrEnv(over: Record<string, string> = {}): Record<string, string> {
+    return relayEnv({
+      GITHUB_WORKFLOW_RUN_CONCLUSION: "cancelled",
+      GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
+      GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
+      RELAY_RERUN_TOKEN: "rerun-token",
+      ...over,
+    });
+  }
+
+  function requestTo(requests: Recorded[], url: string): Recorded | undefined {
+    return requests.find((request) => request.url === url);
+  }
+
+  function requestsTo(requests: Recorded[], url: string): Recorded[] {
+    return requests.filter((request) => request.url === url);
+  }
+
+  function authHeaderOf(request: Recorded | undefined): string {
+    if (request === undefined) return "";
+    const headers = request.init.headers as Record<string, string>;
+    return String(headers.authorization ?? "");
+  }
+
+  describe("rerun-heal", () => {
+    it("heals a cancelled pending PR run: posts the mirror as today, then issues the rerun POST under the workflow token", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([]),
+        { status: 201, body: { id: 1 } },
+        pullsListing([pullEntry()]),
+        runsListing([runEntry({ path: PATH_ACTIONLINT, status: "in_progress" })]),
+        { status: 202, body: undefined },
+      ]);
+      const result = await runRelay({
+        env: cancelledPrEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      expect(result.posted).toEqual(["verify"]);
+      expect(result.rerunDispatched).toBe(true);
+
+      // The rerun: exactly one POST to the rerun endpoint, authenticated by
+      // the workflow token — never the App token.
+      const rerun = requestTo(fetchStub.requests, RERUN_URL);
+      expect(rerun?.init.method).toBe("POST");
+      expect(authHeaderOf(rerun)).toBe("Bearer rerun-token");
+
+      // The mirror: the no-jobs branch still mirrors failure, exactly as
+      // today, under the App installation token.
+      const [checkRun] = bodiesOf(fetchStub.requests);
+      expect(checkRun).toMatchObject({
+        name: "verify",
+        status: "completed",
+        conclusion: "failure",
+        head_sha: HEAD_SHA,
+      });
+      expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(1);
+      expect(authHeaderOf(requestTo(fetchStub.requests, CHECK_RUNS_URL))).toBe(
+        "Bearer installation-token",
+      );
+
+      // The heal queries themselves carry the App installation token.
+      expect(authHeaderOf(requestTo(fetchStub.requests, PULLS_URL))).toBe(
+        "Bearer installation-token",
+      );
+      expect(authHeaderOf(requestTo(fetchStub.requests, RUNS_AT_HEAD_URL))).toBe(
+        "Bearer installation-token",
+      );
+    });
+
+    it("does not heal at a superseded head and stops the heal queries there", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([]),
+        { status: 201, body: { id: 1 } },
+        pullsListing([{ state: "open", head: { sha: "d".repeat(40) } }]),
+      ]);
+      const result = await runRelay({
+        env: cancelledPrEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      expect(result.rerunDispatched).toBe(false);
+      // The mirror is unchanged: failure, exactly as today.
+      const [checkRun] = bodiesOf(fetchStub.requests);
+      expect(checkRun).toMatchObject({ name: "verify", conclusion: "failure" });
+      // The guards are evaluated in order: condition (d) failed, so the
+      // live-run listing behind condition (e) is never fetched.
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([
+        TOKEN_URL,
+        JOBS_URL,
+        CHECK_RUNS_URL,
+        PULLS_URL,
+      ]);
+    });
+
+    it("does not heal when a live run of the same workflow is already at the head", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([]),
+        { status: 201, body: { id: 1 } },
+        pullsListing([pullEntry()]),
+        runsListing([
+          runEntry({ path: PATH_ACTIONLINT, status: "in_progress" }),
+          runEntry({ path: PATH_CI, status: "completed" }),
+          runEntry({ path: PATH_CI, status: "queued" }),
+        ]),
+      ]);
+      const result = await runRelay({
+        env: cancelledPrEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      expect(result.rerunDispatched).toBe(false);
+      expect(requestTo(fetchStub.requests, RERUN_URL)).toBeUndefined();
+      // The mirror is unchanged: failure, exactly as today.
+      const [checkRun] = bodiesOf(fetchStub.requests);
+      expect(checkRun).toMatchObject({ name: "verify", conclusion: "failure" });
+    });
+
+    it("rejects loudly, before any heal query, when RELAY_RERUN_TOKEN is missing on a cancelled PR run", async () => {
+      const fetchStub = makeFetch([token(), jobsListing([]), { status: 201, body: { id: 1 } }]);
+      await expect(
+        runRelay({
+          env: relayEnv({
+            GITHUB_WORKFLOW_RUN_CONCLUSION: "cancelled",
+            GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
+            GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
+          }),
+          fetchFn: fetchStub.fn,
+          delayFn: makeDelay().fn,
+          readPinMap: async () => PIN_MAP,
+        }),
+      ).rejects.toThrow(/RELAY_RERUN_TOKEN/);
+      // The token is checked before any heal API call: no query for the PR
+      // and none for the live-run listing.
+      expect(requestTo(fetchStub.requests, PULLS_URL)).toBeUndefined();
+      expect(requestTo(fetchStub.requests, RUNS_AT_HEAD_URL)).toBeUndefined();
+    });
+
+    it("hits the rerun endpoint exactly once and keeps App-token auth on the check-runs when several contexts are pinned", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([]),
+        { status: 201, body: { id: 1 } },
+        { status: 201, body: { id: 2 } },
+        pullsListing([pullEntry()]),
+        runsListing([]),
+        { status: 202, body: undefined },
+      ]);
+      const result = await runRelay({
+        env: cancelledPrEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => ({
+          verify: PATH_CI,
+          actionlint: PATH_CI,
+        }),
+      });
+
+      expect(result.posted).toEqual(["verify", "actionlint"]);
+      expect(
+        fetchStub.requests.filter((request) => request.url === RERUN_URL),
+      ).toHaveLength(1);
+      expect(authHeaderOf(requestTo(fetchStub.requests, RERUN_URL))).toBe("Bearer rerun-token");
+      for (const posting of requestsTo(fetchStub.requests, CHECK_RUNS_URL)) {
+        expect(authHeaderOf(posting)).toBe("Bearer installation-token");
+      }
+    });
+
+    it("does not heal at the attempt cap and never queries the head", async () => {
+      const fetchStub = makeFetch([token(), jobsListing([]), { status: 201, body: { id: 1 } }]);
+      const result = await runRelay({
+        env: cancelledPrEnv({ GITHUB_WORKFLOW_RUN_ATTEMPT: "5" }),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      expect(result.rerunDispatched).toBe(false);
+      // The attempt guard precedes the queries: no PR lookup, no run listing.
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([
+        TOKEN_URL,
+        JOBS_URL,
+        CHECK_RUNS_URL,
+      ]);
+    });
+
+    it("reads a missing or non-numeric attempt as 1 and heals", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([]),
+        { status: 201, body: { id: 1 } },
+        pullsListing([pullEntry()]),
+        runsListing([]),
+        { status: 202, body: undefined },
+      ]);
+      const result = await runRelay({
+        env: cancelledPrEnv({ GITHUB_WORKFLOW_RUN_ATTEMPT: "banana" }),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+      expect(result.rerunDispatched).toBe(true);
+      expect(requestTo(fetchStub.requests, RERUN_URL)).toBeDefined();
+    });
+
+    it("never heals a cancelled push run", async () => {
+      const fetchStub = makeFetch([token(), jobsListing([]), { status: 201, body: { id: 1 } }]);
+      const result = await runRelay({
+        env: cancelledPrEnv({
+          GITHUB_WORKFLOW_RUN_EVENT: "push",
+          GITHUB_WORKFLOW_RUN_ATTEMPT: "",
+        }),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      expect(result.rerunDispatched).toBe(false);
+      expect(requestTo(fetchStub.requests, RERUN_URL)).toBeUndefined();
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([
+        TOKEN_URL,
+        JOBS_URL,
+        CHECK_RUNS_URL,
+      ]);
+    });
+
+    it("heals through the dispatch path using the fetched run's run_attempt", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        {
+          status: 200,
+          body: {
+            id: Number(RUN_ID),
+            head_sha: HEAD_SHA,
+            path: PATH_CI,
+            conclusion: "cancelled",
+            html_url: HTML_URL,
+            event: "pull_request",
+            run_attempt: 2,
+          },
+        },
+        jobsListing([]),
+        { status: 201, body: { id: 1 } },
+        pullsListing([pullEntry()]),
+        runsListing([]),
+        { status: 202, body: undefined },
+      ]);
+      const result = await runRelay({
+        env: relayEnv({
+          GITHUB_WORKFLOW_RUN_ID: "",
+          GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
+          GITHUB_WORKFLOW_RUN_PATH: "",
+          GITHUB_WORKFLOW_RUN_CONCLUSION: "",
+          GITHUB_WORKFLOW_RUN_HTML_URL: "",
+          GITHUB_WORKFLOW_RUN_EVENT: "",
+          LEDGER_DISPATCH_RUN_ID: RUN_ID,
+          RELAY_RERUN_TOKEN: "rerun-token",
+        }),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      expect(result.rerunDispatched).toBe(true);
+      const rerun = requestTo(fetchStub.requests, RERUN_URL);
+      expect(rerun?.init.method).toBe("POST");
+      expect(authHeaderOf(rerun)).toBe("Bearer rerun-token");
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([
+        TOKEN_URL,
+        RUN_URL,
+        JOBS_URL,
+        CHECK_RUNS_URL,
+        PULLS_URL,
+        RUNS_AT_HEAD_URL,
+        RERUN_URL,
+      ]);
+    });
   });
 });

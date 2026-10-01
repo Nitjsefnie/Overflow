@@ -2,6 +2,10 @@
 // The ledger relay (issue 708): re-posts the three required checks as
 // check-runs owned by the Overflow Ledger GitHub App, so branch protection can
 // pin each required context to the App instead of the github-actions app.
+// As its second duty (issue 861) it heals a run that GitHub cancelled out of
+// the shared pending concurrency slot while its pull request's head is still
+// live: the relay re-dispatches that run, so a cancelled pending run does not
+// strand the PR.
 //
 //   node scripts/ledger-relay.ts
 //
@@ -47,6 +51,8 @@ export interface TriggeringRun {
   conclusion: string | null;
   htmlUrl: string;
   event: string;
+  /** The triggering run's attempt number; 1 when the environment or the API did not name one. */
+  runAttempt: number;
 }
 
 export const PIN_SHAPE = /^\.github\/workflows\/[^/]+\.ya?ml$/;
@@ -178,6 +184,55 @@ function conclusionWord(conclusion: string | null): string {
   return conclusion === null || conclusion === "" ? "without a conclusion" : conclusion;
 }
 
+/** A rerun is capped at this attempt, so a flapping heal cannot ping-pong forever. */
+export const RERUN_ATTEMPT_CAP = 5;
+
+/** The heal-relevant fields of the triggering run. */
+export interface RerunRun {
+  conclusion: string | null;
+  event: string;
+  runAttempt: number;
+  /** The run's head commit, compared against the associated PR's tip to detect supersession. */
+  headSha: string;
+}
+
+/** The one PR the heal found associated with the run's head commit, if any. */
+export interface HealPullRequest {
+  state: string;
+  headSha: string;
+}
+
+/**
+ * The rerun-heal's decision (issue 861), pure. Every condition is required;
+ * they are evaluated in this order:
+ *
+ * - a. the run concluded `cancelled` — the shape GitHub leaves when it cancels
+ *   a pending run out of the shared concurrency slot;
+ * - b. the run's event is pull_request or pull_request_target — push legs key
+ *   their own SHA and are never healed;
+ * - c. the attempt is under RERUN_ATTEMPT_CAP — a run cancelled from the
+ *   pending slot never started, so attempts increment only via rerun and the
+ *   cap bounds the churn;
+ * - d. the head is still live: an open PR whose tip is the run's head SHA;
+ * - e. no live run of the same workflow is already queued or running at that
+ *   head — the rerun must not duplicate one in flight.
+ */
+export function decideRerun(
+  run: RerunRun,
+  pr: HealPullRequest | null,
+  liveRunExists: boolean,
+): boolean {
+  if (run.conclusion !== "cancelled") return false;
+  if (!isPullRequestEvent(run.event)) return false;
+  if (run.runAttempt >= RERUN_ATTEMPT_CAP) return false;
+  if (pr === null || pr.state !== "open" || pr.headSha !== run.headSha) return false;
+  return !liveRunExists;
+}
+
+function isPullRequestEvent(event: string): boolean {
+  return event === "pull_request" || event === "pull_request_target";
+}
+
 /**
  * The App JWT: RS256 over base64url(header).base64url(payload), signed with
  * the App's private key. iat is backed up a minute and exp held under ten
@@ -208,6 +263,8 @@ export interface RelayResult {
   decisions: ContextDecision[];
   /** The contexts whose check-run POST succeeded, in posting order. */
   posted: string[];
+  /** True when the rerun-heal dispatched a fresh run (issue 861). */
+  rerunDispatched: boolean;
 }
 
 /**
@@ -233,7 +290,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   if (trigger.kind === "workflow_run" && contextsFor(pinMap, trigger.run.path).length === 0) {
     // Nothing is pinned to this run's workflow; there is nothing to relay and
     // no reason to mint a token.
-    return { decisions: [], posted: [] };
+    return { decisions: [], posted: [], rerunDispatched: false };
   }
 
   const jwt = mintAppJwt(appId, appKey, Date.now());
@@ -268,7 +325,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     );
     run = triggeringRunFromApi(fetched);
     if (contextsFor(pinMap, run.path).length === 0) {
-      return { decisions: [], posted: [] };
+      return { decisions: [], posted: [], rerunDispatched: false };
     }
   }
 
@@ -298,7 +355,126 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     );
     posted.push(decision.context);
   }
-  return { decisions, posted };
+
+  // The rerun-heal runs after the mirrored decisions are posted: the mirror —
+  // the relay's primary duty — lands even when a heal query fails, and a
+  // failed heal still turns the job red on its own.
+  const rerunDispatched = await healWithRerun(deps, env, repo, run, auth);
+
+  return { decisions, posted, rerunDispatched };
+}
+
+/**
+ * The rerun-heal (issue 861). When the triggering run was cancelled out of the
+ * shared pending concurrency slot while its pull request's head is still live,
+ * dispatch a fresh run of it, so the cancelled conclusion — mirrored above —
+ * is replaced when the rerun's own completion event arrives. The heal runs
+ * only for a cancelled PR-event run; its conditions are evaluated in order and
+ * each query is issued only when every earlier condition already holds.
+ * Returns true exactly when the rerun was dispatched.
+ */
+async function healWithRerun(
+  deps: RelayDeps,
+  env: Record<string, string | undefined>,
+  repo: string,
+  run: TriggeringRun,
+  auth: Record<string, string>,
+): Promise<boolean> {
+  // The rerun token is required whenever a cancelled PR run is on the table —
+  // checked before any heal API call, so a missing token is a visible red
+  // relay job, never silent degradation.
+  if (run.conclusion !== "cancelled" || !isPullRequestEvent(run.event)) return false;
+  const rerunToken = required(env, "RELAY_RERUN_TOKEN");
+  // The attempt cap precedes the queries.
+  if (run.runAttempt >= RERUN_ATTEMPT_CAP) return false;
+
+  const pr = await findOpenPullRequestAtHead(deps, repo, run.headSha, auth);
+  const liveRunExists =
+    pr === null ? false : await hasLiveRunOfPath(deps, repo, run.headSha, run.path, auth);
+  if (!decideRerun(run, pr, liveRunExists)) return false;
+
+  // The rerun authenticates as the workflow's own repo-scoped token, not the
+  // App token: the rerun needs actions: write, which the App does not hold.
+  await apiCall<unknown>(
+    deps,
+    {
+      url: `${API_ROOT}/repos/${repo}/actions/runs/${run.runId}/rerun`,
+      method: "POST",
+      headers: { ...API_HEADERS, authorization: `Bearer ${rerunToken}` },
+    },
+    `the rerun of run ${run.runId}`,
+  );
+  return true;
+}
+
+/**
+ * Condition (d): the one open PR whose tip is the run's head SHA, or null.
+ * The commit's associated PRs are filtered client-side; a PR whose head has
+ * moved on (superseded) does not match.
+ */
+async function findOpenPullRequestAtHead(
+  deps: RelayDeps,
+  repo: string,
+  headSha: string,
+  auth: Record<string, string>,
+): Promise<HealPullRequest | null> {
+  const body = await apiCall<unknown>(
+    deps,
+    {
+      url: `${API_ROOT}/repos/${repo}/commits/${headSha}/pulls?per_page=100`,
+      method: "GET",
+      headers: { ...API_HEADERS, ...auth },
+    },
+    `the pull requests associated with commit ${headSha}`,
+  );
+  if (!Array.isArray(body)) {
+    throw new Error("the commit's associated-pull-request listing returned no array");
+  }
+  for (const entry of body) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const candidate = entry as { state?: unknown; head?: { sha?: unknown } | undefined };
+    if (candidate.state !== "open") continue;
+    const prHeadSha = typeof candidate.head?.sha === "string" ? candidate.head.sha : "";
+    if (prHeadSha === headSha) {
+      return { state: candidate.state, headSha: prHeadSha };
+    }
+  }
+  return null;
+}
+
+/**
+ * Condition (e): whether any run of the SAME workflow at the head SHA is
+ * queued or in_progress. The runs listing is filtered client-side for the
+ * workflow's path and the live statuses.
+ */
+async function hasLiveRunOfPath(
+  deps: RelayDeps,
+  repo: string,
+  headSha: string,
+  path: string,
+  auth: Record<string, string>,
+): Promise<boolean> {
+  const body = await apiCall<Record<string, unknown>>(
+    deps,
+    {
+      url: `${API_ROOT}/repos/${repo}/actions/runs?head_sha=${headSha}&per_page=100`,
+      method: "GET",
+      headers: { ...API_HEADERS, ...auth },
+    },
+    `the workflow-run listing at ${headSha}`,
+  );
+  const runs = Array.isArray(body.workflow_runs) ? body.workflow_runs : [];
+  for (const entry of runs) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const candidate = entry as { path?: unknown; status?: unknown };
+    if (
+      candidate.path === path &&
+      (candidate.status === "queued" || candidate.status === "in_progress")
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function checkRunBody(decision: ContextDecision, run: TriggeringRun): Record<string, unknown> {
@@ -347,6 +523,9 @@ async function apiCall<T>(deps: RelayDeps, request: ApiRequest, what: string): P
     }
     const text = await response.text();
     if (response.ok) {
+      // The rerun endpoint (issue 861) answers 202 with an empty body; an
+      // empty success body parses as no data rather than a shape failure.
+      if (text === "") return undefined as T;
       try {
         return JSON.parse(text) as T;
       } catch {
@@ -397,6 +576,7 @@ function parseTrigger(env: Record<string, string | undefined>): Trigger {
         conclusion: normalizedConclusion(env.GITHUB_WORKFLOW_RUN_CONCLUSION),
         htmlUrl,
         event: env.GITHUB_WORKFLOW_RUN_EVENT ?? "",
+        runAttempt: normalizedAttempt(env.GITHUB_WORKFLOW_RUN_ATTEMPT),
       },
     };
   }
@@ -416,6 +596,22 @@ function normalizedConclusion(value: string | undefined): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
+/**
+ * A missing or invalid attempt reads as 1 (issue 861): the heal's cap
+ * compares against the run's own attempt number, which both trigger paths
+ * carry — GITHUB_WORKFLOW_RUN_ATTEMPT on the workflow_run path, run_attempt in
+ * the fetched body on the dispatch path.
+ */
+function normalizedAttempt(value: string | number | undefined): number {
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value >= 1 ? value : 1;
+  }
+  const trimmed = (value ?? "").trim();
+  if (!DIGITS.test(trimmed)) return 1;
+  const parsed = Number(trimmed);
+  return parsed >= 1 ? parsed : 1;
+}
+
 function triggeringRunFromApi(body: Record<string, unknown>): TriggeringRun {
   const headSha = typeof body.head_sha === "string" ? body.head_sha : "";
   assertShape(headSha, SHA_40, "the fetched run's head_sha must be a 40-hex SHA");
@@ -432,6 +628,11 @@ function triggeringRunFromApi(body: Record<string, unknown>): TriggeringRun {
     conclusion: typeof body.conclusion === "string" ? body.conclusion : null,
     htmlUrl,
     event: typeof body.event === "string" ? body.event : "",
+    runAttempt: normalizedAttempt(
+      typeof body.run_attempt === "number" || typeof body.run_attempt === "string"
+        ? body.run_attempt
+        : undefined,
+    ),
   };
 }
 
@@ -515,6 +716,12 @@ function main(): void {
       }
       for (const decision of result.decisions) {
         console.log(`[ledger-relay] ${decision.context}: ${decision.conclusion ?? decision.status}`);
+      }
+      if (result.rerunDispatched) {
+        console.log(
+          "[ledger-relay] rerun-heal: the cancelled run was re-dispatched; " +
+            "its completion event will mirror the real conclusion",
+        );
       }
     },
     (error: unknown) => {
