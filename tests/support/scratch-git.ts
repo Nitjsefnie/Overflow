@@ -137,16 +137,21 @@ export function showFileLines(commit: string, path: string, cwd?: string): strin
  * of the answer.
  *
  * It DOES throw when there is no status at all. `spawnSync` returns
- * `status: null` — and, measured, with **no `stdout` key whatsoever** — when the
- * binary cannot be launched or the call times out, so a helper that returned
- * those fields unchanged would hand a caller an `undefined` where its type said
- * `string`, and the caller's `expect(result.stdout).not.toContain(secret)` would
- * throw a bare `TypeError` instead of failing an assertion. Worse, coalescing to
- * `""` would be worse still: an empty string contains nothing, so a launch
- * failure would satisfy a "found nothing" assertion and certify a repository the
- * test never opened. Throwing makes "could not look" loud, which is the only
- * shape in which it cannot be read as "looked, found nothing" — the exact
- * distinction between status 1 and the failures above this line.
+ * `status: null` when the binary cannot be launched or the call times out, and on
+ * those two paths `result.stdout` holds DIFFERENT values — measured on this box:
+ * a missing binary and a missing working directory both give `undefined`, and a
+ * **timeout gives `""`**. The key is present on every one of them; what varies is
+ * what it holds.
+ *
+ * That difference is the whole reason the throw is not cosmetic, because the two
+ * value shapes fail in opposite directions. Hand the caller the `undefined` and
+ * their `expect(result.stdout).not.toContain(secret)` raises a vitest
+ * `AssertionError` — red, but on a message about an unusable argument rather than
+ * about the repository. Hand them the `""` and that same assertion **PASSES**:
+ * an empty string contains nothing, so a scan that never opened the repository
+ * certifies it clean. Coalescing with `?? ""` would therefore convert the second
+ * case into exactly the false green this helper exists to prevent, which is why
+ * it throws on any null status instead of returning a value.
  *
  * Same environment as `git`: every inherited `GIT_*` variable stripped, so a
  * caller cannot be redirected to a different repository by the environment.
@@ -159,10 +164,15 @@ export function tryGit(repo: string, ...args: string[]): { status: number; stdou
     timeout: BLOB_READ_TIMEOUT_MS,
   });
   if (result.status === null) {
-    // Measured on this box, `spawnSync` pointed at a directory that does not
-    // exist returns `status: null`, an `error`, and NO `stdout` at all — so the
-    // declared `string` was a lie on exactly this path, and a caller's
-    // `not.toContain(...)` would have thrown a bare TypeError, or worse, passed.
+    // Measured on this box, and the ternary below is what it reports:
+    //
+    //   missing binary    → status null, stdout undefined, error ENOENT
+    //   missing cwd       → status null, stdout undefined, error ENOENT
+    //   timeout           → status null, signal SIGTERM, stdout ""
+    //
+    // So `undefined` means the call never started and `""` means it started and
+    // produced nothing — which is the case that would satisfy a "found nothing"
+    // assertion if this returned a value. Both throw here.
     throw new Error(
       `git ${args.join(" ")} never produced an exit status in ${repo} (status null, stdout ` +
         `${result.stdout === undefined ? "absent" : "present"}): ${String(result.error ?? result.signal ?? "unknown")}`,

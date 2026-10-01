@@ -76,20 +76,18 @@ describe("scratch-git helpers under an inherited git environment", () => {
    * Measured on this box, `spawnSync` pointed at a working directory that does
    * not exist returns `status: null`, `error: spawnSync git ENOENT`, and a
    * `stdout` that is **undefined** — not the empty string, and not the `string`
-   * the old return type promised. A helper that passed those fields through gave
-   * a caller an object whose `.stdout` was undefined, and
-   * `expect(result.stdout).not.toContain(secret)` on that **throws** a bare
-   * `TypeError` instead of failing an assertion: the suite goes red, but on a
-   * message about the test's own plumbing rather than about the repository it
-   * was supposed to have opened.
+   * the old return type promised. The key is present; the value is not a string.
    *
    * The FALSE GREEN is the neighbouring case, and it is why the guard throws
-   * rather than coalescing: a helper that returned `stdout: result.stdout ?? ""`
-   * would hand the caller an empty string, an empty string contains nothing, and
-   * `not.toContain(secret)` would PASS on a repository the test never opened.
-   * Throwing is the only shape in which "could not look" cannot be read as
-   * "looked, found nothing" — the exact distinction between status 1 and
-   * everything above it. Asserted here rather than trusted.
+   * rather than coalescing. Measured through vitest's own `expect`:
+   * `expect(undefined).not.toContain(x)` raises an `AssertionError` — red, but on
+   * a message about an unusable argument rather than about the repository — while
+   * `expect("").not.toContain(x)` **PASSES**, and a timeout gives exactly that
+   * `""`. So a helper returning `stdout: result.stdout ?? ""` would certify a
+   * repository it never opened as clean. Throwing is the only shape in which
+   * "could not look" cannot be read as "looked, found nothing" — the exact
+   * distinction between status 1 and everything above it. Asserted here rather
+   * than trusted.
    */
   it("refuses to report a launch failure as a clean read", async () => {
     const { tryGit } = await freshHelpers();
@@ -106,8 +104,9 @@ describe("scratch-git helpers under an inherited git environment", () => {
     expect(
       returned,
       "tryGit must not RETURN for a launch that produced no exit status. A returned object makes the failure " +
-        "invisible one way or the other — an undefined stdout makes the caller's `not.toContain(secret)` throw " +
-        "a bare TypeError, and a coalesced empty one makes it PASS on a repository the test never opened",
+        "invisible one way or the other — an undefined stdout makes the caller's `not.toContain(secret)` fail " +
+        "on an unusable argument, and the empty stdout a TIMEOUT produces makes it PASS on a repository the test " +
+        "never opened",
     ).toBeUndefined();
     expect(String(thrown), "and it must say what it was trying to run, and where").toContain("git log --all -p");
     expect(String(thrown), "and name the launch failure rather than reporting an empty result").toMatch(
