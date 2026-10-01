@@ -8,7 +8,7 @@ import {
   type SweepApi,
   type SweepCandidate,
 } from "../../scripts/ledger-relay-sweep.ts";
-import type { ContextDecision, RelayJob } from "../../scripts/ledger-relay.ts";
+import { decideContexts } from "../../scripts/ledger-relay.ts";
 
 /**
  * The orphan sweep (issue 885), the ledger relay's third duty.
@@ -201,13 +201,19 @@ describe("missingContextsFor", () => {
  * The sweep against an injected api: every request is recorded, and the
  * responses are supplied per URL rather than in a queue, so the test says what
  * each call answers instead of relying on call order.
+ *
+ * A POST records `url: null`. The injected `postCheckRun` receives only the
+ * body — it never sees an endpoint — so writing one here would be a fabricated
+ * URL asserting a fact this seam cannot carry. The endpoint is pinned for real
+ * in tests/scripts/ledger-relay.test.ts, where the production constructor is in
+ * play and the full request URL is on the record.
  */
 function fakeApi(handlers: Record<string, unknown>): {
   api: SweepApi;
-  requests: Array<{ url: string; method: "GET" | "POST"; body: unknown }>;
+  requests: Array<{ url: string | null; method: "GET" | "POST"; body: unknown }>;
 } {
-  const requests: Array<{ url: string; method: "GET" | "POST"; body: unknown }> = [];
-  const record = (url: string, method: "GET" | "POST", body: unknown) => {
+  const requests: Array<{ url: string | null; method: "GET" | "POST"; body: unknown }> = [];
+  const record = (url: string | null, method: "GET" | "POST", body: unknown) => {
     requests.push({ url, method, body });
   };
   const api: SweepApi = {
@@ -217,7 +223,7 @@ function fakeApi(handlers: Record<string, unknown>): {
       return handlers[url] as T;
     },
     postCheckRun: async (body: Record<string, unknown>): Promise<unknown> => {
-      record(`${"https://api.github.com/repos/" + REPO + "/check-runs"}`, "POST", body);
+      record(null, "POST", body);
       return { id: 1 };
     },
   };
@@ -226,40 +232,24 @@ function fakeApi(handlers: Record<string, unknown>): {
 
 const RUNS_URL = `https://api.github.com/repos/${REPO}/actions/runs?per_page=100`;
 const checkRunsAt = (sha: string) =>
-  `https://api.github.com/repos/${REPO}/commits/${sha}/check-runs?app_id=${APP_ID}&per_page=100`;
+  `https://api.github.com/repos/${REPO}/commits/${sha}/check-runs?app_id=${APP_ID}&filter=latest&per_page=100`;
 const jobsUrl = (runId: string) =>
   `https://api.github.com/repos/${REPO}/actions/runs/${runId}/jobs?filter=latest&per_page=100`;
 
-/** The mirror's own decideContexts, re-exported here as the injected decide. */
-function decide(
-  pinMap: Readonly<Record<string, string>>,
-  runPath: string,
-  runConclusion: string | null,
-  jobs: readonly RelayJob[],
-): ContextDecision[] {
-  const decisions: ContextDecision[] = [];
-  for (const [context, path] of Object.entries(pinMap)) {
-    if (path !== runPath) continue;
-    const job = jobs.find((entry) => entry.name === context);
-    decisions.push({
-      context,
-      status: "completed",
-      conclusion: job?.conclusion ?? "success",
-      title: `${context}: ${job?.conclusion ?? "success"}`,
-      summary: "summary",
-    });
-  }
-  return decisions;
-}
-
-function parseJobs(body: Record<string, unknown>): RelayJob[] {
-  return (body.jobs as RelayJob[]) ?? [];
-}
-
+/**
+ * The sweep under test with the MIRROR'S OWN `decideContexts` injected, not a
+ * local stand-in.
+ *
+ * A hand-written decide that ignores `runConclusion` cannot catch the sweep
+ * passing the wrong conclusion — and that is exactly the mutant that survived
+ * this suite in review: hardcoding `"success"` into the decide call left every
+ * test green, because every fixture's conclusion was `"success"` and the stand-in
+ * never read the field at all. The real decider reads it on the no-jobs branch,
+ * which is where a producer run cancelled before it created any job lands.
+ */
 const deps = (api: SweepApi, over: Record<string, unknown> = {}) => ({
   api,
-  decide,
-  parseJobs,
+  decide: decideContexts,
   pinMap: PIN_MAP,
   repo: REPO,
   appId: APP_ID,
@@ -290,18 +280,71 @@ describe("sweepOrphans", () => {
     });
     // The check-run body is the mirror's own shape, carrying the CANDIDATE's
     // head_sha and the CANDIDATE's html_url — never the triggering run's.
+    // `url` is null on a POST by construction: this seam never sees the
+    // endpoint, and the endpoint is pinned at the runRelay level instead.
     expect(requests.at(-1)).toEqual({
-      url: `https://api.github.com/repos/${REPO}/check-runs`,
+      url: null,
       method: "POST",
       body: {
         name: "actionlint",
         head_sha: HEAD_SHA,
         status: "completed",
         conclusion: "success",
-        output: { title: "actionlint: success", summary: "summary" },
+        output: {
+          title: "actionlint: success",
+          summary:
+            'Job "actionlint" (attempt 1) in .github/workflows/actionlint.yml concluded success; ' +
+            "the outcome is relayed to branch protection.",
+        },
         details_url: `https://github.com/${REPO}/actions/runs/9002`,
       },
     });
+  });
+
+  it("decides a candidate whose jobs are empty from the LISTING's conclusion, so a cancelled producer relays failure and not success", async () => {
+    // The branch this guards is decideOne's no-jobs fallback, and the run that
+    // lands there is a producer cancelled before it created any job: the runs
+    // listing still carries its conclusion, and that is the only evidence
+    // there is. Hardcoding `"success"` into the sweep's decide call passes
+    // every other case in this file — each of their fixtures concludes
+    // "success" — and turns a required context GREEN on a run that failed,
+    // which is the direction that silently unblocks a merge that must not go
+    // through.
+    const { api, requests } = fakeApi({
+      [RUNS_URL]: {
+        workflow_runs: [
+          runEntry({ id: 9002, path: PATH_ACTIONLINT, conclusion: "failure" }),
+        ],
+      },
+      [checkRunsAt(HEAD_SHA)]: { check_runs: [] },
+      [jobsUrl("9002")]: { jobs: [] },
+    });
+    const outcome = await sweepOrphans(deps(api));
+
+    expect(outcome.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
+    expect(requests.at(-1)?.body).toMatchObject({
+      name: "actionlint",
+      head_sha: HEAD_SHA,
+      status: "completed",
+      conclusion: "failure",
+    });
+  });
+
+  it("mirrors a no-jobs candidate that concluded success as success, so the conclusion is read rather than assumed", async () => {
+    // The other half of the same branch: without this case a decider that
+    // hardcoded "failure" would satisfy the case above, and the sweep would be
+    // just as wrong in the opposite direction — failing a check that passed.
+    const { api, requests } = fakeApi({
+      [RUNS_URL]: {
+        workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT, conclusion: "success" })],
+      },
+      [checkRunsAt(HEAD_SHA)]: { check_runs: [] },
+      [jobsUrl("9002")]: { jobs: [] },
+    });
+    const outcome = await sweepOrphans(deps(api));
+
+    expect(outcome.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
+    expect(requests.at(-1)?.body).toMatchObject({ name: "actionlint", conclusion: "success" });
   });
 
   it("skips a candidate whose contexts are all attested, without reading its jobs", async () => {
@@ -367,13 +410,15 @@ describe("sweepOrphans", () => {
         { context: "actionlint", runId: "9004" },
       ],
     });
-    const headsRead = requests.filter((request) => request.url.startsWith("https://api.github.com/repos/Nitjsefnie/Overflow/commits/"));
+    const headsRead = requests.filter(
+      (request) => request.url?.startsWith(`https://api.github.com/repos/${REPO}/commits/`) ?? false,
+    );
     expect(headsRead.map((request) => request.url)).toEqual([
       checkRunsAt(HEAD_SHA),
       checkRunsAt(OTHER_SHA),
     ]);
     // Two jobs listings, four candidates.
-    expect(requests.filter((request) => request.url.includes("/jobs?"))).toHaveLength(2);
+    expect(requests.filter((request) => request.url?.includes("/jobs?") ?? false)).toHaveLength(2);
   });
 
   it("keeps only the decisions the mirror makes that the candidate is actually missing", () => {
@@ -388,18 +433,16 @@ describe("sweepOrphans", () => {
     expect(outcome).toEqual(["actionlint"]);
   });
 
-  it("throws when the runs listing cannot be read, so a dead sweep is a red relay job", async () => {
+  it("reads a malformed runs listing as no candidates rather than throwing", async () => {
     const { api } = fakeApi({ [RUNS_URL]: { workflow_runs: "not an array" } });
-    // A malformed runs listing carries no candidates, so it cannot orphan a
-    // completion it never read — but it must not be silently swallowed into a
-    // green "examined 0" either. What a dead sweep looks like in practice is a
-    // failed GET, and that path is the caller's: api.get throws, so nothing
-    // here catches it.
+    // A listing shape we cannot read carries no evidence, so it cannot orphan a
+    // completion it never read. The THROW path is the next case: a failed GET
+    // propagates, and a dead sweep is a red relay job.
     const outcome = await sweepOrphans(deps(api));
     expect(outcome).toEqual({ examined: 0, relayed: [] });
   });
 
-  it("propagates a failed GET rather than posting blind", async () => {
+  it("propagates a failed GET rather than posting blind, so a dead sweep is a red relay job", async () => {
     const { api } = fakeApi({}); // the runs URL has no handler: get throws
     await expect(sweepOrphans(deps(api))).rejects.toThrow(/unexpected fetch/);
   });
