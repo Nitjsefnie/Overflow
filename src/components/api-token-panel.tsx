@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
-import { API_TOKEN_LIFETIME_DAYS } from "@/lib/tokens/lifetime";
+import { API_TOKEN_DELIVERY_WINDOW_MINUTES, API_TOKEN_LIFETIME_DAYS } from "@/lib/tokens/lifetime";
 // Type-only, so erased at build time: the store's database client never
 // reaches this client bundle.
 import type {
@@ -10,13 +10,63 @@ import type {
   ApiTokenSummary as StoredApiTokenSummary,
 } from "@/lib/tokens/postgres-store";
 
-/** A store shape as it crosses to the browser: every instant as an ISO-8601 string. */
-type Serialized<T> = { [K in keyof T]: T[K] extends Date ? string : T[K] };
+/**
+ * A store shape as it crosses to the browser: every instant as an ISO-8601
+ * string, and its nullability kept. A bare `T[K] extends Date` maps `Date | null`
+ * to `Date | null` — the null instant stays a `Date`, so the serialised type is
+ * unreachable from a real one.
+ */
+type Serialized<T> = {
+  [K in keyof T]: T[K] extends Date ? string : T[K] extends Date | null ? string | null : T[K];
+};
 
 type ApiTokenSummary = Serialized<StoredApiTokenSummary>;
 
 /** `expired` is the database's verdict, decided when the page rendered. */
 type ApiTokenStatus = Serialized<StoredApiTokenStatus>;
+
+/**
+ * What the member can be told about the token on screen.
+ *
+ * `expired` alone no longer says what it used to: an unconfirmed token fails its
+ * delivery window, a confirmed one reaches the lifetime, and both arrive here as
+ * `expired: true` (issue 847). The remedy is the same in both cases, so the panel
+ * offers the same remedy — but the reason is what the member reads, and the
+ * states are kept apart here so nothing downstream can fold them back together.
+ *
+ * Each state owns one marker element, and the marker is what a test asserts on:
+ * the wording of a sentence is free to change, the distinction is not.
+ */
+type TokenState = "unconfirmed" | "window-lapsed" | "active" | "expired";
+
+const TOKEN_STATE_MARKERS = {
+  unconfirmed: { id: "api-token-unconfirmed", tone: "pending" },
+  "window-lapsed": { id: "api-token-window-lapsed", tone: "error" },
+  active: null,
+  expired: { id: "api-token-expired", tone: "error" },
+} as const satisfies Record<TokenState, { id: string; tone: string } | null>;
+
+function tokenState(summary: ApiTokenSummary, expired: boolean): TokenState {
+  if (summary.confirmedAt === null) {
+    return expired ? "window-lapsed" : "unconfirmed";
+  }
+  return expired ? "expired" : "active";
+}
+
+function stateExplanation(state: TokenState): string | null {
+  switch (state) {
+    case "unconfirmed":
+      // No claim about how much of the window is left: this renders again on a
+      // reloaded page, where part of it is already spent.
+      return `Nobody has used this token yet, so it stops working after its ${API_TOKEN_DELIVERY_WINDOW_MINUTES}-minute delivery window unless your script authenticates with it first — that first request starts its ${API_TOKEN_LIFETIME_DAYS} days.`;
+    case "window-lapsed":
+      return `Nothing ever used this token, so it stopped working at the end of its ${API_TOKEN_DELIVERY_WINDOW_MINUTES}-minute delivery window rather than reaching ${API_TOKEN_LIFETIME_DAYS} days. Regenerate it if your script never received the earlier value.`;
+    case "expired":
+      return "This token has expired and no longer authenticates. Regenerate it to keep using the API.";
+    case "active":
+      return null;
+  }
+}
 
 /** The route's refusal when the session's GitHub sign-in is too old to mint. */
 const REAUTHENTICATION_REQUIRED_CODE = "REAUTHENTICATION_REQUIRED";
@@ -40,8 +90,14 @@ export function ApiTokenPanel({ summary, reauthenticateAction }: ApiTokenPanelPr
   const currentSummary = issued ?? summary;
   // The database's verdict, never this browser's clock: reading the clock
   // here could disagree with the refusal, and with the server render at the
-  // expiry instant. A token minted in this view has its full lifetime ahead.
+  // expiry instant. A token minted in this view is unconfirmed and inside its
+  // delivery window, and the 201 body says so.
   const expired = issued === null && summary !== null && summary.expired;
+  const state = currentSummary === null ? null : tokenState(currentSummary, expired);
+  // Two views of one state, non-null together: which element carries the
+  // explanation, and what it says. `active` contributes neither.
+  const marker = state === null ? null : TOKEN_STATE_MARKERS[state];
+  const explanation = state === null ? null : stateExplanation(state);
 
   async function generateToken() {
     if (inFlight.current) return;
@@ -56,7 +112,12 @@ export function ApiTokenPanel({ summary, reauthenticateAction }: ApiTokenPanelPr
         return;
       }
       const body = await response.json() as { token: string } & ApiTokenSummary;
-      setIssued({ token: body.token, createdAt: body.createdAt, expiresAt: body.expiresAt });
+      setIssued({
+        token: body.token,
+        createdAt: body.createdAt,
+        expiresAt: body.expiresAt,
+        confirmedAt: body.confirmedAt,
+      });
       router.refresh();
     } catch {
       setError({ message: "The request could not reach Overflow. Check your connection and try again." });
@@ -74,7 +135,8 @@ export function ApiTokenPanel({ summary, reauthenticateAction }: ApiTokenPanelPr
         An Overflow API token authenticates as your account. A script holding it can do anything
         your role permits on the routes that accept an API token, including moderation and override
         decisions if you are a moderator; it cannot generate tokens or manage linked forge
-        identities. It expires {API_TOKEN_LIFETIME_DAYS} days after it is generated.
+        identities. A token nobody has used yet stops working after {API_TOKEN_DELIVERY_WINDOW_MINUTES}{" "}
+        minutes; the first request that authenticates with it starts its {API_TOKEN_LIFETIME_DAYS} days.
       </p>
       {currentSummary ? (
         <>
@@ -84,11 +146,9 @@ export function ApiTokenPanel({ summary, reauthenticateAction }: ApiTokenPanelPr
               {formatUtc(currentSummary.expiresAt)}
             </time>.
           </p>
-          {expired ? (
-            <p id="api-token-expired" className="feedback error">
-              This token has expired and no longer authenticates. Regenerate it to keep using the API.
-            </p>
-          ) : null}
+          {marker === null ? null : (
+            <p id={marker.id} className={`feedback ${marker.tone}`}>{explanation}</p>
+          )}
           <p id="api-token-revocation">Regenerating means your existing token stops working immediately.</p>
         </>
       ) : <p>You have no API token.</p>}
@@ -97,7 +157,9 @@ export function ApiTokenPanel({ summary, reauthenticateAction }: ApiTokenPanelPr
         type="button"
         disabled={pending}
         aria-describedby={
-          currentSummary ? (expired ? "api-token-expired api-token-revocation" : "api-token-revocation") : undefined
+          currentSummary
+            ? [marker?.id, "api-token-revocation"].filter((id) => id !== undefined).join(" ")
+            : undefined
         }
         onClick={() => void generateToken()}
       >

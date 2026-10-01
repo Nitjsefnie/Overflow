@@ -35,14 +35,40 @@ vi.mock("@/lib/auth/sign-in-actions", () => ({ signInForRepositoryRegistration, 
 
 const createdAt = "2026-09-05T10:30:00.123Z";
 const expiresAt = "2026-12-04T10:30:00.123Z";
+const confirmedAt = "2026-09-05T10:31:00.123Z";
 const token = `ovf_${"a".repeat(43)}`;
 const replacementToken = `ovf_${"b".repeat(43)}`;
 // Every test reads the clock at this instant, so "expired" never depends on the day the suite runs.
 const now = new Date("2026-09-10T00:00:00.000Z");
-const expiredSummary = { createdAt: "2026-05-01T08:00:00.000Z", expiresAt: "2026-07-30T08:00:00.000Z", expired: true };
 
-function mintedToken(value = token, date = createdAt, expiry = expiresAt) {
-  return Response.json({ token: value, createdAt: date, expiresAt: expiry }, { status: 201 });
+/**
+ * The three token states, as the database reports them. `confirmedAt` null is
+ * the whole distinction: an unconfirmed token carries a delivery window, a
+ * confirmed one the ninety-day lifetime measured from its first use.
+ */
+const unconfirmed = { createdAt, expiresAt, confirmedAt: null, expired: false };
+const confirmed = { createdAt, expiresAt, confirmedAt, expired: false };
+const expiredSummary = {
+  createdAt: "2026-05-01T08:00:00.000Z",
+  expiresAt: "2026-07-30T08:00:00.000Z",
+  confirmedAt: "2026-05-01T08:05:00.000Z",
+  expired: true,
+};
+/** Never used, and the delivery window ran out: expired, but not at ninety days. */
+const lapsedSummary = { createdAt, expiresAt, confirmedAt: null, expired: true };
+const confirmedExpired = { ...confirmed, expired: true };
+
+/**
+ * The marker element each state contributes, or null when it contributes none.
+ * Asserted by id and tone, never by wording: a copy change must not move these.
+ */
+const stateMarkers = ["api-token-unconfirmed", "api-token-window-lapsed", "api-token-expired"] as const;
+
+function mintedToken(value = token, date = createdAt, expiry = expiresAt, confirmation: string | null = null) {
+  return Response.json(
+    { token: value, createdAt: date, expiresAt: expiry, confirmedAt: confirmation },
+    { status: 201 },
+  );
 }
 
 const reauthenticationRefusal = () => Response.json({ error: {
@@ -81,7 +107,7 @@ describe("API token panel", () => {
   });
 
   it("shows the generation date and warns about immediate revocation before regeneration", () => {
-    render(<ApiTokenPanel summary={{ createdAt, expiresAt, expired: false }} />);
+    render(<ApiTokenPanel summary={confirmed} />);
 
     expect(screen.getByRole("button", { name: "Regenerate token" })).toBeEnabled();
     expect(screen.getByText("2026-09-05 10:30:00 UTC")).toHaveAttribute("dateTime", createdAt);
@@ -90,7 +116,7 @@ describe("API token panel", () => {
   });
 
   it("shows the expiry as a time element and no expired state for a live token", () => {
-    render(<ApiTokenPanel summary={{ createdAt, expiresAt, expired: false }} />);
+    render(<ApiTokenPanel summary={confirmed} />);
 
     expect(screen.getByText("2026-12-04 10:30:00 UTC")).toHaveAttribute("dateTime", expiresAt);
     expect(document.getElementById("api-token-expired")).toBeNull();
@@ -119,10 +145,112 @@ describe("API token panel", () => {
   });
 
   it("shows the expired state for an expired verdict even when the browser clock is before the expiry", () => {
-    render(<ApiTokenPanel summary={{ createdAt, expiresAt, expired: true }} />);
+    render(<ApiTokenPanel summary={confirmedExpired} />);
 
     expect(Date.now()).toBeLessThan(Date.parse(expiresAt));
     expect(document.getElementById("api-token-expired")).toBeVisible();
+  });
+
+  // Issue 847. An unconfirmed token that failed its 30-minute delivery window
+  // reads `expired: true`, exactly like a confirmed one that reached ninety
+  // days. Those are different facts — same remedy, different reason — so the
+  // member must be able to tell them apart. Pinned by element id and tone, NOT
+  // by wording: a faithful paraphrase of the copy must not turn this red, and
+  // negating a sentence must not turn it green.
+  it("gives every token state a marker the member can tell apart without reading the copy", () => {
+    const cases = [
+      { state: "never used, inside the delivery window", summary: unconfirmed, marker: "api-token-unconfirmed", tone: "pending" },
+      { state: "never used, delivery window lapsed", summary: lapsedSummary, marker: "api-token-window-lapsed", tone: "error" },
+      { state: "used, inside the ninety-day lifetime", summary: confirmed, marker: null, tone: null },
+      { state: "used, lifetime reached", summary: expiredSummary, marker: "api-token-expired", tone: "error" },
+    ] as const;
+
+    const observed: Record<string, string> = {};
+    for (const { state, summary, marker, tone } of cases) {
+      const { unmount } = render(<ApiTokenPanel summary={summary} />);
+      const button = screen.getByRole("button", { name: "Regenerate token" });
+
+      // Exactly this state's marker, and no other state's, is present and linked.
+      expect(describedBy(button).filter((id) => (stateMarkers as readonly string[]).includes(id))).toEqual(
+        marker === null ? [] : [marker],
+      );
+      for (const other of stateMarkers) {
+        expect(document.getElementById(other) === null).toBe(other !== marker);
+      }
+      if (marker !== null) {
+        const node = document.getElementById(marker)!;
+        expect(node).toBeVisible();
+        expect(node.className.split(/\s+/)).toContain(tone);
+      }
+      observed[state] = describedBy(button).join(" ");
+      unmount();
+    }
+
+    // The four states are mutually distinguishable by the link set alone: a
+    // member who never reads a word still cannot confuse a lapsed window with
+    // a reached lifetime.
+    expect(Object.values(observed)).toEqual([
+      "api-token-unconfirmed api-token-revocation",
+      "api-token-window-lapsed api-token-revocation",
+      "api-token-revocation",
+      "api-token-expired api-token-revocation",
+    ]);
+    expect(new Set(Object.values(observed)).size).toBe(cases.length);
+  });
+
+  it("renders an unconfirmed token's marker from the summary the server sent", () => {
+    render(<ApiTokenPanel summary={unconfirmed} />);
+
+    expect(document.getElementById("api-token-unconfirmed")).toBeVisible();
+    expect(document.getElementById("api-token-window-lapsed")).toBeNull();
+    expect(describedBy(screen.getByRole("button", { name: "Regenerate token" })))
+      .toContain("api-token-unconfirmed");
+  });
+
+  it("separates a lapsed delivery window from a reached lifetime by marker and tone", () => {
+    const lapsed = render(<ApiTokenPanel summary={lapsedSummary} />);
+    const lapsedNode = document.getElementById("api-token-window-lapsed")!;
+    const lapsedTone = lapsedNode.className;
+    expect(lapsedNode).toBeVisible();
+    expect(document.getElementById("api-token-expired")).toBeNull();
+    lapsed.unmount();
+
+    render(<ApiTokenPanel summary={expiredSummary} />);
+
+    const expiredNode = document.getElementById("api-token-expired")!;
+    expect(expiredNode).toBeVisible();
+    expect(document.getElementById("api-token-window-lapsed")).toBeNull();
+    // Both read as a dead credential, and both are marked "error"; the tone is
+    // not the discriminator, the marker is. Both carry it, differently.
+    expect(expiredNode.className).toBe(lapsedTone);
+  });
+
+  it("reads the confirmation out of the mint response instead of assuming it", async () => {
+    // A real mint is never confirmed. This body claims otherwise, so the panel
+    // can only reach the unconfirmed state by reading `confirmedAt` off the
+    // response rather than stamping a null onto it.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mintedToken(token, createdAt, expiresAt, confirmedAt)));
+    render(<ApiTokenPanel summary={null} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Generate token" }));
+
+    expect(await screen.findByText(token)).toBeVisible();
+    expect(document.getElementById("api-token-unconfirmed")).toBeNull();
+    expect(describedBy(screen.getByRole("button", { name: "Regenerate token" })))
+      .not.toContain("api-token-unconfirmed");
+  });
+
+  it("shows a just-minted token as unconfirmed, pending its first use", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mintedToken()));
+    render(<ApiTokenPanel summary={null} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Generate token" }));
+
+    expect(await screen.findByText(token)).toBeVisible();
+    const marker = document.getElementById("api-token-unconfirmed");
+    expect(marker).toBeVisible();
+    expect(marker!.className.split(/\s+/)).toContain("pending");
+    expect(describedBy(screen.getByRole("button", { name: "Regenerate token" }))).toContain("api-token-unconfirmed");
   });
 
   it("clears the expired state and shows the new expiry after regeneration", async () => {
@@ -165,10 +293,10 @@ describe("API token panel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Generate token" }));
     expect(await screen.findByText(token)).toBeVisible();
-    rerender(<ApiTokenPanel summary={{ createdAt, expiresAt, expired: false }} />);
+    rerender(<ApiTokenPanel summary={confirmed} />);
     expect(screen.getByText(token)).toBeVisible();
     unmount();
-    render(<ApiTokenPanel summary={{ createdAt, expiresAt, expired: false }} />);
+    render(<ApiTokenPanel summary={confirmed} />);
 
     expect(screen.queryByText(token)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Regenerate token" })).toBeEnabled();
@@ -214,7 +342,7 @@ describe("API token panel", () => {
   it("offers the supplied re-authentication action as its own form when minting needs a fresh sign-in", async () => {
     const reauthenticate = vi.fn(async () => {});
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reauthenticationRefusal()));
-    render(<ApiTokenPanel summary={{ createdAt, expiresAt, expired: false }} reauthenticateAction={reauthenticate} />);
+    render(<ApiTokenPanel summary={confirmed} reauthenticateAction={reauthenticate} />);
     expect(reauthenticateForm()).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Regenerate token" }));
@@ -286,7 +414,7 @@ describe("API token panel", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: {
       code: "UPSTREAM_FAILURE", message: "Unable to issue an API token.",
     } }, { status: 502 })));
-    render(<ApiTokenPanel summary={{ createdAt, expiresAt, expired: false }} />);
+    render(<ApiTokenPanel summary={confirmed} />);
     fireEvent.click(screen.getByRole("button", { name: "Regenerate token" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Unable to issue an API token.");
@@ -343,7 +471,7 @@ describe("API token panel", () => {
 
   it.each([
     ["generation", null],
-    ["regeneration", { createdAt, expiresAt, expired: false }],
+    ["regeneration", confirmed],
   ] as const)("allows only one in-flight request during %s", async (_name, summary) => {
     let resolveRequest!: (response: Response) => void;
     const request = new Promise<Response>((resolve) => { resolveRequest = resolve; });
@@ -405,8 +533,8 @@ describe("repository registration page token panel", () => {
 
   it.each([
     { memberId: "member-without-token", summary: null },
-    { memberId: "member-with-token", summary: { createdAt: new Date(createdAt), expiresAt: new Date(expiresAt), expired: false } },
-    { memberId: "member-with-expired-token", summary: { createdAt: new Date(createdAt), expiresAt: new Date(expiresAt), expired: true } },
+    { memberId: "member-with-token", summary: { createdAt: new Date(createdAt), expiresAt: new Date(expiresAt), confirmedAt: new Date(confirmedAt), expired: false } },
+    { memberId: "member-with-expired-token", summary: { createdAt: new Date(createdAt), expiresAt: new Date(expiresAt), confirmedAt: new Date(confirmedAt), expired: true } },
   ])("passes the member summary for $memberId to the panel below the form", async ({ memberId, summary }) => {
     requireMemberPageSession.mockReset().mockResolvedValue({
       user: { id: memberId, name: "Ada", role: "MEMBER", canAdministerWebhooks: true },
