@@ -26,6 +26,25 @@ export class GitLabApiError extends Error {
 }
 
 /**
+ * A 200 whose body fails to parse as JSON at all — an HTML error page from an
+ * intermediary, or an empty body (issue 879) — is the instance misbehaving,
+ * one step earlier than 871's non-array body: the parse throws a raw
+ * SyntaxError outside the taxonomy (no status, no endpoint). The failure is
+ * recognized here and folded into the same typed rank as a transport failure:
+ * status 0 — never a fabricated HTTP status the server never sent — with the
+ * endpoint in `.body`, so run failure records name the failed boundary. The
+ * endpoint arrives explicitly from each caller; no other part of the request
+ * contract changes.
+ */
+function parseJsonBody(response: GitLabRestResponse, path: string): unknown {
+  try {
+    return JSON.parse(response.body);
+  } catch {
+    throw new GitLabApiError(0, `GitLab returned an unparsable body from ${path}.`);
+  }
+}
+
+/**
  * Issue 871: a 200 whose JSON body parses but is not an array — an object,
  * or the JSON literal null — is an instance misbehaving, not a shape the
  * walker can consume. Letting it reach `CollectionWalkBound.add` dies with a
@@ -34,12 +53,24 @@ export class GitLabApiError extends Error {
  * status 0 — never a fabricated HTTP status the server never sent — with the
  * endpoint in `.body`, so run failure records name the failed boundary. The
  * endpoint arrives explicitly from the walker; the walk's ceilings contract
- * in CollectionWalkBound is not changed by it.
+ * in CollectionWalkBound is not changed by it. A body that fails to parse at
+ * all takes the same rank through `parseJsonBody` (issue 879).
  */
 export async function responseJsonArray<T>(response: GitLabRestResponse, path: string): Promise<T[]> {
-  const parsed: unknown = JSON.parse(response.body);
+  const parsed = parseJsonBody(response, path);
   if (!Array.isArray(parsed)) {
     throw new GitLabApiError(0, `GitLab returned a non-array body from ${path}.`);
   }
   return parsed as T[];
+}
+
+/**
+ * The single-object counterpart of `responseJsonArray`, moved here from
+ * client.ts (issue 879): the repository, issue, merge-request and hook reads
+ * all parse their 200 bodies through it, so a non-JSON body from any of them
+ * takes the same typed rank as a transport failure instead of a raw
+ * SyntaxError. Like the walker, it names the endpoint in `.body`.
+ */
+export async function responseJson<T>(response: GitLabRestResponse, path: string): Promise<T> {
+  return parseJsonBody(response, path) as T;
 }
