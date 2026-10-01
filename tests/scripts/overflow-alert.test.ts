@@ -299,6 +299,18 @@ function runAlert(
     /** A daemon that accepts the submission without answering a 250 OK id=. */
     noId?: boolean;
     /**
+     * The submission endpoint, handed to the script as
+     * OVERFLOW_ALERT_SMTP_URL. Absent: the variable is left out of the
+     * environment entirely, so the run submits to the deployed default.
+     *
+     * Leaving it out is the honest default for every other case in this suite.
+     * The client on PATH is the shim, which records its argv and opens no
+     * socket, so the URL is inert here whatever it says - and a case that
+     * quietly rewrote it would therefore LOOK mocked without being mocked,
+     * which is the one thing this file must never claim.
+     */
+    smtpUrl?: string;
+    /**
      * An earlier message's id, which the shim answers BEFORE the message under
      * test. Exercises which of several `250 OK id=` lines the script takes.
      */
@@ -362,6 +374,7 @@ function runAlert(
           OVERFLOW_ALERT_RECIPIENT_FILE: recipientFile,
           OVERFLOW_ALERT_STATE_DIR: stateDir,
           ...(options.deployedLogPath ? {} : { OVERFLOW_ALERT_EXIM_LOG: eximLogPath }),
+          ...(options.smtpUrl ? { OVERFLOW_ALERT_SMTP_URL: options.smtpUrl } : {}),
           OVERFLOW_TEST_CURL_ARGV: curlArgvPath,
           OVERFLOW_TEST_CLOCK_CALLS: join(directory, "clock-calls"),
           OVERFLOW_TEST_CLOCK_BASE: join(directory, "clock-base"),
@@ -487,6 +500,65 @@ describe("overflow-alert.sh send stage", () => {
 
     expect(run.status).toBe(0);
     expect(run.argv).toEqual(expectedCurlArgv);
+  });
+
+  /**
+   * What the recorded `--url` is, read off the argv rather than off the script.
+   *
+   * THE SAFETY OF THIS SUITE RESTS ON ONE PROPERTY, and it is worth stating
+   * next to the cases that depend on it: the client on PATH is the shim above,
+   * which records what it was asked and opens no socket. The endpoint is
+   * therefore inert here whatever the script names, and these cases exercise it
+   * as exactly what it is - a string the script hands to a client that never
+   * dials it. Nothing in this file submits a message to anything, on any case,
+   * at any URL.
+   *
+   * That is also why no case below sets the endpoint by default. A case that
+   * rewrote the URL would look as though the transport were mocked when the
+   * thing doing the mocking is the client shim and not the address, and that
+   * false signal is what the override's absence used to hide.
+   */
+  const urlArgument = (argv: string[]): string => argv[argv.indexOf("--url") + 1] ?? "";
+
+  it("submits to the deployed local exim daemon when the variable is absent entirely", () => {
+    // The deployed default, reached with the variable out of the environment.
+    // No assertion over an OVERRIDDEN value can ever see the number or the
+    // address a deployed run really uses, so the case that omits it is the one
+    // that means anything about the host.
+    const run = runAlert({ recipient: validRecipient });
+
+    expect(run.status).toBe(0);
+    expect(urlArgument(run.argv)).toBe("smtp://127.0.0.1:25");
+  });
+
+  it("submits to the endpoint OVERFLOW_ALERT_SMTP_URL names, rather than to a hardcoded one", () => {
+    // The script's submission endpoint is an INPUT like every other one here,
+    // so it is reachable from outside the script. While it was written into the
+    // curl invocation as a literal, nothing could point the script at anything
+    // but the one address, which is what left the transport boundary
+    // unreachable and this suite depending entirely on the client shim to stay
+    // safe. This is the guard for that: reinstating the literal leaves it red.
+    //
+    // The run still SUCCEEDS, which is the point. The endpoint is only where
+    // the submission goes; the verdict is read off the mainlog fixture, so the
+    // recipient validation, the submission, the scan, the state file and the
+    // throttle all run and are all judged exactly as they are for the default.
+    // An override that quietly disabled the send would be caught by the exit
+    // status and the argv both.
+    const run = runAlert({
+      recipient: validRecipient,
+      smtpUrl: "smtp://127.0.0.1:2525",
+    });
+
+    expect(run.status).toBe(0);
+    expect(urlArgument(run.argv), "the endpoint must be the one the variable names").toBe(
+      "smtp://127.0.0.1:2525",
+    );
+    expect(run.argv, "and nothing else about the submission changes").toEqual([
+      ...expectedCurlArgv.slice(0, expectedCurlArgv.indexOf("smtp://127.0.0.1:25")),
+      "smtp://127.0.0.1:2525",
+      ...expectedCurlArgv.slice(expectedCurlArgv.indexOf("smtp://127.0.0.1:25") + 1),
+    ]);
   });
 
   it("mails headers, the failure line and the journal tail for a valid recipient", () => {
