@@ -15,21 +15,36 @@
  * throw, so the failure lands in the gateway's existing error path and fails
  * the reconciliation loudly instead of truncating the evidence silently.
  *
- * Sizing. GitLab clamps `per_page` at 100 on every list endpoint and the
- * walker always asks for the maximum, so a full page is 100 rows: the row
- * ceiling of 100 000 is a thousand full pages, an order of magnitude above any
- * real issue listing, per-issue note or label-event collection, label catalog
- * or merge request commit history, and far beyond what one reconciliation pass
- * carries. The page ceiling of 2 000 is the second, independent bound, and it
- * is the one that catches an instance answering with near-empty pages forever
- * while staying under the row ceiling — at one row a page, 2 000 requests is
- * still 2 000 requests against a collection that will not end.
+ * Sizing, and what each number costs. Both are POLICY values, not measurements
+ * of any instance, and the arithmetic between them is load-bearing:
  *
- * Both are enforced, because they bound different things: the row ceiling
- * bounds the accumulated array this issue names, and the page ceiling bounds
- * the request cost an under-populated instance can still inflict.
+ * - GitLab clamps `per_page` at 100 on every list endpoint and the walker always
+ *   asks for the maximum, so a full page is 100 rows. `MAX_WALK_ITEMS` is
+ *   150 000 rows — 1 500 full pages — which is deliberately far above what any
+ *   single project's lifetime collection holds (a full issue listing, a label
+ *   catalog, one issue's notes and label events, a merge request's commits),
+ *   so every legitimate walk completes and the ceiling only ever fires on an
+ *   instance that is not answering the walk.
+ * - `MAX_WALK_PAGES` is 2 000. It is the backstop for an instance that answers
+ *   with near-empty pages forever: the row count never moves, and without it
+ *   that walk is still 2 000 requests against a collection that will not end.
+ *
+ * The row ceiling must stay below `MAX_WALK_PAGES * 100`, or a full-page walk
+ * reaches the page ceiling first and the row ceiling is shadowed by it — dead
+ * code that can never throw. At 150 000 against 200 000 the row ceiling fires
+ * at request 1 501 and the page ceiling at 2 001, so both are live and each
+ * catches the walk it exists for.
+ *
+ * The row ceiling is a MEMORY ceiling, and the honest reading of it is that a
+ * legitimate maximum-size collection is read into memory in full: a walk that
+ * gets near it holds every row it has accumulated, up to 150 000 rows of
+ * whatever shape is being walked. That retained-whole cost is the price of the
+ * array being bounded at all — the alternative is the unbounded walk above,
+ * which holds the same rows plus a worker slot, a lease and the run itself.
+ * Anything smaller would make the ceiling a likelier cause of a failed
+ * reconciliation than a cause of protection from one.
  */
-export const MAX_WALK_ITEMS = 100_000;
+export const MAX_WALK_ITEMS = 150_000;
 export const MAX_WALK_PAGES = 2_000;
 
 export class CollectionWalkBound<T> {
@@ -46,12 +61,17 @@ export class CollectionWalkBound<T> {
         `GitLab returned more than ${MAX_WALK_PAGES} pages of ${this.collection}, past the collection-walk bound.`,
       );
     }
-    this.rows.push(...page);
-    if (this.rows.length > MAX_WALK_ITEMS) {
+    // The row check runs BEFORE the append, on the page's own length: an
+    // instance is free to answer with one oversized page, and appending such a
+    // page first would spill the argument limit and die with a RangeError
+    // instead of the typed error. The append below is element-wise for the
+    // same reason — `push(...page)` spreads the whole page onto the stack.
+    if (this.rows.length + page.length > MAX_WALK_ITEMS) {
       throw new Error(
         `GitLab returned more than ${MAX_WALK_ITEMS} rows of ${this.collection}, past the collection-walk bound.`,
       );
     }
+    for (const row of page) this.rows.push(row);
   }
 
   public get collected(): T[] {
