@@ -1,15 +1,55 @@
-// Per-commit legal revision gate (issue 955): a commit that changes a legal
-// page's text must also touch src/lib/legal-revisions.ts in the SAME commit.
+// Per-commit legal revision gate (issue 955; text-unchanged exemption added by
+// issue 973):
 //
 //   node scripts/check-legal-revisions.ts <base> <head>
+//
+// THE RULE AS IMPLEMENTED. A commit that changes a legal page's file must also
+// change src/lib/legal-revisions.ts in the SAME commit, or carry a
+// `Legal-Text: unchanged; <justification>` claim in its commit message body.
+//
+// The earlier version of this header claimed the gate compared a legal page's
+// TEXT. It never did — it compares plain path membership, so any edit to a
+// page counts, including one that leaves the document byte-identical (the
+// static-import-to-dynamic-import relocation on PR 971). Comparing rendered
+// text instead was considered and rejected (#973): any extractor a real legal
+// text edit could slip past is worse than over-triggering, because a gate that
+// misses a real revision is silent where this one is loud. The exemption
+// therefore lives where a reviewer reads it — the commit message — rather than
+// in an extractor nobody can audit.
+//
+// THE MARKER. One whole line of the message BODY, at column 0:
+//
+//   Legal-Text: unchanged; <justification>
+//
+//   - the subject line never counts; the first blank line ends it, and every
+//     line after that (in every paragraph) is body
+//   - the line is matched whole and anchored: `See-Legal-Text: unchanged; x`,
+//     `we agreed, so Legal-Text: unchanged; x`, and an indented or quoted line
+//     are all NOT markers
+//   - the key and value are matched case-sensitively; `legal-text:` and
+//     `Legal-Text: changed;` are not markers
+//   - the justification after `;` must hold at least one non-whitespace
+//     character. A bare `Legal-Text: unchanged`, a lone `Legal-Text: unchanged;`
+//     and a whitespace-only justification are NOT markers: the exemption is a
+//     claim a reviewer can check, not a magic word anyone can paste
+//   - a message carrying several markers is read at the first one
+//
+// WHAT AN EXEMPTION DOES AND DOES NOT DO. It applies only to a commit that
+// touches a legal page and does NOT touch the record module; a commit that
+// touches the record is already green and claims no exemption, so nothing is
+// printed for it. Every honoured marker is reported on stderr — one line per
+// exempted commit, its sha and its justification — so the exemption is
+// auditable in the CI log without opening the commit, and it cannot be read as
+// part of the success line on stdout. The success line states how many commits
+// were exempted. An unreadable commit message is an error, never a silent pass.
 //
 // The walk is per-commit over base..head, merge commits excluded: git rev-list
 // --no-merges, then one git diff-tree per commit. A legal page edited in one
 // commit and the revision record bumped in a later one still violates — the
 // gate must survive a rebase that reorders the pair. A commit touching only
 // the record file is green, as is an empty range. Violations go to stdout and
-// the process exits 1; a failed git call (unknown revision, no repository)
-// fails closed on stderr with exit 1.
+// the process exits 1; a failed git call (unknown revision, no repository,
+// unreadable message) fails closed on stderr with exit 1.
 
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
@@ -27,40 +67,95 @@ const LEGAL_PAGES: readonly string[] = [
 
 const GUARD_FILE = "src/lib/legal-revisions.ts";
 
+// The exemption marker's only accepted spelling, anchored to the whole line so
+// no substring, mid-sentence occurrence or indented line can match it. The
+// whitespace run after `;` is the delimiter and is free-form; the capture group
+// is the justification, and `\S` makes an empty or whitespace-only one a
+// non-match, which is what keeps a bare marker worthless.
+const MARKER = /^Legal-Text: unchanged;[ \t]+(\S.*)$/;
+
 export interface CommitChanges {
   sha: string;
   files: readonly string[];
+  message: string;
+}
+
+/** One legal page changed by a commit that carried no exemption for it. */
+export interface LegalPageViolation {
+  sha: string;
+  page: string;
+}
+
+/** One legal-page change the commit message itself declared text-unchanged. */
+export interface LegalTextExemption {
+  sha: string;
+  justification: string;
+}
+
+export interface LegalRevisionReport {
+  violations: readonly LegalPageViolation[];
+  exemptions: readonly LegalTextExemption[];
 }
 
 /**
- * Returns one violation per (commit, legal page) whose commit does not also
- * touch the revision record file. Commits touching the record, or no legal
- * page at all, are green.
+ * Returns the justification of a commit message's `Legal-Text: unchanged`
+ * marker, or null when the message carries none. Only the BODY counts: the
+ * first blank line ends the subject, so a marker that is only ever the subject
+ * claims nothing.
  */
-export function legalRevisionViolations(
-  commits: ReadonlyArray<CommitChanges>,
-): string[] {
-  const violations: string[] = [];
+export function legalTextUnchangedJustification(message: string): string | null {
+  const bodyStart = message.indexOf("\n\n");
+  if (bodyStart === -1) {
+    return null;
+  }
 
-  for (const { sha, files } of commits) {
-    const touchesGuard = files.includes(GUARD_FILE);
-    if (touchesGuard) {
-      continue;
-    }
-
-    for (const page of LEGAL_PAGES) {
-      if (files.includes(page)) {
-        violations.push(
-          `${page} changed in ${sha} without a matching ${GUARD_FILE} change in the same commit.`,
-        );
-      }
+  for (const line of message.slice(bodyStart + 2).split("\n")) {
+    const match = MARKER.exec(line);
+    const justification = match?.[1];
+    if (justification !== undefined) {
+      return justification.trim();
     }
   }
 
-  return violations;
+  return null;
 }
 
-/** Reads the non-merge commits of base..head with each one's changed paths. */
+/**
+ * Reviews a range's commits: one violation per (commit, legal page) that
+ * changed the page without the record module and without a well-formed
+ * exemption, plus one entry per commit an exemption was honoured for. Commits
+ * touching the record, or no legal page at all, are green and claim nothing.
+ */
+export function reviewCommits(
+  commits: ReadonlyArray<CommitChanges>,
+): LegalRevisionReport {
+  const violations: LegalPageViolation[] = [];
+  const exemptions: LegalTextExemption[] = [];
+
+  for (const { sha, files, message } of commits) {
+    if (files.includes(GUARD_FILE)) {
+      continue;
+    }
+
+    const pages = LEGAL_PAGES.filter((page) => files.includes(page));
+    if (pages.length === 0) {
+      continue;
+    }
+
+    const justification = legalTextUnchangedJustification(message);
+    if (justification === null) {
+      for (const page of pages) {
+        violations.push({ sha, page });
+      }
+    } else {
+      exemptions.push({ sha, justification });
+    }
+  }
+
+  return { violations, exemptions };
+}
+
+/** Reads the non-merge commits of base..head with each one's changed paths and message. */
 function commitsBetween(baseRevision: string, headRevision: string): CommitChanges[] {
   const listing = spawnSync(
     "git",
@@ -79,7 +174,7 @@ function commitsBetween(baseRevision: string, headRevision: string): CommitChang
   return listing.stdout
     .split("\n")
     .filter((sha) => sha.length > 0)
-    .map((sha) => ({ sha, files: changedPaths(sha) }));
+    .map((sha) => ({ sha, files: changedPaths(sha), message: commitMessage(sha) }));
 }
 
 /**
@@ -106,6 +201,35 @@ function changedPaths(sha: string): string[] {
   return diff.stdout.split("\0").filter((path) => path.length > 0);
 }
 
+/**
+ * Reads one commit's full message (subject and body, as %B renders them).
+ * --no-walk stops at the named commit instead of walking its history, and -z
+ * terminates the single record with a NUL. A commit whose message cannot be
+ * read is an error: the exemption is a claim, and a claim the gate cannot
+ * check is never assumed to be absent.
+ */
+function commitMessage(sha: string): string {
+  const message = spawnSync(
+    "git",
+    ["log", "--no-walk", "--format=%B", "-z", sha],
+    { cwd: repositoryRoot, encoding: "utf8" },
+  );
+
+  if (message.error !== undefined || message.status !== 0) {
+    const detail = message.error?.message ?? message.stderr.trim();
+    throw new Error(
+      `Could not read the message of ${sha}${detail.length === 0 ? "." : `: ${detail}`}`,
+    );
+  }
+
+  const [record] = message.stdout.split("\0");
+  if (record === undefined || record.trim() === "") {
+    throw new Error(`Could not read the message of ${sha}: git returned none.`);
+  }
+
+  return record.replace(/\n$/, "");
+}
+
 function main(args: readonly string[]): void {
   if (args.length !== 2 || args[0] === undefined || args[1] === undefined) {
     process.stderr.write("Usage: node scripts/check-legal-revisions.ts <base> <head>\n");
@@ -116,16 +240,29 @@ function main(args: readonly string[]): void {
   const [baseRevision, headRevision] = args;
   try {
     const commits = commitsBetween(baseRevision, headRevision);
-    const violations = legalRevisionViolations(commits);
+    const { violations, exemptions } = reviewCommits(commits);
+
+    // stderr, not stdout: this is the audit trail of what the gate chose to
+    // let through, and it must never be mistakable for the success line.
+    for (const { sha, justification } of exemptions) {
+      process.stderr.write(
+        `exempted ${sha} (Legal-Text: unchanged): ${justification}\n`,
+      );
+    }
 
     if (violations.length > 0) {
-      for (const violation of violations) {
-        process.stdout.write(`${violation}\n`);
+      for (const { sha, page } of violations) {
+        process.stdout.write(
+          `${page} changed in ${sha} without a matching ${GUARD_FILE} change in the same commit.\n`,
+        );
       }
       process.stdout.write(
         "Legal pages carry revision records in src/lib/legal-revisions.ts: a commit that " +
           "changes a legal page must change its record in the same commit (issue 955). " +
-          "Amend the page change to carry the record change.\n",
+          "Amend the page change to carry the record change. If the page's text is genuinely " +
+          "unchanged, say so in the commit message body with a whole line reading " +
+          "`Legal-Text: unchanged; <justification>`, and the gate will report the exemption " +
+          "rather than treat the page as revised.\n",
       );
       process.exitCode = 1;
       return;
@@ -135,7 +272,9 @@ function main(args: readonly string[]): void {
       `${commits.length} ${commits.length === 1 ? "commit" : "commits"} in ` +
         `${baseRevision}..${headRevision} ` +
         `${commits.length === 1 ? "changes" : "change"} no legal page ` +
-        "without a matching revision-record change\n",
+        "without a matching revision-record change " +
+        `(${exemptions.length} ${exemptions.length === 1 ? "commit" : "commits"} exempted ` +
+        "with a Legal-Text: unchanged claim)\n",
     );
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
