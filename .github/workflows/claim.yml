@@ -51,5 +51,12 @@ jobs:
           # comments on unrelated issues reserves the sponsor's whole headroom, and a claim nobody
           # releases never expires on its own. `admin=-1` is the action's spelling for unlimited,
           # and `expire` is in days.
+          #
+          # `expire` schedules nothing: expiry is LAZY, evaluated only inside the run that answers a
+          # comment, so seven idle days do not unassign anybody by themselves. What the seven days
+          # buy is that an idle claim becomes takeover-able by the next commenter and
+          # privileged-releasable by a write+ actor; until one of those happens the assignment
+          # stands, and the sponsor's reserve points stand with it — the reserve query keys on an
+          # open issue with an assignee and never on claim age.
           max-claims: 'read=2, triage=4, write=6, maintain=10, admin=-1'
           expire: '7'

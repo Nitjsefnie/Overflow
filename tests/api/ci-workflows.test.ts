@@ -32,12 +32,14 @@ type Workflow = {
   }>;
 };
 
-// Every pin below is a CONSISTENCY check, not a correctness check: it proves the
-// tree still says what it said, not that the value is the right one. Substituting
-// a well-shaped wrong SHA at every site at once leaves this file green, because
-// proving that a pin names the real upstream fork would need a network fetch that
-// a suite reading the tree does not make. Read a green run as "nothing drifted",
-// never as "this pin is the right fork".
+// The exact-value pins below are CONSISTENCY checks, not correctness checks: they
+// prove the tree still says what it said, not that the value is the right one.
+// Substituting a well-shaped wrong SHA at every site at once leaves this file
+// green, because proving that a pin names the real upstream fork would need a
+// network fetch that a suite reading the tree does not make. The `uses` shape
+// checks and the pre-filter guards are correctness checks and do go red on a
+// wrong value. Read a green run as "nothing drifted", never as "this pin is the
+// right fork".
 
 describe("GitHub Actions release gates", () => {
   it("carries the shared action's reference block: condition, queued concurrency, permission scope and claim policy", async () => {
@@ -45,8 +47,7 @@ describe("GitHub Actions release gates", () => {
     expect(workflow.on).toEqual({ issue_comment: { types: ["created"] } });
     // The action's own reference block scopes `issues: write` to the job, and
     // a workflow-level block is denied on its own: leaving it there is the
-    // coarse shape this move exists to drop, and a job-level permission that
-    // narrows the token is silently overridden by a workflow-level one.
+    // coarse shape this move exists to drop.
     expect(workflow.permissions).toBeUndefined();
     // `queue: max` is load-bearing, not a stylistic choice: GitHub keeps one
     // PENDING run per concurrency group and cancels the older pending one even
