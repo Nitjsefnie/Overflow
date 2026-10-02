@@ -45,29 +45,65 @@ const LANDMARK_SELECTOR = [
   "[role='region']",
 ].join(", ");
 
+/** The elements axe never counts as page content, however much text they hold. */
+const NOT_PAGE_CONTENT = new Set(["script", "style", "noscript", "template"]);
+
 /**
- * axe-core's region rule makes room for the page's first skip link, and for that
- * one node: `findRegionlessElms` keeps a node only when `_isSkipLink(node) &&
- * getElementByReference(node, 'href')`. Both halves are reproduced here, so the
- * exemption is narrower than "carries the class" — the node must be an anchor
- * whose href resolves onto an element in this document, and it must be the first
- * such anchor on the page. A second skip link further down, or a stray element
- * wearing the class, stays regionless content like any other.
+ * axe's reference anchor: `generateFirstPageLink` takes the first link that is
+ * neither a `javascript:` href nor one `_isCurrentPageLink`, and that predicate
+ * is true for every href starting with "#". A fragment link — which is what a
+ * skip link is — can therefore never BE the anchor, and never loses its
+ * exemption to a link placed ahead of it.
+ */
+function firstPageLink(): Element | undefined {
+  return Array.from(document.querySelectorAll("a[href]")).find((candidate) => {
+    const href = candidate.getAttribute("href") ?? "";
+    return !/^javascript:/i.test(href) && !href.startsWith("#");
+  });
+}
+
+/**
+ * axe-core's region rule keeps a node out of its regionless list when
+ * `_isSkipLink(node) && getElementByReference(node, 'href')`: the link must
+ * resolve onto an element of this document, and must not be the page's own
+ * reference anchor. That is the test modelled here, and the anchor it is
+ * measured against is the one above — NOT "the first a[href] in the document",
+ * which is the earlier version's mistake and which cost the skip link its
+ * exemption as soon as any link preceded it, including a link inside a nav that
+ * axe accepts outright.
+ *
+ * The `skip-link` class is the handle on the shell's own chrome, not part of
+ * axe's rule: it keeps this exemption narrower than axe, so a stray element
+ * wearing the class elsewhere is still counted.
  */
 function isThePagesSkipLink(element: Element): boolean {
   if (!element.classList.contains("skip-link") || element.tagName.toLowerCase() !== "a") {
     return false;
   }
-  const href = element.getAttribute("href");
-  // A bare "#" is a fragment with no name: it resolves onto nothing, so
-  // getElementByReference finds no element and the node is not a skip link.
-  if (href === null || !href.startsWith("#") || href.length < 2) {
+  // getElementByReference resolves an href by id first and falls back to the
+  // name attribute. Reading the fragment by hand is what keeps a malformed one
+  // (`href="#a b"`, which querySelector throws on) a failed assertion here
+  // rather than a TypeError out of the walk.
+  const href = element.getAttribute("href") ?? "";
+  const reference = href.startsWith("#") ? href.slice(1) : href;
+  if (reference === "") {
     return false;
   }
-  if (document.querySelector(href) === null) {
-    return false;
-  }
-  return element === document.querySelector("a[href]");
+  const target = document.getElementById(reference) ?? document.getElementsByName(reference)[0] ?? null;
+  return target !== null && element !== firstPageLink();
+}
+
+/**
+ * Whether the element carries text of its own. axe flags content — the element
+ * a text node hangs off — not the wrappers that merely contain it, so a div
+ * whose every child is already inside a landmark is not itself regionless. It
+ * also keeps the walk free of the test renderer's own container, which wraps
+ * the whole page and holds all of its text without being page content.
+ */
+function carriesOwnText(element: Element): boolean {
+  return Array.from(element.childNodes).some(
+    (child) => child.nodeType === Node.TEXT_NODE && (child.textContent ?? "").trim().length > 0,
+  );
 }
 
 // Issue 908: src/app had error.tsx and global-error.tsx but no not-found.tsx,
@@ -127,19 +163,22 @@ describe("not-found page", () => {
     await renderNotFound();
 
     // axe-core's `region` rule: all page content must be contained by
-    // landmarks. This walks the rendered shell rather than a selector naming
-    // the page's own content, so content that escapes main — or chrome that
-    // loses its landmarks — fails here too.
+    // landmarks. The walk covers the whole document rather than the shell, so
+    // content rendered outside .app-shell is caught too — the shell-scoped
+    // version was the one place this file was narrower than the rule it models,
+    // and narrower is the direction that misses defects. Body itself is the
+    // walk's root: it holds every string on the page and is not content.
     //
     // The rule exempts the shell's skip link, which sits ahead of the header so
-    // a keyboard reaches the content without traversing the chrome — but it
-    // exempts that one node under a narrow test, which isThePagesSkipLink
-    // reproduces rather than a blanket exemption for anything wearing the class.
-    const stray = Array.from(document.querySelectorAll(".app-shell *")).filter(
+    // a keyboard reaches the content without traversing the chrome, under the
+    // narrow test isThePagesSkipLink models — not a blanket exemption for
+    // anything wearing the class.
+    const stray = Array.from(document.body.querySelectorAll("*")).filter(
       (element) =>
+        !NOT_PAGE_CONTENT.has(element.tagName.toLowerCase()) &&
         !isThePagesSkipLink(element) &&
         element.closest(LANDMARK_SELECTOR) === null &&
-        (element.textContent ?? "").trim().length > 0,
+        carriesOwnText(element),
     );
 
     expect(
