@@ -174,35 +174,49 @@ deployment tree:
 
 ```bash
 set -a; . /etc/overflow/overflow.env; set +a
-# Take the run's LAST stdout line, which is the path it installed. The run's
-# status is read before the line is picked, because `$(… | tail -1)` reports
-# tail's status and would let a failed backup carry on with an empty path,
-# surfacing much later as "install: cannot stat ''". Nothing here calls exit:
-# this runbook sets no set -e, and an exit in a pasted block closes the shell
-# the operator is standing in.
-output=$(bash scripts/db-backup.sh) || output=
-dump=$(printf '%s\n' "$output" | tail -1)
-# STOP HERE if the line below printed: the backup run failed and there is no
-# dump to copy. Everything after this point is working from $dump.
-[ -n "$dump" ] || printf '%s\n' "no dump path printed — the backup run failed; stop and read its stderr" >&2
-# $dump is e.g. /var/backups/overflow/overflow-<stamp>.dump — or
-# overflow-<stamp>-1.dump when another run had already taken the plain name in
-# that second. Copy that exact path; do not reconstruct it from the timestamp.
-
+# Named before the drill runs, because the later blocks of this section — the
+# comparison, the grant, the listing, the dropdb — need it, and a subshell
+# cannot hand a variable back to the shell it was typed in.
 scratch="overflow_drill_$(date +%s)"
-sudo -u postgres createdb "$scratch"
 
-# The backup directory is root-only, and the deployed restore script is 0750
-# root:overflow, unreadable by postgres. Stage postgres-readable copies of both;
-# the restore runs as the postgres OS user over peer auth.
-install -o postgres -g postgres -m 0400 \
-  "$dump" /tmp/overflow-drill-dump-staging.dump
-install -o postgres -g postgres -m 0500 \
-  /srv/overflow/scripts/db-restore.sh /tmp/overflow-drill-restore.sh
-sudo -u postgres env DATABASE_URL=postgresql:///"$scratch" \
-  bash /tmp/overflow-drill-restore.sh --allow-live "$scratch" \
-  /tmp/overflow-drill-dump-staging.dump
+(
+  set -e
+  # Take the run's LAST stdout line, which is the path it installed. The run's
+  # status is read before the line is picked, because `$(… | tail -1)` reports
+  # tail's status and would let a failed backup carry on with an empty path,
+  # surfacing much later as "install: cannot stat ''".
+  output=$(bash scripts/db-backup.sh)
+  dump=$(printf '%s\n' "$output" | tail -1)
+  # $dump is e.g. /var/backups/overflow/overflow-<stamp>.dump — or
+  # overflow-<stamp>-1.dump when another run had already taken the plain name
+  # in that second. Copy that exact path; do not reconstruct it from the
+  # timestamp.
+  [ -n "$dump" ] || { printf '%s\n' "no dump path printed — the backup run failed" >&2; exit 1; }
+
+  # Everything below is gated on the backup having worked, so a failed run stops
+  # HERE rather than leaving an overflow_drill_<epoch> database behind for the
+  # cleanup at the end of this section to never reach.
+  sudo -u postgres createdb "$scratch"
+
+  # The backup directory is root-only, and the deployed restore script is 0750
+  # root:overflow, unreadable by postgres. Stage postgres-readable copies of
+  # both; the restore runs as the postgres OS user over peer auth.
+  install -o postgres -g postgres -m 0400 \
+    "$dump" /tmp/overflow-drill-dump-staging.dump
+  install -o postgres -g postgres -m 0500 \
+    /srv/overflow/scripts/db-restore.sh /tmp/overflow-drill-restore.sh
+  sudo -u postgres env DATABASE_URL=postgresql:///"$scratch" \
+    bash /tmp/overflow-drill-restore.sh --allow-live "$scratch" \
+    /tmp/overflow-drill-dump-staging.dump
+)
 ```
+
+The subshell is what makes the gate safe to paste: the `set -e` and the `exit`
+belong to it, and it is the operator's shell that keeps running afterwards.
+This runbook sets no `set -e` in the shell the operator is standing in, and an
+`exit` typed there would close it — which is why the refusal above is a
+subshell's `exit 1` and not a bare one. If the block stops without printing the
+path, the backup failed and nothing was created.
 
 Note the `--allow-live`: the target equals the database the drill's
 `DATABASE_URL` names, so the safety guard demands the flag be typed on
