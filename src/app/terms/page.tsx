@@ -20,7 +20,7 @@ export function TermsNotice() {
           the shared ledger attributes work to it by your GitHub identity. What Overflow stores about your
           account is described on the <Link href="/account-data">account data page</Link>.
         </p>
-        <p>
+        <p className="account-age-floor">
           An account presupposes that you are old enough to hold one. Because sign-up is GitHub
           authentication and nothing else, that floor is GitHub&apos;s, not Overflow&apos;s: the{" "}
           <a href="https://docs.github.com/en/site-policy/github-terms/github-terms-of-service" rel="noreferrer">
