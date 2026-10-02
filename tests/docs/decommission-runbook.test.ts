@@ -161,12 +161,27 @@ function shBlocks(text: string): string[][] {
     .map((block) => block.body);
 }
 
-/** The body of one phase: its lines after the heading, up to the next `## `. */
-function sectionBody(heading: string): string {
-  const start = runbookLines.findIndex((line) => line === heading);
+/**
+ * The body of one phase: its lines after the heading, up to the next `## `.
+ * The next `## ` ends the section only OUTSIDE a fenced block — a `## ` in
+ * shell text is a shell comment, not the next phase's heading — so the scan
+ * toggles through fences exactly as `proseLines` and `fencedBlocks` do. The
+ * fenced lines stay in the returned body: the per-phase literal assertions
+ * read commands that live inside `sh` blocks.
+ */
+function sectionBody(heading: string, lines: string[] = runbookLines): string {
+  const start = lines.findIndex((line) => line === heading);
   if (start === -1) return "";
-  const rest = runbookLines.slice(start + 1);
-  const end = rest.findIndex((line) => /^##\s/.test(line));
+  const rest = lines.slice(start + 1);
+  let end = -1;
+  let fenced = false;
+  for (const [offset, line] of rest.entries()) {
+    if (/^```/.test(line)) fenced = !fenced;
+    else if (!fenced && /^##\s/.test(line)) {
+      end = offset;
+      break;
+    }
+  }
   return (end === -1 ? rest : rest.slice(0, end)).join("\n");
 }
 
@@ -189,6 +204,26 @@ describe("decommissioning runbook", () => {
       subHeadings,
       `${document} carries a sub-heading. Sections are extracted per phase below, so anything under one stops being checked`,
     ).toStrictEqual([]);
+  });
+
+  it("does not let a `## ` inside a later fence truncate a phase's checked body", () => {
+    const planted = [
+      "## 5. Database disposal",
+      "prose before the block",
+      "```sh",
+      "sudo -u postgres psql <<'SQL'",
+      "## not a heading, just shell text",
+      "SQL",
+      "```",
+      "prose after the block",
+      "## 6. Backup disposal",
+      "phase 6 body",
+    ];
+    const body = sectionBody("## 5. Database disposal", planted);
+    expect(
+      body,
+      "a `## ` line inside a sh fence truncated the phase's checked body, so everything after it in this phase went unchecked",
+    ).toContain("prose after the block");
   });
 
   it("gives the runbook an introduction before the first phase", () => {
