@@ -45,6 +45,31 @@ const LANDMARK_SELECTOR = [
   "[role='region']",
 ].join(", ");
 
+/**
+ * axe-core's region rule makes room for the page's first skip link, and for that
+ * one node: `findRegionlessElms` keeps a node only when `_isSkipLink(node) &&
+ * getElementByReference(node, 'href')`. Both halves are reproduced here, so the
+ * exemption is narrower than "carries the class" — the node must be an anchor
+ * whose href resolves onto an element in this document, and it must be the first
+ * such anchor on the page. A second skip link further down, or a stray element
+ * wearing the class, stays regionless content like any other.
+ */
+function isThePagesSkipLink(element: Element): boolean {
+  if (!element.classList.contains("skip-link") || element.tagName.toLowerCase() !== "a") {
+    return false;
+  }
+  const href = element.getAttribute("href");
+  // A bare "#" is a fragment with no name: it resolves onto nothing, so
+  // getElementByReference finds no element and the node is not a skip link.
+  if (href === null || !href.startsWith("#") || href.length < 2) {
+    return false;
+  }
+  if (document.querySelector(href) === null) {
+    return false;
+  }
+  return element === document.querySelector("a[href]");
+}
+
 // Issue 908: src/app had error.tsx and global-error.tsx but no not-found.tsx,
 // so an unknown URL rendered Next.js's default 404 — unstyled, no app shell,
 // and failing both the landmark-one-main and the region check. These cases walk
@@ -104,12 +129,15 @@ describe("not-found page", () => {
     // axe-core's `region` rule: all page content must be contained by
     // landmarks. This walks the rendered shell rather than a selector naming
     // the page's own content, so content that escapes main — or chrome that
-    // loses its landmarks — fails here too. The skip link is the single
-    // exception: it is the keyboard affordance the shell places ahead of the
-    // header on every page it wraps, and it is chrome rather than page content.
+    // loses its landmarks — fails here too.
+    //
+    // The rule exempts the shell's skip link, which sits ahead of the header so
+    // a keyboard reaches the content without traversing the chrome — but it
+    // exempts that one node under a narrow test, which isThePagesSkipLink
+    // reproduces rather than a blanket exemption for anything wearing the class.
     const stray = Array.from(document.querySelectorAll(".app-shell *")).filter(
       (element) =>
-        !element.classList.contains("skip-link") &&
+        !isThePagesSkipLink(element) &&
         element.closest(LANDMARK_SELECTOR) === null &&
         (element.textContent ?? "").trim().length > 0,
     );
