@@ -9,7 +9,12 @@
 # place under a free name; that path is printed on stdout. The stamp has
 # one-second resolution, so a second run landing in the same second installs
 # under the next free name in the series overflow-<stamp>-1.dump,
-# overflow-<stamp>-2.dump, ... rather than replacing the first run's dump.
+# overflow-<stamp>-2.dump, ... rather than replacing the first run's dump. A
+# name already held is skipped, whether by a file, a dangling symlink, or a
+# directory — a directory counts as taken because ln would otherwise link INTO
+# it and report success. Only a link that fails on a FREE name — a read-only
+# directory, no space, a name the filesystem will not accept — aborts the run,
+# and it says so with ln's own reason.
 # Dumps matching overflow-*.dump that are older than --retention-days
 # (default 14) are pruned after a successful dump.
 #
@@ -127,7 +132,11 @@ pg_restore_cmd=${OVERFLOW_PG_RESTORE:-pg_restore}
 # derive one name. The install below takes the first free name in the series
 # overflow-<stamp>.dump, overflow-<stamp>-1.dump, overflow-<stamp>-2.dump, ...
 stamp=${OVERFLOW_BACKUP_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}
-dump="$output_dir/overflow-$stamp.dump"
+# The name this run would take if nothing else had it. Only the empty-dump
+# refusal below quotes it, and it is quoted as the intent rather than as an
+# installed file: the name actually installed is decided by the search, which
+# has not run yet, and $dump is set to it only once it has.
+intended="$output_dir/overflow-$stamp.dump"
 # The partial carries this run's pid: two runs sharing one second would
 # otherwise share one partial, and the second run's redirect would truncate the
 # bytes the first is about to install. The stem is the pid rather than the
@@ -141,19 +150,22 @@ trap 'rm -f "$partial"' EXIT HUP INT TERM
 $pg_dump_cmd --format=custom "$DATABASE_URL" > "$partial"
 
 if [ ! -s "$partial" ]; then
-    fail "the dump is empty; refusing to keep it ($dump)"
+    fail "the dump is empty; refusing to keep it ($intended)"
 fi
 
 # Listing the archive through pg_restore proves the file is a complete,
 # readable custom-format dump before it is called a backup.
 $pg_restore_cmd --list < "$partial" > /dev/null
 
-# Install under the first free name in the series, atomically. ln is the
-# exclusive create: it fails when the name is taken, and a hard link inside one
-# directory is same-filesystem by construction, so choosing the name and taking
-# it cannot come apart the way a test-then-mv does — two runs in one second
-# would both see the plain name free and one would replace the other. The
-# bound keeps a directory full of taken names from searching forever.
+# Install under the first free name in the series, atomically. The primitive is
+# link(2): it either creates the name or fails EEXIST, and the kernel decides
+# which with no window in between. That is what makes choosing the name and
+# taking it one step — a test-then-mv splits them, so two runs in one second
+# both see the plain name free and one replaces the other. Both operands sit in
+# one directory, which is what makes the hard link possible at all: it rules
+# out EXDEV, it is not where the atomicity comes from. (link(2) is atomic on a
+# local filesystem; the backup directory is documented as local.)
+# The bound keeps a directory full of taken names from searching forever.
 max_attempts=100
 attempt=0
 while :; do
