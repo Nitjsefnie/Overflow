@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -65,5 +66,51 @@ describe("scratch-git helpers under an inherited git environment", () => {
     git(repo, "init", "--quiet");
 
     expect(git(repo, "rev-parse", "--absolute-git-dir")).toBe(join(repo, ".git"));
+  });
+
+  /**
+   * `tryGit` exists so that a read whose NON-ZERO exit is the answer can keep
+   * the status. Its other job is the harder half: a launch that never produced a
+   * status must not be readable as "looked, found nothing".
+   *
+   * Measured on this box, `spawnSync` pointed at a working directory that does
+   * not exist returns `status: null`, `error: spawnSync git ENOENT`, and a
+   * `stdout` that is **undefined** — not the empty string, and not the `string`
+   * the old return type promised. The key is present; the value is not a string.
+   *
+   * The FALSE GREEN is the neighbouring case, and it is why the guard throws
+   * rather than coalescing. Measured through vitest's own `expect`:
+   * `expect(undefined).not.toContain(x)` raises an `AssertionError` — red, but on
+   * a message about an unusable argument rather than about the repository — while
+   * `expect("").not.toContain(x)` **PASSES**, and a timeout gives exactly that
+   * `""`. So a helper returning `stdout: result.stdout ?? ""` would certify a
+   * repository it never opened as clean. Throwing is the only shape in which
+   * "could not look" cannot be read as "looked, found nothing" — the exact
+   * distinction between status 1 and everything above it. Asserted here rather
+   * than trusted.
+   */
+  it("refuses to report a launch failure as a clean read", async () => {
+    const { tryGit } = await freshHelpers();
+    const missing = join(root, "no-such-directory-938");
+    expect(existsSync(missing), "the case must point at a directory that is genuinely absent").toBe(false);
+
+    let thrown: unknown;
+    let returned: { status: number; stdout: string; stderr: string } | undefined;
+    try {
+      returned = tryGit(missing, "log", "--all", "-p");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(
+      returned,
+      "tryGit must not RETURN for a launch that produced no exit status. A returned object makes the failure " +
+        "invisible one way or the other — an undefined stdout makes the caller's `not.toContain(secret)` fail " +
+        "on an unusable argument, and the empty stdout a TIMEOUT produces makes it PASS on a repository the test " +
+        "never opened",
+    ).toBeUndefined();
+    expect(String(thrown), "and it must say what it was trying to run, and where").toContain("git log --all -p");
+    expect(String(thrown), "and name the launch failure rather than reporting an empty result").toMatch(
+      /ENOENT|never produced an exit status/,
+    );
   });
 });

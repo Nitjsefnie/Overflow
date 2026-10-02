@@ -5,6 +5,7 @@ import { githubWebhookEvents } from "@/lib/github/webhook-schema";
 import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
 import { checkGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
+import { boundedResponseText, GitHubResponseTooLargeError, MAX_SUCCESS_BODY_BYTES } from "@/lib/github/response-text";
 import type { ForgeGateway } from "@/lib/forge/gateway";
 import type { GitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
 export { GitHubApiError } from "@/lib/github/errors";
@@ -875,15 +876,23 @@ export class GitHubGateway implements ForgeGateway {
         throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body);
       }
 
-      // Drain successful bodies even when callers only need the status.
-      const body = await beforeDeadline(boundedResponseText(response, Infinity, controller.signal));
-      return { status: response.status, headers: response.headers, body: body ?? "" };
+      // Drain successful bodies even when callers only need the status. Past the
+      // success-path cap the request rejects; the body is never silently emptied.
+      const body = await beforeDeadline(boundedResponseText(response, MAX_SUCCESS_BODY_BYTES, controller.signal));
+      if (body === null) {
+        throw new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES);
+      }
+      return { status: response.status, headers: response.headers, body };
     } catch (error) {
       if (error instanceof Error && error.message === "GitHub request timed out.") {
         throw error;
       }
 
       if (error instanceof GitHubApiError) {
+        throw error;
+      }
+
+      if (error instanceof GitHubResponseTooLargeError) {
         throw error;
       }
 
@@ -1406,46 +1415,6 @@ function toGitHubPullRequestReview(
     submittedAt: node.submittedAt,
     dismissal,
   };
-}
-
-async function boundedResponseText(response: Response, maxBytes: number, signal: AbortSignal): Promise<string | null> {
-  if (response.body === null) {
-    return "";
-  }
-  const reader = response.body.getReader();
-  const cleanup = () => {
-    try {
-      // Cancellation may reject or never settle. Initiate it without awaiting it,
-      // then release the reader immediately, including when a read is pending.
-      void reader.cancel().catch(() => undefined);
-    } catch {
-      // Cleanup must not replace the read's result or error.
-    } finally {
-      reader.releaseLock();
-    }
-  };
-  signal.addEventListener("abort", cleanup, { once: true });
-  const decoder = new TextDecoder();
-  let bytes = 0;
-  let content = "";
-  try {
-    signal.throwIfAborted();
-    while (true) {
-      const { done, value } = await reader.read();
-      signal.throwIfAborted();
-      if (done) {
-        return content + decoder.decode();
-      }
-      bytes += value.byteLength;
-      if (bytes > maxBytes) {
-        return null;
-      }
-      content += decoder.decode(value, { stream: true });
-    }
-  } finally {
-    signal.removeEventListener("abort", cleanup);
-    cleanup();
-  }
 }
 
 function segment(value: string): string {

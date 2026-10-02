@@ -11,6 +11,7 @@ import {
   startReconciliationWorker,
   type ReconciliationWorkerStore,
 } from "@/lib/fold/reconciliation-worker";
+import { captureUnhandledRejections } from "../support/unhandled-rejection-probe";
 
 const heldSignals = new Set<() => void>();
 afterEach(() => {
@@ -519,7 +520,7 @@ describe("running the next reconciliation job", () => {
   it("records the retry when the failure reporter rejects instead of throwing", async () => {
     const { store, calls } = createFakeStore({ jobs: [job()] });
     const unfolded = new Error("GitHub is unreachable");
-    const rejections = watchUnhandledRejections();
+    const rejections = captureUnhandledRejections();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const reports: string[] = [];
 
@@ -548,13 +549,13 @@ describe("running the next reconciliation job", () => {
       });
       await settle();
       await settle();
-      expect(rejections.recorded).toEqual([]);
+      expect(rejections.seen).toEqual([]);
       expect(logged.mock.calls).toEqual([
         ["Reconciliation failed for repository", "repo-a", unfolded],
       ]);
     } finally {
       logged.mockRestore();
-      rejections.stop();
+      rejections.restore();
     }
   });
 });
@@ -817,7 +818,7 @@ describe("reconciliation lease heartbeat", () => {
       if (++attempts === 1) throw failure;
       return true;
     };
-    const rejections = watchUnhandledRejections();
+    const rejections = captureUnhandledRejections();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const running = runNextReconciliationJob({ store, reconcile: () => fold.promise, ...timer.dependencies });
     try {
@@ -826,7 +827,7 @@ describe("reconciliation lease heartbeat", () => {
       await timer.tick();
       expect(calls.filter(({ method }) => method === "renew")).toHaveLength(2);
       await surfaceUnhandledRejections();
-      expect(rejections.recorded).toEqual([]);
+      expect(rejections.seen).toEqual([]);
       // The rejected renewal prints the site's full line; the renewal that
       // answers ends the outage with its recovery line (issue 661).
       expect(logged).toHaveBeenCalledTimes(2);
@@ -843,7 +844,7 @@ describe("reconciliation lease heartbeat", () => {
       fold.resolve();
       await running;
       logged.mockRestore();
-      rejections.stop();
+      rejections.restore();
     }
   });
 
@@ -922,16 +923,16 @@ describe("reconciliation lease heartbeat", () => {
         },
       };
       const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-      const rejections = watchUnhandledRejections();
+      const rejections = captureUnhandledRejections();
       try {
         await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
         await surfaceUnhandledRejections();
-        expect(rejections.recorded).toEqual([]);
+        expect(rejections.seen).toEqual([]);
         expect(logged).toHaveBeenCalledTimes(1);
         expect(logged.mock.calls[0]?.slice(1)).toEqual(["job-1", mode === "uncallable" ? undefined : failure]);
       } finally {
         logged.mockRestore();
-        rejections.stop();
+        rejections.restore();
       }
     },
   );
@@ -940,7 +941,7 @@ describe("reconciliation lease heartbeat", () => {
     const { store } = createFakeStore({ jobs: [job()] });
     const failure = new Error("cancellation failed");
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    const rejections = watchUnhandledRejections();
+    const rejections = captureUnhandledRejections();
     try {
       await expect(runNextReconciliationJob({
         store, reconcile: async () => {},
@@ -950,12 +951,12 @@ describe("reconciliation lease heartbeat", () => {
         },
       })).resolves.toBe("RECONCILED");
       await surfaceUnhandledRejections();
-      expect(rejections.recorded).toEqual([]);
+      expect(rejections.seen).toEqual([]);
       expect(logged).toHaveBeenCalledTimes(1);
       expect(logged.mock.calls[0]?.slice(1)).toEqual(["job-1", failure]);
     } finally {
       logged.mockRestore();
-      rejections.stop();
+      rejections.restore();
     }
   });
 
@@ -1717,7 +1718,7 @@ describe("the scheduled reconciliation worker", () => {
   });
 
   it("reports a drain that rejects instead of letting the rejection escape", async () => {
-    const rejections = watchUnhandledRejections();
+    const rejections = captureUnhandledRejections();
     try {
       const timer = createTimer();
       const failure = new Error("PostgreSQL is unreachable");
@@ -1737,14 +1738,14 @@ describe("the scheduled reconciliation worker", () => {
       await timer.settle();
 
       expect(reported).toEqual([failure]);
-      expect(rejections.recorded).toEqual([]);
+      expect(rejections.seen).toEqual([]);
     } finally {
-      rejections.stop();
+      rejections.restore();
     }
   });
 
   it("reports a drain that rejects on the console when no reporter is attached", async () => {
-    const rejections = watchUnhandledRejections();
+    const rejections = captureUnhandledRejections();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const undrained = new Error("PostgreSQL is unreachable");
     try {
@@ -1765,18 +1766,18 @@ describe("the scheduled reconciliation worker", () => {
       // Counted so the empty rejection list stands for a drain that really ran
       // and really rejected, rather than for a drain that never happened.
       expect(drains).toBe(1);
-      expect(rejections.recorded).toEqual([]);
+      expect(rejections.seen).toEqual([]);
       expect(logged.mock.calls).toEqual([
         ["Reconciliation worker could not drain the job queue", undrained],
       ]);
     } finally {
       logged.mockRestore();
-      rejections.stop();
+      rejections.restore();
     }
   });
 
   it("treats a drain reporter whose retrieval throws as no reporter at all", async () => {
-    const rejections = watchUnhandledRejections();
+    const rejections = captureUnhandledRejections();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const undrained = new Error("PostgreSQL is unreachable");
     try {
@@ -1800,7 +1801,7 @@ describe("the scheduled reconciliation worker", () => {
       await timer.settle();
       await timer.settle();
 
-      expect(rejections.recorded).toEqual([]);
+      expect(rejections.seen).toEqual([]);
       expect(logged.mock.calls).toEqual([
         ["Reconciliation worker could not drain the job queue", undrained],
       ]);
@@ -1810,15 +1811,15 @@ describe("the scheduled reconciliation worker", () => {
       await timer.tick();
       await timer.settle();
       expect(drains).toEqual(["drained", "drained"]);
-      expect(rejections.recorded).toEqual([]);
+      expect(rejections.seen).toEqual([]);
     } finally {
       logged.mockRestore();
-      rejections.stop();
+      rejections.restore();
     }
   });
 
   it("contains a drain reporter that rejects rather than throwing", async () => {
-    const rejections = watchUnhandledRejections();
+    const rejections = captureUnhandledRejections();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const undrained = new Error("PostgreSQL is unreachable");
     try {
@@ -1841,18 +1842,18 @@ describe("the scheduled reconciliation worker", () => {
       await settle();
 
       expect(reports).toEqual([undrained]);
-      expect(rejections.recorded).toEqual([]);
+      expect(rejections.seen).toEqual([]);
       expect(logged.mock.calls).toEqual([
         ["Reconciliation worker could not drain the job queue", undrained],
       ]);
     } finally {
       logged.mockRestore();
-      rejections.stop();
+      rejections.restore();
     }
   });
 
   it("keeps a failure reporter that throws from escaping the drain", async () => {
-    const rejections = watchUnhandledRejections();
+    const rejections = captureUnhandledRejections();
     try {
       const timer = createTimer();
       const drains: string[] = [];
@@ -1870,20 +1871,20 @@ describe("the scheduled reconciliation worker", () => {
       });
       await timer.settle();
       await timer.settle();
-      expect(rejections.recorded).toEqual([]);
+      expect(rejections.seen).toEqual([]);
 
       // A reporter that threw must still leave the worker able to drain again.
       await timer.tick();
       await timer.settle();
       expect(drains).toEqual(["drained", "drained"]);
-      expect(rejections.recorded).toEqual([]);
+      expect(rejections.seen).toEqual([]);
     } finally {
-      rejections.stop();
+      rejections.restore();
     }
   });
 
   it("drains again on the next tick after a drain rejected", async () => {
-    const rejections = watchUnhandledRejections();
+    const rejections = captureUnhandledRejections();
     try {
       const timer = createTimer();
       const drains: string[] = [];
@@ -1908,7 +1909,7 @@ describe("the scheduled reconciliation worker", () => {
       await timer.tick();
       expect(drains).toEqual(["rejected", "drained"]);
     } finally {
-      rejections.stop();
+      rejections.restore();
     }
   });
 
@@ -2206,28 +2207,6 @@ function createTimer() {
     },
     async settle() {
       await new Promise((resolve) => setTimeout(resolve, 0));
-    },
-  };
-}
-
-/**
- * Records the rejections Node would otherwise have thrown on.
- *
- * Node's default for an unhandled rejection is to throw, which would take the
- * server down, so the tests below need to see the ones that got away rather
- * than only the ones the worker reported.
- */
-function watchUnhandledRejections() {
-  const recorded: unknown[] = [];
-  const listener = (reason: unknown) => {
-    recorded.push(reason);
-  };
-  process.on("unhandledRejection", listener);
-
-  return {
-    recorded,
-    stop() {
-      process.off("unhandledRejection", listener);
     },
   };
 }

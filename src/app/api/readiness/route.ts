@@ -1,5 +1,6 @@
 import { getSql } from "@/lib/db/client";
-import { isSchemaUpToDate } from "@/lib/db/migration-manifest";
+import { bundledMigrationNames } from "@/lib/db/migration-manifest";
+import { describeErrorCause } from "@/lib/repositories/register";
 
 /**
  * Deployment readiness probe — issue 439.
@@ -33,8 +34,18 @@ import { isSchemaUpToDate } from "@/lib/db/migration-manifest";
  * runs per handler instance no matter how many requests arrive. Requests
  * landing while a probe is in flight share that probe's result, a completed
  * result is reused with zero probe work until the TTL expires, and a cached
- * failure is served exactly like a cached success. In the worst case an
- * attacker costs one query every TTL window.
+ * failure is served with its reason, exactly like a cached success. In the
+ * worst case an attacker costs one query every TTL window.
+ *
+ * Issue 910 adds the why to a not-ready answer: every failure mode maps to a
+ * reason string — a rejection renders its redacted cause through
+ * `describeErrorCause` (imported from the repositories module, PR 887
+ * precedent), a schema behind the build names the migrations it is missing,
+ * and a probe that outlives the hard cap names the cap — and the reason
+ * reaches both the 503 body and the journal, one `console.error` per failed
+ * probe at settlement. A TTL-cached failure served inside its window does
+ * not log again: only a probe settlement logs. Status codes, cache-control,
+ * single-flight and TTL semantics are unchanged.
  */
 
 /** How long a single probe query may run before it counts as not ready. */
@@ -52,8 +63,19 @@ const READINESS_TTL_MS = 3000;
 
 export type Readiness = "ready" | "unavailable";
 
+/**
+ * What one probe run concluded. `reason` is present exactly when `status` is
+ * `"unavailable"` (issue 910): it names the failing dependency and why —
+ * every reason this module produces starts "database: …" — and is rendered
+ * into the 503 body and the journal line.
+ */
+export type ReadinessProbeOutcome = {
+  status: Readiness;
+  reason?: string;
+};
+
 export type ReadinessRouteDependencies = {
-  probe: () => Promise<Readiness>;
+  probe: () => Promise<ReadinessProbeOutcome>;
   now: () => number;
 };
 
@@ -76,13 +98,28 @@ export type ReadinessRouteDependencies = {
  * a socket that never answers); its settlement reaches only the handlers
  * attached here, never the process's unhandled-rejection path.
  */
-async function probeDatabase(): Promise<Readiness> {
+async function probeDatabase(): Promise<ReadinessProbeOutcome> {
   const sql = getSql();
   const appliedRows = await raceTimeout(
     sql<{ name: string }[]>`select name from schema_migrations`,
     READINESS_QUERY_TIMEOUT_MS,
   );
-  return isSchemaUpToDate(appliedRows.map((row) => row.name)) ? "ready" : "unavailable";
+  const missing = missingMigrations(appliedRows.map((row) => row.name));
+  return missing.length === 0
+    ? { status: "ready" }
+    : {
+        status: "unavailable",
+        reason: `database: schema is behind the build; missing migrations: ${missing.join(", ")}`,
+      };
+}
+
+/**
+ * The bundled migrations the applied ledger does not name, in bundled order —
+ * the exact list a behind-schema reason renders (issue 910).
+ */
+export function missingMigrations(applied: readonly string[]): readonly string[] {
+  const appliedNames = new Set(applied);
+  return bundledMigrationNames.filter((name) => !appliedNames.has(name));
 }
 
 /** Rejects if the query has not settled within `budgetMs`. */
@@ -115,33 +152,65 @@ export function createReadinessGetHandler(
   const probe = dependencies.probe ?? probeDatabase;
   const now = dependencies.now ?? Date.now;
 
-  let inFlight: Promise<Readiness> | undefined;
-  let cached: { outcome: Readiness; at: number } | undefined;
+  let inFlight: Promise<ReadinessProbeOutcome> | undefined;
+  let cached: { outcome: ReadinessProbeOutcome; at: number } | undefined;
 
   /**
    * Runs the probe exactly once per call and settles it through the hard cap.
    * The probe is invoked through Promise.resolve().then so a synchronous throw
    * counts as a failure like any other, and the mapped promise never rejects —
-   * every failure mode arrives as "unavailable".
+   * every failure mode arrives as an unavailable outcome carrying its reason
+   * (issue 910): a rejection renders `describeErrorCause`, and the hard cap
+   * renders its own. The race's loser is deliberately not awaited — a query
+   * that loses the race settles late through the client, or not at all — and
+   * `finish` consumes whichever settlement arrives second without resolving
+   * or logging again, so each probe journals exactly once.
    */
-  function runProbe(): Promise<Readiness> {
+  function runProbe(): Promise<ReadinessProbeOutcome> {
     const settled = Promise.resolve()
       .then(probe)
       .then(
         (outcome) => outcome,
-        () => "unavailable" as const,
+        (error: unknown) => ({
+          status: "unavailable" as const,
+          reason: `database: ${describeErrorCause(error)}`,
+        }),
       );
 
-    return new Promise<Readiness>((resolve) => {
-      const cap = setTimeout(() => resolve("unavailable"), READINESS_HARD_CAP_MS);
+    return new Promise<ReadinessProbeOutcome>((resolve) => {
+      let decided = false;
+      const finish = (outcome: ReadinessProbeOutcome): void => {
+        if (decided) {
+          return;
+        }
+        decided = true;
+        // One consolidated outcome: the reason fallback lives here, so the
+        // body and the journal line derive from the same string.
+        const consolidated: ReadinessProbeOutcome =
+          outcome.status === "unavailable" && outcome.reason === undefined
+            ? { ...outcome, reason: "database: an unavailable probe outcome arrived without a reason" }
+            : outcome;
+        if (consolidated.status === "unavailable") {
+          console.error(`Readiness probe failed: ${consolidated.reason}`);
+        }
+        resolve(consolidated);
+      };
+      const cap = setTimeout(
+        () =>
+          finish({
+            status: "unavailable",
+            reason: `database: probe did not settle within the ${READINESS_HARD_CAP_MS} ms hard cap`,
+          }),
+        READINESS_HARD_CAP_MS,
+      );
       settled.then((outcome) => {
         clearTimeout(cap);
-        resolve(outcome);
+        finish(outcome);
       });
     });
   }
 
-  async function readiness(): Promise<Readiness> {
+  async function readiness(): Promise<ReadinessProbeOutcome> {
     if (inFlight !== undefined) {
       return inFlight;
     }
@@ -165,9 +234,11 @@ export function createReadinessGetHandler(
   return async function getReadiness(): Promise<Response> {
     const outcome = await readiness();
     return Response.json(
-      { status: outcome },
+      outcome.status === "ready"
+        ? { status: "ready" }
+        : { status: "unavailable", reason: outcome.reason },
       {
-        status: outcome === "ready" ? 200 : 503,
+        status: outcome.status === "ready" ? 200 : 503,
         headers: { "cache-control": "no-store" },
       },
     );

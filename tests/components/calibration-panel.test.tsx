@@ -10,6 +10,11 @@ import type { RepositoryCalibrationEntry } from "@/lib/calibration/statistics";
 import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
 import { formatSigned } from "@/lib/format-signed";
 import { UNLABELLED_POINTS } from "@/lib/overrides/unlabelled-points";
+// Undeclared under pnpm strict mode, so the import names the locked store
+// path: it fails loudly on a dependency change and never silently falls back
+// to a hand-rolled name algorithm. This is the same computation the role
+// queries' `name` option applies.
+import { computeAccessibleName } from "../../node_modules/.pnpm/dom-accessibility-api@0.5.16/node_modules/dom-accessibility-api";
 
 // Rebind cached consumers to this file's mocks when workers are shared.
 vi.hoisted(() => { vi.resetModules(); });
@@ -127,6 +132,26 @@ describe("calibration comparison", () => {
     expect(card).toHaveClass("calibration-panel");
     expect(within(card as HTMLElement).queryByRole("heading", { name: "Calibration comparison", level: 1 })).toBeNull();
     expect(within(card as HTMLElement).queryByText("Paired calibration evidence")).toBeNull();
+  });
+
+  // Two landmark regions carrying one accessible name read as one region
+  // twice: a screen reader's region list cannot distinguish them (axe's
+  // landmark-unique rule, audit probe D2-12). The names are computed the way
+  // the role queries compute them and compared as a set, so a rename of any
+  // one region stays green while a shared name fails.
+  it("gives every landmark region a distinct accessible name", () => {
+    render(
+      <CalibrationPanel
+        comparison={{
+          selfWork: { count: 12, meanDelta: -0.5, medianDelta: -1 },
+          outsider: { count: 14, meanDelta: 1, medianDelta: 1 },
+          differenceBetweenMeans: -1.5,
+        }}
+      />,
+    );
+
+    const names = screen.getAllByRole("region").map((region) => computeAccessibleName(region));
+    expect(new Set(names).size).toBe(names.length);
   });
 
   it("renders no difference-between-means figure when only the self-work sample has pairs", () => {

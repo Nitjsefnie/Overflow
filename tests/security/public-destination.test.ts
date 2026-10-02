@@ -9,7 +9,6 @@ import {
   type ServerResponse,
 } from "node:http";
 import { getDefaultAutoSelectFamily, isIP, setDefaultAutoSelectFamily, type Socket } from "node:net";
-import { networkInterfaces } from "node:os";
 import { inspect } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -17,6 +16,7 @@ import {
   DestinationRefusedError,
   isPublicAddress,
 } from "@/lib/security/public-destination";
+import { hostPublicAddresses, urlHost } from "../support/public-destination-harness";
 
 const bodyLimit = 1024 * 1024;
 
@@ -134,31 +134,6 @@ function scriptedLookup(answers: string[][]): { lookup: typeof dnsLookup; calls:
 }
 
 const refusalMessage = "The destination was refused.";
-
-/**
- * The host's own public interface addresses — the ones the address class
- * admits, and the ones a deployment's deny list names (issue 899). Empty
- * where the host has none (a CI runner behind private interfaces), which
- * skips the public-address fixtures below: a destination the class permits
- * must route locally for the test to stay network-free, and only the host's
- * own public address does — a self-connect answers over loopback.
- */
-function hostPublicAddresses(): string[] {
-  const found: string[] = [];
-  for (const addresses of Object.values(networkInterfaces())) {
-    for (const entry of addresses ?? []) {
-      if (!entry.internal && isPublicAddress(entry.address)) {
-        found.push(entry.address);
-      }
-    }
-  }
-  return [...new Set(found)];
-}
-
-/** Brackets an IPv6 literal for use as a URL host; passes anything else through. */
-function urlHost(address: string): string {
-  return isIP(address) === 6 ? `[${address}]` : address;
-}
 
 /**
  * Awaits a rejection and pins it as the one refusal: the refusal class, the
