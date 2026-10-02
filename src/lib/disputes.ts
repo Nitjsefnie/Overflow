@@ -26,3 +26,20 @@ export const DISPUTE_RULES = [
   "The settlement's creditor or the sponsor can ask; a moderator decides.",
   "One open request per issue at a time.",
 ] as const;
+
+/**
+ * The case a correction request can be made for, named the way a page names it
+ * mid-sentence.
+ *
+ * DISPUTE_RULES above is the rules themselves; this is the noun those rules are
+ * ABOUT, and a page that says "contesting X cites that date" is making the same
+ * claim the list does. It lived only as a hand-written phrase in the terms
+ * revision paragraph, which is how that paragraph came to promise a sanction
+ * could be contested — the drift this file exists to end, reached through a
+ * sentence the list itself never appears in. Generating the sentence from this
+ * constant removes the second place the claim can be made.
+ *
+ * A page interpolates it mid-sentence, so the value carries its own article
+ * ("a settlement", not "settlement").
+ */
+export const DISPUTE_CONTESTABLE_CASE = "a settlement";
