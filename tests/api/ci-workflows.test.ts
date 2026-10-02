@@ -9,12 +9,15 @@ type Workflow = {
     string,
     { branches?: string[]; paths?: string[]; types?: string[]; inputs?: Record<string, unknown> } | Array<{ cron: string }> | null
   >;
-  permissions: Record<string, string>;
-  concurrency: { group: string; "cancel-in-progress": boolean | string };
+  // Optional: a workflow that scopes its permission to the job carries no
+  // workflow-level block at all, and that absence is what claim.yml now has.
+  permissions?: Record<string, string>;
+  concurrency: { group: string; "cancel-in-progress": boolean | string; queue?: string };
   jobs: Record<string, {
     if?: string;
     "runs-on"?: string;
     "timeout-minutes"?: number;
+    permissions?: Record<string, string>;
     services?: Record<string, { image?: string; options?: string }>;
     env?: Record<string, string>;
     steps: Array<{
@@ -30,27 +33,78 @@ type Workflow = {
 };
 
 describe("GitHub Actions release gates", () => {
-  it("preserves claim policy around the reviewed shared action without input overrides", async () => {
+  it("carries the shared action's reference block: condition, queued concurrency, permission scope and claim policy", async () => {
     const workflow = await readWorkflow("claim.yml");
     expect(workflow.on).toEqual({ issue_comment: { types: ["created"] } });
-    expect(workflow.permissions).toEqual({ issues: "write" });
+    // The action's own reference block scopes `issues: write` to the job, and
+    // a workflow-level block is denied on its own: leaving it there is the
+    // coarse shape this move exists to drop, and a job-level permission that
+    // narrows the token is silently overridden by a workflow-level one.
+    expect(workflow.permissions).toBeUndefined();
+    // `queue: max` is load-bearing, not a stylistic choice: GitHub keeps one
+    // PENDING run per concurrency group and cancels the older pending one even
+    // at cancel-in-progress false, so without it the second of three /claim
+    // comments landing while a run is in progress is dropped unanswered.
     expect(workflow.concurrency).toEqual({
       group: "claim-${{ github.event.issue.number }}",
       "cancel-in-progress": false,
+      queue: "max",
     });
     expect(workflow.jobs).toEqual({
       claim: {
-        if: "github.event.issue.pull_request == null"
-          + " && github.event.issue.state == 'open'"
-          + " && github.event.comment.user.type != 'Bot'"
+        if: "github.event.comment.user.type != 'Bot'"
           + " && (contains(github.event.comment.body, '/claim')\n"
           + "    || contains(github.event.comment.body, '/unclaim')\n"
           + "    || contains(github.event.comment.body, '/release'))",
         "runs-on": "ubuntu-latest",
         "timeout-minutes": 5,
-        steps: [{ uses: "Nitjsefnie-Actions/claim@ceaadaa096fd249cdeecc137342158ec17347cb9" }],
+        permissions: { issues: "write" },
+        steps: [{
+          uses: "Nitjsefnie-Actions/claim@8abff4f2f27d59b984528cb736f64b9391952a25",
+          with: {
+            "max-claims": "read=2, triage=4, write=6, maintain=10, admin=-1",
+            expire: "7",
+          },
+        }],
       },
     });
+  });
+
+  it("runs on a pull request or a closed issue so the action can decline the command in a reply", async () => {
+    const condition = (await readWorkflow("claim.yml")).jobs.claim!.if!;
+    // Each pre-filter the job condition used to carry is denied separately, so
+    // restoring one is named rather than buried in the whole-job diff. A job
+    // whose `if` does not match starts NO run, so the commenter is met with
+    // silence; the reference condition lets the action answer instead, and the
+    // answer is a refusal — which is what tells the author the command reached
+    // the workflow at all.
+    expect(
+      condition,
+      "claim.yml must not pre-filter pull requests on github.event.issue.pull_request: a job " +
+        "condition that skips starts no run, so /claim on a pull request gets no reply at all " +
+        "where the shared action answers with a decline.",
+    ).not.toContain("github.event.issue.pull_request");
+    expect(
+      condition,
+      "claim.yml must not pre-filter closed issues on github.event.issue.state: the same skip " +
+        "silence applies, and the action's reply is what says the issue is closed.",
+    ).not.toContain("github.event.issue.state");
+  });
+
+  it("caps concurrent claims per account and expires them", async () => {
+    const step = (await readWorkflow("claim.yml")).jobs.claim!.steps[0]!;
+    // Pinned as a pair with the job equality above, and on its own so a
+    // deletion is named: with neither input, one account can hold an unbounded
+    // number of claims and a stale claim never releases the reserve on its own.
+    expect(step.with).toEqual({
+      "max-claims": "read=2, triage=4, write=6, maintain=10, admin=-1",
+      expire: "7",
+    });
+  });
+
+  it("keeps the write permission on the job that issues the assignment", async () => {
+    const job = (await readWorkflow("claim.yml")).jobs.claim!;
+    expect(job.permissions).toEqual({ issues: "write" });
   });
 
   it("checks admission through the reviewed shared action without a consumer checkout", async () => {
