@@ -80,8 +80,11 @@ import { parse } from "yaml";
  * so the cheap kind of cancellation is the one that remains.
  *
  * Assertions are made on the parsed YAML data, never on the raw bytes, so
- * reformatting the block does not disturb them while a change to either key
- * fails loudly here.
+ * reformatting the block does not disturb them while a change to a key one of
+ * the tables below pins fails loudly here: `group` and `cancel-in-progress` for
+ * every bounded workflow, and — for each exception — the `queue` recorded beside
+ * its reason. The bounded table carries only the first two because none of the
+ * four bounded workflows ships a `queue`; the key is pinned where one exists.
  */
 
 type Workflow = {

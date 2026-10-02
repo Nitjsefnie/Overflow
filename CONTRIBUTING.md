@@ -472,7 +472,9 @@ one you already hold.
 **your own** assignment and nobody else's.
 
 Release an issue you stop working on, and do it before the merge that would
-close it. A claim also lapses on its own after seven days, and closing the issue
+close it, because a stale assignment on a closed issue may no longer be
+removable, and "probably still works" is not a reason to find that out after the
+merge. A claim also lapses on its own after seven days, and closing the issue
 releases the reserve immediately — only open issues hold points against the
 sponsor — but while an issue is open, your assignment makes it unclaimable by
 anyone else.

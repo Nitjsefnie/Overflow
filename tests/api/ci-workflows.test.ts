@@ -32,6 +32,13 @@ type Workflow = {
   }>;
 };
 
+// Every pin below is a CONSISTENCY check, not a correctness check: it proves the
+// tree still says what it said, not that the value is the right one. Substituting
+// a well-shaped wrong SHA at every site at once leaves this file green, because
+// proving that a pin names the real upstream fork would need a network fetch that
+// a suite reading the tree does not make. Read a green run as "nothing drifted",
+// never as "this pin is the right fork".
+
 describe("GitHub Actions release gates", () => {
   it("carries the shared action's reference block: condition, queued concurrency, permission scope and claim policy", async () => {
     const workflow = await readWorkflow("claim.yml");
