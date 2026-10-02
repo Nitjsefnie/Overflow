@@ -192,6 +192,11 @@ scratch="overflow_drill_$(date +%s)"
   # in that second. Copy that exact path; do not reconstruct it from the
   # timestamp.
   [ -n "$dump" ] || { printf '%s\n' "no dump path printed — the backup run failed" >&2; exit 1; }
+  # Print it here, inside the subshell where it lives: the subshell's variables
+  # die with it, so a path that is only assigned is a path nobody sees, and
+  # (e.2) below tells the operator to use the dump the run printed. This line
+  # is what a successful drill leaves on the terminal.
+  printf 'drill dump: %s\n' "$dump"
 
   # Everything below is gated on the backup having worked, so a failed run stops
   # HERE rather than leaving an overflow_drill_<epoch> database behind for the
@@ -215,8 +220,14 @@ The subshell is what makes the gate safe to paste: the `set -e` and the `exit`
 belong to it, and it is the operator's shell that keeps running afterwards.
 This runbook sets no `set -e` in the shell the operator is standing in, and an
 `exit` typed there would close it — which is why the refusal above is a
-subshell's `exit 1` and not a bare one. If the block stops without printing the
-path, the backup failed and nothing was created.
+subshell's `exit 1` and not a bare one.
+
+**A `drill dump: <path>` line means the drill is proceeding; no such line means
+it stopped.** On failure nothing was created, and because the shell survived,
+the blocks below would otherwise run on against a `$scratch` that was never
+made — the comparison printing `MISMATCH` for every table. If there is no
+`drill dump:` line, stop here and read the backup's stderr; the rest of this
+section has nothing to work from.
 
 Note the `--allow-live`: the target equals the database the drill's
 `DATABASE_URL` names, so the safety guard demands the flag be typed on

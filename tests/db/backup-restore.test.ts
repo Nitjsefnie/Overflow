@@ -176,10 +176,11 @@ describe("the backup and restore procedure", () => {
   });
 
   it("reclaims a crash-leftover partial older than a day and spares young partials and real dumps", () => {
-    // A run killed mid-dump leaves .overflow-<stamp>.dump.incomplete behind;
-    // the next run's sweep must reclaim one older than 24 hours — keyed on
-    // mtime, not the timestamp in the name — while a young partial and every
-    // real dump survive.
+    // A run killed mid-dump leaves a .overflow-<pid>.dump.incomplete behind —
+    // pid-stemmed, since two runs in one second would otherwise share one
+    // partial; the next run's sweep must reclaim one older than 24 hours —
+    // keyed on mtime, not anything in the name — while a young partial and
+    // every real dump survive.
     const oldPartial = join(backupDir, ".overflow-20260101T000000Z.dump.incomplete");
     writeFileSync(oldPartial, "truncated");
     utimesSync(oldPartial, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
@@ -364,6 +365,12 @@ describe("the backup and restore procedure", () => {
     expect(dumpsForStamp(backupDir, stamp), "one dump per run, neither replaced").toHaveLength(2);
     expect(existsSync(join(backupDir, firstName)), "the first run's dump, after the second run").toBe(true);
     expect(secondPath, `stdout was: ${secondRun.stdout}`).toBe(join(backupDir, secondName));
+    // The run says on STDERR that it took a suffix rather than the plain name.
+    // The stream is the claim: stdout's contract is that its last line is the
+    // installed path, so a notice there could be read as one. Asserted on
+    // stderr only — a notice on stdout as well would be the defect.
+    expect(secondRun.stderr, "the collision notice").toContain("was already there");
+    expect(firstRun.stderr, "no notice for a run that took the plain name").toBe("");
 
     // A third run proves the suffix search is a search and not a single retry.
     const thirdRun = runScript(backupScript, ["--output-dir", backupDir, "--retention-days", "14"], stampedEnv(stamp));
@@ -401,7 +408,10 @@ describe("the backup and restore procedure", () => {
     const result = runScript(
       backupScript,
       ["--output-dir", backupDir, "--retention-days", "14"],
-      { ...scriptEnv(), OVERFLOW_BACKUP_STAMP: "9".repeat(300) },
+      // LC_ALL pins the message this case reads below: "File name too long"
+      // is coreutils' rendering of strerror(ENAMETOOLONG), so it follows the
+      // host's locale. The run is a child, so this is where the locale goes.
+      { ...scriptEnv(), LC_ALL: "C", OVERFLOW_BACKUP_STAMP: "9".repeat(300) },
     );
 
     expect(result.status, "a run that cannot install its dump").not.toBe(0);
@@ -411,7 +421,8 @@ describe("the backup and restore procedure", () => {
     // here passes for a run that searched all 100 suffixes before giving up.
     expect(result.stderr).toContain("could not install the dump as");
     // The link's own reason has to reach the operator, or the message names a
-    // failure it does not explain.
+    // failure it does not explain. This one is about the relay, not about which
+    // arm fired — the line above is what discriminates the arm.
     expect(result.stderr).toContain("File name too long");
     expect(dumpsIn(backupDir), "no dump was installed by the failed run").toEqual(before);
     // The run's own partial is cleaned up on the failure path.
@@ -578,10 +589,19 @@ describe("the backup and restore procedure", () => {
     const stubPids = readdirSync(arrived).map((name) => Number(readFileSync(join(arrived, name), "utf8").trim()));
     expect(started.every((run) => isAlive(run.pid)), "the runs are alive before the reap").toBe(true);
     expect(stubPids.every((pid) => Number.isInteger(pid) && isAlive(pid)), "the stubs are alive before the reap").toBe(true);
+    // Registered before the reap, not asserted after it: a stub is a separate
+    // process in the group, it is orphaned when the group dies, and its own
+    // latency to go is bounded by nothing else the test waits on. The reap
+    // below has to wait for it on the same terms as the scripts, or this case
+    // is a point-in-time check landing in the window between the two.
+    for (const pid of stubPids) watchReapedPid(pid);
 
     const reaped = await reapBackupRuns();
 
     expect([...reaped].sort((a, b) => a - b)).toEqual(started.map((run) => run.pid).sort((a, b) => a - b));
+    // Every pid the reap was asked to cover is asserted INSIDE its bounded
+    // wait, which is where the scripts' pids have always been asserted. There
+    // is no bare isAlive left in this file.
     for (const pid of [...started.map((run) => run.pid), ...stubPids]) {
       expect(isAlive(pid), `pid ${pid} survived the reap`).toBe(false);
     }
@@ -706,6 +726,20 @@ function barrierStub(barrierDir: string): { stub: string; arrived: string; relea
 /** Backup runs this file has started and not yet reaped, by pid. */
 const unreapedBackups = new Set<number>();
 
+/**
+ * Processes a case has asked the reap to wait for besides the runs themselves:
+ * the stubs, which are separate processes in the same group and reach their
+ * own exit on their own schedule. Kept here rather than in the case so the
+ * afterEach covers them too — a case that dies between spawning and reaping
+ * must not leave a stub behind either.
+ */
+const watchedReapPids = new Set<number>();
+
+/** Add a pid the reap must wait for, and which a bare check may not replace. */
+function watchReapedPid(pid: number): void {
+  watchedReapPids.add(pid);
+}
+
 /** Whether a pid is still a live process we could signal. */
 function isAlive(pid: number): boolean {
   try {
@@ -717,16 +751,22 @@ function isAlive(pid: number): boolean {
 }
 
 /**
- * Kill every backup run still alive, and wait until it is. Returns the pids it
- * reaped so a case can assert on the set rather than assume the kill landed.
+ * Kill every backup run still alive, and wait until it — and every watched pid
+ * — is gone. Returns the run pids it reaped so a case can assert on the set
+ * rather than assume the kill landed.
  *
  * A run is its own process group (see startBackup), so the kill reaches the
  * whole tree — the script and the stub it is waiting inside. Signalling only
- * the script would leave the stub polling a barrier nobody will ever open.
+ * the script would leave the stub polling a barrier nobody will ever open, and
+ * the two die on their own schedules, so the wait covers both classes. Waiting
+ * on the scripts alone left the assertion on the stubs a single point-in-time
+ * check that reddened correct code about once in twenty-five runs.
  */
 async function reapBackupRuns(): Promise<number[]> {
   const pids = [...unreapedBackups];
+  const watched = [...watchedReapPids];
   unreapedBackups.clear();
+  watchedReapPids.clear();
   for (const pid of pids) {
     try {
       process.kill(-pid, "SIGKILL");
@@ -736,8 +776,8 @@ async function reapBackupRuns(): Promise<number[]> {
   }
   await vi.waitFor(
     () => {
-      for (const pid of pids) {
-        expect(isAlive(pid), `backup run ${pid} is still alive after the reap`).toBe(false);
+      for (const pid of [...pids, ...watched]) {
+        expect(isAlive(pid), `pid ${pid} is still alive after the reap`).toBe(false);
       }
     },
     { timeout: 15_000, interval: 20 },
