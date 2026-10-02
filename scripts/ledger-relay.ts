@@ -396,15 +396,26 @@ async function findOpenPullRequestAtHead(
 }
 
 /**
- * Condition (e): whether any run of the SAME workflow at the head SHA is
- * queued or in_progress. The runs listing is filtered client-side for the
- * workflow's path and the live statuses.
+ * Every status in which GitHub's workflow-run `status` enum reports a run that
+ * has not finished: it is on the board, so a rerun of the same workflow at the
+ * same head would duplicate it — and GitHub refuses the POST while it is
+ * there. `pending`, `waiting` and `requested` are the statuses a run waits in
+ * for a runner, so all five are live for this check (issue 952: a cancelled
+ * attempt healed into a `pending` successor, which GitHub refused with 403
+ * "This workflow is already running").
+ */
+const LIVE_RUN_STATUSES = new Set(["queued", "in_progress", "pending", "waiting", "requested"]);
+
+/**
+ * Condition (e): whether any run of the SAME workflow at the head SHA is live
+ * — queued, in_progress, pending, waiting or requested. The runs listing is
+ * filtered client-side for the workflow's path and the live statuses.
  *
  * A malformed listing reads as "no live run" rather than throwing — the
  * deliberate asymmetry with findOpenPullRequestAtHead, which throws: the
  * failure direction is bounded by GitHub's own rerun guard, which refuses a
- * queued or in_progress run with a 4xx that apiCall throws, so the worst case
- * is a visible red relay job, never a duplicate dispatch.
+ * live run with a 4xx that apiCall throws, so the worst case is a visible red
+ * relay job, never a duplicate dispatch.
  */
 async function hasLiveRunOfPath(
   deps: RelayDeps,
@@ -426,10 +437,7 @@ async function hasLiveRunOfPath(
   for (const entry of runs) {
     if (typeof entry !== "object" || entry === null) continue;
     const candidate = entry as { path?: unknown; status?: unknown };
-    if (
-      candidate.path === path &&
-      (candidate.status === "queued" || candidate.status === "in_progress")
-    ) {
+    if (candidate.path === path && LIVE_RUN_STATUSES.has(String(candidate.status))) {
       return true;
     }
   }

@@ -968,6 +968,45 @@ describe("runRelay", () => {
       expect(checkRun).toMatchObject({ name: "verify", conclusion: "failure" });
     });
 
+    // Issue 952: a cancelled attempt whose successor sat at `pending` got a
+    // rerun POST GitHub refused with 403 "This workflow is already running",
+    // and the relay run went red. Every status GitHub's workflow-run `status`
+    // enum can report while the run is live is pinned here, not just the two
+    // the queued/in_progress-only check knew about.
+    for (const liveStatus of ["queued", "in_progress", "pending", "waiting", "requested"]) {
+      it(`does not heal, and does not fail, when a newer attempt of the same workflow at the head is ${liveStatus}`, async () => {
+        const fetchStub = makeFetch([
+          token(),
+          jobsListing([]),
+          { status: 201, body: { id: 1 } },
+          noSweepRuns(),
+          pullsListing([pullEntry()]),
+          runsListing([
+            runEntry({ path: PATH_CI, status: "completed", run_attempt: 4 }),
+            runEntry({ path: PATH_CI, status: liveStatus, run_attempt: 5 }),
+          ]),
+          // The observed refusal, for the direction where the heal fires into a
+          // live run. Once the guard counts every live status this outcome is
+          // never reached: the POST is not issued at all.
+          { status: 403, body: { message: "This workflow is already running" } },
+        ]);
+        const result = await runRelay({
+          env: cancelledPrEnv(),
+          fetchFn: fetchStub.fn,
+          delayFn: makeDelay().fn,
+          readPinMap: async () => PIN_MAP,
+        });
+
+        // The listing was consulted, so the verdicts below are not vacuous.
+        expect(requestTo(fetchStub.requests, RUNS_AT_HEAD_URL)).toBeDefined();
+        expect(result.rerunDispatched).toBe(false);
+        expect(requestTo(fetchStub.requests, RERUN_URL)).toBeUndefined();
+        // The mirror is unchanged: failure, exactly as today — the relay run
+        // neither heals nor goes red.
+        expect(result.posted).toEqual(["verify"]);
+      });
+    }
+
     it("rejects loudly, before any heal query, when RELAY_RERUN_TOKEN is missing on a cancelled PR run", async () => {
       const fetchStub = makeFetch([token(), jobsListing([]), { status: 201, body: { id: 1 } }, noSweepRuns()]);
       await expect(
@@ -1138,9 +1177,10 @@ describe("runRelay", () => {
       // Asymmetry, pinned as the code stands: findOpenPullRequestAtHead
       // THROWS on a non-array listing, while hasLiveRunOfPath reads one as
       // "no live run" and lets the heal proceed. The direction is bounded:
-      // GitHub's rerun endpoint refuses a queued or in_progress run with a
-      // 4xx, which apiCall throws, so the worst case is a visible red relay
-      // job, never a duplicate dispatch.
+      // GitHub's rerun endpoint refuses a run that is still live — queued,
+      // in_progress, pending, waiting or requested — with a 4xx, which
+      // apiCall throws, so the worst case is a visible red relay job, never a
+      // duplicate dispatch.
       const fetchStub = makeFetch([
         token(),
         jobsListing([]),
