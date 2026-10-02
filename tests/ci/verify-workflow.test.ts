@@ -254,13 +254,18 @@ describe("the verify workflow's legal revision currency step", () => {
     ).toHaveLength(1);
   });
 
-  it("runs after Migration immutability", () => {
+  it("runs immediately after Migration immutability", () => {
     const migrationIndex = steps.findIndex((step) => step.name === "Migration immutability");
     const legalIndex = steps.findIndex((step) => step.name === "Legal revision currency");
 
     expect(migrationIndex).toBeGreaterThan(-1);
     expect(legalIndex).toBeGreaterThan(-1);
-    expect(legalIndex).toBeGreaterThan(migrationIndex);
+    expect(
+      legalIndex,
+      "the legal-revision gate must run immediately after Migration immutability — the " +
+        "wiring issue 955 mandated, keeping the two merge-ref revision gates adjacent. " +
+        "A step inserted between them is a silent rewiring of the mandated order.",
+    ).toBe(migrationIndex + 1);
   });
 
   it("runs only for pull requests and walks every commit of the merge range", () => {
