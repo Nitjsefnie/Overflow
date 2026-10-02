@@ -1,20 +1,39 @@
 /**
- * The revision record of every legal document this site publishes.
+ * The revision record of every legal document this site renders.
+ *
+ * "Legal document" here means a rendered page a reader is held to: /terms,
+ * /account-data and /rules. It is not every document the site serves —
+ * /third-party-notices.txt is deliberately absent, because no dispute is
+ * decided by a dependency's licence text and the file is generated from
+ * node_modules, so a revision record for it would fire the rule below on every
+ * dependency bump. The boundary is what a reader is held to, not what is
+ * published.
  *
  * A legal document changes by being edited, and a reader in a dispute has to
  * name WHICH text governed them. The version and the effective date are what
  * they cite, so this file is the single place either value is written and the
  * pages render it — a document with no stamp cites nothing.
  *
- * The rules the values follow:
+ * The conventions the values follow. These are conventions, not enforced
+ * invariants: nothing in the test suite couples an edit to a page's text to an
+ * edit here, and a substantive legal change that leaves these values standing
+ * passes every check in the repository. Read them as what a careful author
+ * does, not as a chokepoint.
  *
  *   - Changing a document's text means changing its effective date here, in
  *     the same change that edits the text. Text that moved while its date
  *     stood still is a revision nobody can cite.
- *   - The effective date is the date the revision applies FROM, not the date
- *     it was drafted.
- *   - A dispute cites the effective date; the mapping from that date to the
- *     governing text is this repository's history.
+ *   - An effective date is the date a revision applies FROM. It is not
+ *     necessarily when the text was written: every value here is the date the
+ *     stamping change landed, and the texts it stamps predate it by days to
+ *     weeks. Back-dating 1.0 to a document's first publication would assert
+ *     the text was in force since a date this stamp cannot evidence, so
+ *     versioning begins HERE instead: a reader citing 2026-10-02 is citing the
+ *     first revision whose text they can be shown, and nothing before the
+ *     stamp is citable at all.
+ *   - A dispute cites the effective date. For dates on or after the stamp, the
+ *     mapping from that date to the governing text is this repository's
+ *     history; before the stamp there is no revision to map to.
  *
  * Nothing here moves on a build. A build-injected value fails silently — a
  * deploy that cannot resolve it would emit a placeholder that reinstates

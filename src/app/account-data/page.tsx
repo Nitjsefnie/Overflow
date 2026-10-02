@@ -15,7 +15,7 @@ export function AccountDataNotice() {
         >
           This notice is version {ACCOUNT_DATA_REVISION.version}, in effect from{" "}
           {ACCOUNT_DATA_REVISION.effectiveDate}. A complaint about what was held about you cites that
-          date — it is what fixes the text you are held to.
+          date — it is what fixes what this notice said at the time.
         </p>
         <p>
           What Overflow stores when you sign in with GitHub or link a GitLab identity, what it is used for, and

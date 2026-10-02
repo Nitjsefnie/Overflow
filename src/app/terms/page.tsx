@@ -14,7 +14,8 @@ export function TermsNotice() {
           data-effective-date={TERMS_REVISION.effectiveDate}
         >
           These terms are version {TERMS_REVISION.version}, in effect from {TERMS_REVISION.effectiveDate}.
-          A dispute cites that date — it is what fixes the text you are held to.
+          Contesting a sanction or a settlement cites that date — it is what fixes the text you are
+          held to.
         </p>
         <p>
           The terms of Overflow — the hosted instance at https://overflow.nitjsefni.eu — in short: what
