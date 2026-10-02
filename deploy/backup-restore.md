@@ -174,11 +174,20 @@ deployment tree:
 
 ```bash
 set -a; . /etc/overflow/overflow.env; set +a
-dump=$(bash scripts/db-backup.sh | tail -1)
-# the run's LAST stdout line is the path it installed, e.g.
-# /var/backups/overflow/overflow-<stamp>.dump — or overflow-<stamp>-1.dump when
-# another run had already taken the plain name in that second. Copy that exact
-# path; do not reconstruct it from the timestamp.
+# Take the run's LAST stdout line, which is the path it installed. The run's
+# status is read before the line is picked, because `$(… | tail -1)` reports
+# tail's status and would let a failed backup carry on with an empty path,
+# surfacing much later as "install: cannot stat ''". Nothing here calls exit:
+# this runbook sets no set -e, and an exit in a pasted block closes the shell
+# the operator is standing in.
+output=$(bash scripts/db-backup.sh) || output=
+dump=$(printf '%s\n' "$output" | tail -1)
+# STOP HERE if the line below printed: the backup run failed and there is no
+# dump to copy. Everything after this point is working from $dump.
+[ -n "$dump" ] || printf '%s\n' "no dump path printed — the backup run failed; stop and read its stderr" >&2
+# $dump is e.g. /var/backups/overflow/overflow-<stamp>.dump — or
+# overflow-<stamp>-1.dump when another run had already taken the plain name in
+# that second. Copy that exact path; do not reconstruct it from the timestamp.
 
 scratch="overflow_drill_$(date +%s)"
 sudo -u postgres createdb "$scratch"
