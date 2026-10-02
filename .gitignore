@@ -201,6 +201,7 @@ src/components/*
 !src/lib/
 src/lib/*
 !src/lib/format-signed.ts
+!src/lib/legal-revisions.ts
 !src/lib/plural.ts
 !src/lib/strip-name-prefix.ts
 !src/lib/version.ts

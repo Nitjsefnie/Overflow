@@ -1,11 +1,21 @@
 import Link from "next/link";
 import { PublicAppShell } from "@/components/app-shell";
+import { TERMS_REVISION } from "@/lib/legal-revisions";
 
 export function TermsNotice() {
   return (
     <main className="page-content" id="main-content">
       <section className="page-heading" aria-labelledby="terms-title">
         <h1 id="terms-title">Terms</h1>
+        <p
+          className="mono-meta"
+          data-legal-revision={TERMS_REVISION.document}
+          data-version={TERMS_REVISION.version}
+          data-effective-date={TERMS_REVISION.effectiveDate}
+        >
+          These terms are version {TERMS_REVISION.version}, in effect from {TERMS_REVISION.effectiveDate}.
+          A dispute cites that date — it is what fixes the text you are held to.
+        </p>
         <p>
           The terms of Overflow — the hosted instance at https://overflow.nitjsefni.eu — in short: what
           an account is, how work earns credits, how moderation works, and how to ask for a correction.
