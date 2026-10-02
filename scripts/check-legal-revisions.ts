@@ -30,13 +30,16 @@
 //     `Legal-Text: changed;` are not markers
 //   - the justification after `;` must hold at least one non-whitespace
 //     character. A bare `Legal-Text: unchanged`, a lone `Legal-Text: unchanged;`
-//     and a whitespace-only justification are NOT markers: the exemption is a
-//     claim a reviewer can check, not a magic word anyone can paste
+//     and a whitespace-only justification are NOT markers, so every honoured
+//     marker names something
 //   - a message carrying several markers is read at the first one
 //   - a marker line inside a FENCED code block is documentation, not a claim,
 //     and is skipped. This repo's own header spells the marker out, so a commit
 //     that documents the grammar — or quotes it in a pull-request-style block —
-//     would otherwise carry the string without anyone having made the claim
+//     would otherwise carry the string without anyone having made the claim. A
+//     fence that is never closed disables the marker for every following line;
+//     that is the fail-closed direction, so a stray ``` costs an exemption
+//     rather than granting one
 //
 // WHAT AN EXEMPTION DOES AND DOES NOT DO. It applies only to a commit that
 // touches a legal page and does NOT touch the record module; a commit that
@@ -48,6 +51,16 @@
 // stdout repeats the count and never carries the list, so the trail cannot be
 // read as part of the verdict. An unreadable commit message is an error, never
 // a silent pass.
+//
+// WHAT THE EXEMPTION ACTUALLY ENFORCES, and what it does not. It enforces that
+// a justification is present at all, that every honoured marker is printed with
+// its sha and that text, and that the count is stated on both the red and the
+// green path. It does NOT enforce that the justification is a good one:
+// `Legal-Text: unchanged; x` is accepted. Nothing mechanical stands between that
+// line and an unreviewed edit to a legal document. The design buys
+// AUDITABILITY, not friction — it makes every exemption visible in the CI log,
+// and it does not make writing one expensive. Review is what a careless
+// exemption runs into; a deliberate one is not stopped here.
 //
 // The walk is per-commit over base..head, merge commits excluded: git rev-list
 // --no-merges, then one git diff-tree per commit. A legal page edited in one
@@ -339,7 +352,7 @@ function main(args: readonly string[]): void {
       `${commits.length} ${commits.length === 1 ? "commit" : "commits"} in ` +
         `${baseRevision}..${headRevision} ` +
         `${commits.length === 1 ? "changes" : "change"} no legal page ` +
-        "without a matching revision-record change " +
+        "without a matching revision-record change or a text-unchanged claim " +
         `(${exemptions.length} ${exemptions.length === 1 ? "commit" : "commits"} exempted ` +
         "with a Legal-Text: unchanged claim)\n",
     );

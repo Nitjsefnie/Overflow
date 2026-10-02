@@ -284,6 +284,91 @@ describe("the Legal-Text: unchanged marker's grammar", () => {
       ),
     ).toBe("the page's rendered text did not change");
   });
+
+  // A closing fence carries no info string, so "```ts" does not close a fence
+  // the way "```" does. Getting this wrong closes the block early and honours a
+  // marker that is still inside it, which is the green direction.
+  it("does not close a fence on a run that carries an info string", () => {
+    expect(
+      legalTextUnchangedJustification(
+        [
+          "Document the exemption grammar",
+          "",
+          "```",
+          "```ts",
+          "Legal-Text: unchanged; still inside the fence, since ```ts is not a closer",
+          "```",
+          "",
+        ].join("\n"),
+      ),
+    ).toBeNull();
+  });
+
+  it("honours a marker after a fence that closed on a bare run", () => {
+    expect(
+      legalTextUnchangedJustification(
+        [
+          "Document the exemption grammar",
+          "",
+          "```",
+          "an example block",
+          "```",
+          "",
+          "Legal-Text: unchanged; the real claim, after the block",
+          "",
+        ].join("\n"),
+      ),
+    ).toBe("the real claim, after the block");
+  });
+
+  // A backtick run whose info string itself holds a backtick is inline code,
+  // not a fence delimiter, so it must not swallow the marker on the next line.
+  it("does not open a fence on a backtick run whose info string holds a backtick", () => {
+    expect(
+      legalTextUnchangedJustification(
+        [
+          "Document the exemption grammar",
+          "",
+          "```const template = `x`",
+          "Legal-Text: unchanged; no fence opened, so this is a claim",
+          "",
+        ].join("\n"),
+      ),
+    ).toBe("no fence opened, so this is a claim");
+  });
+
+  // The subject/body split is `indexOf("\\n\\n")`, not `indexOf("\\n")`. Both
+  // subject cases below use a subject that WRAPS onto a second line, which is
+  // the only shape that can tell the two apart — a one-line subject cannot.
+  it("does not honour a marker on a wrapped subject line when the body claims nothing", () => {
+    expect(
+      legalTextUnchangedJustification(
+        [
+          "Load the current role at call time",
+          "Legal-Text: unchanged; a claim written as the second line of a wrapped subject",
+          "",
+          "The role is read inside the function instead of at module scope.",
+          "",
+        ].join("\n"),
+      ),
+    ).toBeNull();
+  });
+
+  it("reads the body marker, not the one a wrapped subject carries", () => {
+    expect(
+      legalTextUnchangedJustification(
+        [
+          "Load the current role at call time",
+          "Legal-Text: unchanged; written into the wrapped subject",
+          "",
+          "The role is read inside the function.",
+          "",
+          "Legal-Text: unchanged; the real claim, in the body",
+          "",
+        ].join("\n"),
+      ),
+    ).toBe("the real claim, in the body");
+  });
 });
 
 describe("the exemption's scope", () => {
@@ -706,6 +791,40 @@ describe("the gate's command line", () => {
           "",
         ].join("\n"),
         { [TERMS]: "export default () => <p>Governed by the laws of Delaware.</p>;\n" },
+      );
+
+      const result = fixture.runGate(baseSha, headSha);
+
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toContain(headSha);
+      expect(result.stdout).toContain(GUARD);
+      expect(result.stderr).not.toContain("exempted");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("exits 1 when the claim is wrapped into the subject instead of the body", async () => {
+    // The end-to-end shape the `indexOf("\\n")` mutant was demonstrated with: a
+    // real effective-date change whose claim sits on the second line of a
+    // wrapped subject. Splitting the subject from the body on the first newline
+    // instead of the first blank line would read that line as body and exempt
+    // the change.
+    const fixture = await createGateFixture();
+    try {
+      const baseSha = await fixture.commit("base\n\nFixture base.\n", {
+        "README.md": "fixture base\n",
+      });
+
+      const headSha = await fixture.commit(
+        [
+          "Change the effective date",
+          "Legal-Text: unchanged; a claim written as the second line of a wrapped subject",
+          "",
+          "The effective date now reads 1 January 2026.",
+          "",
+        ].join("\n"),
+        { [TERMS]: "export default () => <p>Effective 2026-01-01</p>;\n" },
       );
 
       const result = fixture.runGate(baseSha, headSha);
