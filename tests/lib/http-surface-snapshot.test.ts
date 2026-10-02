@@ -262,7 +262,7 @@ function commitSnapshotFixture(snapshot: { httpServerVersion: string; routes: Re
  * runner has no global/system/local config naming an author (Actions died on
  * commit-tree with "empty ident name"), and the pinned -c identity outranks
  * every config source, so the commit never depends on anything ambient. The
-`.invalid` domain cannot deliver mail.
+ * `.invalid` domain cannot deliver mail.
  */
 function gitInput(args: string[], input?: string): string {
   const result = spawnSync(
