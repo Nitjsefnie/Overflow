@@ -110,8 +110,9 @@ export interface HealPullRequest {
  *   pending slot never started, so attempts increment only via rerun and the
  *   cap bounds the churn;
  * - d. the head is still live: an open PR whose tip is the run's head SHA;
- * - e. no live run of the same workflow is already queued or running at that
- *   head — the rerun must not duplicate one in flight.
+ * - e. no live run of the same workflow is already queued, in_progress,
+ *   pending, waiting or requested at that head — the rerun must not duplicate
+ *   one in flight.
  */
 export function decideRerun(
   run: RerunRun,

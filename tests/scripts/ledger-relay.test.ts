@@ -1007,6 +1007,33 @@ describe("runRelay", () => {
       });
     }
 
+    // Negative space for the allowlist above. The triggering run's OWN entry
+    // sits in this listing with status `completed`, so `completed` must not
+    // read as live — folding it into LIVE_RUN_STATUSES would silently
+    // disable the whole rerun-heal, and no other fixture in this file carries
+    // a completed same-path entry without also carrying a live one.
+    it("still heals when the only same-workflow run at the head is completed", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([]),
+        { status: 201, body: { id: 1 } },
+        noSweepRuns(),
+        pullsListing([pullEntry()]),
+        runsListing([runEntry({ path: PATH_CI, status: "completed", run_attempt: 1 })]),
+        { status: 202, body: undefined },
+      ]);
+      const result = await runRelay({
+        env: cancelledPrEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      expect(requestTo(fetchStub.requests, RUNS_AT_HEAD_URL)).toBeDefined();
+      expect(result.rerunDispatched).toBe(true);
+      expect(requestsTo(fetchStub.requests, RERUN_URL)).toHaveLength(1);
+    });
+
     it("rejects loudly, before any heal query, when RELAY_RERUN_TOKEN is missing on a cancelled PR run", async () => {
       const fetchStub = makeFetch([token(), jobsListing([]), { status: 201, body: { id: 1 } }, noSweepRuns()]);
       await expect(
