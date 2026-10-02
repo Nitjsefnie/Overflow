@@ -174,6 +174,14 @@ describe("account-data notice page", () => {
       notice,
       "the notice states that body text written before 2026-09-26 may persist until the repository is unregistered",
     ).toMatch(/body text written before 2026-09-26 may persist until the repository is unregistered/i);
+    expect(
+      notice,
+      "the no-writes claim covers all three body kinds: issue, pull request, and comment",
+    ).toMatch(/writes no issue, pull request, or comment body text/i);
+    expect(
+      notice,
+      "the unregister-scrub clause keeps the settlement-window parenthetical",
+    ).toMatch(/\(unless a settlement from the last few minutes is still being computed\)/i);
   });
 
   it("places the non-member and server-log sections between access and retention", async () => {
