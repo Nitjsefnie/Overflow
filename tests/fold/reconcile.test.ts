@@ -692,16 +692,16 @@ describe("reconcileRepository", () => {
     }
   });
 
-  it("completes the run when a dirty subject is gone upstream, discarding only that subject", async () => {
+  it.each([
+    [new Error("GitHub GraphQL request failed. NOT_FOUND: Could not resolve to an Issue with the number of '42'."), "NOT_FOUND"],
+    [new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES), "RESPONSE_TOO_LARGE"],
+  ])("completes the run when a dirty issue read answers %s, discarding only that subject", async (failure, reason) => {
     const poison = { kind: "ISSUE" as const, id: 999, number: 42, generation: 7 };
     const good = { kind: "ISSUE" as const, id: 555, number: 43, generation: 8 };
-    const notFound = new Error(
-      "GitHub GraphQL request failed. NOT_FOUND: Could not resolve to an Issue with the number of '42'.",
-    );
     const dependencies = reconciliationDependencies({
       github: {
         getIssue: vi.fn(async (_reference: GitHubRepositoryReference, subject: GitHubSubject) => {
-          if (subject.number === poison.number) throw notFound;
+          if (subject.number === poison.number) throw failure;
           return { ...reconciliationIssue({ id: subject.id, number: subject.number }), closingPullRequests: [] };
         }),
       },
@@ -729,7 +729,7 @@ describe("reconcileRepository", () => {
       expect(dependencies.store.failRun).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(
-        "Reconciliation of repository repository discarded unresolvable subject kind=ISSUE number=42 reason=NOT_FOUND",
+        `Reconciliation of repository repository discarded unresolvable subject kind=ISSUE number=42 reason=${reason}`,
       );
       const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
       const foldedIds = materializeInput.fold.issues.map((issue) => issue.githubIssueId);
@@ -836,15 +836,15 @@ describe("reconcileRepository", () => {
     }
   });
 
-  it("completes the run when a dirty pull request is gone upstream, discarding only that subject", async () => {
+  it.each([
+    [new Error("GitHub GraphQL request failed. NOT_FOUND: Could not resolve to a PullRequest with the number of '44'."), "NOT_FOUND"],
+    [new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES), "RESPONSE_TOO_LARGE"],
+  ])("completes the run when dirty pull request closing references answer %s, discarding only that subject", async (failure, reason) => {
     const subject = { kind: "PULL_REQUEST" as const, id: 777, number: 44, generation: 9 };
-    const notFound = new Error(
-      "GitHub GraphQL request failed. NOT_FOUND: Could not resolve to a PullRequest with the number of '44'.",
-    );
     const dependencies = reconciliationDependencies({
       github: {
         getPullRequestClosingIssues: vi.fn(async () => {
-          throw notFound;
+          throw failure;
         }),
       },
     });
@@ -871,7 +871,7 @@ describe("reconcileRepository", () => {
       expect(dependencies.store.failRun).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(
-        "Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=44 reason=NOT_FOUND",
+        `Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=44 reason=${reason}`,
       );
     } finally {
       errorLog.mockRestore();
@@ -1005,16 +1005,14 @@ describe("reconcileRepository", () => {
     },
   );
 
-  it(
-    "completes the run when a merged closing pull request's diff read answers a body over the success-path byte cap, discarding and omitting only that subject",
-    async () => {
+  it.each(["reviews", "diff"] as const)(
+    "completes the run when a merged closing pull request's %s read answers a body over the success-path byte cap, discarding and omitting only that subject",
+    async (failingFetch) => {
       // A body past the client's success-path cap is as fixed as the diff-cap
       // 406: the pull request's own bytes are what tripped it, so every retry
       // re-reads the same over-cap body and fails the same way. The failure
       // joins the discard arm — dirty row gone, subject omitted, run completes.
-      // Only the diff leg can answer it: that read goes through the capped
-      // REST request, while the reviews read pages GraphQL, whose body is read
-      // unbounded and whose failures are wrapped as their own error class.
+      // Both the REST diff and GraphQL reviews reads preserve this error class.
       const overCap = new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES);
       const dependencies = reconciliationDependencies({
         github: {
@@ -1025,9 +1023,12 @@ describe("reconcileRepository", () => {
               reconciliationPullRequest({ id: 202, number: 12 }),
             ],
           }]),
-          getPullRequestReviews: vi.fn().mockResolvedValue([]),
+          getPullRequestReviews: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
+            if (failingFetch === "reviews" && number === 11) throw overCap;
+            return [];
+          }),
           getPullRequestDiff: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
-            if (number === 11) throw overCap;
+            if (failingFetch === "diff" && number === 11) throw overCap;
             return `diff ${number}`;
           }),
         },

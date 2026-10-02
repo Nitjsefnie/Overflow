@@ -2,6 +2,7 @@ import { classifyGitHubGraphqlRateLimit, classifyGitHubRateLimit, GitHubApiError
 import { gitHubGraphqlBudget, readGraphqlBudgetPayload, type GitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
 import { checkGraphqlRequestBudget, GraphqlBudgetHeld } from "@/lib/github/graphql-request-budget";
 import { recordGraphqlResponseCost } from "@/lib/github/graphql-cost";
+import { boundedResponseText, GitHubResponseTooLargeError, MAX_SUCCESS_BODY_BYTES } from "@/lib/github/response-text";
 
 const defaultGraphqlEndpoint = "https://api.github.com/graphql";
 const defaultTimeoutMs = 10_000;
@@ -187,7 +188,9 @@ export class GitHubGraphqlClient {
         throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body);
       }
 
-      const payload = (await response.json()) as { data?: TData; errors?: unknown };
+      const body = await boundedResponseText(response, MAX_SUCCESS_BODY_BYTES, controller.signal);
+      if (body === null) throw new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES);
+      const payload = JSON.parse(body) as { data?: TData; errors?: unknown };
       if (payload?.data === undefined || payload.errors !== undefined) {
         const { rateLimited, retryAfterSeconds } = classifyGitHubGraphqlRateLimit(payload?.errors, response.headers);
         throw new GitHubGraphqlRequestError(graphqlFailureMessage(payload?.errors, this.accessToken), rateLimited, retryAfterSeconds);
@@ -212,7 +215,8 @@ export class GitHubGraphqlClient {
       checkGraphqlRequestBudget();
       return payload.data;
     } catch (error) {
-      if (error instanceof GraphqlBudgetHeld || error instanceof GitHubApiError || error instanceof GitHubGraphqlRequestError) {
+      if (error instanceof GraphqlBudgetHeld || error instanceof GitHubApiError
+        || error instanceof GitHubGraphqlRequestError || error instanceof GitHubResponseTooLargeError) {
         throw error;
       }
 
