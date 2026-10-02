@@ -195,7 +195,7 @@ async function reconcileRepositoryWhileCoordinated(
     kind: DirtyReconciliationSubject["kind"],
     subject: GitHubSubject,
     dirty: DirtyReconciliationSubject | undefined,
-    classifyDiscard: (error: unknown) => SubjectDiscardReason | null = notFoundDiscardReason,
+    classifyDiscard: (error: unknown) => SubjectDiscardReason | null = defaultSubjectDiscardReason,
   ): Promise<boolean> => {
     const reason = classifyDiscard(failure);
     if (reason === null) return false;
@@ -496,8 +496,8 @@ type SubjectDiscardReason = "NOT_FOUND" | "DIFF_TOO_LARGE" | "RESPONSE_TOO_LARGE
 // so it joins the same subject-alone arm under its own reason. That read can
 // also answer a body past the client's success-path byte cap, which is fixed
 // for the pull request the same way: its own bytes are what tripped the cap,
-// so every retry re-reads them and trips it again. The GraphQL leg has no
-// such cap, so only the REST read reaches this arm by size. Either shape is
+// so every retry re-reads them and trips it again. Both the REST diff and
+// GraphQL reviews legs share this cap. Either shape is
 // definitive for that pull request, not a property of the run.
 function pullRequestDiscardReason(error: unknown): SubjectDiscardReason | null {
   if (error instanceof GitHubApiError && error.status === 406) return "DIFF_TOO_LARGE";
@@ -511,8 +511,11 @@ function pullRequestDiscardReason(error: unknown): SubjectDiscardReason | null {
 // classifier matches, GitHub's REST read answers its fixed 404 error, and a
 // GitLab read that loses the issue between endpoints throws GitLabApiError
 // 404. Any of the three is gone for good — a deleted issue can never
-// resolve — and anything else keeps whole-run retry semantics.
+// resolve. A capped issue read also cannot resolve: its own issue body,
+// labels, timeline or closing references exceeded the shared byte cap.
+// Anything else keeps whole-run retry semantics.
 function issueDiscardReason(error: unknown): SubjectDiscardReason | null {
+  if (error instanceof GitHubResponseTooLargeError) return "RESPONSE_TOO_LARGE";
   return isGitHubSubjectNotFoundError(error)
     || (error instanceof GitHubApiError && error.status === 404)
     || (error instanceof GitLabApiError && error.status === 404)
@@ -520,8 +523,11 @@ function issueDiscardReason(error: unknown): SubjectDiscardReason | null {
     : null;
 }
 
-// The default classifier: the flattened NOT_FOUND message and nothing else.
-function notFoundDiscardReason(error: unknown): SubjectDiscardReason | null {
+// The default per-subject classifier also covers a pull request's closing-issue
+// references: those bytes belong to that subject, so retry cannot shrink them.
+// Repository-wide list reads never enter a per-subject classifier.
+function defaultSubjectDiscardReason(error: unknown): SubjectDiscardReason | null {
+  if (error instanceof GitHubResponseTooLargeError) return "RESPONSE_TOO_LARGE";
   return isGitHubSubjectNotFoundError(error) ? "NOT_FOUND" : null;
 }
 

@@ -2,11 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
 import { GitHubApiError } from "@/lib/github/errors";
 import { GitHubGraphqlClient } from "@/lib/github/graphql";
+import { GitHubResponseTooLargeError, MAX_SUCCESS_BODY_BYTES } from "@/lib/github/response-text";
 import { withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
 
 describe("GitHubGraphqlClient failures", () => {
+  it("rejects a successful response past the shared byte cap with its own error class", async () => {
+    const body = '{"data":{"ok":true}}' + " ".repeat(MAX_SUCCESS_BODY_BYTES);
+    const client = new GitHubGraphqlClient({ accessToken: "test-access-token", fetch: async () => new Response(body) });
+    await expect(client.query("query {}", {})).rejects.toBeInstanceOf(GitHubResponseTooLargeError);
+  });
+
   it("surfaces GitHub RATE_LIMIT type and message through the gateway", async () => {
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
@@ -2908,18 +2915,12 @@ function pullRequestNode(
 }
 
 function reviewNode(id: number, state: string) {
-  return {
-    databaseId: id,
-    state,
-    submittedAt: "2026-09-04T12:00:00.000Z",
-  };
+  return { databaseId: id, state, submittedAt: "2026-09-04T12:00:00.000Z" };
 }
 
 function firstLabelPage(prefix: string) {
-  return {
-    nodes: firstHundredLabels(prefix).map((name) => ({ name })),
-    pageInfo: { hasNextPage: true, endCursor: `${prefix}-label-cursor` },
-  };
+  return { nodes: firstHundredLabels(prefix).map((name) => ({ name })),
+    pageInfo: { hasNextPage: true, endCursor: `${prefix}-label-cursor` } };
 }
 
 type LabelConnectionFixture = {
@@ -2930,7 +2931,6 @@ type LabelConnectionFixture = {
 function firstHundredLabels(prefix: string): string[] {
   return Array.from({ length: 100 }, (_, index) => `${prefix}/${index + 1}`);
 }
-
 
 describe.each(["GraphQL", "REST"] as const)("%s HTTP failures", (transport) => {
   function request(fetch: typeof globalThis.fetch, timeoutMs?: number) {
