@@ -14,7 +14,7 @@ import {
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -122,6 +122,13 @@ describe("the backup and restore procedure", () => {
     else process.env.DATABASE_URL = originalDatabaseUrl;
   });
 
+  // A case that dies mid-flight cannot clean up after itself, so the file does
+  // it here: whatever the case started, whatever route it left by. A no-op
+  // whenever the case finished its own runs, which is every green run.
+  afterEach(async () => {
+    await reapBackupRuns();
+  });
+
   it("refuses to back up without DATABASE_URL", () => {
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.DATABASE_URL;
@@ -164,7 +171,7 @@ describe("the backup and restore procedure", () => {
     // about to be mutated: what db-restore.sh returns later is the dump, not
     // the live rows.
     expect(
-      readdirSync(backupDir).filter((name) => /^overflow-.*\.dump$/.test(name)),
+      dumpsIn(backupDir),
     ).toEqual([dumpPath!.split("/").pop()]);
   });
 
@@ -189,7 +196,7 @@ describe("the backup and restore procedure", () => {
     writeFileSync(withinRetentionDump, "within-retention");
     utimesSync(withinRetentionDump, threeDaysAgo, threeDaysAgo);
 
-    const dumpsBefore = readdirSync(backupDir).filter((name) => /^overflow-.*\.dump$/.test(name));
+    const dumpsBefore = dumpsIn(backupDir);
 
     const result = runScript(backupScript, ["--output-dir", backupDir, "--retention-days", "14"], scriptEnv());
 
@@ -209,7 +216,7 @@ describe("the backup and restore procedure", () => {
       "the sweep's line for the reclaimed partial precedes the dump path",
     ).toBeLessThan(result.stdout.indexOf(freshDumpPath!));
 
-    const dumpsAfter = readdirSync(backupDir).filter((name) => /^overflow-.*\.dump$/.test(name));
+    const dumpsAfter = dumpsIn(backupDir);
     for (const name of dumpsBefore) {
       expect(dumpsAfter, "real dumps present before the run").toContain(name);
     }
@@ -488,24 +495,14 @@ describe("the backup and restore procedure", () => {
     // run's own content, nothing left behind. No assertion on elapsed time:
     // the barrier is a file this test creates, not a stopwatch.
     const dir = mkdtempSync(join(tmpdir(), "overflow-backup-race-"));
-    const barrier = mkdtempSync(join(tmpdir(), "overflow-backup-barrier-"));
-    const arrived = join(barrier, "arrived");
-    const release = join(barrier, "release");
-    mkdirSync(arrived);
-    const stub = join(barrier, "pg-dump-barrier.sh");
-    writeFileSync(
-      stub,
-      [
-        "#!/bin/sh",
-        ': > "$BARRIER_ARRIVED/$BARRIER_MARKER"',
-        'while [ ! -e "$BARRIER_RELEASE" ]; do sleep 0.05; done',
-        'printf "%s\\n" "$BARRIER_MARKER"',
-        "",
-      ].join("\n"),
-    );
-    chmodSync(stub, 0o700);
+    const { stub, arrived, release } = barrierStub(mkdtempSync(join(tmpdir(), "overflow-backup-barrier-")));
 
-    const runs = 8;
+    // Sixteen, not eight: the mutant is caught when two runs interleave between
+    // their existence test and their move, and the pairs that can do that grow
+    // with the square of the contender count. The kill is a rate, not a
+    // certainty — what must not happen is a green suite on broken code, so the
+    // count is raised until that residual is vanishing.
+    const runs = 16;
     const stamp = "20260930T130000Z";
     const running = Array.from({ length: runs }, (_, index) =>
       startBackup(
@@ -528,7 +525,7 @@ describe("the backup and restore procedure", () => {
       expect(readdirSync(arrived), "every run parked in the dump stub").toHaveLength(runs);
     }, { timeout: 60_000, interval: 25 });
     writeFileSync(release, "");
-    const finished = await Promise.all(running);
+    const finished = await Promise.all(running.map((run) => run.finished));
     for (const [index, run] of finished.entries()) {
       expect(run.status, `run-${index} stderr: ${run.stderr}`).toBe(0);
     }
@@ -537,11 +534,61 @@ describe("the backup and restore procedure", () => {
     expect(names, "one dump per run, none sharing a name").toHaveLength(runs);
     // The content is the point: two runs that picked one name leave the file
     // count right and the bytes of one run gone, which is the whole defect.
+    // Both sides sort, because these are labels and not numbers: run-10 sorts
+    // before run-2, and comparing them in index order would be an assertion
+    // about spelling that passes or fails for the wrong reason.
     expect(names.map((name) => readFileSync(join(dir, name), "utf8")).sort()).toEqual(
-      Array.from({ length: runs }, (_, index) => `run-${index}\n`),
+      Array.from({ length: runs }, (_, index) => `run-${index}\n`).sort(),
     );
     expect(incompleteNames(dir), "no run left its partial behind").toEqual([]);
   }, 120_000);
+
+  it("reaps the runs it abandons when a barrier never opens", async () => {
+    // Every route out of the case above abandons its runs rather than
+    // cancelling them: a run that rejects, a barrier that never fills, the
+    // case's own timeout. An abandoned run is not a leaked promise, it is a
+    // live process sitting in the stub's wait loop, waking twenty times a
+    // second, and there is one per participant. So this asserts the reap
+    // rather than assuming it: start runs that can never be released, reap
+    // them, and prove each one is gone — the script AND the stub it is parked
+    // inside, which is a separate process and needs the group kill.
+    const dir = mkdtempSync(join(tmpdir(), "overflow-backup-reap-"));
+    const { stub, arrived, release } = barrierStub(mkdtempSync(join(tmpdir(), "overflow-backup-barrier-")));
+    const stamp = "20260930T134500Z";
+
+    const started = Array.from({ length: 4 }, (_, index) =>
+      startBackup(
+        ["--output-dir", dir, "--retention-days", "14"],
+        {
+          ...scriptEnv(),
+          OVERFLOW_PG_DUMP: stub,
+          OVERFLOW_PG_RESTORE: "true",
+          OVERFLOW_BACKUP_STAMP: stamp,
+          BARRIER_ARRIVED: arrived,
+          BARRIER_RELEASE: release,
+          BARRIER_MARKER: `stranded-${index}`,
+        },
+      ),
+    );
+    // Each stub records its own pid in its arrival marker, which is what lets
+    // the assertion below reach the grandchild and not just the script.
+    await vi.waitFor(() => {
+      expect(readdirSync(arrived), "every run parked in the dump stub").toHaveLength(started.length);
+    }, { timeout: 60_000, interval: 25 });
+    const stubPids = readdirSync(arrived).map((name) => Number(readFileSync(join(arrived, name), "utf8").trim()));
+    expect(started.every((run) => isAlive(run.pid)), "the runs are alive before the reap").toBe(true);
+    expect(stubPids.every((pid) => Number.isInteger(pid) && isAlive(pid)), "the stubs are alive before the reap").toBe(true);
+
+    const reaped = await reapBackupRuns();
+
+    expect([...reaped].sort((a, b) => a - b)).toEqual(started.map((run) => run.pid).sort((a, b) => a - b));
+    for (const pid of [...started.map((run) => run.pid), ...stubPids]) {
+      expect(isAlive(pid), `pid ${pid} survived the reap`).toBe(false);
+    }
+    // Nothing left to reap: the registry is what makes the afterEach reap a
+    // no-op rather than a second round of kills against dead pids.
+    expect(await reapBackupRuns(), "a second reap has nothing left").toEqual([]);
+  }, 60_000);
 });
 
 /**
@@ -616,23 +663,122 @@ async function restoreInto(database: string, dump: string): Promise<Sql> {
  */
 function bytesStub(body = "custom-format-archive-bytes\n"): string {
   const stub = join(mkdtempSync(join(tmpdir(), "overflow-backup-stub-")), "pg-dump-bytes.sh");
-  writeFileSync(stub, `#!/bin/sh\nprintf '%s' '${body}'\n`);
+  // The body goes in through a quoted heredoc rather than an interpolated
+  // shell literal: a body carrying an apostrophe would otherwise close the
+  // literal early and produce a stub that is not the stub. Written verbatim
+  // after the heredoc's own newline, so the bytes are the caller's and not one
+  // newline more than the caller asked for.
+  const text = body.endsWith("\n") ? body : `${body}\n`;
+  writeFileSync(stub, `#!/bin/sh\ncat <<'OVERFLOW_STUB_EOF'\n${text}OVERFLOW_STUB_EOF\n`);
   chmodSync(stub, 0o700);
   return stub;
 }
 
-/** Start one backup run without waiting for it, so several can overlap. */
-function startBackup(args: string[], env: NodeJS.ProcessEnv): Promise<{ status: number | null; stderr: string }> {
-  return new Promise((resolveRun, rejectRun) => {
-    const child = spawn("sh", [backupScript, ...args], { env });
+/**
+ * A pg_dump stub that parks every run on a barrier file: it records its own
+ * pid where the test can find it, then blocks until the test creates the
+ * release file. The wait is bounded, so a run whose barrier never opens ends
+ * itself instead of outliving the case that was watching it.
+ */
+function barrierStub(barrierDir: string): { stub: string; arrived: string; release: string } {
+  const arrived = join(barrierDir, "arrived");
+  const release = join(barrierDir, "release");
+  mkdirSync(arrived);
+  const stub = join(barrierDir, "pg-dump-barrier.sh");
+  writeFileSync(
+    stub,
+    [
+      "#!/bin/sh",
+      'printf "%s\\n" "$$" > "$BARRIER_ARRIVED/$BARRIER_MARKER"',
+      'waited=0',
+      'while [ ! -e "$BARRIER_RELEASE" ] && [ "$waited" -lt 600 ]; do',
+      "  sleep 0.05",
+      "  waited=$((waited + 1))",
+      "done",
+      'printf "%s\\n" "$BARRIER_MARKER"',
+      "",
+    ].join("\n"),
+  );
+  chmodSync(stub, 0o700);
+  return { stub, arrived, release };
+}
+
+/** Backup runs this file has started and not yet reaped, by pid. */
+const unreapedBackups = new Set<number>();
+
+/** Whether a pid is still a live process we could signal. */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Kill every backup run still alive, and wait until it is. Returns the pids it
+ * reaped so a case can assert on the set rather than assume the kill landed.
+ *
+ * A run is its own process group (see startBackup), so the kill reaches the
+ * whole tree — the script and the stub it is waiting inside. Signalling only
+ * the script would leave the stub polling a barrier nobody will ever open.
+ */
+async function reapBackupRuns(): Promise<number[]> {
+  const pids = [...unreapedBackups];
+  unreapedBackups.clear();
+  for (const pid of pids) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // Already gone, or never made it into a group of its own.
+    }
+  }
+  await vi.waitFor(
+    () => {
+      for (const pid of pids) {
+        expect(isAlive(pid), `backup run ${pid} is still alive after the reap`).toBe(false);
+      }
+    },
+    { timeout: 15_000, interval: 20 },
+  );
+  return pids;
+}
+
+/**
+ * Start one backup run without waiting for it, so several can overlap. The run
+ * is detached into its own process group and registered for reaping, because
+ * every route out of the case that starts it — a rejected run, a barrier that
+ * never fills, the case's own timeout — abandons the others rather than
+ * cancelling them, and an abandoned run sits in the stub waking 20 times a
+ * second for as long as the box keeps it.
+ */
+function startBackup(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): { pid: number; finished: Promise<{ status: number | null; stderr: string }> } {
+  const child = spawn("sh", [backupScript, ...args], { env, detached: true });
+  const pid = child.pid;
+  if (pid === undefined) {
+    throw new Error("spawning a backup run returned no pid");
+  }
+  unreapedBackups.add(pid);
+  const finished = new Promise<{ status: number | null; stderr: string }>((resolveRun, rejectRun) => {
     let stderr = "";
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
-    child.on("error", rejectRun);
-    child.on("close", (status) => resolveRun({ status, stderr }));
+    child.on("error", (error) => {
+      unreapedBackups.delete(pid);
+      rejectRun(error);
+    });
+    child.on("close", (status) => {
+      unreapedBackups.delete(pid);
+      resolveRun({ status, stderr });
+    });
   });
+  return { pid, finished };
 }
 
 function printedDumpPath(stdout: string): string | undefined {
