@@ -18,15 +18,13 @@ name: coverage comment
 #     event's SHA, is never selected; zero matches exits silently, more than
 #     one fails loudly, and a claim inside a same-repository artifact that
 #     mismatches the event-resolved PR fails loudly;
-#   - a fork-headed pull request is not commented on at all: a
-#     pull_request_target run reports the BASE repository as its head
-#     repository, so the resolve step looks for a pull request head-labelled
-#     <base owner>:<branch>, and a fork's pull request is labelled
-#     <fork owner>:<branch> — zero matches, silent exit. Should a head this
-#     repository does not own ever resolve, the whole artifact is still
-#     treated as untrusted and the body is rendered from the two totals
-#     alone, validated as non-negative integers with covered <= added, so
-#     its markdown and file list are never posted;
+#   - a fork's pull request IS resolved and commented on, but only from its
+#     two totals: a pull_request_target run reports the FORK as its head
+#     repository, so the binding finds that fork's own pull request and
+#     same_repo is false for it — the artifact's markdown and file list are
+#     never posted, and the body is rendered here from total_added and
+#     total_covered alone, validated as non-negative integers with covered
+#     <= added;
 #   - one marker-identified comment is posted or updated in place, never
 #     duplicated — and only a comment github-actions[bot] wrote counts, so a
 #     marker planted in anyone else's comment is neither edited nor able to
@@ -40,7 +38,7 @@ name: coverage comment
 #     triggering run's head SHA: success when a comment was posted or updated
 #     (either body variant), failure on any loud failure.
 on:
-  workflow_run:  # zizmor: ignore[dangerous-triggers] — checks out nothing, executes nothing from the artifact, binds the destination PR to the event's head repository, branch and SHA, and posts nothing for a head this repository does not own; the pinning and behavior suites hold that shape
+  workflow_run:  # zizmor: ignore[dangerous-triggers] — checks out nothing, executes nothing from the artifact, binds the destination PR to the event's head repository, branch and SHA, and posts a fork's report only as validated integer totals; the pinning and behavior suites hold that shape
     workflows: [ci]
     types: [completed]
 
@@ -56,15 +54,10 @@ permissions:
 # complete so a cancelled successor does not silently drop the update. The
 # key is a cancellation authority: a group keeps at most one pending run, and
 # a newly queued run supersedes the pending one even with cancel-in-progress
-# off. The head repository is in the key so two repositories' identically
-# named branches cannot share a group — but a pull_request_target run
-# reports the BASE repository as its head repository, so for every pull
-# request run this workflow reacts to that component is this repository and
-# the branch alone carries the separation. The residual share is between
-# this repository's pull request and a fork's pull request on an identically
-# named branch: the fork's run resolves no destination and posts nothing, so
-# its only effect is to supersede this repository's pending run, which that
-# pull request's next run replaces. The group safely holds the attacker-
+# off. Keyed on the branch alone, another repository's same-named branch (two
+# forks' patch-1, say) would share the group and drop this PR's pending
+# update, leaving its older percentage looking current — so the head
+# repository is part of the key. The group safely holds the attacker-
 # controlled names: it is an opaque string key, never executed.
 concurrency:
   group: coverage-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}

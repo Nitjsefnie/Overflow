@@ -352,7 +352,14 @@ describe("the coverage comment workflow's run blocks", () => {
       },
     );
 
-    it("resolves no pull request for a pull_request_target run at a fork head, which the base repository does not own", async () => {
+    it("rejects a mismatched-repository candidate on a pull_request_target run too — the binding is event-independent", async () => {
+      // Not the fork path: a fork's pull_request_target run reports the FORK
+      // as its head repository, so that fork's own pull request matches and
+      // is selected (covered above, and its markdown excluded end to end
+      // below). This case is the impostor — a same-repository run whose
+      // candidate lives in another repository, which the in-job match must
+      // reject whichever event delivered it.
+      //
       // The candidate is seeded under the BASE owner's head label, so GitHub's
       // own head=owner:branch scoping lets it through and the in-job
       // .head.repo.full_name match is what rejects it. A candidate labelled
