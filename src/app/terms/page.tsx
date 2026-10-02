@@ -15,8 +15,9 @@ export function TermsNotice() {
           data-effective-date={TERMS_REVISION.effectiveDate}
         >
           These terms are version {TERMS_REVISION.version}, in effect from {TERMS_REVISION.effectiveDate}.
-          Contesting {DISPUTE_CONTESTABLE_CASE} cites that date — it is what fixes the text you are
-          held to.
+          Contesting{" "}
+          <span data-dispute-case>{DISPUTE_CONTESTABLE_CASE}</span> cites that date — it is what
+          fixes the text you are held to.
         </p>
         <p>
           The terms of Overflow — the hosted instance at https://overflow.nitjsefni.eu — in short: what
