@@ -1,5 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { timingSafeEqual } from "node:crypto";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { verifyGitLabWebhookToken } from "@/lib/gitlab/webhook-token";
+
+vi.mock("node:crypto", async () => {
+  const actual = await vi.importActual<typeof import("node:crypto")>("node:crypto");
+  return { ...actual, timingSafeEqual: vi.fn(actual.timingSafeEqual) };
+});
+
+afterAll(() => {
+  vi.resetModules();
+});
 
 /**
  * The hook's `token` is the same shared secret the GitHub hooks carry, echoed
@@ -30,5 +40,21 @@ describe("the GitLab webhook token check", () => {
     // this from the configured secret, so the case kills any mutant that
     // answers true past the length guard.
     expect(verifyGitLabWebhookToken("x".repeat("shared-secret".length), "shared-secret")).toBe(false);
+  });
+
+  it("uses timingSafeEqual for equal-length acceptance and rejection", () => {
+    const comparison = vi.mocked(timingSafeEqual);
+    comparison.mockClear();
+
+    expect(verifyGitLabWebhookToken("shared-secret", "shared-secret")).toBe(true);
+    expect(verifyGitLabWebhookToken("shared-secrex", "shared-secret")).toBe(false);
+
+    expect(comparison).toHaveBeenCalledTimes(2);
+    expect(comparison).toHaveBeenNthCalledWith(
+      1, Buffer.from("shared-secret"), Buffer.from("shared-secret"),
+    );
+    expect(comparison).toHaveBeenNthCalledWith(
+      2, Buffer.from("shared-secret"), Buffer.from("shared-secrex"),
+    );
   });
 });
