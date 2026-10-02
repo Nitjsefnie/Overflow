@@ -212,6 +212,78 @@ describe("the Legal-Text: unchanged marker's grammar", () => {
   it("does not honour the marker on a message that never mentions it", () => {
     expect(legalTextUnchangedJustification(NO_CLAIM)).toBeNull();
   });
+
+  // Pasting a code block into a commit message is ordinary, and this repo's own
+  // header now spells the marker out — so a fenced example is exactly how a
+  // message can carry the string without anyone having written it as a claim
+  // about this commit. A marker line inside a fence is documentation, not a
+  // claim, and the gate must not read it as one.
+  it("does not honour a marker that sits inside a fenced code block", () => {
+    expect(
+      legalTextUnchangedJustification(
+        [
+          "Document the exemption grammar",
+          "",
+          "The gate honors a marker like this:",
+          "",
+          "```",
+          "Legal-Text: unchanged; this is a documentation example",
+          "```",
+          "",
+        ].join("\n"),
+      ),
+    ).toBeNull();
+  });
+
+  it("does not honour a marker inside a tilde-fenced block", () => {
+    expect(
+      legalTextUnchangedJustification(
+        [
+          "Document the exemption grammar",
+          "",
+          "~~~markdown",
+          "Legal-Text: unchanged; tildes fence it too",
+          "~~~",
+          "",
+        ].join("\n"),
+      ),
+    ).toBeNull();
+  });
+
+  it("does not close a backtick fence with a tilde run", () => {
+    expect(
+      legalTextUnchangedJustification(
+        [
+          "Document the exemption grammar",
+          "",
+          "```",
+          "Legal-Text: unchanged; the tilde below does not close this fence",
+          "~~~",
+          "Legal-Text: unchanged; still inside the fence",
+          "",
+        ].join("\n"),
+      ),
+    ).toBeNull();
+  });
+
+  it("honours the marker outside the fence when the message also shows one inside", () => {
+    expect(
+      legalTextUnchangedJustification(
+        [
+          "Document the exemption grammar",
+          "",
+          "The gate honors a marker like this:",
+          "",
+          "```",
+          "Legal-Text: unchanged; this is a documentation example",
+          "```",
+          "",
+          "Legal-Text: unchanged; the page's rendered text did not change",
+          "",
+        ].join("\n"),
+      ),
+    ).toBe("the page's rendered text did not change");
+  });
 });
 
 describe("the exemption's scope", () => {
@@ -499,8 +571,13 @@ describe("the gate's command line", () => {
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toContain("1 commit in");
       expect(result.stdout).toContain("1 commit exempted");
-      expect(result.stderr).toContain(headSha);
-      expect(result.stderr).toContain(justification);
+      // The audit line's exact shape, not just its two halves: a line that
+      // named the sha and the justification but dropped the marker label would
+      // read as a gate message rather than as a quoted claim.
+      expect(result.stderr).toContain(
+        `exempted ${headSha} (Legal-Text: unchanged): ${justification}`,
+      );
+      expect(result.stderr).toContain("1 commit exempted with a Legal-Text: unchanged claim:");
       expect(
         result.stdout,
         "the per-commit exemption line is the audit trail and belongs on stderr only",
@@ -568,6 +645,75 @@ describe("the gate's command line", () => {
       expect(result.stdout).toContain("1 commit exempted");
       expect(result.stderr).toContain(exemptSha);
       expect(result.stderr).toContain("relocated an import");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("reports the exempted commits even when the range also has a violation", async () => {
+    // A red run is exactly when an audit trail matters: the reader is already
+    // asking what the gate let through. The exemptions must be printed BEFORE
+    // the exit status is decided, or a build that fails for an unrelated commit
+    // reports nothing about the commits the gate chose to exempt.
+    const fixture = await createGateFixture();
+    try {
+      const baseSha = await fixture.commit("base\n\nFixture base.\n", {
+        "README.md": "fixture base\n",
+      });
+
+      const exemptSha = await fixture.commit(
+        "Move the role lookup\n\nLegal-Text: unchanged; relocated an import\n",
+        { [RULES]: "export default () => <p>Rules</p>;\n" },
+      );
+
+      const violatingSha = await fixture.commit(
+        "Rewrite the governing-law paragraph\n\nThe clause names Delaware.\n",
+        { [TERMS]: "export default () => <p>Governed by the laws of Delaware.</p>;\n" },
+      );
+
+      const result = fixture.runGate(baseSha, violatingSha);
+
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toContain(violatingSha);
+      expect(result.stderr).toContain(
+        `exempted ${exemptSha} (Legal-Text: unchanged): relocated an import`,
+      );
+      expect(result.stderr).toContain("1 commit exempted with a Legal-Text: unchanged claim:");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("exits 1 over a governing-law rewrite whose only marker is inside a fence", async () => {
+    // The end-to-end shape the fenced-block gap was demonstrated with: a commit
+    // that DOCUMENTS the marker and rewrites the governing law at the same time.
+    // The documentation example must not exempt the rewrite.
+    const fixture = await createGateFixture();
+    try {
+      const baseSha = await fixture.commit("base\n\nFixture base.\n", {
+        "README.md": "fixture base\n",
+      });
+
+      const headSha = await fixture.commit(
+        [
+          "Document the exemption grammar and rewrite the governing law",
+          "",
+          "The gate honors a marker like this:",
+          "",
+          "```",
+          "Legal-Text: unchanged; this is a documentation example",
+          "```",
+          "",
+        ].join("\n"),
+        { [TERMS]: "export default () => <p>Governed by the laws of Delaware.</p>;\n" },
+      );
+
+      const result = fixture.runGate(baseSha, headSha);
+
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toContain(headSha);
+      expect(result.stdout).toContain(GUARD);
+      expect(result.stderr).not.toContain("exempted");
     } finally {
       await fixture.dispose();
     }
