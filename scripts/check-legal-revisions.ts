@@ -33,15 +33,21 @@
 //     and a whitespace-only justification are NOT markers: the exemption is a
 //     claim a reviewer can check, not a magic word anyone can paste
 //   - a message carrying several markers is read at the first one
+//   - a marker line inside a FENCED code block is documentation, not a claim,
+//     and is skipped. This repo's own header spells the marker out, so a commit
+//     that documents the grammar — or quotes it in a pull-request-style block —
+//     would otherwise carry the string without anyone having made the claim
 //
 // WHAT AN EXEMPTION DOES AND DOES NOT DO. It applies only to a commit that
 // touches a legal page and does NOT touch the record module; a commit that
 // touches the record is already green and claims no exemption, so nothing is
-// printed for it. Every honoured marker is reported on stderr — one line per
-// exempted commit, its sha and its justification — so the exemption is
-// auditable in the CI log without opening the commit, and it cannot be read as
-// part of the success line on stdout. The success line states how many commits
-// were exempted. An unreadable commit message is an error, never a silent pass.
+// printed for it. Every honoured marker is reported on stderr — a count, then
+// one line per exempted commit carrying its sha and its justification — and it
+// is printed BEFORE the exit status is decided, so a run that reds for an
+// unrelated commit still shows what the gate let through. The success line on
+// stdout repeats the count and never carries the list, so the trail cannot be
+// read as part of the verdict. An unreadable commit message is an error, never
+// a silent pass.
 //
 // The walk is per-commit over base..head, merge commits excluded: git rev-list
 // --no-merges, then one git diff-tree per commit. A legal page edited in one
@@ -74,6 +80,12 @@ const GUARD_FILE = "src/lib/legal-revisions.ts";
 // non-match, which is what keeps a bare marker worthless.
 const MARKER = /^Legal-Text: unchanged;[ \t]+(\S.*)$/;
 
+// A fenced-code-block delimiter: up to three spaces of indent, a run of three
+// or more backticks or tildes, then an optional info string. A fence closes
+// only on a run of the SAME character at least as long, with no info string, so
+// a tilde run cannot close a backtick fence.
+const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
 export interface CommitChanges {
   sha: string;
   files: readonly string[];
@@ -98,10 +110,49 @@ export interface LegalRevisionReport {
 }
 
 /**
+ * Marks which lines of a message body fall inside a fenced code block. A fence
+ * opens on a run of three or more backticks or tildes (a backtick run whose
+ * info string itself holds a backtick is not a delimiter, as in CommonMark) and
+ * closes on a longer-or-equal run of the SAME character carrying no info
+ * string. The opening and closing lines themselves are not inside.
+ */
+function fencedLines(lines: readonly string[]): boolean[] {
+  const inside: boolean[] = [];
+  let open: { character: string; length: number } | null = null;
+
+  for (const line of lines) {
+    const fence = FENCE.exec(line);
+    const run = fence?.[1];
+    const info = fence?.[2] ?? "";
+
+    if (open === null) {
+      if (run !== undefined && !(run.startsWith("`") && info.includes("`"))) {
+        open = { character: run.charAt(0), length: run.length };
+      }
+      inside.push(false);
+      continue;
+    }
+
+    const closes =
+      run !== undefined &&
+      run.charAt(0) === open.character &&
+      run.length >= open.length &&
+      info.trim() === "";
+    inside.push(!closes);
+    if (closes) {
+      open = null;
+    }
+  }
+
+  return inside;
+}
+
+/**
  * Returns the justification of a commit message's `Legal-Text: unchanged`
  * marker, or null when the message carries none. Only the BODY counts: the
  * first blank line ends the subject, so a marker that is only ever the subject
- * claims nothing.
+ * claims nothing. Lines inside a fenced code block are documentation and are
+ * skipped — quoting the grammar is not making the claim.
  */
 export function legalTextUnchangedJustification(message: string): string | null {
   const bodyStart = message.indexOf("\n\n");
@@ -109,7 +160,14 @@ export function legalTextUnchangedJustification(message: string): string | null 
     return null;
   }
 
-  for (const line of message.slice(bodyStart + 2).split("\n")) {
+  const lines = message.slice(bodyStart + 2).split("\n");
+  const insideFences = fencedLines(lines);
+
+  for (const [index, line] of lines.entries()) {
+    if (insideFences[index] === true) {
+      continue;
+    }
+
     const match = MARKER.exec(line);
     const justification = match?.[1];
     if (justification !== undefined) {
@@ -242,12 +300,21 @@ function main(args: readonly string[]): void {
     const commits = commitsBetween(baseRevision, headRevision);
     const { violations, exemptions } = reviewCommits(commits);
 
-    // stderr, not stdout: this is the audit trail of what the gate chose to
-    // let through, and it must never be mistakable for the success line.
-    for (const { sha, justification } of exemptions) {
+    // stderr, not stdout: this is the audit trail of what the gate chose to let
+    // through, and it must never be mistakable for the success line. It is
+    // written BEFORE the exit status is decided — a red run is exactly when a
+    // reader asks what the gate let through — and it leads with the count so
+    // the count is stated on the red path as well as the green one.
+    if (exemptions.length > 0) {
       process.stderr.write(
-        `exempted ${sha} (Legal-Text: unchanged): ${justification}\n`,
+        `${exemptions.length} ${exemptions.length === 1 ? "commit" : "commits"} ` +
+          "exempted with a Legal-Text: unchanged claim:\n",
       );
+      for (const { sha, justification } of exemptions) {
+        process.stderr.write(
+          `exempted ${sha} (Legal-Text: unchanged): ${justification}\n`,
+        );
+      }
     }
 
     if (violations.length > 0) {
