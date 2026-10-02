@@ -3,9 +3,9 @@
 //
 //   node scripts/check-legal-revisions.ts <base> <head>
 //
-// THE RULE AS IMPLEMENTED. A commit that changes a legal page's file must also
-// change src/lib/legal-revisions.ts in the SAME commit, or carry a
-// `Legal-Text: unchanged; <justification>` claim in its commit message body.
+// THE RULE AS IMPLEMENTED. A commit that changes a legal page or a shared-text
+// module's file must also change src/lib/legal-revisions.ts in the SAME commit,
+// or carry a `Legal-Text: unchanged; <justification>` claim in its message body.
 //
 // The earlier version of this header claimed the gate compared a legal page's
 // TEXT. It never did — it compares plain path membership, so any edit to a
@@ -43,10 +43,11 @@
 //     rather than granting one
 //
 // WHAT AN EXEMPTION DOES AND DOES NOT DO. It applies only to a commit that
-// touches a legal page and does NOT touch the record module; a commit that
-// touches the record is already green and claims no exemption, so nothing is
-// printed for it. Every honoured marker is reported on stderr — a count, then
-// one line per exempted commit carrying its sha and its justification — and it
+// touches a legal page or shared-text module and does NOT touch the record
+// module; a commit that touches the record is already green and claims no
+// exemption, so nothing is printed for it. Every honoured marker is reported on
+// stderr — a count, then one line per exempted commit carrying its sha and its
+// justification — and it
 // is printed BEFORE the exit status is decided, so a run that reds for an
 // unrelated commit still shows what the gate let through. When nothing was
 // exempted the block is absent entirely, on either path. The success line on
@@ -66,9 +67,9 @@
 // exemption runs into; a deliberate one is not stopped here.
 //
 // The walk is per-commit over base..head, merge commits excluded: git rev-list
-// --no-merges, then one git diff-tree per commit. A legal page edited in one
-// commit and the revision record bumped in a later one still violates — the
-// gate must survive a rebase that reorders the pair. A commit touching only
+// --no-merges, then one git diff-tree per commit. A legal-text source edited in
+// one commit and the revision record bumped in a later one still violates —
+// the gate must survive a rebase that reorders the pair. A commit touching only
 // the record file is green, as is an empty range. Violations go to stdout and
 // the process exits 1; a failed git call (unknown revision, no repository,
 // unreadable message) fails closed on stderr with exit 1.
@@ -89,6 +90,9 @@ const LEGAL_PAGES: readonly string[] = [
 // Shared modules that supply text a reader is held to on a legal page. Keep
 // this inventory explicit: the commit walk checks changed paths, not imports.
 const SHARED_TEXT_MODULES: readonly string[] = ["src/lib/disputes.ts"];
+
+// Every path whose reader-facing wording is covered by the revision record.
+const LEGAL_TEXT_SOURCES: readonly string[] = [...LEGAL_PAGES, ...SHARED_TEXT_MODULES];
 
 // The record module every legal-text source change must travel with.
 const GUARD_FILE = "src/lib/legal-revisions.ts";
@@ -119,13 +123,13 @@ export interface CommitChanges {
   message: string;
 }
 
-/** One legal page changed by a commit that carried no exemption for it. */
+/** One legal-text source changed by a commit that carried no exemption for it. */
 export interface LegalPageViolation {
   sha: string;
   page: string;
 }
 
-/** One legal-page change the commit message itself declared text-unchanged. */
+/** One legal-text change the commit message itself declared text-unchanged. */
 export interface LegalTextExemption {
   sha: string;
   justification: string;
@@ -206,10 +210,10 @@ export function legalTextUnchangedJustification(message: string): string | null 
 }
 
 /**
- * Reviews a range's commits: one violation per (commit, legal page) that
- * changed the page without the record module and without a well-formed
- * exemption, plus one entry per commit an exemption was honoured for. Commits
- * touching the record, or no legal page at all, are green and claim nothing.
+ * Reviews a range's commits: one violation per (commit, legal-text source) that
+ * changed without the record module and without a well-formed exemption, plus
+ * one entry per commit an exemption was honoured for. Commits touching the
+ * record, or no legal-text source at all, are green and claim nothing.
  */
 export function reviewCommits(
   commits: ReadonlyArray<CommitChanges>,
@@ -222,15 +226,15 @@ export function reviewCommits(
       continue;
     }
 
-    const pages = LEGAL_PAGES.filter((page) => files.includes(page));
-    if (pages.length === 0) {
+    const sources = LEGAL_TEXT_SOURCES.filter((source) => files.includes(source));
+    if (sources.length === 0) {
       continue;
     }
 
     const justification = legalTextUnchangedJustification(message);
     if (justification === null) {
-      for (const page of pages) {
-        violations.push({ sha, page });
+      for (const source of sources) {
+        violations.push({ sha, page: source });
       }
     } else {
       exemptions.push({ sha, justification });
@@ -351,12 +355,13 @@ function main(args: readonly string[]): void {
         );
       }
       process.stdout.write(
-        "Legal pages carry revision records in src/lib/legal-revisions.ts: a commit that " +
-          "changes a legal page must change its record in the same commit (issue 955). " +
-          "Amend the page change to carry the record change. If the page's text is genuinely " +
+        "Legal pages and shared-text modules carry revision records in src/lib/legal-revisions.ts: " +
+          "a commit that changes a legal page or shared-text module must change its record in the " +
+          "same commit (issue 955). Amend the text change to carry the record change. If the text " +
+          "of a legal page or shared-text module is genuinely " +
           "unchanged, say so in the commit message body with a whole line reading " +
           "`Legal-Text: unchanged; <justification>`, and the gate will report the exemption " +
-          "rather than treat the page as revised.\n",
+          "rather than treat the source as revised.\n",
       );
       process.exitCode = 1;
       return;
@@ -365,7 +370,7 @@ function main(args: readonly string[]): void {
     process.stdout.write(
       `${commits.length} ${commits.length === 1 ? "commit" : "commits"} in ` +
         `${baseRevision}..${headRevision} ` +
-        `${commits.length === 1 ? "changes" : "change"} no legal page ` +
+        `${commits.length === 1 ? "changes" : "change"} no legal page or shared-text module ` +
         "without a matching revision-record change or a text-unchanged claim " +
         `(${exemptions.length} ${exemptions.length === 1 ? "commit" : "commits"} exempted ` +
         "with a Legal-Text: unchanged claim)\n",
