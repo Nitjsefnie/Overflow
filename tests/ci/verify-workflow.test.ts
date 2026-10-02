@@ -218,6 +218,70 @@ describe("the verify workflow's migration immutability step", () => {
 });
 
 /**
+ * The verify job's "Legal revision currency" step runs the per-commit
+ * legal-revision gate (scripts/check-legal-revisions.ts, issue 955) over the
+ * merge ref's range — HEAD^1 the base tip, HEAD the merge ref — after
+ * completing the history of both sides. The wiring is pinned exactly because a
+ * rewiring can be silent: a depth-limited fetch leaves the range's ancestry
+ * incomplete and the per-commit walk misses commits, a swapped endpoint judges
+ * the head against the wrong side, and an added `if` or continue-on-error
+ * leaves the step in the file while CI stops gating on it.
+ *
+ * Assertions are made on the parsed YAML data (step.name / step.run / step.if),
+ * never on the raw bytes, so reformatting the file does not disturb them and
+ * a rewired or un-gated step fails loudly here instead of quietly narrowing
+ * what CI gates on.
+ */
+describe("the verify workflow's legal revision currency step", () => {
+  let steps: WorkflowStep[] = [];
+
+  const legalRevisionCurrency = () =>
+    steps.filter((step) => step.name === "Legal revision currency");
+
+  beforeAll(async () => {
+    const source = await readFile(resolve(".github/workflows/ci.yml"), "utf8");
+    const workflow = parse(source) as {
+      jobs?: { verify?: { steps?: WorkflowStep[] } };
+    };
+
+    steps = workflow.jobs?.verify?.steps ?? [];
+  });
+
+  it("exists exactly once in the verify job", () => {
+    expect(
+      legalRevisionCurrency(),
+      "the verify job must keep its Legal revision currency step",
+    ).toHaveLength(1);
+  });
+
+  it("runs after Migration immutability", () => {
+    const migrationIndex = steps.findIndex((step) => step.name === "Migration immutability");
+    const legalIndex = steps.findIndex((step) => step.name === "Legal revision currency");
+
+    expect(migrationIndex).toBeGreaterThan(-1);
+    expect(legalIndex).toBeGreaterThan(-1);
+    expect(legalIndex).toBeGreaterThan(migrationIndex);
+  });
+
+  it("runs only for pull requests and walks every commit of the merge range", () => {
+    const [step] = legalRevisionCurrency();
+
+    expect(step, "the verify job must contain the Legal revision currency step").toBeDefined();
+    expect(step?.if).toBe("${{ github.event_name == 'pull_request_target' }}");
+    expect(
+      step?.env,
+      "the pull request number must reach the fetch through env, never ${{ }} " +
+        "interpolation in the run block",
+    ).toEqual({ PR_NUMBER: "${{ github.event.pull_request.number }}" });
+    expect(step?.run).toBe(
+      'git fetch --unshallow origin main "+refs/pull/${PR_NUMBER}/merge"\n' +
+        "node scripts/check-legal-revisions.ts HEAD^1 HEAD\n",
+    );
+    expect(Boolean(step?.["continue-on-error"])).toBe(false);
+  });
+});
+
+/**
  * Concurrency is the difference between a run that may be superseded and a
  * merged SHA's run, which may not: the deploy gate in
  * scripts/deploy-revision.sh reads the check conclusion for the SHA it deploys,
