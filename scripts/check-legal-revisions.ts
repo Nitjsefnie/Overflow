@@ -132,7 +132,9 @@ function main(args: readonly string[]): void {
     }
 
     process.stdout.write(
-      `${commits.length} commits in ${baseRevision}..${headRevision} change no legal page ` +
+      `${commits.length} ${commits.length === 1 ? "commit" : "commits"} in ` +
+        `${baseRevision}..${headRevision} ` +
+        `${commits.length === 1 ? "changes" : "change"} no legal page ` +
         "without a matching revision-record change\n",
     );
   } catch (error) {
