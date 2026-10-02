@@ -1044,6 +1044,46 @@ describe("GitHubGateway success-body byte cap", () => {
     expect(pulls).toBe(2);
   });
 
+  // The cap is one shared constant, but a read is only covered while it keeps
+  // routing through request(). The fold's discard arm depends on the diff read
+  // being one of those reads: a client that read the diff body whole would hand
+  // the fold an over-cap diff as an ordinary string, never raise the typed
+  // error, and leave the arm dead while the fold's own suite stayed green,
+  // because that suite mocks this read and throws the class itself. So the diff
+  // read is driven past the cap here, in the client's suite, where the routing
+  // is real rather than assumed.
+  //
+  // Unlike the case above this body closes after the over-cap byte, which is
+  // what a real diff body does. Closing is what makes the failure readable: a
+  // read that buffers whole resolves with the whole body, so the assertion below
+  // fails naming the string it got instead of hanging on a stream that never
+  // ends and failing the suite through its timeout.
+  it("rejects a diff read over the cap with the same typed error", async () => {
+    const requestedUrls: string[] = [];
+    const capChunk = new Uint8Array(cap);
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      timeoutMs: 250,
+      fetch: async (input) => {
+        requestedUrls.push(String(input));
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(capChunk);
+            controller.enqueue(new Uint8Array([120]));
+            controller.close();
+          },
+        }, { highWaterMark: 0 }));
+      },
+    });
+
+    const error = await gateway.getPullRequestDiff({ owner: "octo", name: "overflow" }, 4).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(GitHubResponseTooLargeError);
+    // The pull request's own number has to reach the wire for the fold to be
+    // reading this pull request's diff at all.
+    expect(requestedUrls).toHaveLength(1);
+    expect(requestedUrls[0]).toContain("/repos/octo/overflow/pulls/4");
+  });
+
   it("buffers a success body just under the cap and delivers it intact", async () => {
     const repository = {
       id: 42,
