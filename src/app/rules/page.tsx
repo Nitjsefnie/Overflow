@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AppShell, PublicAppShell } from "@/components/app-shell";
+import { RULES_REVISION } from "@/lib/legal-revisions";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 
 type RulesContentProps = {
@@ -35,6 +36,16 @@ function RulesSections() {
     <>
       <section className="page-heading" aria-labelledby="rules-title">
         <h1 id="rules-title">Rules</h1>
+        <p
+          className="mono-meta"
+          data-legal-revision={RULES_REVISION.document}
+          data-version={RULES_REVISION.version}
+          data-effective-date={RULES_REVISION.effectiveDate}
+        >
+          These rules are version {RULES_REVISION.version}, in effect from{" "}
+          {RULES_REVISION.effectiveDate}. A dispute is decided under the Disputes section of this
+          page, and cites that date — it is what fixes the text you are held to.
+        </p>
         <p>How work earns credits and how accounts are reviewed.</p>
         <p>
           The <Link href="/terms">terms page</Link> is the short version, with the hosted
