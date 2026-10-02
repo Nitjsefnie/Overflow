@@ -110,7 +110,39 @@ describe("terms page", () => {
     // sanction" back into the heading leaves every other assertion in the file
     // satisfied, and this one cannot find the section at all. The same literal
     // shape this file already uses on "What an account is" above.
+    //
+    // COST OF THAT LOOKUP, because the literal reads like something to
+    // "simplify". `aria-labelledby` derives the region's accessible name from
+    // the heading's TEXT, so this resolves only while the heading names what it
+    // claims to name. Swapping it for the element id —
+    // `#terms-disputes-heading`, or
+    // `querySelector("section[aria-labelledby='terms-disputes-heading']")` —
+    // keeps every id and class check satisfied under that mutant and silently
+    // hands back the kill this lookup exists to make. Do not.
     const region = screen.getByRole("region", { name: "Contesting a settlement" });
+
+    // The heading is the ONE place on either page that names the contestable
+    // case by hand, and it stays a literal on purpose: src/lib/disputes.ts
+    // holds the case, this file holds the literal, and neither is read from the
+    // other. This assertion is what keeps those two in step. The mutant it
+    // defeats is DISPUTE_CONTESTABLE_CASE widened to "a settlement or a
+    // sanction" with the list widened to match and this heading left at
+    // "Contesting a settlement" — a legitimate product change carried out half
+    // way, which every other assertion in the suite satisfies, and which ships
+    // a heading contradicting the list under it and the revision paragraph
+    // above it. It is the mirror of the lookup above: that one fails when the
+    // heading names a case nothing else names, this one when the case gains a
+    // name the heading does not carry.
+    //
+    // Contained, never asserted as prose — the compared value is the exported
+    // constant, so no sentence is written here. The cost of the literal anchor
+    // above is what a widening now pays, and it is a deliberate one: adding a
+    // contestable case updates this heading AND the literal two lines up in the
+    // same commit, so the product change arrives as a diff that shows both. A
+    // widening that leaves this heading alone fails here.
+    const heading = region.querySelector("h2");
+    expect(heading, "the section is labelled by its own heading").not.toBeNull();
+    expect(heading!.textContent ?? "").toContain(DISPUTE_CONTESTABLE_CASE);
 
     // The list EQUALS the constant the rules page renders, element for element
     // and in order. Compared, not asserted as prose: this never names a rule,

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { AppShell, PublicAppShell } from "@/components/app-shell";
-import { DISPUTE_RULES } from "@/lib/disputes";
+import { DISPUTE_CONTESTABLE_CASE, DISPUTE_RULES } from "@/lib/disputes";
 import { RULES_REVISION } from "@/lib/legal-revisions";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 
@@ -44,7 +44,8 @@ function RulesSections() {
           data-effective-date={RULES_REVISION.effectiveDate}
         >
           These rules are version {RULES_REVISION.version}, in effect from{" "}
-          {RULES_REVISION.effectiveDate}. A correction to a settlement is decided under the Disputes
+          {RULES_REVISION.effectiveDate}. A correction to{" "}
+          <span data-dispute-case>{DISPUTE_CONTESTABLE_CASE}</span> is decided under the Disputes
           section of this page, and cites that date — it is what fixes the text you are held to.
         </p>
         <p>How work earns credits and how accounts are reviewed.</p>

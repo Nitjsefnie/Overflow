@@ -12,12 +12,20 @@ const currentRole = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/moderation/current-role", () => ({ getCurrentUserRole: currentRole }));
 
 import { PublicRulesContent, RulesContent } from "@/app/rules/page";
-import { DISPUTE_RULES } from "@/lib/disputes";
+import { DISPUTE_CONTESTABLE_CASE, DISPUTE_RULES } from "@/lib/disputes";
 
 async function renderRulesPage(): Promise<void> {
   const { default: RulesPage } = await import("@/app/rules/page");
   render(await RulesPage());
 }
+
+// Both shells, as one table: RulesSections is rendered by each of them, so
+// every assertion about text this section states has to hold on both, and
+// listing the pair twice is how one of them quietly stops being checked.
+const MOUNT_POINTS = [
+  ["member view", <RulesContent key="member" memberName="Ada" isModerator={false} />],
+  ["public view", <PublicRulesContent key="public" />],
+] as const;
 
 describe("rules page", () => {
   afterEach(() => {
@@ -146,10 +154,7 @@ describe("rules page", () => {
     expect(currentRole).toHaveBeenCalledWith("u1");
   });
 
-  it.each([
-    ["member view", <RulesContent key="member" memberName="Ada" isModerator={false} />],
-    ["public view", <PublicRulesContent key="public" />],
-  ] as const)("states the correction rules the terms page points here at, in the %s", (_label, element) => {
+  it.each(MOUNT_POINTS)("states the correction rules the terms page points here at, in the %s", (_label, element) => {
     render(element);
 
     // The mirror of the terms-page assertion, and the same constant, because
@@ -172,11 +177,58 @@ describe("rules page", () => {
     // render. The region is then found by its heading — the same literal anchor
     // shape terms-page.test.tsx uses — and its bullets are read in order, so a
     // reordering is a difference rather than a set.
+    //
+    // COST OF THAT LOOKUP — it is a kill, not a convenience. `aria-labelledby`
+    // derives the region's accessible name from the heading's TEXT, so this
+    // lookup resolves only while the heading names what it says it names. The
+    // reviewer's mutant — rewording the Disputes heading so it re-promises a
+    // sanction the list below it does not carry — satisfies every id, every
+    // class and every element query in this file, and fails HERE alone.
+    // Rewriting it as a query on the element id (`#rules-disputes-heading`, or
+    // `querySelector("section[aria-labelledby='rules-disputes-heading']")`)
+    // would read as a harmless simplification, keep the whole suite green and
+    // silently hand back the mutant. Do not.
     const main = document.querySelector<HTMLElement>("main.page-content");
     expect(main, "the rules view supplies its own main.page-content").not.toBeNull();
     const region = within(main!).getByRole("region", { name: "Disputes" });
     const items = [...region.querySelectorAll("li")].map((item) => item.textContent);
     expect(items).toEqual([...DISPUTE_RULES]);
+  });
+
+  it.each(MOUNT_POINTS)("names the contestable case the shared source names, in the %s revision paragraph", (_label, element) => {
+    render(element);
+
+    // This page's revision paragraph sat ONE sentence above the list it points
+    // at and made the same claim by hand — "A correction to a settlement is
+    // decided under the Disputes section of this page" — which is how a reader
+    // could be told a case is contestable with nothing below it saying so. The
+    // page now interpolates DISPUTE_CONTESTABLE_CASE there, exactly as the
+    // terms page's own revision paragraph does, so the two pages cannot disagree
+    // about which case a correction reaches.
+    //
+    // The mutant that survives every other assertion in the suite is this
+    // sentence with "a settlement" changed to "a sanction": terms-page,
+    // rules and legal-revisions-marker all stay 35/35 green on it, because
+    // nothing read it. The assertion that kills it is the marked-element shape,
+    // not a word ban — a hand-written sentence contains no [data-dispute-case]
+    // at all, so the length check fails whatever words it is phrased in, and
+    // the equality then reads the words when a mark IS present. A case
+    // legitimately added to the shared source is still the constant and still
+    // passes.
+    //
+    // Scoped to the page's own main, and to the revision marker inside it, for
+    // the same reason the terms-page mirror is: the shells' nav and footer sit
+    // outside main.page-content. The selector does NOT filter by document name —
+    // a document read from RULES_REVISION.document comes from the module this
+    // page renders, so the two sides could be swapped together and agree with
+    // themselves. legal-revisions-marker.test.tsx owns WHICH document this is.
+    const main = document.querySelector<HTMLElement>("main.page-content");
+    expect(main, "the rules view supplies its own main.page-content").not.toBeNull();
+    const markers = [...main!.querySelectorAll("p[data-legal-revision]")];
+    expect(markers, "the rules page states its revision once").toHaveLength(1);
+    const marked = [...markers[0]!.querySelectorAll("[data-dispute-case]")];
+    expect(marked, "the revision paragraph names the case from the shared source").toHaveLength(1);
+    expect(marked[0]!.textContent).toBe(DISPUTE_CONTESTABLE_CASE);
   });
 
   it("renders the member view for a session with no role claim when the ledger vouches", async () => {
