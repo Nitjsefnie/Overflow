@@ -47,9 +47,9 @@ async function gateLegalPages(): Promise<string[]> {
 }
 
 /** Reads SHARED_TEXT_MODULES from the gate source and fails loudly if it cannot parse the list. */
-async function gateSharedTextModules(): Promise<string[]> {
-  const source = await readFile(resolve(GATE_SCRIPT), "utf8");
-  const block = source.match(/const SHARED_TEXT_MODULES[^=]*=\s*\[([\s\S]*?)\]/);
+async function gateSharedTextModules(source?: string): Promise<string[]> {
+  const gateSource = source ?? (await readFile(resolve(GATE_SCRIPT), "utf8"));
+  const block = gateSource.match(/const SHARED_TEXT_MODULES[^=]*=\s*\[([\s\S]*?)\]/);
   if (block === null) {
     throw new Error(`could not read SHARED_TEXT_MODULES out of ${GATE_SCRIPT}`);
   }
@@ -76,6 +76,21 @@ describe("legal revision gate", () => {
     expect(violations).toHaveLength(1);
     expect(violations[0]).toContain("sha-dispute-rule-only");
     expect(violations[0]).toContain(DISPUTES);
+  });
+
+  it("reports both legal-text sources changed in one commit", () => {
+    const sha = "sha-page-and-shared-text";
+    const violations = legalRevisionViolations([
+      { sha, files: [TERMS, DISPUTES] },
+    ]);
+
+    expect(violations).toHaveLength(2);
+    expect(violations).toContain(
+      `${TERMS} changed in ${sha} without a matching ${GUARD} change in the same commit.`,
+    );
+    expect(violations).toContain(
+      `${DISPUTES} changed in ${sha} without a matching ${GUARD} change in the same commit.`,
+    );
   });
 
   it("accepts a commit that changes a legal page and the guard file together", () => {
@@ -965,5 +980,18 @@ describe("the gate's coverage of shared legal-text modules", () => {
       sharedTextModules,
       "the first-class inventory must match every shared module supplying legal-page wording",
     ).toEqual([DISPUTES]);
+  });
+
+  it("throws its explicit parse error for malformed shared-text inventory source", async () => {
+    const source = await readFile(resolve(GATE_SCRIPT), "utf8");
+    const malformedSource = source.replace(
+      /const SHARED_TEXT_MODULES[^=]*=\s*\[[\s\S]*?\];/,
+      "",
+    );
+    expect(malformedSource).not.toBe(source);
+
+    await expect(gateSharedTextModules(malformedSource)).rejects.toThrow(
+      `could not read SHARED_TEXT_MODULES out of ${GATE_SCRIPT}`,
+    );
   });
 });
