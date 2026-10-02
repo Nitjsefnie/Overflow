@@ -464,9 +464,9 @@ thing that tells you the workflow saw the command. The workflow also tells you
 in a reply when an issue is already held by someone else. Read that reply: it
 confirms the assignment, or explains why there was none.
 
-One account may hold a limited number of claims at once — two at read tier, four
-at triage, six at write, ten at maintain — so an issue you cannot claim is often
-one you already hold.
+One account may hold a limited number of open issues assigned to you in this
+repository at once — two at read tier, four at triage, six at write, ten at
+maintain — so an issue you cannot claim is often one you already hold.
 
 `/unclaim` and `/release` are the same command under two names. Either removes
 **your own** assignment and nobody else's.
@@ -474,10 +474,11 @@ one you already hold.
 Release an issue you stop working on, and do it before the merge that would
 close it, because a stale assignment on a closed issue may no longer be
 removable, and "probably still works" is not a reason to find that out after the
-merge. A claim also lapses on its own after seven days, and closing the issue
-releases the reserve immediately — only open issues hold points against the
-sponsor — but while an issue is open, your assignment makes it unclaimable by
-anyone else.
+merge. A claim does not lapse by itself: after seven idle days another commenter
+may take it over and someone with write access may release it, but until one of
+those happens the assignment stands and the sponsor's points stay reserved.
+Closing the issue is what releases the reserve immediately — only open issues
+hold points against the sponsor.
 
 ## The `offered:` and `settled:` labels are product data
 
