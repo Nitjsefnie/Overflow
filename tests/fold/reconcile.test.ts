@@ -598,6 +598,31 @@ describe("reconcileRepository", () => {
     }
   });
 
+  it("fails the whole run without discarding or materializing when the issue list exceeds the response cap", async () => {
+    const overCap = new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES);
+    const dependencies = reconciliationDependencies({
+      github: { listIssues: vi.fn().mockRejectedValue(overCap) },
+    });
+    dependencies.store.getDirtyReconciliationSubjects = async () => [
+      { kind: "ISSUE", id: 999, number: 42, generation: 7 },
+    ];
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
+        message: "Unable to reconcile repository.",
+        cause: overCap,
+      });
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
+      expect(dependencies.store.materialize).not.toHaveBeenCalled();
+      expect(errorLog).toHaveBeenCalledTimes(1);
+      expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", overCap);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
   it("keeps Postgres record text out of the failure log and rethrown cause", async () => {
     await withRecordBearingPostgresWrite(async (write, originalError) => {
       const dependencies = reconciliationDependencies({ materialize: vi.fn().mockImplementation(write) });
