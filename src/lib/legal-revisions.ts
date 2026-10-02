@@ -14,11 +14,14 @@
  * they cite, so this file is the single place either value is written and the
  * pages render it — a document with no stamp cites nothing.
  *
- * The conventions the values follow. These are conventions, not enforced
- * invariants: nothing in the test suite couples an edit to a page's text to an
- * edit here, and a substantive legal change that leaves these values standing
- * passes every check in the repository. Read them as what a careful author
- * does, not as a chokepoint.
+ * The conventions the values follow. The coupling behind the first one is
+ * enforced, not advisory: scripts/check-legal-revisions.ts fails any commit
+ * that changes a legal page's text without changing this file in the same
+ * commit, and the verify job runs it on every pull request. The gate reads
+ * only that this file moved alongside the page — it cannot tell an honest
+ * date bump from a token touch — so the values below are the chokepoint CI
+ * holds a legal change to, and the honesty of how they move stays what a
+ * reviewer reads this file for.
  *
  *   - Changing a document's text means changing its effective date here, in
  *     the same change that edits the text. Text that moved while its date
