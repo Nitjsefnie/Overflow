@@ -153,26 +153,40 @@ describe("terms page", () => {
     // carried no such case. The page now interpolates DISPUTE_CONTESTABLE_CASE
     // there, so the phrase cannot drift without an edit to the shared source.
     //
-    // Both halves are structural, no prose: the paragraph must carry the
-    // constant, and it must not name "sanction" — the one word that actually
-    // drifted, pinned as the negative half because "contesting a sanction or a
-    // settlement" CONTAINS the constant as a substring, so the positive half
-    // alone is satisfied by the very reintroduction this is written against.
-    // That word is not a general rule against other cases; it is the specific
-    // regression, and a future case would be added to the shared source rather
-    // than written into this sentence.
+    // The paragraph must carry that interpolation as a MARKED element, and the
+    // marked element must BE the constant. Asserting on the mark rather than on
+    // the paragraph's text is what makes both directions come out right:
     //
-    // Exactly one marker, and the literal "terms" rather than
-    // TERMS_REVISION.document: a document name read from the module the page
-    // renders can agree with itself. The marker suite owns the question of
-    // which document this page is; this one is about the case the paragraph
-    // names, and a second marker would let the claim be made twice and be
-    // satisfied by the copy that got it right.
+    //   - A hand-written paragraph — "contesting a sanction or a settlement",
+    //     or the same drift phrased as "a penalty or a settlement" — contains
+    //     no marked element at all, so the length check kills every hand-written
+    //     superset whatever words it is phrased in. A test that forbade the
+    //     word "sanction" instead died on a synonym and had to be special-cased
+    //     against the legitimate change it was written to allow.
+    //   - A case genuinely added to the shared source — "a settlement or a
+    //     sanction" with a matching rule, both pages updated together — is
+    //     still the constant, so it passes. The test forbids a hand-written
+    //     promise the rules do not carry; it says nothing about which cases
+    //     there are.
+    //
+    // The mark carries IDENTITY, not something a reader sees: it is an inline
+    // span with no styling, and it marks which words are the interpolated case
+    // so nothing has to recognise them. It is legitimate only because the
+    // second assertion reads the words inside it — a bare presence check would
+    // pass on a marked element that named nothing. Do not "simplify" it away.
+    //
+    // Exactly one revision marker, and the selector deliberately does NOT filter
+    // by document: a document name read from TERMS_REVISION.document is read
+    // from the module the page itself renders, so the two sides can be swapped
+    // together and the assertion agrees with itself. The marker suite owns which
+    // document this page is; this one is about the case the paragraph names. A
+    // second marker would let the claim be made twice and be satisfied by the
+    // copy that got it right.
     const markers = [...document.querySelectorAll("p[data-legal-revision]")];
     expect(markers, "the terms page states its revision once").toHaveLength(1);
-    const revision = markers[0]!.textContent ?? "";
-    expect(revision).toContain(DISPUTE_CONTESTABLE_CASE);
-    expect(revision).not.toContain("sanction");
+    const marked = [...markers[0]!.querySelectorAll("[data-dispute-case]")];
+    expect(marked, "the revision paragraph names the case from the shared source").toHaveLength(1);
+    expect(marked[0]!.textContent).toBe(DISPUTE_CONTESTABLE_CASE);
   });
 
   it("keeps every internal link on a page route", async () => {
