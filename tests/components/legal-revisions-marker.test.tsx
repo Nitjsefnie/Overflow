@@ -245,17 +245,20 @@ const REGISTERED = Object.values(legalRevisions).filter(
   (value): value is LegalRevision => typeof value === "object" && value !== null && "document" in value,
 );
 
-// How each document's page is rendered in jsdom, keyed by the document's own
-// identity. This is mechanics, not inventory — the reconciliation below is what
-// stops the two drifting apart, so a key with no registry entry fails as loudly
-// as an entry with no key.
+// How each document's page is rendered in jsdom. The keys are LITERALS: this
+// is a second list of document names beside the registry's, and a name present
+// in one and not the other is drift the reconciliation test below exists to
+// catch. Deriving the inventory from the module's exports is what makes that
+// reconciliation possible; it does not remove the second list.
 //
 // These derived tests are ADDITIVE. The per-document tests above stay, because
 // they carry the literal identity anchors, and an identity taken from the
-// module cannot anchor to a literal. The two boundaries the earlier rounds
-// ruled accepted survive untouched: this block reads the module's own document
-// names, so it adds no third source and moves neither the module-identity swap
-// nor the hardcoded-version mutant.
+// module cannot anchor to a literal. Dispatching the derived cases through a
+// literal-keyed map also catches a swapped module identity on this side as well
+// as on the anchor side, so that boundary is narrower than the anchor alone. The
+// hardcoded-version boundary is untouched: a marker rendering a literal version
+// instead of the constant still passes, because the value comparison still reads
+// the constant on both sides.
 const PAGE_RENDERERS: Record<string, () => Promise<Element>> = {
   "terms": renderTermsPage,
   "account-data": renderAccountDataPage,
