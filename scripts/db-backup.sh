@@ -170,8 +170,11 @@ while :; do
         :
     elif ln_error=$(ln "$partial" "$candidate" 2>&1); then
         break
-    elif [ -e "$candidate" ]; then
-        # The name is taken, which is the collision this search exists for.
+    elif [ -e "$candidate" ] || [ -L "$candidate" ]; then
+        # The name is taken, which is the collision this search exists for. -L
+        # as well as -e: a symlink left by a restore or a half-recovered
+        # directory has a name that is taken even when its target is gone, and
+        # -e alone follows the link, calls the name free, and fails the run.
         :
     else
         # The name is free, so this is not a collision: a read-only directory,

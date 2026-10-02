@@ -1,9 +1,20 @@
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -323,6 +334,12 @@ describe("the backup and restore procedure", () => {
     const [repo] = await sql<{ id: string }[]>`select id from registered_repositories where github_repository_id = ${7_400_001}`;
     await insertIssue(sql, repo.id, 7_500_006, markerTitle, "OPEN");
 
+    // A successful run removes its own partial as it installs, and this is the
+    // only place that is visible: the sweep would reclaim one after a day, so
+    // a dropped cleanup here is silent. Compared against the directory as it
+    // stands, because an earlier case's young partial is meant to be in it.
+    const partialsBefore = incompleteNames(backupDir);
+
     const firstRun = runScript(backupScript, ["--output-dir", backupDir, "--retention-days", "14"], stampedEnv(stamp));
     expect(firstRun.status, firstRun.stderr).toBe(0);
     expect(printedDumpPath(firstRun.stdout), `stdout was: ${firstRun.stdout}`).toBe(join(backupDir, firstName));
@@ -346,6 +363,8 @@ describe("the backup and restore procedure", () => {
     expect(thirdRun.status, thirdRun.stderr).toBe(0);
     expect(printedDumpPath(thirdRun.stdout), `stdout was: ${thirdRun.stdout}`).toBe(join(backupDir, thirdName));
     expect(dumpsForStamp(backupDir, stamp), "one dump per run, none replaced").toHaveLength(3);
+    // All three succeeded, so all three cleaned up after themselves.
+    expect(incompleteNames(backupDir), "partials after three successful runs").toEqual(partialsBefore);
 
     // Content, not names: the first dump still restores the row the second no
     // longer holds, and the second restores the rename.
@@ -379,8 +398,14 @@ describe("the backup and restore procedure", () => {
     );
 
     expect(result.status, "a run that cannot install its dump").not.toBe(0);
-    expect(result.stderr).toContain("db-backup.sh");
-    expect(result.stderr).toMatch(/too long|overflow-/);
+    // The abort arm's OWN words, not the program's name and not a regex the
+    // candidate path satisfies on its own: the bound arm dies with the same
+    // program name and the same path in its message, so anything less specific
+    // here passes for a run that searched all 100 suffixes before giving up.
+    expect(result.stderr).toContain("could not install the dump as");
+    // The link's own reason has to reach the operator, or the message names a
+    // failure it does not explain.
+    expect(result.stderr).toContain("File name too long");
     expect(dumpsIn(backupDir), "no dump was installed by the failed run").toEqual(before);
     // The run's own partial is cleaned up on the failure path.
     expect(incompleteNames(backupDir), "partials left behind").toEqual(beforeIncomplete);
@@ -390,20 +415,19 @@ describe("the backup and restore procedure", () => {
     // The stub tools keep this loop fast: it is the install search under test,
     // not the dump, and a real pg_dump per attempt would make a bounded search
     // unbounded in wall-clock terms. Each iteration occupies the next name, so
-    // the loop ends only when the script itself gives up.
+    // the loop ends only when the script itself gives up. It runs in its own
+    // directory because it leaves one dump-named directory per attempt behind,
+    // and the shared directory's other cases count dump-shaped names.
+    const dir = mkdtempSync(join(tmpdir(), "overflow-backup-bound-"));
     const stamp = "20260930T121500Z";
-    const stubDir = mkdtempSync(join(tmpdir(), "overflow-backup-stub-"));
-    const stub = join(stubDir, "pg-dump-stub.sh");
-    writeFileSync(stub, "#!/bin/sh\nprintf 'custom-format-archive-bytes\\n'\n");
-    chmodSync(stub, 0o700);
     const env: NodeJS.ProcessEnv = {
       ...scriptEnv(),
-      OVERFLOW_PG_DUMP: stub,
+      OVERFLOW_PG_DUMP: bytesStub(),
       OVERFLOW_PG_RESTORE: "true",
       OVERFLOW_BACKUP_STAMP: stamp,
     };
 
-    let result = runScript(backupScript, ["--output-dir", backupDir, "--retention-days", "14"], env);
+    let result = runScript(backupScript, ["--output-dir", dir, "--retention-days", "14"], env);
     const occupied: string[] = [];
     for (let taken = 0; result.status === 0 && taken < 1000; taken += 1) {
       // Occupy the name this run just took, as a DIRECTORY rather than the
@@ -411,11 +435,11 @@ describe("the backup and restore procedure", () => {
       // reports success, which would install the dump somewhere nobody reads.
       const installed = printedDumpPath(result.stdout);
       expect(installed, `stdout was: ${result.stdout}`).toBeDefined();
-      const name = join(backupDir, basename(installed!));
+      const name = join(dir, basename(installed!));
       rmSync(name, { force: true });
       mkdirSync(name);
       occupied.push(name);
-      result = runScript(backupScript, ["--output-dir", backupDir, "--retention-days", "14"], env);
+      result = runScript(backupScript, ["--output-dir", dir, "--retention-days", "14"], env);
     }
 
     expect(result.status, `the run that found every name taken; stderr was: ${result.stderr}`).not.toBe(0);
@@ -426,6 +450,98 @@ describe("the backup and restore procedure", () => {
       expect(readdirSync(name), `contents of the occupied name ${name}`).toEqual([]);
     }
   });
+
+  it("takes the next suffix past a dangling symlink sitting on the plain name", () => {
+    // A backup directory restored from somewhere else, or half-recovered, can
+    // carry a symlink whose target is gone. The name is taken — the link
+    // refuses it — but a plain existence test follows the link, calls the name
+    // free, and sends the run down the "not a collision" arm. Loud, no data
+    // lost, and the night's backup is still missing: this is the -1 case.
+    const dir = mkdtempSync(join(tmpdir(), "overflow-backup-symlink-"));
+    const stamp = "20260930T133000Z";
+    symlinkSync(join(dir, "target-that-was-removed"), join(dir, `overflow-${stamp}.dump`));
+
+    const result = runScript(
+      backupScript,
+      ["--output-dir", dir, "--retention-days", "14"],
+      {
+        ...scriptEnv(),
+        OVERFLOW_PG_DUMP: bytesStub("dump-behind-a-dangling-link\n"),
+        OVERFLOW_PG_RESTORE: "true",
+        OVERFLOW_BACKUP_STAMP: stamp,
+      },
+    );
+
+    expect(result.status, `stderr was: ${result.stderr}`).toBe(0);
+    const installed = printedDumpPath(result.stdout);
+    expect(installed, `stdout was: ${result.stdout}`).toBe(join(dir, `overflow-${stamp}-1.dump`));
+    expect(readFileSync(installed!, "utf8")).toBe("dump-behind-a-dangling-link\n");
+  });
+
+  it("keeps every run's dump when same-second runs install at the same time", async () => {
+    // The atomicity requirement 3 exists for, and the case above cannot reach
+    // it: its two runs are sequential, so a name chosen by a test-then-move is
+    // never wrong, because no two runs are ever inside the script together.
+    // These runs are all parked in the dump stub and released together, so the
+    // installs overlap. Each writes bytes no other run writes, so the
+    // assertions are on what the runs DID — one file per run, holding that
+    // run's own content, nothing left behind. No assertion on elapsed time:
+    // the barrier is a file this test creates, not a stopwatch.
+    const dir = mkdtempSync(join(tmpdir(), "overflow-backup-race-"));
+    const barrier = mkdtempSync(join(tmpdir(), "overflow-backup-barrier-"));
+    const arrived = join(barrier, "arrived");
+    const release = join(barrier, "release");
+    mkdirSync(arrived);
+    const stub = join(barrier, "pg-dump-barrier.sh");
+    writeFileSync(
+      stub,
+      [
+        "#!/bin/sh",
+        ': > "$BARRIER_ARRIVED/$BARRIER_MARKER"',
+        'while [ ! -e "$BARRIER_RELEASE" ]; do sleep 0.05; done',
+        'printf "%s\\n" "$BARRIER_MARKER"',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(stub, 0o700);
+
+    const runs = 8;
+    const stamp = "20260930T130000Z";
+    const running = Array.from({ length: runs }, (_, index) =>
+      startBackup(
+        ["--output-dir", dir, "--retention-days", "14"],
+        {
+          ...scriptEnv(),
+          OVERFLOW_PG_DUMP: stub,
+          OVERFLOW_PG_RESTORE: "true",
+          OVERFLOW_BACKUP_STAMP: stamp,
+          BARRIER_ARRIVED: arrived,
+          BARRIER_RELEASE: release,
+          BARRIER_MARKER: `run-${index}`,
+        },
+      ),
+    );
+
+    // Release only once every run is parked inside the stub, so what follows
+    // is N installs contending for one name rather than N sequential runs.
+    await vi.waitFor(() => {
+      expect(readdirSync(arrived), "every run parked in the dump stub").toHaveLength(runs);
+    }, { timeout: 60_000, interval: 25 });
+    writeFileSync(release, "");
+    const finished = await Promise.all(running);
+    for (const [index, run] of finished.entries()) {
+      expect(run.status, `run-${index} stderr: ${run.stderr}`).toBe(0);
+    }
+
+    const names = dumpsIn(dir).sort();
+    expect(names, "one dump per run, none sharing a name").toHaveLength(runs);
+    // The content is the point: two runs that picked one name leave the file
+    // count right and the bytes of one run gone, which is the whole defect.
+    expect(names.map((name) => readFileSync(join(dir, name), "utf8")).sort()).toEqual(
+      Array.from({ length: runs }, (_, index) => `run-${index}\n`),
+    );
+    expect(incompleteNames(dir), "no run left its partial behind").toEqual([]);
+  }, 120_000);
 });
 
 /**
@@ -469,7 +585,9 @@ function stampedEnv(stamp: string): NodeJS.ProcessEnv {
 
 /** The dumps in a directory, by the same matcher the prune and the tests use. */
 function dumpsIn(directory: string): string[] {
-  return readdirSync(directory).filter((name) => /^overflow-.*\.dump$/.test(name));
+  return readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /^overflow-.*\.dump$/.test(entry.name))
+    .map((entry) => entry.name);
 }
 
 /** The dumps one stamp produced: the name count a replaced dump collapses. */
@@ -489,6 +607,32 @@ async function restoreInto(database: string, dump: string): Promise<Sql> {
   const result = runScript(restoreScript, [database, dump], scriptEnv());
   expect(result.status, result.stderr).toBe(0);
   return postgres(hostUrl(database), { max: 1 });
+}
+
+/**
+ * A pg_dump stub that writes fixed bytes, for the cases that are about the
+ * install loop rather than about the archive: it keeps a bounded search or a
+ * run-per-attempt loop from costing a container round each time.
+ */
+function bytesStub(body = "custom-format-archive-bytes\n"): string {
+  const stub = join(mkdtempSync(join(tmpdir(), "overflow-backup-stub-")), "pg-dump-bytes.sh");
+  writeFileSync(stub, `#!/bin/sh\nprintf '%s' '${body}'\n`);
+  chmodSync(stub, 0o700);
+  return stub;
+}
+
+/** Start one backup run without waiting for it, so several can overlap. */
+function startBackup(args: string[], env: NodeJS.ProcessEnv): Promise<{ status: number | null; stderr: string }> {
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn("sh", [backupScript, ...args], { env });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", rejectRun);
+    child.on("close", (status) => resolveRun({ status, stderr }));
+  });
 }
 
 function printedDumpPath(stdout: string): string | undefined {
