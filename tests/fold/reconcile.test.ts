@@ -1005,13 +1005,16 @@ describe("reconcileRepository", () => {
     },
   );
 
-  it.each(["reviews", "diff"] as const)(
-    "completes the run when a merged closing pull request's %s read answers a body over the success-path byte cap, discarding and omitting only that subject",
-    async (failingFetch) => {
+  it(
+    "completes the run when a merged closing pull request's diff read answers a body over the success-path byte cap, discarding and omitting only that subject",
+    async () => {
       // A body past the client's success-path cap is as fixed as the diff-cap
       // 406: the pull request's own bytes are what tripped it, so every retry
       // re-reads the same over-cap body and fails the same way. The failure
       // joins the discard arm — dirty row gone, subject omitted, run completes.
+      // Only the diff leg can answer it: that read goes through the capped
+      // REST request, while the reviews read pages GraphQL, whose body is read
+      // unbounded and whose failures are wrapped as their own error class.
       const overCap = new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES);
       const dependencies = reconciliationDependencies({
         github: {
@@ -1022,12 +1025,9 @@ describe("reconcileRepository", () => {
               reconciliationPullRequest({ id: 202, number: 12 }),
             ],
           }]),
-          getPullRequestReviews: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
-            if (failingFetch === "reviews" && number === 11) throw overCap;
-            return [];
-          }),
+          getPullRequestReviews: vi.fn().mockResolvedValue([]),
           getPullRequestDiff: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
-            if (failingFetch === "diff" && number === 11) throw overCap;
+            if (number === 11) throw overCap;
             return `diff ${number}`;
           }),
         },

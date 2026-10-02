@@ -493,11 +493,12 @@ type SubjectDiscardReason = "NOT_FOUND" | "DIFF_TOO_LARGE" | "RESPONSE_TOO_LARGE
 // read is REST and answers GitHub's fixed 404 error, which that classifier
 // never sees. The diff read also answers GitHub's fixed 406 when the diff
 // exceeds the 20000-line cap — retrying the same read answers 406 again —
-// so it joins the same subject-alone arm under its own reason. Either
-// evidence leg can also answer a body past the client's success-path byte
-// cap, which is fixed for the pull request the same way: its own bytes are
-// what tripped the cap, so every retry re-reads them and trips it again.
-// Either shape is definitive for that pull request, not a property of the run.
+// so it joins the same subject-alone arm under its own reason. That read can
+// also answer a body past the client's success-path byte cap, which is fixed
+// for the pull request the same way: its own bytes are what tripped the cap,
+// so every retry re-reads them and trips it again. The GraphQL leg has no
+// such cap, so only the REST read reaches this arm by size. Either shape is
+// definitive for that pull request, not a property of the run.
 function pullRequestDiscardReason(error: unknown): SubjectDiscardReason | null {
   if (error instanceof GitHubApiError && error.status === 406) return "DIFF_TOO_LARGE";
   if (error instanceof GitHubResponseTooLargeError) return "RESPONSE_TOO_LARGE";
