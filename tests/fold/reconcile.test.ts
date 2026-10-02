@@ -13,6 +13,7 @@ import { GitHubGateway } from "@/lib/github/client";
 import type { GitHubRepository, GitHubRepositoryReference, GitHubSubject } from "@/lib/github/types";
 import { createHash } from "node:crypto";
 import { GitHubApiError } from "@/lib/github/errors";
+import { GitHubResponseTooLargeError, MAX_SUCCESS_BODY_BYTES } from "@/lib/github/response-text";
 import { GitLabApiError } from "@/lib/gitlab/client";
 import { runReconciliationCli } from "../../scripts/reconcile";
 import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
@@ -994,6 +995,73 @@ describe("reconcileRepository", () => {
         expect(errorLog).toHaveBeenNthCalledWith(
           2,
           "Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=11 reason=DIFF_TOO_LARGE",
+        );
+        const secondInput = vi.mocked(dependencies.store.materialize).mock.calls[1]![0];
+        expect(secondInput.synchronization?.dirtySubjects).toEqual([]);
+        expect(secondInput.synchronization?.pullRequests).toEqual([{ id: 202, reviews: [], rawDiff: "diff 12" }]);
+      } finally {
+        errorLog.mockRestore();
+      }
+    },
+  );
+
+  it.each(["reviews", "diff"] as const)(
+    "completes the run when a merged closing pull request's %s read answers a body over the success-path byte cap, discarding and omitting only that subject",
+    async (failingFetch) => {
+      // A body past the client's success-path cap is as fixed as the diff-cap
+      // 406: the pull request's own bytes are what tripped it, so every retry
+      // re-reads the same over-cap body and fails the same way. The failure
+      // joins the discard arm — dirty row gone, subject omitted, run completes.
+      const overCap = new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES);
+      const dependencies = reconciliationDependencies({
+        github: {
+          listIssues: vi.fn().mockResolvedValue([{
+            ...reconciliationIssue({ id: 101, number: 1 }),
+            closingPullRequests: [
+              reconciliationPullRequest({ id: 201, number: 11 }),
+              reconciliationPullRequest({ id: 202, number: 12 }),
+            ],
+          }]),
+          getPullRequestReviews: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
+            if (failingFetch === "reviews" && number === 11) throw overCap;
+            return [];
+          }),
+          getPullRequestDiff: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
+            if (failingFetch === "diff" && number === 11) throw overCap;
+            return `diff ${number}`;
+          }),
+        },
+      });
+      dependencies.store.getDirtyReconciliationSubjects = vi.fn(async () => [
+        { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: 7 },
+      ]);
+      const discard = vi.fn().mockResolvedValue(undefined);
+      dependencies.store.discardDirtyReconciliationSubject = discard;
+      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      try {
+        await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
+        expect(discard).toHaveBeenCalledTimes(1);
+        expect(discard).toHaveBeenCalledWith({
+          repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: 7,
+        });
+        expect(dependencies.store.failRun).not.toHaveBeenCalled();
+        expect(errorLog).toHaveBeenCalledTimes(1);
+        expect(errorLog).toHaveBeenCalledWith(
+          "Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=11 reason=RESPONSE_TOO_LARGE",
+        );
+        const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
+        expect(materializeInput.synchronization?.pullRequests).toEqual([{ id: 202, reviews: [], rawDiff: "diff 12" }]);
+
+        // The discard is what empties the subject's dirty row, so a subsequent
+        // reconciliation no longer carries it as dirty work and still completes
+        // instead of failing the run again.
+        dependencies.store.getDirtyReconciliationSubjects = vi.fn(async () => []);
+        await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
+        expect(dependencies.store.failRun).not.toHaveBeenCalled();
+        expect(errorLog).toHaveBeenNthCalledWith(
+          2,
+          "Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=11 reason=RESPONSE_TOO_LARGE",
         );
         const secondInput = vi.mocked(dependencies.store.materialize).mock.calls[1]![0];
         expect(secondInput.synchronization?.dirtySubjects).toEqual([]);
