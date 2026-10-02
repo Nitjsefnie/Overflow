@@ -163,8 +163,9 @@ $pg_restore_cmd --list < "$partial" > /dev/null
 # taking it one step — a test-then-mv splits them, so two runs in one second
 # both see the plain name free and one replaces the other. Both operands sit in
 # one directory, which is what makes the hard link possible at all: it rules
-# out EXDEV, it is not where the atomicity comes from. (link(2) is atomic on a
-# local filesystem; the backup directory is documented as local.)
+# out EXDEV, it is not where the atomicity comes from. Sharing a directory also
+# makes installing the archive one directory entry rather than a copy of it,
+# whatever its size, and the rm below drops the partial's second name.
 # The bound keeps a directory full of taken names from searching forever.
 max_attempts=100
 attempt=0

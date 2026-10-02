@@ -366,9 +366,13 @@ describe("the backup and restore procedure", () => {
     expect(existsSync(join(backupDir, firstName)), "the first run's dump, after the second run").toBe(true);
     expect(secondPath, `stdout was: ${secondRun.stdout}`).toBe(join(backupDir, secondName));
     // The run says on STDERR that it took a suffix rather than the plain name.
-    // The stream is the claim: stdout's contract is that its last line is the
-    // installed path, so a notice there could be read as one. Asserted on
-    // stderr only — a notice on stdout as well would be the defect.
+    // This pins the notice to the STREAM, not to a hazard it would prevent:
+    // printedDumpPath reads the last matching line, so a notice placed before
+    // the path would leave it correct either way, and the earlier version of
+    // this comment claimed otherwise. What the stream buys is that stdout stays
+    // exactly one line per run, which is the surface the runbook's tail -1 and
+    // printedDumpPath both read. So this catches the notice changing stream or
+    // going away, not a stdout notice being misread.
     expect(secondRun.stderr, "the collision notice").toContain("was already there");
     expect(firstRun.stderr, "no notice for a run that took the plain name").toBe("");
 
