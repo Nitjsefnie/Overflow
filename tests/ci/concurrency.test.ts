@@ -86,7 +86,7 @@ import { parse } from "yaml";
 
 type Workflow = {
   on: unknown;
-  concurrency?: { group?: unknown; "cancel-in-progress"?: unknown };
+  concurrency?: { group?: unknown; "cancel-in-progress"?: unknown; queue?: unknown };
 };
 
 /**
@@ -170,7 +170,20 @@ const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = 
  * would drop work for these. That is why the bound is applied only to the
  * metered CI workflows, each of whose runs is reproducible from the next push.
  */
-const UNBOUNDED_BY_CHOICE = new Map<string, { reason: string; group: string; "cancel-in-progress": unknown }>([
+const UNBOUNDED_BY_CHOICE = new Map<string, {
+  reason: string;
+  group: string;
+  "cancel-in-progress": unknown;
+  /**
+   * The third concurrency key, recorded for every entry so the block an
+   * exception ships is compared whole. `undefined` means the workflow has no
+   * `queue` key, which is a fact this file pins rather than a field it skips:
+   * a `queue` appearing on an exception's workflow, or disappearing from the
+   * one that needs it, then fails the equality below by name instead of
+   * passing an assertion that never looks.
+   */
+  queue: unknown;
+}>([
   [
     "claim.yml",
     {
@@ -178,6 +191,11 @@ const UNBOUNDED_BY_CHOICE = new Map<string, { reason: string; group: string; "ca
         "Two racers commenting /claim on one issue must both get an answer. A shared group keeps only the newest PENDING run and cancels the older even at cancel-in-progress false, so one racer would silently never be answered.",
       group: "claim-${{ github.event.issue.number }}",
       "cancel-in-progress": false,
+      // `queue: max` is what makes the reason true rather than aspirational:
+      // the single PENDING slot is exactly the drop the reason describes, and
+      // the queue is the only setting that holds the arrivals instead of
+      // cancelling the older one.
+      queue: "max",
     },
   ],
   [
@@ -187,6 +205,7 @@ const UNBOUNDED_BY_CHOICE = new Map<string, { reason: string; group: string; "ca
         "A cancelled run may already have closed the pull request; the queued run is what reads that and repairs it. Cancelling it leaves the pull request closed with no repair.",
       group: "pr-gate-${{ github.event.pull_request.number }}",
       "cancel-in-progress": false,
+      queue: undefined,
     },
   ],
   [
@@ -196,6 +215,7 @@ const UNBOUNDED_BY_CHOICE = new Map<string, { reason: string; group: string; "ca
         "The relay posts the check-runs branch protection requires. A cancelled relay posts none, and a missing check-run blocks every open pull request.",
       group: "ledger-relay",
       "cancel-in-progress": false,
+      queue: undefined,
     },
   ],
   [
@@ -206,6 +226,7 @@ const UNBOUNDED_BY_CHOICE = new Map<string, { reason: string; group: string; "ca
       group:
         "coverage-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
       "cancel-in-progress": false,
+      queue: undefined,
     },
   ],
   [
@@ -215,6 +236,7 @@ const UNBOUNDED_BY_CHOICE = new Map<string, { reason: string; group: string; "ca
         "This workflow has NO pull_request and NO pull_request_target trigger — it is schedule and workflow_dispatch only — so BOTH arms that would make it unbounded are dead: the pull_request arm of its group always resolves null and falls through to github.ref, and its cancel-in-progress test is never true, so nothing this workflow receives can ever cancel anything through that flag. The group is therefore already per-ref on a schedule tick. Its findings run is also not reproducible from a later push the way a metered CI leg is: a red run is the only record that a credential is in this history, and cancelling the queued run loses that record until the next weekly tick.",
       group: "secret-scan-${{ github.event.pull_request.number || github.ref }}",
       "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+      queue: undefined,
     },
   ],
   [
@@ -224,6 +246,7 @@ const UNBOUNDED_BY_CHOICE = new Map<string, { reason: string; group: string; "ca
         "This workflow has NO pull_request and NO pull_request_target trigger — it is schedule and workflow_dispatch only — so BOTH arms that would make it unbounded are dead: the pull_request arm of its group always resolves null and falls through to github.ref, and its cancel-in-progress test is never true. The group is therefore already per-ref on a schedule tick, and it never receives the event that would make a repository-level group contend.",
       group: "dependency-audit-${{ github.event.pull_request.number || github.ref }}",
       "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+      queue: undefined,
     },
   ],
 ]);
@@ -471,18 +494,24 @@ describe("the workflows left unbounded", () => {
     }
   });
 
-  it("ship exactly the group and cancel-in-progress recorded beside the reason", () => {
+  it("ship exactly the group, cancel-in-progress and queue recorded beside the reason", () => {
     // Two workflows sharing a group cancel each other's PENDING runs whatever
     // each one's own reason says, so a collision is a correctness change and not
     // a cosmetic one — but nothing in this suite used to pin an exception's
     // group, so pointing pr-gate's at `ci-repo-wide` left the whole file green
     // and only an older suite's whole-block pin noticed. This is that pin.
+    //
+    // The whole block, not three keys read one at a time: a `queue` that appears
+    // or disappears is a change in what GitHub does with a pending arrival, and
+    // comparing the object makes that change fail here whether it is on
+    // claim.yml — whose reason depends on the queue — or on an exception that
+    // has no queue and should not have grown one.
     for (const [name, entry] of UNBOUNDED_BY_CHOICE) {
-      const workflow = workflows.get(name)!;
-      expect(workflow.concurrency?.group, `${name}'s group`).toBe(entry.group);
-      expect(workflow.concurrency?.["cancel-in-progress"], `${name}'s cancel-in-progress`).toBe(
-        entry["cancel-in-progress"],
-      );
+      expect(workflows.get(name)!.concurrency, `${name}'s concurrency block`).toEqual({
+        group: entry.group,
+        "cancel-in-progress": entry["cancel-in-progress"],
+        queue: entry.queue,
+      });
     }
   });
 

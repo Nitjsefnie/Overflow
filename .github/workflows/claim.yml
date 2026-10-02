@@ -10,28 +10,46 @@ on:
   issue_comment:
     types: [created]
 
-# Narrowest token: nothing reads the tree, so no checkout and no contents: read.
-permissions:
-  issues: write
-
 concurrency:
-  # Per issue, NOT cancel-in-progress: two racers must both get an answer.
+  # Per issue, NOT cancel-in-progress: two racers must both get an answer. `queue: max` is what
+  # makes that true rather than aspirational — GitHub keeps ONE pending run per concurrency group
+  # and cancels the older pending one even at cancel-in-progress false, so with the default single
+  # slot the second of three /claim comments landing on one issue while a run is in progress is
+  # dropped unanswered (Nitjsefnie-Actions/claim#30). The queue is the only setting that holds the
+  # arrivals instead of replacing them; cancel-in-progress alone buys nothing here.
   group: claim-${{ github.event.issue.number }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   claim:
-    # A PR is an issue to this event (its assignees mean something else); a closed issue can't be worked;
-    # a bot's comment is never a claim. Cheap prefilter only — the shared action enforces the exact body.
+    # Bots never claim, and the action itself enforces the exact body — this condition only decides
+    # whether a run starts at all. What it must NOT do is pre-filter the event: a job whose `if`
+    # does not match starts no run, so /claim on a pull request or on a closed issue is met with
+    # silence. claim answers such a command with a reply that DECLINES it, and that reply is the
+    # only thing telling the author the workflow saw them at all
+    # (Nitjsefnie-Actions/claim#82 replaced the pre-filter with exactly that).
     if: >-
-      github.event.issue.pull_request == null
-      && github.event.issue.state == 'open'
-      && github.event.comment.user.type != 'Bot'
+      github.event.comment.user.type != 'Bot'
       && (contains(github.event.comment.body, '/claim')
           || contains(github.event.comment.body, '/unclaim')
           || contains(github.event.comment.body, '/release'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
+    # Narrowest token: nothing reads the tree, so no checkout and no contents: read. Scoped to the
+    # job, as the action's reference block has it, so the grant travels with the job that needs it
+    # instead of standing for the whole workflow.
+    permissions:
+      issues: write
+
     steps:
-      - uses: Nitjsefnie-Actions/claim@ceaadaa096fd249cdeecc137342158ec17347cb9
+      - uses: Nitjsefnie-Actions/claim@8abff4f2f27d59b984528cb736f64b9391952a25 # v2.0.1
+        with:
+          # The claim policy, from the action's own reference block. Without it the limits are
+          # unenforced: one account can hold an unbounded number of claims, so a handful of
+          # comments on unrelated issues reserves the sponsor's whole headroom, and a claim nobody
+          # releases never expires on its own. `admin=-1` is the action's spelling for unlimited,
+          # and `expire` is in days.
+          max-claims: 'read=2, triage=4, write=6, maintain=10, admin=-1'
+          expire: '7'

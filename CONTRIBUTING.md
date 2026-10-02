@@ -442,10 +442,10 @@ version, configuration or data conditions genuinely matter.
 ### Claim it before you start
 
 The [claim caller](.github/workflows/claim.yml) uses the
-[shared claim action at the reviewed revision](https://github.com/Nitjsefnie-Actions/claim/tree/ceaadaa096fd249cdeecc137342158ec17347cb9).
+[shared claim action at the reviewed revision](https://github.com/Nitjsefnie-Actions/claim/tree/8abff4f2f27d59b984528cb736f64b9391952a25).
 That SHA-pinned action is the implementation authority for the claim and release
-commands; the caller retains this repository's event, permission and concurrency
-policy.
+commands; the caller retains this repository's event, permission, concurrency and
+claim policy.
 
 Comment `/claim` on an open, unassigned issue and
 [`.github/workflows/claim.yml`](.github/workflows/claim.yml) assigns you. You do
@@ -457,19 +457,25 @@ headroom is settled balance minus the reserve points of open issues assigned to
 outside contributors — so a claim is a ledger event, not a courtesy.
 
 The comment body must be **exactly** the command after trimming whitespace and
-carriage returns. "I'll `/claim` this one" is a sentence and is ignored. The
-workflow also ignores pull requests, closed issues, and bot comments, and it
-tells you in a reply when an issue is already held by someone else. Read that
-reply: it confirms the assignment, or explains why there was none.
+carriage returns. "I'll `/claim` this one" is a sentence and is ignored. A bot's
+comment starts no run at all; a `/claim` on a pull request or on a closed issue
+starts one that declines the command in a reply, because the reply is the only
+thing that tells you the workflow saw the command. The workflow also tells you
+in a reply when an issue is already held by someone else. Read that reply: it
+confirms the assignment, or explains why there was none.
+
+One account may hold a limited number of claims at once — two at read tier, four
+at triage, six at write, ten at maintain — so an issue you cannot claim is often
+one you already hold.
 
 `/unclaim` and `/release` are the same command under two names. Either removes
 **your own** assignment and nobody else's.
 
 Release an issue you stop working on, and do it before the merge that would
-close it. The workflow acts on open issues only, so once the issue is closed a
-stale assignment on it can no longer be removed. Closing the issue releases the
-reserve on its own — only open issues hold points against the sponsor — but
-while it is open, your assignment makes it unclaimable by anyone else.
+close it. A claim also lapses on its own after seven days, and closing the issue
+releases the reserve immediately — only open issues hold points against the
+sponsor — but while an issue is open, your assignment makes it unclaimable by
+anyone else.
 
 ## The `offered:` and `settled:` labels are product data
 
