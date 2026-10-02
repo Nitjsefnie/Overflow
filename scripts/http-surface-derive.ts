@@ -54,6 +54,7 @@ import {
   fixtureRegistrationInput,
   fixtureRepositoryRouteDependencies,
 } from "./http-surface-fixtures.ts";
+import { moderationSurfaceShapes } from "./http-surface-derive-moderation.ts";
 
 /**
  * The HTTP surface snapshot's shared machinery (issue 912): what the recorded
@@ -229,11 +230,11 @@ const memberDependencies = {
   getCurrentRole: async () => "MEMBER" as const,
 };
 
-async function bodyShape(response: Response): Promise<HttpShape> {
+export async function bodyShape(response: Response): Promise<HttpShape> {
   return shapeOf(await response.json());
 }
 
-function memberRequest(path: string): Request {
+export function memberRequest(path: string): Request {
   return new Request(`https://overflow.example${path}`);
 }
 
@@ -242,7 +243,7 @@ function memberRequest(path: string): Request {
  * to APP_URL's origin, and the media-type guard demands JSON when a body
  * declares a type.
  */
-function mutationRequest(path: string, method: string, body?: unknown): Request {
+export function mutationRequest(path: string, method: string, body?: unknown): Request {
   return new Request(`https://overflow.example${path}`, {
     method,
     headers: {
@@ -258,7 +259,7 @@ function mutationRequest(path: string, method: string, body?: unknown): Request 
  * it for the duration of its request and restores whatever was set — the
  * derivation must not leak environment into the process it runs in.
  */
-async function withAppUrl<T>(run: () => Promise<T>): Promise<T> {
+export async function withAppUrl<T>(run: () => Promise<T>): Promise<T> {
   const configured = process.env.APP_URL;
   process.env.APP_URL = "https://overflow.example";
   try {
@@ -634,7 +635,10 @@ async function derivePostAccountExport(): Promise<HttpShape> {
 
 /**
  * The documented routes the snapshot pins, keyed "METHOD /path" in the
- * spelling API.md documents dynamic segments with (<id> for [id]).
+ * spelling API.md documents dynamic segments with (<id> for [id]). The
+ * moderation and override entries live in
+ * scripts/http-surface-derive-moderation.ts and are spread in last, in the
+ * order API.md documents them.
  */
 export async function deriveHttpSurfaceShapes(): Promise<Record<string, HttpShape>> {
   return {
@@ -655,5 +659,6 @@ export async function deriveHttpSurfaceShapes(): Promise<Record<string, HttpShap
     "GET /api/settlements": await deriveGetSettlements(),
     "GET /api/settlements/<id>": await deriveGetSettlementProof(),
     "GET /api/calibration": await deriveGetCalibration(),
+    ...(await moderationSurfaceShapes()),
   };
 }
