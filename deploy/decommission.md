@@ -215,8 +215,11 @@ systemctl daemon-reload
 systemctl reset-failed 'overflow*'
 ```
 
-`disable --now` stops and disables each timer in one step; a timer this host
-does not have is dropped from the list rather than errored on. After
+`disable --now` stops and disables each timer in one step. `systemctl`
+errors on each name this host does not have — `Failed to disable unit …
+does not exist`, exit 1 — and carries on with the rest, so a nonzero status
+from this line is expected on a host missing one of the timers; the removals
+and `daemon-reload` below are what matter. After
 `daemon-reload` nothing under `overflow*` is loaded any more — no loaded
 unit can start, so no store below is written again — and phase 9's
 `list-units` check confirms it. The service is down and the public site now
@@ -417,9 +420,11 @@ account so the ledger app's key stays readable — and the files within it are
   canary probes are sent to, off this host.
 - `canary-discord-webhook` — the Discord webhook URL the canary reports
   failures to and the bounce watcher reports dead alert routes to.
-- `github-app/` — the ledger relay app's `app.json`, `client-secret` and
-  `private-key.pem`. The App was deleted in phase 4, which invalidated the
-  key server-side; this removes the local copy.
+- `github-app/` — the ledger relay app's `private-key.pem`, the one file
+  [README.md section 4](README.md#4-create-the-environment-file) documents
+  at that path; the OAuth client credentials live in `overflow.env`, as
+  stated above. The App was deleted in phase 4, which invalidated the key
+  server-side; this removes the local copy.
 
 The session cookies members hold are signed with the destroyed `AUTH_SECRET`
 and authenticate against the service destroyed in phase 3, so an outstanding
@@ -566,14 +571,35 @@ overflow roles: gone
 Any leftover database the preflight record named — a drill or replacement
 copy — is verified gone by the same shape, with its own exact name.
 
-The webhooks are gone: spot-check a repository from the sweep list.
+The journald decision is verified by measurement, not by trust. Against the
+`journalctl --disk-usage` reading the preflight record took in phase 2:
+after a vacuum the archived-journal footprint is far below it; on the
+no-vacuum path it is unchanged. A reading that matches neither expectation
+means the step did not do what the record claims — re-run it and read
+again.
 
 ```sh
-gh api "repos/<owner>/<name>/hooks"
+journalctl --disk-usage
 ```
 
 ```text
-[]
+Archived journal size far below the preflight record's reading (vacuum
+path), or unchanged from it (no-vacuum path).
+```
+
+The webhooks are gone: spot-check a repository from the sweep list and
+assert no Overflow webhook remains — the repository may carry unrelated
+webhooks, so the list need not be empty. The Overflow webhook is the one
+whose `config.url` carries the deployment's `GITHUB_WEBHOOK_URL` and the
+`hook=<uuid>` parameter registration appends.
+
+```sh
+gh api "repos/<owner>/<name>/hooks" --jq '.[] | .config.url'
+```
+
+```text
+No URL in the output carries the deployment's GITHUB_WEBHOOK_URL or a
+hook=<uuid> parameter: no Overflow webhook remains.
 ```
 
 The applications are gone: neither the GitHub App nor the OAuth application
