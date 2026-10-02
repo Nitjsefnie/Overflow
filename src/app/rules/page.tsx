@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AppShell, PublicAppShell } from "@/components/app-shell";
+import { DISPUTE_RULES } from "@/lib/disputes";
 import { RULES_REVISION } from "@/lib/legal-revisions";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 
@@ -91,12 +92,9 @@ function RulesSections() {
       <section className="surface rules-card" aria-labelledby="rules-disputes-heading">
         <h2 id="rules-disputes-heading">Disputes</h2>
         <ul className="rules-list">
-          <li>
-            Ask for a correction if a settlement is wrong — including when review rounds cost you credits
-            through a maintainer&apos;s mistake.
-          </li>
-          <li>The settlement&apos;s creditor or the sponsor can ask; a moderator decides.</li>
-          <li>One open request per issue at a time.</li>
+          {DISPUTE_RULES.map((rule) => (
+            <li key={rule}>{rule}</li>
+          ))}
         </ul>
       </section>
 

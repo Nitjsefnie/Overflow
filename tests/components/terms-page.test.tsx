@@ -5,6 +5,8 @@ import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { DISPUTE_RULES } from "@/lib/disputes";
+
 async function renderTermsPage(): Promise<void> {
   const { default: TermsPage } = await import("@/app/terms/page");
   render(<TermsPage />);
@@ -96,6 +98,46 @@ describe("terms page", () => {
       "the statement cites the terms the age floor comes from",
     ).not.toBeNull();
     expect(citation, "the citation is one a reader can see").toBeVisible();
+  });
+
+  it("states the correction rules it points /rules at, from the source both pages render", async () => {
+    await renderTermsPage();
+
+    // The section is found by its heading, not by position or a marker class:
+    // the heading NAMES the case the section carries, and a heading that names
+    // a case the rules page does not carry is the defect this test exists to
+    // catch. The lookup itself is load-bearing — the mutant that puts ", or a
+    // sanction" back into the heading leaves every other assertion in the file
+    // satisfied, and this one cannot find the section at all. The same literal
+    // shape this file already uses on "What an account is" above.
+    const region = screen.getByRole("region", { name: "Contesting a settlement" });
+
+    // The list EQUALS the constant the rules page renders, element for element
+    // and in order. Compared, not asserted as prose: this never names a rule,
+    // so it survives a faithful rewording of all three and still goes red on
+    // the defect it targets — a promise on the terms page that the rules page
+    // does not carry. The mutants it defeats are the three the page could hold:
+    // a hand-copied list that drifts from the constant (one bullet reworded
+    // here, the same bullet untouched in src/lib/disputes.ts), a bullet deleted
+    // from this page alone, and a sanction case added here that the constant
+    // does not list.
+    const items = [...region.querySelectorAll("li")].map((item) => item.textContent);
+    expect(items).toEqual([...DISPUTE_RULES]);
+
+    // Exactly one paragraph, and it is the pointer at /rules. This is the other
+    // half of the same claim: the rules are the list, so a promise the list
+    // does not carry can only be prose, and prose in this section is a second
+    // paragraph. A length check rather than a text match — it pins the SHAPE
+    // (one list, one pointer) and names no sentence. The paragraph is then
+    // required to carry the pointer, so a section that deleted the pointer
+    // and kept a paragraph of new promises fails the second half rather than
+    // satisfying the first. The mutant it defeats is the one this section was
+    // written around: the terms page's own "…or a sanction is [wrong], you can
+    // ask for it to be corrected", a promise the rules page's Disputes section
+    // does not carry and never did.
+    const paragraphs = [...region.querySelectorAll("p")];
+    expect(paragraphs).toHaveLength(1);
+    expect(paragraphs[0]!.querySelector('a[href="/rules"]')).not.toBeNull();
   });
 
   it("keeps every internal link on a page route", async () => {

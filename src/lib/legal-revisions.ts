@@ -56,7 +56,7 @@ export interface LegalRevision {
 
 export const TERMS_REVISION: LegalRevision = {
   document: "terms",
-  version: "1.0",
+  version: "1.1",
   effectiveDate: "2026-10-02",
 };
 
