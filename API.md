@@ -321,7 +321,8 @@ Success is HTTP `201`. Example body (identifiers vary):
     "visibility": "PUBLIC",
     "githubWebhookId": 987654321
   },
-  "initialImportScheduled": true
+  "initialImportScheduled": true,
+  "claimPath": "NOT_CHECKED"
 }
 ```
 
