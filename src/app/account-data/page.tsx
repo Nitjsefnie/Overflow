@@ -304,6 +304,12 @@ export function AccountDataNotice() {
             backups, and the system journal Overflow&apos;s own output goes to. The repository names
             no provider, so no region is stated for it
           </li>
+          <li>
+            Google (US) — when a systemd unit fails on the host, an alert mails that unit&apos;s
+            last journal entries — the system journal the Server logs section describes — through
+            Google&apos;s smtp.gmail.com relay to the operator&apos;s mailbox. The repository
+            names no mailbox address, so none is stated here
+          </li>
         </ul>
         <p>
           Using this site from outside the US therefore means data is transferred to these

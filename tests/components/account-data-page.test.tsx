@@ -225,6 +225,22 @@ describe("account-data notice page", () => {
     expect(follows(controls, deletion), "deletion follows your controls").toBe(true);
   });
 
+  it("discloses the failure-alert mail route in the recipients section, naming the relay's operator", async () => {
+    await renderAccountDataPage();
+
+    const recipients = sectionLabelledBy("account-data-recipients-heading");
+    const bullet = Array.from(recipients.querySelectorAll("li")).find(
+      (candidate) => /smtp\.gmail\.com/i.test(candidate.textContent ?? ""),
+    );
+    expect(
+      bullet,
+      "the recipients list carries a bullet naming the failure-alert mail relay",
+    ).toBeDefined();
+    expect(bullet!.textContent ?? "", "that bullet names Google, the relay's operator").toMatch(
+      /google/i,
+    );
+  });
+
   it("offers nothing that submits or collects an email address", async () => {
     await renderAccountDataPage();
 
