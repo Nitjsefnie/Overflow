@@ -8,19 +8,25 @@ name: coverage comment
 #   - it checks out NOTHING — the workspace stays empty, run blocks reference
 #     env names only, and the artifact is parsed as data only;
 #   - only a ci run triggered by pull_request or pull_request_target can have
-#     a destination: a push or workflow_dispatch run, even one at a pull
-#     request's head SHA, measured a diff that pull request does not own, so
-#     it exits silently;
+#     a destination: ci triggers on the latter (issue 822), and the former is
+#     kept accepted, while a push or workflow_dispatch run — even one at a
+#     pull request's head SHA — measured a diff that pull request does not
+#     own, so it exits silently;
 #   - the destination pull request is resolved from the triggering event
 #     only — its head repository, head branch and head SHA (issue 656): a
 #     candidate from another repository, or whose head has moved past the
 #     event's SHA, is never selected; zero matches exits silently, more than
 #     one fails loudly, and a claim inside a same-repository artifact that
 #     mismatches the event-resolved PR fails loudly;
-#   - a fork-headed run controls its own ci workflow and so the whole
-#     artifact: its markdown and file list are never posted, and the body is
-#     rendered here from the two totals alone, validated as non-negative
-#     integers with covered <= added;
+#   - a fork-headed pull request is not commented on at all: a
+#     pull_request_target run reports the BASE repository as its head
+#     repository, so the resolve step looks for a pull request head-labelled
+#     <base owner>:<branch>, and a fork's pull request is labelled
+#     <fork owner>:<branch> — zero matches, silent exit. Should a head this
+#     repository does not own ever resolve, the whole artifact is still
+#     treated as untrusted and the body is rendered from the two totals
+#     alone, validated as non-negative integers with covered <= added, so
+#     its markdown and file list are never posted;
 #   - one marker-identified comment is posted or updated in place, never
 #     duplicated — and only a comment github-actions[bot] wrote counts, so a
 #     marker planted in anyone else's comment is neither edited nor able to
@@ -34,7 +40,7 @@ name: coverage comment
 #     triggering run's head SHA: success when a comment was posted or updated
 #     (either body variant), failure on any loud failure.
 on:
-  workflow_run:  # zizmor: ignore[dangerous-triggers] — checks out nothing, executes nothing from the artifact, binds the destination PR to the event's head repository, branch and SHA, and posts a fork's report only as validated integer totals; the pinning and behavior suites hold that shape
+  workflow_run:  # zizmor: ignore[dangerous-triggers] — checks out nothing, executes nothing from the artifact, binds the destination PR to the event's head repository, branch and SHA, and posts nothing for a head this repository does not own; the pinning and behavior suites hold that shape
     workflows: [ci]
     types: [completed]
 
@@ -50,10 +56,15 @@ permissions:
 # complete so a cancelled successor does not silently drop the update. The
 # key is a cancellation authority: a group keeps at most one pending run, and
 # a newly queued run supersedes the pending one even with cancel-in-progress
-# off. Keyed on the branch alone, another repository's same-named branch (two
-# forks' patch-1, say) would share the group and drop this PR's pending
-# update, leaving its older percentage looking current — so the head
-# repository is part of the key. The group safely holds the attacker-
+# off. The head repository is in the key so two repositories' identically
+# named branches cannot share a group — but a pull_request_target run
+# reports the BASE repository as its head repository, so for every pull
+# request run this workflow reacts to that component is this repository and
+# the branch alone carries the separation. The residual share is between
+# this repository's pull request and a fork's pull request on an identically
+# named branch: the fork's run resolves no destination and posts nothing, so
+# its only effect is to supersede this repository's pending run, which that
+# pull request's next run replaces. The group safely holds the attacker-
 # controlled names: it is an opaque string key, never executed.
 concurrency:
   group: coverage-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
@@ -87,12 +98,16 @@ jobs:
           set -euo pipefail
           # ci also runs on push and workflow_dispatch; neither measured a pull
           # request's own diff, so neither has a destination: silent exit.
-          # pull_request_target is the event ci actually runs on (issue 822),
-          # and such a run carries the pull request's own head SHA — but its
-          # head repository is the BASE repository, never a fork's. A fork's
-          # run therefore asks for a pull request head-labelled
-          # <base owner>:<branch>, which a fork's pull request is not, so the
-          # binding below resolves nothing and it exits silently.
+          # pull_request_target is the event ci actually runs on (issue 822).
+          # A same-repository pull request's run carries this repository as
+          # its head repository and the pull request's own head SHA, so the
+          # binding below resolves that pull request unchanged. A fork's run
+          # resolves nothing under either head repository GitHub reports:
+          # this repository, and it asks for a pull request head-labelled
+          # <base owner>:<branch> that a fork's pull request
+          # (<fork owner>:<branch>) is not; or the fork itself, and the
+          # candidate's own repository does not match the run's. Either way
+          # it exits silently.
           if [[ "$RUN_EVENT" != "pull_request" && "$RUN_EVENT" != "pull_request_target" ]]; then
             echo "the triggering ci run was a ${RUN_EVENT} run, not a pull_request or pull_request_target run; nothing to comment on"
             echo "found=false" >> "$GITHUB_OUTPUT"

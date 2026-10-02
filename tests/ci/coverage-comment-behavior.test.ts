@@ -353,19 +353,25 @@ describe("the coverage comment workflow's run blocks", () => {
     );
 
     it("resolves no pull request for a pull_request_target run at a fork head, which the base repository does not own", async () => {
+      // The candidate is seeded under the BASE owner's head label, so GitHub's
+      // own head=owner:branch scoping lets it through and the in-job
+      // .head.repo.full_name match is what rejects it. A candidate labelled
+      // with the fork owner would be filtered by the API before the jq filter
+      // ever ran, which would leave this test green against a filter that
+      // rejects nothing.
       const outcome = await runBlock(
         resolveRun,
         {
           ...resolveEnv({ owner: BASE_OWNER, repo: REPO_SLUG }),
           RUN_EVENT: "pull_request_target",
         },
-        { pulls: [candidate(93, FORK_OWNER, FORK_REPO, EVENT_SHA)] },
+        { pulls: [candidate(94, BASE_OWNER, FORK_REPO, EVENT_SHA)] },
       );
 
       expect(outcome.result.status, log(outcome)).toBe(0);
       expect(
         outcome.outputs.found,
-        "the run's head repository and the candidate's differ, so the binding holds even on the accepted event",
+        "the candidate passed the owner-scoped query carrying another repository, so the .head.repo.full_name match is what rejected it",
       ).toBe("false");
       expect(outcome.outputs.pr_number).toBeUndefined();
     });

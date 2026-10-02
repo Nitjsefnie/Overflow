@@ -175,6 +175,20 @@ describe("the coverage comment workflow", () => {
       condition,
       `the guard must be one [[ ]] comparison naming RUN_EVENT, so its accepted set is readable; got: ${guard[0]}`,
     ).toBeDefined();
+    // The probe universe below is a hand-typed list, so it can only report an
+    // event someone thought to name. These two assertions close it: the guard
+    // is exactly two negated comparisons joined by &&, so an event accepted
+    // outside the universe has nowhere to enter it — and joining them with ||
+    // instead would invert the guard into an accept-any-unless-named denylist
+    // that the probe would read as accepting almost everything.
+    expect(
+      condition!.match(/!=/g)?.length,
+      "the guard must be exactly two negated comparisons, one per accepted event",
+    ).toBe(2);
+    expect(
+      condition,
+      "the negated comparisons must be joined by && — joined by || the guard accepts every event it does not name, which is a denylist",
+    ).not.toContain("||");
 
     // ci can run on push, pull_request_target and workflow_dispatch; the rest
     // are the triggers a future edit could plausibly widen the guard to. Every
