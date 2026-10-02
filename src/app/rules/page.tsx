@@ -43,8 +43,8 @@ function RulesSections() {
           data-effective-date={RULES_REVISION.effectiveDate}
         >
           These rules are version {RULES_REVISION.version}, in effect from{" "}
-          {RULES_REVISION.effectiveDate}. A dispute is decided under the Disputes section of this
-          page, and cites that date — it is what fixes the text you are held to.
+          {RULES_REVISION.effectiveDate}. A correction to a settlement is decided under the Disputes
+          section of this page, and cites that date — it is what fixes the text you are held to.
         </p>
         <p>How work earns credits and how accounts are reviewed.</p>
         <p>
