@@ -337,15 +337,21 @@ describe("the Legal-Text: unchanged marker's grammar", () => {
     ).toBe("no fence opened, so this is a claim");
   });
 
-  // The subject/body split is `indexOf("\\n\\n")`, not `indexOf("\\n")`. Both
-  // subject cases below use a subject that WRAPS onto a second line, which is
-  // the only shape that can tell the two apart — a one-line subject cannot.
+  // The subject/body split is `indexOf("\n\n")`, not `indexOf("\n")`. The
+  // discriminating shape is a subject of THREE OR MORE lines, and a two-line
+  // subject is not: under the `\n` mutant the body slice still starts two
+  // characters past the first newline, which for a two-line subject eats the
+  // marker's own first character — `Legal-Text:` becomes `egal-Text:` and stops
+  // matching for a reason that has nothing to do with the split. Move the marker
+  // down one line and it survives the offset intact, so these subjects wrap onto
+  // at least three lines and the marker sits on the third.
   it("does not honour a marker on a wrapped subject line when the body claims nothing", () => {
     expect(
       legalTextUnchangedJustification(
         [
           "Load the current role at call time",
-          "Legal-Text: unchanged; a claim written as the second line of a wrapped subject",
+          "and resolve it inside the component",
+          "Legal-Text: unchanged; a claim written into a wrapped subject",
           "",
           "The role is read inside the function instead of at module scope.",
           "",
@@ -359,7 +365,8 @@ describe("the Legal-Text: unchanged marker's grammar", () => {
       legalTextUnchangedJustification(
         [
           "Load the current role at call time",
-          "Legal-Text: unchanged; written into the wrapped subject",
+          "and resolve it inside the component",
+          "Legal-Text: unchanged; written into a wrapped subject",
           "",
           "The role is read inside the function.",
           "",
@@ -602,6 +609,11 @@ describe("the gate's command line", () => {
       );
       expect(result.stdout).toContain(`${baseSha}..${headSha}`);
       expect(result.stdout).toContain("0 commits exempted");
+      // Nothing was exempted, so the stderr audit block is absent outright —
+      // not an empty one, and not one stating a zero count. The header says so,
+      // and this is the pin that keeps it true on the green path; the two red
+      // path legs below assert the same absence.
+      expect(result.stderr).not.toContain("exempted");
     } finally {
       await fixture.dispose();
     }
@@ -805,11 +817,12 @@ describe("the gate's command line", () => {
   });
 
   it("exits 1 when the claim is wrapped into the subject instead of the body", async () => {
-    // The end-to-end shape the `indexOf("\\n")` mutant was demonstrated with: a
-    // real effective-date change whose claim sits on the second line of a
-    // wrapped subject. Splitting the subject from the body on the first newline
-    // instead of the first blank line would read that line as body and exempt
-    // the change.
+    // The end-to-end shape the `indexOf("\n")` mutant was demonstrated with: a
+    // real effective-date change whose claim sits on the third line of a wrapped
+    // subject. The subject wraps onto three lines on purpose — see the grammar
+    // tests above for why a two-line subject cannot tell the two apart. Splitting
+    // the subject from the body on the first newline instead of the first blank
+    // line would read that line as body and exempt the change.
     const fixture = await createGateFixture();
     try {
       const baseSha = await fixture.commit("base\n\nFixture base.\n", {
@@ -819,7 +832,8 @@ describe("the gate's command line", () => {
       const headSha = await fixture.commit(
         [
           "Change the effective date",
-          "Legal-Text: unchanged; a claim written as the second line of a wrapped subject",
+          "in the terms page",
+          "Legal-Text: unchanged; a claim written into a wrapped subject",
           "",
           "The effective date now reads 1 January 2026.",
           "",

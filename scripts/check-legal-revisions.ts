@@ -30,8 +30,9 @@
 //     `Legal-Text: changed;` are not markers
 //   - the justification after `;` must hold at least one non-whitespace
 //     character. A bare `Legal-Text: unchanged`, a lone `Legal-Text: unchanged;`
-//     and a whitespace-only justification are NOT markers, so every honoured
-//     marker names something
+//     and a whitespace-only justification are NOT markers: the exemption cannot
+//     be a keyword alone, and whatever text it does carry is printed to stderr
+//     with its sha, before the exit status is decided
 //   - a message carrying several markers is read at the first one
 //   - a marker line inside a FENCED code block is documentation, not a claim,
 //     and is skipped. This repo's own header spells the marker out, so a commit
@@ -47,15 +48,17 @@
 // printed for it. Every honoured marker is reported on stderr — a count, then
 // one line per exempted commit carrying its sha and its justification — and it
 // is printed BEFORE the exit status is decided, so a run that reds for an
-// unrelated commit still shows what the gate let through. The success line on
+// unrelated commit still shows what the gate let through. When nothing was
+// exempted the block is absent entirely, on either path. The success line on
 // stdout repeats the count and never carries the list, so the trail cannot be
 // read as part of the verdict. An unreadable commit message is an error, never
 // a silent pass.
 //
 // WHAT THE EXEMPTION ACTUALLY ENFORCES, and what it does not. It enforces that
-// a justification is present at all, that every honoured marker is printed with
-// its sha and that text, and that the count is stated on both the red and the
-// green path. It does NOT enforce that the justification is a good one:
+// a justification is present at all, that every honoured marker is printed to
+// stderr with its sha and that text before the exit status is decided, and that
+// the success line states how many commits were exempted — zero when none were.
+// It does NOT enforce that the justification is a good one:
 // `Legal-Text: unchanged; x` is accepted. Nothing mechanical stands between that
 // line and an unreviewed edit to a legal document. The design buys
 // AUDITABILITY, not friction — it makes every exemption visible in the CI log,
@@ -92,6 +95,13 @@ const GUARD_FILE = "src/lib/legal-revisions.ts";
 // is the justification, and `\S` makes an empty or whitespace-only one a
 // non-match, which is what keeps a bare marker worthless.
 const MARKER = /^Legal-Text: unchanged;[ \t]+(\S.*)$/;
+
+// What separates a commit message's subject from its body. It is named once and
+// sliced by its own `.length`, so the separator and the offset past it cannot
+// drift apart: a bare `+ 2` here is a second constant coupled to this one, and a
+// refactor that changed only the `indexOf` would silently corrupt the marker's
+// first character instead of failing visibly.
+const SUBJECT_SEPARATOR = "\n\n";
 
 // A fenced-code-block delimiter: up to three spaces of indent, a run of three
 // or more backticks or tildes, then an optional info string. A fence closes
@@ -168,12 +178,12 @@ function fencedLines(lines: readonly string[]): boolean[] {
  * skipped — quoting the grammar is not making the claim.
  */
 export function legalTextUnchangedJustification(message: string): string | null {
-  const bodyStart = message.indexOf("\n\n");
+  const bodyStart = message.indexOf(SUBJECT_SEPARATOR);
   if (bodyStart === -1) {
     return null;
   }
 
-  const lines = message.slice(bodyStart + 2).split("\n");
+  const lines = message.slice(bodyStart + SUBJECT_SEPARATOR.length).split("\n");
   const insideFences = fencedLines(lines);
 
   for (const [index, line] of lines.entries()) {
