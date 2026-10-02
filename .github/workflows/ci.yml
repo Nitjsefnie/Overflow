@@ -306,6 +306,22 @@ jobs:
           git fetch --depth=2 origin "+refs/pull/${PR_NUMBER}/merge"
           node scripts/check-migration-edits.ts HEAD^1 HEAD
 
+      # Unlike the migration step above — which compares the range's two
+      # endpoints, so depth=2 carries everything it reads — the legal-revision
+      # gate walks EVERY commit of base..head: a legal page edited in one
+      # commit and its revision record bumped in the next still violates, so a
+      # reordered pair cannot slip through. The per-commit walk needs the
+      # range's full ancestry, and the checkout is shallow by the time this
+      # step runs, so the step first completes the history of both sides (the
+      # Ratchet documents step is the precedent).
+      - name: Legal revision currency
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --unshallow origin main "+refs/pull/${PR_NUMBER}/merge"
+          node scripts/check-legal-revisions.ts HEAD^1 HEAD
+
       - name: Typecheck
         run: pnpm typecheck
 
