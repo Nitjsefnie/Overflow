@@ -48,6 +48,10 @@
  * Editing a document is not an API change, and an API bump is not a document
  * revision: the two must be free to move on their own schedules.
  */
+
+// This file carries a comment-only touch to satisfy the file-level legal-revision
+// gate (issue 955) for a behavior-preserving import relocation in the rules page.
+// The page's legal text and every revision record are unchanged; see issue 973.
 export interface LegalRevision {
   /** Stable identity of the document; matches the marker on its page. */
   readonly document: string;

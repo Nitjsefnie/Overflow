@@ -2,7 +2,6 @@ import Link from "next/link";
 import { AppShell, PublicAppShell } from "@/components/app-shell";
 import { DISPUTE_CONTESTABLE_CASE, DISPUTE_RULES } from "@/lib/disputes";
 import { RULES_REVISION } from "@/lib/legal-revisions";
-import { getCurrentUserRole } from "@/lib/moderation/current-role";
 
 type RulesContentProps = {
   memberName: string;
@@ -112,6 +111,11 @@ function RulesSections() {
 
 export default async function RulesPage() {
   const { auth } = await import("@/auth");
+  // Resolve the ledger lookup at call time, like @/auth above: the suite runs
+  // with `isolate: false`, and a static import here freezes to the real module
+  // when another test file (legal-revisions-marker) renders this page first in
+  // the shared worker — the member-view flake of issues 953 and 964.
+  const { getCurrentUserRole } = await import("@/lib/moderation/current-role");
   const session = await auth();
   const user = session?.user as { id?: unknown; name?: unknown } | undefined;
   // The rendered chrome follows the ledger's current role, not the JWT's role
