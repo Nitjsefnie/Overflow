@@ -56,8 +56,14 @@ export const DISPUTE_RULES = [
  * heading carries this value; that heading is the only hand-written case name
  * left on either page, and it is deliberately a literal so that a test-side
  * literal is a third source beside these two constants. A complete widening
- * therefore edits, in one commit: both constants, the terms heading, and the
- * literal the terms test resolves that heading by.
+ * therefore edits, in one commit: both constants, the terms heading, the
+ * literal the terms test resolves that heading by, and the DISPUTE_RULES
+ * bullets that name the case — the first and the second today. The second is
+ * the sharper of the two: it is hand-written prose whose "the settlement's
+ * creditor" means nothing for a sanction, which is the very incoherence this
+ * file's header describes, so a widening that left it behind would ship a
+ * bullet the pointer promised. The third bullet names no case and does not
+ * move.
  *
  * A page interpolates it mid-sentence, so the value carries its own article
  * ("a settlement", not "settlement").
