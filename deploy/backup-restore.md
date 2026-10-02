@@ -17,12 +17,16 @@ here runs verbatim on this one.
 ## (a) What is backed up
 
 The whole `overflow` database, dumped with `pg_dump --format=custom` by
-`scripts/db-backup.sh`, into `overflow-<UTC timestamp>.dump` files. A
-custom-format dump restores selectively (`pg_restore --list`, table-level
-`-L`/`-T` listing and filtering) and compressed; it restores only into the
-same major version, which is the cluster's own (17). The dump reads the
-database through a normal connection and takes no lock beyond
-`ACCESS SHARE`, so the application keeps serving during the backup.
+`scripts/db-backup.sh`, into `overflow-<UTC timestamp>.dump` files. The stamp
+has one-second resolution, so a second run landing in the same UTC second
+installs `overflow-<stamp>-1.dump` and a third `overflow-<stamp>-2.dump`
+instead of replacing the first run's dump, and the name is taken atomically,
+so runs racing each other cannot collide on it either. A custom-format dump
+restores selectively (`pg_restore --list`, table-level `-L`/`-T` listing and
+filtering) and compressed; it restores only into the same major version,
+which is the cluster's own (17). The dump reads the database through a normal
+connection and takes no lock beyond `ACCESS SHARE`, so the application keeps
+serving during the backup.
 
 Not backed up: roles, and anything outside the `overflow` database (other
 databases, cluster-wide settings such as `postgresql.conf` and
@@ -138,11 +142,12 @@ defense in depth for the same property, not the mechanism.
 `db-backup.sh` prunes `overflow-*.dump` files older than 14 days
 (`--retention-days`, default 14) after each successful dump — 15 daily dumps
 are retained at the steady state, and nothing not matching `overflow-*.dump`
-in the directory is ever deleted. The exception: partials named
-`.overflow-*.dump.incomplete` older than one day are reclaimed by the next
-run's sweep. The first real backup was
-`overflow-20260910T154923Z.dump` (22.7 MB), taken during the 2026-09-10 drill;
-it later aged out under the 14-day retention policy.
+in the directory is ever deleted. The pattern covers the `-1`, `-2` suffixed
+names a same-second extra run takes, so those are retained and pruned on the
+same schedule. The exception: a run's partial, `.overflow-<pid>.dump.incomplete`,
+older than one day is reclaimed by the next run's sweep. The first real backup
+was `overflow-20260910T154923Z.dump` (22.7 MB), taken during the 2026-09-10
+drill; it later aged out under the 14-day retention policy.
 
 The directory is on the same filesystem as the database. That is fine for the
 failure modes this runbook targets — a bad migration, a bad deploy, a dropped
@@ -169,8 +174,11 @@ deployment tree:
 
 ```bash
 set -a; . /etc/overflow/overflow.env; set +a
-bash scripts/db-backup.sh
-# prints /var/backups/overflow/overflow-<stamp>.dump
+dump=$(bash scripts/db-backup.sh | tail -1)
+# the run's LAST stdout line is the path it installed, e.g.
+# /var/backups/overflow/overflow-<stamp>.dump — or overflow-<stamp>-1.dump when
+# another run had already taken the plain name in that second. Copy that exact
+# path; do not reconstruct it from the timestamp.
 
 scratch="overflow_drill_$(date +%s)"
 sudo -u postgres createdb "$scratch"
@@ -179,7 +187,7 @@ sudo -u postgres createdb "$scratch"
 # root:overflow, unreadable by postgres. Stage postgres-readable copies of both;
 # the restore runs as the postgres OS user over peer auth.
 install -o postgres -g postgres -m 0400 \
-  /var/backups/overflow/overflow-<stamp>.dump /tmp/overflow-drill-dump-staging.dump
+  "$dump" /tmp/overflow-drill-dump-staging.dump
 install -o postgres -g postgres -m 0500 \
   /srv/overflow/scripts/db-restore.sh /tmp/overflow-drill-restore.sh
 sudo -u postgres env DATABASE_URL=postgresql:///"$scratch" \
@@ -278,6 +286,10 @@ set -a; . /etc/overflow/overflow.env; set +a
 bash scripts/db-restore.sh overflow_replacement \
   /var/backups/overflow/overflow-<stamp>.dump
 ```
+
+Substitute the dump you mean, spelled exactly as the backup run printed it:
+the plain `overflow-<stamp>.dump`, or the `overflow-<stamp>-1.dump` that run
+installed when another run already held the plain name for that second.
 
 The restored copy carries the schema the dump was taken with, and a dump
 carries `schema_migrations` as of the moment it ran — 01:30 UTC, before

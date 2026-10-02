@@ -5,14 +5,19 @@
 #
 # DATABASE_URL must name the database to dump; without it the script refuses to
 # guess. The dump is written as <output-dir>/overflow-<UTC timestamp>.dump,
-# verified nonempty and listable by pg_restore --list, and only then moved into
-# place; the path is printed on stdout. Dumps matching overflow-*.dump that are
-# older than --retention-days (default 14) are pruned after a successful dump.
+# verified nonempty and listable by pg_restore --list, and only then linked into
+# place under a free name; that path is printed on stdout. The stamp has
+# one-second resolution, so a second run landing in the same second installs
+# under the next free name in the series overflow-<stamp>-1.dump,
+# overflow-<stamp>-2.dump, ... rather than replacing the first run's dump.
+# Dumps matching overflow-*.dump that are older than --retention-days
+# (default 14) are pruned after a successful dump.
 #
-# A run killed before its mv leaves its .overflow-<stamp>.dump.incomplete
-# partial behind. Every run begins by sweeping leftover partials older than 24
-# hours (-mtime +0) out of the output directory and deleting them; real dumps
-# matching overflow-*.dump are never touched by the sweep.
+# A run killed before its dump is installed leaves its
+# .overflow-<pid>.dump.incomplete partial behind. Every run begins by sweeping
+# leftover partials older than 24 hours (-mtime +0) out of the output directory
+# and deleting them; real dumps matching overflow-*.dump are never touched by
+# the sweep.
 #
 # The output directory comes from --output-dir, else OVERFLOW_BACKUP_DIR, else
 # /var/backups/overflow; a missing directory is created root-only (0700).
@@ -21,6 +26,13 @@
 # commands. The automated restore test (tests/db/backup-restore.test.ts) uses
 # them to run the client tools inside the postgres:17 container, where the tool
 # version always matches the server; the default is the host's own tools.
+#
+# OVERFLOW_BACKUP_STAMP replaces the timestamp this run derives from date -u,
+# verbatim. It names the dump and nothing else: the search for a free name still
+# runs, so two runs given the same stamp keep both dumps. The automated restore
+# test sets it to make the same-second collision a thing it can reproduce
+# without depending on the wall clock; an operator may set it to file a dump
+# under a chosen name.
 set -eu
 
 # The dump carries the database's entire contents, so its mode is the
@@ -111,12 +123,17 @@ fi
 pg_dump_cmd=${OVERFLOW_PG_DUMP:-pg_dump}
 pg_restore_cmd=${OVERFLOW_PG_RESTORE:-pg_restore}
 
-# The stamp has second resolution, so a second run landing in the same UTC
-# second derives the same dump path and its mv replaces the first run's dump.
-# Known and accepted for now; issue 931 tracks it.
-stamp=$(date -u +%Y%m%dT%H%M%SZ)
+# The stamp has second resolution, so two runs landing in the same UTC second
+# derive one name. The install below takes the first free name in the series
+# overflow-<stamp>.dump, overflow-<stamp>-1.dump, overflow-<stamp>-2.dump, ...
+stamp=${OVERFLOW_BACKUP_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}
 dump="$output_dir/overflow-$stamp.dump"
-partial="$output_dir/.overflow-$stamp.dump.incomplete"
+# The partial carries this run's pid: two runs sharing one second would
+# otherwise share one partial, and the second run's redirect would truncate the
+# bytes the first is about to install. The stem is the pid rather than the
+# stamp, which keeps the name inside what the sweep matches and keeps it short
+# enough whatever stamp an operator supplies.
+partial="$output_dir/.overflow-$$.dump.incomplete"
 trap 'rm -f "$partial"' EXIT HUP INT TERM
 
 # pg_dump writes the custom-format archive; the partial name keeps a failed or
@@ -131,7 +148,55 @@ fi
 # readable custom-format dump before it is called a backup.
 $pg_restore_cmd --list < "$partial" > /dev/null
 
-mv "$partial" "$dump"
+# Install under the first free name in the series, atomically. ln is the
+# exclusive create: it fails when the name is taken, and a hard link inside one
+# directory is same-filesystem by construction, so choosing the name and taking
+# it cannot come apart the way a test-then-mv does — two runs in one second
+# would both see the plain name free and one would replace the other. The
+# bound keeps a directory full of taken names from searching forever.
+max_attempts=100
+attempt=0
+while :; do
+    if [ "$attempt" -eq 0 ]; then
+        candidate="$output_dir/overflow-$stamp.dump"
+    else
+        candidate="$output_dir/overflow-$stamp-$attempt.dump"
+    fi
+
+    # ln treats a directory operand as a place to link INTO, which would report
+    # success and install the dump under a name this run does not own. A real
+    # dump is always a regular file one of these runs created.
+    if [ -d "$candidate" ]; then
+        :
+    elif ln_error=$(ln "$partial" "$candidate" 2>&1); then
+        break
+    elif [ -e "$candidate" ]; then
+        # The name is taken, which is the collision this search exists for.
+        :
+    else
+        # The name is free, so this is not a collision: a read-only directory,
+        # no space, a name the filesystem will not accept. Retrying a suffix
+        # cannot help, and spinning would hide a failed backup behind a hung
+        # timer, so the run fails loudly and leaves no dump behind.
+        fail "could not install the dump as $candidate: $ln_error"
+    fi
+
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge "$max_attempts" ]; then
+        fail "no free dump name after $max_attempts tries; the last was $candidate"
+    fi
+done
+
+# The notice about a taken name goes to stderr: stdout's contract is that its
+# last line is the installed dump path, and this is a diagnostic, not one.
+if [ "$attempt" -gt 0 ]; then
+    printf '%s: a dump for %s was already there; this run installed the next one\n' \
+        "$program" "$stamp" >&2
+fi
+
+# The dump is in place under its own name; the partial link is what is left.
+rm -f "$partial"
+dump=$candidate
 trap - EXIT HUP INT TERM
 
 # Prune only after the new dump is safely in place, and only files that match
