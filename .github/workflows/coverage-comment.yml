@@ -95,14 +95,16 @@ jobs:
           # A same-repository pull request's run carries this repository as
           # its head repository and the pull request's own head SHA, so the
           # binding below resolves that pull request unchanged. A fork's run
-          # is safe under either head repository GitHub reports, and neither
-          # way is by being rejected: reported as this repository, it asks
-          # for a pull request head-labelled <base owner>:<branch>, which a
-          # fork's pull request (<fork owner>:<branch>) is not, so nothing
-          # matches and it exits silently; reported as the fork, the fork's
-          # own pull request does match and is selected, with same_repo
-          # false, so the body step renders from the two validated totals and
-          # never posts the artifact's markdown or file list.
+          # reports the FORK, so the fork's own pull request is the candidate
+          # that matches, and it is selected with same_repo false — the body
+          # step then renders from the two validated totals and never posts
+          # the artifact's markdown or file list.
+          #
+          # Contingency: were GitHub ever to report a fork's run as this
+          # repository instead, the query would ask for a pull request
+          # head-labelled <base owner>:<branch>, which a fork's pull request
+          # (<fork owner>:<branch>) is not, so nothing would match and the
+          # run would exit silently.
           if [[ "$RUN_EVENT" != "pull_request" && "$RUN_EVENT" != "pull_request_target" ]]; then
             echo "the triggering ci run was a ${RUN_EVENT} run, not a pull_request or pull_request_target run; nothing to comment on"
             echo "found=false" >> "$GITHUB_OUTPUT"

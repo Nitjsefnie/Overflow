@@ -383,7 +383,7 @@ describe("the coverage comment workflow's run blocks", () => {
       expect(outcome.outputs.pr_number).toBeUndefined();
     });
 
-    it("treats another repository of the base owner as a fork end to end — its markdown never reaches the body", async () => {
+    it("compares same_repo by full repository name, so the base owner's second repository takes the untrusted-artifact path and its markdown never reaches the body", async () => {
       const copy = `${BASE_OWNER}/Overflow-copy`;
       const resolved = await runBlock(resolveRun, resolveEnv({ owner: BASE_OWNER, repo: copy }), {
         pulls: [candidate(92, BASE_OWNER, copy, EVENT_SHA)],
