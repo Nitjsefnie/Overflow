@@ -68,9 +68,18 @@ function mainOf(page: string): Element {
   return main!;
 }
 
+// The tag is load-bearing and no existing count can catch it: a <section> only
+// becomes a landmark when it has an accessible name, so an UNNAMED <section>
+// here contributes no region, terms-page.test.tsx (5), rules.test.tsx (6) and
+// account-data-page.test.tsx (13 sections) all stay at their counts, and the
+// sibling-position assertion is satisfied by any element. A mutation-verified
+// false green on all three pages. Asserting the tag is what makes "the marker
+// adds no section" a fact rather than a convention, and it lives here so one
+// line covers every document.
 function markerWithin(main: Element, document: string): Element {
   const marker = main.querySelector(`[data-legal-revision="${document}"]`);
   expect(marker, `the ${document} page renders its revision marker`).not.toBeNull();
+  expect(marker!.tagName, `the ${document} marker is a paragraph, not a section`).toBe("P");
   return marker!;
 }
 
