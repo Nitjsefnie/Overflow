@@ -5,7 +5,7 @@ import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { DISPUTE_RULES } from "@/lib/disputes";
+import { DISPUTE_CONTESTABLE_CASE, DISPUTE_RULES } from "@/lib/disputes";
 
 async function renderTermsPage(): Promise<void> {
   const { default: TermsPage } = await import("@/app/terms/page");
@@ -116,11 +116,14 @@ describe("terms page", () => {
     // and in order. Compared, not asserted as prose: this never names a rule,
     // so it survives a faithful rewording of all three and still goes red on
     // the defect it targets — a promise on the terms page that the rules page
-    // does not carry. The mutants it defeats are the three the page could hold:
-    // a hand-copied list that drifts from the constant (one bullet reworded
-    // here, the same bullet untouched in src/lib/disputes.ts), a bullet deleted
-    // from this page alone, and a sanction case added here that the constant
-    // does not list.
+    // does not carry. The mutants it defeats are the ones this page can hold
+    // INSIDE this section: a hand-copied list that drifts from the constant (one
+    // bullet reworded here, the same bullet untouched in src/lib/disputes.ts),
+    // a bullet deleted from this page alone, and a sanction case added here that
+    // the constant does not list. It says nothing about a promise added to
+    // another section of the page — the "How sanctions work" section is a
+    // non-goal of this change and no assertion here reaches it. The mirrored
+    // assertion on the rules page is what covers /rules drifting instead.
     const items = [...region.querySelectorAll("li")].map((item) => item.textContent);
     expect(items).toEqual([...DISPUTE_RULES]);
 
@@ -138,6 +141,38 @@ describe("terms page", () => {
     const paragraphs = [...region.querySelectorAll("p")];
     expect(paragraphs).toHaveLength(1);
     expect(paragraphs[0]!.querySelector('a[href="/rules"]')).not.toBeNull();
+  });
+
+  it("names the contestable case the shared source names, in the revision paragraph", async () => {
+    await renderTermsPage();
+
+    // The revision paragraph says what a reader cites a date over, so it makes
+    // the same claim the Disputes list does — the case you can contest. It sat
+    // outside the list as a hand-written phrase, which is how it came to
+    // promise a sanction could be contested while the rules it points at
+    // carried no such case. The page now interpolates DISPUTE_CONTESTABLE_CASE
+    // there, so the phrase cannot drift without an edit to the shared source.
+    //
+    // Both halves are structural, no prose: the paragraph must carry the
+    // constant, and it must not name "sanction" — the one word that actually
+    // drifted, pinned as the negative half because "contesting a sanction or a
+    // settlement" CONTAINS the constant as a substring, so the positive half
+    // alone is satisfied by the very reintroduction this is written against.
+    // That word is not a general rule against other cases; it is the specific
+    // regression, and a future case would be added to the shared source rather
+    // than written into this sentence.
+    //
+    // Exactly one marker, and the literal "terms" rather than
+    // TERMS_REVISION.document: a document name read from the module the page
+    // renders can agree with itself. The marker suite owns the question of
+    // which document this page is; this one is about the case the paragraph
+    // names, and a second marker would let the claim be made twice and be
+    // satisfied by the copy that got it right.
+    const markers = [...document.querySelectorAll("p[data-legal-revision]")];
+    expect(markers, "the terms page states its revision once").toHaveLength(1);
+    const revision = markers[0]!.textContent ?? "";
+    expect(revision).toContain(DISPUTE_CONTESTABLE_CASE);
+    expect(revision).not.toContain("sanction");
   });
 
   it("keeps every internal link on a page route", async () => {

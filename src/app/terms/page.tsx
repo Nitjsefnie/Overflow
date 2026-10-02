@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { PublicAppShell } from "@/components/app-shell";
-import { DISPUTE_RULES } from "@/lib/disputes";
+import { DISPUTE_CONTESTABLE_CASE, DISPUTE_RULES } from "@/lib/disputes";
 import { TERMS_REVISION } from "@/lib/legal-revisions";
 
 export function TermsNotice() {
@@ -15,7 +15,7 @@ export function TermsNotice() {
           data-effective-date={TERMS_REVISION.effectiveDate}
         >
           These terms are version {TERMS_REVISION.version}, in effect from {TERMS_REVISION.effectiveDate}.
-          Contesting a settlement cites that date — it is what fixes the text you are
+          Contesting {DISPUTE_CONTESTABLE_CASE} cites that date — it is what fixes the text you are
           held to.
         </p>
         <p>

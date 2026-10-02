@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const auth = vi.hoisted(() => vi.fn());
@@ -12,6 +12,7 @@ const currentRole = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/moderation/current-role", () => ({ getCurrentUserRole: currentRole }));
 
 import { PublicRulesContent, RulesContent } from "@/app/rules/page";
+import { DISPUTE_RULES } from "@/lib/disputes";
 
 async function renderRulesPage(): Promise<void> {
   const { default: RulesPage } = await import("@/app/rules/page");
@@ -143,6 +144,39 @@ describe("rules page", () => {
     expect(main, "the public rules view supplies its own main.page-content").not.toBeNull();
     expect(main).toHaveAttribute("id", "main-content");
     expect(currentRole).toHaveBeenCalledWith("u1");
+  });
+
+  it.each([
+    ["member view", <RulesContent key="member" memberName="Ada" isModerator={false} />],
+    ["public view", <PublicRulesContent key="public" />],
+  ] as const)("states the correction rules the terms page points here at, in the %s", (_label, element) => {
+    render(element);
+
+    // The mirror of the terms-page assertion, and the same constant, because
+    // /rules is where a dispute is actually decided: the terms page names this
+    // section as the source of truth, so a rule that drifts HERE is a reader
+    // held to text the pointer's promise no longer matches. That direction was
+    // the one unasserted of the two, and the mutant that re-hardcoded these
+    // three <li> by hand with the third drifted to "One open dispute per issue
+    // at a time" left the whole suite green. Compared, never asserted as prose:
+    // this names no rule, so a faithful rewording of all three still passes.
+    //
+    // Both mount points, not one. RulesContent and PublicRulesContent are
+    // separate shells a visitor reaches and both render RulesSections, so a pin
+    // on the public shell alone would leave the member view unchecked — and the
+    // marker suite already establishes that the revision stamp has to hold on
+    // both.
+    //
+    // Scoped to the page's own main: the shells' nav and footer are outside it,
+    // so a document-wide query cannot resolve to anything the page does not
+    // render. The region is then found by its heading — the same literal anchor
+    // shape terms-page.test.tsx uses — and its bullets are read in order, so a
+    // reordering is a difference rather than a set.
+    const main = document.querySelector<HTMLElement>("main.page-content");
+    expect(main, "the rules view supplies its own main.page-content").not.toBeNull();
+    const region = within(main!).getByRole("region", { name: "Disputes" });
+    const items = [...region.querySelectorAll("li")].map((item) => item.textContent);
+    expect(items).toEqual([...DISPUTE_RULES]);
   });
 
   it("renders the member view for a session with no role claim when the ledger vouches", async () => {
