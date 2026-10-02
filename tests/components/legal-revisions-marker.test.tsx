@@ -3,7 +3,12 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { ACCOUNT_DATA_REVISION, TERMS_REVISION, type LegalRevision } from "@/lib/legal-revisions";
+import {
+  ACCOUNT_DATA_REVISION,
+  RULES_REVISION,
+  TERMS_REVISION,
+  type LegalRevision,
+} from "@/lib/legal-revisions";
 
 // Each document's identity is named as a LITERAL here, never taken from the
 // constant it is checking. A selector or an assertion built from
@@ -13,11 +18,16 @@ import { ACCOUNT_DATA_REVISION, TERMS_REVISION, type LegalRevision } from "@/lib
 // rather than about page copy, so naming it in a test is not asserting prose.
 const TERMS_DOCUMENT = "terms";
 const ACCOUNT_DATA_DOCUMENT = "account-data";
+const RULES_DOCUMENT = "rules";
 
 // Whole tokens, not partial ones: "1.0.1" has to read as one token, or a
 // superseded patch version reduces to the release it supersedes and passes for
-// it.
-const VERSION_TOKEN = /\b\d+\.\d+(?:\.\d+)*\b/g;
+// it. The leading "v" is optional because a second version written as "v2.0"
+// carries no word boundary before its digits — "v" and "2" are both word
+// characters — so a recogniser without it skipped the token entirely and the
+// second version sat beside the true one unnoticed. A mutation-verified false
+// green, both ways.
+const VERSION_TOKEN = /\bv?\d+\.\d+(?:\.\d+)*\b/g;
 const DATE_TOKEN = /\b\d{4}-\d{2}-\d{2}\b/g;
 
 async function renderTermsPage(): Promise<Element> {
@@ -30,6 +40,23 @@ async function renderAccountDataPage(): Promise<Element> {
   const { default: AccountDataPage } = await import("@/app/account-data/page");
   render(<AccountDataPage />);
   return mainOf(ACCOUNT_DATA_DOCUMENT);
+}
+
+// The rules page has two shells, and both are mount points a visitor reaches:
+// a signed-in member gets AppShell's main, everyone else gets the main
+// PublicRulesContent brings itself. The marker lives in the section both share,
+// and each of these renders one shell so the document-wide main lookup below
+// cannot resolve to the other render.
+async function renderPublicRulesPage(): Promise<Element> {
+  const { PublicRulesContent } = await import("@/app/rules/page");
+  render(<PublicRulesContent />);
+  return mainOf(RULES_DOCUMENT);
+}
+
+async function renderMemberRulesPage(): Promise<Element> {
+  const { RulesContent } = await import("@/app/rules/page");
+  render(<RulesContent memberName="Ada" isModerator={false} />);
+  return mainOf(RULES_DOCUMENT);
 }
 
 // Scoped to the page's own main on purpose: PublicAppShell's nav and footer
@@ -79,6 +106,35 @@ describe("legal revision markers", () => {
     expectStatesOnlyItsOwnRevision(markerWithin(main, ACCOUNT_DATA_DOCUMENT), ACCOUNT_DATA_REVISION);
   });
 
+  it("states the rules revision, and only that revision, on the public rules page", async () => {
+    // The terms page sends a reader here for disputes, and the disputes section
+    // of THIS page is the text they are held to, so the public shell — the one a
+    // signed-out reader in a dispute actually gets — is the view that has to
+    // carry the stamp.
+    const main = await renderPublicRulesPage();
+
+    expectStatesOnlyItsOwnRevision(markerWithin(main, RULES_DOCUMENT), RULES_REVISION);
+  });
+
+  it("states the same rules revision on the member view of the rules page", async () => {
+    // The other mount point: a member reading the rules under AppShell. Same
+    // document, same revision, and a pin that only covered the public shell
+    // would let the member view drop the marker unnoticed.
+    const main = await renderMemberRulesPage();
+
+    expectStatesOnlyItsOwnRevision(markerWithin(main, RULES_DOCUMENT), RULES_REVISION);
+  });
+
+  it("places the rules marker in the page's own heading, where it needs no scrolling", async () => {
+    // Same position as the other two documents: inside the existing
+    // page-heading section, immediately after the h1, adding no section and so
+    // no landmark region — rules.test.tsx counts six and must stay untouched.
+    const rules = await renderPublicRulesPage();
+    const rulesHeading = rules.querySelector("section.page-heading > h1");
+    expect(rulesHeading, "the rules page has a page-heading section").not.toBeNull();
+    expect(markerWithin(rules, RULES_DOCUMENT).previousElementSibling).toBe(rulesHeading);
+  });
+
   it("places the terms marker in the page's own heading, where it needs no scrolling", async () => {
     // Placement is part of what the marker promises: inside the existing
     // page-heading section, immediately after the h1, adding no section and
@@ -106,5 +162,6 @@ describe("legal revision markers", () => {
     // the module nor the page is read from.
     expect(TERMS_REVISION.document).toBe(TERMS_DOCUMENT);
     expect(ACCOUNT_DATA_REVISION.document).toBe(ACCOUNT_DATA_DOCUMENT);
+    expect(RULES_REVISION.document).toBe(RULES_DOCUMENT);
   });
 });

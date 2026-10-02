@@ -46,3 +46,13 @@ export const ACCOUNT_DATA_REVISION: LegalRevision = {
   version: "1.0",
   effectiveDate: "2026-10-02",
 };
+
+// The rules page is a legal document too, and a stronger one for disputes: the
+// terms page sends a reader here, and names the Disputes section of THIS page
+// as the source of truth. The stamp that makes that text citable belongs on the
+// page, not only on the notice that points at it.
+export const RULES_REVISION: LegalRevision = {
+  document: "rules",
+  version: "1.0",
+  effectiveDate: "2026-10-02",
+};
