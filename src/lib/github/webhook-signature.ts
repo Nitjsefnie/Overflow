@@ -1,5 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+// The `{64}` is the sole place the digest length is enforced. Widening it makes
+// timingSafeEqual throw a RangeError on a length mismatch instead of returning false.
 const signaturePattern = /^sha256=([0-9a-f]{64})$/;
 
 export function verifyGitHubWebhookSignature(
@@ -18,9 +20,6 @@ export function verifyGitHubWebhookSignature(
 
   const expected = createHmac("sha256", secret).update(rawBody).digest();
   const supplied = Buffer.from(match[1], "hex");
-  if (supplied.length !== expected.length) {
-    return false;
-  }
 
   return timingSafeEqual(expected, supplied);
 }
