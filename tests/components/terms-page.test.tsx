@@ -43,6 +43,24 @@ describe("terms page", () => {
     expect(notice!.querySelector('a[href="/rules"]')).not.toBeNull();
   });
 
+  it("cites the upstream source of the age floor inside the account section", async () => {
+    await renderTermsPage();
+
+    // What an account presupposes — that its holder is old enough to hold one
+    // — is only checkable because the section cites where the floor comes from.
+    // A reader depends on that citation, not on the sentence's wording, so this
+    // pins the link and survives a faithful paraphrase.
+    //
+    // Scoped to the account section: PublicAppShell's chrome and the page's own
+    // other sections carry external links already, and a document-wide query
+    // passes with this section's link deleted.
+    const section = screen.getByRole("region", { name: "What an account is" });
+    expect(
+      section.querySelector('a[href^="https://docs.github.com/"]'),
+      "the account section cites the source of the age floor",
+    ).not.toBeNull();
+  });
+
   it("keeps every internal link on a page route", async () => {
     await renderTermsPage();
 
