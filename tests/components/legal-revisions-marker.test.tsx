@@ -9,6 +9,7 @@ import {
   TERMS_REVISION,
   type LegalRevision,
 } from "@/lib/legal-revisions";
+import * as legalRevisions from "@/lib/legal-revisions";
 
 // Each document's identity is named as a LITERAL here, never taken from the
 // constant it is checking. A selector or an assertion built from
@@ -27,8 +28,32 @@ const RULES_DOCUMENT = "rules";
 // characters — so a recogniser without it skipped the token entirely and the
 // second version sat beside the true one unnoticed. A mutation-verified false
 // green, both ways.
-const VERSION_TOKEN = /\bv?\d+\.\d+(?:\.\d+)*\b/g;
-const DATE_TOKEN = /\b\d{4}-\d{2}-\d{2}\b/g;
+//
+// The second alternative is a bare integer, and it is gated on the word
+// "version" for a reason that is not stylistic: an ungated \d+ alternative
+// matches the 2026 inside the marker's own ISO date, so every page would fail
+// against its own correct text. The (?!\.\d) is what keeps "version 1.0" out of
+// this alternative, so the dotted branch still reads the true version whole
+// rather than "1" here and ".0" there. A mutation-verified false green, twice.
+const VERSION_TOKEN = /\bv?\d+\.\d+(?:\.\d+)*\b|\bversion\s+(\d+)(?!\.\d)/gi;
+
+// The two recognisers used to have different widths, which is how "Superseded
+// 2 October 2026." sat beside the ISO date with the date set unchanged and the
+// suite green. This one is a shape list, like its sibling: a date written in a
+// shape it does not name is invisible to it, and that residue is the class the
+// final review parked rather than closed.
+const MONTHS =
+  "January|February|March|April|May|June|July|August|September|October|November|December" +
+  "|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec";
+
+const DATE_TOKEN = new RegExp(
+  [
+    "\\b\\d{4}-\\d{2}-\\d{2}\\b",
+    `\\b\\d{1,2}\\s+(?:${MONTHS})\\.?\\s+\\d{4}\\b`,
+    `\\b(?:${MONTHS})\\.?\\s+\\d{1,2},?\\s+\\d{4}\\b`,
+  ].join("|"),
+  "gi",
+);
 
 async function renderTermsPage(): Promise<Element> {
   const { default: TermsPage } = await import("@/app/terms/page");
@@ -76,15 +101,39 @@ function mainOf(page: string): Element {
 // false green on all three pages. Asserting the tag is what makes "the marker
 // adds no section" a fact rather than a convention, and it lives here so one
 // line covers every document.
-function markerWithin(main: Element, document: string): Element {
-  const marker = main.querySelector(`[data-legal-revision="${document}"]`);
-  expect(marker, `the ${document} page renders its revision marker`).not.toBeNull();
-  expect(marker!.tagName, `the ${document} marker is a paragraph, not a section`).toBe("P");
-  return marker!;
+//
+// EVERY marker on the page, not the first match. This used to be a single
+// querySelector, which answered with exactly one element and left every other
+// [data-legal-revision] on the page outside the exclusivity set entirely: a
+// second <p data-legal-revision="terms" data-version="0.9"> beside the true one
+// rendered both claims to the reader and the suite stayed 12/12. That is the
+// defect this branch exists to close, moved from a second token inside one
+// element to a second element on the page. Checking each element's own identity
+// rather than counting them also catches a foreign document's marker carried
+// onto the wrong page, which a length check would not.
+function revisionMarkers(main: Element, document: string): Element[] {
+  const markers = [...main.querySelectorAll("[data-legal-revision]")];
+  expect(markers.length, `the ${document} page renders a revision marker`).toBeGreaterThan(0);
+  for (const marker of markers) {
+    expect(
+      marker.getAttribute("data-legal-revision"),
+      `every revision claim on the ${document} page is the ${document} document's`,
+    ).toBe(document);
+    expect(marker.tagName, `a revision marker on the ${document} page is a paragraph`).toBe("P");
+  }
+  return markers;
 }
 
+// matchAll, not match, because VERSION_TOKEN's bare-integer branch carries the
+// token in a capture group while its dotted branch is the whole match; `match`
+// would hand back "version 2" where the token is "2". matchAll copies the
+// pattern rather than advancing the shared global's lastIndex, so the same
+// regex can be reused across every call without state leaking between them.
 function tokensIn(marker: Element, pattern: RegExp): string[] {
-  return [...new Set(marker.textContent?.match(pattern) ?? [])];
+  const found = [...(marker.textContent?.matchAll(pattern) ?? [])].map(
+    (match) => match[1] ?? match[0],
+  );
+  return [...new Set(found)];
 }
 
 // What a reader is shown is the marker's prose, not its data attributes, so
@@ -94,25 +143,31 @@ function tokensIn(marker: Element, pattern: RegExp): string[] {
 // mutation-verified false green this replaces. Exact textContent equality is
 // barred by the never-assert-prose rule, so what is constrained here is the
 // SHAPE of the rendered values: the version-shaped tokens are the constant and
-// nothing else, so a second one makes it a different set.
-function expectStatesOnlyItsOwnRevision(marker: Element, revision: LegalRevision): void {
-  expect(marker).toHaveAttribute("data-version", revision.version);
-  expect(marker).toHaveAttribute("data-effective-date", revision.effectiveDate);
-  expect(tokensIn(marker, VERSION_TOKEN)).toEqual([revision.version]);
-  expect(tokensIn(marker, DATE_TOKEN)).toEqual([revision.effectiveDate]);
+// nothing else, so a second one makes it a different set. Run over every
+// marker on the page, not the first match — see revisionMarkers above.
+function expectStatesOnlyItsOwnRevision(markers: Element[], revision: LegalRevision): void {
+  for (const marker of markers) {
+    expect(marker).toHaveAttribute("data-version", revision.version);
+    expect(marker).toHaveAttribute("data-effective-date", revision.effectiveDate);
+    expect(tokensIn(marker, VERSION_TOKEN)).toEqual([revision.version]);
+    expect(tokensIn(marker, DATE_TOKEN)).toEqual([revision.effectiveDate]);
+  }
 }
 
 describe("legal revision markers", () => {
   it("states the terms revision, and only that revision, on the terms page", async () => {
     const main = await renderTermsPage();
 
-    expectStatesOnlyItsOwnRevision(markerWithin(main, TERMS_DOCUMENT), TERMS_REVISION);
+    expectStatesOnlyItsOwnRevision(revisionMarkers(main, TERMS_DOCUMENT), TERMS_REVISION);
   });
 
   it("states the account-data revision, and only that revision, on the account-data page", async () => {
     const main = await renderAccountDataPage();
 
-    expectStatesOnlyItsOwnRevision(markerWithin(main, ACCOUNT_DATA_DOCUMENT), ACCOUNT_DATA_REVISION);
+    expectStatesOnlyItsOwnRevision(
+      revisionMarkers(main, ACCOUNT_DATA_DOCUMENT),
+      ACCOUNT_DATA_REVISION,
+    );
   });
 
   it("states the rules revision, and only that revision, on the public rules page", async () => {
@@ -122,7 +177,7 @@ describe("legal revision markers", () => {
     // carry the stamp.
     const main = await renderPublicRulesPage();
 
-    expectStatesOnlyItsOwnRevision(markerWithin(main, RULES_DOCUMENT), RULES_REVISION);
+    expectStatesOnlyItsOwnRevision(revisionMarkers(main, RULES_DOCUMENT), RULES_REVISION);
   });
 
   it("states the same rules revision on the member view of the rules page", async () => {
@@ -131,7 +186,7 @@ describe("legal revision markers", () => {
     // would let the member view drop the marker unnoticed.
     const main = await renderMemberRulesPage();
 
-    expectStatesOnlyItsOwnRevision(markerWithin(main, RULES_DOCUMENT), RULES_REVISION);
+    expectStatesOnlyItsOwnRevision(revisionMarkers(main, RULES_DOCUMENT), RULES_REVISION);
   });
 
   it("places the rules marker in the page's own heading, where it needs no scrolling", async () => {
@@ -141,7 +196,9 @@ describe("legal revision markers", () => {
     const rules = await renderPublicRulesPage();
     const rulesHeading = rules.querySelector("section.page-heading > h1");
     expect(rulesHeading, "the rules page has a page-heading section").not.toBeNull();
-    expect(markerWithin(rules, RULES_DOCUMENT).previousElementSibling).toBe(rulesHeading);
+    for (const marker of revisionMarkers(rules, RULES_DOCUMENT)) {
+      expect(marker.previousElementSibling).toBe(rulesHeading);
+    }
   });
 
   it("places the terms marker in the page's own heading, where it needs no scrolling", async () => {
@@ -151,16 +208,18 @@ describe("legal revision markers", () => {
     const terms = await renderTermsPage();
     const termsHeading = terms.querySelector("section.page-heading > h1");
     expect(termsHeading, "the terms page has a page-heading section").not.toBeNull();
-    expect(markerWithin(terms, TERMS_DOCUMENT).previousElementSibling).toBe(termsHeading);
+    for (const marker of revisionMarkers(terms, TERMS_DOCUMENT)) {
+      expect(marker.previousElementSibling).toBe(termsHeading);
+    }
   });
 
   it("places the account-data marker in the page's own heading, where it needs no scrolling", async () => {
     const accountData = await renderAccountDataPage();
     const accountDataHeading = accountData.querySelector("section.page-heading > h1");
     expect(accountDataHeading, "the account-data page has a page-heading section").not.toBeNull();
-    expect(markerWithin(accountData, ACCOUNT_DATA_DOCUMENT).previousElementSibling).toBe(
-      accountDataHeading,
-    );
+    for (const marker of revisionMarkers(accountData, ACCOUNT_DATA_DOCUMENT)) {
+      expect(marker.previousElementSibling).toBe(accountDataHeading);
+    }
   });
 
   it("pins each document's identity to its own literal", () => {
@@ -173,4 +232,53 @@ describe("legal revision markers", () => {
     expect(ACCOUNT_DATA_REVISION.document).toBe(ACCOUNT_DATA_DOCUMENT);
     expect(RULES_REVISION.document).toBe(RULES_DOCUMENT);
   });
+});
+
+// The inventory, read from the module instead of listed here. A registry entry
+// nothing renders used to be invisible: a PRIVACY_REVISION constant with no page
+// consuming it was 28/28 green and typechecked, because an unused export is
+// legal TypeScript. Deriving the list means a new entry is exercised the day it
+// is added and an orphan one fails the moment it is added. `LegalRevision` is a
+// type, erased at runtime, so it is not in Object.values and needs no filter
+// for it; the filter is for anything else the module might grow.
+const REGISTERED = Object.values(legalRevisions).filter(
+  (value): value is LegalRevision => typeof value === "object" && value !== null && "document" in value,
+);
+
+// How each document's page is rendered in jsdom, keyed by the document's own
+// identity. This is mechanics, not inventory — the reconciliation below is what
+// stops the two drifting apart, so a key with no registry entry fails as loudly
+// as an entry with no key.
+//
+// These derived tests are ADDITIVE. The per-document tests above stay, because
+// they carry the literal identity anchors, and an identity taken from the
+// module cannot anchor to a literal. The two boundaries the earlier rounds
+// ruled accepted survive untouched: this block reads the module's own document
+// names, so it adds no third source and moves neither the module-identity swap
+// nor the hardcoded-version mutant.
+const PAGE_RENDERERS: Record<string, () => Promise<Element>> = {
+  "terms": renderTermsPage,
+  "account-data": renderAccountDataPage,
+  "rules": renderPublicRulesPage,
+};
+
+describe("the revision registry and the pages that render it", () => {
+  it("reconciles the registry against the pages, in both directions", () => {
+    const registered = REGISTERED.map((revision) => revision.document).sort();
+    expect(
+      Object.keys(PAGE_RENDERERS).sort(),
+      "every registered document has a page rendered here, and every rendered page has an entry",
+    ).toEqual(registered);
+  });
+
+  it.each(REGISTERED.map((revision) => [revision.document, revision] as const))(
+    "renders the %s revision, and only that revision, on its own page",
+    async (document, revision) => {
+      const render = PAGE_RENDERERS[document];
+      expect(render, `the ${document} document has a page rendered here`).toBeDefined();
+      const main = await render!();
+
+      expectStatesOnlyItsOwnRevision(revisionMarkers(main, document), revision);
+    },
+  );
 });
