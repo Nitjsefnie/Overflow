@@ -152,6 +152,51 @@ describe("HTTP surface snapshot", () => {
     });
     expect(() => assertNoBreakingRecordedChange(base)).toThrow(/version did not move/);
   });
+
+  it("commits the synthetic fixture with no ambient git identity (the CI-runner case)", () => {
+    // Actions runners carry no global or system git config and no identity
+    // env, and a fresh clone's local config names nobody: the fixture commit
+    // must not depend on any of it. Empty config files and unset identity env
+    // scrub the stored sources; user.useConfigOnly then forbids the
+    // hostname-based auto-detection that a well-named development box falls
+    // back to (the runner has no FQDN and fails it as "empty ident name"),
+    // so the spawn must carry its own identity to pass anywhere.
+    const scratch = mkdtempSync(join(tmpdir(), "http-snapshot-identity-"));
+    const emptyConfig = join(scratch, "empty-gitconfig");
+    writeFileSync(emptyConfig, "");
+    const identityEnv = [
+      "GIT_CONFIG_GLOBAL",
+      "GIT_CONFIG_SYSTEM",
+      "GIT_AUTHOR_NAME",
+      "GIT_AUTHOR_EMAIL",
+      "GIT_COMMITTER_NAME",
+      "GIT_COMMITTER_EMAIL",
+      "GIT_CONFIG_COUNT",
+      "GIT_CONFIG_KEY_0",
+      "GIT_CONFIG_VALUE_0",
+    ];
+    const saved = new Map(identityEnv.map((name) => [name, process.env[name]]));
+    for (const name of identityEnv) {
+      delete process.env[name];
+    }
+    process.env.GIT_CONFIG_GLOBAL = emptyConfig;
+    process.env.GIT_CONFIG_SYSTEM = emptyConfig;
+    process.env.GIT_CONFIG_COUNT = "1";
+    process.env.GIT_CONFIG_KEY_0 = "user.useConfigOnly";
+    process.env.GIT_CONFIG_VALUE_0 = "true";
+    try {
+      const base = commitSnapshotFixture({ httpServerVersion: snapshot.httpServerVersion, routes: {} });
+      expect(git(["cat-file", "-t", base])).toBe("commit");
+    } finally {
+      for (const [name, value] of saved) {
+        if (value === undefined) {
+          delete process.env[name];
+        } else {
+          process.env[name] = value;
+        }
+      }
+    }
+  });
 });
 
 /**
@@ -203,8 +248,8 @@ function assertNoBreakingRecordedChange(base: string): void {
  * comparisons at an arbitrary recorded surface without moving any ref.
  */
 function commitSnapshotFixture(snapshot: { httpServerVersion: string; routes: Record<string, HttpShape> }): string {
-  const index = mkdtempSync(join(tmpdir(), "http-snapshot-fixture-"));
-  const file = join(index, "http-surface-snapshot.json");
+  const scratch = mkdtempSync(join(tmpdir(), "http-snapshot-fixture-"));
+  const file = join(scratch, "http-surface-snapshot.json");
   writeFileSync(file, JSON.stringify(snapshot, null, 2));
   const blob = gitInput(["hash-object", "-w", file]);
   const leaf = gitInput(["mktree"], `100644 blob ${blob}\thttp-surface-snapshot.json\n`);
@@ -212,8 +257,23 @@ function commitSnapshotFixture(snapshot: { httpServerVersion: string; routes: Re
   return gitInput(["commit-tree", root, "-m", "synthetic HTTP snapshot fixture"], "");
 }
 
+/**
+ * Runs git with the fixture's own identity pinned on the command line: a CI
+ * runner has no global/system/local config naming an author (Actions died on
+ * commit-tree with "empty ident name"), and the pinned -c identity outranks
+ * every config source, so the commit never depends on anything ambient. The
+`.invalid` domain cannot deliver mail.
+ */
 function gitInput(args: string[], input?: string): string {
-  const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8", input });
+  const result = spawnSync(
+    "git",
+    [
+      "-c", "user.name=HTTP Snapshot Fixture",
+      "-c", "user.email=http-snapshot-fixture@invalid",
+      ...args,
+    ],
+    { cwd: repoRoot, encoding: "utf8", input },
+  );
   if (result.status !== 0) {
     throw new Error(`git ${args.join(" ")} failed: ${result.stderr.trim()}`);
   }
