@@ -49,14 +49,6 @@ import {
   fixtureTargetId,
 } from "./http-surface-fixtures.ts";
 
-/**
- * The moderation and override routes' derivations (issue 912, task 3),
- * split off scripts/http-surface-derive.ts because that module's tooling
- * ceiling (800 lines) has no room for sixteen more per-route functions. The
- * record this returns is spread into deriveHttpSurfaceShapes; the stubs live
- * in scripts/http-surface-fixtures.ts like every other route's.
- */
-
 export async function deriveGetModerationAudits(): Promise<HttpShape> {
   return bodyShape(
     await createModerationAuditsGetHandler(fixtureModerationAuditsRouteDependencies())(
@@ -215,8 +207,13 @@ export async function derivePatchOverride(): Promise<HttpShape> {
 }
 
 /**
- * The moderation and override routes' shapes, keyed "METHOD /path" in the
- * spelling API.md documents dynamic segments with (<id> for [id]).
+ * The moderation and override routes' shapes (issue 912, task 3), keyed
+ * "METHOD /path" in the spelling API.md documents dynamic segments with
+ * (<id> for [id]). The derivation is split off
+ * scripts/http-surface-derive.ts because that module's tooling ceiling
+ * (800 lines) has no room for sixteen more per-route functions; the record
+ * this returns is spread into deriveHttpSurfaceShapes, and the stubs live in
+ * scripts/http-surface-fixtures.ts like every other route's.
  */
 export async function moderationSurfaceShapes(): Promise<Record<string, HttpShape>> {
   return {
