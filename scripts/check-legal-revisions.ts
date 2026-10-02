@@ -79,14 +79,18 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-// The pages whose visible text the revision records describe, and the record
-// module every one of their changes must travel with.
+// The pages whose visible text the revision records describe.
 const LEGAL_PAGES: readonly string[] = [
   "src/app/terms/page.tsx",
   "src/app/rules/page.tsx",
   "src/app/account-data/page.tsx",
 ];
 
+// Shared modules that supply text a reader is held to on a legal page. Keep
+// this inventory explicit: the commit walk checks changed paths, not imports.
+const SHARED_TEXT_MODULES: readonly string[] = ["src/lib/disputes.ts"];
+
+// The record module every legal-text source change must travel with.
 const GUARD_FILE = "src/lib/legal-revisions.ts";
 
 // The exemption marker's only accepted spelling, anchored to the whole line so
