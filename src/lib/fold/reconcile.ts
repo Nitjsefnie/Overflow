@@ -3,6 +3,7 @@ import type { GitHubIssueListOptions } from "@/lib/github/client";
 import { DEFAULT_GRAPHQL_BUDGET_RESERVE, type GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
 import { GitHubApiError, isGitHubRateLimitError, isGitHubSubjectNotFoundError } from "@/lib/github/errors";
+import { GitHubResponseTooLargeError } from "@/lib/github/response-text";
 import { GitLabApiError } from "@/lib/gitlab/client";
 import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { withGraphqlFoldCost } from "@/lib/github/graphql-cost";
@@ -182,9 +183,10 @@ async function reconcileRepositoryWhileCoordinated(
   // issue or pull request can never resolve, and the retry machinery (the sweep
   // revives FAILED jobs with attempts reset) would retry it forever. The
   // classifier names the durable failure class the failure belongs to — a
-  // NOT_FOUND is definitive, and a pull request whose diff GitHub refuses under
-  // its 20000-line cap (a fixed 406) can never read — so its dirty row is
-  // discarded and the remaining subjects keep the run alive; any other
+  // NOT_FOUND is definitive, a pull request whose diff GitHub refuses under
+  // its 20000-line cap (a fixed 406) can never read, and a body past the
+  // client's success-path byte cap can never be read any smaller — so its dirty
+  // row is discarded and the remaining subjects keep the run alive; any other
   // per-subject failure keeps whole-run retry semantics. The journal line names
   // the subject's identity and the failure class only, matching the
   // reconciliation queue's rule against storing upstream error text.
@@ -484,17 +486,21 @@ function carriesCredentialRejection(error: unknown): boolean {
 
 // The journal reason a durable per-subject failure class names when its subject
 // joins the discard arm; null means the failure keeps whole-run retry semantics.
-type SubjectDiscardReason = "NOT_FOUND" | "DIFF_TOO_LARGE";
+type SubjectDiscardReason = "NOT_FOUND" | "DIFF_TOO_LARGE" | "RESPONSE_TOO_LARGE";
 
 // The reviews read is GraphQL, so a pull request deleted upstream answers
 // the flattened NOT_FOUND message the subject classifier matches; the diff
 // read is REST and answers GitHub's fixed 404 error, which that classifier
 // never sees. The diff read also answers GitHub's fixed 406 when the diff
 // exceeds the 20000-line cap — retrying the same read answers 406 again —
-// so it joins the same subject-alone arm under its own reason. Either shape
-// is definitive for that pull request, not a property of the run.
+// so it joins the same subject-alone arm under its own reason. Either
+// evidence leg can also answer a body past the client's success-path byte
+// cap, which is fixed for the pull request the same way: its own bytes are
+// what tripped the cap, so every retry re-reads them and trips it again.
+// Either shape is definitive for that pull request, not a property of the run.
 function pullRequestDiscardReason(error: unknown): SubjectDiscardReason | null {
   if (error instanceof GitHubApiError && error.status === 406) return "DIFF_TOO_LARGE";
+  if (error instanceof GitHubResponseTooLargeError) return "RESPONSE_TOO_LARGE";
   if (isGitHubSubjectNotFoundError(error) || (error instanceof GitHubApiError && error.status === 404)) return "NOT_FOUND";
   return null;
 }
@@ -531,9 +537,10 @@ function notFoundDiscardReason(error: unknown): SubjectDiscardReason | null {
 // over the cache and nothing erases a cached subject that stops
 // refreshing. Blank it instead and a probably-transient read failure
 // blanks a settlement's proof to the empty diff. A diff over GitHub's
-// 20000-line cap (a fixed 406 on either evidence leg) deliberately joins
-// this arm beside NOT_FOUND: GitHub durably refuses the diff, so no retry
-// can succeed and the sweep would fail the run forever. Every other class —
+// 20000-line cap (a fixed 406 on either evidence leg) and a body past the
+// client's success-path byte cap both deliberately join this arm beside
+// NOT_FOUND: the pull request's own size is what failed, so no retry can
+// succeed and the sweep would fail the run forever. Every other class —
 // a rate limit with its cooldown path, auth, 5xx, network, the GraphQL
 // budget held — is transient or run-invalidating and rethrows, keeping
 // whole-run retry; nothing further joins this arm.
