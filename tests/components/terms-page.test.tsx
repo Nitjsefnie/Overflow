@@ -51,49 +51,44 @@ describe("terms page", () => {
     // comes from. A reader depends on that citation, not on the sentence's
     // wording, so this pins the link and survives a faithful paraphrase.
     //
+    // The statement is found by its marker class, not by its position. Every
+    // positional reconstruction tried — last paragraph, distinct from the
+    // account-creation paragraph, that paragraph carrying /account-data — was
+    // defeated by a mutant that deletes the statement and appends a bare
+    // citation-only paragraph, which becomes the last paragraph and satisfies
+    // all of them. The class is the same handle shape this file already uses
+    // on main.page-content below.
+    //
+    // THE CLASS CARRIES IDENTITY, NOT SOMETHING A READER SEES. It marks which
+    // paragraph is the statement; nothing renders it differently. It is
+    // legitimate only because the two assertions below independently require
+    // the citation to be present and visible inside it — the class alone
+    // would pass on a statement that cites nothing, and no assertion here
+    // reads the statement's words. Do not "simplify" the class away: it is
+    // what stops the statement being deleted outright.
+    //
     // Exact href, not a docs.github.com prefix: the section also mentions
     // GitHub, and a prefix match is satisfied by any of GitHub's pages, so it
     // would go green on a page whose age floor cites nothing at all.
     //
     // Visible, not merely present: a hidden anchor carries no citation to a
-    // reader, so presence alone is not the property being relied on.
-    //
-    // In the LAST paragraph, and NOT the account-creation paragraph above it:
-    // presence in the section is satisfied by moving the citation into the
-    // paragraph above and deleting the statement, which is the regression
-    // issue 915 exists to prevent. Position alone does not catch that — once
-    // the statement is deleted, the paragraph above BECOMES the last one — so
-    // the account-creation paragraph is pinned directly, by claiming the
-    // /account-data link sits in the FIRST paragraph, rather than inferred
-    // from its absence in the last. Inference alone does not catch it either:
-    // a mutant that moves /account-data to another paragraph of the same main
-    // leaves nothing for the statement to be found missing. Both are
-    // structural: neither reads a word of the page.
-    //
-    // POSITIONAL BY DESIGN — adding a paragraph after the statement later
-    // breaks this test, and the fix is to move the statement or this pin
-    // deliberately, never to relax it back to section presence.
+    // reader, so presence alone is not the property being relied on. This
+    // catches hidden, display:none, visibility:hidden and opacity:0 — it is
+    // a rendered-visibility check, not a geometry check, so an anchor clipped
+    // to a sliver still passes it.
     //
     // Scoped to the account section: PublicAppShell's chrome and the page's own
     // other sections carry external links already, and a document-wide query
-    // passes with this section's link deleted.
+    // passes with this section's link deleted. The scope is also what makes
+    // the marker a statement in THIS section.
     const section = screen.getByRole("region", { name: "What an account is" });
-    const paragraphs = section.querySelectorAll("p");
-    const statement = paragraphs[paragraphs.length - 1];
+    const statement = section.querySelector("p.account-age-floor");
     expect(
       statement,
       "the account section states what holding an account presupposes",
-    ).not.toBeUndefined();
-    expect(
-      paragraphs[0].querySelector('a[href="/account-data"]'),
-      "the account section opens by creating the account",
     ).not.toBeNull();
-    expect(
-      statement.querySelector('a[href="/account-data"]'),
-      "the statement is a paragraph of its own, not the account-creation one",
-    ).toBeNull();
 
-    const citation = statement.querySelector(
+    const citation = statement!.querySelector(
       'a[href="https://docs.github.com/en/site-policy/github-terms/github-terms-of-service"]',
     );
     expect(
