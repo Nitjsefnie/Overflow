@@ -27,7 +27,7 @@ describe("verifyGitHubWebhookSignature", () => {
 
     expect(verifyGitHubWebhookSignature(rawBody, `sha256=${valid}0`, secret)).toBe(false);
     expect(verifyGitHubWebhookSignature(rawBody, `sha256=${valid}ab`, secret)).toBe(false);
-    expect(verifyGitHubWebhookSignature(rawBody, `sha256=${valid.slice(0, -1)}0`, secret)).toBe(false);
+    expect(verifyGitHubWebhookSignature(rawBody, `sha256=${valid.slice(0, -1)}`, secret)).toBe(false);
   });
 
   it("rejects a signature forged under the empty secret, because no secret is configured", () => {

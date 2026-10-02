@@ -1,7 +1,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-// The `{64}` is the sole place the digest length is enforced. Widening it makes
-// timingSafeEqual throw a RangeError on a length mismatch instead of returning false.
+// The `{64}` is the only place the digest length is enforced: widen it and a
+// wrong-length payload throws a RangeError, while a 65-character one decodes to
+// the same 32 bytes and is silently accepted.
 const signaturePattern = /^sha256=([0-9a-f]{64})$/;
 
 export function verifyGitHubWebhookSignature(
