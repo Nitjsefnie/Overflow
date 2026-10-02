@@ -63,8 +63,11 @@ describe("terms page", () => {
     // paragraph above and deleting the statement, which is the regression
     // issue 915 exists to prevent. Position alone does not catch that — once
     // the statement is deleted, the paragraph above BECOMES the last one — so
-    // the statement is also pinned as a paragraph distinct from the one the
-    // account-creation test identifies by its /account-data link. Both are
+    // the account-creation paragraph is pinned directly, by claiming the
+    // /account-data link sits in the FIRST paragraph, rather than inferred
+    // from its absence in the last. Inference alone does not catch it either:
+    // a mutant that moves /account-data to another paragraph of the same main
+    // leaves nothing for the statement to be found missing. Both are
     // structural: neither reads a word of the page.
     //
     // POSITIONAL BY DESIGN — adding a paragraph after the statement later
@@ -81,6 +84,10 @@ describe("terms page", () => {
       statement,
       "the account section states what holding an account presupposes",
     ).not.toBeUndefined();
+    expect(
+      paragraphs[0].querySelector('a[href="/account-data"]'),
+      "the account section opens by creating the account",
+    ).not.toBeNull();
     expect(
       statement.querySelector('a[href="/account-data"]'),
       "the statement is a paragraph of its own, not the account-creation one",
