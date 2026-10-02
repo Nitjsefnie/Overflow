@@ -35,7 +35,6 @@ import type {
 import type { AccountExport, AccountExportRow } from "../src/lib/accounts/export.ts";
 import { ACCOUNT_EXPORT_FORMAT_VERSION } from "../src/lib/accounts/export.ts";
 import type {
-  CalibrationCohortSnapshot,
   CalibrationComparison,
   CalibrationPair,
 } from "../src/lib/calibration/statistics.ts";
@@ -51,6 +50,7 @@ import type {
 import type {
   AccountAudit,
   CalibrationCohortPreview,
+  CalibrationCohortSnapshot,
   ModeratorRoleChange,
   ModeratorSummary,
   RecalibrationClosure,
