@@ -1,11 +1,22 @@
 import Link from "next/link";
 import { PublicAppShell } from "@/components/app-shell";
+import { ACCOUNT_DATA_REVISION } from "@/lib/legal-revisions";
 
 export function AccountDataNotice() {
   return (
     <main className="page-content" id="main-content">
       <section className="page-heading" aria-labelledby="account-data-title">
         <h1 id="account-data-title">Account data</h1>
+        <p
+          className="mono-meta"
+          data-legal-revision={ACCOUNT_DATA_REVISION.document}
+          data-version={ACCOUNT_DATA_REVISION.version}
+          data-effective-date={ACCOUNT_DATA_REVISION.effectiveDate}
+        >
+          This notice is version {ACCOUNT_DATA_REVISION.version}, in effect from{" "}
+          {ACCOUNT_DATA_REVISION.effectiveDate}. A complaint about what was held about you cites that
+          date — it is what fixes the text you are held to.
+        </p>
         <p>
           What Overflow stores when you sign in with GitHub or link a GitLab identity, what it is used for, and
           what you control — and what it stores about people who have never signed in, and what its server logs
