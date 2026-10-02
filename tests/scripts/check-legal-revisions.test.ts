@@ -69,28 +69,18 @@ describe("legal revision gate", () => {
   it("names a commit that rewrites DISPUTE_RULES without the guard file", () => {
     // Rewriting DISPUTE_RULES[0] changes this shared module, whose exported
     // wording is rendered by the terms and rules pages.
-    const violations = legalRevisionViolations([
-      { sha: "sha-dispute-rule-only", files: [DISPUTES] },
-    ]);
+    const violations = reviewCommits([commit("sha-dispute-rule-only", [DISPUTES])]).violations;
 
-    expect(violations).toHaveLength(1);
-    expect(violations[0]).toContain("sha-dispute-rule-only");
-    expect(violations[0]).toContain(DISPUTES);
+    expect(violations).toEqual([{ sha: "sha-dispute-rule-only", page: DISPUTES }]);
   });
 
   it("reports both legal-text sources changed in one commit", () => {
     const sha = "sha-page-and-shared-text";
-    const violations = legalRevisionViolations([
-      { sha, files: [TERMS, DISPUTES] },
-    ]);
+    const violations = reviewCommits([commit(sha, [TERMS, DISPUTES])]).violations;
 
     expect(violations).toHaveLength(2);
-    expect(violations).toContain(
-      `${TERMS} changed in ${sha} without a matching ${GUARD} change in the same commit.`,
-    );
-    expect(violations).toContain(
-      `${DISPUTES} changed in ${sha} without a matching ${GUARD} change in the same commit.`,
-    );
+    expect(violations).toContainEqual({ sha, page: TERMS });
+    expect(violations).toContainEqual({ sha, page: DISPUTES });
   });
 
   it("accepts a commit that changes a legal page and the guard file together", () => {
@@ -439,6 +429,39 @@ describe("the exemption's scope", () => {
     expect(violations).toEqual([]);
   });
 
+  it("exempts a shared-text-module change whose message carries a well-formed marker", () => {
+    const { violations, exemptions } = reviewCommits([
+      commit(
+        "sha-disputes-exempt",
+        [DISPUTES],
+        markerBody("reflowed the list without changing wording"),
+      ),
+    ]);
+
+    expect(violations).toEqual([]);
+    expect(exemptions).toEqual([
+      {
+        sha: "sha-disputes-exempt",
+        justification: "reflowed the list without changing wording",
+      },
+    ]);
+  });
+
+  it("does not let a page exemption excuse an unmarked shared-module change", () => {
+    const { violations, exemptions } = reviewCommits([
+      commit("sha-page-exempt", [TERMS], markerBody("moved an import without changing wording")),
+      commit("sha-module-unmarked", [DISPUTES]),
+    ]);
+
+    expect(violations).toEqual([{ sha: "sha-module-unmarked", page: DISPUTES }]);
+    expect(exemptions).toEqual([
+      {
+        sha: "sha-page-exempt",
+        justification: "moved an import without changing wording",
+      },
+    ]);
+  });
+
   it("still reports a violation when the marker carries no justification", () => {
     const { violations, exemptions } = reviewCommits([
       commit("sha-bare", [TERMS], "Subject line\n\nLegal-Text: unchanged\n"),
@@ -647,6 +670,10 @@ describe("the gate's command line", () => {
       );
       expect(result.stdout).toContain(`${baseSha}..${headSha}`);
       expect(result.stdout).toContain("0 commits exempted");
+      expect(result.stdout).toContain(
+        "changes no legal page or shared-text module without a matching revision-record " +
+          "change or a text-unchanged claim (0 commits exempted with a Legal-Text: unchanged claim)",
+      );
       // Nothing was exempted, so the stderr audit block is absent outright —
       // not an empty one, and not one stating a zero count. The header says so,
       // and this is the pin that keeps it true on the green path; the two red
@@ -750,6 +777,8 @@ describe("the gate's command line", () => {
       expect(result.status, result.stderr).toBe(1);
       expect(result.stdout).toContain(headSha);
       expect(result.stdout).toContain(GUARD);
+      expect(result.stdout).toContain("legal page or shared-text module");
+      expect(result.stdout).toContain("Legal-Text: unchanged; <justification>");
       expect(result.stderr).not.toContain("exempted");
     } finally {
       await fixture.dispose();
