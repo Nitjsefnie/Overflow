@@ -1,8 +1,8 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { existsSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
@@ -26,6 +26,9 @@ import { startPostgresContainer } from "../support/postgres-container";
  */
 const DATABASE = "backup_restore_test";
 const DRILL_DATABASE = "backup_restore_drill";
+/** Two scratch databases, one per dump of the same-second collision test. */
+const FIRST_RUN_DATABASE = "backup_restore_first_run";
+const SECOND_RUN_DATABASE = "backup_restore_second_run";
 const backupScript = resolve("scripts/db-backup.sh");
 const restoreScript = resolve("scripts/db-restore.sh");
 
@@ -204,6 +207,38 @@ describe("the backup and restore procedure", () => {
     expect(statSync(freshDumpPath!).size).toBeGreaterThan(0);
   });
 
+  it("reclaims a partial left by a killed run of the current script", () => {
+    // The existing sweep cases write their fixture partials by hand, so they
+    // keep passing whatever the script names its own partial. This one kills a
+    // real run mid-dump and reclaims what the script actually left, which is
+    // what a partial name that falls outside the sweep glob would break: real
+    // leftovers would sit in the directory forever, unreclaimed.
+    const dir = mkdtempSync(join(tmpdir(), "overflow-backup-partial-"));
+    const stubDir = mkdtempSync(join(tmpdir(), "overflow-backup-stub-"));
+    const killer = join(stubDir, "pg-dump-killer.sh");
+    writeFileSync(killer, "#!/bin/sh\nprintf 'partial-bytes\\n'\nkill -9 $PPID\n");
+    chmodSync(killer, 0o700);
+
+    const killed = runScript(
+      backupScript,
+      ["--output-dir", dir],
+      { ...scriptEnv(), OVERFLOW_PG_DUMP: killer, OVERFLOW_BACKUP_STAMP: "20260930T123000Z" },
+    );
+    expect(killed.status, "a run killed mid-dump").not.toBe(0);
+
+    const partials = incompleteNames(dir);
+    expect(partials, "the partial the killed run left behind").toHaveLength(1);
+    const old = new Date("2026-01-01T00:00:00Z");
+    utimesSync(join(dir, partials[0]!), old, old);
+
+    const result = runScript(backupScript, ["--output-dir", dir], scriptEnv());
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(join(dir, partials[0]!)), "the killed run's own partial, past 24 hours").toBe(false);
+    // The sweep prints what it reclaims before the final dump-path line.
+    expect(result.stdout).toContain(partials[0]!);
+  });
+
   it("sweeps crash leftovers even when the dump itself fails", () => {
     // "Every run begins by sweeping" includes runs whose dump never
     // completes: a sweep placed after the dump completes would leave this
@@ -269,6 +304,128 @@ describe("the backup and restore procedure", () => {
     const [issueCount] = await drill`select count(*)::int as count from issues`;
     expect(issueCount.count).toBe(4);
   });
+
+  it("keeps both dumps when two runs land on the same UTC second", async () => {
+    // The stamp has second resolution, so two runs inside one second derive one
+    // name. OVERFLOW_BACKUP_STAMP pins the stamp so the collision is the
+    // variable under test rather than the wall clock: a name count alone let
+    // the replacing mv through (it read "expected 1 to be 2"), so the first
+    // dump is also identified by what it CONTAINS.
+    const stamp = "20260930T120000Z";
+    const firstName = `overflow-${stamp}.dump`;
+    const secondName = `overflow-${stamp}-1.dump`;
+    const thirdName = `overflow-${stamp}-2.dump`;
+    const markerTitle = "same-second-marker";
+
+    // The marker row is present for the first dump and renamed before the
+    // second: a surviving first dump still restores the marker, a first dump
+    // replaced by the second restores the rename.
+    const [repo] = await sql<{ id: string }[]>`select id from registered_repositories where github_repository_id = ${7_400_001}`;
+    await insertIssue(sql, repo.id, 7_500_006, markerTitle, "OPEN");
+
+    const firstRun = runScript(backupScript, ["--output-dir", backupDir, "--retention-days", "14"], stampedEnv(stamp));
+    expect(firstRun.status, firstRun.stderr).toBe(0);
+    expect(printedDumpPath(firstRun.stdout), `stdout was: ${firstRun.stdout}`).toBe(join(backupDir, firstName));
+
+    await sql`update issues set title = ${"renamed-after-the-first-dump"} where github_issue_id = ${7_500_006}`;
+
+    const secondRun = runScript(backupScript, ["--output-dir", backupDir, "--retention-days", "14"], stampedEnv(stamp));
+    expect(secondRun.status, secondRun.stderr).toBe(0);
+    const secondPath = printedDumpPath(secondRun.stdout);
+    expect(secondPath, `stdout was: ${secondRun.stdout}`).toBeDefined();
+    expect(existsSync(secondPath!), "the second run's dump").toBe(true);
+    // The invariant the defect broke: two runs, two dumps. Counted over this
+    // stamp's names only, so the dumps earlier cases left in the directory do
+    // not stand in for the second run's.
+    expect(dumpsForStamp(backupDir, stamp), "one dump per run, neither replaced").toHaveLength(2);
+    expect(existsSync(join(backupDir, firstName)), "the first run's dump, after the second run").toBe(true);
+    expect(secondPath, `stdout was: ${secondRun.stdout}`).toBe(join(backupDir, secondName));
+
+    // A third run proves the suffix search is a search and not a single retry.
+    const thirdRun = runScript(backupScript, ["--output-dir", backupDir, "--retention-days", "14"], stampedEnv(stamp));
+    expect(thirdRun.status, thirdRun.stderr).toBe(0);
+    expect(printedDumpPath(thirdRun.stdout), `stdout was: ${thirdRun.stdout}`).toBe(join(backupDir, thirdName));
+    expect(dumpsForStamp(backupDir, stamp), "one dump per run, none replaced").toHaveLength(3);
+
+    // Content, not names: the first dump still restores the row the second no
+    // longer holds, and the second restores the rename.
+    const firstRestored = await restoreInto(FIRST_RUN_DATABASE, join(backupDir, firstName));
+    try {
+      const rows = await firstRestored`select title from issues where github_issue_id = ${7_500_006}`;
+      expect(rows.map((row) => row.title), "the surviving first dump's contents").toEqual([markerTitle]);
+    } finally {
+      await firstRestored.end();
+    }
+
+    const secondRestored = await restoreInto(SECOND_RUN_DATABASE, join(backupDir, secondName));
+    try {
+      const rows = await secondRestored`select title from issues where github_issue_id = ${7_500_006}`;
+      expect(rows.map((row) => row.title), "the second dump's contents").toEqual(["renamed-after-the-first-dump"]);
+    } finally {
+      await secondRestored.end();
+    }
+  });
+
+  it("fails loudly when the dump cannot be installed for a reason other than a taken name", () => {
+    // A name the filesystem refuses outright (here: past its length limit) is
+    // not a taken name, and retrying another suffix would never help. The run
+    // must abort with a message on stderr instead of searching forever.
+    const before = dumpsIn(backupDir);
+    const beforeIncomplete = incompleteNames(backupDir);
+    const result = runScript(
+      backupScript,
+      ["--output-dir", backupDir, "--retention-days", "14"],
+      { ...scriptEnv(), OVERFLOW_BACKUP_STAMP: "9".repeat(300) },
+    );
+
+    expect(result.status, "a run that cannot install its dump").not.toBe(0);
+    expect(result.stderr).toContain("db-backup.sh");
+    expect(result.stderr).toMatch(/too long|overflow-/);
+    expect(dumpsIn(backupDir), "no dump was installed by the failed run").toEqual(before);
+    // The run's own partial is cleaned up on the failure path.
+    expect(incompleteNames(backupDir), "partials left behind").toEqual(beforeIncomplete);
+  });
+
+  it("gives up with a message once every suffixed name is taken", () => {
+    // The stub tools keep this loop fast: it is the install search under test,
+    // not the dump, and a real pg_dump per attempt would make a bounded search
+    // unbounded in wall-clock terms. Each iteration occupies the next name, so
+    // the loop ends only when the script itself gives up.
+    const stamp = "20260930T121500Z";
+    const stubDir = mkdtempSync(join(tmpdir(), "overflow-backup-stub-"));
+    const stub = join(stubDir, "pg-dump-stub.sh");
+    writeFileSync(stub, "#!/bin/sh\nprintf 'custom-format-archive-bytes\\n'\n");
+    chmodSync(stub, 0o700);
+    const env: NodeJS.ProcessEnv = {
+      ...scriptEnv(),
+      OVERFLOW_PG_DUMP: stub,
+      OVERFLOW_PG_RESTORE: "true",
+      OVERFLOW_BACKUP_STAMP: stamp,
+    };
+
+    let result = runScript(backupScript, ["--output-dir", backupDir, "--retention-days", "14"], env);
+    const occupied: string[] = [];
+    for (let taken = 0; result.status === 0 && taken < 1000; taken += 1) {
+      // Occupy the name this run just took, as a DIRECTORY rather than the
+      // file it installed: ln against a directory target links INTO it and
+      // reports success, which would install the dump somewhere nobody reads.
+      const installed = printedDumpPath(result.stdout);
+      expect(installed, `stdout was: ${result.stdout}`).toBeDefined();
+      const name = join(backupDir, basename(installed!));
+      rmSync(name, { force: true });
+      mkdirSync(name);
+      occupied.push(name);
+      result = runScript(backupScript, ["--output-dir", backupDir, "--retention-days", "14"], env);
+    }
+
+    expect(result.status, `the run that found every name taken; stderr was: ${result.stderr}`).not.toBe(0);
+    expect(result.stderr).toContain(stamp);
+    expect(occupied.length, "the search was bounded, and long before this cap").toBeLessThan(1000);
+    // Nothing was linked into an occupied name.
+    for (const name of occupied) {
+      expect(readdirSync(name), `contents of the occupied name ${name}`).toEqual([]);
+    }
+  });
 });
 
 /**
@@ -303,6 +460,35 @@ function scriptEnv(): NodeJS.ProcessEnv {
     OVERFLOW_PG_DUMP: exec("pg_dump"),
     OVERFLOW_PG_RESTORE: exec("pg_restore"),
   };
+}
+
+/** scriptEnv with the run's stamp pinned, so two runs collide on purpose. */
+function stampedEnv(stamp: string): NodeJS.ProcessEnv {
+  return { ...scriptEnv(), OVERFLOW_BACKUP_STAMP: stamp };
+}
+
+/** The dumps in a directory, by the same matcher the prune and the tests use. */
+function dumpsIn(directory: string): string[] {
+  return readdirSync(directory).filter((name) => /^overflow-.*\.dump$/.test(name));
+}
+
+/** The dumps one stamp produced: the name count a replaced dump collapses. */
+function dumpsForStamp(directory: string, stamp: string): string[] {
+  return dumpsIn(directory).filter((name) => name.startsWith(`overflow-${stamp}`));
+}
+
+/** The crash-leftover partials in a directory. */
+function incompleteNames(directory: string): string[] {
+  return readdirSync(directory).filter((name) => name.endsWith(".incomplete"));
+}
+
+/** Restore a dump into a fresh scratch database and hand back a client for it. */
+async function restoreInto(database: string, dump: string): Promise<Sql> {
+  await sql`drop database if exists ${sql(database)}`;
+  await sql`create database ${sql(database)}`;
+  const result = runScript(restoreScript, [database, dump], scriptEnv());
+  expect(result.status, result.stderr).toBe(0);
+  return postgres(hostUrl(database), { max: 1 });
 }
 
 function printedDumpPath(stdout: string): string | undefined {
