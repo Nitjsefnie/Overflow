@@ -22,6 +22,14 @@ describe("verifyGitHubWebhookSignature", () => {
     expect(verifyGitHubWebhookSignature(rawBody, `sha256=${"0".repeat(64)}`, secret)).toBe(false);
   });
 
+  it("rejects a hex payload that is not exactly the 64-character digest", () => {
+    const valid = createHmac("sha256", secret).update(rawBody).digest("hex");
+
+    expect(verifyGitHubWebhookSignature(rawBody, `sha256=${valid}0`, secret)).toBe(false);
+    expect(verifyGitHubWebhookSignature(rawBody, `sha256=${valid}ab`, secret)).toBe(false);
+    expect(verifyGitHubWebhookSignature(rawBody, `sha256=${valid.slice(0, -1)}0`, secret)).toBe(false);
+  });
+
   it("rejects a signature forged under the empty secret, because no secret is configured", () => {
     const forged = `sha256=${createHmac("sha256", "").update(rawBody).digest("hex")}`;
 
