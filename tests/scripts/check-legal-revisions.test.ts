@@ -12,6 +12,7 @@ import * as legalRevisions from "../../src/lib/legal-revisions";
 const TERMS = "src/app/terms/page.tsx";
 const RULES = "src/app/rules/page.tsx";
 const ACCOUNT_DATA = "src/app/account-data/page.tsx";
+const DISPUTES = "src/lib/disputes.ts";
 const GUARD = "src/lib/legal-revisions.ts";
 const GATE_SCRIPT = "scripts/check-legal-revisions.ts";
 
@@ -45,6 +46,16 @@ async function gateLegalPages(): Promise<string[]> {
   return [...block[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
 }
 
+/** Reads SHARED_TEXT_MODULES from the gate source and fails loudly if it cannot parse the list. */
+async function gateSharedTextModules(): Promise<string[]> {
+  const source = await readFile(resolve(GATE_SCRIPT), "utf8");
+  const block = source.match(/const SHARED_TEXT_MODULES[^=]*=\s*\[([\s\S]*?)\]/);
+  if (block === null) {
+    throw new Error(`could not read SHARED_TEXT_MODULES out of ${GATE_SCRIPT}`);
+  }
+  return [...block[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+}
+
 describe("legal revision gate", () => {
   it("names a commit that changes a legal page without the guard file", () => {
     const violations = reviewCommits([commit("sha-page-only", [TERMS, "src/lib/unrelated.ts"])])
@@ -53,6 +64,18 @@ describe("legal revision gate", () => {
     expect(violations).toHaveLength(1);
     expect(violations[0]?.sha).toBe("sha-page-only");
     expect(violations[0]?.page).toBe(TERMS);
+  });
+
+  it("names a commit that rewrites DISPUTE_RULES without the guard file", () => {
+    // Rewriting DISPUTE_RULES[0] changes this shared module, whose exported
+    // wording is rendered by the terms and rules pages.
+    const violations = legalRevisionViolations([
+      { sha: "sha-dispute-rule-only", files: [DISPUTES] },
+    ]);
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toContain("sha-dispute-rule-only");
+    expect(violations[0]).toContain(DISPUTES);
   });
 
   it("accepts a commit that changes a legal page and the guard file together", () => {
@@ -926,5 +949,21 @@ describe("the gate's coverage of the revision record module", () => {
           `LEGAL_PAGES — edits to its text would ship without a revision-record bump`,
       ).toContain(page);
     }
+  });
+});
+
+describe("the gate's coverage of shared legal-text modules", () => {
+  it("pins every reader-facing shared module so an omitted module cannot ship silently", async () => {
+    const sharedTextModules = await gateSharedTextModules();
+    expect(
+      sharedTextModules.length,
+      "SHARED_TEXT_MODULES must parse out of scripts/check-legal-revisions.ts — an " +
+        "unparsable or empty list would let shared legal-text edits ship silently",
+    ).toBeGreaterThan(0);
+
+    expect(
+      sharedTextModules,
+      "the first-class inventory must match every shared module supplying legal-page wording",
+    ).toEqual([DISPUTES]);
   });
 });
