@@ -314,9 +314,9 @@ describe("the coverage comment workflow's run blocks", () => {
     });
 
     // An allowlist, not a denylist of today's other triggers, and an empty
-    // event is not a pull_request run either.
+    // event is not a pull request's own run either.
     it.each(["workflow_dispatch", "push", "merge_group", ""])(
-      "exits silently without querying when the ci run was triggered by %j, not pull_request",
+      "exits silently without querying when the ci run was triggered by %j, not by a pull request event",
       async (event) => {
         const outcome = await runBlock(
           resolveRun,
@@ -327,21 +327,47 @@ describe("the coverage comment workflow's run blocks", () => {
         expect(outcome.result.status, log(outcome)).toBe(0);
         expect(outcome.outputs.found).toBe("false");
         expect(outcome.outputs.pr_number).toBeUndefined();
-        expect(outcome.argv, "a run that is not a pull_request run must not look up a pull request").toHaveLength(0);
+        expect(outcome.argv, "a run that measured no pull request's diff must not look up a pull request").toHaveLength(0);
       },
     );
 
-    it("proceeds for a pull_request-triggered ci run", async () => {
+    // ci runs on pull_request_target (issue 822), whose run carries the pull
+    // request's own head SHA and the BASE repository as head_repository — so
+    // the same binding resolves, unchanged, and a fork head falls out of the
+    // repository+SHA match as a silent exit.
+    it.each(["pull_request", "pull_request_target"])(
+      "proceeds for a ci run triggered by %j",
+      async (event) => {
+        const outcome = await runBlock(
+          resolveRun,
+          { ...resolveEnv({ owner: BASE_OWNER, repo: REPO_SLUG }), RUN_EVENT: event },
+          { pulls: [candidate(91, BASE_OWNER, REPO_SLUG, EVENT_SHA)] },
+        );
+
+        expect(outcome.result.status, log(outcome)).toBe(0);
+        expect(outcome.outputs.found).toBe("true");
+        expect(outcome.outputs.pr_number).toBe("91");
+        expect(outcome.outputs.same_repo, "a same-repository head is this repository's own report").toBe("true");
+        expect(outcome.argv).toHaveLength(1);
+      },
+    );
+
+    it("resolves no pull request for a pull_request_target run at a fork head, which the base repository does not own", async () => {
       const outcome = await runBlock(
         resolveRun,
-        { ...resolveEnv({ owner: BASE_OWNER, repo: REPO_SLUG }), RUN_EVENT: "pull_request" },
-        { pulls: [candidate(91, BASE_OWNER, REPO_SLUG, EVENT_SHA)] },
+        {
+          ...resolveEnv({ owner: BASE_OWNER, repo: REPO_SLUG }),
+          RUN_EVENT: "pull_request_target",
+        },
+        { pulls: [candidate(93, FORK_OWNER, FORK_REPO, EVENT_SHA)] },
       );
 
       expect(outcome.result.status, log(outcome)).toBe(0);
-      expect(outcome.outputs.found).toBe("true");
-      expect(outcome.outputs.pr_number).toBe("91");
-      expect(outcome.argv).toHaveLength(1);
+      expect(
+        outcome.outputs.found,
+        "the run's head repository and the candidate's differ, so the binding holds even on the accepted event",
+      ).toBe("false");
+      expect(outcome.outputs.pr_number).toBeUndefined();
     });
 
     it("treats another repository of the base owner as a fork end to end — its markdown never reaches the body", async () => {

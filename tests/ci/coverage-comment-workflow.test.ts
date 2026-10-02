@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -158,6 +159,55 @@ describe("the coverage comment workflow", () => {
       HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
       RUN_EVENT: "${{ github.event.workflow_run.event }}",
     });
+  });
+
+  it("accepts exactly the ci run events that measured a pull request's own diff", () => {
+    const [resolve] = steps.filter((step) => step.name === "Resolve the destination pull request");
+    const guard = (resolve?.run ?? "")
+      .split("\n")
+      .filter((line) => /^\s*if \[\[.*\bRUN_EVENT\b/.test(line));
+    expect(
+      guard,
+      "the resolve step must gate the destination on the triggering run's event",
+    ).toHaveLength(1);
+    const condition = guard[0]?.match(/^if \[\[(.*)\]\]; then$/)?.[1];
+    expect(
+      condition,
+      `the guard must be one [[ ]] comparison naming RUN_EVENT, so its accepted set is readable; got: ${guard[0]}`,
+    ).toBeDefined();
+
+    // ci can run on push, pull_request_target and workflow_dispatch; the rest
+    // are the triggers a future edit could plausibly widen the guard to. Every
+    // one of them is offered to the guard's OWN comparison and the accepted set
+    // is what comes back, so a denylist of today's other triggers, a comment
+    // naming the same event, or a reverted guard each fail here.
+    const probeUniverse = [
+      "push",
+      "pull_request",
+      "pull_request_target",
+      "workflow_dispatch",
+      "merge_group",
+      "schedule",
+      "pull_request_review",
+      "pull_request_review_comment",
+      "repository_dispatch",
+      "issue_comment",
+      "release",
+      "",
+    ];
+    const accepted = probeUniverse.filter((event) => {
+      const probe = spawnSync(
+        "bash",
+        ["--noprofile", "--norc", "-c", `RUN_EVENT=${JSON.stringify(event)}; if [[ ${condition} ]]; then echo reject; else echo accept; fi`],
+        { encoding: "utf8" },
+      );
+      expect(probe.status, `evaluating the guard for ${JSON.stringify(event)}: ${probe.stderr}`).toBe(0);
+      return probe.stdout.trim() === "accept";
+    });
+    expect(
+      accepted,
+      "the guard must accept pull_request and pull_request_target — the two events whose ci run measured this pull request's own diff — and nothing else",
+    ).toEqual(["pull_request", "pull_request_target"]);
   });
 
   it("wires the not-measured substitution from the triggering run's conclusion", () => {

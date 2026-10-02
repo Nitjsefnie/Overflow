@@ -7,9 +7,10 @@ name: coverage comment
 #
 #   - it checks out NOTHING — the workspace stays empty, run blocks reference
 #     env names only, and the artifact is parsed as data only;
-#   - only a ci run triggered by pull_request can have a destination: a push
-#     or workflow_dispatch run, even one at a pull request's head SHA,
-#     measured a diff that pull request does not own, so it exits silently;
+#   - only a ci run triggered by pull_request or pull_request_target can have
+#     a destination: a push or workflow_dispatch run, even one at a pull
+#     request's head SHA, measured a diff that pull request does not own, so
+#     it exits silently;
 #   - the destination pull request is resolved from the triggering event
 #     only — its head repository, head branch and head SHA (issue 656): a
 #     candidate from another repository, or whose head has moved past the
@@ -86,8 +87,14 @@ jobs:
           set -euo pipefail
           # ci also runs on push and workflow_dispatch; neither measured a pull
           # request's own diff, so neither has a destination: silent exit.
-          if [[ "$RUN_EVENT" != "pull_request" ]]; then
-            echo "the triggering ci run was a ${RUN_EVENT} run, not a pull_request run; nothing to comment on"
+          # pull_request_target is the event ci actually runs on (issue 822),
+          # and such a run carries the pull request's own head SHA — but its
+          # head repository is the BASE repository, never a fork's. A fork's
+          # run therefore asks for a pull request head-labelled
+          # <base owner>:<branch>, which a fork's pull request is not, so the
+          # binding below resolves nothing and it exits silently.
+          if [[ "$RUN_EVENT" != "pull_request" && "$RUN_EVENT" != "pull_request_target" ]]; then
+            echo "the triggering ci run was a ${RUN_EVENT} run, not a pull_request or pull_request_target run; nothing to comment on"
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -256,8 +263,9 @@ jobs:
 
       # Success when a comment was posted or updated (either body variant),
       # failure on any loud failure — and every silent exit of the resolve
-      # step (not a pull_request run, a deleted head repository, or no open
-      # PR from that head at that SHA) publishes nothing at all.
+      # step (not a pull_request or pull_request_target run, a deleted head
+      # repository, or no open PR from that head at that SHA) publishes
+      # nothing at all.
       - name: Publish the coverage comment check run
         if: always()
         shell: bash
