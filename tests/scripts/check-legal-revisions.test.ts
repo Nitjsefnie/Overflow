@@ -154,4 +154,69 @@ describe("legal revision gate", () => {
       await rm(fixture, { recursive: true, force: true });
     }
   });
+
+  it("exits 0 over a one-commit range and names the count and range correctly", async () => {
+    // Same fixture shape as the violating-range leg above: the CLI resolves the
+    // repository it walks from its own location, so the fixture is a throwaway
+    // git repository carrying a byte-identical copy of the script. This leg
+    // covers the success path through the real binary — a legal page and its
+    // revision record landing in the SAME commit — and pins the success
+    // message's count and range wording for the one-commit case.
+    const fixture = await mkdtemp(join(tmpdir(), "legal-revisions-"));
+    try {
+      await mkdir(join(fixture, "scripts"), { recursive: true });
+      await copyFile(
+        resolve("scripts/check-legal-revisions.ts"),
+        join(fixture, "scripts/check-legal-revisions.ts"),
+      );
+
+      const git = (...args: string[]): string => {
+        const run = spawnSync("git", args, { cwd: fixture, encoding: "utf8" });
+        if (run.error !== undefined || run.status !== 0) {
+          throw new Error(`git ${args.join(" ")} failed: ${run.stderr.trim()}`);
+        }
+        return run.stdout;
+      };
+
+      git("init", "--quiet");
+      git("config", "user.email", "fixture@example.invalid");
+      git("config", "user.name", "Legal Revision Fixture");
+      git("config", "commit.gpgsign", "false");
+
+      await writeFile(join(fixture, "README.md"), "fixture base\n");
+      git("add", "README.md");
+      git("commit", "--quiet", "-m", "base");
+      const baseSha = git("rev-parse", "HEAD").trim();
+
+      await mkdir(join(fixture, "src/app/terms"), { recursive: true });
+      await mkdir(join(fixture, "src/lib"), { recursive: true });
+      await writeFile(
+        join(fixture, "src/app/terms/page.tsx"),
+        "export default () => null;\n",
+      );
+      await writeFile(
+        join(fixture, "src/lib/legal-revisions.ts"),
+        "export const LEGAL_REVISIONS = 1;\n",
+      );
+      git("add", "src/app/terms/page.tsx", "src/lib/legal-revisions.ts");
+      git("commit", "--quiet", "-m", "terms page with its revision record");
+      const headSha = git("rev-parse", "HEAD").trim();
+
+      const result = spawnSync(
+        process.execPath,
+        [resolve(fixture, "scripts/check-legal-revisions.ts"), baseSha, headSha],
+        { cwd: process.cwd(), encoding: "utf8" },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("1 commit in");
+      expect(result.stdout, "the count must not be pluralized for one commit").not.toContain(
+        "1 commits",
+      );
+      expect(result.stdout).toContain(`${baseSha}..${headSha}`);
+    } finally {
+      await rm(fixture, { recursive: true, force: true });
+    }
+  });
 });
