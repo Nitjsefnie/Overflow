@@ -42,7 +42,10 @@ describe("the GitLab webhook token check", () => {
     expect(verifyGitLabWebhookToken("x".repeat("shared-secret".length), "shared-secret")).toBe(false);
   });
 
-  it("uses timingSafeEqual for equal-length acceptance and rejection", () => {
+  it("uses timingSafeEqual for equal-length acceptance and rejection", async () => {
+    // Earlier files can cache this module with real crypto in the shared graph.
+    vi.resetModules();
+    const { verifyGitLabWebhookToken } = await import("@/lib/gitlab/webhook-token");
     const comparison = vi.mocked(timingSafeEqual);
     comparison.mockClear();
 
