@@ -304,6 +304,13 @@ export function AccountDataNotice() {
             backups, and the system journal Overflow&apos;s own output goes to. The repository names
             no provider, so no region is stated for it
           </li>
+          <li>
+            Google LLC (US) — failure alerts mail the tail of the failed unit&apos;s journal
+            entries to the operator&apos;s mailbox. The mail is submitted through the host&apos;s
+            mail relay and forwarded by Google&apos;s smtp.gmail.com relay, so Google LLC (US)
+            processes that content. The journal excerpts may carry personal data (for example
+            repository names or logins)
+          </li>
         </ul>
         <p>
           Using this site from outside the US therefore means data is transferred to these
