@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { PublicAppShell } from "@/components/app-shell";
+import { DISPUTE_RULES } from "@/lib/disputes";
 import { TERMS_REVISION } from "@/lib/legal-revisions";
 
 export function TermsNotice() {
@@ -14,7 +15,7 @@ export function TermsNotice() {
           data-effective-date={TERMS_REVISION.effectiveDate}
         >
           These terms are version {TERMS_REVISION.version}, in effect from {TERMS_REVISION.effectiveDate}.
-          Contesting a sanction or a settlement cites that date — it is what fixes the text you are
+          Contesting a settlement cites that date — it is what fixes the text you are
           held to.
         </p>
         <p>
@@ -72,13 +73,12 @@ export function TermsNotice() {
       </section>
 
       <section className="surface" aria-labelledby="terms-disputes-heading">
-        <h2 id="terms-disputes-heading">Contesting a sanction or a settlement</h2>
-        <p>
-          Ask for a correction. If a settlement is wrong — including when review rounds cost you credits
-          through a maintainer&apos;s mistake — or a sanction is, you can ask for it to be corrected. The
-          settlement&apos;s creditor or the sponsor can ask; a moderator decides. One open request per
-          issue at a time.
-        </p>
+        <h2 id="terms-disputes-heading">Contesting a settlement</h2>
+        <ul className="rules-list">
+          {DISPUTE_RULES.map((rule) => (
+            <li key={rule}>{rule}</li>
+          ))}
+        </ul>
         <p>
           The <Link href="/rules">Disputes section of the rules page</Link> is the source of truth for how
           correction requests work.

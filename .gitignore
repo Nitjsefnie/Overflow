@@ -200,6 +200,7 @@ src/components/*
 !src/components/*.tsx
 !src/lib/
 src/lib/*
+!src/lib/disputes.ts
 !src/lib/format-signed.ts
 !src/lib/legal-revisions.ts
 !src/lib/plural.ts
