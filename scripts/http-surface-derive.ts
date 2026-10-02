@@ -74,6 +74,14 @@ import { moderationSurfaceShapes } from "./http-surface-derive-moderation.ts";
  * representative typed values (ISO strings for timestamps, uuid-ish strings
  * for ids, nonempty arrays for lists), and reads the shape off the Response
  * the handler answers.
+ *
+ * The five pass-through reads (the issues, settlements, moderation-audit,
+ * unwritable-closure and override lists) answer the stub's object unchanged,
+ * so the recorded shape is the fixture's. That pin has two legs: the snapshot
+ * gate pins the field names the fixture serves, and because the fixtures are
+ * typed against the real projection types (e.g. src/lib/dashboard/queries.ts),
+ * a wire rename in the underlying module leaves the snapshot gate green and
+ * is caught by the typecheck leg of the same CI gate.
  */
 
 /**

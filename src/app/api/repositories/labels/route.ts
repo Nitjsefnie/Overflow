@@ -396,8 +396,9 @@ async function getSession(): Promise<LabelsRouteSession | null> {
 
 /**
  * The direct export Next.js routes on: a thin wrapper delegating to the
- * factory with production dependencies, constructed per request exactly as
- * the pre-refactor handler constructed them.
+ * factory with the production dependency functions — the same construction
+ * sites the pre-refactor handler used, each building its store or gateway
+ * per call, so no database client outlives the request that made it.
  */
 export const GET = createLabelsGetHandler({
   getSession,
