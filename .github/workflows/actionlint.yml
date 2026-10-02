@@ -49,10 +49,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      ACTIONLINT_VERSION: 1.7.12
-      # sha256 of actionlint_1.7.12_linux_amd64.tar.gz from the upstream
-      # checksums file. Bump the version and checksum together.
-      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+      # actionlint from the Nitjsefnie-OSC fork, not from rhysd/actionlint.
+      # Upstream's newest release is still 1.7.12, and its workflow schema has no
+      # `queue` key under `concurrency` — the key claim.yml needs so a second
+      # /claim arriving mid-run is queued rather than dropped unanswered. Stock
+      # 1.7.12 fails that file as an unexpected key, which would leave the gate
+      # unable to lint the workflow it exists to lint.
+      #
+      # RETURN TO UPSTREAM as soon as an upstream release accepts `queue` under
+      # `concurrency`: set ACTIONLINT_REPO back to rhysd/actionlint, take the
+      # version and the sha256 from that release's own checksums file, and
+      # re-verify .github/workflows/ with the stock binary.
+      # tests/api/ci-workflows.test.ts pins all three values by exact equality, so
+      # it goes red until the same change bumps them there; the failure names the
+      # mismatched key. Until then the fork release is the same upstream code plus
+      # that one schema key.
+      ACTIONLINT_REPO: Nitjsefnie-OSC/actionlint
+      ACTIONLINT_VERSION: 1.7.12-queue.1
+      # sha256 of actionlint_1.7.12-queue.1_linux_amd64.tar.gz from the fork's
+      # checksums file. Bump the repository, version and checksum together.
+      ACTIONLINT_SHA256: dcc2c42a7caaa197dfe63584a3851f62ef260f80b2cf221baaf05479661e1521
 
     steps:
       # Under pull_request_target no ref input at all: GitHub points GITHUB_REF
@@ -83,7 +99,7 @@ jobs:
         run: |
           tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           curl -fsSL --retry 3 -o "$tarball" \
-            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+            "https://github.com/${ACTIONLINT_REPO}/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
           echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "$tarball" actionlint
           ./actionlint --version

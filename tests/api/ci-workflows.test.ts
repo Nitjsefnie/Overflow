@@ -429,8 +429,14 @@ fi
       "runs-on": "ubuntu-latest",
       "timeout-minutes": 15,
       env: {
-        ACTIONLINT_VERSION: "1.7.12",
-        ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
+        // The fork, not upstream: stock actionlint's newest release is still
+        // 1.7.12, and its workflow schema has no `queue` key under
+        // `concurrency`, so it rejects claim.yml as an unknown key. The
+        // repository and version live in env beside the checksum that pins the
+        // fork's own tarball.
+        ACTIONLINT_REPO: "Nitjsefnie-OSC/actionlint",
+        ACTIONLINT_VERSION: "1.7.12-queue.1",
+        ACTIONLINT_SHA256: "dcc2c42a7caaa197dfe63584a3851f62ef260f80b2cf221baaf05479661e1521",
       },
       steps: [
         {
@@ -451,7 +457,7 @@ fi
           name: "Install actionlint",
           run: `tarball="actionlint_\${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
 curl -fsSL --retry 3 -o "$tarball" \\
-  "https://github.com/rhysd/actionlint/releases/download/v\${ACTIONLINT_VERSION}/\${tarball}"
+  "https://github.com/\${ACTIONLINT_REPO}/releases/download/v\${ACTIONLINT_VERSION}/\${tarball}"
 echo "\${ACTIONLINT_SHA256}  \${tarball}" | sha256sum -c -
 tar -xzf "$tarball" actionlint
 ./actionlint --version
