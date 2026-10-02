@@ -374,6 +374,373 @@
         "openingComparisonPoints": "number",
         "repositoryName": "string"
       }
+    },
+    "GET /api/moderation/audits": {
+      "differenceBetweenMeans": "number",
+      "id": "string",
+      "openedAt": "string",
+      "priorEnforcementState": "string",
+      "reporterLogin": "string",
+      "repositoryName": "string",
+      "sampleEndedAt": "string",
+      "sampleStartedAt": "string",
+      "settledSampleSize": "number",
+      "state": "string",
+      "targetAccountId": "string",
+      "targetLogin": "string"
+    },
+    "GET /api/moderation/unwritable-closures": {
+      "history": {
+        "calibrationId": "null",
+        "calibrationOwnerLogin": "null",
+        "id": "string",
+        "issueNumber": "number",
+        "issueTitle": "string",
+        "issueUrl": "string",
+        "kind": "string",
+        "latestCorrection": {
+          "requestedAt": "string",
+          "state": "string"
+        },
+        "pullRequest": {
+          "number": "number",
+          "title": "string",
+          "url": "string"
+        },
+        "reason": "string",
+        "recordedAt": "string",
+        "repositoryName": "string",
+        "settlementId": "string",
+        "settlementParties": {
+          "creditorLogin": "null",
+          "debtorLogin": "string"
+        },
+        "viewerCanRequestCorrection": "boolean"
+      },
+      "queue": {
+        "calibrationId": "null",
+        "calibrationOwnerLogin": "null",
+        "id": "string",
+        "issueNumber": "number",
+        "issueTitle": "string",
+        "issueUrl": "string",
+        "kind": "string",
+        "latestCorrection": {
+          "requestedAt": "string",
+          "state": "string"
+        },
+        "pullRequest": {
+          "number": "number",
+          "title": "string",
+          "url": "string"
+        },
+        "reason": "string",
+        "recordedAt": "string",
+        "repositoryName": "string",
+        "settlementId": "string",
+        "settlementParties": {
+          "creditorLogin": "null",
+          "debtorLogin": "string"
+        },
+        "viewerCanRequestCorrection": "boolean"
+      }
+    },
+    "GET /api/moderation/cohort": {
+      "preview": {
+        "comparison": {
+          "differenceBetweenMeans": "number",
+          "outsider": {
+            "count": "number",
+            "meanDelta": "number",
+            "medianDelta": "number"
+          },
+          "selfWork": {
+            "count": "number",
+            "meanDelta": "number",
+            "medianDelta": "number"
+          }
+        },
+        "meetsMinimumSampleSize": "boolean",
+        "repositoryId": "null",
+        "sampleEndedAt": "string",
+        "sampleStartedAt": "string",
+        "targetAccountId": "string"
+      }
+    },
+    "GET /api/moderation/recalibration": {
+      "preview": {
+        "actionability": {
+          "actionable": "boolean",
+          "reason": "string"
+        },
+        "adjustments": {
+          "calibrationAuditId": "string",
+          "createdAt": "string",
+          "gapPerPair": "number",
+          "id": "string",
+          "lines": {
+            "amount": "number",
+            "creditorId": "string",
+            "settlementId": "string"
+          },
+          "moderationEventId": "string",
+          "pairCount": "number",
+          "reason": "string",
+          "reversalOf": "null",
+          "targetAccountId": "string",
+          "totalAmount": "number"
+        },
+        "audit": {
+          "decidedAt": "string",
+          "id": "string"
+        },
+        "figure": {
+          "gapPerPair": "number",
+          "pairCount": "number",
+          "totalAmount": "number"
+        },
+        "lines": {
+          "amount": "number",
+          "creditorId": "string",
+          "settlementId": "string"
+        },
+        "totals": {
+          "outCount": "number",
+          "outSum": "number",
+          "selfCount": "number",
+          "selfSum": "number"
+        }
+      }
+    },
+    "GET /api/moderation/rederivation": {
+      "rederivation": {
+        "foldRevision": "number",
+        "repositories": {
+          "ownerName": "string",
+          "rederivationRequestedAt": "string",
+          "repositoryId": "string",
+          "rowsAtCurrentRevision": "number",
+          "rowsBelowCurrentRevision": "number"
+        }
+      },
+      "startupRecoverySkipped": "boolean"
+    },
+    "GET /api/moderation/moderators": {
+      "moderators": {
+        "accountId": "string",
+        "githubLogin": "string",
+        "isConfigured": "boolean"
+      }
+    },
+    "POST /api/moderation/moderators": {
+      "change": {
+        "actorId": "string",
+        "changedAt": "string",
+        "role": "string",
+        "targetAccountId": "string",
+        "targetGitHubLogin": "string"
+      }
+    },
+    "POST /api/moderation": {
+      "audit": {
+        "cohort": {
+          "comparison": {
+            "differenceBetweenMeans": "number",
+            "outsider": {
+              "count": "number",
+              "meanDelta": "number",
+              "medianDelta": "number"
+            },
+            "selfWork": {
+              "count": "number",
+              "meanDelta": "number",
+              "medianDelta": "number"
+            }
+          },
+          "outsiderSettlementPairs": {
+            "githubIssueId": "number",
+            "githubPullRequestId": "number",
+            "githubRepositoryId": "number",
+            "mergedAt": "string",
+            "offeredDifficulty": "number",
+            "proofSha256": "string",
+            "settledDifficulty": "number"
+          },
+          "repositoryId": "null",
+          "sampleEndedAt": "string",
+          "sampleStartedAt": "string",
+          "selfWorkPairs": {
+            "githubIssueId": "number",
+            "githubPullRequestId": "number",
+            "githubRepositoryId": "number",
+            "mergedAt": "string",
+            "offeredDifficulty": "number",
+            "proofSha256": "string",
+            "settledDifficulty": "number"
+          },
+          "targetAccountId": "string"
+        },
+        "confirmedPatternCount": "number",
+        "id": "string",
+        "priorState": "string",
+        "repositoryId": "null",
+        "state": "string",
+        "targetAccountId": "string",
+        "targetState": "string"
+      }
+    },
+    "PATCH /api/moderation/<id>": {
+      "audit": {
+        "cohort": {
+          "comparison": {
+            "differenceBetweenMeans": "number",
+            "outsider": {
+              "count": "number",
+              "meanDelta": "number",
+              "medianDelta": "number"
+            },
+            "selfWork": {
+              "count": "number",
+              "meanDelta": "number",
+              "medianDelta": "number"
+            }
+          },
+          "outsiderSettlementPairs": {
+            "githubIssueId": "number",
+            "githubPullRequestId": "number",
+            "githubRepositoryId": "number",
+            "mergedAt": "string",
+            "offeredDifficulty": "number",
+            "proofSha256": "string",
+            "settledDifficulty": "number"
+          },
+          "repositoryId": "null",
+          "sampleEndedAt": "string",
+          "sampleStartedAt": "string",
+          "selfWorkPairs": {
+            "githubIssueId": "number",
+            "githubPullRequestId": "number",
+            "githubRepositoryId": "number",
+            "mergedAt": "string",
+            "offeredDifficulty": "number",
+            "proofSha256": "string",
+            "settledDifficulty": "number"
+          },
+          "targetAccountId": "string"
+        },
+        "confirmedPatternCount": "number",
+        "id": "string",
+        "priorState": "string",
+        "repositoryId": "null",
+        "state": "string",
+        "targetAccountId": "string",
+        "targetState": "string"
+      }
+    },
+    "PATCH /api/moderation": {
+      "recalibration": {
+        "confirmedPatternCount": "number",
+        "priorState": "string",
+        "reactivatedRepositoryCount": "number",
+        "targetAccountId": "string",
+        "targetState": "string"
+      }
+    },
+    "POST /api/moderation/recalibration/adjustment": {
+      "adjustment": {
+        "calibrationAuditId": "string",
+        "createdAt": "string",
+        "gapPerPair": "number",
+        "id": "string",
+        "lines": {
+          "amount": "number",
+          "creditorId": "string",
+          "settlementId": "string"
+        },
+        "moderationEventId": "string",
+        "pairCount": "number",
+        "reason": "string",
+        "reversalOf": "null",
+        "targetAccountId": "string",
+        "totalAmount": "number"
+      }
+    },
+    "POST /api/moderation/adjustments/reversal": {
+      "reversal": {
+        "calibrationAuditId": "string",
+        "createdAt": "string",
+        "gapPerPair": "number",
+        "id": "string",
+        "lines": {
+          "amount": "number",
+          "creditorId": "string",
+          "settlementId": "string"
+        },
+        "moderationEventId": "string",
+        "pairCount": "number",
+        "reason": "string",
+        "reversalOf": "string",
+        "targetAccountId": "string",
+        "totalAmount": "number"
+      }
+    },
+    "POST /api/moderation/rederivation": {
+      "request": {
+        "ownerName": "string",
+        "rederivationRequestedAt": "string",
+        "repositoryId": "string"
+      }
+    },
+    "POST /api/overrides": {
+      "request": {
+        "createdAt": "string",
+        "decidedAt": "null",
+        "decidedById": "null",
+        "decisionReason": "null",
+        "id": "string",
+        "issueId": "string",
+        "reason": "string",
+        "requesterId": "string",
+        "settledPoints": "null",
+        "state": "string"
+      }
+    },
+    "GET /api/overrides": {
+      "calibration": "null",
+      "id": "string",
+      "issueNumber": "number",
+      "issueTitle": "string",
+      "issueUrl": "string",
+      "reason": "string",
+      "repositoryName": "string",
+      "requestedAt": "string",
+      "requesterLogin": "string",
+      "settlement": {
+        "credits": "number",
+        "openingComparisonPoints": "number",
+        "pullRequestNumber": "number",
+        "pullRequestTitle": "string",
+        "pullRequestUrl": "string",
+        "reviewRounds": "number",
+        "settledLabel": "string",
+        "settledPoints": "number",
+        "settlementId": "string",
+        "status": "string"
+      }
+    },
+    "PATCH /api/overrides/<id>": {
+      "request": {
+        "createdAt": "string",
+        "decidedAt": "string",
+        "decidedById": "string",
+        "decisionReason": "string",
+        "id": "string",
+        "issueId": "string",
+        "reason": "string",
+        "requesterId": "string",
+        "settledPoints": "number",
+        "state": "string"
+      }
     }
   }
 }
