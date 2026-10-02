@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { legalRevisionViolations } from "../../scripts/check-legal-revisions";
 
@@ -95,5 +97,61 @@ describe("legal revision gate", () => {
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`Could not list commits in ${missingRevision}..HEAD`);
+  });
+
+  it("exits 1 over a violating range, naming the sha and the revision-record line", async () => {
+    // The CLI resolves the repository it walks from its own location, so the
+    // fixture is a throwaway git repository carrying a copy of the script: the
+    // copy makes that repository the one under test while this checkout's
+    // history and working tree stay untouched. The commits are real throwaway
+    // commits and the whole fixture is removed again below.
+    const fixture = await mkdtemp(join(tmpdir(), "legal-revisions-"));
+    try {
+      await mkdir(join(fixture, "scripts"), { recursive: true });
+      await copyFile(
+        resolve("scripts/check-legal-revisions.ts"),
+        join(fixture, "scripts/check-legal-revisions.ts"),
+      );
+
+      const git = (...args: string[]): string => {
+        const run = spawnSync("git", args, { cwd: fixture, encoding: "utf8" });
+        if (run.error !== undefined || run.status !== 0) {
+          throw new Error(`git ${args.join(" ")} failed: ${run.stderr.trim()}`);
+        }
+        return run.stdout;
+      };
+
+      git("init", "--quiet");
+      git("config", "user.email", "fixture@example.invalid");
+      git("config", "user.name", "Legal Revision Fixture");
+      git("config", "commit.gpgsign", "false");
+
+      await writeFile(join(fixture, "README.md"), "fixture base\n");
+      git("add", "README.md");
+      git("commit", "--quiet", "-m", "base");
+      const baseSha = git("rev-parse", "HEAD").trim();
+
+      await mkdir(join(fixture, "src/app/terms"), { recursive: true });
+      await writeFile(
+        join(fixture, "src/app/terms/page.tsx"),
+        "export default () => null;\n",
+      );
+      git("add", "src/app/terms/page.tsx");
+      git("commit", "--quiet", "-m", "page without the revision record");
+      const headSha = git("rev-parse", "HEAD").trim();
+
+      const result = spawnSync(
+        process.execPath,
+        [resolve(fixture, "scripts/check-legal-revisions.ts"), baseSha, headSha],
+        { cwd: process.cwd(), encoding: "utf8" },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toContain(headSha);
+      expect(result.stdout).toContain("src/lib/legal-revisions.ts");
+    } finally {
+      await rm(fixture, { recursive: true, force: true });
+    }
   });
 });
