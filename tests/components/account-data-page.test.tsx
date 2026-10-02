@@ -257,6 +257,27 @@ describe("account-data notice page", () => {
     );
     expect(hrefs.filter((href) => href.startsWith("mailto:") || /emails/i.test(href))).toEqual([]);
   });
+
+  it("discloses the failure-alert mail route in the recipients list", async () => {
+    await renderAccountDataPage();
+
+    const recipients = sectionLabelledBy("account-data-recipients-heading");
+    const item = Array.from(recipients.querySelectorAll("li")).find((candidate) =>
+      /smtp\.gmail\.com/i.test(candidate.textContent ?? ""),
+    );
+    expect(item, "the recipients list discloses the failure-alert mail route").toBeDefined();
+
+    const text = item!.textContent ?? "";
+    expect(text, "failure alerts are what get mailed").toMatch(
+      /failure alerts mail [\s\S]*journal (?:entries|excerpts)/i,
+    );
+    expect(text, "the destination is the operator's mailbox").toMatch(/operator.s mailbox/i);
+    expect(text, "the mail is forwarded by Google's smtp.gmail.com relay").toMatch(
+      /host.s mail relay[\s\S]*smtp\.gmail\.com/i,
+    );
+    expect(text, "Google LLC (US) is named as processing the content").toMatch(/Google LLC \(US\)/i);
+    expect(text, "the mailed journal excerpts may carry personal data").toMatch(/personal data/i);
+  });
 });
 
 describe("routes that link the notice", () => {
