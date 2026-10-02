@@ -43,11 +43,11 @@ describe("terms page", () => {
     expect(notice!.querySelector('a[href="/rules"]')).not.toBeNull();
   });
 
-  it("cites the terms that set the age floor inside the account section", async () => {
+  it("cites the terms that set the age floor in the account section's statement", async () => {
     await renderTermsPage();
 
     // What an account presupposes — that its holder is old enough to hold one
-    // — is only checkable because the section cites the exact terms the floor
+    // — is only checkable because the statement cites the exact terms the floor
     // comes from. A reader depends on that citation, not on the sentence's
     // wording, so this pins the link and survives a faithful paraphrase.
     //
@@ -55,16 +55,45 @@ describe("terms page", () => {
     // GitHub, and a prefix match is satisfied by any of GitHub's pages, so it
     // would go green on a page whose age floor cites nothing at all.
     //
+    // Visible, not merely present: a hidden anchor carries no citation to a
+    // reader, so presence alone is not the property being relied on.
+    //
+    // In the LAST paragraph, and NOT the account-creation paragraph above it:
+    // presence in the section is satisfied by moving the citation into the
+    // paragraph above and deleting the statement, which is the regression
+    // issue 915 exists to prevent. Position alone does not catch that — once
+    // the statement is deleted, the paragraph above BECOMES the last one — so
+    // the statement is also pinned as a paragraph distinct from the one the
+    // account-creation test identifies by its /account-data link. Both are
+    // structural: neither reads a word of the page.
+    //
+    // POSITIONAL BY DESIGN — adding a paragraph after the statement later
+    // breaks this test, and the fix is to move the statement or this pin
+    // deliberately, never to relax it back to section presence.
+    //
     // Scoped to the account section: PublicAppShell's chrome and the page's own
     // other sections carry external links already, and a document-wide query
     // passes with this section's link deleted.
     const section = screen.getByRole("region", { name: "What an account is" });
+    const paragraphs = section.querySelectorAll("p");
+    const statement = paragraphs[paragraphs.length - 1];
     expect(
-      section.querySelector(
-        'a[href="https://docs.github.com/en/site-policy/github-terms/github-terms-of-service"]',
-      ),
-      "the account section cites the terms the age floor comes from",
+      statement,
+      "the account section states what holding an account presupposes",
+    ).not.toBeUndefined();
+    expect(
+      statement.querySelector('a[href="/account-data"]'),
+      "the statement is a paragraph of its own, not the account-creation one",
+    ).toBeNull();
+
+    const citation = statement.querySelector(
+      'a[href="https://docs.github.com/en/site-policy/github-terms/github-terms-of-service"]',
+    );
+    expect(
+      citation,
+      "the statement cites the terms the age floor comes from",
     ).not.toBeNull();
+    expect(citation, "the citation is one a reader can see").toBeVisible();
   });
 
   it("keeps every internal link on a page route", async () => {

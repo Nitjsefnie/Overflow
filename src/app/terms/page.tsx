@@ -26,9 +26,10 @@ export function TermsNotice() {
           <a href="https://docs.github.com/en/site-policy/github-terms/github-terms-of-service" rel="noreferrer">
             GitHub terms of service
           </a>{" "}
-          require you to be age 13 or older — and to be older where your country&apos;s own minimum age
-          is higher. Overflow sets no floor of its own and does not check one of its own — it relies
-          on GitHub not issuing an account to someone below that floor.
+          require you to be age 13 or older. Where your country sets a minimum age higher than 13, it
+          is on you to meet it: GitHub&apos;s terms leave you responsible for complying with your own
+          country&apos;s laws. Overflow sets no floor of its own and does not check one of its own —
+          it relies on GitHub not issuing an account to someone below that floor.
         </p>
       </section>
 
