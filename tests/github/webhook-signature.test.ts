@@ -29,7 +29,7 @@ describe("verifyGitHubWebhookSignature", () => {
   });
 
   it("rejects an unconfigured secret rather than hashing the body with it", () => {
-    const forged = `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
+    const forged = `sha256=${createHmac("sha256", "").update(rawBody).digest("hex")}`;
 
     expect(verifyGitHubWebhookSignature(rawBody, forged, undefined)).toBe(false);
   });
