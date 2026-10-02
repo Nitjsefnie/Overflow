@@ -275,8 +275,13 @@ describe("account-data notice page", () => {
     expect(text, "the mail is forwarded by Google's smtp.gmail.com relay").toMatch(
       /host.s mail relay[\s\S]*smtp\.gmail\.com/i,
     );
-    expect(text, "Google LLC (US) is named as processing the content").toMatch(/Google LLC \(US\)/i);
-    expect(text, "the mailed journal excerpts may carry personal data").toMatch(/personal data/i);
+    expect(text, "Google LLC (US) is named as processing the content the relay forwards").toMatch(
+      /smtp\.gmail\.com[\s\S]*Google LLC \(US\)\s+processes/i,
+    );
+    expect(
+      text,
+      "the mailed journal excerpts may carry personal data, with repository names and logins as the examples",
+    ).toMatch(/personal data[\s\S]*repository names[\s\S]*logins/i);
   });
 });
 
