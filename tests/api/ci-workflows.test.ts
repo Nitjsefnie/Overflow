@@ -889,14 +889,16 @@ exit 1
     expect(pip!["open-pull-requests-limit"]).toBe(5);
     expect(pip!.groups).toBeUndefined();
     expect(pip!.ignore).toBeUndefined();
-    expect(source).toContain(`  - package-ecosystem: "pip"
+    const expectedPipBlock = `  - package-ecosystem: "pip"
     directory: "/.github/"
     schedule:
       interval: "weekly"
       day: "thursday"
       time: "05:07"
       timezone: "Etc/UTC"
-    open-pull-requests-limit: 5`);
+    open-pull-requests-limit: 5\n`;
+    expect(source).toContain(expectedPipBlock);
+    expect(source.endsWith(expectedPipBlock)).toBe(true);
   });
 
   it("collects every workflow action into one version and one security dependabot group", async () => {
