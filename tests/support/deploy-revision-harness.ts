@@ -226,10 +226,16 @@ export const IGNORED_LISTING = "git ls-files -z --others --ignored --exclude-sta
  * Every ignored untracked entry production's tree legitimately holds, in the
  * shape `git ls-files --others --ignored --directory` prints it: directories
  * carry a trailing slash, the .next symlink does not.
+ *
+ * `.claude/` is this repository's own session machinery (the autoloaded working
+ * rules and the priority board), present and ignored in every checkout a deploy
+ * runs from. It is allowlisted as a directory entry with its trailing slash, so
+ * nothing below it is admitted by name and no sibling one edit away matches.
  */
 export const OPERATIONAL_IGNORED = [
   ".next",
   ".next/",
+  ".claude/",
   ".next-release-20260908T000000Z-abc1234/",
   ".next-release-20260908T000000Z-0123456789abcdef0123456789abcdef01234567/",
   ".next-release-20260908T000000Z-abc1234.tsconfig.json",
@@ -243,6 +249,10 @@ export const OPERATIONAL_IGNORED = [
  * the tree root, with the release grammar exactly.
  */
 export const NEAR_MISS_IGNORED = [
+  ".claude",
+  ".claude-rules/",
+  ".claudex",
+  "src/.claude/",
   ".next-release-bogus/",
   ".next-switch-abc1234",
   ".next-release-20260908T000000Z-abc1234",
