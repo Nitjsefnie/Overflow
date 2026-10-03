@@ -745,6 +745,14 @@ fi
     // The real `uses:` inventory, read from the shipped workflows, so a group
     // that silently stopped covering an action dies here instead of splitting
     // that action's bump into its own pull request.
+    //
+    // Both walks dereference a key every shipped workflow carries, and both are
+    // left to THROW when one is absent — `Object.values(workflow.on)` and
+    // `for (const step of job.steps)` each raise a TypeError. That is a
+    // deliberate choice, matching the job-level `uses:` case this file already
+    // crashes on: a loud failure forces a maintainer to look, where a silent
+    // `?? {}` would shrink the inventory or the cron set and let the gate pass
+    // on less coverage than it claims to have read.
     const workflowDirectory = resolve(".github/workflows");
     const workflowFiles = (await readdir(workflowDirectory)).filter((file) =>
       /\.ya?ml$/.test(file));
@@ -768,11 +776,15 @@ fi
       for (const trigger of Object.values(workflow.on)) {
         for (const entry of Array.isArray(trigger) ? trigger : []) {
           const fields = entry.cron.trim().split(/\s+/);
-          // A weekly cron is `m h * * d`; anything narrower fires on a
-          // schedule dependabot's weekly lanes need not dodge.
-          if (fields.length === 5 && fields[2] === "*" && fields[3] === "*" && fields[4] !== "*") {
-            cronDays.add(CRON_DAYS[Number(fields[4])]!);
-          }
+          if (fields.length !== 5 || fields[2] !== "*" || fields[3] !== "*") continue;
+          // `m h * * d` fires on one weekday, so that weekday is occupied;
+          // `m h * * *` fires EVERY day, so it occupies all seven and collides
+          // with every lane. Not modelled here: a day-of-month or month field
+          // (monthly crons), and a day field naming a RANGE or a list (`1-5`),
+          // which fire on a subset this weekday-only check does not resolve.
+          // No cron of either shape ships in this repository.
+          const days = fields[4] === "*" ? CRON_DAYS : [CRON_DAYS[Number(fields[4])]!];
+          for (const day of days) cronDays.add(day);
         }
       }
     }
