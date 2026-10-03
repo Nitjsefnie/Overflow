@@ -48,9 +48,9 @@ type ScriptedOutcome = { code: number; stdout: string; stderr: string };
  * machine: the slowest legitimate case measured on this worktree was the
  * three-attempt retry-budget case at ~570 ms (the six-spawn classification case
  * is ~970 ms end to end, and the suite's `sleep` is a stub, so its 7- and
- * 30-second backoffs cost nothing here), and this sits ~100x above the slowest
- * single spawn. The one case that deliberately overruns it is the runaway
- * fixture below, which is bounded by a much shorter explicit limit.
+ * 30-second backoffs cost nothing here), and this sits ~200x above the
+ * slowest single spawn. The one case that deliberately overruns it is the
+ * runaway fixture below, which is bounded by a much shorter explicit limit.
  */
 const STEP_TIMEOUT_MS = 120_000;
 
@@ -902,12 +902,24 @@ describe("the dependency audit workflow's audit step", () => {
       // applied, which is a record of what the code did rather than a duration
       // this test measured.
       expect((result.error as NodeJS.ErrnoException | undefined)?.code).toBe("ETIMEDOUT");
-      expect(result.signal).toBe(STEP_KILL_SIGNAL);
+      // The literal, not STEP_KILL_SIGNAL. Comparing the observed signal to the
+      // constant that configures it is self-referential: planting SIGTERM in the
+      // constant satisfied this assertion and left the file 21/21 green, because
+      // `spawnSync` faithfully reported the signal it was told to send. SIGKILL
+      // is the property being pinned — a script that has to be bounded cannot be
+      // asked to stop politely, and a process still running to handle SIGTERM is
+      // the thing this whole mechanism exists to prevent.
+      expect(result.signal).toBe("SIGKILL");
 
       // And nothing it started outlived it. This is the assertion that carries
       // the issue: the bound alone takes down the direct child and leaves the
-      // rest of the tree running, reparented to PID 1 — measured at 3 processes
+      // rest of the chain running, reparented to PID 1 — measured at 3 processes
       // still alive after the window below, on the unfixed spawn.
+      //
+      // What the count covers is the chain's own shells, matched on the marker
+      // in their argv. Each level's `sleep` child carries no marker and is not
+      // counted; it is still killed, because the group kill takes every member
+      // of the group rather than the ones this count can see.
       const deadline = Date.now() + SURVIVOR_SETTLE_MS;
       let survivors = countProcesses(marker);
       while (survivors > baseline && Date.now() < deadline) {
@@ -916,9 +928,11 @@ describe("the dependency audit workflow's audit step", () => {
       }
       expect(
         survivors,
-        `the step script's process tree outlived the run: ${survivors - baseline} process(es) still ` +
-          "carrying this run's marker. The bound killed the direct child and left the rest reparented, " +
-          "which is the 2026-10-03 failure",
+        `the step script left ${survivors - baseline} of its own re-exec chain running after the run: ` +
+          "process(es) still carrying this run's marker. The bound killed the direct child and left the " +
+          "rest reparented, which is the 2026-10-03 failure. (The count covers the chain's own shells " +
+          "only — the `sleep` each level waits on carries no marker and is not included, which is why " +
+          "the group kill rather than the count is what has to cover it.)",
       ).toBe(baseline);
     }, 30_000);
   });
