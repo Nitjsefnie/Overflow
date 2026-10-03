@@ -1834,6 +1834,69 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
     expect(git("rev-parse", "HEAD")).toBe(tip);
   });
 
+  it("deploys a tree carrying its own .claude/ session machinery, and refuses that same tree from a script whose allowlist never learned it", async () => {
+    // Why this case exists separately: the positive direction was pinned only
+    // by OPERATIONAL_IGNORED in the shared fixture. Deleting ".claude/" from
+    // that one line left every other case in this file green, because each
+    // behavioural assertion read its expectation back out of it -- and it is
+    // also the only OPERATIONAL_IGNORED entry with no real directory behind
+    // it. Nothing here reads either constant: the tree is planted for real, the
+    // listing is real git's, and the refusal comes from the script itself with
+    // .claude/ taken out of its allowlist. So the case dies whichever half is
+    // mutated, and it is the only one that does.
+    const { fixture, behind, tip, git } = await makeGitFixture();
+    await denyByDefault(fixture.tree, git);
+    // The incident's shape: the autoloaded working rules and the priority
+    // board, nested, so git yields the directory entry and not its contents.
+    await mkdir(path.join(fixture.tree, ".claude", "rules"), { recursive: true });
+    await writeFile(path.join(fixture.tree, ".claude", "rules", "overflow-session.md"), "rules\n");
+    await mkdir(path.join(fixture.tree, ".claude", "pm"));
+    await writeFile(path.join(fixture.tree, ".claude", "pm", "board.md"), "board\n");
+    // The premise: git status cannot see any of it, and the listing the gate
+    // reads yields the whole directory in the shape its allowlist names.
+    expect(git("status", "--porcelain=v1", "-uall")).toBe("");
+    expect(
+      git("ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "--no-empty-directory"),
+    ).toContain(".claude/");
+
+    // The script as it stood before .claude/ was admitted: the alternative
+    // gone from the allowlist, and its name gone from the refusal's prose.
+    // Beside the tree, never inside it, so this run cannot list itself.
+    const source = await readFile(script, "utf8");
+    const mutant = source
+      .replace('"^(\\.next/?|\\.claude/|', '"^(\\.next/?|')
+      .replace("(.next, .claude/, release directories", "(.next, release directories");
+    expect(mutant, "the mutant drops .claude/ from the allowlist").not.toBe(source);
+    expect(mutant).not.toContain("\\.claude/");
+    const mutantScript = path.join(fixture.dir, "allowlist-without-claude.sh");
+    await writeFile(mutantScript, mutant);
+    expect(path.relative(fixture.tree, mutantScript).startsWith(".."), "outside the tree").toBe(true);
+
+    const refused = await runDeploy(fixture, HERMETIC_GIT_ENV, { ...realGit, scriptPath: mutantScript });
+
+    expect(refused.status, refused.stderr).toBe(1);
+    // .claude/ is the only thing in this tree outside the mutant's allowlist.
+    expect(listedOffenders(refused.stderr)).toEqual([".claude/"]);
+    expect(refused.stderr).toContain(`The tree in ${fixture.tree} holds the ignored untracked files above`);
+    expect(refused.stderr).toContain("outside the operational allowlist");
+    expect(git("rev-parse", "HEAD"), "the refusal left HEAD where it was").toBe(behind);
+    const afterRefusal = await readLog(fixture.shimLog);
+    expect(afterRefusal.some((entry) => entry.cmd === "gh"), "the CI gate never ran").toBe(false);
+    expect(afterRefusal.some((entry) => entry.cmd === "pnpm"), "nothing after the gates ran").toBe(false);
+    await expect(readFile(path.join(fixture.tree, ".claude", "rules", "overflow-session.md"), "utf8")).resolves.toBe("rules\n");
+
+    // The same tree, the script as committed: the deploy the issue's operator
+    // could not make. It follows the refusal because that refusal leaves the
+    // tree and HEAD exactly as they were, .claude/ included.
+    const result = await runDeploy(fixture, HERMETIC_GIT_ENV, realGit);
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(git("rev-parse", "HEAD")).toBe(tip);
+    // The refusal really did not clear it: the deploy succeeded with the
+    // rules still on disk.
+    await expect(readFile(path.join(fixture.tree, ".claude", "rules", "overflow-session.md"), "utf8")).resolves.toBe("rules\n");
+  });
+
   it("refuses a near-miss of an allowlisted name, so the allowlist is anchored at the tree root", async () => {
     for (const nearMiss of [".next-release-bogus", path.join("src", "node_modules")]) {
       const { fixture, behind, git } = await makeGitFixture();

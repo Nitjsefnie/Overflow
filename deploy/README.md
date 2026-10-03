@@ -636,44 +636,41 @@ considered explicitly.
 The procedure runs as one committed script. As root, from the tree root, run
 `bash scripts/deploy-revision.sh`; it applies the source-tree guards described
 below, plus its automated pending-migration and workflow-pinned CI gates: the
-`flock` fence on
-`/run/overflow-deploy.lock` held on fd 9 for up to 900 seconds and refusing
-with the serialization refusal when the lock is not acquired, the `.next`
-anchor taken before the fetch and passed to `release:switch --expect-current`,
-a `git fetch origin main` that moves only refs, resolution of the deployed SHA
-from `FETCH_HEAD`, a refusal when `HEAD` cannot fast-forward to that SHA (the
-tree is ahead of or diverged from main), the tree-cleanliness gate that refuses
-the deploy when the working tree deviates from `HEAD` — tracked modifications,
-staged changes and untracked non-ignored files all survive a fast-forward, and
-a release is named for the commit it was built from, so the tree must be that
-commit; it also refuses the deploy when the tree holds an ignored
-untracked file outside the operational allowlist, since `git status` never
-shows such a file (the `.gitignore` denies by default) and the build would
-compile it into a release named for a commit that does not contain it; the
-allowlist is exactly, and only at the tree root, the `.next` anchor, the
-`.claude/` session-machinery directory, the
-release directories and their `.tsconfig.json` sidecars,
-`.next-release-notes/`, `next-env.d.ts` and `node_modules/`, and anything
-else ignored anywhere in the tree must be removed before re-running — the
-required-checks gate that must bless the
-exact fetched SHA (below), and only after both gates pass the
-`git merge --ff-only` that moves the tree to that SHA; then the redundant-deploy
-skip that compares the resolved SHA against the serving release's `REVISION`
-record and, on a match — the run that built the serving release migrated at
-that same commit — exits without installing, migrating or building, the
-copy-import install, the environment load, `db:migrate`, a
-grammar-named release directory created with a collision-aborting `mkdir`,
-generated-config preparation, the build, whose clean step wipes the release
-directory (everything outside `cache|dev|lock|trace`), the ownership reset
-excluding the serving cache, the new cache handover to the service account, the
-conditional
-switch, the restart, the `is-active` verification, the readiness endpoint and
-the sign-in smoke (`GET /api/auth/providers`, which must answer 200), the
-webhook upgrade written to a retained JSONL log with a nonzero upgrade exiting the
-script nonzero, after which the exact source SHA is recorded in a `REVISION`
-file inside the release — attesting a fully deployed release (built after the
-wipe, switched, verified), so a redundant deploy may trust it — the retention
-listing, and the prune via `release:prune --keep 3`.
+`flock` fence on `/run/overflow-deploy.lock` held on fd 9 for up to 900 seconds
+and refusing with the serialization refusal when the lock is not acquired, the
+`.next` anchor taken before the fetch and passed to
+`release:switch --expect-current`, a `git fetch origin main` that moves only
+refs, resolution of the deployed SHA from `FETCH_HEAD`, a refusal when `HEAD`
+cannot fast-forward to that SHA (the tree is ahead of or diverged from main),
+the tree-cleanliness gate that refuses the deploy when the working tree deviates
+from `HEAD` — tracked modifications, staged changes and untracked non-ignored
+files all survive a fast-forward, and a release is named for the commit it was
+built from, so the tree must be that commit; it also refuses the deploy when the
+tree holds an ignored untracked file outside the operational allowlist, since
+`git status` never shows such a file (the `.gitignore` denies by default) and
+the build would compile it into a release named for a commit that does not
+contain it; the allowlist is exactly, and only at the tree root, the `.next`
+anchor, the `.claude/` session-machinery directory, the release directories and
+their `.tsconfig.json` sidecars, `.next-release-notes/`, `next-env.d.ts` and
+`node_modules/`, and anything else ignored anywhere in the tree must be removed
+before re-running — the required-checks gate that must bless the exact fetched
+SHA (below), and only after both gates pass the `git merge --ff-only` that moves
+the tree to that SHA; then the redundant-deploy skip that compares the resolved
+SHA against the serving release's `REVISION` record and, on a match — the run
+that built the serving release migrated at that same commit — exits without
+installing, migrating or building, the copy-import install, the environment
+load, `db:migrate`, a grammar-named release directory created with a
+collision-aborting `mkdir`, generated-config preparation, the build, whose clean
+step wipes the release directory (everything outside `cache|dev|lock|trace`),
+the ownership reset excluding the serving cache, the new cache handover to the
+service account, the conditional switch, the restart, the `is-active`
+verification, the readiness endpoint and the sign-in smoke
+(`GET /api/auth/providers`, which must answer 200), the webhook upgrade written
+to a retained JSONL log with a nonzero upgrade exiting the script nonzero, after
+which the exact source SHA is recorded in a `REVISION` file inside the release —
+attesting a fully deployed release (built after the wipe, switched, verified),
+so a redundant deploy may trust it — the retention listing, and the prune via
+`release:prune --keep 3`.
 The migration-safety analysis and every other guard below govern the script's
 run exactly as they govern the manual block; read this whole section before
 running either.
