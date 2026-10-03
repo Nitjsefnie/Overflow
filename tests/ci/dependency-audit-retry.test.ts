@@ -58,6 +58,21 @@ const STEP_TIMEOUT_MS = 120_000;
 const STEP_KILL_SIGNAL = "SIGKILL";
 
 /**
+ * Pins the constant itself, which the in-test assertion cannot: that one
+ * observes `spawnSync`'s REPORTED `killSignal`, so it covers the spawn option
+ * and nothing else. Both kill sites in `killTree` read this constant, and the
+ * brief's mandate is that they send SIGKILL.
+ *
+ * Measured here, and the reason this line exists: swapping the constant to
+ * SIGTERM was caught, but writing `"SIGTERM"` literally at the two `killTree`
+ * sites — the group kill sending a signal that can be handled — left the file
+ * 21/21 GREEN, because this constant was never read on that path. The
+ * behavioural half of that gate is the runaway fixture's `trap '' TERM` below;
+ * this assertion covers the constant so neither half is load-bearing alone.
+ */
+expect(STEP_KILL_SIGNAL).toBe("SIGKILL");
+
+/**
  * The runaway fixture's recursion cap. It is a cap in the fixture's own source,
  * so the chain cannot grow however long the bound takes to fire — rule 19's
  * shape, one foreground child per level.
@@ -869,10 +884,18 @@ describe("the dependency audit workflow's audit step", () => {
       // to count the whole chain: the alternative — matching on the script's
       // path — silently counts nothing once a level re-execs by a RELATIVE
       // path, which is exactly how this fixture recurses.
+      // The fixture IGNORES SIGTERM. That is what makes the survivor count a
+      // real gate on the SIGNAL rather than only on the group: a chain that
+      // declines to handle SIGTERM survives a SIGTERM group kill and is taken
+      // down only by SIGKILL, so swapping the signal to SIGTERM at either kill
+      // site in `killTree` leaves processes alive here and turns this red.
+      // Measured on this host: with SIGTERM planted at both sites the file was
+      // otherwise 21/21 green, so without this the assertion could not see it.
       writeFileSync(
         script,
         [
           "#!/usr/bin/env bash",
+          "trap '' TERM",
           `if [ "\${AUDIT_DEPTH:-0}" -lt ${RUNAWAY_MAX_DEPTH} ]; then`,
           '  AUDIT_DEPTH=$((AUDIT_DEPTH + 1)) bash ./audit.sh "$1"',
           "fi",
@@ -928,11 +951,11 @@ describe("the dependency audit workflow's audit step", () => {
       }
       expect(
         survivors,
-        `the step script left ${survivors - baseline} of its own re-exec chain running after the run: ` +
-          "process(es) still carrying this run's marker. The bound killed the direct child and left the " +
-          "rest reparented, which is the 2026-10-03 failure. (The count covers the chain's own shells " +
-          "only — the `sleep` each level waits on carries no marker and is not included, which is why " +
-          "the group kill rather than the count is what has to cover it.)",
+        `the step script left ${survivors - baseline} of its own re-exec chain still running after ` +
+          "the run — that many processes carrying this run's marker. The bound killed the direct child " +
+          "and left the rest reparented, which is the 2026-10-03 failure. (The count covers the chain's " +
+          "own shells only — the `sleep` each level waits on carries no marker and is not included, " +
+          "which is why the group kill rather than the count is what has to cover it.)",
       ).toBe(baseline);
     }, 30_000);
   });
