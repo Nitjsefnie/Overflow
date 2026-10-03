@@ -141,6 +141,12 @@ jobs:
       APP_URL: https://overflow.invalid
       GITHUB_WEBHOOK_URL: https://overflow.invalid/api/github/webhooks
       MODERATOR_GITHUB_USER_IDS: "1"
+      # Actions `env:` is step-scoped. This job checks out the PR's merge ref;
+      # a pin on only the install step leaves later `pnpm` steps resolving the
+      # PR tree's `packageManager`. At job scope every `pnpm` step inherits
+      # both pins, so there is no step left on which to forget them.
+      COREPACK_ENABLE_PROJECT_SPEC: "0"
+      npm_config_registry: "https://registry.npmjs.org/"
 
     steps:
       # Under pull_request_target the checkout plants the pull request's merge
@@ -200,9 +206,6 @@ jobs:
           node-version: "24.17.0"
 
       - name: Enable the pinned package manager
-        env:
-          COREPACK_ENABLE_PROJECT_SPEC: "0"
-          npm_config_registry: "https://registry.npmjs.org/"
         run: |
           corepack enable
           corepack install --global pnpm@10.33.0
@@ -417,6 +420,11 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+    # Actions `env:` is step-scoped. Keep these pins at job scope so every
+    # `pnpm` step inherits both, leaving no step on which to forget them.
+    env:
+      COREPACK_ENABLE_PROJECT_SPEC: "0"
+      npm_config_registry: "https://registry.npmjs.org/"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -432,9 +440,6 @@ jobs:
           node-version: "24.17.0"
 
       - name: Enable the pinned package manager
-        env:
-          COREPACK_ENABLE_PROJECT_SPEC: "0"
-          npm_config_registry: "https://registry.npmjs.org/"
         run: |
           corepack enable
           corepack install --global pnpm@10.33.0

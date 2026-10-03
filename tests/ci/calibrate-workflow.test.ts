@@ -30,6 +30,7 @@ type CalibrateJob = {
   needs?: string | string[];
   if?: unknown;
   permissions?: Record<string, string>;
+  env?: Record<string, string | undefined>;
   steps?: WorkflowStep[];
 };
 
@@ -159,6 +160,7 @@ describe("the simulate-refused-raise input", () => {
 });
 
 describe("the calibrate job's steps", () => {
+  let job: CalibrateJob | undefined;
   let steps: WorkflowStep[] = [];
 
   beforeAll(async () => {
@@ -167,22 +169,20 @@ describe("the calibrate job's steps", () => {
       jobs?: { calibrate?: CalibrateJob };
     };
 
-    steps = workflow.jobs?.calibrate?.steps ?? [];
+    job = workflow.jobs?.calibrate;
+    steps = job?.steps ?? [];
   });
 
   const named = (name: string) => steps.filter((step) => step.name === name);
 
   it("pins Corepack and the package registry", () => {
-    const [step] = named("Enable the pinned package manager");
-
     expect(
       named("Enable the pinned package manager"),
       "the calibrate job must keep exactly one Enable the pinned package manager step",
     ).toHaveLength(1);
-    expect(step?.env).toEqual({
-      COREPACK_ENABLE_PROJECT_SPEC: "0",
-      npm_config_registry: "https://registry.npmjs.org/",
-    });
+    // Actions env is step-scoped; dependency-audit.yml pins both at job scope so every pnpm step inherits them.
+    expect(job?.env?.COREPACK_ENABLE_PROJECT_SPEC).toBe("0");
+    expect(job?.env?.npm_config_registry).toBe("https://registry.npmjs.org/");
   });
 
   it("pushes the floor through the recalibration script, with the token through env", () => {

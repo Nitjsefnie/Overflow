@@ -22,32 +22,34 @@ type WorkflowStep = {
   env?: Record<string, string | undefined>;
 };
 
+type VerifyJob = {
+  env?: Record<string, string | undefined>;
+  steps?: WorkflowStep[];
+};
+
 describe("the verify workflow's package-manager step", () => {
-  let steps: WorkflowStep[] = [];
+  let job: VerifyJob | undefined;
 
   beforeAll(async () => {
     const source = await readFile(resolve(".github/workflows/ci.yml"), "utf8");
     const workflow = parse(source) as {
-      jobs?: { verify?: { steps?: WorkflowStep[] } };
+      jobs?: { verify?: VerifyJob };
     };
 
-    steps = workflow.jobs?.verify?.steps ?? [];
+    job = workflow.jobs?.verify;
   });
 
   const packageManager = () =>
-    steps.filter((step) => step.name === "Enable the pinned package manager");
+    job?.steps?.filter((step) => step.name === "Enable the pinned package manager") ?? [];
 
   it("pins Corepack and the package registry", () => {
-    const [step] = packageManager();
-
     expect(
       packageManager(),
       "the verify job must keep exactly one Enable the pinned package manager step",
     ).toHaveLength(1);
-    expect(step?.env).toEqual({
-      COREPACK_ENABLE_PROJECT_SPEC: "0",
-      npm_config_registry: "https://registry.npmjs.org/",
-    });
+    // Actions env is step-scoped; dependency-audit.yml pins both at job scope so every pnpm step inherits them.
+    expect(job?.env?.COREPACK_ENABLE_PROJECT_SPEC).toBe("0");
+    expect(job?.env?.npm_config_registry).toBe("https://registry.npmjs.org/");
   });
 });
 
