@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -37,6 +38,194 @@ import { parse } from "yaml";
  */
 
 type ScriptedOutcome = { code: number; stdout: string; stderr: string };
+
+/**
+ * The bound on ONE invocation of the step script.
+ *
+ * Without it the suite hands the script to `bash` and waits forever, which is
+ * how a script that never terminates takes the whole run down with it. The
+ * number is generous because it has to clear every legitimate case on a loaded
+ * machine: the slowest legitimate case measured on this worktree was the
+ * three-attempt retry-budget case at ~570 ms (the six-spawn classification case
+ * is ~970 ms end to end, and the suite's `sleep` is a stub, so its 7- and
+ * 30-second backoffs cost nothing here), and this sits ~100x above the slowest
+ * single spawn. The one case that deliberately overruns it is the runaway
+ * fixture below, which is bounded by a much shorter explicit limit.
+ */
+const STEP_TIMEOUT_MS = 120_000;
+
+/** SIGKILL, not SIGTERM: the point is that nothing is left to answer a second signal. */
+const STEP_KILL_SIGNAL = "SIGKILL";
+
+/**
+ * The runaway fixture's recursion cap. It is a cap in the fixture's own source,
+ * so the chain cannot grow however long the bound takes to fire — rule 19's
+ * shape, one foreground child per level.
+ */
+const RUNAWAY_MAX_DEPTH = 5;
+
+/**
+ * How long each level of the runaway chain waits before it ends on its own.
+ *
+ * The chain must outlive the bound it is run under, or the survivors count
+ * would find nothing there and the test would pass against unfixed code. It
+ * must NOT be unbounded, or a run with the bound removed would hang this suite
+ * instead of failing it.
+ */
+const RUNAWAY_WAIT_SECONDS = 2;
+
+/**
+ * The bound the runaway fixture is deliberately run under. Below the chain's
+ * own lifetime, so the chain is guaranteed to still be running when it fires.
+ */
+const RUNAWAY_BOUND_MS = 1_500;
+
+/**
+ * How long to wait for processes the group kill reached to leave the process
+ * table before the survivor count is judged.
+ *
+ * This is NOT a wall-clock margin on the fix, and it is not what makes the test
+ * a gate. The chain's levels unwind one at a time, each taking
+ * RUNAWAY_WAIT_SECONDS, so a leaked chain takes roughly
+ * RUNAWAY_MAX_DEPTH * RUNAWAY_WAIT_SECONDS to disappear on its own — measured
+ * at 9s for the values here, with 3 processes still alive at 4s. This window
+ * ends while that chain is still unwinding, which is what stops the count from
+ * reaching zero on its own and passing an unfixed build. The assertion is about
+ * the COUNT returning to its baseline; a fixed build reaches it in well under a
+ * second because the group kill is synchronous.
+ */
+const SURVIVOR_SETTLE_MS = 4_000;
+
+/**
+ * Publishes the shell's own pid, then becomes the step script.
+ *
+ * `setsid` makes its caller a session and process-group leader, so `$$` IS the
+ * process group — no `ps`, no assumption that `setsid` execed in place. That
+ * matters because `setsid` does NOT always exec in place (measured here: it
+ * forked on one run and execed on the next), so the pid `spawnSync` reports is
+ * not reliably the group leader. The pid is published BEFORE the exec, so the
+ * file exists whenever the script ran at all.
+ *
+ * `shift` then hands the rest of the launcher's own arguments to the script,
+ * which is how a caller-supplied argument reaches the script's `$1`.
+ */
+const STEP_LAUNCHER = 'echo $$ > "$1"; shift; exec bash -e "$@"';
+
+/** Process groups this suite has spawned and not yet cleaned up. */
+const liveGroups = new Set<number>();
+
+/**
+ * Kills a whole process group, or a lone process when no group is known.
+ *
+ * SIGKILL because a step script that has to be bounded cannot be asked to stop
+ * politely. ESRCH is the expected race — the group is already gone — so it is
+ * swallowed rather than reported.
+ */
+function killTree(pgid: number | undefined, pid: number | undefined): void {
+  if (pgid !== undefined) {
+    liveGroups.delete(pgid);
+    try {
+      process.kill(-pgid, STEP_KILL_SIGNAL);
+      return;
+    } catch (error) {
+      // ESRCH: the group is already gone, which is the expected race and the
+      // only failure worth ignoring. Anything else (EPERM) means the group did
+      // not go down, and falling through to the single pid is better than
+      // leaving the tree alive.
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+    }
+  }
+  if (pid !== undefined) {
+    try {
+      process.kill(pid, STEP_KILL_SIGNAL);
+    } catch {
+      // Already gone, or not ours to signal.
+    }
+  }
+}
+
+/**
+ * Runs one shell script in its own process group, under a bound, and takes the
+ * whole group down afterwards — whether the script finished, overran, or the
+ * process running this suite was stopped from outside mid-run.
+ *
+ * The group kill is the load-bearing half. Measured on this host: with the
+ * script started under `setsid` and left to overrun, `spawnSync`'s own timeout
+ * signal killed ONLY the direct child — eight descendants survived, reparented
+ * to PID 1, exactly the shape of the 2026-10-03 runaway. `kill(-pgid)` after
+ * the fact took the same run from eight survivors to zero.
+ */
+function runBoundedScript(
+  script: string,
+  home: string,
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number,
+  scriptArgs: string[] = [],
+): SpawnSyncReturns<string> {
+  const pgidFile = join(home, "step-pgid");
+  const result = spawnSync("setsid", ["bash", "-c", STEP_LAUNCHER, "step", pgidFile, script, ...scriptArgs], {
+    cwd: home,
+    encoding: "utf8",
+    env,
+    timeout: timeoutMs,
+    killSignal: STEP_KILL_SIGNAL,
+  });
+  // The script publishes `$$` before the exec, so this read is after the fact
+  // and never races: by now either the file is there or the script never ran.
+  let pgid: number | undefined;
+  try {
+    const published = Number(readFileSync(pgidFile, "utf8").trim());
+    // Refuse anything that is not a plausible group id, and never this
+    // process's own group — a stray `kill(-pgid)` aimed at the test runner
+    // would take the suite down, which is the failure this whole mechanism
+    // exists to prevent.
+    if (Number.isInteger(published) && published > 1 && published !== process.pid && published !== process.ppid) {
+      pgid = published;
+      liveGroups.add(published);
+    }
+  } catch {
+    // No file: `setsid` never got as far as the script.
+  }
+  // Unconditional, not only on a timeout: a script that exits can leave a
+  // descendant running, and that is the same leak by another route.
+  killTree(pgid, result.pid ?? undefined);
+  return result;
+}
+
+/**
+ * Counts the processes whose command line carries `marker`, which is how the
+ * runaway test counts what it leaked. `pgrep` never matches itself, and the
+ * marker is unique to one test run, so the count is this run's processes and
+ * nothing else on the host.
+ */
+function countProcesses(marker: string): number {
+  const found = spawnSync("pgrep", ["-f", marker], { encoding: "utf8" });
+  return found.stdout.split("\n").filter((line) => line.trim() !== "").length;
+}
+
+/**
+ * The "the run was stopped from outside" case: a step script started here and
+ * still running when this process goes down must not be left behind. SIGINT,
+ * SIGTERM and SIGHUP are trapped for that; `exit` covers the normal end. A
+ * SIGKILL to this process cannot be trapped by anything, which is precisely why
+ * the bound in `runBoundedScript` is the primary mechanism and this is the
+ * backstop.
+ */
+function installCleanupOnExit(): void {
+  const cleanup = (): void => {
+    for (const pgid of [...liveGroups]) killTree(pgid, undefined);
+    liveGroups.clear();
+  };
+  process.on("exit", cleanup);
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.on(signal, () => {
+      cleanup();
+      process.exit(0);
+    });
+  }
+}
+
+installCleanupOnExit();
 
 /** `pnpm audit --json` over a lockfile with no known vulnerabilities. */
 const CLEAN: ScriptedOutcome = {
@@ -358,6 +547,10 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     afterAll(async () => {
+      // Whatever this file spawned is gone by now in every passing run; this
+      // is the backstop for a failing one, so a red suite does not leave the
+      // host carrying a step script's process tree.
+      for (const pgid of [...liveGroups]) killTree(pgid, undefined);
       await rm(root, { recursive: true, force: true });
     });
 
@@ -424,7 +617,7 @@ describe("the dependency audit workflow's audit step", () => {
         delete env.DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS;
       }
 
-      const result = spawnSync("bash", ["-e", script], { cwd: home, encoding: "utf8", env });
+      const result = runBoundedScript(script, home, env, STEP_TIMEOUT_MS);
       return {
         status: result.status,
         stdout: result.stdout,
@@ -649,5 +842,84 @@ describe("the dependency audit workflow's audit step", () => {
       expect(outcome.attempts).toBe(1);
       expect(outcome.stdout).not.toContain("advisories (");
     });
+
+    it("leaves nothing running when the step script never terminates", async () => {
+      // The regression this suite did not have until issue 1008. Every case
+      // above runs a script that answers; this one runs the same kind of script
+      // with a `run:` block that re-executes itself, which is what a mutation
+      // probe did to this workflow on 2026-10-03. The bound took the direct
+      // child down, the rest of the chain survived reparented to PID 1, and
+      // 57,700 processes were still alive twelve hours later.
+      //
+      // So the assertion is on the PROCESSES, not on a duration: the count of
+      // processes carrying this run's unique marker must be back at its
+      // baseline once the run returns. Nothing here says how long the run took,
+      // and the fixture's own chain is depth-capped in its source, so a run that
+      // leaked it would cost five processes rather than fifty thousand.
+      const marker = `audit-runaway-${randomBytes(8).toString("hex")}`;
+      const home = join(root, marker);
+      mkdirSync(home, { recursive: true });
+      const script = join(home, "audit.sh");
+      // A cap on the recursion depth AND one foreground child per level: the
+      // chain is linear, so a run that leaked without the group kill would cost
+      // five processes, not a fork bomb.
+      //
+      // The marker is passed as an argument and re-passed on every level, so
+      // it is in each descendant's own argv. That is what makes `pgrep -f` able
+      // to count the whole chain: the alternative — matching on the script's
+      // path — silently counts nothing once a level re-execs by a RELATIVE
+      // path, which is exactly how this fixture recurses.
+      writeFileSync(
+        script,
+        [
+          "#!/usr/bin/env bash",
+          `if [ "\${AUDIT_DEPTH:-0}" -lt ${RUNAWAY_MAX_DEPTH} ]; then`,
+          '  AUDIT_DEPTH=$((AUDIT_DEPTH + 1)) bash ./audit.sh "$1"',
+          "fi",
+          `sleep ${RUNAWAY_WAIT_SECONDS}`,
+          "",
+        ].join("\n"),
+      );
+
+      const baseline = countProcesses(marker);
+
+      // The settle window has to end while a leaked chain is STILL unwinding,
+      // or the count would drift to zero on its own and this would pass against
+      // unfixed code. Asserted rather than left to a comment to hold, because
+      // it is exactly the kind of relationship that rots when one constant moves.
+      expect(
+        SURVIVOR_SETTLE_MS,
+        "the settle window must end before the chain finishes unwinding, or an " +
+          "unfixed build's survivors expire on their own and this test passes vacuously",
+      ).toBeLessThan(RUNAWAY_MAX_DEPTH * RUNAWAY_WAIT_SECONDS * 1000);
+
+      // Bounded far below the chain's own lifetime, so the chain is guaranteed
+      // to still be running when the bound fires — the only state in which this
+      // can fail.
+      const result = runBoundedScript(script, home, { ...process.env }, RUNAWAY_BOUND_MS, [marker]);
+
+      // It was killed, not merely slow: `spawnSync` reports the timeout it
+      // applied, which is a record of what the code did rather than a duration
+      // this test measured.
+      expect((result.error as NodeJS.ErrnoException | undefined)?.code).toBe("ETIMEDOUT");
+      expect(result.signal).toBe(STEP_KILL_SIGNAL);
+
+      // And nothing it started outlived it. This is the assertion that carries
+      // the issue: the bound alone takes down the direct child and leaves the
+      // rest of the tree running, reparented to PID 1 — measured at 3 processes
+      // still alive after the window below, on the unfixed spawn.
+      const deadline = Date.now() + SURVIVOR_SETTLE_MS;
+      let survivors = countProcesses(marker);
+      while (survivors > baseline && Date.now() < deadline) {
+        await new Promise((done) => setTimeout(done, 50));
+        survivors = countProcesses(marker);
+      }
+      expect(
+        survivors,
+        `the step script's process tree outlived the run: ${survivors - baseline} process(es) still ` +
+          "carrying this run's marker. The bound killed the direct child and left the rest reparented, " +
+          "which is the 2026-10-03 failure",
+      ).toBe(baseline);
+    }, 30_000);
   });
 });
