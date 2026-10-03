@@ -333,13 +333,18 @@ export function unboundedGroupKeysIn(group: string): string[] {
  * failure message below says so.
  *
  * The set is the union of what the eleven shipped workflows actually carry, so a
- * twelfth workflow carrying only legitimate top-level keys passes with no edit
- * here. What it does NOT catch, deliberately: a workflow DROPPING a key it
- * should have, such as a missing `permissions:`. This is a check against the
- * unexpected, not against the missing — that direction is already covered for
- * the eight of eleven files that carry one by `ci-workflows.test.ts`'s per-file
- * `permissions` assertions, and duplicating it here would be two tests failing
- * for one defect.
+ * twelfth workflow carrying only legitimate top-level keys needs NO EDIT TO THIS
+ * ALLOWLIST — though it is not free of edits to this FILE: a new workflow still
+ * has to be classified in `BOUNDED` / `UNBOUNDED_BY_CHOICE` below, or the
+ * classification totality assertion reds. What this set does NOT catch,
+ * deliberately: a workflow DROPPING a key it should have, such as a missing
+ * `permissions:`. This is a check against the unexpected, not against the
+ * missing — that direction is covered elsewhere for eight of the eleven
+ * workflows, being the seven whose exact `permissions` value
+ * `ci-workflows.test.ts` pins and `claim.yml`, whose ABSENCE of a top-level
+ * `permissions` it pins. The three it does not cover — `coverage-comment.yml`,
+ * `ledger-relay.yml` and `secret-scan.yml`, all of which do carry one — are a
+ * gap in THAT suite, not a reason to duplicate the direction here.
  *
  * Every name below is carried by at least one shipped workflow, which is what
  * keeps the set from rotting: an entry added here "just in case" is a hole
@@ -386,24 +391,24 @@ describe("every workflow's top-level keys", () => {
     // change fails loudly by name.
     //
     // Built as a whole-collection comparison rather than a per-workflow `expect`
-    // inside the loop, and that shape is load-bearing twice over. It names every
-    // offending workflow at once, so one failure reports the full set instead of
-    // the first; and the companion comparison below makes an EMPTY result fail,
-    // which a per-workflow `expect` inside the loop cannot. That variant was
-    // written first and it is vacuous: an iteration source emptied to `new Map()`
-    // passed this suite whole with a planted top-level `env:` block sitting in
-    // the tree, because the assertion never ran. The enumeration guard below did
-    // not notice either — it reads the Map, not this loop. Hence the second
-    // comparison.
+    // inside the loop, and that shape is load-bearing twice over: it names every
+    // offending workflow at once, and — with the companion comparison below — an
+    // EMPTY result fails. Both of those were arrived at by mutation, and the
+    // mutations are the reason neither can be simplified:
     //
-    // Its expected value reads `workflows` a SECOND time, independently of the
-    // collection above, and that independence is the whole guard. Hoisting one
-    // sorted name list and using it for both sides is the same vacuity wearing a
-    // different hat: emptying the collection source empties the expectation too,
-    // and the comparison holds against itself. That version was written, and a
-    // planted block passed it. So the two sides are deliberately derived from
-    // separate reads, and only the collected side goes through the loop the
-    // first assertion depends on.
+    // 1. The per-workflow `expect`-in-loop variant is VACUOUS. Written first, it
+    //    passed this suite whole with a planted top-level `env:` block in the
+    //    tree once its iteration source was emptied to `new Map()` — the
+    //    assertion never ran. The enumeration guard above did not notice either;
+    //    it reads the Map, not this loop.
+    // 2. Hoisting ONE sorted name list for both sides is that same vacuity in
+    //    another hat: emptying the collected side empties the expectation too,
+    //    and the comparison holds against itself. Written, and the planted block
+    //    passed it.
+    //
+    // So the two sides are derived from SEPARATE reads: only the collected side
+    // goes through the loop this assertion depends on, and the expected side
+    // re-reads the directory. Keep it that way.
     const entries = [...workflows].map(
       ([name, workflow]): [string, string[]] => [
         name,
