@@ -119,9 +119,10 @@ def skippable(line):
 
 
 def tracked_files(root):
+    # NUL delimiters prevent Git's path quoting from hiding workflow files.
     return tuple(f for f in
-                 git(root, "ls-tree", "-r", "--name-only", "--full-tree", "HEAD",
-                     what="list the tracked tree").split("\n") if f)
+                 git(root, "ls-tree", "-z", "-r", "--name-only", "--full-tree", "HEAD",
+                     what="list the tracked tree").split("\0") if f)
 
 
 def workflow_files(files):
