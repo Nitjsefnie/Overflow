@@ -61,4 +61,14 @@ describe("the verify workflow's conflict-marker shell gate", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).toBe("");
   });
+
+  it("finds no markers in this repository's real tracked working tree", () => {
+    // Production greps tracked working files, including uncommitted changes.
+    const result = spawnSync("git", ["grep", "-nI", "-E", pattern, "--", "."], {
+      cwd: resolve("."), encoding: "utf8",
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+  });
 });
