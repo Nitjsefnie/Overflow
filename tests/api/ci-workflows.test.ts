@@ -169,7 +169,7 @@ describe("GitHub Actions release gates", () => {
         "runs-on": "ubuntu-latest",
         "timeout-minutes": 5,
         steps: [{
-          uses: "Nitjsefnie-Actions/pr-gate@679744b0807472d5fd681e42759f081494f2f562",
+          uses: "Nitjsefnie-Actions/pr-gate@441f855e54f4f6c98709152f2d2542031dc82f03",
           with: {
             "github-token": "${{ github.token }}",
             repository: "${{ github.repository }}",
