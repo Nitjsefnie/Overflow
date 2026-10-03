@@ -382,7 +382,39 @@ describe("Actions event policy runner", () => {
     expect(result.message).toContain("1");
     expect(result.message).toContain("2");
     expect(result.message).toMatch(/fetched|total_count|total/i);
+    expect(result.message).toMatch(/distinct/i);
     expect(pages).toEqual([1, 2]);
+  });
+
+  it("fails closed when a policy ID is repeated across list pages", async () => {
+    const pages: number[] = [];
+    const fetchedDetails: number[] = [];
+    const transport: PolicyTransport = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === POLICY_LIST_PATH) {
+        const page = Number(url.searchParams.get("page") ?? "1");
+        pages.push(page);
+        return new Response(JSON.stringify({
+          total_count: 2,
+          policies: [{ id: 1, name: "policy-1" }],
+        }), { status: 200 });
+      }
+      const id = Number(url.pathname.split("/").at(-1));
+      fetchedDetails.push(id);
+      return activePolicyDetail(id);
+    };
+
+    if (runCheck === undefined) {
+      expect(runCheck, "the injectable runner must be exported").toBeTypeOf("function");
+      return;
+    }
+    const result = await runCheck("offline-token", transport);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toMatch(/duplicate/i);
+    expect(result.message).toContain("policy id 1");
+    expect(pages).toEqual([1, 2]);
+    expect(fetchedDetails).toEqual([]);
   });
 
   it("fails when a later policy-list page returns a non-200 response", async () => {

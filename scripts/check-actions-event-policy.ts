@@ -477,9 +477,26 @@ export async function runCheck(
     return runnerResult(classify(firstPageResponse, []));
   }
 
-  const policies = [...firstPage.policies];
+  const policies: PolicySummary[] = [];
+  const policyIds = new Set<string>();
+  const appendPage = (pagePolicies: PolicySummary[], page: number): string | undefined => {
+    for (const policy of pagePolicies) {
+      if (policyIds.has(policy.id)) {
+        return `Actions policy list pagination returned duplicate policy id ${policy.id} ` +
+          `on page ${page}; refusing to verify a broken pagination contract.`;
+      }
+      policyIds.add(policy.id);
+      policies.push(policy);
+    }
+    return undefined;
+  };
+  const firstPageDuplicate = appendPage(firstPage.policies, 1);
+  if (firstPageDuplicate !== undefined) {
+    return { exitCode: 1, message: firstPageDuplicate };
+  }
+
   const totalCount = firstPage.totalCount;
-  for (let page = 2; policies.length < totalCount && page <= totalCount; page += 1) {
+  for (let page = 2; policyIds.size < totalCount && page <= totalCount; page += 1) {
     const pageResponse = await request(policyListPageUrl(page), token, transport);
     const parsedPage = parsePolicyList(pageResponse);
     if (
@@ -493,6 +510,10 @@ export async function runCheck(
         message: `Actions policy list page ${page} failed: ${failedPage.reason}`,
       };
     }
+    const duplicateId = appendPage(parsedPage.policies, page);
+    if (duplicateId !== undefined) {
+      return { exitCode: 1, message: duplicateId };
+    }
     if (parsedPage.totalCount !== totalCount) {
       return {
         exitCode: 1,
@@ -502,14 +523,21 @@ export async function runCheck(
       };
     }
     if (parsedPage.policies.length === 0) break;
-    policies.push(...parsedPage.policies);
   }
 
   const completeListResponse: ApiResponse = {
     status: 200,
     body: JSON.stringify({ total_count: totalCount, policies }),
   };
-  if (policies.length !== totalCount || policies.length === 0) {
+  if (policyIds.size !== totalCount) {
+    return {
+      exitCode: 1,
+      message:
+        `Fetched ${policyIds.size} distinct Actions policy IDs, but total_count is ${totalCount}; ` +
+        "refusing to verify an incomplete policy list.",
+    };
+  }
+  if (policyIds.size === 0) {
     return runnerResult(classify(completeListResponse, []));
   }
 
