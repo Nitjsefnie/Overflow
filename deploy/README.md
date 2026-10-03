@@ -651,6 +651,7 @@ untracked file outside the operational allowlist, since `git status` never
 shows such a file (the `.gitignore` denies by default) and the build would
 compile it into a release named for a commit that does not contain it; the
 allowlist is exactly, and only at the tree root, the `.next` anchor, the
+`.claude/` session-machinery directory, the
 release directories and their `.tsconfig.json` sidecars,
 `.next-release-notes/`, `next-env.d.ts` and `node_modules/`, and anything
 else ignored anywhere in the tree must be removed before re-running — the
@@ -974,7 +975,7 @@ if [ -n "${tree_status}" ]; then
   printf 'The working tree in /srv/overflow deviates from HEAD; fast-forwarding it to %s would not make it that commit. A release is named for the commit it was built from; refusing to build one from a tree that is not that commit. Resolve every deviation above (git status), then re-run the deploy.\n' "${full_sha}" >&2
   exit 1
 fi
-allowlist_re='^(\.next/?|\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}/|\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}\.tsconfig\.json|\.next-release-notes/|next-env\.d\.ts|node_modules/)$'
+allowlist_re='^(\.next/?|\.claude/|\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}/|\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}\.tsconfig\.json|\.next-release-notes/|next-env\.d\.ts|node_modules/)$'
 ignored_listing=$(mktemp)
 ignored_status=0
 git ls-files -z --others --ignored --exclude-standard --directory --no-empty-directory > "${ignored_listing}" || ignored_status=$?
@@ -990,7 +991,7 @@ for entry in "${ignored_entries[@]}"; do
 done
 if [ "${#stray_ignored[@]}" -gt 0 ]; then
   printf '  %q\n' "${stray_ignored[@]}" >&2
-  printf 'The tree in /srv/overflow holds the ignored untracked files above, outside the operational allowlist (.next, release directories and their .tsconfig.json sidecars, .next-release-notes/, next-env.d.ts and node_modules/, each at the tree root). These are ignored untracked files that git status does not show, and the build would compile them into a release named for %s, a commit that does not contain them; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Remove them, then re-run the deploy.\n' "${full_sha}" >&2
+  printf 'The tree in /srv/overflow holds the ignored untracked files above, outside the operational allowlist (.next, .claude/, release directories and their .tsconfig.json sidecars, .next-release-notes/, next-env.d.ts and node_modules/, each at the tree root). These are ignored untracked files that git status does not show, and the build would compile them into a release named for %s, a commit that does not contain them; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Remove them, then re-run the deploy.\n' "${full_sha}" >&2
   exit 1
 fi
 remote_url=$(git config --get remote.origin.url)
