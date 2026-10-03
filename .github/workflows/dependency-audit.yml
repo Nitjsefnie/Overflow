@@ -42,7 +42,14 @@ name: dependency audit
 # "the audit never completed" and "the lockfile has findings" cannot both be
 # true of one report. Anything else — empty stdout from an unusable invocation,
 # a report with no `advisories` key, an empty `advisories` map with a nonzero
-# exit — is neither, and is reported as unreadable rather than resolved.
+# exit — is neither, and is reported as unreadable rather than resolved. All
+# three are red and all three share the verdict word, so they are told apart by
+# the DETAIL, which names each of them for what it is: an unparseable report, a
+# report with no `advisories` key, and a report whose `advisories` map was empty
+# while pnpm exited nonzero. That last one is the case worth its own sentence —
+# it is the only one of the three that says the report parsed AND carried a
+# field, and a reader told it carried none goes hunting for a malformed report
+# that is not there.
 #
 # The registry row was captured against a local server answering the advisory
 # endpoint 503 and 429. pnpm tries `…/audits/quick`, falls back to `…/audits`,
@@ -61,7 +68,11 @@ name: dependency audit
 #
 # One more `error` worth naming: a pull request that DELETES pnpm-lock.yaml
 # makes pnpm answer ERR_PNPM_AUDIT_NO_LOCKFILE. That is reported red, which is
-# right — there is no lockfile to audit and a human should see that.
+# right — there is no lockfile to audit and a human should see that. It is
+# routed to `unreadable` rather than `unreachable` because no registry was ever
+# asked: `unreachable` means an answered or unconnected registry, and there was
+# neither. `unreadable` says the one true thing, which is that there is no
+# report to read, and the detail carries pnpm's own sentence.
 #
 # THE RETRY IS NARROW ON PURPOSE. It fires on a transient registry answer and
 # on nothing else — never on advisories, never on a 403 or a 404, never on
@@ -225,9 +236,12 @@ jobs:
             const transient = statuses.length > 0
               && statuses.every((status) => status === 429 || (status >= 500 && status < 600));
             const first = (message) => String(message).split("\n")[0];
-            console.log(transient
-              ? "transient|" + first("the advisory endpoint answered " + statuses.join(" and "))
-              : "unreachable|" + first(report.error.message ?? "the advisory endpoint did not answer"));
+            const reported = first(report.error.message ?? "the advisory endpoint did not answer");
+            console.log(String(report.error.code ?? "") === "ERR_PNPM_AUDIT_NO_LOCKFILE"
+              ? "unreadable|" + reported
+              : transient
+                ? "transient|" + first("the advisory endpoint answered " + statuses.join(" and "))
+                : "unreachable|" + reported);
             process.exit(0);
           }
           const advisories = report && report.advisories ? Object.keys(report.advisories).length : -1;
@@ -240,8 +254,10 @@ jobs:
             console.log("advisories|" + advisories + " advisories (" + (summary || "severities unreported") + ")");
             process.exit(0);
           }
-          console.log(advisories === 0 && process.env.AUDIT_EXIT === "0"
-            ? "clean|no known vulnerabilities found"
+          console.log(advisories === 0
+            ? process.env.AUDIT_EXIT === "0"
+              ? "clean|no known vulnerabilities found"
+              : "unreadable|the audit report carried an empty advisories map and exited " + process.env.AUDIT_EXIT
             : "unreadable|the audit report carried no advisories field and exited " + process.env.AUDIT_EXIT);
           ')
             verdict="${result%%|*}"

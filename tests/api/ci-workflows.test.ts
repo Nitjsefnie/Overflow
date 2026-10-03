@@ -692,9 +692,12 @@ if (report && report.error) {
   const transient = statuses.length > 0
     && statuses.every((status) => status === 429 || (status >= 500 && status < 600));
   const first = (message) => String(message).split("\\n")[0];
-  console.log(transient
-    ? "transient|" + first("the advisory endpoint answered " + statuses.join(" and "))
-    : "unreachable|" + first(report.error.message ?? "the advisory endpoint did not answer"));
+  const reported = first(report.error.message ?? "the advisory endpoint did not answer");
+  console.log(String(report.error.code ?? "") === "ERR_PNPM_AUDIT_NO_LOCKFILE"
+    ? "unreadable|" + reported
+    : transient
+      ? "transient|" + first("the advisory endpoint answered " + statuses.join(" and "))
+      : "unreachable|" + reported);
   process.exit(0);
 }
 const advisories = report && report.advisories ? Object.keys(report.advisories).length : -1;
@@ -707,8 +710,10 @@ if (advisories > 0) {
   console.log("advisories|" + advisories + " advisories (" + (summary || "severities unreported") + ")");
   process.exit(0);
 }
-console.log(advisories === 0 && process.env.AUDIT_EXIT === "0"
-  ? "clean|no known vulnerabilities found"
+console.log(advisories === 0
+  ? process.env.AUDIT_EXIT === "0"
+    ? "clean|no known vulnerabilities found"
+    : "unreadable|the audit report carried an empty advisories map and exited " + process.env.AUDIT_EXIT
   : "unreadable|the audit report carried no advisories field and exited " + process.env.AUDIT_EXIT);
 ')
   verdict="\${result%%|*}"
