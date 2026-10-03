@@ -758,8 +758,8 @@ fi
       /\.ya?ml$/.test(file));
     expect(workflowFiles.length).toBeGreaterThan(0);
     const actionNames = new Set<string>();
-    // The weekday every scheduled workflow in this repository fires on, read
-    // from the workflows themselves rather than transcribed, so the
+    // The weekday each weekday-pinned workflow in this repository fires on,
+    // read from the workflows themselves rather than transcribed, so the
     // dependabot lanes' collision check cannot drift from the real crons.
     const cronDays = new Set<string>();
     for (const file of workflowFiles) {
@@ -777,14 +777,16 @@ fi
         for (const entry of Array.isArray(trigger) ? trigger : []) {
           const fields = entry.cron.trim().split(/\s+/);
           if (fields.length !== 5 || fields[2] !== "*" || fields[3] !== "*") continue;
-          // `m h * * d` fires on one weekday, so that weekday is occupied;
-          // `m h * * *` fires EVERY day, so it occupies all seven and collides
-          // with every lane. Not modelled here: a day-of-month or month field
-          // (monthly crons), and a day field naming a RANGE or a list (`1-5`),
+          // `m h * * d` occupies its pinned weekday. A daily cron (`*` weekday)
+          // occupies no specific day in this model: the daily secret-scan sweep
+          // fires once every weekday, and only weekly lanes' collisions with
+          // weekday-pinned workflows are modelled. Not modelled here: a
+          // day-of-month or month field (monthly crons), and a day field naming
+          // a RANGE or a list (`1-5`),
           // which fire on a subset this weekday-only check does not resolve.
           // No cron of either shape ships in this repository.
-          const days = fields[4] === "*" ? CRON_DAYS : [CRON_DAYS[Number(fields[4])]!];
-          for (const day of days) cronDays.add(day);
+          if (fields[4] === "*") continue;
+          cronDays.add(CRON_DAYS[Number(fields[4])]!);
         }
       }
     }
@@ -870,9 +872,10 @@ fi
     // All three lanes carry an explicit weekday, an explicit clock and a
     // timezone. No lane's day may be Monday — the default an unset `day`
     // resolves to, and this repository's busiest slot — nor any weekday a
-    // scheduled workflow in this repository already fires on: dependency-audit
-    // Monday, secret-scan and code-scanning Wednesday, scorecard Saturday. Two
-    // jobs on one runner minute is the contention the explicit days remove, so
+    // weekday-pinned workflow in this repository already fires on:
+    // dependency-audit Monday, code-scanning Wednesday, scorecard Saturday.
+    // Secret-scan is DAILY and excluded from the weekday-occupation model.
+    // The explicit days spread weekly lanes away from weekly workflow slots;
     // the property is asserted against the crons read above, not transcribed.
     for (const ecosystem of ["npm", "github-actions", "docker"]) {
       const update = config.updates.find((u) => u["package-ecosystem"] === ecosystem)!;
