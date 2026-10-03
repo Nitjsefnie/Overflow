@@ -823,6 +823,10 @@ fi
 
     const analyze = workflow.jobs.analyze! as typeof workflow.jobs.analyze & {
       permissions: Record<string, string>;
+      strategy: {
+        "fail-fast": boolean;
+        matrix: { language: string[] };
+      };
     };
     expect(analyze.steps.filter((step) => step.uses).every((step) => /@[0-9a-f]{40}$/.test(step.uses!))).toBe(true);
 
@@ -832,6 +836,10 @@ fi
     // persist-credentials disabled — fails this equality.
     expect(analyze).toEqual({
       permissions: { contents: "read", "security-events": "write" },
+      strategy: {
+        "fail-fast": false,
+        matrix: { language: ["javascript-typescript", "actions"] },
+      },
       "runs-on": "ubuntu-latest",
       "timeout-minutes": 30,
       steps: [
@@ -841,11 +849,15 @@ fi
         },
         {
           uses: "github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2",
-          with: { languages: "javascript-typescript", "config-file": ".github/codeql-config.yml" },
+          with: {
+            languages: "${{ matrix.language }}",
+            "config-file": ".github/codeql-config.yml",
+            queries: "security-extended",
+          },
         },
         {
           uses: "github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2",
-          with: { category: "/language:javascript-typescript" },
+          with: { category: "/language:${{ matrix.language }}" },
         },
       ],
     } satisfies typeof analyze);
