@@ -6,13 +6,18 @@ import { pathToFileURL } from "node:url";
 
 const POLICY_LIST_URL =
   "https://api.github.com/repos/Nitjsefnie/Overflow/actions/policies";
+const POLICY_LIST_PAGE_SIZE = 100;
 const REQUIRED_EVENTS = ["pull_request_target", "workflow_run"] as const;
 
 type RequiredEvent = (typeof REQUIRED_EVENTS)[number];
 type Classification = { pass: boolean; reason: string };
 type ApiResponse = { status: number; body: string; error?: string };
 type PolicySummary = { id: string; name: string };
-type ParsedList = { policies?: PolicySummary[]; error?: string };
+type ParsedList = {
+  policies?: PolicySummary[];
+  totalCount?: number;
+  error?: string;
+};
 type PolicyTransport = (
   url: string,
   init: RequestInit,
@@ -82,6 +87,17 @@ function parsePolicyList(response: ApiResponse): ParsedList {
         `Raw document: ${response.body}`,
     };
   }
+  if (
+    typeof document.total_count !== "number" ||
+    !Number.isSafeInteger(document.total_count) ||
+    document.total_count < 0
+  ) {
+    return {
+      error:
+        "Actions policy list response is malformed: expected a non-negative integer total_count. " +
+        `Raw document: ${response.body}`,
+    };
+  }
 
   const policies: PolicySummary[] = [];
   for (const [index, value] of document.policies.entries()) {
@@ -117,7 +133,7 @@ function parsePolicyList(response: ApiResponse): ParsedList {
     policies.push({ id, name: typeof value.name === "string" ? value.name : "unnamed" });
   }
 
-  return { policies };
+  return { policies, totalCount: document.total_count };
 }
 
 function parseDocument(response: ApiResponse): { document?: unknown; error?: string } {
@@ -165,6 +181,21 @@ export function classify(
   const parsedList = parsePolicyList(listResponse);
   if (parsedList.error !== undefined) return { pass: false, reason: parsedList.error };
   const policies = parsedList.policies ?? [];
+  const totalCount = parsedList.totalCount;
+  if (totalCount === undefined) {
+    return {
+      pass: false,
+      reason: "Actions policy list is missing total_count; refusing to verify an incomplete list.",
+    };
+  }
+  if (policies.length !== totalCount) {
+    return {
+      pass: false,
+      reason:
+        `Fetched ${policies.length} Actions policy summaries, but total_count is ${totalCount}; ` +
+        "refusing to verify an incomplete or ambiguous policy list.",
+    };
+  }
   if (policies.length === 0) {
     return {
       pass: false,
@@ -414,9 +445,11 @@ async function request(
   }
 }
 
-function listPolicies(response: ApiResponse): PolicySummary[] | undefined {
-  const parsed = parsePolicyList(response);
-  return parsed.policies;
+function policyListPageUrl(page: number): string {
+  const url = new URL(POLICY_LIST_URL);
+  url.searchParams.set("per_page", String(POLICY_LIST_PAGE_SIZE));
+  url.searchParams.set("page", String(page));
+  return url.toString();
 }
 
 function runnerResult(result: Classification): RunnerResult {
@@ -434,10 +467,50 @@ export async function runCheck(
     };
   }
 
-  const listResponse = await request(POLICY_LIST_URL, token, transport);
-  const policies = listPolicies(listResponse);
-  if (policies === undefined || policies.length === 0) {
-    return runnerResult(classify(listResponse, []));
+  const firstPageResponse = await request(policyListPageUrl(1), token, transport);
+  const firstPage = parsePolicyList(firstPageResponse);
+  if (
+    firstPage.error !== undefined ||
+    firstPage.policies === undefined ||
+    firstPage.totalCount === undefined
+  ) {
+    return runnerResult(classify(firstPageResponse, []));
+  }
+
+  const policies = [...firstPage.policies];
+  const totalCount = firstPage.totalCount;
+  for (let page = 2; policies.length < totalCount && page <= totalCount; page += 1) {
+    const pageResponse = await request(policyListPageUrl(page), token, transport);
+    const parsedPage = parsePolicyList(pageResponse);
+    if (
+      parsedPage.error !== undefined ||
+      parsedPage.policies === undefined ||
+      parsedPage.totalCount === undefined
+    ) {
+      const failedPage = classify(pageResponse, []);
+      return {
+        exitCode: 1,
+        message: `Actions policy list page ${page} failed: ${failedPage.reason}`,
+      };
+    }
+    if (parsedPage.totalCount !== totalCount) {
+      return {
+        exitCode: 1,
+        message:
+          `Actions policy pagination changed total_count from ${totalCount} on page 1 ` +
+          `to ${parsedPage.totalCount} on page ${page}; refusing to verify an unstable list.`,
+      };
+    }
+    if (parsedPage.policies.length === 0) break;
+    policies.push(...parsedPage.policies);
+  }
+
+  const completeListResponse: ApiResponse = {
+    status: 200,
+    body: JSON.stringify({ total_count: totalCount, policies }),
+  };
+  if (policies.length !== totalCount || policies.length === 0) {
+    return runnerResult(classify(completeListResponse, []));
   }
 
   const policyResponses = await Promise.all(
@@ -445,7 +518,7 @@ export async function runCheck(
       request(`${POLICY_LIST_URL}/${encodeURIComponent(policy.id)}`, token, transport),
     ),
   );
-  return runnerResult(classify(listResponse, policyResponses));
+  return runnerResult(classify(completeListResponse, policyResponses));
 }
 
 function report(result: RunnerResult): void {

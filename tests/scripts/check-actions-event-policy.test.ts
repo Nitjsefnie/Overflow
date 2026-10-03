@@ -14,6 +14,29 @@ const runCheck = (actionsEventPolicy as typeof actionsEventPolicy & { runCheck?:
   .runCheck;
 const POLICY_LIST_URL =
   "https://api.github.com/repos/Nitjsefnie/Overflow/actions/policies";
+const POLICY_LIST_PATH = new URL(POLICY_LIST_URL).pathname;
+
+function policyListPageUrl(page: number): string {
+  const url = new URL(POLICY_LIST_URL);
+  url.searchParams.set("per_page", "100");
+  url.searchParams.set("page", String(page));
+  return url.toString();
+}
+
+function activePolicyDetail(id: number): Response {
+  return new Response(JSON.stringify({
+    id,
+    name: `policy-${id}`,
+    enforcement: "active",
+    conditions: { workflow_path: { include: ["~ALL"], exclude: [] } },
+    rules: [
+      {
+        type: "restrict_action_events",
+        parameters: { allowed_events: events },
+      },
+    ],
+  }), { status: 200 });
+}
 
 const events = ["pull_request_target", "workflow_run"];
 
@@ -200,7 +223,7 @@ describe("Actions event policy runner", () => {
     const transport: PolicyTransport = async (input, init) => {
       const url = String(input);
       calls.push({ url, init });
-      if (url === POLICY_LIST_URL) {
+      if (new URL(url).pathname === POLICY_LIST_PATH) {
         return new Response(JSON.stringify({
           total_count: 1,
           policies: [{ id: 6375, name: "repo-event-policy" }],
@@ -232,7 +255,7 @@ describe("Actions event policy runner", () => {
     expect(result.exitCode).toBe(0);
     expect(result.message).toContain("policy 6375");
     expect(calls.map(({ url }) => url)).toEqual([
-      POLICY_LIST_URL,
+      policyListPageUrl(1),
       `${POLICY_LIST_URL}/6375`,
     ]);
     expect(calls[0]?.init?.headers).toMatchObject({ Authorization: "Bearer offline-token" });
@@ -243,7 +266,7 @@ describe("Actions event policy runner", () => {
     const transport: PolicyTransport = async (input) => {
       const url = String(input);
       calls.push(url);
-      if (url === POLICY_LIST_URL) {
+      if (new URL(url).pathname === POLICY_LIST_PATH) {
         return new Response(JSON.stringify({
           total_count: 1,
           policies: [{ id: 6375, name: "summary-has-no-rules" }],
@@ -261,7 +284,7 @@ describe("Actions event policy runner", () => {
     expect(result.exitCode).toBe(1);
     expect(result.message).toContain("404");
     expect(result.message).toContain("6375");
-    expect(calls).toEqual([POLICY_LIST_URL, `${POLICY_LIST_URL}/6375`]);
+    expect(calls).toEqual([policyListPageUrl(1), `${POLICY_LIST_URL}/6375`]);
   });
 
   it("fails visibly without a token without making a request", async () => {
@@ -296,5 +319,135 @@ describe("Actions event policy runner", () => {
     expect(result.message).toContain("GITHUB_TOKEN");
     expect(result.message).toContain("Administration read");
     expect(result.message).toContain("maintainer-wired secret");
+  });
+
+  it("fetches a 31st policy and fails when that policy is malformed", async () => {
+    const summaries = Array.from({ length: 31 }, (_, index) => ({
+      id: index + 1,
+      name: `policy-${index + 1}`,
+    }));
+    const listRequests: URL[] = [];
+    const fetchedDetails: number[] = [];
+    const transport: PolicyTransport = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === POLICY_LIST_PATH) {
+        listRequests.push(url);
+        const perPage = Number(url.searchParams.get("per_page") ?? "30");
+        const page = Number(url.searchParams.get("page") ?? "1");
+        return new Response(JSON.stringify({
+          total_count: summaries.length,
+          policies: summaries.slice((page - 1) * perPage, page * perPage),
+        }), { status: 200 });
+      }
+      const id = Number(url.pathname.split("/").at(-1));
+      fetchedDetails.push(id);
+      return id === 31 ? new Response("{", { status: 200 }) : activePolicyDetail(id);
+    };
+
+    if (runCheck === undefined) {
+      expect(runCheck, "the injectable runner must be exported").toBeTypeOf("function");
+      return;
+    }
+    const result = await runCheck("offline-token", transport);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toContain("policy 31");
+    expect(result.message).toMatch(/malformed JSON/i);
+    expect(fetchedDetails).toContain(31);
+    expect(listRequests.map((url) => url.searchParams.get("per_page"))).toEqual(["100"]);
+  });
+
+  it("fails with fetched and total counts when pagination cannot reach total_count", async () => {
+    const pages: number[] = [];
+    const transport: PolicyTransport = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === POLICY_LIST_PATH) {
+        const page = Number(url.searchParams.get("page") ?? "1");
+        pages.push(page);
+        return new Response(JSON.stringify({
+          total_count: 2,
+          policies: page === 1 ? [{ id: 1, name: "policy-1" }] : [],
+        }), { status: 200 });
+      }
+      return activePolicyDetail(Number(url.pathname.split("/").at(-1)));
+    };
+
+    if (runCheck === undefined) {
+      expect(runCheck, "the injectable runner must be exported").toBeTypeOf("function");
+      return;
+    }
+    const result = await runCheck("offline-token", transport);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toContain("1");
+    expect(result.message).toContain("2");
+    expect(result.message).toMatch(/fetched|total_count|total/i);
+    expect(pages).toEqual([1, 2]);
+  });
+
+  it("fails when a later policy-list page returns a non-200 response", async () => {
+    const pages: number[] = [];
+    const summaries = Array.from({ length: 101 }, (_, index) => ({
+      id: index + 1,
+      name: `policy-${index + 1}`,
+    }));
+    const transport: PolicyTransport = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === POLICY_LIST_PATH) {
+        const page = Number(url.searchParams.get("page") ?? "1");
+        pages.push(page);
+        if (page === 2) return new Response("rate limited", { status: 503 });
+        const perPage = Number(url.searchParams.get("per_page") ?? "30");
+        return new Response(JSON.stringify({
+          total_count: summaries.length,
+          policies: summaries.slice((page - 1) * perPage, page * perPage),
+        }), { status: 200 });
+      }
+      return activePolicyDetail(Number(url.pathname.split("/").at(-1)));
+    };
+
+    if (runCheck === undefined) {
+      expect(runCheck, "the injectable runner must be exported").toBeTypeOf("function");
+      return;
+    }
+    const result = await runCheck("offline-token", transport);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toContain("503");
+    expect(pages).toEqual([1, 2]);
+  });
+
+  it("passes when all policies across multiple pages qualify", async () => {
+    const summaries = Array.from({ length: 101 }, (_, index) => ({
+      id: index + 1,
+      name: `policy-${index + 1}`,
+    }));
+    const pages: number[] = [];
+    const details: number[] = [];
+    const transport: PolicyTransport = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === POLICY_LIST_PATH) {
+        const page = Number(url.searchParams.get("page") ?? "1");
+        const perPage = Number(url.searchParams.get("per_page") ?? "30");
+        pages.push(page);
+        return new Response(JSON.stringify({
+          total_count: summaries.length,
+          policies: summaries.slice((page - 1) * perPage, page * perPage),
+        }), { status: 200 });
+      }
+      const id = Number(url.pathname.split("/").at(-1));
+      details.push(id);
+      return activePolicyDetail(id);
+    };
+
+    if (runCheck === undefined) {
+      expect(runCheck, "the injectable runner must be exported").toBeTypeOf("function");
+      return;
+    }
+    const result = await runCheck("offline-token", transport);
+
+    expect(result.exitCode).toBe(0);
+    expect(pages).toEqual([1, 2]);
+    expect(details).toHaveLength(101);
   });
 });
