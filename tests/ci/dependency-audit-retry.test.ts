@@ -54,23 +54,30 @@ type ScriptedOutcome = { code: number; stdout: string; stderr: string };
  */
 const STEP_TIMEOUT_MS = 120_000;
 
-/** SIGKILL, not SIGTERM: the point is that nothing is left to answer a second signal. */
-const STEP_KILL_SIGNAL = "SIGKILL";
-
 /**
- * Pins the constant itself, which the in-test assertion cannot: that one
- * observes `spawnSync`'s REPORTED `killSignal`, so it covers the spawn option
- * and nothing else. Both kill sites in `killTree` read this constant, and the
+ * SIGKILL, not SIGTERM: the point is that nothing is left to answer a second
+ * signal.
+ *
+ * This constant is PINNED BY A TEST ("signals every process it kills with
+ * SIGKILL"), which the in-test signal assertion cannot do: that one observes
+ * `spawnSync`'s REPORTED `killSignal`, so it covers the spawn option and
+ * nothing else. Both kill sites in `killTree` read this constant, and the
  * brief's mandate is that they send SIGKILL.
  *
- * Measured here, and the reason this line exists: swapping the constant to
+ * Measured here, and the reason that test exists: swapping the constant to
  * SIGTERM was caught, but writing `"SIGTERM"` literally at the two `killTree`
  * sites — the group kill sending a signal that can be handled — left the file
  * 21/21 GREEN, because this constant was never read on that path. The
  * behavioural half of that gate is the runaway fixture's `trap '' TERM` below;
- * this assertion covers the constant so neither half is load-bearing alone.
+ * the constant assertion covers the other half, so neither is load-bearing
+ * alone.
+ *
+ * The assertion lives inside a test rather than at module scope because a
+ * module-level violation aborts collection: the run then reports "0 test" and
+ * every other case in the file never runs, so the failure hides the state of
+ * everything else.
  */
-expect(STEP_KILL_SIGNAL).toBe("SIGKILL");
+const STEP_KILL_SIGNAL = "SIGKILL";
 
 /**
  * The runaway fixture's recursion cap. It is a cap in the fixture's own source,
@@ -126,9 +133,6 @@ const SURVIVOR_SETTLE_MS = 4_000;
  */
 const STEP_LAUNCHER = 'echo $$ > "$1"; shift; exec bash -e "$@"';
 
-/** Process groups this suite has spawned and not yet cleaned up. */
-const liveGroups = new Set<number>();
-
 /**
  * Kills a whole process group, or a lone process when no group is known.
  *
@@ -138,7 +142,6 @@ const liveGroups = new Set<number>();
  */
 function killTree(pgid: number | undefined, pid: number | undefined): void {
   if (pgid !== undefined) {
-    liveGroups.delete(pgid);
     try {
       process.kill(-pgid, STEP_KILL_SIGNAL);
       return;
@@ -161,8 +164,7 @@ function killTree(pgid: number | undefined, pid: number | undefined): void {
 
 /**
  * Runs one shell script in its own process group, under a bound, and takes the
- * whole group down afterwards — whether the script finished, overran, or the
- * process running this suite was stopped from outside mid-run.
+ * whole group down afterwards — whether the script finished or overran.
  *
  * The group kill is the load-bearing half. Measured on this host: with the
  * script started under `setsid` and left to overrun, `spawnSync`'s own timeout
@@ -190,13 +192,21 @@ function runBoundedScript(
   let pgid: number | undefined;
   try {
     const published = Number(readFileSync(pgidFile, "utf8").trim());
-    // Refuse anything that is not a plausible group id, and never this
-    // process's own group — a stray `kill(-pgid)` aimed at the test runner
-    // would take the suite down, which is the failure this whole mechanism
-    // exists to prevent.
-    if (Number.isInteger(published) && published > 1 && published !== process.pid && published !== process.ppid) {
+    // Refuse anything that is not a plausible group id, and never a group this
+    // process belongs to — a stray `kill(-pgid)` aimed at the test runner or
+    // its own shell would take the suite down, which is the failure this whole
+    // mechanism exists to prevent. The runner's real group is NOT `process.pid`
+    // or `process.ppid`: measured inside a vitest worker, pid 615705 and ppid
+    // 614470 sat in group 614439. So the group is read from /proc, not
+    // inferred from those two.
+    //
+    // This is defence in depth, not the protection: `setsid` is what puts the
+    // script in a group of its own, and a published pgid that collided with
+    // ours would mean `setsid` had not done that. It costs one small read and
+    // removes a way to aim a group-kill at the runner.
+    const own = ownProcessGroup();
+    if (Number.isInteger(published) && published > 1 && published !== process.pid && published !== own) {
       pgid = published;
-      liveGroups.add(published);
     }
   } catch {
     // No file: `setsid` never got as far as the script.
@@ -219,28 +229,59 @@ function countProcesses(marker: string): number {
 }
 
 /**
- * The "the run was stopped from outside" case: a step script started here and
- * still running when this process goes down must not be left behind. SIGINT,
- * SIGTERM and SIGHUP are trapped for that; `exit` covers the normal end. A
- * SIGKILL to this process cannot be trapped by anything, which is precisely why
- * the bound in `runBoundedScript` is the primary mechanism and this is the
- * backstop.
+ * This process's own process group, or undefined where it cannot be read.
+ *
+ * `process.getpgrp` does not exist in Node 24.17.0 (the version this workflow
+ * pins), so field 5 of /proc/self/stat is the source. The comm field that
+ * precedes it can contain spaces and parentheses, so the parse starts after the
+ * LAST `)`, not by splitting the whole line.
  */
-function installCleanupOnExit(): void {
-  const cleanup = (): void => {
-    for (const pgid of [...liveGroups]) killTree(pgid, undefined);
-    liveGroups.clear();
-  };
-  process.on("exit", cleanup);
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    process.on(signal, () => {
-      cleanup();
-      process.exit(0);
-    });
+function ownProcessGroup(): number | undefined {
+  try {
+    const stat = readFileSync("/proc/self/stat", "utf8");
+    const afterComm = stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/);
+    const pgid = Number(afterComm[2]);
+    return Number.isInteger(pgid) && pgid > 0 ? pgid : undefined;
+  } catch {
+    return undefined;
   }
 }
 
-installCleanupOnExit();
+/**
+ * Every case here runs a real shell through `setsid`, which is util-linux and
+ * absent on macOS — where this file ran before this branch. Gated the same way
+ * as the other platform-specific cases in this repo
+ * (tests/db/postgres-shared.test.ts), so a developer on a Mac skips rather than
+ * reading 21 ENOENT failures. The workflow assertions above the gate are pure
+ * YAML reads and still run everywhere. CI is ubuntu-latest, which is why this
+ * needs stating rather than discovering.
+ *
+ * `pgrep` is not gated: it is in the base system on macOS too, and it is only
+ * reached from the Linux-gated case.
+ */
+const LINUX_ONLY = process.platform === "linux";
+
+/**
+ * NOTE ON THE "RUN STOPPED FROM OUTSIDE" CASE — there is no protection for it,
+ * deliberately, and this comment exists so nobody adds one that cannot work.
+ *
+ * An earlier version kept a set of live process groups and killed them from
+ * `process.on("exit")` and from SIGINT/SIGTERM/SIGHUP handlers. Measured here,
+ * that set was ALWAYS empty when a handler could run: the only two statements
+ * that touched it — the `add` and the `delete` — sit inside a single synchronous
+ * `runBoundedScript` frame, and a signal callback cannot interleave inside a
+ * synchronous call. An instrumented exit handler printed
+ * `observedLiveGroups=0`. So the handlers could never kill anything, while the
+ * `process.exit(0)` in them really did change vitest worker's signal semantics
+ * — a real cost for zero protection.
+ *
+ * What actually bounds a step script is the `timeout` in `runBoundedScript`,
+ * because that is what stops the script from running indefinitely in the first
+ * place. If the whole test run is killed from outside, whatever was running at
+ * that instant is left behind; the difference this fix makes is that nothing is
+ * ever UNBOUND, so the window is bounded by the timeout rather than by
+ * eternity.
+ */
 
 /** `pnpm audit --json` over a lockfile with no known vulnerabilities. */
 const CLEAN: ScriptedOutcome = {
@@ -547,13 +588,19 @@ describe("the dependency audit workflow's audit step", () => {
     }
   });
 
+  it("signals every process it kills with SIGKILL", () => {
+    // Lives here, outside the Linux-gated block, because it is about a constant
+    // and needs no shell — so it still runs on a platform that skips the rest.
+    expect(STEP_KILL_SIGNAL).toBe("SIGKILL");
+  });
+
   it("reads the audit's own output rather than a report file a pull request could stage", () => {
     // `pnpm audit` is the only thing that writes the report here. A path under
     // version control would be pull-request-staged input to a decision.
     expect(auditSteps[0]?.run ?? "").toMatch(/pnpm audit --json/);
   });
 
-  describe("run against a scripted advisory endpoint", () => {
+  describe.skipIf(!LINUX_ONLY)("run against a scripted advisory endpoint", () => {
     let root = "";
     let cases = 0;
 
@@ -562,10 +609,10 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     afterAll(async () => {
-      // Whatever this file spawned is gone by now in every passing run; this
-      // is the backstop for a failing one, so a red suite does not leave the
-      // host carrying a step script's process tree.
-      for (const pgid of [...liveGroups]) killTree(pgid, undefined);
+      // Nothing to clean up beyond the directory: `runBoundedScript` kills
+      // every group it starts before it returns, so there is never a live
+      // group by the time this runs. An earlier version swept a set of "live"
+      // groups here; it was always empty, for the reason recorded above.
       await rm(root, { recursive: true, force: true });
     });
 
