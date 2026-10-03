@@ -789,7 +789,7 @@ exit 1
     expect(npm!.ignore).toEqual([{ "dependency-name": "postgres" }]);
   });
 
-  it("adds the github-actions and docker ecosystems to the weekly dependabot schedule", async () => {
+  it("adds the github-actions, docker, and pip ecosystems to the weekly dependabot schedule", async () => {
     const config = parse(await readFile(resolve(".github/dependabot.yml"), "utf8")) as {
       updates: Array<{
         "package-ecosystem": string;
@@ -813,11 +813,12 @@ exit 1
       "npm",
       "github-actions",
       "docker",
+      "pip",
     ]);
     // One slot per ecosystem, not one shared literal: a shared `{ interval:
-    // "weekly" }` cannot tell three lanes apart, so it stayed green while all
-    // three landed on Monday — the busiest slot, shared with the dependency
-    // audit. Keyed by ecosystem, one lane's day drifting fails on its own key.
+    // "weekly" }` cannot tell four lanes apart, so it stayed green while all
+    // four defaulted to Monday. Keyed by ecosystem, one lane's day drifting
+    // fails on its own key.
     const expectedSchedules: Record<string, Schedule> = {
       "github-actions": {
         interval: "weekly",
@@ -826,13 +827,19 @@ exit 1
         timezone: "Etc/UTC",
       },
       docker: { interval: "weekly", day: "sunday", time: "05:31", timezone: "Etc/UTC" },
+      pip: { interval: "weekly", day: "thursday", time: "05:07", timezone: "Etc/UTC" },
     };
-    for (const ecosystem of ["github-actions", "docker"]) {
+    const expectedDirectories: Record<string, string> = {
+      "github-actions": "/",
+      docker: "/",
+      pip: "/.github/",
+    };
+    for (const ecosystem of ["github-actions", "docker", "pip"]) {
       const update = config.updates.find((u) => u["package-ecosystem"] === ecosystem)!;
-      expect(update.directory, ecosystem).toBe("/");
+      expect(update.directory, ecosystem).toBe(expectedDirectories[ecosystem]);
       expect(update.schedule, ecosystem).toEqual(expectedSchedules[ecosystem]);
       // Per-entry cap: each updates entry opens at most five pull requests a
-      // week (the npm lane included), so three entries could reach fifteen —
+      // week (the npm lane included), so four entries could reach twenty —
       // no single lane floods, but the cap does not pool across ecosystems.
       expect(update["open-pull-requests-limit"], ecosystem).toBe(5);
     }
@@ -855,6 +862,41 @@ exit 1
       "github-actions": { patterns: ["*"] },
       "github-actions-security": { "applies-to": "security-updates", patterns: ["*"] },
     });
+  });
+
+  it("pins the pip ecosystem to the hash-pinned zizmor requirements file", async () => {
+    const source = await readFile(resolve(".github/dependabot.yml"), "utf8");
+    const config = parse(source) as {
+      updates: Array<{
+        "package-ecosystem": string;
+        directory: string;
+        schedule: Schedule;
+        "open-pull-requests-limit": number;
+        ignore?: Array<{ "dependency-name": string; "update-types"?: string[] }>;
+        groups?: Record<string, unknown>;
+      }>;
+    };
+    const pip = config.updates.find((update) => update["package-ecosystem"] === "pip");
+
+    expect(pip).toBeDefined();
+    expect(pip!.directory).toBe("/.github/");
+    expect(pip!.schedule).toEqual({
+      interval: "weekly",
+      day: "thursday",
+      time: "05:07",
+      timezone: "Etc/UTC",
+    });
+    expect(pip!["open-pull-requests-limit"]).toBe(5);
+    expect(pip!.groups).toBeUndefined();
+    expect(pip!.ignore).toBeUndefined();
+    expect(source).toContain(`  - package-ecosystem: "pip"
+    directory: "/.github/"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+      time: "05:07"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5`);
   });
 
   it("collects every workflow action into one version and one security dependabot group", async () => {
@@ -910,12 +952,12 @@ exit 1
           const fields = entry.cron.trim().split(/\s+/);
           if (fields.length !== 5 || fields[2] !== "*" || fields[3] !== "*") continue;
           // `m h * * d` occupies its pinned weekday. A daily cron (`*` weekday)
-          // occupies no specific day in this model: the daily secret-scan sweep
-          // fires once every weekday, and only weekly lanes' collisions with
-          // weekday-pinned workflows are modelled. Not modelled here: a
-          // day-of-month or month field (monthly crons), and a day field naming
-          // a RANGE or a list (`1-5`),
-          // which fire on a subset this weekday-only check does not resolve.
+          // occupies no specific weekday in this model: secret-scan runs daily
+          // at 04:41 and dependency-audit daily at 06:37. This checks only
+          // weekly-lane collisions with weekday-pinned workflows. Not modelled
+          // here: a day-of-month or month field (monthly crons), and a day field
+          // naming a RANGE or a list (`1-5`), which this weekday-only check does
+          // not resolve.
           // No cron of either shape ships in this repository.
           if (fields[4] === "*") continue;
           cronDays.add(CRON_DAYS[Number(fields[4])]!);
@@ -1001,15 +1043,15 @@ exit 1
       }
     }
 
-    // All three lanes carry an explicit weekday, an explicit clock and a
+    // All four lanes carry an explicit weekday, an explicit clock and a
     // timezone. No lane's day may be Monday — the default an unset `day`
-    // resolves to, and this repository's busiest slot — nor any weekday a
-    // weekday-pinned workflow in this repository already fires on:
-    // dependency-audit Monday, code-scanning Wednesday, scorecard Saturday.
-    // Secret-scan is DAILY and excluded from the weekday-occupation model.
+    // resolves to — nor any weekday a weekday-pinned workflow in this
+    // repository already fires on: code-scanning Wednesday, scorecard Saturday.
+    // Secret-scan and dependency-audit are DAILY and excluded from the
+    // weekday-occupation model.
     // The explicit days spread weekly lanes away from weekly workflow slots;
     // the property is asserted against the crons read above, not transcribed.
-    for (const ecosystem of ["npm", "github-actions", "docker"]) {
+    for (const ecosystem of ["npm", "github-actions", "docker", "pip"]) {
       const update = config.updates.find((u) => u["package-ecosystem"] === ecosystem)!;
       const { schedule } = update;
       expect(schedule.interval, ecosystem).toBe("weekly");
