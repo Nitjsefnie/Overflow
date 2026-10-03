@@ -868,34 +868,44 @@ fi
    * "the workflow exists" is not a pin and no assertion here accepts one.
    *
    * 1. **A trigger that never fires.** A `push` or `pull_request` trigger
-   *    carrying a branch filter, or a cron that is not the expression intended,
-   *    yields a workflow GitHub schedules and never runs. Every conclusion is
-   *    green and no score is ever produced.
-   * 2. **A contribution-event trigger.** The opposite failure, and the one the
+   *    carrying a branch filter yields a workflow GitHub schedules and never
+   *    runs: every conclusion is green and no score is ever produced.
+   * 2. **A cron that fires on the wrong tick.** A different mechanism and a
+   *    different consequence, so it is a separate case rather than a clause of
+   *    the one above: a valid-but-mistyped slot is not silence, it is a reading
+   *    taken at an hour nobody looks, INVISIBLE in a run history rather than
+   *    absent from it. The `on` equality below catches it as a value mismatch,
+   *    not as a missing run — that equality is the only thing catching it.
+   * 3. **A contribution-event trigger.** The opposite failure, and the one the
    *    `on` equality exists to prevent: a `pull_request` arm makes Scorecard a
    *    second gate on a commit `ci` already checks, spending a pull-request
    *    run on a signal that is allowed to be flat.
-   * 3. **A job that never starts.** The `if` guard is where a skip hides,
+   * 4. **A job that never starts.** The `if` guard is where a skip hides,
    *    because a skipped job is indistinguishable from a green one in a run
    *    summary. A fork's run, or a manual dispatch on any ref but the default
    *    branch, publishes findings for a tree this repository is not
    *    responsible for, and a score describing a different tree than the badge.
-   * 4. **A run that produces no SARIF.** `results_format` other than `sarif`,
+   * 5. **A run that produces no SARIF.** `results_format` other than `sarif`,
    *    or `publish_results` off, leaves the Security tab empty while every run
    *    is green — an instrument that measures nothing is indistinguishable
    *    from one measuring a healthy repository.
-   * 5. **A SARIF upload that cannot succeed, and a score that cannot be
+   * 6. **A SARIF upload that cannot succeed, and a score that cannot be
    *    attributed.** Without `security-events: write` the upload step fails
    *    while the workflow still reports; without `id-token: write` the
    *    published result carries no signature, so a consumer cannot verify the
    *    score came from this repository's own run.
-   * 6. **A step that is not pinned, or is pinned to the wrong action.** A tag
+   * 7. **A step that is not pinned, or is pinned to the wrong action.** A tag
    *    or branch ref moves under the workflow, so the action that produced a
    *    Security-tab finding is not the one that was reviewed. A substitution at
    *    a VALID digest is the shape the digest regex cannot see.
-   * 7. **A run that never ends.** With no `timeout-minutes` a hung analysis
+   * 8. **A key nothing reads.** Every assertion in this test reads a key this
+   *    workflow is expected to carry, so a key they do NOT read is a hole
+   *    rather than a coverage gap. The top-level key-set equality is what
+   *    closes it; before that equality existed, an unpinned top-level `env:`
+   *    block survived this entire test, and actionlint and zizmor with it.
+   * 9. **A run that never ends.** With no `timeout-minutes` a hung analysis
    *    holds a runner and concludes nothing at all.
-   * 8. **A gate that is not a gate.** Promoting `scorecard` into
+   * 10. **A gate that is not a gate.** Promoting `scorecard` into
    *    `.github/required-checks.json` turns a weekly trend signal into a
    *    blocking check on every pull request; this is the last place that shows
    *    up before the deploy gate refuses the merge.
@@ -1041,6 +1051,22 @@ fi
         },
       ],
     } satisfies typeof analysis);
+
+    // The exact top-level key set, and the assertion that closes the one hole
+    // every other assertion here leaves. Each of them reads a key this workflow
+    // is EXPECTED to carry, so a key none of them reads is not a gap in coverage
+    // — it is a silent channel. An unpinned top-level `env:` block planting a
+    // `${{ github.repository }}` survives all of them, and survives actionlint
+    // and zizmor as well: all three read it clean, because a key nobody asserts
+    // on is a key nobody is looking at. Asserting the whole key set is what
+    // turns an added key into a named failure instead of a silent one.
+    expect(Object.keys(workflow).sort()).toEqual([
+      "concurrency",
+      "jobs",
+      "name",
+      "on",
+      "permissions",
+    ]);
 
     // A trend signal, not a gate. Asserted against the parsed pins, not the
     // prose: a required check naming this workflow would block every pull
