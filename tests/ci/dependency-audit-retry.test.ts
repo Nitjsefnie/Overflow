@@ -252,7 +252,7 @@ function ownProcessGroup(): number | undefined {
  * absent on macOS — where this file ran before this branch. Gated the same way
  * as the other platform-specific cases in this repo
  * (tests/db/postgres-shared.test.ts), so a developer on a Mac skips rather than
- * reading 21 ENOENT failures. The workflow assertions above the gate are pure
+ * reading 16 ENOENT failures. The workflow assertions above the gate are pure
  * YAML reads and still run everywhere. CI is ubuntu-latest, which is why this
  * needs stating rather than discovering.
  *
@@ -277,10 +277,12 @@ const LINUX_ONLY = process.platform === "linux";
  *
  * What actually bounds a step script is the `timeout` in `runBoundedScript`,
  * because that is what stops the script from running indefinitely in the first
- * place. If the whole test run is killed from outside, whatever was running at
- * that instant is left behind; the difference this fix makes is that nothing is
- * ever UNBOUND, so the window is bounded by the timeout rather than by
- * eternity.
+ * place. That bound holds only while this process is alive: if the whole test
+ * run is killed from outside, the timeout dies with it, so whatever was running
+ * at that instant is left behind UNBOUND. The honest summary is narrower than
+ * "bounded rather than eternal" — the timeout bounds what a step script can
+ * leave behind WHILE THE TEST IS RUNNING, and bounds nothing at all once the
+ * test process itself is gone.
  */
 
 /** `pnpm audit --json` over a lockfile with no known vulnerabilities. */
