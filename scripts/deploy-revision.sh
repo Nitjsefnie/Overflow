@@ -40,11 +40,17 @@ release_name_re='\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}'
 # The ignored untracked entries a production tree legitimately holds, as
 # git ls-files --others --ignored --directory prints them, each matched as a
 # whole path from the tree root: the .next anchor (a symlink, or a directory
-# before the release migration), release directories and the tsconfig sidecar
-# release.ts writes beside each, the release-notes directory, the generated
-# next-env.d.ts and node_modules. Nothing else, and nothing nested: a leftover
-# .next-switch-* link is a crash artefact the operator should see.
-operational_ignored_re="^(\.next/?|${release_name_re}/|${release_name_re}\.tsconfig\.json|\.next-release-notes/|next-env\.d\.ts|node_modules/)\$"
+# before the release migration), .claude/ (this repository's own session
+# machinery — the autoloaded working rules and the priority board — ignored in
+# every checkout a deploy runs from, and required there, so an operator who
+# cannot clear it must not be left choosing between a refused deploy and
+# deleting the rules), release directories and the tsconfig sidecar release.ts
+# writes beside each, the release-notes directory, the generated next-env.d.ts
+# and node_modules. Nothing else, and nothing nested: a leftover .next-switch-*
+# link is a crash artefact the operator should see, and .claude/ is matched as
+# the directory entry with its trailing slash, so .claude-rules, .claudex and
+# src/.claude/ all still refuse.
+operational_ignored_re="^(\.next/?|\.claude/|${release_name_re}/|${release_name_re}\.tsconfig\.json|\.next-release-notes/|next-env\.d\.ts|node_modules/)\$"
 # Matched byte-wise under LC_ALL=C, as the retention listing below is, so the
 # operator's locale cannot change what the allowlist admits; the function-local
 # assignment restores the locale on return.
@@ -363,7 +369,7 @@ else
   done
   if [ "${#stray_ignored[@]}" -gt 0 ]; then
     printf '  %q\n' "${stray_ignored[@]}" >&2
-    printf 'The tree in %s holds the ignored untracked files above, outside the operational allowlist (.next, release directories and their .tsconfig.json sidecars, .next-release-notes/, next-env.d.ts and node_modules/, each at the tree root). These are ignored untracked files that git status does not show, and the build would compile them into a release named for %s, a commit that does not contain them; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Remove them, then re-run the deploy.\n' "$tree" "$full_sha" >&2
+    printf 'The tree in %s holds the ignored untracked files above, outside the operational allowlist (.next, .claude/, release directories and their .tsconfig.json sidecars, .next-release-notes/, next-env.d.ts and node_modules/, each at the tree root). These are ignored untracked files that git status does not show, and the build would compile them into a release named for %s, a commit that does not contain them; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Remove them, then re-run the deploy.\n' "$tree" "$full_sha" >&2
     exit 1
   fi
   case "${OVERFLOW_DEPLOY_CI_GATE:-}" in
