@@ -281,6 +281,19 @@ def check(root):
         if scope in names and commit_type != "ci":
             violations.append((sha, subject, scope, commit_type))
 
+    plural = "s" if examined != 1 else ""
+    print(f"Examined {examined} commit subject{plural} in origin/main..HEAD; "
+          f"{len(unexamined)} not examined.")
+    # Both verdicts state their reach and list skipped subjects. Only the
+    # outgoing range is judged: already-merged history is never re-judged,
+    # and a subject without a readable scope is listed rather than failed.
+    print("  Only the OUTGOING range is examined: history already merged into")
+    print("  main is never re-judged, and a subject that does not parse")
+    print("  (a merge commit, a plain-English subject) is listed below and is")
+    print("  never a failure:")
+    for sha, subject in unexamined:
+        print(f"    {sha} {subject}")
+
     if violations:
         plural = "s" if len(violations) != 1 else ""
         verb = "pair" if len(violations) != 1 else "pairs"
@@ -295,20 +308,6 @@ def check(root):
               "commit is actually about.")
         return 1
 
-    plural = "s" if examined != 1 else ""
-    print(f"Examined {examined} commit subject{plural} in origin/main..HEAD; "
-          f"{len(unexamined)} not examined.")
-    # The green line states its own reach. Only the outgoing range is judged:
-    # already-merged history is never re-judged, and a subject without a
-    # readable scope is listed rather than failed. A green line that claimed
-    # more than this would be the same over-claim as a report over its
-    # evidence.
-    print("  Only the OUTGOING range is examined: history already merged into")
-    print("  main is never re-judged, and a subject that does not parse")
-    print("  (a merge commit, a plain-English subject) is listed below and is")
-    print("  never a failure:")
-    for sha, subject in unexamined:
-        print(f"    {sha} {subject}")
     print("No commit pairs a workflow-name scope with a type other than `ci`.")
     return 0
 

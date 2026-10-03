@@ -86,6 +86,17 @@ describe("scripts/commit_scopes.py", () => {
     expect(result.stdout).toContain(`${sha} Update the workflow wiring`);
   });
 
+  it("lists unparseable subjects even when another commit violates the rule", async () => {
+    const { root } = await fixture();
+    const violation = commit(root, "fix(ci): wrong type");
+    const skipped = commit(root, "Update wiring in plain English");
+    const result = run(root);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(`${violation} fix(ci): wrong type`);
+    expect(result.stdout).toContain(`${skipped} Update wiring in plain English`);
+    expect(result.stdout).toContain("1 not examined");
+  });
+
   it("uses the workflow name rather than its filename or nested names", async () => {
     const { root } = await fixture("build");
     commit(root, "fix(ci): filename is outside the rule");
