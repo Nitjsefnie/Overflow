@@ -1,31 +1,98 @@
 name: dependency audit
 
-# Weekly lockfile-aware vulnerability audit: a detection signal, not a fix
-# pipeline. pnpm audit reads pnpm-lock.yaml and queries the registry's
-# advisory endpoint, so there is deliberately no install and no build.
+# Lockfile-aware vulnerability audit: a detection signal, not a fix pipeline.
+# pnpm audit reads pnpm-lock.yaml and queries the registry's advisory
+# endpoint, so there is deliberately no install and no build — which is also
+# what keeps it safe to run on a pull request (issue 985).
 #
-# Exit-code semantics, verified empirically against pnpm 10.33.0: the bare
-# `pnpm audit` exits 1 exactly when the lockfile carries advisories, and 0
-# when it is clean. Do not add --audit-level: it sets a severity bar, and
-# findings below the bar still print but exit 0 (captured: a critical bar
-# over 3 moderate + 3 high advisories printed all six and exited 0) — a bar
-# on a detection signal silently passes below-bar findings. Do not add
-# --ignore-registry-errors either: a registry outage also exits 1, so a red
-# run means "advisories found, or the registry could not answer" — either
-# way a human looks, which is what a detection signal is for.
+# FORK SAFETY. The pull_request trigger means the checkout is the pull
+# request, so this workflow runs nothing a pull request authored: no install,
+# no build, no script out of the checked-out tree, no `ref:` or `repository:`
+# from the event. The audit reads the lockfile as DATA and every byte it
+# executes comes from this file or from the runner image. That is why the
+# classifier below is a run-script step and not a module under `scripts/` —
+# `node scripts/anything.ts` would execute the pull request's copy of it. The
+# permissions block stays at `contents: read`, which is all a fork run has
+# anyway.
+#
+# WHY THE OUTPUT IS MACHINE-READ. Captured against pnpm 10.33.0, `pnpm audit`
+# exits 1 both when the lockfile carries advisories and when the registry
+# could not answer, so the exit code alone cannot tell a finding from an
+# outage. `pnpm audit --json` does tell them apart, and everything it writes
+# goes to stdout with stderr left empty:
+#
+#   clean       exit 0   {"advisories": {},      "metadata": {…}}
+#   advisories  exit 1   {"advisories": {"1106913": {…}}, "metadata": {…}}
+#   registry    exit 1   {"error": {"code": "ERR_PNPM_AUDIT_BAD_RESPONSE", …}}
+#
+# The registry row was captured against a local server answering the advisory
+# endpoint 503 and 429. pnpm tries `…/audits/quick`, falls back to `…/audits`,
+# and on any non-200 throws AUDIT_BAD_RESPONSE naming BOTH statuses in its
+# message — so the statuses are read back out of that message and a retry is
+# spent only on 5xx and 429. A transport failure (ECONNREFUSED) arrives in the
+# same `error` shape with no status in it and is NOT retried: it is the answer
+# a run reports so somebody looks.
+#
+# THE RETRY IS NARROW ON PURPOSE. It fires on a transient registry answer and
+# on nothing else — never on advisories, never on a 403 or a 404, never on
+# output that does not parse. Re-asking a lockfile that carries advisories
+# cannot change the answer, and a retry loop over every failure would turn a
+# real finding into a delayed one while masking a broken invocation as a slow
+# one. A finding fails on the first attempt.
+#
+# Do not add --audit-level: it sets a severity bar, and findings below the bar
+# still print but exit 0 (captured: a critical bar over 3 moderate + 3 high
+# advisories printed all six and exited 0) — a bar on a detection signal
+# silently passes below-bar findings. Do not add --ignore-registry-errors: a
+# registry outage also exits 1, so a red run would mean only "advisories
+# found, or the registry could not answer" — either way a human looks, which is
+# what a detection signal is for. The retry below is what separates the two
+# instead.
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - package.json
+      - pnpm-lock.yaml
+  pull_request:
+    branches:
+      - main
+    # The sibling workflows' pull-request legs carry these three types
+    # explicitly (ci.yml, actionlint.yml, ratchet-guard.yml). `edited` is
+    # deliberately absent: a title edit changes no lockfile, and this workflow
+    # is already narrowed by the path filter above.
+    types:
+      - opened
+      - synchronize
+      - reopened
+    paths:
+      - package.json
+      - pnpm-lock.yaml
   schedule:
-    # Mondays 06:37 UTC, off the top of the hour where the Actions queue is
-    # busiest.
-    - cron: "37 6 * * 1"
+    # Daily 06:37 UTC. The minute stays 37: it is the minimal diff, and it is
+    # already this workflow's documented reason for being off the top of the
+    # hour where the Actions queue is busiest. It also collides with nothing —
+    # secret-scan fires at :41 and code-scanning at :43, so :37 is free. What
+    # changed is the day-of-week: weekly meant an advisory published against an
+    # unchanged pin went unreported for up to seven days, and Monday was the
+    # slot every other weekly cron wanted.
+    - cron: "37 6 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  # Same shape as ci.yml: per-ref group, cancellation gated on an event this
-  # workflow never receives — so scheduled and manual runs are never cancelled.
+  # Same shape as ci.yml: one group per pull request, and cancellation true
+  # only on a pull-request event. On the schedule, push and dispatch legs
+  # github.event.pull_request.number is null, so the group falls through to
+  # github.ref and nothing cancels an in-flight run — the daily tick is never
+  # disturbed. On a pull-request event the group is dependency-audit-<number>,
+  # so the run a new push cancels is always that same pull request's superseded
+  # head, and the push that superseded it scheduled the replacement. Cancelling
+  # it costs nothing: an audit is reproducible from the next push, and this
+  # workflow produces no required check, so a cancelled run blocks no merge.
   group: dependency-audit-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -48,8 +115,87 @@ jobs:
           corepack install --global pnpm@10.33.0
           pnpm --version
 
-      # Reads pnpm-lock.yaml directly — no pnpm install, no build. A nonzero
-      # exit here is the signal: advisories were found, or the registry could
-      # not answer.
+      # Reads pnpm-lock.yaml directly — no pnpm install, no build — and is the
+      # only thing in this workflow that executes. Three outcomes are possible
+      # and the fourth, an unreadable report, fails closed rather than reading
+      # as a clean lockfile.
       - name: Audit lockfile advisories
-        run: pnpm audit
+        run: |
+          set -uo pipefail
+          attempts=3
+          delay="${DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS:-30}"
+          for attempt in $(seq 1 "$attempts"); do
+            code=0
+            pnpm audit --json > audit.json 2> audit.err || code=$?
+            result=$(AUDIT_EXIT="$code" node -e '
+          const fs = require("node:fs");
+          let report;
+          try {
+            report = JSON.parse(fs.readFileSync("audit.json", "utf8"));
+          } catch {
+            console.log("unreadable|the audit produced no JSON report");
+            process.exit(0);
+          }
+          if (report && report.error) {
+            const statuses = [...String(report.error.message ?? "").matchAll(/responded with (\d{3})/g)]
+              .map((match) => Number(match[1]));
+            const transient = statuses.length > 0
+              && statuses.every((status) => status === 429 || (status >= 500 && status < 600));
+            const first = (message) => String(message).split("\n")[0];
+            console.log(transient
+              ? "transient|" + first("the advisory endpoint answered " + statuses.join(" and "))
+              : "unreachable|" + first(report.error.message ?? "the advisory endpoint did not answer"));
+            process.exit(0);
+          }
+          const advisories = report && report.advisories ? Object.keys(report.advisories).length : -1;
+          if (advisories > 0) {
+            const counts = report.metadata?.vulnerabilities ?? {};
+            const summary = ["critical", "high", "moderate", "low", "info"]
+              .map((severity) => (counts[severity] ?? 0) + " " + severity)
+              .filter((entry) => !entry.startsWith("0 "))
+              .join(", ");
+            console.log("advisories|" + advisories + " advisories (" + (summary || "severities unreported") + ")");
+            process.exit(0);
+          }
+          console.log(advisories === 0 && process.env.AUDIT_EXIT === "0"
+            ? "clean|no known vulnerabilities found"
+            : "unreadable|the audit report carried no advisories field and exited " + process.env.AUDIT_EXIT);
+          ')
+            verdict="${result%%|*}"
+            detail="${result#*|}"
+            echo "attempt $attempt of $attempts, pnpm audit --json exited $code: $verdict — $detail"
+            case "$verdict" in
+              clean)
+                echo "$detail"
+                exit 0
+                ;;
+              advisories)
+                echo "$detail"
+                echo "advisory ids and patched versions:"
+                node -e '
+          const report = JSON.parse(require("node:fs").readFileSync("audit.json", "utf8"));
+          for (const advisory of Object.values(report.advisories ?? {})) {
+            console.log("  " + advisory.module_name + " " + advisory.severity + ": " + advisory.title
+              + " (vulnerable " + advisory.vulnerable_versions + ", patched " + advisory.patched_versions + ")");
+          }
+          '
+                exit 1
+                ;;
+              transient)
+                cat audit.err
+                if [ "$attempt" -lt "$attempts" ]; then
+                  echo "$detail — a registry outage, not a finding; retrying"
+                  sleep "$delay"
+                  continue
+                fi
+                echo "$detail — the advisory endpoint was still unavailable after $attempts attempts"
+                exit 1
+                ;;
+              *)
+                cat audit.err
+                echo "$detail — the lockfile was NOT audited, so this run reports nothing about it"
+                exit 1
+                ;;
+            esac
+          done
+          exit 1
