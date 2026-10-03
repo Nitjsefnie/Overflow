@@ -42,9 +42,10 @@ jobs:
     # instead of standing for the whole workflow.
     permissions:
       issues: write
+      pull-requests: write
 
     steps:
-      - uses: Nitjsefnie-Actions/claim@cf2aaae56eb3bb6c655b8c4bc35906dafc77a63e # v2.0.2
+      - uses: Nitjsefnie-Actions/claim@0c79a0325d8ab789a60c2eeaf751690d2875c39c # v2.0.3
         with:
           # The claim policy, from the action's own reference block. Without it the limits are
           # unenforced: one account can hold an unbounded number of claims, so a handful of
