@@ -160,9 +160,10 @@ jobs:
       # filter names, so without this the pull request picks the binary and
       # "verified against pnpm 10.33.0" describes a version it chose.
       #
-      # This is also the step that runs `pnpm audit`, so the variable has to
-      # reach there and not merely the install step. With it set at job level,
-      # that step resolves a `pnpm@9.15.9` tree to 10.33.0.
+      # This has to reach the step that runs `pnpm audit` and not merely the
+      # one that installs pnpm, which is why it is here rather than on either
+      # step. Set at job level, the audit step resolves a `pnpm@9.15.9` tree to
+      # 10.33.0; set on the install step alone it resolves to 9.15.9.
       COREPACK_ENABLE_PROJECT_SPEC: "0"
       # pnpm reads `.npmrc` from the working directory, and a `registry=` there
       # redirects the advisory endpoint — a pull request touching both `.npmrc`
