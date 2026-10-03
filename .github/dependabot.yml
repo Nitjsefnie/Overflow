@@ -4,6 +4,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "tuesday"
+      time: "03:17"
+      timezone: "Etc/UTC"
     open-pull-requests-limit: 5
     ignore:
       # postgres is pinned by a deliberate local-patch regime: patches/postgres@3.4.9.patch
@@ -38,23 +41,37 @@ updates:
 
   # Workflow actions are SHA-pinned; dependabot proposes their bumps as SHA
   # updates (the intended behavior for the two Nitjsefnie-Actions workflows,
-  # which stay SHA-pinned by maintainer decision). Non-major bumps travel in
-  # one grouped pull request per week; a security advisory still opens a
-  # single-package pull request. That weekly grouped pull request lands red
-  # on arrival by design: tests/api/ci-workflows.test.ts pins those action
-  # SHAs, so the handler completes the second edit (the test pins) before
-  # merging — CONTRIBUTING.md's two-edit regime for a workflow change.
+  # which stay SHA-pinned by maintainer decision). Every action therefore
+  # travels together in one grouped pull request per week, majors included —
+  # the old minor-and-patch group left a codeql-action v4 to v5 bump as one pull
+  # request per `uses:` line, and the three codeql-action sub-actions (init,
+  # analyze, upload-sarif) must sit on one version: analyze refuses to run when
+  # its version differs from init's, so a split bump is a pull request that can
+  # never go green. Neither group narrows itself with update-types, and
+  # tests/api/ci-workflows.test.ts resolves the patterns against the workflows'
+  # real `uses:` inventory so a group cannot quietly stop covering one. A group
+  # without applies-to covers version updates only and security updates are
+  # enabled here, so the second group keeps a single-action advisory from
+  # reopening its own lane. That weekly grouped pull request lands red on
+  # arrival by design: tests/api/ci-workflows.test.ts pins those action SHAs, so
+  # the handler completes the second edit (the test pins) before merging —
+  # CONTRIBUTING.md's two-edit regime for a workflow change.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "friday"
+      time: "04:23"
+      timezone: "Etc/UTC"
     open-pull-requests-limit: 5
     groups:
-      minor-and-patch:
-        applies-to: version-updates
-        update-types:
-          - "minor"
-          - "patch"
+      github-actions:
+        patterns:
+          - "*"
+      github-actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   # Matches the root Dockerfile (the repository's only one). Its base image is
   # digest-pinned, so bumps arrive as tag+digest updates for that one image.
@@ -68,6 +85,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "sunday"
+      time: "05:31"
+      timezone: "Etc/UTC"
     open-pull-requests-limit: 5
     ignore:
       # Declined in #771: node 26 enters LTS only on 2026-10-28 per the

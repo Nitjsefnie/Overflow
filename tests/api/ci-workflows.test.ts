@@ -1,8 +1,18 @@
 import { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+
+// A dependabot schedule. `day`, `time` and `timezone` are the keys that move
+// the lane off the default Monday slot and pin its clock, so every consumer of
+// a parsed schedule declares them rather than reading them as absent.
+type Schedule = {
+  interval: string;
+  day?: string;
+  time?: string;
+  timezone?: string;
+};
 
 type Workflow = {
   on: Record<
@@ -619,7 +629,7 @@ fi
       updates: Array<{
         "package-ecosystem": string;
         directory: string;
-        schedule: { interval: string };
+        schedule: Schedule;
         "open-pull-requests-limit": number;
         ignore?: Array<{ "dependency-name": string }>;
       }>;
@@ -629,7 +639,12 @@ fi
     const npm = config.updates.find((update) => update["package-ecosystem"] === "npm");
     expect(npm).toBeDefined();
     expect(npm!.directory).toBe("/");
-    expect(npm!.schedule).toEqual({ interval: "weekly" });
+    expect(npm!.schedule).toEqual({
+      interval: "weekly",
+      day: "tuesday",
+      time: "03:17",
+      timezone: "Etc/UTC",
+    });
     expect(npm!["open-pull-requests-limit"]).toBe(5);
     // An automated postgres bump invalidates patches/postgres@3.4.9.patch and
     // its pnpm-lock.yaml patchedDependencies hash, breaking
@@ -642,7 +657,7 @@ fi
       updates: Array<{
         "package-ecosystem": string;
         directory: string;
-        schedule: { interval: string };
+        schedule: Schedule;
         "open-pull-requests-limit": number;
         ignore?: Array<{ "dependency-name": string; "update-types"?: string[] }>;
         groups?: Record<
@@ -657,10 +672,23 @@ fi
       "github-actions",
       "docker",
     ]);
+    // One slot per ecosystem, not one shared literal: a shared `{ interval:
+    // "weekly" }` cannot tell three lanes apart, so it stayed green while all
+    // three landed on Monday — the busiest slot, shared with the dependency
+    // audit. Keyed by ecosystem, one lane's day drifting fails on its own key.
+    const expectedSchedules: Record<string, Schedule> = {
+      "github-actions": {
+        interval: "weekly",
+        day: "friday",
+        time: "04:23",
+        timezone: "Etc/UTC",
+      },
+      docker: { interval: "weekly", day: "sunday", time: "05:31", timezone: "Etc/UTC" },
+    };
     for (const ecosystem of ["github-actions", "docker"]) {
       const update = config.updates.find((u) => u["package-ecosystem"] === ecosystem)!;
       expect(update.directory, ecosystem).toBe("/");
-      expect(update.schedule, ecosystem).toEqual({ interval: "weekly" });
+      expect(update.schedule, ecosystem).toEqual(expectedSchedules[ecosystem]);
       // Per-entry cap: each updates entry opens at most five pull requests a
       // week (the npm lane included), so three entries could reach fifteen —
       // no single lane floods, but the cap does not pool across ecosystems.
@@ -674,17 +702,118 @@ fi
       "update-types": ["version-update:semver-major"],
     }]);
     // The two Nitjsefnie-Actions workflows are SHA-pinned by maintainer
-    // decision and dependabot now proposes their SHA bumps; grouping
-    // non-major bumps keeps those, plus the pinned actions/* shas, in one
-    // pull request per week instead of one per action. Version updates only:
-    // a security advisory must still open a single-package pull request.
+    // decision and dependabot now proposes their SHA bumps; one group per lane
+    // collects every action — major bumps included — into a single weekly pull
+    // request. This is the exact-value pin; the coverage gate below is what
+    // proves the patterns actually collect this repository's actions.
     const actions = config.updates.find((u) => u["package-ecosystem"] === "github-actions")!;
     expect(actions.groups).toEqual({
-      "minor-and-patch": {
-        "applies-to": "version-updates",
-        "update-types": ["minor", "patch"],
-      },
+      "github-actions": { patterns: ["*"] },
+      "github-actions-security": { "applies-to": "security-updates", patterns: ["*"] },
     });
+  });
+
+  it("collects every workflow action into one version and one security dependabot group", async () => {
+    const config = parse(await readFile(resolve(".github/dependabot.yml"), "utf8")) as {
+      updates: Array<{
+        "package-ecosystem": string;
+        schedule: Schedule;
+        groups?: Record<
+          string,
+          { "applies-to"?: string; "update-types"?: string[]; patterns?: string[] }
+        >;
+      }>;
+    };
+
+    // The real `uses:` inventory, read from the shipped workflows, so a group
+    // that silently stopped covering an action dies here instead of splitting
+    // that action's bump into its own pull request.
+    const workflowDirectory = resolve(".github/workflows");
+    const workflowFiles = (await readdir(workflowDirectory)).filter((file) =>
+      /\.ya?ml$/.test(file));
+    expect(workflowFiles.length).toBeGreaterThan(0);
+    const actionNames = new Set<string>();
+    for (const file of workflowFiles) {
+      const workflow = parse(await readFile(resolve(workflowDirectory, file), "utf8")) as Workflow;
+      for (const job of Object.values(workflow.jobs)) {
+        for (const step of job.steps) {
+          // A local action (`./path`) is not in the dependency graph dependabot
+          // groups; a `uses:` without `@` is not a pinned external reference.
+          if (step.uses && !step.uses.startsWith(".") && step.uses.includes("@")) {
+            actionNames.add(step.uses.slice(0, step.uses.lastIndexOf("@")));
+          }
+        }
+      }
+    }
+    expect(actionNames.size).toBeGreaterThan(0);
+
+    // Dependabot group patterns are globs where `*` matches any run of
+    // characters, resolved against the ACTION NAME — `owner/repo` for a whole
+    // action, `owner/repo/subaction` for one of its sub-actions, which is why a
+    // sub-action is only collected by a pattern that reaches its path.
+    const globMatches = (pattern: string, name: string) =>
+      new RegExp(`^${pattern.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\/]/g, "\\$&")).join(".*")}$`)
+        .test(name);
+
+    const actions = config.updates.find((u) => u["package-ecosystem"] === "github-actions")!;
+    const groups = Object.entries(actions.groups ?? {});
+    const carriersOf = (action: string, lane: string) =>
+      groups
+        .filter(([, group]) => (group["applies-to"] ?? "version-updates") === lane)
+        .filter(([, group]) =>
+          (group.patterns ?? []).some((pattern) => globMatches(pattern, action)))
+        .map(([name]) => name);
+
+    // Exactly one group per lane, per action: zero leaves the action's bump on
+    // its own, two or more let two groups race for it. Security updates are
+    // enabled on this repository, and a group without `applies-to` covers
+    // version updates only — so a lane with no group reopens the
+    // single-package security pull request this grouping exists to prevent.
+    for (const lane of ["version-updates", "security-updates"]) {
+      for (const action of [...actionNames].sort()) {
+        expect(carriersOf(action, lane), `${lane} ${action}`).toHaveLength(1);
+      }
+    }
+
+    // The reason a split bump can never go green: `analyze` refuses to run when
+    // its version differs from `init`'s, and `upload-sarif` must match too. All
+    // three sub-actions must therefore ride in ONE version group together, so
+    // assert they resolve to the same single group — the per-action uniqueness
+    // above alone would pass with three separate codeql-only groups.
+    const codeqlTrio = [...actionNames].filter((name) =>
+      name.startsWith("github/codeql-action/")).sort();
+    expect(codeqlTrio).toEqual([
+      "github/codeql-action/analyze",
+      "github/codeql-action/init",
+      "github/codeql-action/upload-sarif",
+    ]);
+    const codeqlCarriers = codeqlTrio.map((action) => carriersOf(action, "version-updates")[0]!);
+    expect(new Set(codeqlCarriers).size).toBe(1);
+
+    // No version group may narrow itself with update-types: that key is what
+    // held the old `minor-and-patch` group, which left every major bump
+    // (codeql-action v4 to v5) as one pull request per `uses:` line.
+    for (const [name, group] of groups) {
+      if ((group["applies-to"] ?? "version-updates") === "version-updates") {
+        expect(group["update-types"], name).toBeUndefined();
+      }
+    }
+
+    // All three lanes carry an explicit weekday, an explicit clock and a
+    // timezone, and none is Monday — the default day an unset `day` resolves
+    // to, shared with the dependency audit cron and therefore the busiest slot
+    // this repository has. The days also stay off the four existing weekly
+    // crons (dependency-audit Monday, secret-scan and code-scanning Wednesday,
+    // scorecard Saturday) so no two jobs contend for the same runner minute.
+    for (const ecosystem of ["npm", "github-actions", "docker"]) {
+      const update = config.updates.find((u) => u["package-ecosystem"] === ecosystem)!;
+      const { schedule } = update;
+      expect(schedule.interval, ecosystem).toBe("weekly");
+      expect(schedule.timezone, ecosystem).toBe("Etc/UTC");
+      expect(schedule.time, ecosystem).toMatch(/^\d{2}:\d{2}$/);
+      expect(schedule.day, ecosystem).not.toBe("monday");
+      expect(schedule.day, ecosystem).toBeDefined();
+    }
   });
 
   it("hash-pins the zizmor install through the tracked requirements file", async () => {
