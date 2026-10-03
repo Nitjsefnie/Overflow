@@ -252,6 +252,16 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
       queue: undefined,
     },
   ],
+  [
+    "scorecard.yml",
+    {
+      reason:
+        "This workflow has NO pull_request and NO pull_request_target trigger — it is schedule and workflow_dispatch only — so BOTH arms that would make it unbounded are dead: it never keys its group on one contributor's pull request, and it never receives the event that would make a repository-level group contend. The group is therefore already per-ref, and on a schedule tick github.ref is the default branch. Unlike the two schedule workflows above it, which make cancel-in-progress an event expression that is never true here, this one ships the literal true, and there is no arrival that could let it destroy anything: the ticks are a week apart and the job bounds itself at 15 minutes, so a run still in flight when the next tick lands does not exist. Scorecard is also not reproducible from a later push the way a metered CI leg is — its SARIF is a weekly reading, not a per-commit verdict — which is the second reason the group needs no repository-level bound.",
+      group: "scorecard-${{ github.ref }}",
+      "cancel-in-progress": true,
+      queue: undefined,
+    },
+  ],
 ]);
 
 /** The two events that make a workflow reachable from a fork pull request. */
