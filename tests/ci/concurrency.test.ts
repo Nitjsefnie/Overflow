@@ -836,12 +836,13 @@ describe("the workflows left unbounded", () => {
   });
 
   it("records a premise only this table's own vocabulary names", () => {
-    // The premise field is read by the assertion above, so a typo in it would
-    // silently take the `unreproducible` branch and pass against a workflow
-    // that cancels. Asserting the closed vocabulary here names the shape.
+    // The TypeScript type is the first line of defence here and rejects an
+    // unknown spelling at compile time; what this asserts is the second — that
+    // the vocabulary stays closed, so widening the type to admit a third value
+    // cannot leave `premiseOf` with a branch that checks nothing.
     for (const [name, entry] of UNBOUNDED_BY_CHOICE) {
       expect(
-        entry.premise ?? "unreproducible",
+        premiseOf(entry),
         `${name}'s recorded premise is not one this suite knows how to check`,
       ).toMatch(/^(unreproducible|superseded-attempt)$/);
     }

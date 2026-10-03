@@ -2,8 +2,8 @@ name: dependency audit
 
 # Lockfile-aware vulnerability audit: a detection signal, not a fix pipeline.
 # pnpm audit reads pnpm-lock.yaml and queries the registry's advisory
-# endpoint, so there is deliberately no install and no build — which is also
-# what keeps it safe to run on a pull request (issue 985).
+# endpoint, so there is deliberately no project install and no build — which
+# is also what keeps it safe to run on a pull request (issue 985).
 #
 # FORK SAFETY. The pull_request trigger means the checkout is the pull
 # request, so this workflow runs nothing a pull request authored: no install,
@@ -84,8 +84,8 @@ permissions:
   contents: read
 
 concurrency:
-  # Same shape as ci.yml: one group per pull request, and cancellation true
-  # only on a pull-request event. On the schedule, push and dispatch legs
+  # One group per pull request, and cancellation true only on a pull-request
+  # event. On the schedule, push and dispatch legs
   # github.event.pull_request.number is null, so the group falls through to
   # github.ref and nothing cancels an in-flight run — the daily tick is never
   # disturbed. On a pull-request event the group is dependency-audit-<number>,
@@ -93,6 +93,10 @@ concurrency:
   # head, and the push that superseded it scheduled the replacement. Cancelling
   # it costs nothing: an audit is reproducible from the next push, and this
   # workflow produces no required check, so a cancelled run blocks no merge.
+  # (Not ci.yml's shape, which is one repository-level group for every pull
+  # request: bounding this one there would cap the audit at a single run no
+  # matter how many pull requests are open. tests/ci/concurrency.test.ts holds
+  # the entry and the reasoning.)
   group: dependency-audit-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -116,9 +120,12 @@ jobs:
           pnpm --version
 
       # Reads pnpm-lock.yaml directly — no pnpm install, no build — and is the
-      # only thing in this workflow that executes. Three outcomes are possible
-      # and the fourth, an unreadable report, fails closed rather than reading
-      # as a clean lockfile.
+      # only thing in this workflow that executes. Every run ends in exactly
+      # one of five verdicts: clean, advisories, transient (a 5xx or 429 to
+      # retry), unreachable (an answered or unconnected registry that is not
+      # retryable), and unreadable. The last one fails closed rather than
+      # reading as a clean lockfile, which is the failure mode a detection
+      # signal cannot have.
       - name: Audit lockfile advisories
         run: |
           set -uo pipefail
