@@ -335,6 +335,14 @@ Give the panel its own class next to `.surface` and put the spacing there.
 `padding: clamp(...)`, and the measure and rhythm of the headings and paragraphs
 inside it.
 
+### Workflow-name scopes require the ci type
+
+A commit subject may use a workflow's name — the top-level `name:` under
+`.github/workflows/` — as its scope only with type `ci`.
+Subjects outside the `type(scope):` shape are outside this rule and are never
+rejected by it; conventional commit subjects are not required.
+`scripts/commit_scopes.py` enforces the rule in the verify job.
+
 ### Module size is ratcheted
 
 `node scripts/check-module-size.ts` enforces per-family line ceilings against
@@ -343,7 +351,7 @@ each capped by the ceilings key of the same name, are:
 
 - `src` — TypeScript under `src/`, 800 lines;
 - `tests` — TypeScript under `tests/`, 2500 lines;
-- `tooling` — `scripts/*.ts`, `scripts/*.mjs`, `scripts/*.sh` and the
+- `tooling` — `scripts/*.ts`, `scripts/*.mjs`, `scripts/*.sh`, `scripts/*.py` and the
   repository-root `*.ts` and `*.mjs` config modules, 800 lines;
 - `stylesheets` — CSS under `src/`, 800 lines;
 - `migrations` — `db/migrations/*.sql`, 400 lines.
