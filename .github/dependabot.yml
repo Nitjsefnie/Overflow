@@ -51,13 +51,19 @@ updates:
   # versions of the same action against each other. One group carrying every
   # action removes that hazard. Neither group narrows itself with update-types,
   # and tests/api/ci-workflows.test.ts resolves the patterns against the
-  # workflows' real `uses:` inventory so a group cannot quietly stop covering
-  # one. A group without applies-to covers version updates only and security
-  # updates are enabled here, so the second group keeps a single-action advisory
-  # from opening a single-package pull request. That weekly grouped pull request
-  # lands red on arrival by design: tests/api/ci-workflows.test.ts pins those
-  # action SHAs, so the handler completes the second edit (the test pins) before
-  # merging — CONTRIBUTING.md's two-edit regime for a workflow change.
+  # workflows' real `uses:` inventory — patterns and exclude-patterns alike — so
+  # a group cannot quietly stop covering one. A group without applies-to covers
+  # version updates only and security updates are enabled here, so the second
+  # group keeps a single-action advisory from opening a single-package pull
+  # request. All three lanes carry an explicit day, off the default Monday and
+  # off every weekly cron in this repository — Monday 06:37 (dependency-audit),
+  # Wednesday 04:41 (secret-scan) and 05:43 (code-scanning), Saturday 03:23
+  # (scorecard). npm runs Tuesday 03:17, this lane Friday 04:23 and docker
+  # Sunday 05:31, so no lane shares a runner minute with a scheduled workflow.
+  # That weekly grouped pull request lands red on arrival by design:
+  # tests/api/ci-workflows.test.ts pins those action SHAs, so the handler
+  # completes the second edit (the test pins) before merging — CONTRIBUTING.md's
+  # two-edit regime for a workflow change.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

@@ -14,6 +14,11 @@ type Schedule = {
   timezone?: string;
 };
 
+// Cron's day-of-week field is 0-6 starting at Sunday; dependabot's `day:` keys
+// are the names. Mapping through this table is what lets a parsed cron be
+// compared with a schedule's day directly.
+const CRON_DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
 type Workflow = {
   on: Record<
     string,
@@ -662,7 +667,12 @@ fi
         ignore?: Array<{ "dependency-name": string; "update-types"?: string[] }>;
         groups?: Record<
           string,
-          { "applies-to"?: string; "update-types"?: string[]; patterns?: string[] }
+          {
+            "applies-to"?: string;
+            "update-types"?: string[];
+            patterns?: string[];
+            "exclude-patterns"?: string[];
+          }
         >;
       }>;
     };
@@ -722,7 +732,12 @@ fi
         schedule: Schedule;
         groups?: Record<
           string,
-          { "applies-to"?: string; "update-types"?: string[]; patterns?: string[] }
+          {
+            "applies-to"?: string;
+            "update-types"?: string[];
+            patterns?: string[];
+            "exclude-patterns"?: string[];
+          }
         >;
       }>;
     };
@@ -735,6 +750,10 @@ fi
       /\.ya?ml$/.test(file));
     expect(workflowFiles.length).toBeGreaterThan(0);
     const actionNames = new Set<string>();
+    // The weekday every scheduled workflow in this repository fires on, read
+    // from the workflows themselves rather than transcribed, so the
+    // dependabot lanes' collision check cannot drift from the real crons.
+    const cronDays = new Set<string>();
     for (const file of workflowFiles) {
       const workflow = parse(await readFile(resolve(workflowDirectory, file), "utf8")) as Workflow;
       for (const job of Object.values(workflow.jobs)) {
@@ -746,8 +765,19 @@ fi
           }
         }
       }
+      for (const trigger of Object.values(workflow.on)) {
+        for (const entry of Array.isArray(trigger) ? trigger : []) {
+          const fields = entry.cron.trim().split(/\s+/);
+          // A weekly cron is `m h * * d`; anything narrower fires on a
+          // schedule dependabot's weekly lanes need not dodge.
+          if (fields.length === 5 && fields[2] === "*" && fields[3] === "*" && fields[4] !== "*") {
+            cronDays.add(CRON_DAYS[Number(fields[4])]!);
+          }
+        }
+      }
     }
     expect(actionNames.size).toBeGreaterThan(0);
+    expect(cronDays.size).toBeGreaterThan(0);
 
     // Dependabot group patterns are globs where `*` matches any run of
     // characters, resolved against the ACTION NAME — `owner/repo` for a whole
@@ -759,16 +789,31 @@ fi
 
     const actions = config.updates.find((u) => u["package-ecosystem"] === "github-actions")!;
     const groups = Object.entries(actions.groups ?? {});
-    const carriersOf = (action: string, lane: string) =>
-      groups
-        .filter(([, group]) => (group["applies-to"] ?? "version-updates") === lane)
-        .filter(([, group]) =>
-          (group.patterns ?? []).some((pattern) => globMatches(pattern, action)))
-        .map(([name]) => name);
+    // Declaration order is load-bearing: dependabot resolves membership
+    // FIRST-MATCH-WINS ("if a dependency matches more than one rule, it's
+    // included in the first group that it matches"), so the groups are walked in
+    // order and only the first match counts as a carrier.
+    const carriersOf = (action: string, lane: string) => {
+      for (const [name, group] of groups) {
+        if ((group["applies-to"] ?? "version-updates") !== lane) continue;
+        // `exclude-patterns` subtracts from the group's own `patterns`, so a
+        // group that excludes an action does not carry it however well its
+        // patterns match. Both keys are read here because dependabot reads
+        // both; reading patterns alone would report coverage the config does
+        // not actually deliver.
+        const included = (group.patterns ?? []).some((pattern) => globMatches(pattern, action));
+        const excluded = (group["exclude-patterns"] ?? [])
+          .some((pattern) => globMatches(pattern, action));
+        if (included && !excluded) return [name];
+      }
+      return [];
+    };
 
-    // Exactly one group per lane, per action: zero leaves the action's bump on
-    // its own, two or more let two groups race for it. Security updates are
-    // enabled on this repository, and a group without `applies-to` covers
+    // Every action is carried by a group in each lane: zero leaves the action's
+    // bump on its own. A second group overlapping the first is not a second
+    // carrier either — first-match-wins makes it shadowed, dead configuration
+    // that no dependabot run and no other assertion reports. Security updates
+    // are enabled on this repository, and a group without `applies-to` covers
     // version updates only — so a lane with no group reopens the
     // single-package security pull request this grouping exists to prevent.
     for (const lane of ["version-updates", "security-updates"]) {
@@ -811,11 +856,12 @@ fi
     }
 
     // All three lanes carry an explicit weekday, an explicit clock and a
-    // timezone, and none is Monday — the default day an unset `day` resolves
-    // to, shared with the dependency audit cron and therefore the busiest slot
-    // this repository has. The days also stay off the four existing weekly
-    // crons (dependency-audit Monday, secret-scan and code-scanning Wednesday,
-    // scorecard Saturday) so no two jobs contend for the same runner minute.
+    // timezone. No lane's day may be Monday — the default an unset `day`
+    // resolves to, and this repository's busiest slot — nor any weekday a
+    // scheduled workflow in this repository already fires on: dependency-audit
+    // Monday, secret-scan and code-scanning Wednesday, scorecard Saturday. Two
+    // jobs on one runner minute is the contention the explicit days remove, so
+    // the property is asserted against the crons read above, not transcribed.
     for (const ecosystem of ["npm", "github-actions", "docker"]) {
       const update = config.updates.find((u) => u["package-ecosystem"] === ecosystem)!;
       const { schedule } = update;
@@ -824,6 +870,8 @@ fi
       expect(schedule.time, ecosystem).toMatch(/^\d{2}:\d{2}$/);
       expect(schedule.day, ecosystem).toBeDefined();
       expect(schedule.day, ecosystem).not.toBe("monday");
+      expect(cronDays.has(schedule.day ?? ""), `${ecosystem} runs on ${schedule.day}, a cron day`)
+        .toBe(false);
     }
   });
 
