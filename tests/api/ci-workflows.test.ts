@@ -857,6 +857,205 @@ fi
       expect(command).not.toMatch(/pnpm (install|build)/);
     }
   });
+
+  /**
+   * OpenSSF Scorecard is the instrument that MEASURES this repository's
+   * supply-chain hardening — hash-pinned actions, explicit workflow
+   * permissions, CodeQL, Dependabot — so a regression in that regime is
+   * otherwise invisible: every other workflow keeps passing while the practice
+   * that produced them quietly stops. The ways below are the ones where every
+   * run concludes SUCCESS and the Security tab is still empty, which is why
+   * "the workflow exists" is not a pin and no assertion here accepts one.
+   *
+   * 1. **A trigger that never fires.** A `push` or `pull_request` trigger
+   *    carrying a branch filter, or a cron that is not the expression intended,
+   *    yields a workflow GitHub schedules and never runs. Every conclusion is
+   *    green and no score is ever produced.
+   * 2. **A contribution-event trigger.** The opposite failure, and the one the
+   *    `on` equality exists to prevent: a `pull_request` arm makes Scorecard a
+   *    second gate on a commit `ci` already checks, spending a pull-request
+   *    run on a signal that is allowed to be flat.
+   * 3. **A job that never starts.** The `if` guard is where a skip hides,
+   *    because a skipped job is indistinguishable from a green one in a run
+   *    summary. A fork's run, or a manual dispatch on any ref but the default
+   *    branch, publishes findings for a tree this repository is not
+   *    responsible for, and a score describing a different tree than the badge.
+   * 4. **A run that produces no SARIF.** `results_format` other than `sarif`,
+   *    or `publish_results` off, leaves the Security tab empty while every run
+   *    is green — an instrument that measures nothing is indistinguishable
+   *    from one measuring a healthy repository.
+   * 5. **A SARIF upload that cannot succeed, and a score that cannot be
+   *    attributed.** Without `security-events: write` the upload step fails
+   *    while the workflow still reports; without `id-token: write` the
+   *    published result carries no signature, so a consumer cannot verify the
+   *    score came from this repository's own run.
+   * 6. **A step that is not pinned, or is pinned to the wrong action.** A tag
+   *    or branch ref moves under the workflow, so the action that produced a
+   *    Security-tab finding is not the one that was reviewed. A substitution at
+   *    a VALID digest is the shape the digest regex cannot see.
+   * 7. **A run that never ends.** With no `timeout-minutes` a hung analysis
+   *    holds a runner and concludes nothing at all.
+   * 8. **A gate that is not a gate.** Promoting `scorecard` into
+   *    `.github/required-checks.json` turns a weekly trend signal into a
+   *    blocking check on every pull request; this is the last place that shows
+   *    up before the deploy gate refuses the merge.
+   */
+  it("measures supply-chain hardening weekly without becoming a second gate on a commit", async () => {
+    const workflow = await readWorkflow("scorecard.yml") as Workflow & { name: string };
+    expect(workflow.name).toBe("scorecard");
+
+    // The WHOLE `on` object, so an added trigger fails rather than passing
+    // unnoticed beside the ones that are still correct. Schedule plus manual
+    // dispatch, and nothing else: the cron is the only automatic tick, so a
+    // mistyped slot is caught here rather than as a workflow that quietly never
+    // runs again.
+    expect(workflow.on).toEqual({
+      schedule: [{ cron: "23 3 * * 6" }],
+      workflow_dispatch: null,
+    });
+
+    // Least privilege at the top. The workflow only reads the tree; the two
+    // write scopes Scorecard genuinely needs are granted on the job, so a
+    // workflow-level broadening is an extra key on this equality.
+    expect(workflow.permissions).toEqual({ contents: "read" });
+
+    // Carried verbatim from the file. tests/ci/concurrency.test.ts is what
+    // holds the classification, and it pins these same two values, so the two
+    // suites cannot drift apart on the block.
+    expect(workflow.concurrency).toEqual({
+      group: "scorecard-${{ github.ref }}",
+      "cancel-in-progress": true,
+    });
+
+    // Widened for `name`, which the shared job type omits: every workflow pinned
+    // above this point leaves its job unnamed, so the field was never needed.
+    // The whole-job equality below does need it, because a job's `name` is the
+    // check-run name branch protection sees — a renamed job is a real change,
+    // not a cosmetic one.
+    const analysis = workflow.jobs.analysis! as typeof workflow.jobs.analysis & { name?: string };
+
+    // The guard, in the two halves that matter, asserted separately so a half
+    // that is removed is named. `fork` stops a fork's run publishing findings
+    // for a tree nobody here is responsible for; the default-branch test stops
+    // a manual run on another ref publishing a score for a different tree than
+    // the one the badge describes.
+    expect(
+      analysis.if,
+      "scorecard.yml's job must skip forks: a fork run publishes findings for a tree this " +
+        "repository is not responsible for, and a skipped job is indistinguishable from a green one",
+    ).toContain("!github.event.repository.fork");
+    expect(
+      analysis.if,
+      "scorecard.yml's job must only run on the default branch, so a workflow_dispatch on any " +
+        "other ref cannot publish a score describing a different tree than the badge",
+    ).toContain("github.ref == format('refs/heads/{0}', github.event.repository.default_branch)");
+
+    // Exactly these three, and no more. `security-events: write` is what puts
+    // findings in the Security tab — drop it and the SARIF upload fails while
+    // the run still reports. `id-token: write` is what lets Scorecard sign its
+    // published result over OIDC, without which a consumer cannot verify the
+    // published score came from this repository's own run.
+    expect(analysis.permissions).toEqual({
+      "security-events": "write",
+      "id-token": "write",
+      contents: "read",
+    });
+
+    // Every step that runs an action, pinned to a commit digest: a tag or
+    // branch ref moves under the workflow, so the action that produced a
+    // Security-tab finding is not the one that was reviewed.
+    const used = analysis.steps.filter((step) => step.uses);
+    expect(used.length, "scorecard.yml must run at least one action").toBeGreaterThan(0);
+    for (const step of used) {
+      expect(
+        step.uses,
+        `scorecard.yml's "${step.name ?? "unnamed"}" step must be pinned to a 40-character ` +
+          "commit digest, so the action that ran is the one that was reviewed",
+      ).toMatch(/@[0-9a-f]{40}$/);
+    }
+
+    // The SET, not only the shape. Swapping `ossf/scorecard-action` for a
+    // different action at a valid 40-hex digest satisfies every assertion above
+    // and would sail past them, leaving a workflow that still runs weekly and
+    // still concludes green while measuring something else.
+    expect(used.map((step) => step.uses!).sort()).toEqual([
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      "github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2",
+      "ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc",
+    ]);
+
+    // The checkout leaves no credential on the runner. The analysis only reads
+    // the tree, and a persisted token beside a third-party action is a
+    // credential the workflow has no reason to hold.
+    const checkout = analysis.steps.find((step) => step.uses!.startsWith("actions/checkout@"))!;
+    expect(checkout.with).toEqual({ "persist-credentials": false });
+
+    // The three inputs that decide whether the run produces anything at all.
+    // A run that wrote no SARIF uploads nothing, so the Security tab stays
+    // empty while every run is green.
+    const scorecard = analysis.steps.find((step) => step.uses!.startsWith("ossf/scorecard-action@"))!;
+    expect(scorecard.with).toEqual({
+      results_file: "results.sarif",
+      results_format: "sarif",
+      publish_results: true,
+    });
+
+    // A hung analysis holds a runner and concludes nothing, so the job must
+    // carry the bound the reference ships.
+    expect(
+      analysis["timeout-minutes"],
+      "scorecard.yml's job must bound its own runtime, or a hung analysis holds a runner and " +
+        "concludes nothing at all",
+    ).toBe(15);
+
+    // The whole job, exactly, in the dependency-audit style: the equality is
+    // what fails on a step added, removed or reordered, and on an extra
+    // permission key the named assertions above would tolerate.
+    expect(analysis).toEqual({
+      name: "Scorecard analysis",
+      if: "${{ !github.event.repository.fork && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}",
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 15,
+      permissions: { "security-events": "write", "id-token": "write", contents: "read" },
+      steps: [
+        {
+          name: "Checkout code",
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          with: { "persist-credentials": false },
+        },
+        {
+          name: "Run Scorecard analysis",
+          uses: "ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc",
+          with: { results_file: "results.sarif", results_format: "sarif", publish_results: true },
+        },
+        {
+          name: "Upload Scorecard results artifact",
+          uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+          with: { name: "scorecard-results", path: "results.sarif", "retention-days": 5 },
+        },
+        {
+          name: "Upload Scorecard results to code scanning",
+          uses: "github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2",
+          with: { sarif_file: "results.sarif" },
+        },
+      ],
+    } satisfies typeof analysis);
+
+    // A trend signal, not a gate. Asserted against the parsed pins, not the
+    // prose: a required check naming this workflow would block every pull
+    // request on a weekly measurement that is allowed to be flat.
+    const requiredChecks = JSON.parse(
+      await readFile(resolve(".github/required-checks.json"), "utf8"),
+    ) as Record<string, string>;
+    expect(
+      Object.entries(requiredChecks).filter(
+        ([check, file]) => check === "scorecard" || String(file).endsWith("scorecard.yml"),
+      ),
+      "scorecard is a weekly trend signal, not a per-commit gate: a required check naming it " +
+        "would block every pull request on a signal that is allowed to stay flat",
+    ).toEqual([]);
+  });
 });
 
 async function readWorkflow(name: string): Promise<Workflow> {
