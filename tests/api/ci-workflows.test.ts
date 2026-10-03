@@ -96,7 +96,7 @@ describe("GitHub Actions release gates", () => {
   it("keeps the CONTRIBUTING claim revision aligned with the workflow pin", async () => {
     const contributing = await readFile(resolve(process.cwd(), "CONTRIBUTING.md"), "utf8");
     const contributingSha = contributing.match(
-      /https:\/\/github\.com\/Nitjsefnie-Actions\/claim\/tree\/([0-9a-f]{40})/,
+      /https:\/\/github\.com\/Nitjsefnie-Actions\/claim\/tree\/([0-9a-f]{40})(?![0-9a-f])/,
     )?.[1];
     const workflow = await readWorkflow("claim.yml");
     const workflowSha = workflow.jobs.claim!.steps[0]!.uses?.match(
