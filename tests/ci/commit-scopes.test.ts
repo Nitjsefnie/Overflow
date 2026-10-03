@@ -122,6 +122,8 @@ describe("scripts/commit_scopes.py", () => {
     expect(result.stdout).toContain("Examined 0 commit subjects");
   });
 
+  // This list deliberately fails when a workflow is added, so update the pin in
+  // the same change, like tests/support/applied-migrations.ts for migrations.
   it("reads every real workflow at HEAD and derives the complete name set", () => {
     const result = spawnSync("python3", ["-c", [
       "import importlib.util, json, pathlib, sys",
@@ -133,7 +135,7 @@ describe("scripts/commit_scopes.py", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual([
       "actionlint", "ci", "claim", "code scanning", "coverage comment",
-      "dependency audit", "ledger relay", "pr gate", "ratchet guard", "secret scan",
+      "dependency audit", "ledger relay", "pr gate", "ratchet guard", "scorecard", "secret scan",
     ]);
   });
 });
