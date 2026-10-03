@@ -112,6 +112,15 @@ describe("scripts/commit_scopes.py", () => {
     expect(result.stderr).toContain(reason);
   });
 
+  it("refuses a comment-only workflow name instead of passing a violating commit", async () => {
+    const { root } = await fixture("# workflow omitted");
+    commit(root, "fix(ci): wrong type");
+    const result = run(root);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(".github/workflows/ci.yml");
+    expect(result.stderr).toContain("top-level `name:` at line 1 carries no value");
+  });
+
   it("fetches main freshly instead of judging already merged outgoing commits", async () => {
     const { root, origin } = await fixture();
     commit(root, "fix(ci): now merged");

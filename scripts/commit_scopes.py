@@ -168,7 +168,7 @@ def workflow_name(workflow, text):
     # no value to extract, which the valueless-name refusal below states.
     header = MAPPING.match(lines[at])
     value = ((header["value"] if header is not None else "") or "").strip()
-    if not value:
+    if not value or value.startswith("#"):
         refuse_name(workflow, f"the top-level `name:` at line {at + 1} carries no value")
     if NOT_PLAIN.match(value[0]):
         refuse_name(
