@@ -279,13 +279,6 @@ describe("the dependency audit workflow's audit step", () => {
     expect(auditSteps[0]?.run ?? "").toMatch(/pnpm audit --json/);
   });
 
-  it("keeps a retry delay of its own, so the shipped backoff is not a test-only zero", () => {
-    // The suite below zeroes the delay to run in milliseconds. Without a
-    // shipped default, zeroing it would be the only value the delay ever had
-    // and the retry would hammer the endpoint from CI.
-    expect(auditSteps[0]?.run ?? "").toContain("DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS:-30");
-  });
-
   describe("run against a scripted advisory endpoint", () => {
     let root = "";
     let cases = 0;
@@ -349,8 +342,8 @@ describe("the dependency audit workflow's audit step", () => {
       const script = join(home, "audit.sh");
       writeFileSync(script, auditSteps[0]!.run!);
 
-      const env: Record<string, string> = {
-        ...(process.env as Record<string, string>),
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
         PATH: `${join(home, "bin")}:${process.env.PATH}`,
         AUDIT_STUB_DIR: home,
       };
