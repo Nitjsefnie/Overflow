@@ -316,6 +316,7 @@ scripts/*
 !scripts/db-restore.sh
 !scripts/container-build.sh
 !scripts/ci-base-freshness.sh
+!scripts/commit_scopes.py
 !scripts/secret-scan.sh
 !scripts/secret-scan-baseline.sh
 !scripts/overflow-alert.sh

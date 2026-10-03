@@ -73,7 +73,8 @@ export const MEASURED_FAMILIES: readonly PathClass[] = [
   { name: "tests", matches: (p) => /^tests\/.+\.tsx?$/s.test(p) },
   {
     name: "tooling",
-    matches: (p) => /^scripts\/[^/]+\.(ts|mjs|sh)$/s.test(p) || /^[^/]+\.(ts|mjs)$/s.test(p),
+    // CI gate scripts may be Python (commit_scopes.py).
+    matches: (p) => /^scripts\/[^/]+\.(ts|mjs|sh|py)$/s.test(p) || /^[^/]+\.(ts|mjs)$/s.test(p),
   },
   { name: "stylesheets", matches: (p) => /^src\/.+\.css$/s.test(p) },
   { name: "migrations", matches: (p) => /^db\/migrations\/[^/]+\.sql$/s.test(p) },
