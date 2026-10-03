@@ -58,6 +58,8 @@
 # than regenerating the file: a wholesale regeneration would also absorb any
 # genuinely new finding and bury it. Read the diff of old against new baseline,
 # and be able to point at every added entry in whatever diff caused it.
+# For PR baseline behavior, see "ON A PULL REQUEST THE BASELINE IS MAIN'S,
+# NOT YOURS" in .github/workflows/secret-scan.yml.
 #
 # ...AND EXPECT A SECOND RED, WHICH IS CORRECT. An added entry whose Match keeps
 # source context around the redaction — a generic-api-key finding does, a
