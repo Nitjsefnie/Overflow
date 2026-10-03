@@ -173,6 +173,42 @@ const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = 
  * would drop work for these. That is why the bound is applied only to the
  * metered CI workflows, each of whose runs is reproducible from the next push.
  */
+/**
+ * The closed vocabulary of cancellation premises, and the ONE place it is
+ * written. `Premise`, the table's `premise` field and `premiseOf` are all
+ * derived from it, so a value is added in exactly one edit.
+ *
+ * It exists as a value and not only as a type because the type alone is not a
+ * check. A union rejects a misspelling at compile time and says nothing about
+ * whether this suite knows what to DO with a premise that typechecks — which is
+ * how a widened union leaves an entry falling through every branch to the one
+ * default, checked by nothing. So the vocabulary is paired with
+ * `CANCELLATION_LICENCE` below, one rule per value, and the table entry's
+ * premise is asserted against the rule keys rather than against the vocabulary:
+ * adding a value means adding a rule, and an entry carrying a premise with no
+ * rule fails here by name.
+ */
+export const PREMISES = ["unreproducible", "superseded-attempt"] as const;
+
+/** A premise is one of the values {@link PREMISES} names, and nothing else. */
+type Premise = (typeof PREMISES)[number];
+
+/**
+ * What cancellation each premise licenses, keyed by the premise itself and
+ * exhaustive over {@link PREMISES} — a value added there without a rule here
+ * does not typecheck, and an entry recording a premise with no rule here fails
+ * the "records only a premise this suite knows how to check" assertion. The
+ * `satisfies` is what makes the pairing total in the compiler's direction; the
+ * keys are what make it checkable at run time.
+ */
+const CANCELLATION_LICENCE = {
+  "unreproducible":
+    "the literal `false`: nothing re-runs the unit's work, so the RUNNING attempt must survive too",
+  "superseded-attempt":
+    "the pull-request event expression: the group is scoped to one pull request, so every run it "
+    + "cancels is that same pull request's own superseded head",
+} satisfies Record<Premise, string>;
+
 const UNBOUNDED_BY_CHOICE = new Map<string, {
   reason: string;
   group: string;
@@ -212,7 +248,7 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
    * request, not the pending run GitHub cancels in any shared group, which
    * remains the gap the header describes.
    */
-  premise?: "unreproducible" | "superseded-attempt";
+  premise?: Premise;
 }>([
   [
     "claim.yml",
@@ -299,9 +335,11 @@ const PR_EVENTS = ["pull_request", "pull_request_target"];
  * An entry's recorded premise, defaulted. A separate function rather than an
  * `??` at each use so the default lives in one place: the two assertion sites
  * below must agree on which entries are checked against which rule, and a
- * default written twice is a default that can drift.
+ * default written twice is a default that can drift. The return type is
+ * `Premise`, so the default is itself a value {@link PREMISES} names rather
+ * than a literal that could drift away from the vocabulary.
  */
-function premiseOf(entry: { premise?: "unreproducible" | "superseded-attempt" }): "unreproducible" | "superseded-attempt" {
+function premiseOf(entry: { premise?: Premise }): Premise {
   return entry.premise ?? "unreproducible";
 }
 
@@ -780,14 +818,24 @@ describe("the workflows left unbounded", () => {
     // push that superseded it. The pull-request event expression is then
     // correct and is what the workflow ships; what must hold instead is that
     // the group really is keyed on the pull request, that the workflow really
-    // is reachable from one, and that a cancelled run concludes nothing a
-    // merge waits on.
+    // is reachable from one — on `pull_request` specifically — and that a
+    // cancelled run concludes nothing a merge waits on.
+    //
+    // What is deliberately NOT asserted is that these reasons contain any
+    // particular word. An earlier version of this test required each
+    // `superseded-attempt` reason to match `/superseded|replacement|next
+    // push/i`, which is the repository's banned shape: the string is prose this
+    // file wrote, so a maintainer rewording it for clarity got a red suite and
+    // a faithful paraphrase that changed no premise got one too. Every
+    // structural fact the premise depends on is checked against the WORKFLOW
+    // above — the trigger, the group key, the flag, the required-check set —
+    // which is what a wrong premise actually breaks.
     const required = new Set(requiredCheckWorkflows());
     for (const [name, entry] of UNBOUNDED_BY_CHOICE) {
+      const premise = premiseOf(entry);
       const reachable = isPullRequestReachable(workflows.get(name)!.on);
       const shipped = workflows.get(name)!.concurrency?.["cancel-in-progress"];
-      expect(entry.reason).toMatch(/cancel/i);
-      if (premiseOf(entry) === "superseded-attempt") {
+      if (premise === "superseded-attempt") {
         // Asserted whether or not the workflow is currently reachable: this
         // premise CLAIMS a pull-request trigger, so a workflow that loses one
         // has made its recorded reason false. Skipping it as "not applicable"
@@ -799,6 +847,28 @@ describe("the workflows left unbounded", () => {
             "the workflow is not reachable from a pull request, so the group it ships is per-ref and " +
             "the premise describes a run that never arrives",
         ).toBe(true);
+        // Which fork-reachable event, not whether there is one. The premise is
+        // argued for `pull_request`, and only for it: under `pull_request` the
+        // run executes the pull request's own tree with a read-only token, so a
+        // superseded run is work the next push reproduces. Under
+        // `pull_request_target` the run executes the BASE repository's
+        // definition and tools instead, which is why this repository carries
+        // `zizmor: ignore[dangerous-triggers]` on the four workflows that use
+        // it. Asserting plain reachability let `pull_request_target` satisfy
+        // these checks with its premise unargued.
+        expect(
+          pullRequestTriggerKeys(workflows.get(name)!.on),
+          `${name} claims its cancelled runs are a pull request's own superseded heads, but it does `
+            + "not trigger on `pull_request`. That premise is about the pull request's own tree "
+            + "reproducing from the next push, which `pull_request_target` — running the base "
+            + "repository's definition — does not give it.",
+        ).toContain("pull_request");
+        expect(
+          pullRequestTriggerKeys(workflows.get(name)!.on),
+          `${name} carries a pull_request_target leg while claiming the superseded-attempt premise. `
+            + "That trigger runs in the base repository's context, so re-decide this entry against it "
+            + "rather than letting the pull_request leg vouch for both.",
+        ).not.toContain("pull_request_target");
         expect(
           unboundedGroupKeysIn(String(entry.group)),
           `${name} claims cancellation is safe because every run its group holds is one pull ` +
@@ -806,10 +876,11 @@ describe("the workflows left unbounded", () => {
         ).toContain("github.event.pull_request.number");
         expect(
           shipped,
-          `${name} may cancel in flight only on a pull-request event, where its group is scoped to ` +
-            "that one pull request and the push that superseded the run scheduled its replacement. " +
-            "The literal true would also cancel the daily tick and a push run; an expression naming " +
-            "another event would cancel work no push supersedes.",
+          `${name} records the "${premise}" premise, which licenses ` +
+            `${CANCELLATION_LICENCE[premise]}. It may cancel in flight only on a pull-request ` +
+            "event, where its group is scoped to that one pull request and the push that superseded " +
+            "the run scheduled its replacement. The literal true would also cancel the daily tick " +
+            "and a push run; an expression naming another event would cancel work no push supersedes.",
         ).toBe("${{ github.event_name == 'pull_request' }}");
         expect(
           required.has(name),
@@ -818,34 +889,58 @@ describe("the workflows left unbounded", () => {
             "and a cancelled run on a required context blocks the pull request no later push unblocks — " +
             "re-decide this entry before that edit.",
         ).toBe(false);
-        expect(
-          entry.reason,
-          `${name}'s reason has to say the cancelled run is superseded and replaced, because that is ` +
-            "the whole licence for an event expression here",
-        ).toMatch(/superseded|replacement|next push/i);
         continue;
       }
       if (!reachable) continue;
+      // Back inside its original guard. Refactoring this loop hoisted it above
+      // the reachability check, which widened a pre-existing assertion to
+      // every entry in the table — including workflows this one is not about,
+      // like secret-scan.yml, which has no pull-request trigger at all. The
+      // widening was a side effect of the edit, not a decision, so the scope it
+      // had on main is the scope it keeps here.
+      expect(entry.reason).toMatch(/cancel/i);
       expect(
         shipped,
-        `${name} is listed as unbounded on a reason about work a cancellation would lose, but its ` +
-          "cancel-in-progress is not the literal false that reason depends on — either it now " +
-          "cancels, or it has gained a pull request trigger its reason says it does not receive",
+        `${name} records the "${premise}" premise, which licenses ` +
+          `${CANCELLATION_LICENCE[premise]}. It is listed as unbounded on a reason about work a ` +
+          "cancellation would lose, but its cancel-in-progress is not the literal false that reason " +
+          "depends on — either it now cancels, or it has gained a pull request trigger its reason " +
+          "says it does not receive",
       ).toBe(false);
     }
   });
 
-  it("records a premise only this table's own vocabulary names", () => {
-    // The TypeScript type is the first line of defence here and rejects an
-    // unknown spelling at compile time; what this asserts is the second — that
-    // the vocabulary stays closed, so widening the type to admit a third value
-    // cannot leave `premiseOf` with a branch that checks nothing.
+  it("records only a premise this suite knows how to check", () => {
+    // Asserted against the RULES, not against the vocabulary. An earlier
+    // version matched `premiseOf(entry)` against a literal alternation of the
+    // two values the function could return, which no mutation could turn red:
+    // the function is typed to that union, the table supplies only those two,
+    // and its `?? "unreproducible"` default is a third copy of one of them.
+    // Every value it can produce matched, always, so it was not a runtime check
+    // at all — it read as one, and a reviewer trusting it as evidence of a
+    // closed vocabulary was wrong.
+    //
+    // What is checked now is the thing that can actually break: a premise this
+    // suite has no rule for. `CANCELLATION_LICENCE` is keyed by premise and
+    // exhaustive over the vocabulary, so widening `PREMISES` to a third value
+    // without writing that value's rule fails the typecheck AND — because the
+    // assertion reads the keys, not the vocabulary — any entry that records the
+    // new premise fails here, naming it.
+    //
+    // The reverse direction is asserted too: a rule for a premise nothing can
+    // produce is a branch that checks nothing, which is the same defect wearing
+    // the other hat.
     for (const [name, entry] of UNBOUNDED_BY_CHOICE) {
       expect(
-        premiseOf(entry),
-        `${name}'s recorded premise is not one this suite knows how to check`,
-      ).toMatch(/^(unreproducible|superseded-attempt)$/);
+        Object.keys(CANCELLATION_LICENCE),
+        `${name}'s recorded premise is not one this suite knows how to check: ${premiseOf(entry)}. `
+          + "Add its rule to CANCELLATION_LICENCE and the assertion that uses it.",
+      ).toContain(premiseOf(entry));
     }
+    expect(
+      [...Object.keys(CANCELLATION_LICENCE)].sort(),
+      "CANCELLATION_LICENCE names a premise PREMISES does not, so its rule can never be reached",
+    ).toEqual([...PREMISES].sort());
   });
 
   it("never covers a workflow that produces a required check", () => {
@@ -904,8 +999,21 @@ function requiredCheckWorkflows(): string[] {
   ];
 }
 
+/**
+ * The fork-reachable events a workflow's `on` block actually names, as keys.
+ *
+ * Returned rather than reduced to a boolean because the two call sites need
+ * different things from it: `isPullRequestReachable` asks only whether such an
+ * event is present at all, and the `superseded-attempt` premise asks WHICH one —
+ * `pull_request` and `pull_request_target` both make a workflow reachable, and
+ * only the first is the input that premise was argued for.
+ */
+function pullRequestTriggerKeys(on: unknown): string[] {
+  const keys = Array.isArray(on) ? on : typeof on === "string" ? [on] : Object.keys((on ?? {}) as object);
+  return keys.map(String).filter((key) => PR_EVENTS.includes(key));
+}
+
 /** True when any of the two fork-reachable events appears in a workflow's `on` block. */
 function isPullRequestReachable(on: unknown): boolean {
-  const keys = Array.isArray(on) ? on : typeof on === "string" ? [on] : Object.keys((on ?? {}) as object);
-  return keys.some((key) => PR_EVENTS.includes(String(key)));
+  return pullRequestTriggerKeys(on).length > 0;
 }

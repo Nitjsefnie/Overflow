@@ -175,6 +175,26 @@ const NO_ADVISORIES_FIELD: ScriptedOutcome = {
   stdout: JSON.stringify({ actions: [], muted: [], metadata: { dependencies: 688 } }),
 };
 
+/**
+ * What real pnpm 10.33.0 answers when the tree has no pnpm-lock.yaml — a pull
+ * request that DELETES it, which the workflow's path filter does trigger on.
+ * Neither registry nor transport failed: there was nothing to audit, so pnpm
+ * never asked one. Labelling it `unreachable` would blame a registry for an
+ * answer nobody asked it for.
+ */
+const NO_LOCKFILE: ScriptedOutcome = {
+  code: 1,
+  stderr: "",
+  stdout: JSON.stringify({
+    error: {
+      code: "ERR_PNPM_AUDIT_NO_LOCKFILE",
+      message:
+        "No pnpm-lock.yaml found: Cannot audit a project without a lockfile\n"
+        + 'at resolveDependencies (.../node_modules/.pnpm/@pnpm+audit.../lib/audit.js:12:11)',
+    },
+  }),
+};
+
 type Step = {
   name?: string;
   uses?: string;
@@ -513,11 +533,68 @@ describe("the dependency audit workflow's audit step", () => {
       // Both sites the `unreadable` label is emitted from, plus the
       // `unreachable` site, so every label in the classifier is covered and a
       // partial swap cannot hide behind the others.
-      for (const outcome of [UNREADABLE, NO_ADVISORIES_FIELD, UNTRUSTED]) {
+      for (const outcome of [UNREADABLE, NO_ADVISORIES_FIELD, UNTRUSTED, NO_LOCKFILE]) {
         const result = runStep([outcome], { delaySeconds: RETRY_DELAY });
         expect(result.stdout).toMatch(/\bunreadable\b/);
         expect(result.stdout).not.toMatch(/\bunreachable\b/);
       }
+    });
+
+    it("names each way of failing to produce a verdict by what actually happened", () => {
+      // Three states reach the classifier's trailing branch and all three are
+      // red, so the verdict word cannot tell them apart — only the detail can,
+      // and the detail is the whole added value of a five-verdict classifier.
+      // Sent to the wrong one, a reader either hunts a malformed report that is
+      // not there, or reads an empty `advisories` map as a report that never
+      // arrived. So each state's own text is pinned here, and pinned AGAINST the
+      // other two: a fix that collapses the three back into one sentence dies
+      // whichever of the three it collapses.
+      //
+      // Not an assertion on prose in the sense the repository bans. Each string
+      // is written to stdout at run time by the classifier under test — the
+      // same footing as the verdict words above and the `not.toContain` checks
+      // around it; what is banned is matching a source file's copy or a
+      // comment's wording. Here the strings come out of the executed program,
+      // so what is pinned is its behaviour, not the file it was typed into.
+      const seen: Record<string, string> = {};
+      for (const [name, outcome, expected, forbidden] of [
+        ["unparseable", UNREADABLE, "no JSON report", "carried"],
+        ["absent field", NO_ADVISORIES_FIELD, "carried no advisories field", "empty advisories map"],
+        ["empty map at a nonzero exit", UNTRUSTED, "carried an empty advisories map", "carried no advisories field"],
+      ] as const) {
+        const result = runStep([outcome], { delaySeconds: RETRY_DELAY });
+        expect(result.status, `${name} must still fail closed`).toBe(1);
+        expect(
+          result.stdout,
+          `a report that is ${name} has to say so; the run log is what a human reads`,
+        ).toContain(expected);
+        expect(
+          result.stdout,
+          `a report that is ${name} must not be described as ${forbidden}`,
+        ).not.toContain(forbidden);
+        seen[name] = result.stdout;
+      }
+      // And the three texts are genuinely three: no two agree. Without this the
+      // pins above would pass a classifier that printed all three fragments in
+      // every case.
+      expect(new Set(Object.values(seen)).size, "the three texts are not distinguishable").toBe(3);
+    });
+
+    it("does not blame the registry when there was no lockfile to audit", () => {
+      // A pull request that DELETES pnpm-lock.yaml still triggers this workflow
+      // — the path filter names that file — and pnpm then answers
+      // ERR_PNPM_AUDIT_NO_LOCKFILE. No registry was asked and none failed, so
+      // the `unreachable` label ("an answered or unconnected registry") is
+      // wrong on both halves, and a reader who believes it goes looking for an
+      // outage. Red either way, and still one attempt: a lockfile does not
+      // appear between two tries.
+      const outcome = runStep([NO_LOCKFILE], { delaySeconds: RETRY_DELAY });
+      expect(outcome.status).toBe(1);
+      expect(outcome.attempts).toBe(1);
+      expect(outcome.sleeps).toEqual([]);
+      expect(outcome.stdout).toMatch(/\bunreadable\b/);
+      expect(outcome.stdout).not.toMatch(/\bunreachable\b/);
+      expect(outcome.stdout).not.toMatch(/\btransient\b/);
     });
 
     it("does not retry when one endpoint's answer is transient and the other's is not", () => {
