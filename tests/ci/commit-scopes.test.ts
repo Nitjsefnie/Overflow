@@ -77,6 +77,26 @@ describe("scripts/commit_scopes.py", () => {
     expect(result.stdout).toContain(`scope \`${name}\` is the name of a workflow`);
   });
 
+  it("includes a workflow with a non-ASCII filename under default Git configuration", async () => {
+    const { root } = await fixture();
+    await writeFile(join(root, ".github/workflows/über.yml"), "name: audit\non: push\n");
+    git(root, "add", ".github/workflows/über.yml");
+    const subject = "fix(audit): outgoing workflow change";
+    const sha = commit(root, subject);
+    const names = spawnSync("python3", ["-c", [
+      "import importlib.util, json, pathlib, sys",
+      "spec = importlib.util.spec_from_file_location('commit_scopes', sys.argv[1])",
+      "gate = importlib.util.module_from_spec(spec)",
+      "spec.loader.exec_module(gate)",
+      "print(json.dumps(sorted(gate.workflow_name_set(pathlib.Path(sys.argv[2])))))",
+    ].join("\n"), script, root], { encoding: "utf8" });
+    expect(names.status, names.stderr).toBe(0);
+    expect.soft(JSON.parse(names.stdout)).toEqual(["audit", "ci"]);
+    const result = run(root);
+    expect.soft(result.status, result.stderr).toBe(1);
+    expect.soft(result.stdout).toContain(`${sha} ${subject}`);
+  });
+
   it("lists an unparseable subject on stdout without failing", async () => {
     const { root } = await fixture();
     const sha = commit(root, "Update the workflow wiring");
