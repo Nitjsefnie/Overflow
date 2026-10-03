@@ -339,8 +339,13 @@ inside it.
 
 A commit subject may use a workflow's name — the top-level `name:` under
 `.github/workflows/` — as its scope only with type `ci`.
-Subjects outside the `type(scope):` shape are outside this rule and are never
-rejected by it; conventional commit subjects are not required.
+The gate arms only on `type(scope):`-shaped subjects with a lowercase type and
+a whitespace-free scope. Subjects outside that grammar are never rejected by
+it; conventional commit subjects are not required. A workflow name containing
+spaces, such as `code scanning`, cannot appear as a scope the gate reads.
+The top-level `name:` must be a plain scalar; the gate refuses other spellings
+rather than guessing. Adding or renaming a workflow requires updating the
+real-name pin in `tests/ci/commit-scopes.test.ts` in the same change.
 `scripts/commit_scopes.py` enforces the rule in the verify job.
 
 ### Module size is ratcheted
