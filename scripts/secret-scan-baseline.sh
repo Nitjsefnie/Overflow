@@ -1,26 +1,18 @@
 #!/usr/bin/env bash
 # Every commit the committed baseline names must be reachable from this
-# checkout's HEAD. "Reachable" is a question about the REF SET, not the object
-# store: an entry naming a commit no ref this repository ships contains is a
+# checkout's HEAD or the optional additional reachability root (first argument).
+# "Reachable" is a question about the REF SET, not the object store: an entry
+# naming a commit no ref this checkout scans contains is a
 # defect in a tracked artefact. It suppresses nothing — gitleaks walks
 # `git log --all`, so it never even produces a record equal to one — it misleads
 # every reader who consults the baseline to decide what was deliberately
 # allowed, and it will never be found by the scan it belongs to.
 #
-# WHY THIS RUNS HERE AND NOT IN THE TEST SUITE. It was a test, and it was a
-# test that could not work: the property is about a COMMIT's reachability, and
-# `.github/workflows/ci.yml` gives the `verify` job `actions/checkout`'s default
-# depth of 1, where none of the commits the baseline names exist. Asserted
-# there, the check had two failure modes and both were bad — a baseline naming
-# a commit the repository really does ship, but that a depth-1 checkout never
-# fetched, reads as a defect in every contributor's run; and any `--rebase`
-# merge re-stamps the branch's commits and can invalidate an entry after the
-# fact, landing as a RED REQUIRED CHECK ON MAIN for everybody, over a defect
-# that is real but belongs to the weekly sweep that owns it. So it moved to
-# the one environment that has the history: this workflow checks out at
-# `fetch-depth: 0` and ticks weekly, which is the same posture as every other
-# detection signal this repository runs. The blast radius of a stale entry is
-# a red scheduled scan that names the entry, not a red main.
+# Full-depth workflow checkouts can prove ancestry; the depth-1 verify job
+# cannot distinguish an orphan from a commit it never fetched. On a PR run,
+# main's copy of this script checks HEAD and the fetched PR head as roots.
+# Reading that additional root uses only git objects, never the PR's code.
+# Without an argument, the check still requires ancestry from HEAD alone.
 #
 # WHY `merge-base --is-ancestor` AND NOT AN EXISTENCE TEST. A `--rebase` merge's
 # discarded pre-image is exactly the commit this check has to catch, and it is
@@ -57,6 +49,11 @@ if [ "$(git -C "$REPO_ROOT" rev-parse --is-shallow-repository)" = "true" ]; then
 fi
 
 readonly HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse --verify HEAD)"
+additional_sha=""
+if [ -n "${1:-}" ]; then
+  additional_sha="$(git -C "$REPO_ROOT" rev-parse --verify "${1}^{commit}")"
+fi
+readonly REACHABILITY_ROOTS="$HEAD_SHA${additional_sha:+ or $additional_sha}"
 
 # jq reads the baseline into a file BEFORE the loop, not into the loop's stdin
 # through a pipe. A pipeline would put the reader in a subshell, where its exit
@@ -85,11 +82,15 @@ while IFS=$'\t' read -r fingerprint commit; do
     orphans=$((orphans + 1))
     continue
   fi
-  if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$commit" "$HEAD_SHA"; then
-    printf 'secret-scan-baseline: %s names commit %s, which is in the object store but is not an ancestor of %s.\n' \
-      "$fingerprint" "$commit" "$HEAD_SHA" >&2
-    orphans=$((orphans + 1))
+  if git -C "$REPO_ROOT" merge-base --is-ancestor "$commit" "$HEAD_SHA"; then
+    continue
   fi
+  if [ -n "$additional_sha" ] && git -C "$REPO_ROOT" merge-base --is-ancestor "$commit" "$additional_sha"; then
+    continue
+  fi
+  printf 'secret-scan-baseline: %s names commit %s, which is in the object store but is not an ancestor of %s.\n' \
+    "$fingerprint" "$commit" "$REACHABILITY_ROOTS" >&2
+  orphans=$((orphans + 1))
 done < "$ENTRIES_FILE"
 
 # A baseline this read nothing from has certified nothing. `0 checked, all
@@ -105,7 +106,7 @@ fi
 
 if [ "$orphans" -ne 0 ]; then
   printf 'secret-scan-baseline: %s of %s entries name commits that are not reachable from %s.\n' \
-    "$orphans" "$checked" "$HEAD_SHA" >&2
+    "$orphans" "$checked" "$REACHABILITY_ROOTS" >&2
   echo "secret-scan-baseline: every one of them suppresses nothing, and the scan that just ran" >&2
   echo "secret-scan-baseline: reported whatever was really there regardless. REMOVE each entry named" >&2
   echo "secret-scan-baseline: above and keep the reachable one for the same finding — same file, line" >&2
@@ -114,4 +115,4 @@ if [ "$orphans" -ne 0 ]; then
   exit 1
 fi
 
-echo "secret-scan-baseline: all $checked entries name commits reachable from $HEAD_SHA."
+echo "secret-scan-baseline: all $checked entries name commits reachable from $REACHABILITY_ROOTS."

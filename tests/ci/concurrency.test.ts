@@ -21,7 +21,7 @@ import { parse } from "yaml";
  * cancelled by a later event. A `schedule` tick and a `workflow_dispatch` land
  * in the same non-PR arm but do NOT get a private group: on a schedule event
  * `github.sha` is the default branch's tip, which is the very SHA a push run for
- * that tip carries, so the two share a group. Harmless at one weekly tick.
+ * that tip carries, so the two share a group. Harmless at one scheduled tick.
  *
  * The shared group is paired with `cancel-in-progress: false`, and the flag is
  * what a reader is most likely to get wrong in either direction. GitHub's own
@@ -84,7 +84,7 @@ import { parse } from "yaml";
  * the tables below pins fails loudly here: `group` and `cancel-in-progress` for
  * every bounded workflow, and — for each exception — the `queue` recorded beside
  * its reason. The bounded table carries only the first two because none of the
- * four bounded workflows ships a `queue`; the key is pinned where one exists.
+ * bounded workflows ships a `queue`; the key is pinned where one exists.
  */
 
 type Workflow = {
@@ -104,7 +104,7 @@ type Workflow = {
  * `a || (b && 'repo-wide') || github.sha` and every `pull_request` run gets its
  * own SHA group — the exact unbounded shape this suite exists to deny.
  *
- * `cancel-in-progress` is the literal boolean `false` in all four, for every
+ * `cancel-in-progress` is the literal boolean `false` in all bounded workflows, for every
  * leg, not an event expression. It buys no bound (see the header), and on a
  * group shared by every pull request a `true` destroys a peer's in-flight run.
  * It does not stop GitHub cancelling the group's PENDING run — that happens by
@@ -122,6 +122,12 @@ const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = 
   },
   "ratchet-guard.yml": {
     group: "ratchet-guard-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+    "cancel-in-progress": false,
+  },
+  // PR scans share the repository slot; main pushes keep their SHA group,
+  // and no peer arrival cancels an in-flight findings scan.
+  "secret-scan.yml": {
+    group: "secret-scan-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
   },
   "code-scanning.yml": {
@@ -229,16 +235,6 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
       group:
         "coverage-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
       "cancel-in-progress": false,
-      queue: undefined,
-    },
-  ],
-  [
-    "secret-scan.yml",
-    {
-      reason:
-        "This workflow has NO pull_request and NO pull_request_target trigger — it is schedule and workflow_dispatch only — so BOTH arms that would make it unbounded are dead: the pull_request arm of its group always resolves null and falls through to github.ref, and its cancel-in-progress test is never true, so nothing this workflow receives can ever cancel anything through that flag. The group is therefore already per-ref on a schedule tick. Its findings run is also not reproducible from a later push the way a metered CI leg is: a red run is the only record that a credential is in this history, and cancelling the queued run loses that record until the next weekly tick.",
-      group: "secret-scan-${{ github.event.pull_request.number || github.ref }}",
-      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
       queue: undefined,
     },
   ],

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { commitFiles, git, scratchGitEnv } from "../support/scratch-git";
+import { commitFiles, git, scratchGitEnv, tryGit } from "../support/scratch-git";
 
 /**
  * The shape of .github/workflows/secret-scan.yml, asserted on the PARSED YAML
@@ -16,8 +16,8 @@ import { commitFiles, git, scratchGitEnv } from "../support/scratch-git";
  * Every assertion here exists because of a specific way this workflow could go
  * quietly green while doing nothing:
  *
- *  - a `pull_request` trigger, which this workflow must not have, would make it
- *    reachable from a fork and change what a red run means;
+ *  - a `pull_request` trigger could execute untrusted PR scripts; the trusted
+ *    `pull_request_target` leg must only fetch the PR head as git objects;
  *  - a checkout without `fetch-depth: 0` turns a full-history scan into a scan
  *    of the tip commit, which passes every time;
  *  - a gitleaks installed from an action reference or a package manager is a
@@ -77,68 +77,99 @@ describe(".github/workflows/secret-scan.yml", () => {
 
   beforeAll(async () => {
     workflow = parse(await readFile(resolve(".github/workflows/secret-scan.yml"), "utf8")) as Workflow;
-    scan = workflow.jobs.scan;
+    scan = workflow.jobs["secret-scan"] ?? workflow.jobs.scan;
   });
 
   it("is named for what it does", () => {
     expect(workflow.name).toBe("secret scan");
   });
 
-  it("is scheduled weekly and dispatchable, and is not reachable from a pull request", () => {
+  it("runs on every main push and pull request, daily, and on dispatch", () => {
     expect(workflow.on).toEqual({
-      schedule: [{ cron: expect.any(String) as unknown as string }],
+      pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
+      push: { branches: ["main"] },
+      schedule: [{ cron: "41 4 * * *" }],
       workflow_dispatch: null,
     });
-    expect((workflow.on.schedule as Array<{ cron: string }>)).toHaveLength(1);
   });
 
-  it("carries no pull_request or pull_request_target trigger", () => {
-    // Pinned on its own rather than only through the equality above: that
-    // equality is an `objectContaining`-shaped check to a reader, and adding a
-    // second trigger is the change most likely to arrive with a plausible
-    // reason ("let authors see it on their own branches"). This workflow exists
-    // for history push protection never saw; a new commit is already gated by
-    // push protection, so a pull-request leg would be metered for a signal
-    // that already exists.
-    const triggers = Object.keys(workflow.on ?? {});
-    for (const trigger of ["pull_request", "pull_request_target"]) {
-      expect(triggers, `secret-scan.yml must not be reachable through ${trigger}`).not.toContain(trigger);
+  it("scopes the trusted PR trigger to main only, with no pull_request trigger", () => {
+    expect(workflow.on).not.toHaveProperty("pull_request");
+    expect(workflow.on.pull_request_target).toEqual({
+      branches: ["main"], types: ["opened", "synchronize", "reopened"],
+    });
+  });
+
+  it("ticks daily at the pinned off-peak UTC slot", () => {
+    expect(workflow.on.schedule).toEqual([{ cron: "41 4 * * *" }]);
+  });
+
+  it("produces exactly the future secret-scan check context", () => {
+    expect(Object.keys(workflow.jobs)).toEqual(["secret-scan"]);
+    expect(scan.name ?? "secret-scan").toBe("secret-scan");
+  });
+
+  it("uses main's checkout and fetches the PR head only as git objects", async () => {
+    const checkouts = scan.steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
+    expect(checkouts).toHaveLength(2);
+    expect(checkouts.map((step) => step.if)).toEqual([
+      "${{ github.event_name == 'pull_request_target' }}",
+      "${{ github.event_name != 'pull_request_target' }}",
+    ]);
+    for (const checkout of checkouts) {
+      expect(checkout.with).toEqual({ "fetch-depth": 0, "persist-credentials": false });
+    }
+    const fetch = scan.steps.find((step) => step.name === "Fetch the pull request head");
+    expect(fetch?.if).toBe("${{ github.event_name == 'pull_request_target' }}");
+    expect(fetch?.env).toEqual({ PR_NUMBER: "${{ github.event.pull_request.number }}" });
+    expect(fetch?.run).toBe('git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"');
+    const fetchIndex = scan.steps.indexOf(fetch!);
+    const installIndex = scan.steps.findIndex((step) => step.name === "Install gitleaks");
+    expect(fetchIndex).toBeGreaterThan(scan.steps.indexOf(checkouts[1]));
+    expect(fetchIndex).toBeLessThan(installIndex);
+    for (const step of scan.steps) {
+      expect(step.run ?? "").not.toMatch(/git\s+(checkout|switch|reset|worktree)\b/);
+      expect(step.uses ?? "").not.toMatch(/^\.\//);
+    }
+    const source = await readFile(resolve(".github/workflows/secret-scan.yml"), "utf8");
+    expect(source).toMatch(/pull_request_target:\s*# zizmor: ignore\[dangerous-triggers\]/);
+  });
+
+  it("scans and uploads for every event, with a PR-specific reachability root", () => {
+    const scanStep = scan.steps.find((step) => step.name === "Scan the full history");
+    const upload = scan.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+    expect(scanStep?.run).toBe("bash scripts/secret-scan.sh");
+    expect(scanStep?.if).toBeUndefined();
+    expect(scanStep?.env).toEqual({ GITLEAKS_REPORT_PATH: "gitleaks-report.json" });
+    expect(upload?.if).toBe("${{ always() }}");
+    expect(upload?.with?.path).toBe("gitleaks-report.json");
+    const checks = scan.steps.filter((step) => /scripts\/secret-scan-baseline\.sh/.test(step.run ?? ""));
+    expect(checks.map((step) => [step.if, step.run])).toEqual([
+      ["${{ github.event_name == 'pull_request_target' }}", "bash scripts/secret-scan-baseline.sh refs/remotes/pr/head"],
+      ["${{ github.event_name != 'pull_request_target' }}", "bash scripts/secret-scan-baseline.sh"],
+    ]);
+    for (const check of checks) expect(scan.steps.indexOf(check)).toBeGreaterThan(scan.steps.indexOf(upload!));
+  });
+
+  it("rejects an event without a scan path", () => {
+    const gate = scan.steps.find((step) => step.name === "Refuse unhandled events");
+    expect(gate?.run).toBeDefined();
+    expect(scan.steps.indexOf(gate!)).toBe(0);
+    for (const event of ["push", "pull_request_target", "schedule", "workflow_dispatch", "pull_request", "unknown"]) {
+      const result = spawnSync("bash", ["-e", "-c", gate!.run!], {
+        encoding: "utf8", env: { ...scratchGitEnv, GITHUB_EVENT_NAME: event },
+      });
+      expect(result.status, `${event}: ${result.stdout} ${result.stderr}`).toBe(
+        ["push", "pull_request_target", "schedule", "workflow_dispatch"].includes(event) ? 0 : 1,
+      );
     }
   });
 
-  it("ticks weekly, off the top of the hour, and not on the half hour either", () => {
-    const [cron] = (workflow.on.schedule as Array<{ cron: string }>).map((entry) => entry.cron);
-    // Five fields: minute, hour, day-of-month, month, day-of-week. A fixed
-    // day-of-week with `*` in the day-of-month field is what makes it WEEKLY —
-    // a `*` day-of-week with a fixed day-of-month would be monthly, which is a
-    // different promise than the one the header comment makes.
-    expect(cron, "the cron must have five fields").toMatch(/^\S+ \S+ \S+ \S+ \S+$/);
-    const fields = cron.split(/\s+/);
-    expect(fields[2], "a fixed day-of-week with '*' in the day-of-month field is weekly").toBe("*");
-    expect(fields[3], "a fixed month would make the entry run once a year").toBe("*");
-    expect(fields[4], "a fixed day-of-week is what makes the schedule weekly").toMatch(/^[0-6]$/);
-    // The repository's stated reason for the off-peak minute: the Actions queue
-    // is busiest on the hour, and dependency-audit.yml says so in its own
-    // header. 0 and 30 are the two minutes everybody picks.
-    expect(fields[0], `the minute must be off the top of the hour (got ${fields[0]})`).not.toBe("0");
-    expect(fields[0], `the minute must not be the half hour (got ${fields[0]})`).not.toBe("30");
-    // The hour was range-checked and the MINUTE was not, which is how `61` —
-    // a field naming no instant in the week, so a workflow that has silently
-    // stopped running — passed every assertion in this file. A schedule that
-    // cannot fire has to be a failing test.
-    //
-    // `Number` is NaN for `*` and for a step expression like `*/15`, so both are
-    // rejected here too — which is what the off-peak reasoning above wants
-    // anyway, since a step expression would run the scan hourly, not weekly.
-    expect(
-      Number(fields[0]),
-      `the minute must be a real minute, 0-59 (got ${fields[0]}) — an out-of-range minute names no ` +
-        "instant, so the schedule silently never fires and a green run certifies nothing",
-    ).toBeGreaterThanOrEqual(0);
-    expect(Number(fields[0]), `the minute must be at most 59 (got ${fields[0]})`).toBeLessThan(60);
-    expect(fields[0], "and it must be a plain number, not a step expression or a wildcard").toMatch(/^\d+$/);
-    expect(Number(fields[1]), "the hour must be a valid UTC hour").toBeLessThan(24);
-    expect(fields[1], "and the hour must be a plain number too").toMatch(/^\d+$/);
+  it("wires the producer's workflow name into the ledger relay", async () => {
+    const relay = parse(await readFile(resolve(".github/workflows/ledger-relay.yml"), "utf8")) as {
+      on: { workflow_run: { workflows: string[] } };
+    };
+    expect(relay.on.workflow_run.workflows).toContain("secret scan");
   });
 
   it("reads the repository and nothing more", () => {
@@ -273,7 +304,7 @@ describe(".github/workflows/secret-scan.yml", () => {
     // name, and .github/required-checks.json names verify, actionlint and
     // ratchet-guard. A job id or name that matched one of those would be a
     // required context this workflow's conclusions could silently satisfy.
-    expect(workflow.jobs, "the job id must be scan").not.toHaveProperty("verify");
+    expect(workflow.jobs, "the job id must not be verify").not.toHaveProperty("verify");
     expect(workflow.jobs, "the job id must not be actionlint").not.toHaveProperty("actionlint");
     expect(workflow.jobs, "the job id must not be ratchet-guard").not.toHaveProperty("ratchet-guard");
     expect(scan.name ?? "", "a job name carrying an expression is a required-checks failure").not.toContain("${{");
@@ -539,7 +570,7 @@ describe(".github/workflows/secret-scan.yml", () => {
    * evidence the step works: a step whose `run:` block is a `grep` for a string,
    * or whose comparison is inverted, satisfies every shape assertion above and
    * reports a clean baseline as an orphaned one — or, worse, the reverse, on a
-   * weekly tick nobody is watching. So this executes the step's own `run:` block
+   * daily tick nobody is watching. So this executes the step's own `run:` block
    * verbatim, the way the sibling install/scan test executes those two, against a
    * repository this suite builds with real commits.
    *
@@ -552,8 +583,11 @@ describe(".github/workflows/secret-scan.yml", () => {
    */
   describe("the reachability step, executed against repositories this suite builds", () => {
     const SCRIPT = "scripts/secret-scan-baseline.sh";
-    const step = () => {
-      const found = scan.steps.find((candidate) => /scripts\/secret-scan-baseline\.sh/.test(candidate.run ?? ""));
+    const step = (pr = false) => {
+      const found = scan.steps.find((candidate) => {
+        const isPrStep = candidate.if === "${{ github.event_name == 'pull_request_target' }}";
+        return /scripts\/secret-scan-baseline\.sh/.test(candidate.run ?? "") && isPrStep === pr;
+      });
       expect(found, "no step runs the baseline-reachability check").toBeDefined();
       return found!;
     };
@@ -585,9 +619,9 @@ describe(".github/workflows/secret-scan.yml", () => {
     });
 
     /** Run the step's `run:` block verbatim in `repoPath`, with `baseline` as its committed file. */
-    const runStep = (repoPath: string, baseline: unknown) => {
+    const runStep = (repoPath: string, baseline: unknown, pr = false) => {
       writeFileSync(join(repoPath, ".github", "gitleaks-baseline.json"), `${JSON.stringify(baseline, null, 1)}\n`, "utf8");
-      return spawnSync("bash", ["-e", "-c", step().run!], {
+      return spawnSync("bash", ["-e", "-c", step(pr).run!], {
         cwd: repoPath,
         encoding: "utf8",
         // `scratchGitEnv` already carries this session's NODE_ENV and strips
@@ -607,6 +641,7 @@ describe(".github/workflows/secret-scan.yml", () => {
       git(repoPath, "checkout", "--quiet", "-b", "side");
       unmerged = await commitFiles(repoPath, { "b.txt": "b\n" }, "on a branch that is never merged");
       git(repoPath, "checkout", "--quiet", "main");
+      git(repoPath, "update-ref", "refs/remotes/pr/head", unmerged);
       // Staged last, so the history above is the history git actually has. The
       // script resolves its repository from its OWN location, which is what makes
       // a staged copy the checkout as far as the step is concerned.
@@ -646,13 +681,34 @@ describe(".github/workflows/secret-scan.yml", () => {
       // Both halves, in one substring. Asserting the fingerprint alone would be
       // satisfied by any message echoing the commit, because gitleaks builds the
       // fingerprint out of it; asserting the commit alone would not say WHICH
-      // entry. The exact expected sentence is what a human reads at 04:41 on a
-      // Wednesday, so it is what is pinned.
+      // entry. The exact expected sentence is what a human reads at 04:41 UTC each
+      // day, so it is what is pinned.
       expect(
         `${result.stdout}\n${result.stderr}`,
         "the failure must name the entry's fingerprint AND the commit it names",
       ).toContain(`${orphan.Fingerprint} names commit ${unmerged}`);
       expect(`${result.stdout}\n${result.stderr}`).toMatch(/not an ancestor/i);
+    });
+
+    it("accepts a baseline entry reachable only from the PR root", () => {
+      const repo = join(root, "checkout");
+      expect(tryGit(repo, "merge-base", "--is-ancestor", unmerged, "HEAD").status).toBe(1);
+      const result = runStep(repo, [finding(reachable, "tests/main.ts"), finding(unmerged, "tests/pr.ts")], true);
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("all 2 entries");
+    });
+
+    it("rejects an entry reachable from neither HEAD nor the additional root", () => {
+      const repo = join(root, "checkout");
+      git(repo, "checkout", "--quiet", "-b", "other");
+      git(repo, "commit", "--allow-empty", "-m", "outside both roots");
+      const orphanCommit = git(repo, "rev-parse", "HEAD").trim();
+      git(repo, "checkout", "--quiet", "main");
+      const orphan = finding(orphanCommit, "tests/neither.ts");
+      const result = runStep(repo, [finding(unmerged, "tests/pr.ts"), orphan], true);
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+      expect(result.stderr).toContain(`${orphan.Fingerprint} names commit ${orphanCommit}`);
+      expect(result.stderr).toMatch(/not an ancestor/i);
     });
 
     it("fails, by name, on an entry whose commit this checkout does not carry at all", () => {
@@ -671,7 +727,7 @@ describe(".github/workflows/secret-scan.yml", () => {
       // cases above. A shallow checkout cannot distinguish "this repository does
       // not have the commit" from "this checkout was not fetched far enough", so
       // the honest answer there is to refuse rather than to report a defect that
-      // is not there — which is what a step this one would otherwise do weekly,
+      // is not there — which is what a step this one would otherwise do daily,
       // if anyone ever pointed it at a shallow checkout.
       const shallowPath = join(root, "shallow");
       await mkdir(shallowPath, { recursive: true });

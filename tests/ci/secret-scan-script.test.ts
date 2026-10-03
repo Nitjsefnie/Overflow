@@ -1163,6 +1163,14 @@ describe("scripts/secret-scan.sh", () => {
     if (tempRoot) await rm(tempRoot, { recursive: true, force: true });
   });
 
+  it("documents every push, pull request and daily sweep with trusted scripts", async () => {
+    const source = await readFile(scriptPath, "utf8");
+    expect(source).toContain("every push to main and every pull request");
+    expect(source).toContain("daily sweep");
+    expect(source).toContain("git objects");
+    expect(source).not.toContain("WHY SCHEDULED RATHER THAN PULL-REQUEST-REACHABLE");
+  });
+
   it("selects git-history mode and never a directory scan", async () => {
     const { argv, status, output } = await runScript();
     expect(status, `the stub accepted the argv the script passed: ${output}`).toBe(0);

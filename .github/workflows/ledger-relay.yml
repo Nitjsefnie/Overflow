@@ -27,6 +27,8 @@ on:
       - "ci"
       - "actionlint"
       - "ratchet guard"
+      # Forward wiring: unpinned workflows no-op in scripts/ledger-relay.ts.
+      - "secret scan"
     types: [completed]
   workflow_dispatch:
     inputs:
