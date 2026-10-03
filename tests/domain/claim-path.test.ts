@@ -306,6 +306,8 @@ describe("reviewed shared claim action evidence", () => {
     ["fake owner", "someone-else/claim@cf2aaae56eb3bb6c655b8c4bc35906dafc77a63e"],
     ["suffixed action", "Nitjsefnie-Actions/claim-extra@cf2aaae56eb3bb6c655b8c4bc35906dafc77a63e"],
     // v2.0.1 was the previous reviewed SHA; the v2.0.2 bump is the recognition boundary.
+    // Rejecting an obsolete pin keeps the gate from reporting it as the
+    // currently reviewed action.
     ["previous reviewed SHA", "Nitjsefnie-Actions/claim@8abff4f2f27d59b984528cb736f64b9391952a25"],
     ["wrong SHA", "Nitjsefnie-Actions/claim@0000000000000000000000000000000000000000"],
     ["floating ref", "Nitjsefnie-Actions/claim@main"],
