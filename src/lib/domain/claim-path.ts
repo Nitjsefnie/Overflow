@@ -33,10 +33,10 @@ export type ClaimPathVerdict = ClaimPathAssessment | "NOT_CHECKED";
 const assigneesCollection = /(?<![\w.~%+:=$-])issues\/[^/\r\n]+\/assignees(?=$|[\s"'`;&|)<>?#\\])/;
 const additiveCall = /\baddAssigneesToAssignable\b|\bissues\s*\.\s*addAssignees\b/;
 const deletion = /(?:-X\s*|--method(?:\s+|=))["']?DELETE\b|\bremoveAssignees(?:FromAssignable)?\b/i;
-// The reviewed revision of the shared claim action (v2.0.1), matched exactly.
+// The reviewed revision of the shared claim action (v2.0.2), matched exactly.
 // Bumping the pin in .github/workflows/claim.yml is another edit here, or this
 // repository's own claim path stops being recognised as evidence of one.
-const reviewedClaimAction = "Nitjsefnie-Actions/claim@8abff4f2f27d59b984528cb736f64b9391952a25";
+const reviewedClaimAction = "Nitjsefnie-Actions/claim@cf2aaae56eb3bb6c655b8c4bc35906dafc77a63e";
 
 export function assessClaimPath(workflows: readonly ClaimPathEvidence[]): ClaimPathAssessment {
   for (const { content } of workflows) {

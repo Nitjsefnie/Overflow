@@ -292,7 +292,7 @@ describe("known limits of textual evidence, not guaranteed runtime assignment", 
 });
 
 describe("reviewed shared claim action evidence", () => {
-  const action = "Nitjsefnie-Actions/claim@8abff4f2f27d59b984528cb736f64b9391952a25";
+  const action = "Nitjsefnie-Actions/claim@cf2aaae56eb3bb6c655b8c4bc35906dafc77a63e";
   const caller = (reference: string, trigger = "on: issue_comment") => ({
     path: ".github/workflows/claim.yml",
     content: `${trigger}\njobs:\n  claim:\n    steps:\n      - uses: ${reference}\n`,
@@ -303,15 +303,10 @@ describe("reviewed shared claim action evidence", () => {
   });
 
   it.each([
-    ["fake owner", "someone-else/claim@8abff4f2f27d59b984528cb736f64b9391952a25"],
-    ["suffixed action", "Nitjsefnie-Actions/claim-extra@8abff4f2f27d59b984528cb736f64b9391952a25"],
-    // The revision this repository reviewed before the v2.0.1 bump. It is the
-    // one string a recogniser keyed to "the reviewed action" is most likely to
-    // keep accepting after the pin moves, and accepting it means telling a
-    // repository that pins v1.1.0 it has a claim path when the policy inputs
-    // the action enforces — max-claims, expire — are not the ones Overflow
-    // documents.
-    ["previous reviewed SHA", "Nitjsefnie-Actions/claim@ceaadaa096fd249cdeecc137342158ec17347cb9"],
+    ["fake owner", "someone-else/claim@cf2aaae56eb3bb6c655b8c4bc35906dafc77a63e"],
+    ["suffixed action", "Nitjsefnie-Actions/claim-extra@cf2aaae56eb3bb6c655b8c4bc35906dafc77a63e"],
+    // v2.0.1 was the previous reviewed SHA; the v2.0.2 bump is the recognition boundary.
+    ["previous reviewed SHA", "Nitjsefnie-Actions/claim@8abff4f2f27d59b984528cb736f64b9391952a25"],
     ["wrong SHA", "Nitjsefnie-Actions/claim@0000000000000000000000000000000000000000"],
     ["floating ref", "Nitjsefnie-Actions/claim@main"],
   ])("rejects a %s", (_reason, reference) => {
