@@ -129,6 +129,10 @@ const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = 
     group: "code-scanning-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
   },
+  "event-policy.yml": {
+    group: "event-policy-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+    "cancel-in-progress": false,
+  },
 };
 
 /**
@@ -449,6 +453,7 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   "code-scanning.yml": ["analyze"],
   "coverage-comment.yml": ["comment"],
   "dependency-audit.yml": ["audit"],
+  "event-policy.yml": ["event-policy"],
   "ledger-relay.yml": ["relay-required-checks"],
   "pr-gate.yml": ["gate"],
   "ratchet-guard.yml": ["ratchet-guard"],

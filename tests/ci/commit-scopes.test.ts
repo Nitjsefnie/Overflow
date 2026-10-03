@@ -174,6 +174,7 @@ describe("scripts/commit_scopes.py", () => {
     ].join("\n"), script, resolve(".")], { encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual([
+      "Actions event policy",
       "actionlint", "ci", "claim", "code scanning", "coverage comment",
       "dependency audit", "ledger relay", "pr gate", "ratchet guard", "scorecard", "secret scan",
     ]);
