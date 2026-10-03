@@ -187,12 +187,14 @@ type Step = {
 describe("the dependency audit workflow's audit step", () => {
   let steps: Step[] = [];
   let auditSteps: Step[] = [];
+  let jobEnv: Record<string, string> | undefined;
 
   beforeAll(async () => {
     const workflow = parse(await readFile(resolve(".github/workflows/dependency-audit.yml"), "utf8")) as {
-      jobs?: { audit?: { steps?: Step[] } };
+      jobs?: { audit?: { env?: Record<string, string>; steps?: Step[] } };
     };
     steps = workflow.jobs?.audit?.steps ?? [];
+    jobEnv = workflow.jobs?.audit?.env;
     auditSteps = steps.filter((step) => step.name === "Audit lockfile advisories");
   });
 
@@ -234,40 +236,73 @@ describe("the dependency audit workflow's audit step", () => {
     expect(run).not.toMatch(/\bbash\s+(\.\/)?scripts\//);
   });
 
-  it("takes the pnpm binary from the workflow's own pin, not the pull request's", () => {
+  it("binds the pnpm version for the step that runs the audit, not only the step that installs it", () => {
     // `corepack install --global pnpm@10.33.0` sets corepack's DEFAULT and
     // nothing more. When the `pnpm` shim runs, corepack otherwise reads
     // `packageManager` from the nearest `package.json` and downloads THAT
-    // version from the registry — and `package.json` is one of the two files
-    // this task added to the path filter, so the trigger is what put a
-    // pull-request-controlled field in the position that selects the binary.
-    // Measured on the Node 24.17.0 this workflow pins: a `packageManager` of
-    // `pnpm@9.99.99-evil-canary` makes corepack announce a download of
-    // `pnpm-9.99.99-evil-canary.tgz`; with COREPACK_ENABLE_PROJECT_SPEC=0 the
-    // same tree prints 10.33.0. Without this the "verified against pnpm
-    // 10.33.0" claim in the workflow header is a claim about a version a pull
-    // request chooses, and every verdict the classifier emits is a property of
-    // a specific pnpm's output shape.
-    const corepack = steps.find((step) => step.name === "Enable the pinned package manager");
-    expect(corepack).toBeDefined();
+    // version — and `package.json` is one of the two files this task added to
+    // the path filter, so the trigger is what put a pull-request-controlled
+    // field in the position that selects the binary.
+    //
+    // The step that matters is the one that EXECUTES `pnpm audit`, not the one
+    // that installs pnpm, and GitHub Actions `env:` is step-scoped: it does not
+    // carry forward. An earlier version of this branch pinned the variable on
+    // the install step and every assertion here stayed green while the hole
+    // was open — measured on the Node 24.17.0 this workflow pins, replaying the
+    // two steps as separate processes against a `packageManager` of
+    // `pnpm@9.15.9`:
+    //
+    //   step 1 with the variable on the step:  pnpm --version -> 10.33.0
+    //   step 2 without it:                     pnpm --version -> 9.15.9
+    //
+    // So the assertions are on the EFFECTIVE environment of the step that runs
+    // the audit — its own env, falling back to the job's — and separately on
+    // the job, which is what makes the wrong placement impossible rather than
+    // merely absent today.
+    const effective = (step: Step | undefined): string | undefined =>
+      step?.env?.COREPACK_ENABLE_PROJECT_SPEC ?? jobEnv?.COREPACK_ENABLE_PROJECT_SPEC;
+
     expect(
-      corepack?.env?.COREPACK_ENABLE_PROJECT_SPEC,
-      "corepack must ignore the checked-out package.json's packageManager field, or the pnpm@10.33.0 " +
-        "pin this workflow installs is only a default that the pull request's own manifest overrides",
+      effective(auditSteps[0]),
+      "the step that runs `pnpm audit` must resolve pnpm under COREPACK_ENABLE_PROJECT_SPEC=0. An env " +
+        "block on the step that INSTALLS pnpm does not reach it: Actions env is step-scoped, so that " +
+        "placement leaves the audit running whatever version the pull request's packageManager names",
     ).toBe("0");
+    expect(
+      jobEnv?.COREPACK_ENABLE_PROJECT_SPEC,
+      "the pin belongs on the job, where it is in effect for every step that runs pnpm including one " +
+        "added later. On a step it is placeable in exactly the wrong spot, which is what happened once",
+    ).toBe("0");
+
+    // And no step may shadow it, in either direction. A step-level `env` that
+    // re-set the variable would win over the job's for that step alone.
+    const pnpmSteps = steps.filter((step) => /\bpnpm\b/.test(step.run ?? ""));
+    expect(
+      pnpmSteps.length,
+      "this assertion is vacuous if fewer than two steps run pnpm — the install step and the audit step",
+    ).toBeGreaterThan(1);
+    for (const step of pnpmSteps) {
+      expect(
+        step.env?.COREPACK_ENABLE_PROJECT_SPEC ?? jobEnv?.COREPACK_ENABLE_PROJECT_SPEC,
+        `step "${step.name ?? step.uses}" runs pnpm and must resolve it under the job's pin`,
+      ).toBe("0");
+    }
   });
 
   it("reaches the public advisory endpoint, not one the pull request's .npmrc names", () => {
-    // Second order, and closed for one line. pnpm reads `.npmrc` from the
-    // working directory, so a pull request touching `.npmrc` AND `package.json`
-    // could point the audit at a registry it controls and have the audit answer
-    // "no known vulnerabilities". `.npmrc` is not in the path filter, so that
-    // combination does not trigger on its own — but this workflow already runs
-    // on the `package.json` half of it. Measured on pnpm 10.33.0: a project
-    // `.npmrc` carrying `registry=` does redirect `pnpm config get registry`,
-    // and `npm_config_registry` in the environment outranks it.
+    // pnpm reads `.npmrc` from the working directory, so a pull request
+    // touching `.npmrc` AND `package.json` could point the audit at a registry
+    // it controls and have the audit answer "no known vulnerabilities".
+    // `.npmrc` is not in the path filter, so that combination does not trigger
+    // on its own — but this workflow already runs on the `package.json` half of
+    // it. Measured on pnpm 10.33.0: a project `.npmrc` carrying `registry=`
+    // does redirect `pnpm config get registry`, and `npm_config_registry` in the
+    // environment outranks it. corepack does not read `.npmrc` at all, so the
+    // audit step is the only one carrying this exposure — but it is pinned at
+    // job level beside the pnpm pin, because a variable that has to be
+    // remembered per step is a variable that will eventually be forgotten.
     expect(
-      auditSteps[0]?.env?.npm_config_registry,
+      auditSteps[0]?.env?.npm_config_registry ?? jobEnv?.npm_config_registry,
       "the audit must resolve the registry from this workflow, because a pull-request-authored .npmrc " +
         "in the working directory can otherwise redirect the advisory endpoint and turn a red signal green",
     ).toBe("https://registry.npmjs.org/");
@@ -433,6 +468,35 @@ describe("the dependency audit workflow's audit step", () => {
       const refused = runStep([REFUSED], { delaySeconds: RETRY_DELAY });
       expect(refused.status).toBe(1);
       expect(refused.attempts).toBe(1);
+    });
+
+    it("names which of the two non-retryable states it is, in the log a human reads", () => {
+      // `unreachable` and `unreadable` share the `*)` arm, the same echo and
+      // the same exit status — nothing programmatic consumes them — but the
+      // verdict word is echoed into the step's own output, and the two say
+      // different things to whoever reads a red run: a registry that answered
+      // "no" is not a report this step failed to read. Swapping the labels
+      // mislabels the diagnosis without changing anything else, which is why
+      // asserting on the word is the only thing that catches it.
+      //
+      // This is not an assertion on prose. The token is written to stdout at
+      // run time by the classifier, in the same sense as the `not.toContain`
+      // checks below and above it; the repository's ban is on matching page
+      // copy or a comment's wording in a source file.
+      const forbidden = runStep([FORBIDDEN], { delaySeconds: RETRY_DELAY });
+      expect(forbidden.stdout).toContain(": unreachable —");
+      expect(forbidden.stdout).not.toContain(": unreadable —");
+
+      const refused = runStep([REFUSED], { delaySeconds: RETRY_DELAY });
+      expect(refused.stdout).toContain(": unreachable —");
+
+      // All three sites the `unreadable` label is emitted from, so a partial
+      // swap cannot hide behind the others.
+      for (const outcome of [UNREADABLE, NO_ADVISORIES_FIELD, UNTRUSTED]) {
+        const result = runStep([outcome], { delaySeconds: RETRY_DELAY });
+        expect(result.stdout).toContain(": unreadable —");
+        expect(result.stdout).not.toContain(": unreachable —");
+      }
     });
 
     it("does not retry when one endpoint's answer is transient and the other's is not", () => {
