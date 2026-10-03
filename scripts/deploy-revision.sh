@@ -41,10 +41,10 @@ release_name_re='\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}'
 # git ls-files --others --ignored --directory prints them, each matched as a
 # whole path from the tree root: the .next anchor (a symlink, or a directory
 # before the release migration), .claude/ (this repository's own session
-# machinery — the autoloaded working rules and the priority board — ignored in
-# every checkout a deploy runs from, and required there, so an operator who
-# cannot clear it must not be left choosing between a refused deploy and
-# deleting the rules), release directories and the tsconfig sidecar release.ts
+# machinery — the autoloaded working rules and the priority board — which the
+# checkout a deploy is invoked from may carry, ignored there, so an operator
+# must not be left choosing between a refused deploy and deleting the rules),
+# release directories and the tsconfig sidecar release.ts
 # writes beside each, the release-notes directory, the generated next-env.d.ts
 # and node_modules. Nothing else, and nothing nested: a leftover .next-switch-*
 # link is a crash artefact the operator should see, and .claude/ is matched as

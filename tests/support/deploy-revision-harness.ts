@@ -228,9 +228,10 @@ export const IGNORED_LISTING = "git ls-files -z --others --ignored --exclude-sta
  * carry a trailing slash, the .next symlink does not.
  *
  * `.claude/` is this repository's own session machinery (the autoloaded working
- * rules and the priority board), present and ignored in every checkout a deploy
- * runs from. It is allowlisted as a directory entry with its trailing slash, so
- * nothing below it is admitted by name and no sibling one edit away matches.
+ * rules and the priority board). The checkout a deploy is invoked from may carry
+ * it, ignored, so an operator must not have to delete it to deploy. It is
+ * allowlisted as a directory entry with its trailing slash, so nothing below it
+ * is admitted by name and no sibling one edit away matches.
  */
 export const OPERATIONAL_IGNORED = [
   ".next",
