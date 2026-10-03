@@ -55,11 +55,13 @@ updates:
   # a group cannot quietly stop covering one. A group without applies-to covers
   # version updates only and security updates are enabled here, so the second
   # group keeps a single-action advisory from opening a single-package pull
-  # request. All three lanes carry an explicit day, off the default Monday and
-  # off every weekly cron in this repository — Monday 06:37 (dependency-audit),
-  # Wednesday 04:41 (secret-scan) and 05:43 (code-scanning), Saturday 03:23
-  # (scorecard). npm runs Tuesday 03:17, this lane Friday 04:23 and docker
-  # Sunday 05:31, so no lane shares a runner minute with a scheduled workflow.
+  # request. All four lanes carry an explicit day, off the default Monday. The
+  # weekday-pinned workflow crons are Wednesday 05:43 (code-scanning) and
+  # Saturday 03:23 (scorecard). secret-scan runs daily at 04:41 and
+  # dependency-audit daily at 06:37; both daily minutes differ from every
+  # Dependabot lane minute. npm runs Tuesday 03:17, pip Thursday 05:07, this
+  # lane Friday 04:23 and docker Sunday 05:31, so no lane shares a runner
+  # minute with any scheduled workflow. Thursday has no weekday-pinned cron.
   # That weekly grouped pull request lands red on arrival by design:
   # tests/api/ci-workflows.test.ts pins those action SHAs, so the handler
   # completes the second edit (the test pins) before merging — CONTRIBUTING.md's
@@ -107,3 +109,27 @@ updates:
       # container-image test constant).
       - dependency-name: "node"
         update-types: ["version-update:semver-major"]
+
+  # This lane covers .github/requirements-zizmor.txt, the hash-pinned zizmor
+  # install for the actionlint workflow. The pip ecosystem picks up the file
+  # because its name contains "requirements" within this configured directory.
+  # dependabot-core's python requirement_file_updater passes new_hash_version to
+  # RequirementReplacer, which fetches the new version's full --hash set from
+  # the package index. A Dependabot PR is not stale-hash broken, but it lands
+  # red on arrival by design: tests/api/ci-workflows.test.ts pins
+  # `zizmor==1.29.0`. The handler completes the second edit on that branch
+  # before merging: regenerate this file using its header's pip-tools procedure,
+  # update that test's version literal and the header's printf example version.
+  # This is the same two-edit regime as the SHA-pinned actions lane above.
+  # No groups or ignore entries: one pinned package gives a group nothing to
+  # collect, and zizmor bumps are wanted. Thursday 05:07 Etc/UTC is the fourth
+  # lane slot, off Monday and clear of the scheduled workflow times; no
+  # weekday-pinned workflow cron runs Thursday.
+  - package-ecosystem: "pip"
+    directory: "/.github/"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+      time: "05:07"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
