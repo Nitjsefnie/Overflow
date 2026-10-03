@@ -100,9 +100,42 @@ function registryFailure(status: number, code: string): ScriptedOutcome {
   };
 }
 
+/**
+ * Two endpoints, two different answers — which is what pnpm's fallback produces
+ * whenever the quick endpoint and the full endpoint disagree. Built here because
+ * pnpm has never been observed to emit it (both endpoints answer alike in every
+ * capture), and the classifier's contract is about the pair: `every` statuses
+ * must be transient, so one transient leg is not a transient answer. A
+ * `some()` classifier retries this; the shipped one must not.
+ */
+function mixedRegistryFailure(transient: number, answered: number): ScriptedOutcome {
+  return {
+    code: 1,
+    stderr: "",
+    stdout: JSON.stringify({
+      error: {
+        code: "ERR_PNPM_AUDIT_BAD_RESPONSE",
+        message:
+          "The audit endpoint (at http://127.0.0.1:40857/-/npm/v1/security/audits/quick) responded with "
+          + `${transient}: {"error":"service unavailable"}. Fallback endpoint (at `
+          + `http://127.0.0.1:40857/-/npm/v1/security/audits) responded with ${answered}: {"error":"forbidden"}`,
+      },
+    }),
+  };
+}
+
 const SERVER_5XX = registryFailure(503, "ERR_PNPM_AUDIT_BAD_RESPONSE");
 const RATE_LIMITED = registryFailure(429, "ERR_PNPM_AUDIT_BAD_RESPONSE");
 const FORBIDDEN = registryFailure(403, "ERR_PNPM_AUDIT_BAD_RESPONSE");
+/** Quick endpoint 503, fallback endpoint 403 — a split answer. */
+const SPLIT_ANSWER = mixedRegistryFailure(503, 403);
+/**
+ * A 6xx. Not something registry.npmjs.org has been observed to answer with,
+ * and the point is exactly that: the classifier promises "5xx or 429", so a
+ * status outside 500–599 must not buy a retry. Dropping the `< 600` bound
+ * retries this.
+ */
+const OUT_OF_RANGE = registryFailure(600, "ERR_PNPM_AUDIT_BAD_RESPONSE");
 const REFUSED: ScriptedOutcome = {
   code: 1,
   stderr: "",
@@ -121,11 +154,33 @@ const REFUSED: ScriptedOutcome = {
  */
 const UNREADABLE: ScriptedOutcome = { code: 1, stdout: "", stderr: " ERROR  Unknown option: 'audit-level'\n" };
 
+/**
+ * An empty `advisories` map with a NONZERO exit — pnpm answered in a shape
+ * carrying no findings while telling us something went wrong. Reading that as
+ * clean is the fail-open the workflow's own comment says it does not have, and
+ * the only fixture here that can catch it, because every other empty-advisories
+ * case exits 0.
+ */
+const UNTRUSTED: ScriptedOutcome = { code: 1, stderr: "", stdout: CLEAN.stdout };
+
+/**
+ * A report with no `advisories` key at all, exiting 0. Nothing in it says the
+ * lockfile was clean, so it must not be read as clean — and it must not be read
+ * as a finding either, which is the only shape that would report an advisory
+ * the registry never mentioned.
+ */
+const NO_ADVISORIES_FIELD: ScriptedOutcome = {
+  code: 0,
+  stderr: "",
+  stdout: JSON.stringify({ actions: [], muted: [], metadata: { dependencies: 688 } }),
+};
+
 type Step = {
   name?: string;
   uses?: string;
   run?: string;
   with?: Record<string, unknown>;
+  env?: Record<string, string>;
   "continue-on-error"?: unknown;
 };
 
@@ -179,6 +234,45 @@ describe("the dependency audit workflow's audit step", () => {
     expect(run).not.toMatch(/\bbash\s+(\.\/)?scripts\//);
   });
 
+  it("takes the pnpm binary from the workflow's own pin, not the pull request's", () => {
+    // `corepack install --global pnpm@10.33.0` sets corepack's DEFAULT and
+    // nothing more. When the `pnpm` shim runs, corepack otherwise reads
+    // `packageManager` from the nearest `package.json` and downloads THAT
+    // version from the registry — and `package.json` is one of the two files
+    // this task added to the path filter, so the trigger is what put a
+    // pull-request-controlled field in the position that selects the binary.
+    // Measured on the Node 24.17.0 this workflow pins: a `packageManager` of
+    // `pnpm@9.99.99-evil-canary` makes corepack announce a download of
+    // `pnpm-9.99.99-evil-canary.tgz`; with COREPACK_ENABLE_PROJECT_SPEC=0 the
+    // same tree prints 10.33.0. Without this the "verified against pnpm
+    // 10.33.0" claim in the workflow header is a claim about a version a pull
+    // request chooses, and every verdict the classifier emits is a property of
+    // a specific pnpm's output shape.
+    const corepack = steps.find((step) => step.name === "Enable the pinned package manager");
+    expect(corepack).toBeDefined();
+    expect(
+      corepack?.env?.COREPACK_ENABLE_PROJECT_SPEC,
+      "corepack must ignore the checked-out package.json's packageManager field, or the pnpm@10.33.0 " +
+        "pin this workflow installs is only a default that the pull request's own manifest overrides",
+    ).toBe("0");
+  });
+
+  it("reaches the public advisory endpoint, not one the pull request's .npmrc names", () => {
+    // Second order, and closed for one line. pnpm reads `.npmrc` from the
+    // working directory, so a pull request touching `.npmrc` AND `package.json`
+    // could point the audit at a registry it controls and have the audit answer
+    // "no known vulnerabilities". `.npmrc` is not in the path filter, so that
+    // combination does not trigger on its own — but this workflow already runs
+    // on the `package.json` half of it. Measured on pnpm 10.33.0: a project
+    // `.npmrc` carrying `registry=` does redirect `pnpm config get registry`,
+    // and `npm_config_registry` in the environment outranks it.
+    expect(
+      auditSteps[0]?.env?.npm_config_registry,
+      "the audit must resolve the registry from this workflow, because a pull-request-authored .npmrc " +
+        "in the working directory can otherwise redirect the advisory endpoint and turn a red signal green",
+    ).toBe("https://registry.npmjs.org/");
+  });
+
   it("reads the audit's own output rather than a report file a pull request could stage", () => {
     // `pnpm audit` is the only thing that writes the report here. A path under
     // version control would be pull-request-staged input to a decision.
@@ -206,22 +300,28 @@ describe("the dependency audit workflow's audit step", () => {
 
     /**
      * Runs the step's own run script the way the runner would — `bash -e`, a
-     * script file, its own working directory — with a `pnpm` stub first on
-     * PATH. The stub replays `outcomes` in order and counts its own
-     * invocations, so `attempts` is how many times the audit actually ran:
-     * that is the whole difference between "retried and then succeeded" and
-     * "retried and still failing".
+     * script file, its own working directory — with two stubs first on PATH.
+     *
+     * `pnpm` replays `outcomes` in order and counts its own invocations, so
+     * `attempts` is how many times the audit actually ran: that is the whole
+     * difference between "retried and then succeeded" and "retried and still
+     * failing". `sleep` records the argument it was handed instead of waiting,
+     * so the backoff is asserted on the RECORD of the call rather than on a
+     * literal in the script — and so no assertion here depends on a clock.
      */
-    function runStep(outcomes: ScriptedOutcome[]): { status: number | null; stdout: string; attempts: number } {
+    function runStep(
+      outcomes: ScriptedOutcome[],
+      options?: { delaySeconds?: string },
+    ): { status: number | null; stdout: string; attempts: number; sleeps: string[] } {
       cases += 1;
       const home = join(root, `case-${cases}`);
       mkdirSync(join(home, "bin"), { recursive: true });
       const counter = join(home, "counter");
       writeFileSync(counter, "0");
       writeFileSync(join(home, "outcomes.json"), JSON.stringify(outcomes));
-      const stub = join(home, "bin", "pnpm");
+      writeFileSync(join(home, "sleeps"), "");
       writeFileSync(
-        stub,
+        join(home, "bin", "pnpm"),
         [
           "#!/usr/bin/env node",
           'const fs = require("node:fs");',
@@ -236,66 +336,97 @@ describe("the dependency audit workflow's audit step", () => {
           "",
         ].join("\n"),
       );
-      chmodSync(stub, 0o755);
+      writeFileSync(
+        join(home, "bin", "sleep"),
+        [
+          "#!/usr/bin/env node",
+          'require("node:fs").appendFileSync(process.env.AUDIT_STUB_DIR + "/sleeps", process.argv.slice(2).join(" ") + "\\n");',
+          "",
+        ].join("\n"),
+      );
+      for (const stub of ["pnpm", "sleep"]) chmodSync(join(home, "bin", stub), 0o755);
 
       const script = join(home, "audit.sh");
       writeFileSync(script, auditSteps[0]!.run!);
 
-      const result = spawnSync("bash", ["-e", script], {
-        cwd: home,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          PATH: `${join(home, "bin")}:${process.env.PATH}`,
-          AUDIT_STUB_DIR: home,
-          // The retry's backoff is real in CI and irrelevant here; the shipped
-          // default is pinned above, so zeroing it for the run costs no
-          // coverage.
-          DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS: "0",
-        },
-      });
+      const env: Record<string, string> = {
+        ...(process.env as Record<string, string>),
+        PATH: `${join(home, "bin")}:${process.env.PATH}`,
+        AUDIT_STUB_DIR: home,
+      };
+      // Omitting the key entirely is how the shipped default is exercised.
+      if (options?.delaySeconds !== undefined) {
+        env.DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS = options.delaySeconds;
+      } else {
+        delete env.DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS;
+      }
+
+      const result = spawnSync("bash", ["-e", script], { cwd: home, encoding: "utf8", env });
       return {
         status: result.status,
         stdout: result.stdout,
         attempts: Number(readFileSync(counter, "utf8").trim()),
+        sleeps: readFileSync(join(home, "sleeps"), "utf8").split("\n").filter((line) => line !== ""),
       };
     }
 
+    /** The delay every case below asks for unless it is testing the default. */
+    const RETRY_DELAY = "7";
+
     it("passes a clean lockfile without retrying", () => {
-      const outcome = runStep([CLEAN]);
+      const outcome = runStep([CLEAN], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(0);
       expect(outcome.attempts).toBe(1);
+      expect(outcome.sleeps).toEqual([]);
     });
 
     it("fails a lockfile carrying advisories, on the first attempt and without retrying", () => {
       // The narrowness this whole suite exists for: a finding is the answer,
       // not a failure to be re-asked. Retrying it would delay the report and
       // spend runner minutes to arrive at the same verdict.
-      const outcome = runStep([ADVISORIES]);
+      const outcome = runStep([ADVISORIES], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       expect(outcome.attempts).toBe(1);
+      expect(outcome.sleeps).toEqual([]);
     });
 
     it("retries a transient registry failure and passes when the endpoint recovers", () => {
-      const outcome = runStep([SERVER_5XX, CLEAN]);
+      const outcome = runStep([SERVER_5XX, CLEAN], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(0);
       expect(outcome.attempts).toBe(2);
+      // One sleep, and it is the delay asked for — the backoff is the record
+      // the stub kept, not a literal the script happens to contain.
+      expect(outcome.sleeps).toEqual([RETRY_DELAY]);
     });
 
     it("retries a rate-limited endpoint too — 429 is a transient registry answer", () => {
-      const outcome = runStep([RATE_LIMITED, RATE_LIMITED, ADVISORIES]);
+      const outcome = runStep([RATE_LIMITED, RATE_LIMITED, ADVISORIES], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       // Two retries then the real finding: the loop stops at the finding
       // rather than spending its remaining attempts on it.
       expect(outcome.attempts).toBe(3);
+      expect(outcome.sleeps).toEqual([RETRY_DELAY, RETRY_DELAY]);
     });
 
-    it("fails after its attempts are spent on a registry outage, having retried each time", () => {
+    it("spends exactly its retry budget on a registry outage and then fails", () => {
       // One scripted outcome replays forever, so `attempts` is the retry
-      // budget. It has to exceed one, or the retry does not exist.
-      const outcome = runStep([SERVER_5XX]);
+      // budget, and it is asserted EXACTLY: a budget raised to 99 would pass a
+      // `toBeGreaterThan(1)` and then overrun this job's `timeout-minutes: 10`
+      // on a slow registry.
+      const outcome = runStep([SERVER_5XX], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
-      expect(outcome.attempts).toBeGreaterThan(1);
+      expect(outcome.attempts).toBe(3);
+      // Two sleeps for three attempts: the last failure reports rather than
+      // waiting for a fourth that will not come.
+      expect(outcome.sleeps).toEqual([RETRY_DELAY, RETRY_DELAY]);
+    });
+
+    it("sleeps its shipped default when nothing overrides it", () => {
+      // The suite above always asks for a delay of its own, so the default is
+      // what a CI run actually uses, and it is read off the recorded call.
+      const outcome = runStep([SERVER_5XX, CLEAN]);
+      expect(outcome.status).toBe(0);
+      expect(outcome.sleeps).toEqual(["30"]);
     });
 
     it("does not retry a registry answer that is not transient", () => {
@@ -303,21 +434,65 @@ describe("the dependency audit workflow's audit step", () => {
       // again gets the same answer. A transport failure reads the same to a
       // human but gets the same treatment — one attempt, then a red run
       // somebody looks at.
-      const forbidden = runStep([FORBIDDEN]);
+      const forbidden = runStep([FORBIDDEN], { delaySeconds: RETRY_DELAY });
       expect(forbidden.status).toBe(1);
       expect(forbidden.attempts).toBe(1);
-      const refused = runStep([REFUSED]);
+      const refused = runStep([REFUSED], { delaySeconds: RETRY_DELAY });
       expect(refused.status).toBe(1);
       expect(refused.attempts).toBe(1);
+    });
+
+    it("does not retry when one endpoint's answer is transient and the other's is not", () => {
+      // pnpm asks `…/audits/quick`, falls back to `…/audits`, and reports BOTH
+      // statuses. A 503 on the first and a 403 on the second is not an outage
+      // that a retry can clear — the second endpoint answered, and it answered
+      // "no". `every` is what makes that the rule; `some` would retry it.
+      const outcome = runStep([SPLIT_ANSWER], { delaySeconds: RETRY_DELAY });
+      expect(outcome.status).toBe(1);
+      expect(outcome.attempts).toBe(1);
+      expect(outcome.sleeps).toEqual([]);
+    });
+
+    it("does not retry a status outside 500–599, however it reads", () => {
+      // The classifier promises 5xx and 429. A 6xx is not one, and retrying it
+      // would spend the whole budget on an answer that is not going to change.
+      const outcome = runStep([OUT_OF_RANGE], { delaySeconds: RETRY_DELAY });
+      expect(outcome.status).toBe(1);
+      expect(outcome.attempts).toBe(1);
+      expect(outcome.sleeps).toEqual([]);
     });
 
     it("fails closed when the audit produced no readable report at all", () => {
       // pnpm exiting 1 with empty stdout is what an unusable invocation looks
       // like. Reading that as "no advisories" would turn a broken step into a
       // green one, which is the failure mode a detection signal must not have.
-      const outcome = runStep([UNREADABLE]);
+      const outcome = runStep([UNREADABLE], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       expect(outcome.attempts).toBe(1);
+    });
+
+    it("fails an empty advisories map that arrived with a nonzero exit", () => {
+      // The other fail-closed edge, and the one the workflow's own comment
+      // claims: `advisories: {}` says nothing was found, but a nonzero exit
+      // says something went wrong, so the report is one this step does not
+      // trust. Accepting it would report the lockfile clean on the strength of
+      // a run that also reported a failure.
+      const outcome = runStep([UNTRUSTED], { delaySeconds: RETRY_DELAY });
+      expect(outcome.status).toBe(1);
+      expect(outcome.attempts).toBe(1);
+      expect(outcome.stdout).not.toContain("no known vulnerabilities found");
+    });
+
+    it("reports neither a clean lockfile nor an advisory when the report has no advisories field", () => {
+      // Nothing in this report says the lockfile was clean. It also says
+      // nothing about an advisory, so calling it a finding would report one the
+      // registry never mentioned — the failure a detection signal can least
+      // afford, because it sends someone looking for a vulnerability that does
+      // not exist.
+      const outcome = runStep([NO_ADVISORIES_FIELD], { delaySeconds: RETRY_DELAY });
+      expect(outcome.status).toBe(1);
+      expect(outcome.attempts).toBe(1);
+      expect(outcome.stdout).not.toContain("advisories (");
     });
   });
 });

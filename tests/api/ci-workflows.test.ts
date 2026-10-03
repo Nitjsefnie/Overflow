@@ -620,14 +620,27 @@ fi
     // step-level continue-on-error tolerating a red audit, or a job-level
     // permissions override — fails this equality. No install and no build
     // precede the audit, so pnpm reads pnpm-lock.yaml directly and nothing a
-    // pull request authored is ever executed (the pull_request trigger makes
-    // the checkout the pull request, so a `node scripts/…` step or a checkout
-    // `ref:` would cross that line — tests/ci/dependency-audit-retry.test.ts
-    // denies both by name). The step's own script is the gate and is pinned
-    // here verbatim; tests/ci/dependency-audit-retry.test.ts then EXECUTES
-    // that verbatim text against a scripted advisory endpoint, which is what
-    // pins the narrow retry — the statuses this literal reads out of
-    // `error.message` were captured from pnpm 10.33.0 answering 503 and 429.
+    // pull request authored is ever EXECUTED: the pull_request trigger makes the
+    // checkout the pull request, so a `node scripts/…` step or a checkout
+    // `ref:` would cross that line, and corepack would otherwise download the
+    // pnpm the pull request's own `packageManager` names. Both steps' `env`
+    // blocks are pinned here for the same reason — they are what holds those
+    // two inputs — and tests/ci/dependency-audit-retry.test.ts denies all four
+    // by name and asserts the env values.
+    //
+    // On pinning this 78-line script verbatim, at roughly eight times the
+    // largest run string this file pinned before it: the duplication stands,
+    // and the reason is the opposite of redundancy. When this copy was written
+    // it was the ONLY thing holding seven classifier mutations dead —
+    // `every`/`some` on the status set, the `< 600` bound, the exit-0 conjunct
+    // on the clean verdict, the retry budget, the sleep — because the executing
+    // suite had no fixture for a split endpoint answer, an out-of-range status,
+    // or an empty advisories map with a nonzero exit. Those fixtures now exist,
+    // so the string is a second line of defence rather than the only one, and
+    // it is worth keeping anyway because it fails for a different reason than
+    // the behavioural suite: exact equality makes drift impossible, so the only
+    // cost of the copy is a partial edit leaving one side stale, which fails
+    // loudly and immediately instead of quietly.
     expect(workflow.jobs.audit).toEqual({
       "runs-on": "ubuntu-latest",
       "timeout-minutes": 10,
@@ -642,10 +655,12 @@ fi
         },
         {
           name: "Enable the pinned package manager",
+          env: { COREPACK_ENABLE_PROJECT_SPEC: "0" },
           run: "corepack enable\ncorepack install --global pnpm@10.33.0\npnpm --version\n",
         },
         {
           name: "Audit lockfile advisories",
+          env: { npm_config_registry: "https://registry.npmjs.org/" },
           run: `set -uo pipefail
 attempts=3
 delay="\${DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS:-30}"
