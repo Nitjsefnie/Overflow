@@ -777,11 +777,12 @@ fi
       }
     }
 
-    // The reason a split bump can never go green: `analyze` refuses to run when
-    // its version differs from `init`'s, and `upload-sarif` must match too. All
-    // three sub-actions must therefore ride in ONE version group together, so
-    // assert they resolve to the same single group — the per-action uniqueness
-    // above alone would pass with three separate codeql-only groups.
+    // The trio is pinned to one SHA and used as a matched set — init and analyze
+    // are two steps of the same analyze job in code-scanning.yml — so a split
+    // bump could leave one job running two versions of the same action against
+    // each other. All three sub-actions must therefore ride in ONE version group
+    // together; the per-action uniqueness above alone would pass with three
+    // separate codeql-only groups.
     const codeqlTrio = [...actionNames].filter((name) =>
       name.startsWith("github/codeql-action/")).sort();
     expect(codeqlTrio).toEqual([

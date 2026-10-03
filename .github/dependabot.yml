@@ -44,15 +44,17 @@ updates:
   # which stay SHA-pinned by maintainer decision). Every action therefore
   # travels together in one grouped pull request per week, majors included —
   # the old minor-and-patch group left a codeql-action v4 to v5 bump as one pull
-  # request per `uses:` line, and the three codeql-action sub-actions (init,
-  # analyze, upload-sarif) must sit on one version: analyze refuses to run when
-  # its version differs from init's, so a split bump is a pull request that can
-  # never go green. Neither group narrows itself with update-types, and
-  # tests/api/ci-workflows.test.ts resolves the patterns against the workflows'
-  # real `uses:` inventory so a group cannot quietly stop covering one. A group
-  # without applies-to covers version updates only and security updates are
-  # enabled here, so the second group keeps a single-action advisory from
-  # opening a single-package pull request. That weekly grouped pull request
+  # request per `uses:` line. That matters here because the three codeql-action
+  # sub-actions (init, analyze, upload-sarif) are pinned to one SHA and used as a
+  # matched set — init and analyze are two steps of the same analyze job in
+  # code-scanning.yml — so a split major bump could leave one job running two
+  # versions of the same action against each other. One group carrying every
+  # action removes that hazard. Neither group narrows itself with update-types,
+  # and tests/api/ci-workflows.test.ts resolves the patterns against the
+  # workflows' real `uses:` inventory so a group cannot quietly stop covering
+  # one. A group without applies-to covers version updates only and security
+  # updates are enabled here, so the second group keeps a single-action advisory
+  # from opening a single-package pull request. That weekly grouped pull request
   # lands red on arrival by design: tests/api/ci-workflows.test.ts pins those
   # action SHAs, so the handler completes the second edit (the test pins) before
   # merging — CONTRIBUTING.md's two-edit regime for a workflow change.
