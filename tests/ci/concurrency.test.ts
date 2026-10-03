@@ -462,6 +462,45 @@ describe("every workflow's top-level keys", () => {
         "through is silent. Remove the entry, or land the workflow that carries it.",
     ).toEqual([...ALLOWED_TOP_LEVEL_KEYS].sort());
   });
+
+  it("never allows `env`, because allowing it reopens the hole it was absent for", () => {
+    // The escape this denies is a two-file edit that nothing else catches. Plant
+    // an unpinned top-level `env:` block in any workflow, add "env" to
+    // ALLOWED_TOP_LEVEL_KEYS, and every other assertion here passes: the key
+    // check sees a key it has been told is fine, and the rot guard above passes
+    // too, because the planted block now genuinely ships one. Both files are
+    // edited together, so neither suite's count moves and nothing is red. This
+    // was measured, not reasoned: that plant passed the suite whole before this
+    // assertion existed.
+    //
+    // `env` is a legitimate GitHub Actions key and a workflow may pin one, at the
+    // job level or at the top. That is exactly why the mechanism is an allowlist
+    // and not a denylist — a denylist would have had to name `env` to catch it,
+    // and the next unasserted key nobody had thought of would have passed
+    // instead. A denylist cannot protect a key it has not been told about; an
+    // allowlist can, and that is the property worth keeping. This assertion is
+    // the cost of that choice made explicit at the one entry where the
+    // allowlist's own weak side is exploitable.
+    //
+    // The other escape stays open by design and is a reviewer's job, not this
+    // suite's: allowlisting some OTHER key and planting it together is equally
+    // silent. No assertion inside an allowlist can tell a deliberate widening
+    // from a silencing one — the key set is the specification, so editing it is
+    // always a visible diff in a file a reviewer reads.
+    expect(
+      ALLOWED_TOP_LEVEL_KEYS,
+      "`env` must never appear in ALLOWED_TOP_LEVEL_KEYS. It is absent on purpose, and adding " +
+        "it here reopens exactly the hole it is absent for: a top-level `env:` block planting an " +
+        "unpinned `${{ github.repository }}` then passes this file whole, and passes actionlint and " +
+        "zizmor as well, because a key the suite has agreed to allow is a key the suite no longer " +
+        "looks at. The rot guard above does not catch that edit either, since the planted block " +
+        "makes the entry genuinely spent. The allowlist is the mechanism precisely because a " +
+        "denylist would have to name `env` here to catch this, and would then pass the next " +
+        "unasserted key nobody had thought of. If you are adding a legitimate top-level key, it is " +
+        "not `env` and the fix is to assert the key, not to delete it from your workflow — a " +
+        "per-job `env:` block keeps the guarantee while scoping it to the job that reads it.",
+    ).not.toContain("env");
+  });
 });
 
 describe("every workflow's concurrency block", () => {
