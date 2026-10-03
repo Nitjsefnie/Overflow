@@ -188,13 +188,19 @@ describe("the dependency audit workflow's audit step", () => {
   let steps: Step[] = [];
   let auditSteps: Step[] = [];
   let jobEnv: Record<string, string> | undefined;
+  let workflowEnv: Record<string, string> | undefined;
 
   beforeAll(async () => {
     const workflow = parse(await readFile(resolve(".github/workflows/dependency-audit.yml"), "utf8")) as {
+      env?: Record<string, string>;
       jobs?: { audit?: { env?: Record<string, string>; steps?: Step[] } };
     };
     steps = workflow.jobs?.audit?.steps ?? [];
     jobEnv = workflow.jobs?.audit?.env;
+    // Read, not asserted: Actions merges workflow-level env into every job, so
+    // a pin there is as effective as one on the job and this suite must not
+    // fail a placement that works. The exact shape is the string pin's to own.
+    workflowEnv = workflow.env;
     auditSteps = steps.filter((step) => step.name === "Audit lockfile advisories");
   });
 
@@ -236,7 +242,7 @@ describe("the dependency audit workflow's audit step", () => {
     expect(run).not.toMatch(/\bbash\s+(\.\/)?scripts\//);
   });
 
-  it("binds the pnpm version for the step that runs the audit, not only the step that installs it", () => {
+  it("binds both pull-request-controlled inputs for every step that runs pnpm", () => {
     // `corepack install --global pnpm@10.33.0` sets corepack's DEFAULT and
     // nothing more. When the `pnpm` shim runs, corepack otherwise reads
     // `packageManager` from the nearest `package.json` and downloads THAT
@@ -255,57 +261,66 @@ describe("the dependency audit workflow's audit step", () => {
     //   step 1 with the variable on the step:  pnpm --version -> 10.33.0
     //   step 2 without it:                     pnpm --version -> 9.15.9
     //
-    // So the assertions are on the EFFECTIVE environment of the step that runs
-    // the audit — its own env, falling back to the job's — and separately on
-    // the job, which is what makes the wrong placement impossible rather than
-    // merely absent today.
-    const effective = (step: Step | undefined): string | undefined =>
-      step?.env?.COREPACK_ENABLE_PROJECT_SPEC ?? jobEnv?.COREPACK_ENABLE_PROJECT_SPEC;
+    // The second pin is the same class of thing about a different input: pnpm
+    // reads `.npmrc` from the working directory, and a `registry=` there
+    // redirects the advisory endpoint, so a pull request touching `.npmrc` AND
+    // `package.json` could have the audit answer "no known vulnerabilities".
+    // `.npmrc` is not in the path filter so that pair does not trigger on its
+    // own, but this workflow already runs on the `package.json` half of it.
+    // Measured on pnpm 10.33.0: a project `.npmrc` does redirect `pnpm config
+    // get registry`, and `npm_config_registry` outranks it.
+    //
+    // Both pins are swept over every step that runs pnpm, from ONE table. They
+    // were placed on mirrored steps by accident once — one right, one wrong —
+    // and it was the ASYMMETRY that let it stand: one pin was asserted, the
+    // other was not. A table means a pin cannot be added, removed or given a
+    // different value without the sweep noticing, and no second pin can slip in
+    // beside it unasserted.
+    const PINS: Record<string, string> = {
+      COREPACK_ENABLE_PROJECT_SPEC: "0",
+      npm_config_registry: "https://registry.npmjs.org/",
+    };
 
-    expect(
-      effective(auditSteps[0]),
-      "the step that runs `pnpm audit` must resolve pnpm under COREPACK_ENABLE_PROJECT_SPEC=0. An env " +
-        "block on the step that INSTALLS pnpm does not reach it: Actions env is step-scoped, so that " +
-        "placement leaves the audit running whatever version the pull request's packageManager names",
-    ).toBe("0");
-    expect(
-      jobEnv?.COREPACK_ENABLE_PROJECT_SPEC,
-      "the pin belongs on the job, where it is in effect for every step that runs pnpm including one " +
-        "added later. On a step it is placeable in exactly the wrong spot, which is what happened once",
-    ).toBe("0");
+    // Actions resolves a step's environment as workflow, then job, then the
+    // step's own block. Any of the three levels satisfies the requirement, so
+    // this asserts the PROPERTY — every step that runs pnpm resolves these
+    // inputs from the workflow — rather than a particular level. Asserting a
+    // level instead is what made an earlier version of this message claim a
+    // property that an equally effective placement also had.
+    const effective = (step: Step | undefined, key: string): string | undefined =>
+      step?.env?.[key] ?? jobEnv?.[key] ?? workflowEnv?.[key];
 
-    // And no step may shadow it, in either direction. A step-level `env` that
-    // re-set the variable would win over the job's for that step alone.
+    // The step the finding was about, named on its own so a regression there
+    // fails with a message about the audit rather than about a sweep.
+    for (const [key, value] of Object.entries(PINS)) {
+      expect(
+        effective(auditSteps[0], key),
+        `the step that runs \`pnpm audit\` must resolve ${key} from the workflow. An env block on the ` +
+          "step that INSTALLS pnpm does not reach it: Actions env is step-scoped, so that placement " +
+          "leaves the audit reading whatever the pull request's own package.json and .npmrc name",
+      ).toBe(value);
+    }
+
+    // And no step may shadow either pin, in either direction — a step-level
+    // `env` that re-set one would win over the job's for that step alone. The
+    // set is every step whose script mentions pnpm, which over-includes the
+    // install step: a step that cannot resolve a registry today may be the one
+    // that can after an edit, and a pin that only covers the steps that exist
+    // today is the pin that will be forgotten.
     const pnpmSteps = steps.filter((step) => /\bpnpm\b/.test(step.run ?? ""));
     expect(
       pnpmSteps.length,
-      "this assertion is vacuous if fewer than two steps run pnpm — the install step and the audit step",
+      "this sweep is vacuous if fewer than two steps run pnpm — the install step and the audit step",
     ).toBeGreaterThan(1);
     for (const step of pnpmSteps) {
-      expect(
-        step.env?.COREPACK_ENABLE_PROJECT_SPEC ?? jobEnv?.COREPACK_ENABLE_PROJECT_SPEC,
-        `step "${step.name ?? step.uses}" runs pnpm and must resolve it under the job's pin`,
-      ).toBe("0");
+      for (const [key, value] of Object.entries(PINS)) {
+        expect(
+          effective(step, key),
+          `step "${step.name ?? step.uses}" runs pnpm and must resolve ${key} from the workflow, ` +
+            "not from a value its own env block shadows",
+        ).toBe(value);
+      }
     }
-  });
-
-  it("reaches the public advisory endpoint, not one the pull request's .npmrc names", () => {
-    // pnpm reads `.npmrc` from the working directory, so a pull request
-    // touching `.npmrc` AND `package.json` could point the audit at a registry
-    // it controls and have the audit answer "no known vulnerabilities".
-    // `.npmrc` is not in the path filter, so that combination does not trigger
-    // on its own — but this workflow already runs on the `package.json` half of
-    // it. Measured on pnpm 10.33.0: a project `.npmrc` carrying `registry=`
-    // does redirect `pnpm config get registry`, and `npm_config_registry` in the
-    // environment outranks it. corepack does not read `.npmrc` at all, so the
-    // audit step is the only one carrying this exposure — but it is pinned at
-    // job level beside the pnpm pin, because a variable that has to be
-    // remembered per step is a variable that will eventually be forgotten.
-    expect(
-      auditSteps[0]?.env?.npm_config_registry ?? jobEnv?.npm_config_registry,
-      "the audit must resolve the registry from this workflow, because a pull-request-authored .npmrc " +
-        "in the working directory can otherwise redirect the advisory endpoint and turn a red signal green",
-    ).toBe("https://registry.npmjs.org/");
   });
 
   it("reads the audit's own output rather than a report file a pull request could stage", () => {
@@ -483,19 +498,25 @@ describe("the dependency audit workflow's audit step", () => {
       // run time by the classifier, in the same sense as the `not.toContain`
       // checks below and above it; the repository's ban is on matching page
       // copy or a comment's wording in a source file.
+      // Matched on the word alone. An earlier version of this asserted
+      // `": unreachable —"`, which copied the colon and em dash out of the echo
+      // above, so reformatting that echo — changing no verdict — turned this
+      // red for an unrelated reason. The word is the contract; its punctuation
+      // is not.
       const forbidden = runStep([FORBIDDEN], { delaySeconds: RETRY_DELAY });
-      expect(forbidden.stdout).toContain(": unreachable —");
-      expect(forbidden.stdout).not.toContain(": unreadable —");
+      expect(forbidden.stdout).toMatch(/\bunreachable\b/);
+      expect(forbidden.stdout).not.toMatch(/\bunreadable\b/);
 
       const refused = runStep([REFUSED], { delaySeconds: RETRY_DELAY });
-      expect(refused.stdout).toContain(": unreachable —");
+      expect(refused.stdout).toMatch(/\bunreachable\b/);
 
-      // All three sites the `unreadable` label is emitted from, so a partial
-      // swap cannot hide behind the others.
+      // Both sites the `unreadable` label is emitted from, plus the
+      // `unreachable` site, so every label in the classifier is covered and a
+      // partial swap cannot hide behind the others.
       for (const outcome of [UNREADABLE, NO_ADVISORIES_FIELD, UNTRUSTED]) {
         const result = runStep([outcome], { delaySeconds: RETRY_DELAY });
-        expect(result.stdout).toContain(": unreadable —");
-        expect(result.stdout).not.toContain(": unreachable —");
+        expect(result.stdout).toMatch(/\bunreadable\b/);
+        expect(result.stdout).not.toMatch(/\bunreachable\b/);
       }
     });
 
