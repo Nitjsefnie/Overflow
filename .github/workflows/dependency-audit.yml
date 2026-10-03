@@ -12,25 +12,27 @@ name: dependency audit
 #   - the SHA-pinned `actions/checkout` and `actions/setup-node`, with no
 #     `ref:` and no `repository:` taken from the event;
 #   - `corepack enable`, `corepack install --global pnpm@10.33.0` and
-#     `pnpm --version`, with COREPACK_ENABLE_PROJECT_SPEC=0 so the pull
-#     request's own `packageManager` cannot choose the pnpm that runs;
+#     `pnpm --version`, and later this file's `pnpm audit` — both under the
+#     JOB-level env below, which is what stops the pull request's own
+#     `packageManager` choosing the pnpm that either of them runs;
 #   - this file's run script, and nothing else — no install, no build, no
 #     module out of the checked-out tree. That is why the classifier below is a
 #     run-script step rather than `scripts/dependency-audit.ts`:
 #     `node scripts/anything.ts` would execute the pull request's copy of it.
 #
 # What it READS as data: pnpm-lock.yaml, package.json, and whatever `.npmrc`
-# the pull request carries — the last neutralised by pinning
-# npm_config_registry on the audit step, because a project `.npmrc` can point
-# the advisory endpoint at a registry the pull request controls. The
-# permissions block stays at `contents: read`, which is all a fork run has.
+# the pull request carries — the last neutralised by the same job-level env,
+# because a project `.npmrc` can point the advisory endpoint at a registry the
+# pull request controls. The permissions block stays at `contents: read`, which
+# is all a fork run has.
 #
 # WHY THE OUTPUT IS MACHINE-READ. Captured against pnpm 10.33.0 — the version
-# the corepack step above is made to resolve to — `pnpm audit` exits 1 both when
-# the lockfile carries advisories and when the registry could not answer, so the
-# exit code alone cannot tell a finding from an outage. `pnpm audit --json`
-# tells them apart, and each of these three writes its whole report to stdout
-# with stderr left empty:
+# every step that runs pnpm resolves to under the job-level env below, which is
+# what makes that claim hold rather than merely be written down — `pnpm audit`
+# exits 1 both when the lockfile carries advisories and when the registry could
+# not answer, so the exit code alone cannot tell a finding from an outage.
+# `pnpm audit --json` tells them apart, and each of these three writes its
+# whole report to stdout with stderr left empty:
 #
 #   clean       exit 0   {"advisories": {},      "metadata": {…}}
 #   advisories  exit 1   {"advisories": {"1106913": {…}}, "metadata": {…}}
@@ -135,6 +137,45 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    # JOB level, and that is the whole point. GitHub Actions `env:` is
+    # step-scoped and does not carry forward, so a variable pinned on the step
+    # that INSTALLS pnpm is simply absent from the environment of the step that
+    # EXECUTES `pnpm audit` — which is how an earlier version of this file
+    # shipped a fix that did nothing. Measured on the Node 24.17.0 pinned
+    # below, replaying the two steps as separate processes against a
+    # `packageManager` of `pnpm@9.15.9`:
+    #
+    #   step 1, with this variable on the step:  `pnpm --version` -> 10.33.0
+    #   step 2, without it:                       `pnpm --version` -> 9.15.9
+    #
+    # At job level both variables are in effect for every step in the job,
+    # including a step added later, and there is no step left on which to
+    # forget one.
+    env:
+      # `corepack install --global pnpm@10.33.0` sets corepack's DEFAULT and
+      # nothing more: when the `pnpm` shim runs, corepack otherwise reads
+      # `packageManager` from the nearest package.json and downloads THAT
+      # version. package.json is one of the two files this workflow's path
+      # filter names, so without this the pull request picks the binary and
+      # "verified against pnpm 10.33.0" describes a version it chose.
+      #
+      # This is also the step that runs `pnpm audit`, so the variable has to
+      # reach there and not merely the install step. With it set at job level,
+      # that step resolves a `pnpm@9.15.9` tree to 10.33.0.
+      COREPACK_ENABLE_PROJECT_SPEC: "0"
+      # pnpm reads `.npmrc` from the working directory, and a `registry=` there
+      # redirects the advisory endpoint — a pull request touching both `.npmrc`
+      # and `package.json` could point the audit at a registry it controls and
+      # have the audit answer "no known vulnerabilities". `.npmrc` is not in the
+      # path filter so that combination does not trigger on its own, but this
+      # workflow already runs on the `package.json` half of it. Measured on
+      # pnpm 10.33.0: a project `.npmrc` does redirect `pnpm config get
+      # registry`, and this variable outranks it. corepack does not read
+      # `.npmrc` at all, so the audit step is the only one with this exposure —
+      # at job level it costs the install step nothing.
+      npm_config_registry: "https://registry.npmjs.org/"
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -145,41 +186,22 @@ jobs:
           node-version: "24.17.0"
 
       - name: Enable the pinned package manager
-        env:
-          # `corepack install --global` below sets corepack's DEFAULT and
-          # nothing more: when the `pnpm` shim runs, corepack otherwise reads
-          # `packageManager` from the nearest package.json and downloads THAT
-          # version. package.json is one of the two files this workflow's path
-          # filter names, so without this the pull request picks the binary and
-          # "verified against pnpm 10.33.0" describes a version it chose.
-          # Measured on the Node 24.17.0 pinned below: a `packageManager` of
-          # `pnpm@9.99.99-evil-canary` makes corepack announce a download of
-          # that tarball; with this set the same tree resolves to 10.33.0.
-          COREPACK_ENABLE_PROJECT_SPEC: "0"
         run: |
           corepack enable
           corepack install --global pnpm@10.33.0
           pnpm --version
 
       # Reads pnpm-lock.yaml directly — no pnpm install, no build — and is the
-      # only thing in this workflow that executes. Every run ends in exactly
-      # one of five verdicts: clean, advisories, transient (a 5xx or 429 to
-      # retry), unreachable (an answered or unconnected registry that is not
-      # retryable), and unreadable. The last one fails closed rather than
-      # reading as a clean lockfile, which is the failure mode a detection
-      # signal cannot have.
+      # only step that reads anything the pull request controls other than the
+      # lockfile itself. Every run ends in exactly one of five verdicts: clean,
+      # advisories, transient (a 5xx or 429 to retry), unreachable (an answered
+      # or unconnected registry that is not retryable), and unreadable. The
+      # verdict word is echoed into this step's log, so the last two stay
+      # distinguishable to whoever reads a red run; they share the same arm and
+      # the same exit status, which is asserted too. `unreadable` fails closed
+      # rather than reading as a clean lockfile, which is the failure mode a
+      # detection signal cannot have.
       - name: Audit lockfile advisories
-        env:
-          # pnpm reads `.npmrc` from the working directory, and a `registry=`
-          # there redirects the advisory endpoint — a pull request touching
-          # both `.npmrc` and `package.json` could point the audit at a registry
-          # it controls and have the audit answer "no known vulnerabilities".
-          # `.npmrc` is not in the path filter so that combination does not
-          # trigger on its own, but this workflow already runs on the
-          # `package.json` half of it. Measured on pnpm 10.33.0: a project
-          # `.npmrc` does redirect `pnpm config get registry`, and this
-          # environment variable outranks it.
-          npm_config_registry: "https://registry.npmjs.org/"
         run: |
           set -uo pipefail
           attempts=3

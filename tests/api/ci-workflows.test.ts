@@ -644,6 +644,18 @@ fi
     expect(workflow.jobs.audit).toEqual({
       "runs-on": "ubuntu-latest",
       "timeout-minutes": 10,
+      // The env block is JOB-level and that is load-bearing, not tidiness:
+      // Actions `env:` is step-scoped, so this pair pinned on the step that
+      // INSTALLS pnpm left the step that EXECUTES `pnpm audit` resolving
+      // whatever version the pull request's `packageManager` named. Here it is
+      // in effect for every step that runs pnpm, including one added later, so
+      // there is no step left on which to forget it. The comment in the
+      // workflow records the measurement; this equality is what would have
+      // caught the misplacement.
+      env: {
+        COREPACK_ENABLE_PROJECT_SPEC: "0",
+        npm_config_registry: "https://registry.npmjs.org/",
+      },
       steps: [
         {
           uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
@@ -655,12 +667,10 @@ fi
         },
         {
           name: "Enable the pinned package manager",
-          env: { COREPACK_ENABLE_PROJECT_SPEC: "0" },
           run: "corepack enable\ncorepack install --global pnpm@10.33.0\npnpm --version\n",
         },
         {
           name: "Audit lockfile advisories",
-          env: { npm_config_registry: "https://registry.npmjs.org/" },
           run: `set -uo pipefail
 attempts=3
 delay="\${DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS:-30}"
