@@ -2,13 +2,11 @@
 # Full-history secret scan over this repository, baselined against the
 # committed report of what was already there.
 #
-# WHY SCHEDULED RATHER THAN PULL-REQUEST-REACHABLE. GitHub's push protection
-# and secret scanning gate commits as they arrive, so nothing that reaches a
-# branch today can slip past them unnoticed. What neither of them ever sees is
-# HISTORY: a credential committed before scanning was enabled is still sitting
-# in an old commit, and no amount of push protection retires it. This script
-# is the sweep for exactly that, so it runs on a schedule and on manual
-# dispatch, and nothing else.
+# Runs on every push to main and every pull request, plus a daily sweep and
+# manual dispatch. Full history includes credentials removed from later trees.
+# Under pull_request_target only main's scripts execute: the PR head is fetched
+# as git objects, never checked out or executed. gitleaks reads all fetched refs,
+# and the committed baseline suppresses the known findings in that history.
 #
 # WHY THE VERSION IS PINNED, AND WHY THE SCRIPT REFUSES TO SCAN UNDER ANY
 # OTHER. The scan is only meaningful relative to a baseline, and a baseline is
@@ -55,7 +53,7 @@
 #
 # WHEN THE BASELINE NEEDS A NEW ENTRY. It keys on COMMIT SHA, so editing a file
 # that carries a baselined fixture produces a new finding under a new SHA that
-# the committed baseline cannot suppress, and the next scheduled run exits 1 on
+# the committed baseline cannot suppress, and the next scan exits 1 on
 # a change containing no secret. Add that entry to the existing baseline rather
 # than regenerating the file: a wholesale regeneration would also absorb any
 # genuinely new finding and bury it. Read the diff of old against new baseline,
@@ -67,7 +65,7 @@
 # meaningfully examine, and tests/ci/secret-scan-script.test.ts pins that count as
 # EXPECTED_CHECKABLE_ENTRIES. Bump it in the same commit, having read the
 # baseline diff. Both assertions on that count run at every checkout depth, so
-# they will not wait for the weekly run to tell you.
+# they will not wait for the daily sweep to tell you.
 #
 # ...AND THE OPPOSITE REMEDY, FOR AN ORPHANED ENTRY. A `--rebase` merge
 # re-creates the branch's commits, so a baseline generated while the pre-rebase
@@ -79,7 +77,8 @@
 # "IN NO SHIPPED HISTORY" IS ABOUT THE REF SET, NOT THE OBJECT STORE, and the
 # difference is the whole diagnosis. A merged pull request's head commit, held on
 # `refs/remotes/pr/*` by whatever generated the baseline, is exactly this shape:
-# gitleaks walked `--all` and recorded it, and no checkout fetches `refs/pull/*`.
+# gitleaks walked `--all` and recorded it. Only the PR leg explicitly fetches
+# its own `refs/pull/*` head; other PR refs are outside the scan's reachability roots.
 # Where the object survives locally it is PRESENT AND UNREFERENCED — `git
 # cat-file -e` says fine, `git rev-parse` resolves it, and only `git merge-base
 # --is-ancestor` catches it. So the remedy there is to REMOVE that entry and keep
