@@ -186,6 +186,33 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
    * passing an assertion that never looks.
    */
   queue: unknown;
+  /**
+   * What makes a cancellation acceptable for this workflow, recorded so the
+   * assertion that checks `cancel-in-progress` reads the right rule rather
+   * than one rule applied to two situations. Absent means
+   * `"unreproducible"`.
+   *
+   * - `"unreproducible"` — the run is work nobody re-runs: the first of two
+   *   /claim racers, the run that repairs an already-closed pull request, the
+   *   relay that posts the check-runs. `cancel-in-progress` must be the
+   *   literal `false`.
+   * - `"superseded-attempt"` — the GROUP is scoped to one pull request, so
+   *   every run GitHub cancels (pending by default, running if the flag says
+   *   so) is that same pull request's superseded attempt, and the push that
+   *   superseded it scheduled the replacement. `cancel-in-progress` may then be
+   *   the pull-request event expression, which buys nothing about the bound
+   *   and stops a superseded run accruing minutes.
+   *
+   * The second premise rests on a further fact, and this file asserts it: such
+   * a workflow must not produce a required check. A cancelled run on a
+   * required context is the peer's blocked pull request that `false` exists to
+   * prevent, and "reproducible from the next push" is not a defence — the next
+   * push does not unblock the pull request that is already open. The premise
+   * is also narrower than it looks: it covers cancellation WITHIN one pull
+   * request, not the pending run GitHub cancels in any shared group, which
+   * remains the gap the header describes.
+   */
+  premise?: "unreproducible" | "superseded-attempt";
 }>([
   [
     "claim.yml",
@@ -246,10 +273,11 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     "dependency-audit.yml",
     {
       reason:
-        "This workflow has NO pull_request and NO pull_request_target trigger — it is schedule and workflow_dispatch only — so BOTH arms that would make it unbounded are dead: the pull_request arm of its group always resolves null and falls through to github.ref, and its cancel-in-progress test is never true. The group is therefore already per-ref on a schedule tick, and it never receives the event that would make a repository-level group contend.",
+        "Issue 985 gave this workflow a pull_request trigger, so the arm of its group that used to be dead now fires: on a pull-request event github.event.pull_request.number resolves and the group is dependency-audit-<number> rather than a per-ref fallback. That makes this the SECOND shape of justification in this table, and the difference is the point. Bounding it repository-wide would cap the audit at one run no matter how many pull requests are open, so the open-pull-request count would again decide how quickly an advisory surfaces — the aggregate-spend problem the bound exists to fix. It stays unbounded because its group is scoped to ONE pull request, which is the narrower of the two: a run this workflow cancels is always that same pull request's superseded head, never a peer's, and the push that superseded it scheduled the replacement. That is why cancel-in-progress is the pull-request event expression rather than the literal false the other entries carry — it stops a superseded audit accruing runner minutes for a verdict nobody reads, and on the schedule, push and dispatch legs the expression is false, so the daily tick is never cancelled. The premise holds only while this workflow produces no required check, and this file asserts that: a cancelled run concluding on a required context is a blocked pull request that no later push unblocks. Should the audit ever become merge-blocking, this entry has to be re-decided, and the event expression is the first thing to go.",
       group: "dependency-audit-${{ github.event.pull_request.number || github.ref }}",
       "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
       queue: undefined,
+      premise: "superseded-attempt",
     },
   ],
   [
@@ -266,6 +294,16 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
 
 /** The two events that make a workflow reachable from a fork pull request. */
 const PR_EVENTS = ["pull_request", "pull_request_target"];
+
+/**
+ * An entry's recorded premise, defaulted. A separate function rather than an
+ * `??` at each use so the default lives in one place: the two assertion sites
+ * below must agree on which entries are checked against which rule, and a
+ * default written twice is a default that can drift.
+ */
+function premiseOf(entry: { premise?: "unreproducible" | "superseded-attempt" }): "unreproducible" | "superseded-attempt" {
+  return entry.premise ?? "unreproducible";
+}
 
 /**
  * Group keys that scope a run to one pull request or one ref, not to the
@@ -726,22 +764,80 @@ describe("the workflows left unbounded", () => {
     // prevents cancellation — it does not, for the pending run. It is that each
     // exception's GROUP is scoped to one unit of work, so that the pending run
     // GitHub drops is always that same unit's superseded attempt and a
-    // replacement exists. `cancel-in-progress: false` is a second, independent
-    // part of the same premise: without it the RUNNING attempt is destroyed too,
-    // and for these workflows that is work nobody re-runs — the first of two
-    // /claim racers, the run that repairs an already-closed pull request, the
-    // relay that posts the check-runs. So the flag is asserted because flipping
-    // it makes each stated reason false, not because it is what the reason is
-    // about.
+    // replacement exists. What that premise licenses for `cancel-in-progress`
+    // depends on the unit, and the entry records which kind it is rather than
+    // leaving one rule to cover both.
+    //
+    // `unreproducible` (the default): the unit's work is not re-run by
+    // anything — the first of two /claim racers, the run that repairs an
+    // already-closed pull request, the relay that posts the check-runs. The
+    // RUNNING attempt is destroyed too if the flag says so, so the flag must be
+    // the literal `false`. Flipping it makes each stated reason false, which is
+    // why it is asserted at all.
+    //
+    // `superseded-attempt`: the unit is one pull request, so a cancelled run is
+    // always that pull request's own superseded head and the replacement is the
+    // push that superseded it. The pull-request event expression is then
+    // correct and is what the workflow ships; what must hold instead is that
+    // the group really is keyed on the pull request, that the workflow really
+    // is reachable from one, and that a cancelled run concludes nothing a
+    // merge waits on.
+    const required = new Set(requiredCheckWorkflows());
     for (const [name, entry] of UNBOUNDED_BY_CHOICE) {
       if (!isPullRequestReachable(workflows.get(name)!.on)) continue;
+      const shipped = workflows.get(name)!.concurrency?.["cancel-in-progress"];
+      expect(entry.reason).toMatch(/cancel/i);
+      if (premiseOf(entry) === "superseded-attempt") {
+        expect(
+          isPullRequestReachable(workflows.get(name)!.on),
+          `${name} claims cancellation is safe because its group is scoped to one pull request, but ` +
+            "the workflow is not reachable from a pull request, so the group it ships is per-ref and " +
+            "the premise describes a run that never arrives",
+        ).toBe(true);
+        expect(
+          unboundedGroupKeysIn(String(entry.group)),
+          `${name} claims cancellation is safe because every run its group holds is one pull ` +
+            `request's superseded attempt, but its group is not keyed on a pull request: ${entry.group}`,
+        ).toContain("github.event.pull_request.number");
+        expect(
+          shipped,
+          `${name} may cancel in flight only on a pull-request event, where its group is scoped to ` +
+            "that one pull request and the push that superseded the run scheduled its replacement. " +
+            "The literal true would also cancel the daily tick and a push run; an expression naming " +
+            "another event would cancel work no push supersedes.",
+        ).toBe("${{ github.event_name == 'pull_request' }}");
+        expect(
+          required.has(name),
+          `${name} may let a superseded pull request's run conclude cancelled only because nothing ` +
+            "waits on that conclusion. Naming it in .github/required-checks.json makes it merge-blocking, " +
+            "and a cancelled run on a required context blocks the pull request no later push unblocks — " +
+            "re-decide this entry before that edit.",
+        ).toBe(false);
+        expect(
+          entry.reason,
+          `${name}'s reason has to say the cancelled run is superseded and replaced, because that is ` +
+            "the whole licence for an event expression here",
+        ).toMatch(/superseded|replacement|next push/i);
+        continue;
+      }
       expect(
-        workflows.get(name)!.concurrency?.["cancel-in-progress"],
+        shipped,
         `${name} is listed as unbounded on a reason about work a cancellation would lose, but its ` +
           "cancel-in-progress is not the literal false that reason depends on — either it now " +
           "cancels, or it has gained a pull request trigger its reason says it does not receive",
       ).toBe(false);
-      expect(entry.reason).toMatch(/cancel/i);
+    }
+  });
+
+  it("records a premise only this table's own vocabulary names", () => {
+    // The premise field is read by the assertion above, so a typo in it would
+    // silently take the `unreproducible` branch and pass against a workflow
+    // that cancels. Asserting the closed vocabulary here names the shape.
+    for (const [name, entry] of UNBOUNDED_BY_CHOICE) {
+      expect(
+        entry.premise ?? "unreproducible",
+        `${name}'s recorded premise is not one this suite knows how to check`,
+      ).toMatch(/^(unreproducible|superseded-attempt)$/);
     }
   });
 

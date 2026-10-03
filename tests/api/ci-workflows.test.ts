@@ -586,10 +586,28 @@ fi
     });
   });
 
-  it("parses a scheduled lockfile audit whose gate is the bare audit command's exit code", async () => {
+  it("parses a lockfile audit that fires on a lockfile change, daily, and on demand", async () => {
     const workflow = await readWorkflow("dependency-audit.yml");
+    // The whole `on`, because the shape IS the fix (issue 985): the audit used
+    // to run on `37 6 * * 1` and dispatch only, so a pull request adding a
+    // vulnerable package merged unaudited and an advisory against an unchanged
+    // pin went unreported for up to a week. The two path filters name the
+    // lockfile and the manifest and NOTHING else — this workflow must not
+    // spend a runner on an unrelated source edit — and `branches: [main]` on
+    // both legs matches ci.yml, actionlint.yml, ratchet-guard.yml and
+    // code-scanning.yml, so a feature branch's own pushes are covered by its
+    // pull_request run rather than by a second one. The pull-request leg
+    // carries the siblings' explicit `opened`/`synchronize`/`reopened`: with a
+    // path filter an `edited` event has nothing new to audit, and without one
+    // a retarget to main would carry a stale green.
     expect(workflow.on).toEqual({
-      schedule: [{ cron: "37 6 * * 1" }],
+      push: { branches: ["main"], paths: ["package.json", "pnpm-lock.yaml"] },
+      pull_request: {
+        branches: ["main"],
+        types: ["opened", "synchronize", "reopened"],
+        paths: ["package.json", "pnpm-lock.yaml"],
+      },
+      schedule: [{ cron: "37 6 * * *" }],
       workflow_dispatch: null,
     });
     expect(workflow.permissions).toEqual({ contents: "read" });
@@ -600,10 +618,16 @@ fi
 
     // The whole job, exactly, in the claim/pr-gate style: any extra key — a
     // step-level continue-on-error tolerating a red audit, or a job-level
-    // permissions override — fails this equality. The gate is the audit
-    // command's own exit code, exactly as verified against pnpm 10.33.0:
-    // bare `pnpm audit` exits 1 iff advisories exist. No install and no
-    // build precede it — pnpm audit reads pnpm-lock.yaml directly.
+    // permissions override — fails this equality. No install and no build
+    // precede the audit, so pnpm reads pnpm-lock.yaml directly and nothing a
+    // pull request authored is ever executed (the pull_request trigger makes
+    // the checkout the pull request, so a `node scripts/…` step or a checkout
+    // `ref:` would cross that line — tests/ci/dependency-audit-retry.test.ts
+    // denies both by name). The step's own script is the gate and is pinned
+    // here verbatim; tests/ci/dependency-audit-retry.test.ts then EXECUTES
+    // that verbatim text against a scripted advisory endpoint, which is what
+    // pins the narrow retry — the statuses this literal reads out of
+    // `error.message` were captured from pnpm 10.33.0 answering 503 and 429.
     expect(workflow.jobs.audit).toEqual({
       "runs-on": "ubuntu-latest",
       "timeout-minutes": 10,
@@ -622,7 +646,85 @@ fi
         },
         {
           name: "Audit lockfile advisories",
-          run: "pnpm audit",
+          run: `set -uo pipefail
+attempts=3
+delay="\${DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS:-30}"
+for attempt in $(seq 1 "$attempts"); do
+  code=0
+  pnpm audit --json > audit.json 2> audit.err || code=$?
+  result=$(AUDIT_EXIT="$code" node -e '
+const fs = require("node:fs");
+let report;
+try {
+  report = JSON.parse(fs.readFileSync("audit.json", "utf8"));
+} catch {
+  console.log("unreadable|the audit produced no JSON report");
+  process.exit(0);
+}
+if (report && report.error) {
+  const statuses = [...String(report.error.message ?? "").matchAll(/responded with (\\d{3})/g)]
+    .map((match) => Number(match[1]));
+  const transient = statuses.length > 0
+    && statuses.every((status) => status === 429 || (status >= 500 && status < 600));
+  const first = (message) => String(message).split("\\n")[0];
+  console.log(transient
+    ? "transient|" + first("the advisory endpoint answered " + statuses.join(" and "))
+    : "unreachable|" + first(report.error.message ?? "the advisory endpoint did not answer"));
+  process.exit(0);
+}
+const advisories = report && report.advisories ? Object.keys(report.advisories).length : -1;
+if (advisories > 0) {
+  const counts = report.metadata?.vulnerabilities ?? {};
+  const summary = ["critical", "high", "moderate", "low", "info"]
+    .map((severity) => (counts[severity] ?? 0) + " " + severity)
+    .filter((entry) => !entry.startsWith("0 "))
+    .join(", ");
+  console.log("advisories|" + advisories + " advisories (" + (summary || "severities unreported") + ")");
+  process.exit(0);
+}
+console.log(advisories === 0 && process.env.AUDIT_EXIT === "0"
+  ? "clean|no known vulnerabilities found"
+  : "unreadable|the audit report carried no advisories field and exited " + process.env.AUDIT_EXIT);
+')
+  verdict="\${result%%|*}"
+  detail="\${result#*|}"
+  echo "attempt $attempt of $attempts, pnpm audit --json exited $code: $verdict — $detail"
+  case "$verdict" in
+    clean)
+      echo "$detail"
+      exit 0
+      ;;
+    advisories)
+      echo "$detail"
+      echo "advisory ids and patched versions:"
+      node -e '
+const report = JSON.parse(require("node:fs").readFileSync("audit.json", "utf8"));
+for (const advisory of Object.values(report.advisories ?? {})) {
+  console.log("  " + advisory.module_name + " " + advisory.severity + ": " + advisory.title
+    + " (vulnerable " + advisory.vulnerable_versions + ", patched " + advisory.patched_versions + ")");
+}
+'
+      exit 1
+      ;;
+    transient)
+      cat audit.err
+      if [ "$attempt" -lt "$attempts" ]; then
+        echo "$detail — a registry outage, not a finding; retrying"
+        sleep "$delay"
+        continue
+      fi
+      echo "$detail — the advisory endpoint was still unavailable after $attempts attempts"
+      exit 1
+      ;;
+    *)
+      cat audit.err
+      echo "$detail — the lockfile was NOT audited, so this run reports nothing about it"
+      exit 1
+      ;;
+  esac
+done
+exit 1
+`,
         },
       ],
     });
