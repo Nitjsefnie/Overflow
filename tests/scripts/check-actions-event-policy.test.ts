@@ -161,6 +161,23 @@ describe("Actions event policy classification", () => {
     expect(result.reason).toContain("~ALL");
   });
 
+  it("passes when an active policy's conditions omit workflow_path entirely", () => {
+    const result = classify(listResponse(1), [
+      detailResponse({ conditions: {} }),
+    ]);
+
+    expect(result.pass).toBe(true);
+    expect(result.reason).toContain("6375");
+  });
+
+  it("fails when the detail body's id does not match the listed policy id", () => {
+    const result = classify(listResponse(1), [detailResponse({ id: 999 })]);
+
+    expect(result.pass).toBe(false);
+    expect(result.reason).toMatch(/does not match the list/);
+    expect(result.reason).toContain("6375");
+  });
+
   it("fails when a policy excludes any workflow despite ~ALL targeting", () => {
     const result = classify(
       listResponse(1),
