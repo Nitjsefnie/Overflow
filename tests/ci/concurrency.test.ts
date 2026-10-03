@@ -124,12 +124,6 @@ const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = 
     group: "ratchet-guard-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
   },
-  // PR scans share the repository slot; main pushes keep their SHA group,
-  // and no peer arrival cancels an in-flight findings scan.
-  "secret-scan.yml": {
-    group: "secret-scan-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": false,
-  },
   "code-scanning.yml": {
     group: "code-scanning-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
@@ -234,6 +228,16 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
         "The report posts a comment the author reads. Cancelling a queued run loses the report for that head commit, and the next run may not come.",
       group:
         "coverage-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
+      "cancel-in-progress": false,
+      queue: undefined,
+    },
+  ],
+  [
+    "secret-scan.yml",
+    {
+      reason:
+        "Every pull request must be scanned: per-PR groups let a newer run supersede only its own PR's pending scan, so another PR cannot cancel it. Push, workflow_dispatch and schedule runs group per SHA so different merged SHAs cannot cancel each other's pending scans. cancel-in-progress false preserves every in-flight full-history detection record.",
+      group: "secret-scan-${{ github.event.pull_request.number || github.sha }}",
       "cancel-in-progress": false,
       queue: undefined,
     },
