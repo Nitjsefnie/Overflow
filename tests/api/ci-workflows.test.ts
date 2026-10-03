@@ -81,9 +81,9 @@ describe("GitHub Actions release gates", () => {
           + "    || contains(github.event.comment.body, '/release'))",
         "runs-on": "ubuntu-latest",
         "timeout-minutes": 5,
-        permissions: { issues: "write" },
+        permissions: { issues: "write", "pull-requests": "write" },
         steps: [{
-          uses: "Nitjsefnie-Actions/claim@cf2aaae56eb3bb6c655b8c4bc35906dafc77a63e",
+          uses: "Nitjsefnie-Actions/claim@0c79a0325d8ab789a60c2eeaf751690d2875c39c",
           with: {
             "max-claims": "read=2, triage=4, write=6, maintain=10, admin=-1",
             expire: "7",
@@ -143,7 +143,7 @@ describe("GitHub Actions release gates", () => {
 
   it("keeps the write permission on the job that issues the assignment", async () => {
     const job = (await readWorkflow("claim.yml")).jobs.claim!;
-    expect(job.permissions).toEqual({ issues: "write" });
+    expect(job.permissions).toEqual({ issues: "write", "pull-requests": "write" });
   });
 
   it("checks admission through the reviewed shared action without a consumer checkout", async () => {
