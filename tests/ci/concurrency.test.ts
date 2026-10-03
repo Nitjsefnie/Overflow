@@ -90,6 +90,7 @@ import { parse } from "yaml";
 type Workflow = {
   on: unknown;
   concurrency?: { group?: unknown; "cancel-in-progress"?: unknown; queue?: unknown };
+  jobs?: Record<string, unknown>;
 };
 
 /**
@@ -435,6 +436,26 @@ const ALLOWED_TOP_LEVEL_KEYS = [
   "permissions",
 ];
 
+/**
+ * Exact job-name sets for every workflow. Equality in the assertion below
+ * denies both a job the workflow does not carry and a workflow job absent from
+ * this table. The independent directory guard denies stale workflow rows and
+ * requires every file in `.github/workflows/` to have a row.
+ */
+const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
+  "actionlint.yml": ["actionlint"],
+  "ci.yml": ["calibrate", "verify"],
+  "claim.yml": ["claim"],
+  "code-scanning.yml": ["analyze"],
+  "coverage-comment.yml": ["comment"],
+  "dependency-audit.yml": ["audit"],
+  "ledger-relay.yml": ["relay-required-checks"],
+  "pr-gate.yml": ["gate"],
+  "ratchet-guard.yml": ["ratchet-guard"],
+  "scorecard.yml": ["analysis"],
+  "secret-scan.yml": ["secret-scan"],
+};
+
 const workflows = new Map<string, Workflow>();
 
 beforeAll(async () => {
@@ -576,6 +597,78 @@ describe("every workflow's top-level keys", () => {
         "not `env` and the fix is to assert the key, not to delete it from your workflow — a " +
         "per-job `env:` block keeps the guarantee while scoping it to the job that reads it.",
     ).not.toContain("env");
+  });
+});
+
+function collectWorkflowJobChecks() {
+  const checkedNames: string[] = [];
+  const offenders: string[] = [];
+  for (const [name, workflow] of workflows) {
+    checkedNames.push(name);
+    const actual = Object.keys(workflow.jobs ?? {}).sort();
+    const expected = [...(ALLOWED_JOB_NAMES[name] ?? [])].sort();
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      offenders.push(`${name}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+    }
+  }
+
+  return { checkedNames, offenders };
+}
+
+describe("every workflow's jobs", () => {
+  it("enumerates each workflow's complete job-name set", () => {
+    const { offenders } = collectWorkflowJobChecks();
+    expect(
+      offenders.join("; ") || "(none)",
+      "these workflows do not carry exactly the job names in ALLOWED_JOB_NAMES: " +
+        (offenders.join("; ") || "(none)"),
+    ).toBe("(none)");
+  });
+
+  it("decides every workflow in the directory", async () => {
+    // checkedNames comes from the loop that makes the exact job comparison.
+    // The expected side re-reads the directory. Comparing that read to a
+    // second workflows.keys() list would pass if the jobs loop stopped running.
+    // The table-name comparisons also name missing or stale ALLOWED_JOB_NAMES
+    // rows; exact job-set equality catches a table job absent from its workflow.
+    const directory = resolve(".github/workflows");
+    const directoryNames = (await readdir(directory))
+      .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
+      .sort();
+    const { checkedNames } = collectWorkflowJobChecks();
+    const sortedCheckedNames = [...checkedNames].sort();
+    const loadedNames = [...workflows.keys()].sort();
+    const tableNames = Object.keys(ALLOWED_JOB_NAMES).sort();
+    const offenders = [
+      ...directoryNames
+        .filter((name) => !Object.hasOwn(ALLOWED_JOB_NAMES, name))
+        .map((name) => `${name} is in .github/workflows but has no ALLOWED_JOB_NAMES entry`),
+      ...tableNames
+        .filter((name) => !directoryNames.includes(name))
+        .map((name) => `${name} is in ALLOWED_JOB_NAMES but absent from .github/workflows`),
+      ...directoryNames
+        .filter((name) => !workflows.has(name))
+        .map((name) => `${name} is in .github/workflows but absent from the workflows Map`),
+      ...loadedNames
+        .filter((name) => !directoryNames.includes(name))
+        .map((name) => `${name} is in the workflows Map but absent from .github/workflows`),
+      ...directoryNames
+        .filter((name) => !checkedNames.includes(name))
+        .map((name) => `${name} is in .github/workflows but was not checked by the jobs assertion`),
+      ...checkedNames
+        .filter((name) => !directoryNames.includes(name))
+        .map((name) => `${name} was checked by the jobs assertion but is absent from .github/workflows`),
+    ];
+
+    expect(
+      offenders.join("; ") || "(none)",
+      "every workflow's jobs must be decided by ALLOWED_JOB_NAMES and loaded from the directory: " +
+        (offenders.join("; ") || "(none)"),
+    ).toBe("(none)");
+    expect(
+      sortedCheckedNames,
+      "the workflows actually checked by the jobs assertion must match a fresh directory read",
+    ).toEqual(directoryNames);
   });
 });
 
