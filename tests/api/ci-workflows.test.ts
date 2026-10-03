@@ -898,11 +898,13 @@ fi
    *    or branch ref moves under the workflow, so the action that produced a
    *    Security-tab finding is not the one that was reviewed. A substitution at
    *    a VALID digest is the shape the digest regex cannot see.
-   * 8. **A key nothing reads.** Every assertion in this test reads a key this
+   * 8. **A key nobody reads.** Every assertion in this test reads a key this
    *    workflow is expected to carry, so a key they do NOT read is a hole
-   *    rather than a coverage gap. The top-level key-set equality is what
-   *    closes it; before that equality existed, an unpinned top-level `env:`
-   *    block survived this entire test, and actionlint and zizmor with it.
+   *    rather than a coverage gap — and the same is true one level down of a
+   *    key that IS read. Both of these shipped and both read green under
+   *    actionlint and zizmor: an unpinned top-level `env:` block, and a second
+   *    job carrying `contents: write` beside the one this suite pins. The two
+   *    key-set equalities are what close them.
    * 9. **A run that never ends.** With no `timeout-minutes` a hung analysis
    *    holds a runner and concludes nothing at all.
    * 10. **A gate that is not a gate.** Promoting `scorecard` into
@@ -954,10 +956,22 @@ fi
       "scorecard.yml's job must skip forks: a fork run publishes findings for a tree this " +
         "repository is not responsible for, and a skipped job is indistinguishable from a green one",
     ).toContain("!github.event.repository.fork");
+    // This one pins the EXPRESSION, not the rule, and the message says so on
+    // purpose. `github.ref_name == github.event.repository.default_branch` is a
+    // semantically equivalent spelling of the same guard, and rewriting to it
+    // turns this red without weakening anything — so a message claiming the
+    // workflow had stopped default-branch-only would be stating a falsehood
+    // about a refactor that did not happen. The whole-job equality below pins
+    // the same string verbatim, exactly as the sibling CodeQL and
+    // dependency-audit tests do; amending the expression is therefore a
+    // coordinated edit to both, not a rule that was broken.
     expect(
       analysis.if,
-      "scorecard.yml's job must only run on the default branch, so a workflow_dispatch on any " +
-        "other ref cannot publish a score describing a different tree than the badge",
+      "scorecard.yml's default-branch guard must be the exact expression the reference ships: " +
+        "this assertion pins the expression, not the rule it expresses. A semantically equivalent " +
+        "rewrite (github.ref_name == ... .default_branch, say) fails here and at the whole-job " +
+        "equality below without weakening the guard, so treat changing it as a coordinated edit to " +
+        "both, not as a broken rule.",
     ).toContain("github.ref == format('refs/heads/{0}', github.event.repository.default_branch)");
 
     // Exactly these three, and no more. `security-events: write` is what puts
@@ -1058,9 +1072,17 @@ fi
     // — it is a silent channel. An unpinned top-level `env:` block planting a
     // `${{ github.repository }}` survives all of them, and survives actionlint
     // and zizmor as well: all three read it clean, because a key nobody asserts
-    // on is a key nobody is looking at. Asserting the whole key set is what
-    // turns an added key into a named failure instead of a silent one.
-    expect(Object.keys(workflow).sort()).toEqual([
+    // on is a key nobody is looking at.
+    expect(
+      Object.keys(workflow).sort(),
+      "scorecard.yml's top-level key set is the contract, not a suggestion: every assertion above " +
+        "reads a key this workflow is expected to carry, so a key outside that set is not " +
+        "something merely unasserted — it is a channel nothing reads. An unpinned top-level env: " +
+        "block survives this whole test and both actionlint and zizmor with it, because a key " +
+        "nobody asserts on is a key nobody is looking at. If you are adding a legitimate key " +
+        "such as run-name, add it HERE as well: the fix for this failure is the assertion, not " +
+        "the deletion of your key from the workflow.",
+    ).toEqual([
       "concurrency",
       "jobs",
       "name",
@@ -1068,17 +1090,49 @@ fi
       "permissions",
     ]);
 
+    // The same argument one level down, and this is the gap that survived the
+    // whole-branch review's eight mutants: the pin above is a single lookup of
+    // `analysis`, and the whole-job equality is scoped to that one job, so a
+    // SECOND job on this file was invisible to everything here. It carried
+    // `permissions: contents: write` and a `run:` step interpolating
+    // `${{ github.repository }}`, and passed 34/34 green with actionlint and
+    // zizmor both reporting nothing. One assertion enumerates the jobs key
+    // rather than looking one entry up, which is what turns "a job nobody
+    // reviewed" into a named failure.
+    expect(
+      Object.keys(workflow.jobs).sort(),
+      "scorecard.yml must carry exactly the one job this suite pins. Every job assertion above " +
+        "reads `analysis` specifically and the whole-job equality is scoped to it, so a second " +
+        "job is invisible to all of them: one carrying contents: write and a run step " +
+        "interpolating an expression would ship with this file reviewed only for the job beside " +
+        "it, and both actionlint and zizmor read that clean. If a second job is legitimate, it " +
+        "needs its own pins here, not just an entry in this array.",
+    ).toEqual(["analysis"]);
+
     // A trend signal, not a gate. Asserted against the parsed pins, not the
     // prose: a required check naming this workflow would block every pull
     // request on a weekly measurement that is allowed to be flat.
+    //
+    // The check name GitHub posts for a job is the job's `name:` when set, else
+    // its id — which is exactly how tests/ci/required-checks.test.ts resolves
+    // producers. So the spellings that could actually appear in this file are
+    // derived from the workflow rather than hardcoded: this workflow's own name
+    // (the altitude slip) and the analysis job's real check-run name (the
+    // realistic promotion). An earlier version of this clause tested only
+    // `check === "scorecard"`, which could never fire, because the spelling a
+    // human writes when promoting this workflow is the job's name and not the
+    // file's — the file clause was carrying the whole guard alone. The path
+    // clause still does most of the work and still stays.
     const requiredChecks = JSON.parse(
       await readFile(resolve(".github/required-checks.json"), "utf8"),
     ) as Record<string, string>;
+    const promotableCheckNames = [workflow.name, analysis.name ?? "analysis"];
     expect(
       Object.entries(requiredChecks).filter(
-        ([check, file]) => check === "scorecard" || String(file).endsWith("scorecard.yml"),
+        ([check, file]) => promotableCheckNames.includes(check) || String(file).endsWith("scorecard.yml"),
       ),
-      "scorecard is a weekly trend signal, not a per-commit gate: a required check naming it " +
+      "scorecard is a weekly trend signal, not a per-commit gate: a required check naming it — " +
+        "by its workflow name, by the analysis job's check-run name, or by pinning its file — " +
         "would block every pull request on a signal that is allowed to stay flat",
     ).toEqual([]);
   });
