@@ -309,6 +309,51 @@ export function unboundedGroupKeysIn(group: string): string[] {
   return UNBOUNDED_GROUP_KEYS.filter((key) => group.includes(key));
 }
 
+/**
+ * Every top-level key a workflow in this directory is allowed to carry, and no
+ * others.
+ *
+ * This is a check AGAINST UNEXPECTED KEYS, and that is the whole point of it.
+ * Every other assertion in this file — and every assertion in
+ * `tests/api/ci-workflows.test.ts` that is not issue 986's own — reads a key
+ * the workflow is EXPECTED to carry: `concurrency` here, `name`/`on`/
+ * `permissions`/`jobs` there. A key outside the set those assertions read is not
+ * a gap in coverage, it is a channel nothing reads. An unpinned top-level `env:`
+ * block planting a `${{ github.repository }}` survives both pin suites green and
+ * survives `actionlint` and `zizmor` as well, because all three read it clean:
+ * a key nobody asserts on is a key nobody is looking at. Issue 986 closed that
+ * hole for `scorecard.yml` alone; this closes it for the directory.
+ *
+ * **`env` is deliberately absent, and that is the load-bearing omission.** It is
+ * a legitimate GitHub Actions key — a workflow may legitimately pin one, at the
+ * job level or at the top — which is exactly why an allowlist and not a
+ * denylist is the mechanism: a denylist would need `env` named in it to catch
+ * this, and the next unasserted key nobody thought of would pass. Adding `env`
+ * here to quiet a failure is the fix this file exists to prevent, and the
+ * failure message below says so.
+ *
+ * The set is the union of what the eleven shipped workflows actually carry, so a
+ * twelfth workflow carrying only legitimate top-level keys passes with no edit
+ * here. What it does NOT catch, deliberately: a workflow DROPPING a key it
+ * should have, such as a missing `permissions:`. This is a check against the
+ * unexpected, not against the missing — that direction is already covered for
+ * the eight of eleven files that carry one by `ci-workflows.test.ts`'s per-file
+ * `permissions` assertions, and duplicating it here would be two tests failing
+ * for one defect.
+ *
+ * Every name below is carried by at least one shipped workflow, which is what
+ * keeps the set from rotting: an entry added here "just in case" is a hole
+ * nothing reads, and a later check would deny nothing. Adding one together with
+ * the workflow that uses it is the only way an entry belongs in this list.
+ */
+const ALLOWED_TOP_LEVEL_KEYS = [
+  "concurrency",
+  "jobs",
+  "name",
+  "on",
+  "permissions",
+];
+
 const workflows = new Map<string, Workflow>();
 
 beforeAll(async () => {
@@ -328,6 +373,89 @@ describe("the workflow directory", () => {
     for (const name of Object.keys(BOUNDED)) {
       expect(workflows.has(name), `${name} must be enumerated from .github/workflows`).toBe(true);
     }
+  });
+});
+
+describe("every workflow's top-level keys", () => {
+  it("carry nothing outside the allowed set, because an unasserted key is a channel nothing reads", () => {
+    // The one assertion in this file that reads against UNEXPECTED keys rather
+    // than expected ones. Everything else here looks up a key by name, so it can
+    // only ever fail on a key someone chose to read — and a key nobody chose to
+    // read is exactly the one that ships. Asserted on the PARSED object, never
+    // on file text, so reformatting the block does not disturb it while a key
+    // change fails loudly by name.
+    //
+    // Built as a whole-collection comparison rather than a per-workflow `expect`
+    // inside the loop, and that shape is load-bearing twice over. It names every
+    // offending workflow at once, so one failure reports the full set instead of
+    // the first; and the companion comparison below makes an EMPTY result fail,
+    // which a per-workflow `expect` inside the loop cannot. That variant was
+    // written first and it is vacuous: an iteration source emptied to `new Map()`
+    // passed this suite whole with a planted top-level `env:` block sitting in
+    // the tree, because the assertion never ran. The enumeration guard below did
+    // not notice either — it reads the Map, not this loop. Hence the second
+    // comparison.
+    //
+    // Its expected value reads `workflows` a SECOND time, independently of the
+    // collection above, and that independence is the whole guard. Hoisting one
+    // sorted name list and using it for both sides is the same vacuity wearing a
+    // different hat: emptying the collection source empties the expectation too,
+    // and the comparison holds against itself. That version was written, and a
+    // planted block passed it. So the two sides are deliberately derived from
+    // separate reads, and only the collected side goes through the loop the
+    // first assertion depends on.
+    const entries = [...workflows].map(
+      ([name, workflow]): [string, string[]] => [
+        name,
+        Object.keys(workflow)
+          .filter((key) => !ALLOWED_TOP_LEVEL_KEYS.includes(key))
+          .sort(),
+      ],
+    );
+    const offenders = entries.filter(([, keys]) => keys.length > 0);
+    expect(
+      offenders.map(([name, keys]) => `${name}: ${JSON.stringify(keys)}`).join("; ") ||
+        "(none)",
+      "these workflows carry top-level key(s) outside the allowed set: " +
+        `${JSON.stringify(Object.fromEntries(offenders))}. Every other assertion in this file and ` +
+        "in ci-workflows.test.ts reads a key this workflow is EXPECTED to carry, so a key outside " +
+        "that set is not merely unasserted — it is a channel nothing reads. An unpinned top-level " +
+        "`env:` block planting a `${{ github.repository }}` passes both pin suites whole and is " +
+        "clean to actionlint and zizmor too, because a key nobody asserts on is a key nobody is " +
+        "looking at. `env` is absent from ALLOWED_TOP_LEVEL_KEYS ON PURPOSE. If you are adding a " +
+        "legitimate top-level key, add it to ALLOWED_TOP_LEVEL_KEYS in this file alongside the " +
+        "workflow that uses it: the fix for this failure is the assertion, not the deletion of " +
+        "your key from your workflow, and not a new denylist entry naming the key you happened to " +
+        "trip on.",
+    ).toEqual("(none)");
+    expect(
+      entries.map(([name]) => name),
+      "every workflow in the directory must be decided by the key check above. A comparison " +
+        "collecting fewer names than the directory holds has iterated over nothing and passes " +
+        "vacuously, which is the failure mode a dynamically-enumerated contract suite has to " +
+        "guard explicitly. The enumeration guard above does not cover this: it reads the Map, not " +
+        "this loop. Keep the expected value reading the directory independently — sharing one " +
+        "derived name list between both sides is the same vacuity, and it passes.",
+    ).toEqual([...workflows.keys()].sort((left, right) => left.localeCompare(right)));
+  });
+
+  it("spend every allowed key, so an entry added for a workflow nobody ships is denied", () => {
+    // The rot guard for the set above. An entry added there "just in case" is a
+    // hole: the check above would deny nothing, because nothing carries it, and
+    // the next workflow to use it would ship an unasserted key with a test suite
+    // that has already agreed the key is fine. A twelfth workflow carrying a
+    // legitimate NEW key fails here and is then named in the set above, which is
+    // the diff a reviewer can see.
+    const spent = ALLOWED_TOP_LEVEL_KEYS.filter((key) =>
+      [...workflows.values()].some((workflow) => Object.hasOwn(workflow, key)),
+    ).sort();
+    expect(
+      spent,
+      `these ALLOWED_TOP_LEVEL_KEYS entries are carried by no workflow in the directory: ` +
+        `${JSON.stringify(ALLOWED_TOP_LEVEL_KEYS.filter((key) => !spent.includes(key)))}. An ` +
+        "allowed key nothing ships is a hole nothing can trip over, and the failure it lets " +
+        "through is silent. Remove the entry, or land the workflow that carries it.",
+    ).toEqual([...ALLOWED_TOP_LEVEL_KEYS].sort());
   });
 });
 
