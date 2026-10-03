@@ -390,8 +390,9 @@ describe("the verify workflow's concurrency group", () => {
  * checks when main moves underneath them, so the tree GitHub actually lands
  * (its rebase onto current main) was never tested by a required check (PR 290
  * is the worked example). The base-freshness step is the automated form of the
- * manual final-gate check: as the LAST step of each required job it issues the
- * freshness certificate only when the advance from the tested base to main's
+ * manual final-gate check: at the end of each required job (followed only by
+ * verify's commit-scope gate) it issues the freshness certificate only when
+ * the advance from the tested base to main's
  * current tip is disjoint from the files the pull request changes (issue 510's
  * relevant-advance condition, replacing issue 441's unsatisfiable
  * main-frozen-for-the-whole-run demand). The step delegates to the committed
@@ -438,7 +439,7 @@ describe("the required workflows' base-freshness step", () => {
     ).toHaveLength(1);
   });
 
-  it("is the last step of each required job", () => {
+  it("keeps freshness last except for verify's final commit-scope gate", () => {
     const verifyIndex = verifySteps.findIndex(
       (step) => step.name === "Base freshness",
     );
@@ -453,8 +454,11 @@ describe("the required workflows' base-freshness step", () => {
     ).toBeGreaterThan(-1);
     expect(
       verifyIndex,
-      "Base freshness must be the LAST step of the verify job — an earlier step re-opens the whole run duration as the stale-base window",
-    ).toBe(verifySteps.length - 1);
+      "Only the final commit-scope gate may follow Base freshness in verify (issue 988)",
+    ).toBe(verifySteps.length - 2);
+    expect(verifySteps[verifyIndex + 1]?.name).toBe(
+      "Refuse a commit whose scope names a workflow outside the ci type",
+    );
     expect(
       actionlintIndex,
       "Base freshness must be the LAST step of the actionlint job — an earlier step re-opens the whole run duration as the stale-base window",
@@ -691,5 +695,63 @@ describe("the verify workflow's untrusted-code boundary", () => {
         "— must inherit the workflow-level { contents: read }, so a job-level elevation " +
         "anywhere else fails here",
     ).toEqual(["calibrate"]);
+  });
+});
+
+/** Issue 988 ports both gates into the existing required verify context. */
+describe("the verify workflow's conflict-marker and commit-scope gates", () => {
+  let steps: WorkflowStep[] = [];
+  const markerName = "Check no tracked file carries a merge-conflict marker";
+  const scopeName = "Refuse a commit whose scope names a workflow outside the ci type";
+
+  beforeAll(async () => {
+    const workflow = parse(await readFile(resolve(".github/workflows/ci.yml"), "utf8")) as {
+      jobs?: { verify?: { steps?: WorkflowStep[] } };
+    };
+    steps = workflow.jobs?.verify?.steps ?? [];
+  });
+
+  it("contains exactly one conflict-marker gate", () => {
+    expect(steps.filter((step) => step.name === markerName)).toHaveLength(1);
+  });
+
+  it("checks markers immediately after both checkouts and before setup-node", () => {
+    const checkouts = steps.flatMap((step, index) =>
+      step.uses?.startsWith("actions/checkout@") ? [index] : [],
+    );
+    const markerIndex = steps.findIndex((step) => step.name === markerName);
+    expect(checkouts).toHaveLength(2);
+    expect(markerIndex).toBeGreaterThan(-1);
+    expect(markerIndex).toBe(checkouts[1] + 1);
+    expect(steps[markerIndex + 1]?.uses).toMatch(/^actions\/setup-node@/);
+  });
+
+  it("runs the tracked-text marker grep on every event without tolerating failure", () => {
+    const step = steps.find((step) => step.name === markerName);
+    expect(step).toBeDefined();
+    expect(step?.run).toContain("git grep -nI -E '^(<{7}( |$)|>{7}( |$)|={7}$)' -- .");
+    expect(step?.if).toBeUndefined();
+    expect(Boolean(step?.["continue-on-error"])).toBe(false);
+  });
+
+  it("contains exactly one commit-scope gate", () => {
+    expect(steps.filter((step) => step.name === scopeName)).toHaveLength(1);
+  });
+
+  it("runs the commit-scope gate immediately after Base freshness as the last step", () => {
+    const freshnessIndex = steps.findIndex((step) => step.name === "Base freshness");
+    const scopeIndex = steps.findIndex((step) => step.name === scopeName);
+    expect(freshnessIndex).toBeGreaterThan(-1);
+    expect(scopeIndex).toBeGreaterThan(-1);
+    expect(scopeIndex).toBe(freshnessIndex + 1);
+    expect(scopeIndex).toBe(steps.length - 1);
+  });
+
+  it("runs the Python gate only for pull_request_target without tolerating failure", () => {
+    const step = steps.find((step) => step.name === scopeName);
+    expect(step).toBeDefined();
+    expect(step?.run).toBe("python3 scripts/commit_scopes.py");
+    expect(step?.if).toBe("${{ github.event_name == 'pull_request_target' }}");
+    expect(Boolean(step?.["continue-on-error"])).toBe(false);
   });
 });
