@@ -784,12 +784,17 @@ describe("the workflows left unbounded", () => {
     // merge waits on.
     const required = new Set(requiredCheckWorkflows());
     for (const [name, entry] of UNBOUNDED_BY_CHOICE) {
-      if (!isPullRequestReachable(workflows.get(name)!.on)) continue;
+      const reachable = isPullRequestReachable(workflows.get(name)!.on);
       const shipped = workflows.get(name)!.concurrency?.["cancel-in-progress"];
       expect(entry.reason).toMatch(/cancel/i);
       if (premiseOf(entry) === "superseded-attempt") {
+        // Asserted whether or not the workflow is currently reachable: this
+        // premise CLAIMS a pull-request trigger, so a workflow that loses one
+        // has made its recorded reason false. Skipping it as "not applicable"
+        // is what let a reverted pull_request trigger through this file green
+        // while its reason still talked about one.
         expect(
-          isPullRequestReachable(workflows.get(name)!.on),
+          reachable,
           `${name} claims cancellation is safe because its group is scoped to one pull request, but ` +
             "the workflow is not reachable from a pull request, so the group it ships is per-ref and " +
             "the premise describes a run that never arrives",
@@ -820,6 +825,7 @@ describe("the workflows left unbounded", () => {
         ).toMatch(/superseded|replacement|next push/i);
         continue;
       }
+      if (!reachable) continue;
       expect(
         shipped,
         `${name} is listed as unbounded on a reason about work a cancellation would lose, but its ` +
