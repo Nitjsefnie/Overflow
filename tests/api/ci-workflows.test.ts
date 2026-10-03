@@ -704,8 +704,10 @@ fi
     // The two Nitjsefnie-Actions workflows are SHA-pinned by maintainer
     // decision and dependabot now proposes their SHA bumps; one group per lane
     // collects every action — major bumps included — into a single weekly pull
-    // request. This is the exact-value pin; the coverage gate below is what
-    // proves the patterns actually collect this repository's actions.
+    // request. This is the exact-value pin: on its own it catches any edit to
+    // the groups object. The coverage gate below is what still holds if this
+    // pin is ever loosened, and it is the one that resolves the patterns
+    // against the workflows' real `uses:` inventory rather than restating them.
     const actions = config.updates.find((u) => u["package-ecosystem"] === "github-actions")!;
     expect(actions.groups).toEqual({
       "github-actions": { patterns: ["*"] },
@@ -787,7 +789,15 @@ fi
       "github/codeql-action/init",
       "github/codeql-action/upload-sarif",
     ]);
-    const codeqlCarriers = codeqlTrio.map((action) => carriersOf(action, "version-updates")[0]!);
+    // Each member's carrier count is asserted HERE rather than by indexing
+    // `carriersOf(...)[0]`: an empty carrier list would otherwise yield
+    // `undefined` three times, and `new Set([undefined, undefined, undefined])`
+    // has size 1 — the shared-carrier check would pass having proved nothing.
+    const codeqlCarriers = codeqlTrio.map((action) => {
+      const carriers = carriersOf(action, "version-updates");
+      expect(carriers, action).toHaveLength(1);
+      return carriers[0]!;
+    });
     expect(new Set(codeqlCarriers).size).toBe(1);
 
     // No version group may narrow itself with update-types: that key is what
@@ -811,8 +821,8 @@ fi
       expect(schedule.interval, ecosystem).toBe("weekly");
       expect(schedule.timezone, ecosystem).toBe("Etc/UTC");
       expect(schedule.time, ecosystem).toMatch(/^\d{2}:\d{2}$/);
-      expect(schedule.day, ecosystem).not.toBe("monday");
       expect(schedule.day, ecosystem).toBeDefined();
+      expect(schedule.day, ecosystem).not.toBe("monday");
     }
   });
 
