@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import MarkdownIt from "markdown-it";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -95,9 +96,17 @@ describe("GitHub Actions release gates", () => {
 
   it("keeps the CONTRIBUTING claim revision aligned with the workflow pin", async () => {
     const contributing = await readFile(resolve(process.cwd(), "CONTRIBUTING.md"), "utf8");
-    const contributingRevision = contributing.match(
-      /https:\/\/github\.com\/Nitjsefnie-Actions\/claim\/tree\/([^/?#)\s"'<>]+)/,
-    )?.[1];
+    // Markdown determines the destination boundary: quotes can be part of
+    // an unquoted destination, so treating them as delimiters truncates refs.
+    const contributingHref = new MarkdownIt().parse(contributing, {})
+      .flatMap((token) => token.children ?? [])
+      .filter((token) => token.type === "link_open")
+      .map((token) => token.attrGet("href"))
+      .find((href): href is string => typeof href === "string"
+        && href.startsWith("https://github.com/Nitjsefnie-Actions/claim/tree/"));
+    const contributingRevision = contributingHref
+      ? new URL(contributingHref).pathname.split("/")[4]
+      : undefined;
     const workflow = await readWorkflow("claim.yml");
     const workflowSha = workflow.jobs.claim!.steps[0]!.uses?.match(
       /^Nitjsefnie-Actions\/claim@([0-9a-f]{40})$/,
