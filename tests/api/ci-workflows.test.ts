@@ -95,17 +95,18 @@ describe("GitHub Actions release gates", () => {
 
   it("keeps the CONTRIBUTING claim revision aligned with the workflow pin", async () => {
     const contributing = await readFile(resolve(process.cwd(), "CONTRIBUTING.md"), "utf8");
-    const contributingSha = contributing.match(
-      /https:\/\/github\.com\/Nitjsefnie-Actions\/claim\/tree\/([0-9a-f]{40})(?![0-9a-f])/,
+    const contributingRevision = contributing.match(
+      /https:\/\/github\.com\/Nitjsefnie-Actions\/claim\/tree\/([^/?#)\s"'<>]+)/,
     )?.[1];
     const workflow = await readWorkflow("claim.yml");
     const workflowSha = workflow.jobs.claim!.steps[0]!.uses?.match(
       /^Nitjsefnie-Actions\/claim@([0-9a-f]{40})$/,
     )?.[1];
 
-    expect(contributingSha).toBeDefined();
+    expect(contributingRevision).toBeDefined();
     expect(workflowSha).toBeDefined();
-    expect(contributingSha).toBe(workflowSha);
+    expect(contributingRevision ?? "").toMatch(/^[0-9a-f]{40}$/);
+    expect(contributingRevision).toBe(workflowSha);
   });
 
   it("runs on a pull request or a closed issue so the action can decline the command in a reply", async () => {
