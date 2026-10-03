@@ -172,6 +172,19 @@ describe("the calibrate job's steps", () => {
 
   const named = (name: string) => steps.filter((step) => step.name === name);
 
+  it("pins Corepack and the package registry", () => {
+    const [step] = named("Enable the pinned package manager");
+
+    expect(
+      named("Enable the pinned package manager"),
+      "the calibrate job must keep exactly one Enable the pinned package manager step",
+    ).toHaveLength(1);
+    expect(step?.env).toEqual({
+      COREPACK_ENABLE_PROJECT_SPEC: "0",
+      npm_config_registry: "https://registry.npmjs.org/",
+    });
+  });
+
   it("pushes the floor through the recalibration script, with the token through env", () => {
     const [step] = named("Push the recalibrated floor");
 

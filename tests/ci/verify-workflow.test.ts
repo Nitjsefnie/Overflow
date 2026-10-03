@@ -22,6 +22,35 @@ type WorkflowStep = {
   env?: Record<string, string | undefined>;
 };
 
+describe("the verify workflow's package-manager step", () => {
+  let steps: WorkflowStep[] = [];
+
+  beforeAll(async () => {
+    const source = await readFile(resolve(".github/workflows/ci.yml"), "utf8");
+    const workflow = parse(source) as {
+      jobs?: { verify?: { steps?: WorkflowStep[] } };
+    };
+
+    steps = workflow.jobs?.verify?.steps ?? [];
+  });
+
+  const packageManager = () =>
+    steps.filter((step) => step.name === "Enable the pinned package manager");
+
+  it("pins Corepack and the package registry", () => {
+    const [step] = packageManager();
+
+    expect(
+      packageManager(),
+      "the verify job must keep exactly one Enable the pinned package manager step",
+    ).toHaveLength(1);
+    expect(step?.env).toEqual({
+      COREPACK_ENABLE_PROJECT_SPEC: "0",
+      npm_config_registry: "https://registry.npmjs.org/",
+    });
+  });
+});
+
 /**
  * jsdom does no layout, so the component suite stays green while a stylesheet
  * edit pushes the landing page's sign-in button below the fold (issue 111). The
