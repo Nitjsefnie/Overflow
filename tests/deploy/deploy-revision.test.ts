@@ -1859,15 +1859,27 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
       git("ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "--no-empty-directory"),
     ).toContain(".claude/");
 
-    // The script as it stood before .claude/ was admitted: the alternative
-    // gone from the allowlist, and its name gone from the refusal's prose.
-    // Beside the tree, never inside it, so this run cannot list itself.
+    // The script as it stood before .claude/ was admitted. The alternative is
+    // located inside the allowlist assignment and nowhere else, and stripped
+    // wherever in the alternation it sits: an allowlist gets reordered and
+    // rewrapped constantly, and a mutation coupled to that shape dies on a
+    // script that is still correct. The optional leading bar is what makes the
+    // strip independent of position -- without it, an alternative last in the
+    // group carries no trailing bar to match and the mutant comes out equal to
+    // the source. Beside the tree, never inside it, so this run cannot list
+    // itself.
     const source = await readFile(script, "utf8");
-    const mutant = source
-      .replace('"^(\\.next/?|\\.claude/|', '"^(\\.next/?|')
-      .replace("(.next, .claude/, release directories", "(.next, release directories");
+    const assignment = source.match(/^operational_ignored_re=.*$/m);
+    expect(assignment, "the allowlist assignment").toBeDefined();
+    // The real-module precondition, asserted before the mutant is built: if
+    // the committed script stops admitting .claude/, this is where the case
+    // says so. Left to the assertions below it would die on the mutant coming
+    // out identical to the source -- true, but about the mutation rather than
+    // about the defect the deployment would hit.
+    expect(assignment![0], "the committed script's allowlist admits .claude/").toContain("\\.claude/");
+    const mutant = source.replace(/^operational_ignored_re=.*$/m, (line) => line.replace(/\|?\\\.claude\//, ""));
     expect(mutant, "the mutant drops .claude/ from the allowlist").not.toBe(source);
-    expect(mutant).not.toContain("\\.claude/");
+    expect(mutant.match(/^operational_ignored_re=.*$/m)![0]).not.toContain("\\.claude/");
     const mutantScript = path.join(fixture.dir, "allowlist-without-claude.sh");
     await writeFile(mutantScript, mutant);
     expect(path.relative(fixture.tree, mutantScript).startsWith(".."), "outside the tree").toBe(true);
