@@ -881,6 +881,23 @@ describe("Actions event policy entry orchestration", () => {
     expect(body.output.summary).toContain("Administration read");
   });
 
+  it("keeps GITHUB_TOKEN out of the App-owned neutral check-run summary when the App token drew the 403", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      list: () => new Response("Forbidden", { status: 403 }),
+    });
+
+    await mustRun()(appEnv(generatedKeyPair().privateKey), transport);
+
+    const postCall = checkRunCallOf(calls);
+    const body = JSON.parse(String(postCall.init?.body)) as {
+      output: { title: string; summary: string };
+    };
+    expect(body.output.summary).not.toContain("GITHUB_TOKEN");
+    expect(body.output.summary).toContain("1024");
+    expect(body.output.summary).toContain("Administration read");
+  });
+
   it("runs the check under GH_TOKEN and posts nothing when the App credentials are absent", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const transport = transportFor(calls, {
@@ -959,7 +976,7 @@ describe("Actions event policy entry orchestration", () => {
     expect(calls.some(({ url }) => new URL(url).pathname === POLICY_LIST_PATH)).toBe(false);
   });
 
-  it("fails closed on the issue repro shape: unparseable key, GH_TOKEN set, 401-mint 403-list transport", async () => {
+  it("fails closed on the issue repro shape: unparseable key throws before any HTTP call, with GH_TOKEN set", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const transport = transportFor(calls, {
       mint: () => new Response("nope", { status: 401 }),
@@ -977,8 +994,7 @@ describe("Actions event policy entry orchestration", () => {
     expect(result.message).toContain("LEDGER_APP_KEY");
     expect(result.message).toMatch(/fails closed/i);
     expect(warnings).toEqual([]);
-    expect(calls.some(({ url }) => new URL(url).pathname === POLICY_LIST_PATH)).toBe(false);
-    expect(calls.some(({ url }) => url.endsWith("/check-runs"))).toBe(false);
+    expect(calls).toEqual([]);
   });
 
   it("names the Overflow Ledger App installation token in the neutral message when the App token drew the 403", async () => {
