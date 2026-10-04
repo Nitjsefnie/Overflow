@@ -62,6 +62,9 @@ export async function mintInstallationToken(
           "X-GitHub-Api-Version": "2022-11-28",
         },
         body: JSON.stringify({ repositories: ["Overflow"] }),
+        // Same bound as the check's request(): a blackhole connection must
+        // not hold the job until its timeout.
+        signal: AbortSignal.timeout(30_000),
       },
     );
     const body = await response.text();
@@ -137,6 +140,9 @@ export async function postNeutralCheckRun(
         "X-GitHub-Api-Version": "2022-11-28",
       },
       body: JSON.stringify(neutralCheckRunBody(headSha)),
+      // Same bound as the check's request(): a blackhole connection must
+      // not hold the job until its timeout.
+      signal: AbortSignal.timeout(30_000),
     });
     if (response.status < 200 || response.status >= 300) {
       return `the neutral check run could not be posted (HTTP ${response.status})`;

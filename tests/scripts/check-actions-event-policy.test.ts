@@ -797,6 +797,7 @@ describe("Actions event policy entry orchestration", () => {
       mint?: () => Response;
       list?: () => Response;
       checkRun?: () => Response;
+      detail?: () => Response;
     },
   ): PolicyTransport {
     return async (input, init) => {
@@ -815,7 +816,9 @@ describe("Actions event policy entry orchestration", () => {
       if (url.endsWith("/check-runs")) {
         return routes.checkRun === undefined ? new Response("{}", { status: 201 }) : routes.checkRun();
       }
-      return new Response("{}", { status: 200 });
+      return routes.detail === undefined
+        ? new Response("{}", { status: 200 })
+        : routes.detail();
     };
   }
 
@@ -835,6 +838,7 @@ describe("Actions event policy entry orchestration", () => {
     const mintCall = mintCallOf(calls);
     expect(mintCall.url).toContain("/app/installations/166057493/access_tokens");
     expect(mintCall.init?.method).toBe("POST");
+    expect(mintCall.init?.signal).toBeInstanceOf(AbortSignal);
     const jwt = String(
       new Headers(mintCall.init?.headers).get("authorization"),
     ).slice("Bearer ".length);
@@ -858,6 +862,7 @@ describe("Actions event policy entry orchestration", () => {
     expect(postCall.init?.headers).toMatchObject({
       Authorization: "Bearer installation-token-1",
     });
+    expect(postCall.init?.signal).toBeInstanceOf(AbortSignal);
     const body = JSON.parse(String(postCall.init?.body)) as {
       name: string;
       head_sha: string;
@@ -950,6 +955,31 @@ describe("Actions event policy entry orchestration", () => {
 
     expect(result.outcome).toBe("fail");
     expect(result.exitCode).toBe(1);
+    expect(warnings).toEqual([]);
+    expect(calls.some(({ url }) => url.endsWith("/check-runs"))).toBe(false);
+  });
+
+  it("posts no check run when the outcome is pass, even with App credentials present", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      list: () =>
+        new Response(
+          JSON.stringify({
+            total_count: 1,
+            policies: [{ id: 6375, name: "repo-event-policy" }],
+          }),
+          { status: 200 },
+        ),
+      detail: () => activePolicyDetail(6375),
+    });
+
+    const { result, warnings } = await mustRun()(
+      appEnv(generatedKeyPair().privateKey),
+      transport,
+    );
+
+    expect(result.outcome).toBe("pass");
+    expect(result.exitCode).toBe(0);
     expect(warnings).toEqual([]);
     expect(calls.some(({ url }) => url.endsWith("/check-runs"))).toBe(false);
   });
