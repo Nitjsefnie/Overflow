@@ -426,9 +426,13 @@ the shared action can reopen a PR it closed itself.
 
 ## Issues
 
-The repository ships one issue template,
-[`.github/ISSUE_TEMPLATE/bug-report.md`](.github/ISSUE_TEMPLATE/bug-report.md),
-and its section order is fixed. The
+The repository ships three issue templates:
+[`.github/ISSUE_TEMPLATE/bug-report.md`](.github/ISSUE_TEMPLATE/bug-report.md)
+for a defect, its section order fixed;
+[`.github/ISSUE_TEMPLATE/conduct-report.md`](.github/ISSUE_TEMPLATE/conduct-report.md)
+for a conduct problem, guided by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md#reporting);
+and [`.github/ISSUE_TEMPLATE/general.md`](.github/ISSUE_TEMPLATE/general.md)
+for an enhancement request or any other non-defect request. The
 title lives in GitHub's own title field — one plain-language line, no
 ticket-speak and no trailing punctuation, because it gets copied verbatim into a
 pull request's Bugs Discovered list and has to stand alone there.

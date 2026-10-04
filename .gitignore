@@ -32,6 +32,8 @@
 !.github/ISSUE_TEMPLATE/
 .github/ISSUE_TEMPLATE/*
 !.github/ISSUE_TEMPLATE/bug-report.md
+!.github/ISSUE_TEMPLATE/conduct-report.md
+!.github/ISSUE_TEMPLATE/general.md
 !.github/ISSUE_TEMPLATE/config.yml
 !.github/workflows/
 .github/workflows/*
