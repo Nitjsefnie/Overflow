@@ -1170,22 +1170,34 @@ exit 1
     const workflows = (await readdir(resolve(".github/workflows")))
       .filter((name) => name.endsWith(".yml"));
 
-    const pin = /\buses:\s*[\w.-]+(?:\/[\w.-]+)*@[0-9a-f]{40}\s*(#.*)?$/;
+    // `^\s*(?:-\s+)?uses:` in BOTH, not `\buses:`. `\b` matches mid-line, so a
+    // commented-out step (`# - uses: owner/repo@<sha>`) was read as a live pin by
+    // both instruments and landed in `unannotated` — a false red in a required
+    // check, reachable by commenting out a disabled step, which is ordinary.
+    // Anchoring to the step start also closes the flow-mapping-with-comment form.
+    // Measured over every form recorded in any round of this case, the anchor
+    // changes exactly four dispositions, all `both` → `neither`, and creates no
+    // form that one instrument sees and the other does not.
+    const pin = /^\s*(?:-\s+)?uses:\s*[\w.-]+(?:\/[\w.-]+)*@[0-9a-f]{40}\s*(#.*)?$/;
     // Same population, derived without reference to a path SHAPE: `uses:`, a
     // non-space run, an `@`, and 40 hex digits. It carries `pin`'s OWN terminator
     // `\s*(#.*)?$` on purpose, so the two differ in exactly one place — the
     // owner/repo/subpath form, which is the axis under test. A looser terminator
     // was tried first and is wrong: `(?![0-9a-f])` excludes a 41st hex digit but
-    // admits a trailing letter, a dot, an `-rc1` suffix, a quoted ref inside a
-    // `run:` block and a `uses:` inside a comment — 14 disagreements with `pin`
-    // over the adversarial forms measured for this case.
+    // admits a trailing letter, a dot, an `-rc1` suffix and a quoted ref inside
+    // a `run:` block — 14 disagreements with `pin` over the adversarial forms
+    // measured for this case.
     //
-    // The one thing it does NOT encode is a ref SCHEME. `\S+` would happily match
-    // `docker://alpine@<40hex>`, a container digest rather than an action pin:
-    // it carries no version tag, so `unannotated` could never be satisfied for it
-    // and the case would red on a legal workflow. The lookahead drops any URI
-    // scheme, which no action path can contain.
-    const shapeFree = /\buses:\s*(?![a-z][a-z0-9+.-]*:\/\/)\S+@[0-9a-f]{40}\s*(#.*)?$/;
+    // The one thing it does NOT encode is a ref SCHEME, and the exclusion is
+    // narrower than it first reads: `[a-z][a-z0-9+.-]*://` is lowercase-only and
+    // needs two slashes, so it drops `docker://…` and not `DOCKER://…`, `Docker://…`
+    // or `docker:/…`. What it buys is that a container ref is not treated as an
+    // action pin: such a value carries no version tag, so `unannotated` could
+    // never be satisfied for it. Note a REAL container digest is
+    // `docker://img@sha256:<64hex>`, which `{40}` never matched and the lookahead
+    // now drops outright — the form the exclusion actually reaches is the bare
+    // `@<40hex>` after a scheme, which is not a value GitHub accepts.
+    const shapeFree = /^\s*(?:-\s+)?uses:\s*(?![a-z][a-z0-9+.-]*:\/\/)\S+@[0-9a-f]{40}\s*(#.*)?$/;
     const versionComment = /#\s*v\d+\.\d+\.\d+/;
     const matched: string[] = [];
     const population: string[] = [];
@@ -1221,12 +1233,28 @@ exit 1
     //    to the "covered" direction was tried and discarded: it closed nothing,
     //    because the false red this case was fixing lives in the detector
     //    matching something that is not a pin, not in the comparison's strictness.
-    //  - What is NOT established: that `shapeFree` is complete. A form neither
-    //    regex matches leaves both sets together and is invisible — a `uses:`
-    //    inside a comment, a CRLF file before the split above, a `.yaml` file
-    //    (filtered out at the `readdir`), a flow-mapping comma, a folded `>-`.
-    //    Those are recorded limits, not closed routes, and no assertion here
-    //    pretends otherwise.
+    //  - What is NOT established, in two directions, and both lists are the whole
+    //    census rather than a sample:
+    //
+    //    (a) Forms NEITHER regex matches, so the pins leave both sets together
+    //        and nothing here can see them: a `uses:` inside a comment or prose
+    //        (the anchor), a `- {uses: …}` flow mapping with or without a
+    //        comment, a `docker://img@sha256:<64hex>` container digest, an
+    //        `&anchor` on the value, a folded `>-`, and a `.yaml` workflow file
+    //        (filtered out at the `readdir`). CRLF is NOT in this list: the
+    //        `split(/\r?\n/)` above already covers it.
+    //    (b) Forms `shapeFree` accepts and `pin` rejects — DETECTOR-ONLY, eight
+    //        of them: a subpath segment containing `+`, `~`, `(` or `:`, a path
+    //        containing `@`, and a scheme that is not lowercase-with-`//`
+    //        (`DOCKER://`, `Docker://`, `docker:/`). On any of these the
+    //        equality fails, naming a pin `pin` cannot read. None is a value
+    //        GitHub accepts for an action path — the syntax is alphanumerics
+    //        plus `-`, `_`, `.` and `/` — so there is no reachable false red,
+    //        but a red on one of them is the DETECTOR talking, not a pin that
+    //        lost its comment.
+    //
+    // Those are recorded limits, not closed routes, and no assertion here
+    // pretends otherwise.
     //
     // Liveness first: a selector matching nothing is a better message than a
     // 33-element diff, and the equality cannot fire when both sets are empty.
