@@ -20,12 +20,18 @@
 // protection matches a required context by name AND app, so a same-named
 // github-actions check-run leaves the App's context missing.
 //
-// It imports only TYPES, from scripts/ledger-relay-decisions.ts, and receives
-// every runtime value it needs through injected deps. The pure decision layer
+// Its only import is scripts/ledger-relay-decisions.ts: the types, and the
+// trusted-producer predicate, which is imported rather than injected so the
+// sweep cannot be handed a looser rule than the mirror applies. Everything else
+// it needs at runtime arrives through injected deps. The pure decision layer
 // holds what both duties decide and depends on neither, so neither duty has to
 // import the other and no runtime cycle can form between them.
 
-import type { ContextDecision, RelayJob } from "./ledger-relay-decisions.ts";
+import {
+  isTrustedProducerRun,
+  type ContextDecision,
+  type RelayJob,
+} from "./ledger-relay-decisions.ts";
 
 /**
  * The bound on one sweep: at most this many candidates are examined, so one
@@ -95,6 +101,9 @@ export interface SweepDeps {
  *   relay instance is still entitled to post for it;
  * - its path is pinned to at least one context — a run nothing is pinned to
  *   never had a check-run to orphan;
+ * - its executed workflow definition is the base branch's, judged from its
+ *   `event` and `head_branch` by the same isTrustedProducerRun the mirror
+ *   applies — an absent or non-string field reads as empty, which refuses it;
  * - its id is not the triggering run's — the mirror above already posted it,
  *   and re-deciding it here would duplicate every context on every start;
  * - it carries both a head SHA and an html_url — a check-run needs the first as
@@ -102,7 +111,9 @@ export interface SweepDeps {
  *   either could only be posted against nothing.
  *
  * The listing order is preserved and the first SWEEP_RUN_LIMIT survivors are
- * taken, so the newest completions are always the ones considered.
+ * taken, so the newest completions are always the ones considered — and a
+ * refused run is filtered before the cap, so it never takes a trusted one's
+ * place in that window.
  */
 export function selectSweepCandidates(
   entries: unknown,
@@ -121,9 +132,19 @@ export function selectSweepCandidates(
       conclusion?: unknown;
       head_sha?: unknown;
       html_url?: unknown;
+      event?: unknown;
+      head_branch?: unknown;
     };
     if (run.status !== "completed") continue;
     if (typeof run.path !== "string" || !pinnedPaths.has(run.path)) continue;
+    if (
+      !isTrustedProducerRun(
+        typeof run.event === "string" ? run.event : "",
+        typeof run.head_branch === "string" ? run.head_branch : "",
+      )
+    ) {
+      continue;
+    }
     const runId = idOf(run.id);
     if (runId === "" || runId === triggerRunId) continue;
     if (typeof run.head_sha !== "string" || run.head_sha === "") continue;

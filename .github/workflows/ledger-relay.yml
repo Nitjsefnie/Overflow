@@ -94,6 +94,9 @@ jobs:
           GITHUB_WORKFLOW_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           GITHUB_WORKFLOW_RUN_HTML_URL: ${{ github.event.workflow_run.html_url }}
           GITHUB_WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
+          # With the event, decides whether the run executed main's definition;
+          # a pinned run that did not is refused and nothing is posted.
+          GITHUB_WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           GITHUB_WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           RELAY_RERUN_TOKEN: ${{ github.token }}
           LEDGER_DISPATCH_RUN_ID: ${{ inputs.run_id }}

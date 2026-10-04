@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   decideContexts,
   decideRerun,
+  isTrustedProducerRun,
   mintAppJwt,
   RERUN_ATTEMPT_CAP,
   renderRelayResult,
@@ -42,29 +43,68 @@ function job(over: Partial<RelayJob>): RelayJob {
   };
 }
 
+describe("isTrustedProducerRun", () => {
+  // The allowlist of runs whose executed workflow definition is the base
+  // branch's. pull_request_target runs the base branch's definition whatever
+  // the head branch is called; push, workflow_dispatch and schedule run the
+  // definition at the ref they name, which is the protected one only when that
+  // ref is main; every other event, and any event not listed, is refused.
+  it.each([
+    ["pull_request_target", "main", true],
+    ["pull_request_target", "feature/some-branch", true],
+    ["pull_request_target", "", true],
+    ["push", "main", true],
+    ["push", "feature/some-branch", false],
+    ["push", "", false],
+    ["workflow_dispatch", "main", true],
+    ["workflow_dispatch", "feature/some-branch", false],
+    ["schedule", "main", true],
+    ["schedule", "feature/some-branch", false],
+    ["pull_request", "main", false],
+    ["pull_request", "feature/some-branch", false],
+    ["issue_comment", "main", false],
+    ["issue_comment", "feature/some-branch", false],
+    ["pull_request_review", "main", false],
+    ["pull_request_review_comment", "main", false],
+    ["merge_group", "main", false],
+    ["workflow_run", "main", false],
+    ["", "main", false],
+    ["", "", false],
+    ["some_future_event", "main", false],
+    // Near misses: the comparison is exact, never a prefix or a case fold.
+    ["Push", "main", false],
+    ["push", "Main", false],
+    ["push", "refs/heads/main", false],
+    ["push", "main ", false],
+    ["pull_request_target ", "main", false],
+  ])("event %j on head branch %j is trusted: %s", (event, headBranch, expected) => {
+    expect(isTrustedProducerRun(event, headBranch)).toBe(expected);
+  });
+});
+
 describe("decideRerun", () => {
   const HEAD = "c".repeat(40);
 
   function healRun(
     over: Partial<{ conclusion: string | null; event: string; runAttempt: number; headSha: string }> = {},
   ) {
-    return { conclusion: "cancelled", event: "pull_request", runAttempt: 1, headSha: HEAD, ...over };
+    return { conclusion: "cancelled", event: "pull_request_target", runAttempt: 1, headSha: HEAD, ...over };
   }
 
   it.each([
-    [
-      "heals a cancelled pending pull_request run at a live, unmatched head",
-      healRun(),
-      { state: "open", headSha: HEAD },
-      false,
-      true,
-    ],
     [
       "heals a cancelled pull_request_target run at a live, unmatched head",
       healRun({ event: "pull_request_target" }),
       { state: "open", headSha: HEAD },
       false,
       true,
+    ],
+    [
+      "does not heal a cancelled pull_request run — it is never relayed, so a rerun heals nothing",
+      healRun({ event: "pull_request" }),
+      { state: "open", headSha: HEAD },
+      false,
+      false,
     ],
     [
       "does not heal a superseded head — the open PR's tip has moved on",
@@ -497,6 +537,7 @@ describe("runRelay", () => {
       GITHUB_WORKFLOW_RUN_CONCLUSION: "success",
       GITHUB_WORKFLOW_RUN_HTML_URL: HTML_URL,
       GITHUB_WORKFLOW_RUN_EVENT: "push",
+      GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
       ...over,
     };
   }
@@ -724,6 +765,7 @@ describe("runRelay", () => {
           conclusion: "success",
           html_url: HTML_URL,
           event: "push",
+          head_branch: "main",
         },
       },
       jobsListing([job({})]),
@@ -815,6 +857,269 @@ describe("runRelay", () => {
     expect(fetchStub.requests).toHaveLength(0);
   });
 
+  // --- Trusted producer runs: a required context is relayed only from a run
+  // whose executed workflow definition is the base branch's ---
+
+  /** The workflow_dispatch recovery's environment: no workflow_run fields, only the run id. */
+  function dispatchEnv(over: Record<string, string> = {}): Record<string, string> {
+    return relayEnv({
+      GITHUB_WORKFLOW_RUN_ID: "",
+      GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
+      GITHUB_WORKFLOW_RUN_PATH: "",
+      GITHUB_WORKFLOW_RUN_CONCLUSION: "",
+      GITHUB_WORKFLOW_RUN_HTML_URL: "",
+      GITHUB_WORKFLOW_RUN_EVENT: "",
+      GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "",
+      LEDGER_DISPATCH_RUN_ID: RUN_ID,
+      ...over,
+    });
+  }
+
+  /** The run the dispatch recovery re-reads, as GET actions/runs/{id} returns it. */
+  function fetchedRunBody(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: Number(RUN_ID),
+      head_sha: HEAD_SHA,
+      path: PATH_CI,
+      conclusion: "success",
+      html_url: HTML_URL,
+      event: "push",
+      head_branch: "main",
+      ...over,
+    };
+  }
+
+  function fetchedRun(over: Record<string, unknown> = {}): Outcome {
+    return { status: 200, body: fetchedRunBody(over) };
+  }
+
+  /** Everything a relay that wrongly accepted the run would go on to ask for. */
+  function acceptingOutcomes(): Outcome[] {
+    return [jobsListing([job({})]), { status: 201, body: { id: 1 } }, noSweepRuns()];
+  }
+
+  async function caughtError(promise: Promise<unknown>): Promise<Error | undefined> {
+    return promise.then(
+      () => undefined,
+      (caught: unknown) => (caught instanceof Error ? caught : new Error(String(caught))),
+    );
+  }
+
+  describe("trusted producer runs", () => {
+    it.each([
+      ["pull_request", "main"],
+      ["pull_request", "feature/some-branch"],
+      ["issue_comment", "main"],
+      ["issue_comment", "feature/some-branch"],
+      ["push", "feature/some-branch"],
+      ["workflow_dispatch", "feature/some-branch"],
+      ["", "main"],
+    ])(
+      "refuses a pinned %j run on head branch %j before minting a token: no check-run, no sweep, no heal",
+      async (event, headBranch) => {
+        const fetchStub = makeFetch([token(), ...acceptingOutcomes()]);
+        const error = await caughtError(
+          runRelay({
+            env: relayEnv({
+              GITHUB_WORKFLOW_RUN_EVENT: event,
+              GITHUB_WORKFLOW_RUN_HEAD_BRANCH: headBranch,
+            }),
+            fetchFn: fetchStub.fn,
+            delayFn: makeDelay().fn,
+            readPinMap: async () => PIN_MAP,
+          }),
+        );
+
+        expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
+        expect(error?.message).toContain(`run ${RUN_ID}`);
+        expect(error?.message).toContain(`event ${JSON.stringify(event)}`);
+        expect(error?.message).toContain(`head branch ${JSON.stringify(headBranch)}`);
+        expect(error?.message).toContain("no required context was relayed");
+        // Refused before the installation-token mint: not one request left the relay.
+        expect(fetchStub.requests).toHaveLength(0);
+      },
+    );
+
+    it("refuses a cancelled pinned pull_request run without attempting the heal", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([]),
+        { status: 201, body: { id: 1 } },
+        noSweepRuns(),
+        pullsListing([pullEntry()]),
+        runsListing([]),
+        { status: 202, body: undefined },
+      ]);
+      const error = await caughtError(
+        runRelay({
+          env: cancelledPrEnv({ GITHUB_WORKFLOW_RUN_EVENT: "pull_request" }),
+          fetchFn: fetchStub.fn,
+          delayFn: makeDelay().fn,
+          readPinMap: async () => PIN_MAP,
+        }),
+      );
+      expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
+      expect(error?.message).toContain("no required context was relayed");
+      expect(fetchStub.requests).toHaveLength(0);
+    });
+
+    it("reads an absent GITHUB_WORKFLOW_RUN_HEAD_BRANCH as no branch, so a push run is refused", async () => {
+      const env = relayEnv();
+      delete env.GITHUB_WORKFLOW_RUN_HEAD_BRANCH;
+      const fetchStub = makeFetch([token(), ...acceptingOutcomes()]);
+      const error = await caughtError(
+        runRelay({
+          env,
+          fetchFn: fetchStub.fn,
+          delayFn: makeDelay().fn,
+          readPinMap: async () => PIN_MAP,
+        }),
+      );
+      expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
+      expect(error?.message).toContain('head branch ""');
+      expect(error?.message).toContain("no required context was relayed");
+      expect(fetchStub.requests).toHaveLength(0);
+    });
+
+    it.each([
+      ["pull_request", "main"],
+      ["issue_comment", "feature/some-branch"],
+      ["push", "feature/some-branch"],
+    ])(
+      "refuses through the dispatch path when the fetched run is %j on head branch %j",
+      async (event, headBranch) => {
+        const fetchStub = makeFetch([
+          token(),
+          fetchedRun({ event, head_branch: headBranch }),
+          ...acceptingOutcomes(),
+        ]);
+        const error = await caughtError(
+          runRelay({
+            env: dispatchEnv(),
+            fetchFn: fetchStub.fn,
+            delayFn: makeDelay().fn,
+            readPinMap: async () => PIN_MAP,
+          }),
+        );
+
+        expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
+        expect(error?.message).toContain(`run ${RUN_ID}`);
+        expect(error?.message).toContain(`event ${JSON.stringify(event)}`);
+        expect(error?.message).toContain(`head branch ${JSON.stringify(headBranch)}`);
+        expect(error?.message).toContain("no required context was relayed");
+        // The recovery needs the token to read the run at all; it stops there.
+        expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL]);
+      },
+    );
+
+    it.each([
+      ["absent", {}],
+      ["null", { head_branch: null }],
+      ["not a string", { head_branch: 42 }],
+    ])(
+      "reads a fetched run whose head_branch is %s as no branch, so a push run is refused",
+      async (_name, over) => {
+        const body = fetchedRunBody();
+        delete body.head_branch;
+        const fetchStub = makeFetch([
+          token(),
+          { status: 200, body: { ...body, ...over } },
+          ...acceptingOutcomes(),
+        ]);
+        const error = await caughtError(
+          runRelay({
+            env: dispatchEnv(),
+            fetchFn: fetchStub.fn,
+            delayFn: makeDelay().fn,
+            readPinMap: async () => PIN_MAP,
+          }),
+        );
+        expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
+        expect(error?.message).toContain('head branch ""');
+        expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL]);
+      },
+    );
+
+    it.each([
+      ["pull_request_target", "feature/some-branch"],
+      ["pull_request_target", "main"],
+      ["push", "main"],
+      ["workflow_dispatch", "main"],
+      ["schedule", "main"],
+    ])("still relays a pinned %j run on head branch %j", async (event, headBranch) => {
+      const fetchStub = makeFetch([token(), ...acceptingOutcomes()]);
+      const result = await runRelay({
+        env: relayEnv({
+          GITHUB_WORKFLOW_RUN_EVENT: event,
+          GITHUB_WORKFLOW_RUN_HEAD_BRANCH: headBranch,
+        }),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+      expect(result.posted).toEqual(["verify"]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([
+        TOKEN_URL,
+        JOBS_URL,
+        CHECK_RUNS_URL,
+        SWEEP_RUNS_URL,
+      ]);
+    });
+
+    it("still relays a pull_request_target run through the dispatch path", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        fetchedRun({ event: "pull_request_target", head_branch: "feature/some-branch" }),
+        ...acceptingOutcomes(),
+      ]);
+      const result = await runRelay({
+        env: dispatchEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+      expect(result.posted).toEqual(["verify"]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([
+        TOKEN_URL,
+        RUN_URL,
+        JOBS_URL,
+        CHECK_RUNS_URL,
+        SWEEP_RUNS_URL,
+      ]);
+    });
+
+    it("relays nothing and does not fail for an untrusted run of a workflow nothing is pinned to", async () => {
+      // The refusal is about required contexts; a run that could not produce
+      // one keeps the existing quiet no-op, on both trigger paths.
+      const viaWorkflowRun = makeFetch([]);
+      const result = await runRelay({
+        env: relayEnv({
+          GITHUB_WORKFLOW_RUN_PATH: PATH_ACTIONLINT,
+          GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
+          GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
+        }),
+        fetchFn: viaWorkflowRun.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => ({ verify: PATH_CI }),
+      });
+      expect(result.posted).toEqual([]);
+      expect(viaWorkflowRun.requests).toHaveLength(0);
+
+      const viaDispatch = makeFetch([
+        token(),
+        fetchedRun({ path: PATH_ACTIONLINT, event: "pull_request" }),
+      ]);
+      const recovered = await runRelay({
+        env: dispatchEnv(),
+        fetchFn: viaDispatch.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => ({ verify: PATH_CI }),
+      });
+      expect(recovered.posted).toEqual([]);
+      expect(viaDispatch.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL]);
+    });
+  });
+
   // --- The rerun-heal (issue 861) ---
 
   const PULLS_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${HEAD_SHA}/pulls?per_page=100`;
@@ -840,7 +1145,8 @@ describe("runRelay", () => {
   function cancelledPrEnv(over: Record<string, string> = {}): Record<string, string> {
     return relayEnv({
       GITHUB_WORKFLOW_RUN_CONCLUSION: "cancelled",
-      GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
+      GITHUB_WORKFLOW_RUN_EVENT: "pull_request_target",
+      GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
       GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
       RELAY_RERUN_TOKEN: "rerun-token",
       ...over,
@@ -1040,7 +1346,7 @@ describe("runRelay", () => {
         runRelay({
           env: relayEnv({
             GITHUB_WORKFLOW_RUN_CONCLUSION: "cancelled",
-            GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
+            GITHUB_WORKFLOW_RUN_EVENT: "pull_request_target",
             GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
           }),
           fetchFn: fetchStub.fn,
@@ -1129,6 +1435,7 @@ describe("runRelay", () => {
       const result = await runRelay({
         env: cancelledPrEnv({
           GITHUB_WORKFLOW_RUN_EVENT: "push",
+          GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
           GITHUB_WORKFLOW_RUN_ATTEMPT: "",
         }),
         fetchFn: fetchStub.fn,
@@ -1238,7 +1545,8 @@ describe("runRelay", () => {
             path: PATH_CI,
             conclusion: "cancelled",
             html_url: HTML_URL,
-            event: "pull_request",
+            event: "pull_request_target",
+            head_branch: "feature/some-branch",
             run_attempt: 2,
           },
         },
@@ -1303,6 +1611,8 @@ describe("runRelay", () => {
       conclusion: "success",
       head_sha: HEAD_SHA,
       html_url: `https://github.com/Nitjsefnie/Overflow/actions/runs/${id}`,
+      event: "pull_request_target",
+      head_branch: "feature/some-branch",
       ...over,
     };
   }
@@ -1551,6 +1861,38 @@ describe("runRelay", () => {
         CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
         CHECK_RUNS_AT_HEAD_URL,
+      ]);
+    });
+
+    it("never sweeps a run whose executed definition was not the base branch's", async () => {
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([job({})]),
+        { status: 201, body: { id: 1 } },
+        sweepListing([
+          sweepRun(9002, { path: PATH_ACTIONLINT, event: "pull_request", head_branch: "main" }),
+          sweepRun(9003, { path: PATH_ACTIONLINT, event: "issue_comment" }),
+          sweepRun(9004, { path: PATH_ACTIONLINT, event: "push", head_branch: "feature/some-branch" }),
+          sweepRun(9005, { path: PATH_ACTIONLINT, event: undefined, head_branch: undefined }),
+        ]),
+        // What a sweep that wrongly selected any of them would ask for next.
+        checkRunsListing([]),
+        jobsListing([job({ name: "actionlint" })]),
+        { status: 201, body: { id: 2 } },
+      ]);
+      const result = await runRelay({
+        env: relayEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      expect(result.sweep).toEqual({ examined: 0, relayed: [] });
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([
+        TOKEN_URL,
+        JOBS_URL,
+        CHECK_RUNS_URL,
+        SWEEP_RUNS_URL,
       ]);
     });
 
