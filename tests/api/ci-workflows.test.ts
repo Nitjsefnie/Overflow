@@ -1171,15 +1171,21 @@ exit 1
       .filter((name) => name.endsWith(".yml"));
 
     const pin = /\buses:\s*[\w.-]+(?:\/[\w.-]+)*@[0-9a-f]{40}\s*(#.*)?$/;
-    // Same population, derived without reference to a path shape: `uses:`, some
+    // Same population, derived without reference to a path SHAPE: `uses:`, a
     // non-space run, an `@`, and 40 hex digits. It carries `pin`'s OWN terminator
-    // `\s*(#.*)?$` on purpose, so the two regexes differ in exactly one place —
-    // the owner/repo/subpath shape, which is the axis under test. A looser
-    // terminator was tried first and is wrong: `(?![0-9a-f])` excludes a 41st hex
-    // digit but admits `@<40hex>g`, which `pin` rejects, and set-equality then
-    // fails on a pin that does not exist. Sharing the terminator makes every
-    // disagreement mean "the shape missed a form" and nothing else.
-    const shapeFree = /\buses:\s*\S+@[0-9a-f]{40}\s*(#.*)?$/;
+    // `\s*(#.*)?$` on purpose, so the two differ in exactly one place — the
+    // owner/repo/subpath form, which is the axis under test. A looser terminator
+    // was tried first and is wrong: `(?![0-9a-f])` excludes a 41st hex digit but
+    // admits a trailing letter, a dot, an `-rc1` suffix, a quoted ref inside a
+    // `run:` block and a `uses:` inside a comment — 14 disagreements with `pin`
+    // over the adversarial forms measured for this case.
+    //
+    // The one thing it does NOT encode is a ref SCHEME. `\S+` would happily match
+    // `docker://alpine@<40hex>`, a container digest rather than an action pin:
+    // it carries no version tag, so `unannotated` could never be satisfied for it
+    // and the case would red on a legal workflow. The lookahead drops any URI
+    // scheme, which no action path can contain.
+    const shapeFree = /\buses:\s*(?![a-z][a-z0-9+.-]*:\/\/)\S+@[0-9a-f]{40}\s*(#.*)?$/;
     const versionComment = /#\s*v\d+\.\d+\.\d+/;
     const matched: string[] = [];
     const population: string[] = [];
@@ -1187,7 +1193,10 @@ exit 1
 
     for (const name of workflows) {
       const source = await readFile(resolve(".github/workflows", name), "utf8");
-      for (const [index, line] of source.split("\n").entries()) {
+      // `\r?\n`, not `\n`: a CRLF file would leave a trailing \r that both regexes
+      // reject, and both sets would lose the same pins together — a coverage check
+      // reporting that nothing was lost while four real pins dropped out.
+      for (const [index, line] of source.split(/\r?\n/).entries()) {
         const where = `${name}:${index + 1}`;
         if (shapeFree.test(line)) population.push(where);
         const hit = pin.exec(line);
@@ -1197,8 +1206,30 @@ exit 1
       }
     }
 
-    // Liveness first: a selector matching nothing is a better message here than
-    // a 33-element diff, and the equality below cannot fire when both are empty.
+    // What these three assertions do and do not establish, since the previous
+    // round's note claimed both directions and only had one:
+    //
+    //  - `pin`'s set is a SUBSET of `shapeFree`'s, structurally: everything
+    //    `[\w.-]+(?:\/[\w.-]+)*` matches is non-space, so `\S+` matches it too,
+    //    and the terminators are shared. So `pin` cannot invent a pin, and the
+    //    equality below can only ever fail through `population \ matched`.
+    //    That containment is a PROPERTY, not a licence: it does not by itself
+    //    say the detector is right about what it matched.
+    //  - It is why the equality and a one-sided `population \ matched == []` are
+    //    the SAME test here, not two grades of strictness — measured over the
+    //    adversarial forms, they disagreed on 0 cases. So narrowing the assertion
+    //    to the "covered" direction was tried and discarded: it closed nothing,
+    //    because the false red this case was fixing lives in the detector
+    //    matching something that is not a pin, not in the comparison's strictness.
+    //  - What is NOT established: that `shapeFree` is complete. A form neither
+    //    regex matches leaves both sets together and is invisible — a `uses:`
+    //    inside a comment, a CRLF file before the split above, a `.yaml` file
+    //    (filtered out at the `readdir`), a flow-mapping comma, a folded `>-`.
+    //    Those are recorded limits, not closed routes, and no assertion here
+    //    pretends otherwise.
+    //
+    // Liveness first: a selector matching nothing is a better message than a
+    // 33-element diff, and the equality cannot fire when both sets are empty.
     expect(matched.length).toBeGreaterThan(0);
     expect(matched).toEqual(population);
     expect(unannotated).toEqual([]);
