@@ -1154,27 +1154,53 @@ exit 1
   //    `# verify against the action docs`, which zizmor does NOT back up: it
   //    treats any present comment as annotated. `v\d+\.\d+\.\d+` is zizmor's own
   //    shape and matches every comment the tree ships today.
+  //
+  // A fourth hole, of a different kind, was left open by that fix round: the
+  // guard above proves the pin list is NON-EMPTY, and the property this case is
+  // named for is that the list is COMPLETE. `> 0` cannot tell those apart, and a
+  // selector that quietly narrows stays green — which is exactly the state the
+  // case shipped in for one commit. A number would close it and rot on every
+  // dependency bump. So the coverage is asserted by COMPARING TWO INSTRUMENTS
+  // instead of quoting a constant: `shapeFree` encodes no path shape at all, so
+  // it cannot inherit `pin`'s blind spot, and the two sets are compared for
+  // equality. Neither side is a literal, so adding or removing a pin moves both
+  // and the assertion holds; narrowing one side only is the defect, and the diff
+  // names every pin the selector lost or invented.
   it("annotates every SHA-pinned action with the release its pin names", async () => {
     const workflows = (await readdir(resolve(".github/workflows")))
       .filter((name) => name.endsWith(".yml"));
 
     const pin = /\buses:\s*[\w.-]+(?:\/[\w.-]+)*@[0-9a-f]{40}\s*(#.*)?$/;
+    // Same population, derived without reference to a path shape: `uses:`, some
+    // non-space run, an `@`, and 40 hex digits. It carries `pin`'s OWN terminator
+    // `\s*(#.*)?$` on purpose, so the two regexes differ in exactly one place —
+    // the owner/repo/subpath shape, which is the axis under test. A looser
+    // terminator was tried first and is wrong: `(?![0-9a-f])` excludes a 41st hex
+    // digit but admits `@<40hex>g`, which `pin` rejects, and set-equality then
+    // fails on a pin that does not exist. Sharing the terminator makes every
+    // disagreement mean "the shape missed a form" and nothing else.
+    const shapeFree = /\buses:\s*\S+@[0-9a-f]{40}\s*(#.*)?$/;
     const versionComment = /#\s*v\d+\.\d+\.\d+/;
-    const annotated: string[] = [];
+    const matched: string[] = [];
+    const population: string[] = [];
     const unannotated: string[] = [];
 
     for (const name of workflows) {
       const source = await readFile(resolve(".github/workflows", name), "utf8");
       for (const [index, line] of source.split("\n").entries()) {
-        const match = pin.exec(line);
-        if (!match) continue;
         const where = `${name}:${index + 1}`;
-        annotated.push(where);
-        if (!versionComment.test(match[1] ?? "")) unannotated.push(where);
+        if (shapeFree.test(line)) population.push(where);
+        const hit = pin.exec(line);
+        if (!hit) continue;
+        matched.push(where);
+        if (!versionComment.test(hit[1] ?? "")) unannotated.push(where);
       }
     }
 
-    expect(annotated.length).toBeGreaterThan(0);
+    // Liveness first: a selector matching nothing is a better message here than
+    // a 33-element diff, and the equality below cannot fire when both are empty.
+    expect(matched.length).toBeGreaterThan(0);
+    expect(matched).toEqual(population);
     expect(unannotated).toEqual([]);
   });
 
