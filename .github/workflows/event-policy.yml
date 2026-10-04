@@ -17,6 +17,29 @@ concurrency:
 
 jobs:
   event-policy:
+    if: github.event_name == 'push' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: overflow-ledger
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.17.0"
+
+      - name: Check Actions event policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LEDGER_APP_ID: "5118623"
+          LEDGER_INSTALLATION_ID: "166057493"
+          LEDGER_APP_KEY: ${{ secrets.LEDGER_APP_KEY }}
+        run: node scripts/check-actions-event-policy.ts
+
+  event-policy-pull-request:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
