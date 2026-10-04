@@ -453,7 +453,7 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   "code-scanning.yml": ["analyze"],
   "coverage-comment.yml": ["comment"],
   "dependency-audit.yml": ["audit"],
-  "event-policy.yml": ["event-policy"],
+  "event-policy.yml": ["event-policy", "event-policy-pull-request"],
   "ledger-relay.yml": ["relay-required-checks"],
   "pr-gate.yml": ["gate"],
   "ratchet-guard.yml": ["ratchet-guard"],
