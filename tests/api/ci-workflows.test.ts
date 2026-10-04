@@ -1134,25 +1134,47 @@ exit 1
   // that closes it. It reads the raw text because a YAML parse drops the comment,
   // and it does NOT assert which release the comment names: that half is zizmor's
   // warning-severity job and duplicating it here would restate a value.
+  //
+  // Three ways that went wrong the first time round, all of them silent, so the
+  // shape below is load-bearing rather than incidental:
+  //
+  //  - `owner/repo/subpath` is a real shape and this tree uses it three times
+  //    (github/codeql-action/init, /analyze, /upload-sarif). A selector written
+  //    `[\w.-]+\/[\w.-]+` cannot match two path segments, so all three were
+  //    invisible to this case AND to zizmor, whose missing-comment arm is
+  //    help-severity and suppressed under the gate's persona. `(?:\/[\w.-]+)*`
+  //    takes any number of further segments; a spelling-independent sweep
+  //    (detect a pin by `uses:` + an `@` + 40 hex, never by its path shape) puts
+  //    the tree at 33 real pins, 33 matched.
+  //  - The liveness guard counts PINS, not workflow FILES. A selector that
+  //    silently matches nothing sits between the two, and a file-count guard
+  //    stays green across that. Rotting `{40}` to `{39}` — one character — used
+  //    to pass with a version comment deleted.
+  //  - The comment shape is anchored to digits. `#\s*v\S+` is satisfied by
+  //    `# verify against the action docs`, which zizmor does NOT back up: it
+  //    treats any present comment as annotated. `v\d+\.\d+\.\d+` is zizmor's own
+  //    shape and matches every comment the tree ships today.
   it("annotates every SHA-pinned action with the release its pin names", async () => {
     const workflows = (await readdir(resolve(".github/workflows")))
       .filter((name) => name.endsWith(".yml"));
-    expect(workflows.length).toBeGreaterThan(0);
 
-    const pin = /\buses:\s*[\w.-]+\/[\w.-]+@[0-9a-f]{40}\s*(#.*)?$/;
-    const versionComment = /#\s*v\S+/;
+    const pin = /\buses:\s*[\w.-]+(?:\/[\w.-]+)*@[0-9a-f]{40}\s*(#.*)?$/;
+    const versionComment = /#\s*v\d+\.\d+\.\d+/;
+    const annotated: string[] = [];
     const unannotated: string[] = [];
 
     for (const name of workflows) {
       const source = await readFile(resolve(".github/workflows", name), "utf8");
       for (const [index, line] of source.split("\n").entries()) {
         const match = pin.exec(line);
-        if (match && !versionComment.test(match[1] ?? "")) {
-          unannotated.push(`${name}:${index + 1}`);
-        }
+        if (!match) continue;
+        const where = `${name}:${index + 1}`;
+        annotated.push(where);
+        if (!versionComment.test(match[1] ?? "")) unannotated.push(where);
       }
     }
 
+    expect(annotated.length).toBeGreaterThan(0);
     expect(unannotated).toEqual([]);
   });
 
