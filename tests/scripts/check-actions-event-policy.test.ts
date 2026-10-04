@@ -1,17 +1,34 @@
+import { createVerify, generateKeyPairSync } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 import * as actionsEventPolicy from "../../scripts/check-actions-event-policy.ts";
 import { classify } from "../../scripts/check-actions-event-policy.ts";
 
-type ApiResponse = { status: number; body: string; error?: string };
+type ApiResponse = { status: number; body: string; error?: string; headers?: Headers };
 type PolicyTransport = (
   input: string,
   init?: RequestInit,
-) => Promise<Pick<Response, "status" | "text">>;
-type RunnerResult = { exitCode: number; message: string };
+) => Promise<Pick<Response, "status" | "text" | "headers">>;
+type Outcome = "pass" | "fail" | "neutral";
+type RunnerResult = { outcome: Outcome; exitCode: number; message: string };
 type Runner = (token: string | undefined, transport?: PolicyTransport) => Promise<RunnerResult>;
+type ScriptRun = { result: RunnerResult; warnings: string[] };
+type ScriptRunner = (
+  env: Record<string, string | undefined>,
+  transport?: PolicyTransport,
+) => Promise<ScriptRun>;
+type ReportRenderer = (
+  result: RunnerResult,
+  warnings?: string[],
+) => { out: string[]; err: string[]; exitCode: number };
 
 const runCheck = (actionsEventPolicy as typeof actionsEventPolicy & { runCheck?: Runner })
   .runCheck;
+const runScript = (actionsEventPolicy as typeof actionsEventPolicy & { runScript?: ScriptRunner })
+  .runScript;
+const renderReport = (
+  actionsEventPolicy as typeof actionsEventPolicy & { renderReport?: ReportRenderer }
+).renderReport;
 const POLICY_LIST_URL =
   "https://api.github.com/repos/Nitjsefnie/Overflow/actions/policies";
 const POLICY_LIST_PATH = new URL(POLICY_LIST_URL).pathname;
@@ -76,21 +93,21 @@ describe("Actions event policy classification", () => {
   it("fails visibly when the policy-list surface is absent", () => {
     const result = classify({ status: 404, body: "Not Found" }, []);
 
-    expect(result.pass).toBe(false);
+    expect(result.outcome).toBe("fail");
     expect(result.reason).toContain("2026-11-02");
   });
 
   it("fails when the policy list is empty", () => {
     const result = classify(listResponse(0), []);
 
-    expect(result.pass).toBe(false);
+    expect(result.outcome).toBe("fail");
     expect(result.reason).toMatch(/no .*polic/i);
   });
 
   it("fails visibly when a policy detail fetch fails", () => {
     const result = classify(listResponse(1), [{ status: 403, body: "Forbidden" }]);
 
-    expect(result.pass).toBe(false);
+    expect(result.outcome).toBe("fail");
     expect(result.reason).toContain("403");
     expect(result.reason).toContain("6375");
     expect(result.reason).toContain("Administration read");
@@ -99,7 +116,7 @@ describe("Actions event policy classification", () => {
   it("passes when an active ~ALL policy allows both required events", () => {
     const result = classify(listResponse(1), [detailResponse()]);
 
-    expect(result.pass).toBe(true);
+    expect(result.outcome).toBe("pass");
   });
 
   it("fails when a required event is missing and names it", () => {
@@ -114,7 +131,7 @@ describe("Actions event policy classification", () => {
       }),
     ]);
 
-    expect(result.pass).toBe(false);
+    expect(result.outcome).toBe("fail");
     expect(result.reason).toContain("workflow_run");
     expect(result.reason).toContain("repo-event-policy");
   });
@@ -122,7 +139,7 @@ describe("Actions event policy classification", () => {
   it("fails when enforcement is disabled", () => {
     const result = classify(listResponse(1), [detailResponse({ enforcement: "disabled" })]);
 
-    expect(result.pass).toBe(false);
+    expect(result.outcome).toBe("fail");
     expect(result.reason).toContain("active");
   });
 
@@ -132,7 +149,7 @@ describe("Actions event policy classification", () => {
       detailResponse({ id: 6376, enforcement: "evaluate" }),
     ]);
 
-    expect(result.pass).toBe(false);
+    expect(result.outcome).toBe("fail");
     expect(result.reason).toContain("6376");
     expect(result.reason).toContain("evaluate");
   });
@@ -143,7 +160,7 @@ describe("Actions event policy classification", () => {
       detailResponse({ id: 6376, enforcement: undefined }),
     ]);
 
-    expect(result.pass).toBe(false);
+    expect(result.outcome).toBe("fail");
     expect(result.reason).toContain("6376");
     expect(result.reason).toMatch(/malformed|missing|enforcement/i);
   });
@@ -157,7 +174,7 @@ describe("Actions event policy classification", () => {
       }),
     ]);
 
-    expect(result.pass).toBe(false);
+    expect(result.outcome).toBe("fail");
     expect(result.reason).toContain("~ALL");
   });
 
@@ -166,14 +183,14 @@ describe("Actions event policy classification", () => {
       detailResponse({ conditions: {} }),
     ]);
 
-    expect(result.pass).toBe(true);
+    expect(result.outcome).toBe("pass");
     expect(result.reason).toContain("6375");
   });
 
   it("fails when the detail body's id does not match the listed policy id", () => {
     const result = classify(listResponse(1), [detailResponse({ id: 999 })]);
 
-    expect(result.pass).toBe(false);
+    expect(result.outcome).toBe("fail");
     expect(result.reason).toMatch(/does not match the list/);
     expect(result.reason).toContain("6375");
   });
@@ -193,7 +210,7 @@ describe("Actions event policy classification", () => {
       ],
     );
 
-    expect(result.pass).toBe(false);
+    expect(result.outcome).toBe("fail");
     expect(result.reason).toContain("6375");
     expect(result.reason).toMatch(/exclud|full coverage/i);
   });
@@ -201,14 +218,14 @@ describe("Actions event policy classification", () => {
   it("fails closed when the policy-list JSON is malformed", () => {
     const result = classify({ status: 200, body: "not JSON" }, []);
 
-    expect(result.pass).toBe(false);
+    expect(result.outcome).toBe("fail");
     expect(result.reason).toMatch(/JSON|malformed/i);
   });
 
   it("fails closed when a policy detail body is malformed", () => {
     const result = classify(listResponse(1), [{ status: 200, body: "{" }]);
 
-    expect(result.pass).toBe(false);
+    expect(result.outcome).toBe("fail");
     expect(result.reason).toMatch(/JSON|malformed/i);
     expect(result.reason).toContain("6375");
   });
@@ -222,15 +239,76 @@ describe("Actions event policy classification", () => {
       null,
     ] })]);
 
-    expect(result.pass).toBe(false);
+    expect(result.outcome).toBe("fail");
     expect(result.reason).toContain("malformed restrict_action_events rule");
   });
 
-  it.each([403, 500])("fails visibly for policy-list HTTP %s", (status) => {
+  it.each([500])("fails visibly for policy-list HTTP %s", (status) => {
     const result = classify({ status, body: "" }, []);
 
-    expect(result.pass).toBe(false);
+    expect(result.outcome).toBe("fail");
     expect(result.reason).toContain(String(status));
+  });
+
+  it("ends neutral on the list 403 that is the known permission gap", () => {
+    const result = classify({ status: 403, body: "Forbidden" }, []);
+
+    expect(result.outcome).toBe("neutral");
+    expect(result.reason).toContain("1024");
+    expect(result.reason).toContain("Administration read");
+  });
+
+  it("ends neutral on a list 403 whose body names the integration access gap", () => {
+    const result = classify(
+      { status: 403, body: "Resource not accessible by integration" },
+      [],
+    );
+
+    expect(result.outcome).toBe("neutral");
+  });
+
+  it.each([
+    ["the x-ratelimit-remaining header at 0", { "x-ratelimit-remaining": "0" }, ""],
+    ["a retry-after header", { "retry-after": "60" }, ""],
+    ["a secondary rate-limit body", undefined, "You have exceeded a secondary rate limit"],
+    [
+      "a primary rate-limit body",
+      undefined,
+      "You have exceeded a primary rate limit. Please wait for your rate limit to reset.",
+    ],
+  ])("fails on a list 403 naming a rate limit: %s", (_label, headers, body) => {
+    const result = classify(
+      {
+        status: 403,
+        body,
+        headers: headers === undefined ? undefined : new Headers(headers),
+      },
+      [],
+    );
+
+    expect(result.outcome).toBe("fail");
+  });
+
+  it("does not read a rate limit into a non-zero x-ratelimit-remaining header", () => {
+    const result = classify(
+      {
+        status: 403,
+        body: "Forbidden",
+        headers: new Headers({ "x-ratelimit-remaining": "59" }),
+      },
+      [],
+    );
+
+    expect(result.outcome).toBe("neutral");
+  });
+
+  it("keeps a policy-detail 403 a failure even when the response carries no rate-limit marker", () => {
+    const result = classify(listResponse(1), [
+      { status: 403, body: "Forbidden", headers: new Headers() },
+    ]);
+
+    expect(result.outcome).toBe("fail");
+    expect(result.reason).toContain("6375");
   });
 });
 
@@ -323,7 +401,7 @@ describe("Actions event policy runner", () => {
     expect(calls).toEqual([]);
   });
 
-  it("explains the Administration read-token requirement on HTTP 403", async () => {
+  it("ends neutral on the permission-gap 403, naming the issue and the missing permission", async () => {
     const transport: PolicyTransport = async () => new Response("Forbidden", { status: 403 });
 
     if (runCheck === undefined) {
@@ -332,10 +410,94 @@ describe("Actions event policy runner", () => {
     }
     const result = await runCheck("github-token", transport);
 
-    expect(result.exitCode).toBe(1);
-    expect(result.message).toContain("GITHUB_TOKEN");
+    expect(result.outcome).toBe("neutral");
+    expect(result.exitCode).toBe(0);
+    expect(result.message).toContain("1024");
     expect(result.message).toContain("Administration read");
-    expect(result.message).toContain("maintainer-wired secret");
+  });
+
+  it("fails on a list 403 carrying a rate-limit header", async () => {
+    const transport: PolicyTransport = async () =>
+      new Response("Forbidden", { status: 403, headers: { "x-ratelimit-remaining": "0" } });
+
+    if (runCheck === undefined) {
+      expect(runCheck, "the injectable runner must be exported").toBeTypeOf("function");
+      return;
+    }
+    const result = await runCheck("github-token", transport);
+
+    expect(result.outcome).toBe("fail");
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toMatch(/rate limit/i);
+  });
+
+  it("ends neutral without the page-failed prefix when a later list page hits the permission gap", async () => {
+    const pages: number[] = [];
+    const transport: PolicyTransport = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === POLICY_LIST_PATH) {
+        const page = Number(url.searchParams.get("page") ?? "1");
+        pages.push(page);
+        if (page === 2) return new Response("Forbidden", { status: 403 });
+        return new Response(JSON.stringify({
+          total_count: 101,
+          policies: Array.from({ length: 100 }, (_, index) => ({
+            id: index + 1,
+            name: `policy-${index + 1}`,
+          })),
+        }), { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    };
+
+    if (runCheck === undefined) {
+      expect(runCheck, "the injectable runner must be exported").toBeTypeOf("function");
+      return;
+    }
+    const result = await runCheck("offline-token", transport);
+
+    expect(result.outcome).toBe("neutral");
+    expect(result.exitCode).toBe(0);
+    expect(result.message).toContain("1024");
+    expect(result.message).not.toContain("page 2 failed");
+    expect(pages).toEqual([1, 2]);
+  });
+
+  it("fails with the page-failed prefix when a later list page is rate limited", async () => {
+    const pages: number[] = [];
+    const transport: PolicyTransport = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === POLICY_LIST_PATH) {
+        const page = Number(url.searchParams.get("page") ?? "1");
+        pages.push(page);
+        if (page === 2) {
+          return new Response("Forbidden", {
+            status: 403,
+            headers: { "x-ratelimit-remaining": "0" },
+          });
+        }
+        return new Response(JSON.stringify({
+          total_count: 101,
+          policies: Array.from({ length: 100 }, (_, index) => ({
+            id: index + 1,
+            name: `policy-${index + 1}`,
+          })),
+        }), { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    };
+
+    if (runCheck === undefined) {
+      expect(runCheck, "the injectable runner must be exported").toBeTypeOf("function");
+      return;
+    }
+    const result = await runCheck("offline-token", transport);
+
+    expect(result.outcome).toBe("fail");
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toContain("page 2 failed");
+    expect(result.message).toMatch(/rate limit/i);
+    expect(pages).toEqual([1, 2]);
   });
 
   it("fetches a 31st policy and fails when that policy is malformed", async () => {
@@ -498,5 +660,309 @@ describe("Actions event policy runner", () => {
     expect(result.exitCode).toBe(0);
     expect(pages).toEqual([1, 2]);
     expect(details).toHaveLength(101);
+  });
+});
+
+describe("Actions event policy report rendering", () => {
+  const mustRender = (): ReportRenderer => {
+    if (renderReport === undefined) {
+      expect(renderReport, "the report renderer must be exported").toBeTypeOf("function");
+    }
+    return renderReport as ReportRenderer;
+  };
+
+  it("renders a neutral outcome with the warning annotation and exit 0", () => {
+    const rendered = mustRender()(
+      { outcome: "neutral", exitCode: 0, message: "Cannot verify the event policy (issue 1024).\nSecond line." },
+      [],
+    );
+
+    expect(rendered.exitCode).toBe(0);
+    expect(rendered.out).toEqual([
+      "Cannot verify the event policy (issue 1024).\nSecond line.",
+    ]);
+    expect(rendered.err).toEqual([
+      "::warning::Cannot verify the event policy (issue 1024). Second line.",
+    ]);
+  });
+
+  it("renders a failure with the error annotation and exit 1", () => {
+    const rendered = mustRender()(
+      { outcome: "fail", exitCode: 1, message: "Actions policy list request failed with HTTP 403." },
+      [],
+    );
+
+    expect(rendered.exitCode).toBe(1);
+    expect(rendered.out).toEqual(["Actions policy list request failed with HTTP 403."]);
+    expect(rendered.err).toEqual([
+      "::error::Actions policy list request failed with HTTP 403.",
+    ]);
+  });
+
+  it("keeps the missing-token failure an error annotation on both streams", () => {
+    const rendered = mustRender()(
+      {
+        outcome: "fail",
+        exitCode: 1,
+        message: "Missing GITHUB_TOKEN and GH_TOKEN; cannot verify the Actions event policy.",
+      },
+      [],
+    );
+
+    expect(rendered.exitCode).toBe(1);
+    expect(rendered.out).toEqual([
+      "::error::Missing GITHUB_TOKEN and GH_TOKEN; cannot verify the Actions event policy.",
+    ]);
+    expect(rendered.err).toEqual([
+      "::error::Missing GITHUB_TOKEN and GH_TOKEN; cannot verify the Actions event policy.",
+    ]);
+  });
+
+  it("renders a pass with no annotation and exit 0", () => {
+    const rendered = mustRender()(
+      { outcome: "pass", exitCode: 0, message: 'policy 6375 ("p") is active, targets all workflows.' },
+      [],
+    );
+
+    expect(rendered.exitCode).toBe(0);
+    expect(rendered.out).toEqual(['policy 6375 ("p") is active, targets all workflows.']);
+    expect(rendered.err).toEqual([]);
+  });
+
+  it("renders extra warnings as warning annotations after the outcome line", () => {
+    const rendered = mustRender()(
+      { outcome: "neutral", exitCode: 0, message: "gap message naming 1024" },
+      ["the neutral check run could not be posted (HTTP 500)"],
+    );
+
+    expect(rendered.exitCode).toBe(0);
+    expect(rendered.out).toEqual(["gap message naming 1024"]);
+    expect(rendered.err).toEqual([
+      "::warning::gap message naming 1024",
+      "::warning::the neutral check run could not be posted (HTTP 500)",
+    ]);
+  });
+});
+
+describe("Actions event policy entry orchestration", () => {
+  function mustRun(): ScriptRunner {
+    if (runScript === undefined) {
+      expect(runScript, "the entry orchestration must be exported").toBeTypeOf("function");
+    }
+    return runScript as ScriptRunner;
+  }
+
+  function generatedKeyPair(): { publicKey: string; privateKey: string } {
+    return generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: "spki", format: "pem" },
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    }) as unknown as { publicKey: string; privateKey: string };
+  }
+
+  function appEnv(appKey: string): Record<string, string | undefined> {
+    return {
+      LEDGER_APP_ID: "5118623",
+      LEDGER_INSTALLATION_ID: "166057493",
+      LEDGER_APP_KEY: appKey,
+      GITHUB_SHA: "a".repeat(40),
+    };
+  }
+
+  function mintCallOf(calls: Array<{ url: string; init?: RequestInit }>): {
+    url: string;
+    init?: RequestInit;
+  } {
+    const mintCall = calls.find(({ url }) => url.includes("/app/installations/"));
+    if (mintCall === undefined) {
+      throw new Error("no installation-token mint call was recorded");
+    }
+    return mintCall;
+  }
+
+  function checkRunCallOf(calls: Array<{ url: string; init?: RequestInit }>): {
+    url: string;
+    init?: RequestInit;
+  } {
+    const postCall = calls.find(({ url }) => url.endsWith("/check-runs"));
+    if (postCall === undefined) {
+      throw new Error("no check-run post was recorded");
+    }
+    return postCall;
+  }
+
+  function transportFor(
+    calls: Array<{ url: string; init?: RequestInit }>,
+    routes: {
+      mint?: () => Response;
+      list?: () => Response;
+      checkRun?: () => Response;
+    },
+  ): PolicyTransport {
+    return async (input, init) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes("/app/installations/")) {
+        return routes.mint === undefined
+          ? new Response(JSON.stringify({ token: "installation-token-1" }), { status: 201 })
+          : routes.mint();
+      }
+      if (new URL(url).pathname === POLICY_LIST_PATH) {
+        return routes.list === undefined
+          ? new Response("Forbidden", { status: 403 })
+          : routes.list();
+      }
+      if (url.endsWith("/check-runs")) {
+        return routes.checkRun === undefined ? new Response("{}", { status: 201 }) : routes.checkRun();
+      }
+      return new Response("{}", { status: 200 });
+    };
+  }
+
+  it("mints the App token first, runs the whole check with it, and posts the App-owned neutral check run", async () => {
+    const { publicKey, privateKey } = generatedKeyPair();
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      list: () => new Response("Forbidden", { status: 403 }),
+    });
+
+    const { result, warnings } = await mustRun()(appEnv(privateKey), transport);
+
+    expect(result.outcome).toBe("neutral");
+    expect(result.exitCode).toBe(0);
+    expect(warnings).toEqual([]);
+
+    const mintCall = mintCallOf(calls);
+    expect(mintCall.url).toContain("/app/installations/166057493/access_tokens");
+    expect(mintCall.init?.method).toBe("POST");
+    const jwt = String(
+      new Headers(mintCall.init?.headers).get("authorization"),
+    ).slice("Bearer ".length);
+    const [jwtHeader, jwtPayload, jwtSignature] = jwt.split(".");
+    const verified = createVerify("RSA-SHA256")
+      .update(`${jwtHeader}.${jwtPayload}`)
+      .verify(publicKey, Buffer.from(jwtSignature, "base64url"));
+    expect(verified).toBe(true);
+    expect(JSON.parse(Buffer.from(jwtHeader, "base64url").toString("utf8")))
+      .toMatchObject({ alg: "RS256", typ: "JWT" });
+    expect(JSON.parse(Buffer.from(jwtPayload, "base64url").toString("utf8")))
+      .toMatchObject({ iss: "5118623" });
+
+    const listCall = calls.find(({ url }) => new URL(url).pathname === POLICY_LIST_PATH);
+    expect(listCall).toBeDefined();
+    expect(listCall?.init?.headers).toMatchObject({
+      Authorization: "Bearer installation-token-1",
+    });
+
+    const postCall = checkRunCallOf(calls);
+    expect(postCall.init?.headers).toMatchObject({
+      Authorization: "Bearer installation-token-1",
+    });
+    const body = JSON.parse(String(postCall.init?.body)) as {
+      name: string;
+      head_sha: string;
+      status: string;
+      conclusion: string;
+      output: { title: string; summary: string };
+    };
+    expect(body).toMatchObject({
+      name: "event-policy",
+      head_sha: "a".repeat(40),
+      status: "completed",
+      conclusion: "neutral",
+      output: { title: "Cannot verify the Actions event policy" },
+    });
+    expect(body.output.summary).toContain("1024");
+    expect(body.output.summary).toContain("Administration read");
+  });
+
+  it("runs the check under GH_TOKEN and posts nothing when the App credentials are absent", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      list: () => new Response("Forbidden", { status: 403 }),
+    });
+
+    const { result, warnings } = await mustRun()({ GH_TOKEN: "gh-token" }, transport);
+
+    expect(result.outcome).toBe("neutral");
+    expect(result.exitCode).toBe(0);
+    expect(warnings).toEqual([]);
+    expect(calls.some(({ url }) => url.includes("/app/installations/"))).toBe(false);
+    expect(calls.some(({ url }) => url.endsWith("/check-runs"))).toBe(false);
+    const listCall = calls.find(({ url }) => new URL(url).pathname === POLICY_LIST_PATH);
+    expect(listCall?.init?.headers).toMatchObject({ Authorization: "Bearer gh-token" });
+  });
+
+  it("falls back to GH_TOKEN when the mint fails, never throws, and posts no check run", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      mint: () => new Response("server error", { status: 500 }),
+      list: () => new Response("Forbidden", { status: 403 }),
+    });
+
+    const { result, warnings } = await mustRun()(
+      { ...appEnv(generatedKeyPair().privateKey), GH_TOKEN: "gh-token" },
+      transport,
+    );
+
+    expect(result.outcome).toBe("neutral");
+    expect(result.exitCode).toBe(0);
+    expect(warnings.join("\n")).toMatch(/could not be minted/);
+    expect(calls.some(({ url }) => url.endsWith("/check-runs"))).toBe(false);
+    const listCall = calls.find(({ url }) => new URL(url).pathname === POLICY_LIST_PATH);
+    expect(listCall?.init?.headers).toMatchObject({ Authorization: "Bearer gh-token" });
+  });
+
+  it("never throws when the App key is unusable and still runs the check", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      list: () => new Response("Forbidden", { status: 403 }),
+    });
+
+    const { result, warnings } = await mustRun()(
+      { ...appEnv("not a usable pem key"), GH_TOKEN: "gh-token" },
+      transport,
+    );
+
+    expect(result.outcome).toBe("neutral");
+    expect(result.exitCode).toBe(0);
+    expect(warnings.join("\n")).toMatch(/could not be minted/);
+    expect(calls.some(({ url }) => url.includes("/app/installations/"))).toBe(false);
+    expect(calls.some(({ url }) => url.endsWith("/check-runs"))).toBe(false);
+    const listCall = calls.find(({ url }) => new URL(url).pathname === POLICY_LIST_PATH);
+    expect(listCall?.init?.headers).toMatchObject({ Authorization: "Bearer gh-token" });
+  });
+
+  it("warns and still ends neutral when the check-run post fails", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      list: () => new Response("Forbidden", { status: 403 }),
+      checkRun: () => new Response("nope", { status: 500 }),
+    });
+
+    const { result, warnings } = await mustRun()(
+      appEnv(generatedKeyPair().privateKey),
+      transport,
+    );
+
+    expect(result.outcome).toBe("neutral");
+    expect(result.exitCode).toBe(0);
+    expect(warnings.join("\n")).toContain("could not be posted");
+  });
+
+  it("skips the post and says so when GITHUB_SHA is absent", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      list: () => new Response("Forbidden", { status: 403 }),
+    });
+    const env = appEnv(generatedKeyPair().privateKey);
+    delete env.GITHUB_SHA;
+
+    const { result, warnings } = await mustRun()(env, transport);
+
+    expect(result.outcome).toBe("neutral");
+    expect(result.exitCode).toBe(0);
+    expect(warnings.join("\n")).toContain("GITHUB_SHA");
+    expect(calls.some(({ url }) => url.endsWith("/check-runs"))).toBe(false);
   });
 });
