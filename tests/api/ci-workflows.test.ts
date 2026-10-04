@@ -84,7 +84,7 @@ describe("GitHub Actions release gates", () => {
         "timeout-minutes": 5,
         permissions: { issues: "write", "pull-requests": "write" },
         steps: [{
-          uses: "Nitjsefnie-Actions/claim@0c79a0325d8ab789a60c2eeaf751690d2875c39c",
+          uses: "Nitjsefnie-Actions/claim@cd8ffd8227e94cdf60ed2580016187353b055cf4",
           with: {
             "max-claims": "read=2, triage=4, write=6, maintain=10, admin=-1",
             expire: "7",
