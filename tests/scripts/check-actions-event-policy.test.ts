@@ -957,6 +957,28 @@ describe("Actions event policy entry orchestration", () => {
     expect(calls.some(({ url }) => new URL(url).pathname === POLICY_LIST_PATH)).toBe(false);
   });
 
+  it("fails closed when the mint returns 2xx but the body carries no usable token", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      mint: () => new Response('{"unexpected": "shape"}', { status: 200 }),
+      list: () => new Response("Forbidden", { status: 403 }),
+    });
+
+    const { result, warnings } = await mustRun()(
+      { ...appEnv(generatedKeyPair().privateKey), GH_TOKEN: "gh-token" },
+      transport,
+    );
+
+    expect(result.outcome).toBe("fail");
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toMatch(/mint returned no token/);
+    expect(result.message).toContain("LEDGER_APP_KEY");
+    expect(warnings).toEqual([]);
+    expect(calls.some(({ url }) => url.includes("/app/installations/"))).toBe(true);
+    expect(calls.some(({ url }) => new URL(url).pathname === POLICY_LIST_PATH)).toBe(false);
+    expect(calls.some(({ url }) => url.endsWith("/check-runs"))).toBe(false);
+  });
+
   it("fails closed when the mint transport rejects, even with no GH_TOKEN to fall back to", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const transport = transportFor(calls, {

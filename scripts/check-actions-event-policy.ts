@@ -33,8 +33,10 @@ type RunnerResult = { outcome: Outcome; exitCode: 0 | 1; message: string };
 /** What runScript hands report(): the classification plus best-effort action warnings. */
 export type ScriptRun = { result: RunnerResult; warnings: string[] };
 /**
- * The credential the check ran under. It names whoever drew the 403 in the
- * neutral message and keys the fail-closed mint rule in runScript.
+ * The credential the check ran under: it names whoever drew the 403 in the
+ * neutral message. The fail-closed mint rule keys on the mint outcome
+ * (mint.warning), not on this value — runScript derives the credential only
+ * after that rule has passed, and it selects the wording alone.
  */
 export type Credential = "app-installation-token" | "github-token";
 
