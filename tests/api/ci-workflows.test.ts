@@ -98,20 +98,25 @@ describe("GitHub Actions release gates", () => {
     const contributing = await readFile(resolve(process.cwd(), "CONTRIBUTING.md"), "utf8");
     // Markdown determines the destination boundary: quotes can be part of
     // an unquoted destination, so treating them as delimiters truncates refs.
-    const contributingHref = new MarkdownIt().parse(contributing, {})
+    // The whole matching SET, not its first member: `.find()` took whichever
+    // claim-tree link came first, so a second one elsewhere in the file was
+    // silently ignored and this guard stayed green while the link CONTRIBUTING
+    // actually documents had drifted. An ambiguous set fails instead.
+    const contributingClaimHrefs = new MarkdownIt().parse(contributing, {})
       .flatMap((token) => token.children ?? [])
       .filter((token) => token.type === "link_open")
       .map((token) => token.attrGet("href"))
-      .find((href): href is string => typeof href === "string"
+      .filter((href): href is string => typeof href === "string"
         && href.startsWith("https://github.com/Nitjsefnie-Actions/claim/tree/"));
-    const contributingRevision = contributingHref
-      ? new URL(contributingHref).pathname.split("/")[4]
-      : undefined;
+    const [contributingRevision] = contributingClaimHrefs.map(
+      (href) => new URL(href).pathname.split("/")[4],
+    );
     const workflow = await readWorkflow("claim.yml");
     const workflowSha = workflow.jobs.claim!.steps[0]!.uses?.match(
       /^Nitjsefnie-Actions\/claim@([0-9a-f]{40})$/,
     )?.[1];
 
+    expect(contributingClaimHrefs).toHaveLength(1);
     expect(contributingRevision).toBeDefined();
     expect(workflowSha).toBeDefined();
     expect(contributingRevision ?? "").toMatch(/^[0-9a-f]{40}$/);
