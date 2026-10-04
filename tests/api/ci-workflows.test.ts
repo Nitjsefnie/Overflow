@@ -162,7 +162,7 @@ describe("GitHub Actions release gates", () => {
 
   it("checks admission through the reviewed shared action without a consumer checkout", async () => {
     const workflow = await readWorkflow("pr-gate.yml");
-    expect(workflow.on).toEqual({ pull_request_target: { types: ["opened", "edited", "reopened"] } });
+    expect(workflow.on).toEqual({ pull_request_target: { types: ["opened", "edited", "reopened", "ready_for_review"] } });
     expect(workflow.permissions).toEqual({ contents: "read", "pull-requests": "write", issues: "read" });
     expect(workflow.concurrency).toEqual({
       group: "pr-gate-${{ github.event.pull_request.number }}",
@@ -170,7 +170,7 @@ describe("GitHub Actions release gates", () => {
     });
     expect(workflow.jobs).toEqual({
       gate: {
-        if: "github.event.pull_request.user.type != 'Bot'",
+        if: "github.event.pull_request.user.type != 'Bot' && github.event.pull_request.draft == false",
         "runs-on": "ubuntu-latest",
         "timeout-minutes": 5,
         steps: [{
