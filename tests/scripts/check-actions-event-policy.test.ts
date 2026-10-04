@@ -933,6 +933,27 @@ describe("Actions event policy entry orchestration", () => {
     expect(listCall?.init?.headers).toMatchObject({ Authorization: "Bearer gh-token" });
   });
 
+  it("posts no check run when the outcome is failure, even with App credentials present", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      list: () =>
+        new Response("Forbidden", {
+          status: 403,
+          headers: { "x-ratelimit-remaining": "0" },
+        }),
+    });
+
+    const { result, warnings } = await mustRun()(
+      appEnv(generatedKeyPair().privateKey),
+      transport,
+    );
+
+    expect(result.outcome).toBe("fail");
+    expect(result.exitCode).toBe(1);
+    expect(warnings).toEqual([]);
+    expect(calls.some(({ url }) => url.endsWith("/check-runs"))).toBe(false);
+  });
+
   it("warns and still ends neutral when the check-run post fails", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const transport = transportFor(calls, {
