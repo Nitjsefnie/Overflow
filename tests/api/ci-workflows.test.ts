@@ -1233,28 +1233,50 @@ exit 1
     //    to the "covered" direction was tried and discarded: it closed nothing,
     //    because the false red this case was fixing lives in the detector
     //    matching something that is not a pin, not in the comparison's strictness.
-    //  - What is NOT established, in two directions, and both lists are the whole
-    //    census rather than a sample:
+    //  - What is NOT established. Below is a SAMPLE of forms measured against these
+    //    two regexes, not a census of them: an earlier version of this comment
+    //    called the list a census, and measuring showed that was false. Three
+    //    directions, all open:
     //
-    //    (a) Forms NEITHER regex matches, so the pins leave both sets together
-    //        and nothing here can see them: a `uses:` inside a comment or prose
-    //        (the anchor), a `- {uses: …}` flow mapping with or without a
-    //        comment, a `docker://img@sha256:<64hex>` container digest, an
-    //        `&anchor` on the value, a folded `>-`, and a `.yaml` workflow file
-    //        (filtered out at the `readdir`). CRLF is NOT in this list: the
-    //        `split(/\r?\n/)` above already covers it.
-    //    (b) Forms `shapeFree` accepts and `pin` rejects — DETECTOR-ONLY, eight
-    //        of them: a subpath segment containing `+`, `~`, `(` or `:`, a path
-    //        containing `@`, and a scheme that is not lowercase-with-`//`
-    //        (`DOCKER://`, `Docker://`, `docker:/`). On any of these the
-    //        equality fails, naming a pin `pin` cannot read. None is a value
-    //        GitHub accepts for an action path — the syntax is alphanumerics
-    //        plus `-`, `_`, `.` and `/` — so there is no reachable false red,
-    //        but a red on one of them is the DETECTOR talking, not a pin that
-    //        lost its comment.
+    //    (a) Forms NEITHER regex matches. The pins leave both sets together and
+    //        nothing here can see them. Measured examples: a `uses:` inside a
+    //        comment or prose (the anchor), a `- {uses: …}` flow mapping with or
+    //        without a comment, a `docker://img@sha256:<64hex>` container
+    //        digest, an `&anchor` on the value, a folded `>-`, and a `.yaml`
+    //        workflow file (filtered out at the `readdir`). CRLF is NOT in this
+    //        list: the `split(/\r?\n/)` above already covers it.
+    //        REACHABLE AND SILENT, and the reason the sample matters: a QUOTED
+    //        scalar — `- uses: "owner/repo@<40hex>"` — is legal YAML, matches
+    //        neither regex, and a workflow holding only unannotated quoted or
+    //        uppercase pins leaves this case green while reporting full
+    //        coverage. That is the exact failure this case exists to prevent,
+    //        still open, and not fixed here.
     //
-    // Those are recorded limits, not closed routes, and no assertion here
-    // pretends otherwise.
+    //    (b) Forms `shapeFree` accepts and `pin` rejects — DETECTOR-ONLY. On
+    //        any of these the equality fails, naming a pin `pin` cannot read.
+    //        Naming the five I happened to try is worse than naming the class:
+    //        sweeping every printable ASCII character into a subpath segment
+    //        leaves the two disagreeing on TWENTY-EIGHT of them —
+    //        `!"#$%&'()*+,:;<=>?@[\]^`{|}~` — because each is outside `[\w.-]`
+    //        while `\S+` accepts it. Plus any scheme that is not
+    //        lowercase-with-`//` (`DOCKER://`, `Docker://`, `docker:/`). None is
+    //        a form GitHub's syntax reference documents or shows an example of;
+    //        that reference gives no character grammar for a path segment, so
+    //        this is "undocumented", not "impossible", and a red on one of them
+    //        is the DETECTOR talking rather than a pin that lost its comment.
+    //
+    //    (c) A form BOTH regexes read as an action pin, on which this case
+    //        demands a `vN.N.N` comment: GitHub documents
+    //        `{owner}/{repo}/.github/workflows/{filename}@{ref}`, and a SHA ref
+    //        matches here. Whether a reusable-workflow call should carry a
+    //        version comment is a policy this case never stated; zizmor 1.29.0
+    //        at `--persona=pedantic` reports no finding on such a line even with
+    //        a deliberately wrong version, so nothing else settles it. If one
+    //        appears here without a comment, this case will red it and no gate
+    //        would.
+    //
+    //    These are recorded limits, not closed routes, and the sample is not the
+    //    full set of either class. No assertion here pretends otherwise.
     //
     // Liveness first: a selector matching nothing is a better message than a
     // 33-element diff, and the equality cannot fire when both sets are empty.
