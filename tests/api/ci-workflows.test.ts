@@ -1123,6 +1123,39 @@ exit 1
     expect(zizmor!.if).toBe("${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}");
   });
 
+  // zizmor's ref-version-mismatch audit is the mechanism that catches a pin's
+  // version comment going stale after a bump — but only once the comment is
+  // THERE. Measured against zizmor 1.29.0 at the gate's own invocation: a pin
+  // with no version comment is reported at `help` severity, which falls below
+  // the `regular` persona floor the gate runs under and exits 0; the same pin
+  // carrying a STALE comment is reported at `warning` and exits 13. So the
+  // annotation is what puts a pin under that audit, and dropping it is silent —
+  // the state issue 1022 found for Nitjsefnie-Actions/pr-gate. This is the check
+  // that closes it. It reads the raw text because a YAML parse drops the comment,
+  // and it does NOT assert which release the comment names: that half is zizmor's
+  // warning-severity job and duplicating it here would restate a value.
+  it("annotates every SHA-pinned action with the release its pin names", async () => {
+    const workflows = (await readdir(resolve(".github/workflows")))
+      .filter((name) => name.endsWith(".yml"));
+    expect(workflows.length).toBeGreaterThan(0);
+
+    const pin = /\buses:\s*[\w.-]+\/[\w.-]+@[0-9a-f]{40}\s*(#.*)?$/;
+    const versionComment = /#\s*v\S+/;
+    const unannotated: string[] = [];
+
+    for (const name of workflows) {
+      const source = await readFile(resolve(".github/workflows", name), "utf8");
+      for (const [index, line] of source.split("\n").entries()) {
+        const match = pin.exec(line);
+        if (match && !versionComment.test(match[1] ?? "")) {
+          unannotated.push(`${name}:${index + 1}`);
+        }
+      }
+    }
+
+    expect(unannotated).toEqual([]);
+  });
+
   it("hash-pins every artifact in the zizmor requirements file", async () => {
     const text = await readFile(resolve(".github/requirements-zizmor.txt"), "utf8");
     const requirements = text.split("\n").filter((line) => {
