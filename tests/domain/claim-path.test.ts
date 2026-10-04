@@ -292,7 +292,7 @@ describe("known limits of textual evidence, not guaranteed runtime assignment", 
 });
 
 describe("reviewed shared claim action evidence", () => {
-  const action = "Nitjsefnie-Actions/claim@0c79a0325d8ab789a60c2eeaf751690d2875c39c";
+  const action = "Nitjsefnie-Actions/claim@cd8ffd8227e94cdf60ed2580016187353b055cf4";
   const caller = (reference: string, trigger = "on: issue_comment") => ({
     path: ".github/workflows/claim.yml",
     content: `${trigger}\njobs:\n  claim:\n    steps:\n      - uses: ${reference}\n`,
@@ -303,12 +303,12 @@ describe("reviewed shared claim action evidence", () => {
   });
 
   it.each([
-    ["fake owner", "someone-else/claim@0c79a0325d8ab789a60c2eeaf751690d2875c39c"],
-    ["suffixed action", "Nitjsefnie-Actions/claim-extra@0c79a0325d8ab789a60c2eeaf751690d2875c39c"],
-    // v2.0.1 was the previous reviewed SHA; the v2.0.3 bump is the recognition boundary.
+    ["fake owner", "someone-else/claim@cd8ffd8227e94cdf60ed2580016187353b055cf4"],
+    ["suffixed action", "Nitjsefnie-Actions/claim-extra@cd8ffd8227e94cdf60ed2580016187353b055cf4"],
+    // v2.0.3 was the previous reviewed SHA; the v2.0.4 bump is the recognition boundary.
     // Rejecting an obsolete pin keeps the gate from reporting it as the
     // currently reviewed action.
-    ["previous reviewed SHA", "Nitjsefnie-Actions/claim@8abff4f2f27d59b984528cb736f64b9391952a25"],
+    ["previous reviewed SHA", "Nitjsefnie-Actions/claim@0c79a0325d8ab789a60c2eeaf751690d2875c39c"],
     ["wrong SHA", "Nitjsefnie-Actions/claim@0000000000000000000000000000000000000000"],
     ["floating ref", "Nitjsefnie-Actions/claim@main"],
   ])("rejects a %s", (_reason, reference) => {
