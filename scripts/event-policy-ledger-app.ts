@@ -1,7 +1,7 @@
 // The Overflow Ledger App half of the Actions event-policy check: minting the
 // App installation token the check runs under when the LEDGER_* credentials are
 // present, and posting the App-owned neutral check run that records
-// cannot-verify on the known GITHUB_TOKEN permission gap (issue 1024).
+// cannot-verify when the policy list 403s to that token (issue 1024).
 // A mint failure with credentials present fails the check closed — the
 // orchestration in check-actions-event-policy.ts turns the warning below into
 // a failure with no GH_TOKEN fallback (issue 1026). The neutral check run stays
@@ -108,9 +108,10 @@ function neutralCheckRunBody(headSha: string): Record<string, unknown> {
     output: {
       title: "Cannot verify the Actions event policy",
       summary:
-        "The policy-list request returned the known GITHUB_TOKEN permission gap (HTTP 403): " +
-        "GITHUB_TOKEN cannot hold Administration read on the Actions policies API. Ending neutral, " +
-        "tracked by issue 1024, so cannot-verify stays distinguishable from verified.",
+        "The policy-list request returned HTTP 403 to the Overflow Ledger App installation " +
+        "token, which lacks the Administration read permission on the Actions policies API. " +
+        "Ending neutral, tracked by issue 1024, so cannot-verify stays distinguishable from " +
+        "verified.",
     },
   };
 }
