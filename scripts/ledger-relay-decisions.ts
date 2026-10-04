@@ -32,6 +32,42 @@ export interface ContextDecision {
 
 export const PIN_SHAPE = /^\.github\/workflows\/[^/]+\.ya?ml$/;
 
+/** The base branch: the one protected ref whose workflow definitions the relay trusts. */
+const BASE_BRANCH = "main";
+
+/** Events whose run executes the definition at the ref it names — trusted only when that ref is the base branch. */
+const EVENTS_TRUSTED_ON_BASE_BRANCH = new Set(["push", "workflow_dispatch", "schedule"]);
+
+/**
+ * Whether a producer run may attest a required context: true exactly when the
+ * workflow definition the run EXECUTED is the base branch's. A required
+ * context is evidence about the job that judged the commit, so it is only
+ * worth relaying when that job's definition is one a pull request cannot
+ * shape. The pin map binds a context to a workflow path; this binds it to the
+ * definition at that path being main's.
+ *
+ * An allowlist, so an event GitHub adds later, or one a producer gains by
+ * mistake, is refused until it is reasoned about here:
+ *
+ * - `pull_request_target` runs the base branch's definition whatever the
+ *   pull request's head branch is, and every pinned producer restricts that
+ *   trigger to `branches: [main]`. The head branch names the pull request's
+ *   branch and says nothing about the definition, so it is not consulted.
+ * - `push`, `workflow_dispatch` and `schedule` run the definition at the ref
+ *   they name — the pushed branch, the dispatched ref, the default branch. That
+ *   definition is the base branch's only when the ref is exactly `main`.
+ * - Every other event is refused — `pull_request` (which executes the
+ *   definition the pull request carries), the comment and review events,
+ *   `merge_group`, `workflow_run`, an empty event and any unknown value.
+ *
+ * Both comparisons are exact: no prefix, no case folding, no `refs/heads/`
+ * form, because a near match is a different ref.
+ */
+export function isTrustedProducerRun(event: string, headBranch: string): boolean {
+  if (event === "pull_request_target") return true;
+  return EVENTS_TRUSTED_ON_BASE_BRANCH.has(event) && headBranch === BASE_BRANCH;
+}
+
 /**
  * The relay's core. Contexts come from the pin map entries whose path equals
  * the triggering run's path, in pin-map order. For each:

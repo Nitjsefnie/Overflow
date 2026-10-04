@@ -55,6 +55,8 @@ function runEntry(over: Record<string, unknown> = {}): Record<string, unknown> {
     conclusion: "success",
     head_sha: HEAD_SHA,
     html_url: `https://github.com/${REPO}/actions/runs/${id}`,
+    event: "pull_request_target",
+    head_branch: "feature/some-branch",
     ...over,
   };
 }
@@ -141,6 +143,56 @@ describe("selectSweepCandidates", () => {
       "9001",
     );
     expect(selected.map((entry) => entry.runId)).toEqual(["9004"]);
+  });
+
+  it("keeps only runs whose executed workflow definition is the base branch's", () => {
+    const selected = selectSweepCandidates(
+      [
+        runEntry({ id: 9010, event: "pull_request_target", head_branch: "feature/some-branch" }),
+        runEntry({ id: 9011, event: "push", head_branch: "main" }),
+        runEntry({ id: 9012, event: "workflow_dispatch", head_branch: "main" }),
+        runEntry({ id: 9013, event: "schedule", head_branch: "main" }),
+        runEntry({ id: 9020, event: "pull_request", head_branch: "main" }),
+        runEntry({ id: 9021, event: "pull_request", head_branch: "feature/some-branch" }),
+        runEntry({ id: 9022, event: "issue_comment", head_branch: "main" }),
+        runEntry({ id: 9023, event: "push", head_branch: "feature/some-branch" }),
+        runEntry({ id: 9024, event: "workflow_dispatch", head_branch: "feature/some-branch" }),
+        runEntry({ id: 9025, event: "merge_group", head_branch: "main" }),
+      ],
+      PIN_MAP,
+      "9001",
+    );
+    expect(selected.map((entry) => entry.runId)).toEqual(["9010", "9011", "9012", "9013"]);
+  });
+
+  it("fails closed on a run whose event or head branch is absent or not a string", () => {
+    const selected = selectSweepCandidates(
+      [
+        runEntry({ id: 9030, event: undefined }),
+        runEntry({ id: 9031, event: null }),
+        runEntry({ id: 9032, event: 7 }),
+        runEntry({ id: 9033, event: "push", head_branch: undefined }),
+        runEntry({ id: 9034, event: "push", head_branch: null }),
+        runEntry({ id: 9035, event: "push", head_branch: ["main"] }),
+      ],
+      PIN_MAP,
+      "9001",
+    );
+    expect(selected).toEqual([]);
+  });
+
+  it("does not let untrusted runs consume the SWEEP_RUN_LIMIT cap", () => {
+    // The filter runs before the cap, so a burst of refused runs at the top of
+    // the listing cannot crowd a trusted orphan out of the examined window.
+    const refused = Array.from({ length: SWEEP_RUN_LIMIT }, (_unused, index) =>
+      runEntry({ id: 9100 + index, event: "pull_request" }),
+    );
+    const selected = selectSweepCandidates(
+      [...refused, runEntry({ id: 9200, event: "pull_request_target" })],
+      PIN_MAP,
+      "9001",
+    );
+    expect(selected.map((entry) => entry.runId)).toEqual(["9200"]);
   });
 
   it("reads a malformed listing as no candidates rather than throwing", () => {
@@ -273,6 +325,26 @@ describe("sweepOrphans", () => {
     const { api, requests } = fakeApi({ [RUNS_URL]: { workflow_runs: [] } });
     const outcome = await sweepOrphans(deps(api));
     expect(outcome).toEqual({ examined: 0, relayed: [] });
+    expect(requests.map((request) => request.url)).toEqual([RUNS_URL]);
+  });
+
+  it.each([
+    ["a completed pull_request run", { event: "pull_request", head_branch: "main" }],
+    ["a completed issue_comment run", { event: "issue_comment", head_branch: "main" }],
+    ["a push run on a branch other than main", { event: "push", head_branch: "feature/some-branch" }],
+  ])("posts nothing for %s, however unattested its context is", async (_name, over) => {
+    // Every later call a wrongly selected candidate would make is answered, so
+    // the absence of a POST is the predicate's doing and not a missing handler.
+    const { api, requests } = fakeApi({
+      [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT, ...over })] },
+      [checkRunsAt(HEAD_SHA)]: { check_runs: [] },
+      [jobsUrl("9002")]: {
+        jobs: [{ name: "actionlint", run_attempt: 1, status: "completed", conclusion: "success" }],
+      },
+    });
+    const outcome = await sweepOrphans(deps(api));
+    expect(outcome).toEqual({ examined: 0, relayed: [] });
+    expect(requests.filter((request) => request.method === "POST")).toEqual([]);
     expect(requests.map((request) => request.url)).toEqual([RUNS_URL]);
   });
 

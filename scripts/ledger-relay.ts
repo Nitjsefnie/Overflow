@@ -22,9 +22,12 @@
 // map (.github/required-checks.json) is read from the relay's own checkout —
 // the trusted main tip — and each context pinned to the triggering run's path
 // is decided from that run's job records and posted as a check-run under an
-// App installation token minted in-process. The App key arrives only through
-// the LEDGER_APP_KEY secret and is never logged; every failure exits nonzero so
-// a dead relay is visible as a red job, never as silence.
+// App installation token minted in-process. A pinned run is relayed only when
+// the workflow definition it executed is the base branch's
+// (isTrustedProducerRun); any other pinned run fails the relay without
+// posting. The App key arrives only through the LEDGER_APP_KEY secret and is
+// never logged; every failure exits nonzero so a dead relay is visible as a
+// red job, never as silence.
 
 import { createSign } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -43,13 +46,14 @@ import {
 // decideContexts from here keeps working without knowing the layer exists.
 import {
   decideContexts,
+  isTrustedProducerRun,
   PIN_SHAPE,
   validatePinMap,
   type ContextDecision,
   type RelayJob,
 } from "./ledger-relay-decisions.ts";
 
-export { decideContexts, PIN_SHAPE, validatePinMap };
+export { decideContexts, isTrustedProducerRun, PIN_SHAPE, validatePinMap };
 export type { ContextDecision, RelayJob };
 
 /** The triggering run's identifying fields, validated on entry. */
@@ -60,6 +64,8 @@ export interface TriggeringRun {
   conclusion: string | null;
   htmlUrl: string;
   event: string;
+  /** The triggering run's head branch; empty when the environment or the API did not name one. */
+  headBranch: string;
   /** The triggering run's attempt number; 1 when the environment or the API did not name one. */
   runAttempt: number;
 }
@@ -104,8 +110,9 @@ export interface HealPullRequest {
  *
  * - a. the run concluded `cancelled` — the shape GitHub leaves when it cancels
  *   a pending run out of the shared concurrency slot;
- * - b. the run's event is pull_request or pull_request_target — push legs key
- *   their own SHA and are never healed;
+ * - b. the run's event is pull_request_target — push legs key their own SHA
+ *   and are never healed, and a pull_request run is never relayed at all
+ *   (isTrustedProducerRun), so re-dispatching one would heal nothing;
  * - c. the attempt is under RERUN_ATTEMPT_CAP — a run cancelled from the
  *   pending slot never started, so attempts increment only via rerun and the
  *   cap bounds the churn;
@@ -120,14 +127,14 @@ export function decideRerun(
   liveRunExists: boolean,
 ): boolean {
   if (run.conclusion !== "cancelled") return false;
-  if (!isPullRequestEvent(run.event)) return false;
+  if (!isHealableEvent(run.event)) return false;
   if (run.runAttempt >= RERUN_ATTEMPT_CAP) return false;
   if (pr === null || pr.state !== "open" || pr.headSha !== run.headSha) return false;
   return !liveRunExists;
 }
 
-function isPullRequestEvent(event: string): boolean {
-  return event === "pull_request" || event === "pull_request_target";
+function isHealableEvent(event: string): boolean {
+  return event === "pull_request_target";
 }
 
 /**
@@ -200,6 +207,10 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     // check-run to orphan either, so the sweep has no part in this path.
     return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
   }
+  if (trigger.kind === "workflow_run") {
+    // Refused before the token mint: an untrusted run gets no credential at all.
+    assertTrustedProducer(trigger.run);
+  }
 
   const jwt = mintAppJwt(appId, appKey, Date.now());
   const tokenBody = await apiCall<{ token?: unknown }>(
@@ -235,6 +246,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     if (contextsFor(pinMap, run.path).length === 0) {
       return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
     }
+    assertTrustedProducer(run);
   }
 
   const jobsBody = await apiCall<Record<string, unknown>>(
@@ -323,8 +335,9 @@ function sweepApi(deps: RelayDeps, repo: string, auth: Record<string, string>): 
  * shared pending concurrency slot while its pull request's head is still live,
  * dispatch a fresh run of it, so the cancelled conclusion — mirrored above —
  * is replaced when the rerun's own completion event arrives. The heal runs
- * only for a cancelled PR-event run; its conditions are evaluated in order and
- * each query is issued only when every earlier condition already holds.
+ * only for a cancelled pull_request_target run; its conditions are evaluated
+ * in order and each query is issued only when every earlier condition already
+ * holds.
  * Returns true exactly when the rerun was dispatched.
  */
 async function healWithRerun(
@@ -337,7 +350,7 @@ async function healWithRerun(
   // The rerun token is required whenever a cancelled PR run is on the table —
   // checked before any heal API call, so a missing token is a visible red
   // relay job, never silent degradation.
-  if (run.conclusion !== "cancelled" || !isPullRequestEvent(run.event)) return false;
+  if (run.conclusion !== "cancelled" || !isHealableEvent(run.event)) return false;
   const rerunToken = required(env, "RELAY_RERUN_TOKEN");
   // The attempt cap precedes the queries.
   if (run.runAttempt >= RERUN_ATTEMPT_CAP) return false;
@@ -530,6 +543,7 @@ function parseTrigger(env: Record<string, string | undefined>): Trigger {
         conclusion: normalizedConclusion(env.GITHUB_WORKFLOW_RUN_CONCLUSION),
         htmlUrl,
         event: env.GITHUB_WORKFLOW_RUN_EVENT ?? "",
+        headBranch: env.GITHUB_WORKFLOW_RUN_HEAD_BRANCH ?? "",
         runAttempt: normalizedAttempt(env.GITHUB_WORKFLOW_RUN_ATTEMPT),
       },
     };
@@ -582,12 +596,28 @@ function triggeringRunFromApi(body: Record<string, unknown>): TriggeringRun {
     conclusion: typeof body.conclusion === "string" ? body.conclusion : null,
     htmlUrl,
     event: typeof body.event === "string" ? body.event : "",
+    headBranch: typeof body.head_branch === "string" ? body.head_branch : "",
     runAttempt: normalizedAttempt(
       typeof body.run_attempt === "number" || typeof body.run_attempt === "string"
         ? body.run_attempt
         : undefined,
     ),
   };
+}
+
+/**
+ * The relay's refusal of a pinned run whose executed workflow definition was
+ * not the base branch's. It throws rather than returning an empty result, so
+ * the relay job goes red: a required context that was expected and is not
+ * coming has to be visible, never a quiet no-op.
+ */
+function assertTrustedProducer(run: TriggeringRun): void {
+  if (isTrustedProducerRun(run.event, run.headBranch)) return;
+  throw new Error(
+    `run ${run.runId} (event ${JSON.stringify(run.event)}, head branch ` +
+      `${JSON.stringify(run.headBranch)}) did not execute the base branch's workflow ` +
+      "definition; no required context was relayed",
+  );
 }
 
 function contextsFor(pinMap: Readonly<Record<string, string>>, path: string): string[] {

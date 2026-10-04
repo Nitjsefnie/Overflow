@@ -82,4 +82,13 @@ describe("the ledger relay workflow's pinned App identity", () => {
         "cap compares against (issue 861)",
     ).toEqual(["${{ github.event.workflow_run.run_attempt }}"]);
   });
+
+  it("passes the triggering run's head branch as GITHUB_WORKFLOW_RUN_HEAD_BRANCH exactly once", () => {
+    expect(
+      envValues("GITHUB_WORKFLOW_RUN_HEAD_BRANCH"),
+      "the relay step must carry GITHUB_WORKFLOW_RUN_HEAD_BRANCH exactly once, through env — " +
+        "the head branch the relay's trusted-producer check reads for push, " +
+        "workflow_dispatch and schedule runs",
+    ).toEqual(["${{ github.event.workflow_run.head_branch }}"]);
+  });
 });
