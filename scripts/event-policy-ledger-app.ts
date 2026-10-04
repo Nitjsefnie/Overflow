@@ -2,8 +2,10 @@
 // App installation token the check runs under when the LEDGER_* credentials are
 // present, and posting the App-owned neutral check run that records
 // cannot-verify on the known GITHUB_TOKEN permission gap (issue 1024).
-// Best-effort by contract: neither action may fail the job, so every failure
-// becomes a warning annotation and the check falls back to GH_TOKEN.
+// A mint failure with credentials present fails the check closed — the
+// orchestration in check-actions-event-policy.ts turns the warning below into
+// a failure with no GH_TOKEN fallback (issue 1026). The neutral check run stays
+// best-effort: its failure is a warning that never fails the job.
 
 import { mintAppJwt } from "./ledger-relay.ts";
 
@@ -41,8 +43,8 @@ function ledgerAppCredentials(
  * The Ledger App installation token, mirroring scripts/ledger-relay.ts: the
  * RS256 App JWT from its exported mintAppJwt, then the installation-token
  * POST it performs inside runRelay. Best-effort: credentials absent gives
- * an empty outcome with no warning; any mint failure gives a warning and the
- * caller falls back to GH_TOKEN. Never throws.
+ * an empty outcome with no warning; any mint failure gives a warning, and the
+ * caller fails the check closed on it (issue 1026). Never throws.
  */
 export async function mintInstallationToken(
   env: Record<string, string | undefined>,
@@ -71,8 +73,7 @@ export async function mintInstallationToken(
     if (response.status < 200 || response.status >= 300) {
       return {
         warning:
-          `the Overflow Ledger App installation token could not be minted (HTTP ${response.status}); ` +
-          "falling back to GH_TOKEN",
+          `the Overflow Ledger App installation token could not be minted (HTTP ${response.status})`,
       };
     }
     const parsed: unknown = JSON.parse(body);
@@ -82,17 +83,14 @@ export async function mintInstallationToken(
         : undefined;
     if (token === undefined) {
       return {
-        warning:
-          "the Overflow Ledger App installation-token mint returned no token; " +
-          "falling back to GH_TOKEN",
+        warning: "the Overflow Ledger App installation-token mint returned no token",
       };
     }
     return { token };
   } catch (error) {
     return {
       warning:
-        `the Overflow Ledger App installation token could not be minted (${errorCause(error)}); ` +
-        "falling back to GH_TOKEN",
+        `the Overflow Ledger App installation token could not be minted (${errorCause(error)})`,
     };
   }
 }
