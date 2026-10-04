@@ -32,6 +32,11 @@ type ParsedList = {
 type RunnerResult = { outcome: Outcome; exitCode: 0 | 1; message: string };
 /** What runScript hands report(): the classification plus best-effort action warnings. */
 export type ScriptRun = { result: RunnerResult; warnings: string[] };
+/**
+ * The credential the check ran under. It names whoever drew the 403 in the
+ * neutral message and keys the fail-closed mint rule in runScript.
+ */
+export type Credential = "app-installation-token" | "github-token";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -54,8 +59,19 @@ function administrationAccessMessage(): string {
   );
 }
 
-/** The one neutral reason: the known, documented permission gap on the list endpoint. */
-function neutralGapReason(): string {
+/**
+ * The neutral reason per credential: the message names whoever actually drew
+ * the 403. The github-token variant is today's wording, byte for byte.
+ */
+function neutralGapReason(credential: Credential): string {
+  if (credential === "app-installation-token") {
+    return (
+      "Cannot verify the Actions event policy: the policy-list request returned HTTP 403 to the " +
+      "Overflow Ledger App installation token, which lacks the Administration read permission on " +
+      "the Actions policies API. Ending neutral, tracked by issue 1024; grant the installation " +
+      "Administration read so enforcement can be verified."
+    );
+  }
   return (
     "Cannot verify the Actions event policy: the policy-list request returned HTTP 403, the known " +
     "GITHUB_TOKEN permission gap (GITHUB_TOKEN cannot hold Administration read on the Actions " +
@@ -88,7 +104,7 @@ function isRateLimited(response: ApiResponse): boolean {
   return /rate limit|abuse/i.test(response.body);
 }
 
-function parsePolicyList(response: ApiResponse): ParsedList {
+function parsePolicyList(response: ApiResponse, credential: Credential): ParsedList {
   if (response.error !== undefined) {
     return { error: `Actions policy list request failed with ${responseLabel(response)}.` };
   }
@@ -104,7 +120,7 @@ function parsePolicyList(response: ApiResponse): ParsedList {
       if (isRateLimited(response)) {
         return { error: rateLimitedReason(response) };
       }
-      return { neutralReason: neutralGapReason() };
+      return { neutralReason: neutralGapReason(credential) };
     }
     return {
       error:
@@ -220,8 +236,9 @@ function summarizeMissingEvents(rules: unknown[]): RequiredEvent[] | undefined {
 export function classify(
   listResponse: ApiResponse,
   policyResponses: ApiResponse[],
+  credential: Credential = "github-token",
 ): Classification {
-  const parsedList = parsePolicyList(listResponse);
+  const parsedList = parsePolicyList(listResponse, credential);
   if (parsedList.neutralReason !== undefined) {
     return { outcome: "neutral", reason: parsedList.neutralReason };
   }
@@ -504,6 +521,7 @@ function runnerResult(result: Classification): RunnerResult {
 export async function runCheck(
   token: string | undefined,
   transport: PolicyTransport = globalThis.fetch,
+  credential: Credential = "github-token",
 ): Promise<RunnerResult> {
   if (token === undefined || token.length === 0) {
     return {
@@ -514,13 +532,13 @@ export async function runCheck(
   }
 
   const firstPageResponse = await request(policyListPageUrl(1), token, transport);
-  const firstPage = parsePolicyList(firstPageResponse);
+  const firstPage = parsePolicyList(firstPageResponse, credential);
   if (
     firstPage.error !== undefined ||
     firstPage.policies === undefined ||
     firstPage.totalCount === undefined
   ) {
-    return runnerResult(classify(firstPageResponse, []));
+    return runnerResult(classify(firstPageResponse, [], credential));
   }
 
   const policies: PolicySummary[] = [];
@@ -544,13 +562,13 @@ export async function runCheck(
   const totalCount = firstPage.totalCount;
   for (let page = 2; policyIds.size < totalCount && page <= totalCount; page += 1) {
     const pageResponse = await request(policyListPageUrl(page), token, transport);
-    const parsedPage = parsePolicyList(pageResponse);
+    const parsedPage = parsePolicyList(pageResponse, credential);
     if (
       parsedPage.error !== undefined ||
       parsedPage.policies === undefined ||
       parsedPage.totalCount === undefined
     ) {
-      const failedPage = classify(pageResponse, []);
+      const failedPage = classify(pageResponse, [], credential);
       if (failedPage.outcome === "neutral") {
         return runnerResult(failedPage);
       }
@@ -590,7 +608,7 @@ export async function runCheck(
     };
   }
   if (policyIds.size === 0) {
-    return runnerResult(classify(completeListResponse, []));
+    return runnerResult(classify(completeListResponse, [], credential));
   }
 
   const policyResponses = await Promise.all(
@@ -598,7 +616,7 @@ export async function runCheck(
       request(`${POLICY_LIST_URL}/${encodeURIComponent(policy.id)}`, token, transport),
     ),
   );
-  return runnerResult(classify(completeListResponse, policyResponses));
+  return runnerResult(classify(completeListResponse, policyResponses, credential));
 }
 
 export type RenderedReport = { out: string[]; err: string[]; exitCode: 0 | 1 };
@@ -642,21 +660,46 @@ function report(result: RunnerResult, warnings: string[]): void {
 }
 
 /**
+ * The fail-closed message for a mint failure on an enforced leg: it carries the
+ * mint's cause, names the App key credential, and says no fallback follows.
+ */
+function mintFailureMessage(warning: string): string {
+  const detail = collapseWhitespace(warning);
+  const capitalized = detail.charAt(0).toUpperCase() + detail.slice(1);
+  return (
+    `${capitalized}; the enforced leg fails closed until the App key (LEDGER_APP_KEY) is fixed. ` +
+    "No GH_TOKEN fallback was attempted."
+  );
+}
+
+/**
  * The entry: mint the App installation token when all three LEDGER_* variables
- * are present (falling back to GH_TOKEN on any mint failure), run the whole
- * check with that token, and — on a neutral outcome — post the App-owned
- * neutral check run best-effort. Never throws.
+ * are present — a mint failure with credentials present fails the check closed
+ * (issue 1026: a broken App key must stay distinguishable from the issue-1024
+ * permission gap, so there is no GH_TOKEN fallback on the enforced legs) —
+ * then run the whole check with the minted token, and — on a neutral outcome —
+ * post the App-owned neutral check run best-effort. Never throws.
  */
 export async function runScript(
   env: Record<string, string | undefined>,
   transport: PolicyTransport = globalThis.fetch,
 ): Promise<ScriptRun> {
   const mint = await mintInstallationToken(env, transport);
+  if (mint.warning !== undefined) {
+    return {
+      result: {
+        outcome: "fail",
+        exitCode: 1,
+        message: mintFailureMessage(mint.warning),
+      },
+      warnings: [],
+    };
+  }
   const appToken = mint.token;
+  const credential: Credential = appToken !== undefined ? "app-installation-token" : "github-token";
   const warnings: string[] = [];
-  if (mint.warning !== undefined) warnings.push(mint.warning);
   const token = appToken ?? (env.GITHUB_TOKEN || env.GH_TOKEN);
-  const result = await runCheck(token, transport);
+  const result = await runCheck(token, transport, credential);
   if (result.outcome === "neutral" && appToken !== undefined) {
     const warning = await postNeutralCheckRun(appToken, env, transport);
     if (warning !== undefined) warnings.push(warning);

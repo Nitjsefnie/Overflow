@@ -898,7 +898,7 @@ describe("Actions event policy entry orchestration", () => {
     expect(listCall?.init?.headers).toMatchObject({ Authorization: "Bearer gh-token" });
   });
 
-  it("falls back to GH_TOKEN when the mint fails, never throws, and posts no check run", async () => {
+  it("fails closed when the mint fails (non-2xx), never throws, and runs no policies request", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const transport = transportFor(calls, {
       mint: () => new Response("server error", { status: 500 }),
@@ -910,15 +910,131 @@ describe("Actions event policy entry orchestration", () => {
       transport,
     );
 
-    expect(result.outcome).toBe("neutral");
-    expect(result.exitCode).toBe(0);
-    expect(warnings.join("\n")).toMatch(/could not be minted/);
+    expect(result.outcome).toBe("fail");
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toMatch(/could not be minted/);
+    expect(result.message).toContain("LEDGER_APP_KEY");
+    expect(result.message).toMatch(/fails closed/i);
+    expect(warnings).toEqual([]);
+    expect(calls.some(({ url }) => new URL(url).pathname === POLICY_LIST_PATH)).toBe(false);
     expect(calls.some(({ url }) => url.endsWith("/check-runs"))).toBe(false);
-    const listCall = calls.find(({ url }) => new URL(url).pathname === POLICY_LIST_PATH);
-    expect(listCall?.init?.headers).toMatchObject({ Authorization: "Bearer gh-token" });
   });
 
-  it("never throws when the App key is unusable and still runs the check", async () => {
+  it("fails closed when access_tokens answers 401 to a valid App key", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      mint: () => new Response("nope", { status: 401 }),
+      list: () => new Response("Forbidden", { status: 403 }),
+    });
+
+    const { result, warnings } = await mustRun()(
+      { ...appEnv(generatedKeyPair().privateKey), GH_TOKEN: "gh-token" },
+      transport,
+    );
+
+    expect(result.outcome).toBe("fail");
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toMatch(/could not be minted/);
+    expect(result.message).toContain("LEDGER_APP_KEY");
+    expect(warnings).toEqual([]);
+    expect(calls.some(({ url }) => new URL(url).pathname === POLICY_LIST_PATH)).toBe(false);
+  });
+
+  it("fails closed when the mint transport rejects, even with no GH_TOKEN to fall back to", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      mint: () => {
+        throw new Error("connection reset");
+      },
+      list: () => new Response("Forbidden", { status: 403 }),
+    });
+
+    const { result, warnings } = await mustRun()(appEnv(generatedKeyPair().privateKey), transport);
+
+    expect(result.outcome).toBe("fail");
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toMatch(/could not be minted/);
+    expect(result.message).toContain("LEDGER_APP_KEY");
+    expect(warnings).toEqual([]);
+    expect(calls.some(({ url }) => new URL(url).pathname === POLICY_LIST_PATH)).toBe(false);
+  });
+
+  it("fails closed on the issue repro shape: unparseable key, GH_TOKEN set, 401-mint 403-list transport", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      mint: () => new Response("nope", { status: 401 }),
+      list: () => new Response("Forbidden", { status: 403 }),
+    });
+
+    const { result, warnings } = await mustRun()(
+      { ...appEnv("not a usable pem key"), GH_TOKEN: "gh-token" },
+      transport,
+    );
+
+    expect(result.outcome).toBe("fail");
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toMatch(/could not be minted/);
+    expect(result.message).toContain("LEDGER_APP_KEY");
+    expect(result.message).toMatch(/fails closed/i);
+    expect(warnings).toEqual([]);
+    expect(calls.some(({ url }) => new URL(url).pathname === POLICY_LIST_PATH)).toBe(false);
+    expect(calls.some(({ url }) => url.endsWith("/check-runs"))).toBe(false);
+  });
+
+  it("names the Overflow Ledger App installation token in the neutral message when the App token drew the 403", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      list: () => new Response("Forbidden", { status: 403 }),
+    });
+
+    const { result } = await mustRun()(appEnv(generatedKeyPair().privateKey), transport);
+
+    expect(result.outcome).toBe("neutral");
+    expect(result.exitCode).toBe(0);
+    expect(result.message).toContain("Overflow Ledger App installation token");
+    expect(result.message).toContain("1024");
+    expect(result.message).toContain("Administration read");
+    expect(result.message).not.toContain("GITHUB_TOKEN");
+  });
+
+  it("names GITHUB_TOKEN in the neutral message when GH_TOKEN drew the 403 with no App credentials", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      list: () => new Response("Forbidden", { status: 403 }),
+    });
+
+    const { result } = await mustRun()({ GH_TOKEN: "gh-token" }, transport);
+
+    expect(result.outcome).toBe("neutral");
+    expect(result.exitCode).toBe(0);
+    expect(result.message).toContain("GITHUB_TOKEN");
+    expect(result.message).toContain("1024");
+    expect(result.message).toContain("Administration read");
+  });
+
+  it("renders the mint-failure result as an error annotation on both streams", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const transport = transportFor(calls, {
+      mint: () => new Response("server error", { status: 500 }),
+      list: () => new Response("Forbidden", { status: 403 }),
+    });
+
+    const { result } = await mustRun()(
+      { ...appEnv(generatedKeyPair().privateKey), GH_TOKEN: "gh-token" },
+      transport,
+    );
+    if (renderReport === undefined) {
+      expect(renderReport, "the report renderer must be exported").toBeTypeOf("function");
+      return;
+    }
+    const rendered = renderReport(result, []);
+
+    expect(rendered.exitCode).toBe(1);
+    expect(rendered.out).toEqual([result.message]);
+    expect(rendered.err).toEqual([`::error::${result.message.replace(/\s+/g, " ").trim()}`]);
+  });
+
+  it("never throws when the App key is unusable — it fails closed instead", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const transport = transportFor(calls, {
       list: () => new Response("Forbidden", { status: 403 }),
@@ -929,13 +1045,13 @@ describe("Actions event policy entry orchestration", () => {
       transport,
     );
 
-    expect(result.outcome).toBe("neutral");
-    expect(result.exitCode).toBe(0);
-    expect(warnings.join("\n")).toMatch(/could not be minted/);
-    expect(calls.some(({ url }) => url.includes("/app/installations/"))).toBe(false);
+    expect(result.outcome).toBe("fail");
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toMatch(/could not be minted/);
+    expect(result.message).toContain("LEDGER_APP_KEY");
+    expect(warnings).toEqual([]);
+    expect(calls.some(({ url }) => new URL(url).pathname === POLICY_LIST_PATH)).toBe(false);
     expect(calls.some(({ url }) => url.endsWith("/check-runs"))).toBe(false);
-    const listCall = calls.find(({ url }) => new URL(url).pathname === POLICY_LIST_PATH);
-    expect(listCall?.init?.headers).toMatchObject({ Authorization: "Bearer gh-token" });
   });
 
   it("posts no check run when the outcome is failure, even with App credentials present", async () => {
