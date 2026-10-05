@@ -355,6 +355,17 @@ describe("registering a repository against the real registered_repositories cons
     await expect(countOf(submission.githubRepositoryId)).resolves.toBe(0);
   });
 
+  it("refuses a submission whose sponsor matches no users row", async () => {
+    // The CTE's third refusal, distinct from deletion: an absent sponsor row
+    // is not a living, eligible sponsor, so the zero-row branch must answer
+    // the enforcement error — not the already-registered CONFLICT that
+    // treating the miss as eligible would produce.
+    const submission = newRepository({ sponsorId: randomUUID() });
+
+    await expect(store.createRepository(submission)).rejects.toThrow(RepositoryRegistrationEnforcementError);
+    await expect(countOf(submission.githubRepositoryId)).resolves.toBe(0);
+  });
+
   it("refuses a deleted sponsor reactivating a held unregistered row", async () => {
     // The on-conflict re-activation leg draws from the same sponsor CTE, so
     // the deleted_at filter gates it too: a deleted account must not bring a
