@@ -160,12 +160,18 @@ corrected.
 
 CI is defined by `.github/workflows/ci.yml`: `verify` runs on pushes to `main`,
 pull requests targeting `main`, and manual dispatch, and a separate `calibrate`
-job handles eligible `main` pushes and the manual refusal self-test. `verify`
-starts PostgreSQL 17, installs the pinned toolchain, applies migrations, and
-runs tests, lint, module-size, typecheck, build and page-geometry checks, with
-coverage, ratchet, migration-immutability and freshness checks as applicable.
-Docs-only changes run the test suite without coverage; other changes also
-measure coverage and check the floor. Run this local baseline in the same order:
+job handles eligible `main` pushes and the manual refusal self-test. On a push
+or dispatch `verify` starts PostgreSQL 17, installs the pinned toolchain,
+applies migrations, and runs tests, lint, module-size, typecheck, build and
+page-geometry checks, with coverage. On a pull request that suite runs in
+`.github/workflows/pr-suite.yml` (`pr suite`), on the pull request's own
+code with no trust, and `verify` runs main's copies of the integrity gates —
+conflict markers, docs-only detection, module size, migration immutability,
+legal revisions, commit scopes, the coverage floor and base freshness — over
+the pull request's merge tree as data, and requires the `pr suite` run for
+the head commit to have succeeded. Ratchet documents are judged by
+`ratchet-guard`. Docs-only changes run the test suite without coverage; other
+changes also measure coverage and check the floor. Run this local baseline in the same order:
 
 ```bash
 pnpm db:migrate

@@ -108,7 +108,7 @@ describe("the verify workflow's page-geometry step", () => {
     expect(geometryIndex).toBeGreaterThan(buildIndex);
   });
 
-  it("gates the page geometry step unconditionally", () => {
+  it("gates the page geometry step on every event that runs the event commit's own code", () => {
     const [step] = steps.filter((step) =>
       step.run?.includes("scripts/check-page-geometry.mjs"),
     );
@@ -116,8 +116,10 @@ describe("the verify workflow's page-geometry step", () => {
     expect(step, "the geometry step must exist to be gated").toBeDefined();
     expect(
       step.if,
-      "the geometry step must carry no `if:` — a conditional step does not gate",
-    ).toBeUndefined();
+      "the geometry step runs the checked-out commit's build, so it runs on push and " +
+        "workflow_dispatch exactly; a pull request's geometry runs in pr-suite.yml, whose " +
+        "outcome verify awaits — under pull_request_target no pull-request code executes here",
+    ).toBe("${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}");
     expect(
       Boolean(step["continue-on-error"]),
       "the geometry step must not be continue-on-error — a tolerated failure does not gate",
@@ -126,76 +128,26 @@ describe("the verify workflow's page-geometry step", () => {
 });
 
 /**
- * The verify job's "Ratchet documents" step is the pull-request half of the
- * issue 647 gate: it runs the merge ref's copy of scripts/check-ratchets.ts
- * (which the pull request can edit; only ratchet-guard.yml runs main's) against the merge
- * ref's parents — HEAD^1 the base tip, HEAD^2 the pull request head — after
- * completing the history of both sides, because the checkout is shallow at
- * that point and a shallow history can hand git merge-base a wrong base
- * without erroring. The wiring is pinned exactly because a rewiring can be
- * silent: a swapped parent order judges the head against the wrong side, a
- * depth-limited fetch leaves the merge base untrustworthy, and an added `if`
- * or continue-on-error leaves the step in the file while CI stops gating on
- * it. (The pull_request_target half lives in ratchet-guard.yml, pinned by
- * tests/api/ci-workflows.test.ts.)
- *
- * Assertions are made on the parsed YAML data (step.name / step.run / step.if),
- * never on the raw bytes, so reformatting the file does not disturb them and
- * a rewired or un-gated step fails loudly here instead of quietly narrowing
- * what CI gates on.
+ * The verify job carries no ratchet-documents step. ratchet-guard.yml runs
+ * main's copy of scripts/check-ratchets.ts on every pull request (and every
+ * push to main) as its own required context, reading the head only as git
+ * objects, so a copy here would add no judge — and the copy that used to sit
+ * here executed the pull request's own script.
  */
-describe("the verify workflow's ratchet documents step", () => {
-  let steps: WorkflowStep[] = [];
-
-  beforeAll(async () => {
+describe("the verify workflow's ratchet documents", () => {
+  it("are judged by ratchet-guard.yml, not by a step of the verify job", async () => {
     const source = await readFile(resolve(".github/workflows/ci.yml"), "utf8");
-    const workflow = parse(source) as {
-      jobs?: { verify?: { steps?: WorkflowStep[] } };
+    const workflow = parse(source) as { jobs?: { verify?: { steps?: WorkflowStep[] } } };
+    const steps = workflow.jobs?.verify?.steps ?? [];
+    expect(steps.filter((step) => step.name === "Ratchet documents")).toEqual([]);
+    expect(steps.filter((step) => (step.run ?? "").includes("check-ratchets.ts"))).toEqual([]);
+
+    const guard = parse(await readFile(resolve(".github/workflows/ratchet-guard.yml"), "utf8")) as {
+      jobs: Record<string, { steps: WorkflowStep[] }>;
     };
-
-    steps = workflow.jobs?.verify?.steps ?? [];
-  });
-
-  const ratchet = () => steps.filter((step) => step.name === "Ratchet documents");
-
-  it("exists exactly once in the verify job", () => {
-    expect(ratchet(), "the verify job must keep its Ratchet documents step").toHaveLength(1);
-  });
-
-  it("fetches full history and checks the base parent against the head parent", () => {
-    const [step] = ratchet();
-
-    expect(step, "the verify job must contain the Ratchet documents step").toBeDefined();
-    expect(
-      step.run,
-      "the step must fetch --unshallow (a depth-limited history can make git merge-base " +
-        "return a wrong base without erroring) and then compare HEAD^1 — the merge ref's " +
-        "base parent — with HEAD^2 — the pull request head — in that order; a swapped " +
-        "order judges the base against the head's documents and passes a real relaxation",
-    ).toBe(
-      'git fetch --unshallow origin main "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"\n' +
-        "node scripts/check-ratchets.ts HEAD^1 HEAD^2\n",
-    );
-  });
-
-  it("gates pull requests only, and gates unconditionally when it runs", () => {
-    const [step] = ratchet();
-
-    expect(step, "the verify job must contain the Ratchet documents step").toBeDefined();
-    expect(
-      step.if,
-      "the step must run on pull_request_target events exactly — a push run has no merge ref, " +
-        "so HEAD^2 does not exist there",
-    ).toBe("${{ github.event_name == 'pull_request_target' }}");
-    expect(
-      step.env,
-      "the pull request number must reach the fetch through env, never ${{ }} interpolation " +
-        "in the run block",
-    ).toEqual({ PR_NUMBER: "${{ github.event.pull_request.number }}" });
-    expect(
-      Boolean(step["continue-on-error"]),
-      "the step must not be continue-on-error — a tolerated failure does not gate the merge",
-    ).toBe(false);
+    const ratchet = guard.jobs["ratchet-guard"]?.steps.find((step) => step.name === "Ratchet documents");
+    expect(ratchet?.if).toBe("${{ github.event_name == 'pull_request_target' }}");
+    expect(ratchet?.run).toBe('node scripts/check-ratchets.ts HEAD "$HEAD_SHA"');
   });
 });
 
@@ -221,28 +173,30 @@ describe("the verify workflow's migration immutability step", () => {
     ).toHaveLength(1);
   });
 
-  it("runs after Ratchet documents", () => {
-    const ratchetIndex = steps.findIndex((step) => step.name === "Ratchet documents");
+  it("runs after the merge tree is materialised", () => {
+    const materialiseIndex = steps.findIndex((step) => (step.run ?? "").includes("git worktree add"));
     const migrationIndex = steps.findIndex((step) => step.name === "Migration immutability");
 
-    expect(ratchetIndex).toBeGreaterThan(-1);
-    expect(migrationIndex).toBeGreaterThan(-1);
-    expect(migrationIndex).toBeGreaterThan(ratchetIndex);
+    expect(materialiseIndex).toBeGreaterThan(-1);
+    expect(migrationIndex).toBeGreaterThan(materialiseIndex);
   });
 
-  it("runs only for pull requests and compares the base tip against the merge ref", () => {
+  it("runs only for pull requests, from the base checkout, comparing the base tip against the merge commit", () => {
     const [step] = migrationImmutability();
 
     expect(step, "the verify job must contain the Migration immutability step").toBeDefined();
     expect(step?.if).toBe("${{ github.event_name == 'pull_request_target' }}");
     expect(
       step?.env,
-      "the pull request number must reach the fetch through env, never ${{ }} " +
-        "interpolation in the run block",
-    ).toEqual({ PR_NUMBER: "${{ github.event.pull_request.number }}" });
-    expect(step?.run).toBe(
-      'git fetch --depth=2 origin "+refs/pull/${PR_NUMBER}/merge"\n' +
-        "node scripts/check-migration-edits.ts HEAD^1 HEAD\n",
+      "the merge commit's SHA arrives as the materialise step's output, through env:",
+    ).toEqual({ MERGE_SHA: "${{ steps.pr-tree.outputs.merge_sha }}" });
+    expect(
+      step?.run,
+      "the base checkout's copy of the script must judge the merge commit's first parent " +
+        "against the merge commit — never the pull request tree's copy, and never the raw head " +
+        "(issue 841)",
+    ).toBe(
+      'node "${GITHUB_WORKSPACE}/scripts/check-migration-edits.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"',
     );
     expect(Boolean(step?.["continue-on-error"])).toBe(false);
   });
@@ -306,12 +260,14 @@ describe("the verify workflow's legal revision currency step", () => {
     expect(step?.if).toBe("${{ github.event_name == 'pull_request_target' }}");
     expect(
       step?.env,
-      "the pull request number must reach the fetch through env, never ${{ }} " +
-        "interpolation in the run block",
-    ).toEqual({ PR_NUMBER: "${{ github.event.pull_request.number }}" });
-    expect(step?.run).toBe(
-      'git fetch --unshallow origin main "+refs/pull/${PR_NUMBER}/merge"\n' +
-        "node scripts/check-legal-revisions.ts HEAD^1 HEAD\n",
+      "the merge commit's SHA arrives as the materialise step's output, through env:",
+    ).toEqual({ MERGE_SHA: "${{ steps.pr-tree.outputs.merge_sha }}" });
+    expect(
+      step?.run,
+      "the base checkout's copy of the per-commit walk must judge every commit of the merge " +
+        "commit's range, over the full history the base checkout fetched",
+    ).toBe(
+      'node "${GITHUB_WORKSPACE}/scripts/check-legal-revisions.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"',
     );
     expect(Boolean(step?.["continue-on-error"])).toBe(false);
   });
@@ -421,8 +377,8 @@ describe("the verify workflow's concurrency group", () => {
  * checks when main moves underneath them, so the tree GitHub actually lands
  * (its rebase onto current main) was never tested by a required check (PR 290
  * is the worked example). The base-freshness step is the automated form of the
- * manual final-gate check: at the end of each required job (followed only by
- * verify's commit-scope gate) it issues the freshness certificate only when
+ * manual final-gate check: as the last step of each required job it issues
+ * the freshness certificate only when
  * the advance from the tested base to main's
  * current tip is disjoint from the files the pull request changes (issue 510's
  * relevant-advance condition, replacing issue 441's unsatisfiable
@@ -470,7 +426,7 @@ describe("the required workflows' base-freshness step", () => {
     ).toHaveLength(1);
   });
 
-  it("keeps freshness last except for verify's final commit-scope gate", () => {
+  it("keeps freshness the last step of both required jobs", () => {
     const verifyIndex = verifySteps.findIndex(
       (step) => step.name === "Base freshness",
     );
@@ -485,11 +441,8 @@ describe("the required workflows' base-freshness step", () => {
     ).toBeGreaterThan(-1);
     expect(
       verifyIndex,
-      "Only the final commit-scope gate may follow Base freshness in verify (issue 988)",
-    ).toBe(verifySteps.length - 2);
-    expect(verifySteps[verifyIndex + 1]?.name).toBe(
-      "Refuse a commit whose scope names a workflow outside the ci type",
-    );
+      "Base freshness must be the LAST step of the verify job — an earlier step re-opens the whole run duration as the stale-base window",
+    ).toBe(verifySteps.length - 1);
     expect(
       actionlintIndex,
       "Base freshness must be the LAST step of the actionlint job — an earlier step re-opens the whole run duration as the stale-base window",
@@ -609,8 +562,8 @@ describe("the required workflows' base-freshness step", () => {
     ).toBeDefined();
     expect(
       verifyStep.run,
-      "the gate's logic must live in scripts/ci-base-freshness.sh, where tests/ci/base-freshness.test.ts can execute it against a stubbed gh — an inline run block has no behavioral cover, and issue 510 showed an untested gate decaying into an unsatisfiable one",
-    ).toBe("bash scripts/ci-base-freshness.sh");
+      "the gate's logic must live in scripts/ci-base-freshness.sh, where tests/ci/base-freshness.test.ts can execute it against a stubbed gh — an inline run block has no behavioral cover, and issue 510 showed an untested gate decaying into an unsatisfiable one. verify runs the base checkout's copy by absolute path",
+    ).toBe('bash "${GITHUB_WORKSPACE}/scripts/ci-base-freshness.sh"');
     expect(
       actionlintStep.run,
       "the gate's logic must live in scripts/ci-base-freshness.sh, where tests/ci/base-freshness.test.ts can execute it against a stubbed gh — an inline run block has no behavioral cover, and issue 510 showed an untested gate decaying into an unsatisfiable one",
@@ -623,8 +576,11 @@ describe("the required workflows' base-freshness step", () => {
  * pull_request_target so the executed definition is always main's. Under that
  * event a workflow can reach repository secrets and runs with the caller's
  * checkout context, so the move is only as good as the boundary it keeps:
- * this suite pins ci.yml's side of it. The contexts themselves are posted by
- * the ledger relay alone; the App key exists only in that relay's
+ * this suite pins ci.yml's side of it: no secret, a read-only token, and a
+ * checkout of the base branch whose scripts judge the pull request's merge
+ * tree as data (tests/ci/verify-step-reachability.test.ts pins that no
+ * reachable step executes pull-request code). The contexts themselves are
+ * posted by the ledger relay alone; the App key exists only in that relay's
  * environment, never here.
  */
 describe("the verify workflow's untrusted-code boundary", () => {
@@ -687,20 +643,15 @@ describe("the verify workflow's untrusted-code boundary", () => {
     ).toHaveLength(2);
     expect(
       checkouts[0]?.if,
-      "the PR-tree checkout must be gated to pull_request_target exactly — its ref " +
-        "input reads github.event.pull_request.number, which is null on push and " +
-        "workflow_dispatch and broke those legs (fix round 1, finding A)",
+      "the base checkout must be gated to pull_request_target exactly",
     ).toBe("${{ github.event_name == 'pull_request_target' }}");
     expect(
       checkouts[0]?.with,
-      "the PR-tree checkout must carry persist-credentials: false (actions/checkout's " +
-        "fork guard requires it before admitting a PR ref under pull_request_target) " +
-        "AND the merge-ref ref input (under pull_request_target the default checkout " +
-        "is main's tip; the suite must test the pull request's change)",
-    ).toEqual({
-      ref: "refs/pull/${{ github.event.pull_request.number }}/merge",
-      "persist-credentials": false,
-    });
+      "under pull_request_target the checkout must carry NO ref input — the default " +
+        "checkout is the base branch's tip, whose scripts are the judge — with full history " +
+        "for the range-walking gates and persist-credentials: false. The pull request's " +
+        "merge commit enters only as git objects, materialised outside the workspace",
+    ).toEqual({ "persist-credentials": false, "fetch-depth": 0 });
     expect(
       checkouts[1]?.if,
       "the plain checkout must be gated to every non-PR event — the pushed main tip " +
@@ -713,19 +664,21 @@ describe("the verify workflow's untrusted-code boundary", () => {
     ).toEqual({ "persist-credentials": false });
   });
 
-  it("confines job-level permission overrides to the calibrate job", () => {
+  it("confines job-level permission overrides to calibrate and verify's read-only actions scope", () => {
     const overridden = Object.entries(workflow.jobs ?? {})
       .filter(([, job]) => job !== undefined && "permissions" in job)
       .map(([name]) => name);
 
     expect(
       overridden,
-      "the only job in ci.yml that may carry its own permissions: override is calibrate " +
-        "(its contents: write is pinned by tests/ci/calibrate-workflow.test.ts and it runs " +
-        "only on push and dispatch); every other job — the PR-reachable verify job included " +
-        "— must inherit the workflow-level { contents: read }, so a job-level elevation " +
-        "anywhere else fails here",
-    ).toEqual(["calibrate"]);
+      "only calibrate (its contents: write is pinned by tests/ci/calibrate-workflow.test.ts " +
+        "and it runs only on push and dispatch) and verify may carry a permissions: override",
+    ).toEqual(["verify", "calibrate"]);
+    expect(
+      workflow.jobs?.verify?.permissions,
+      "verify may add exactly actions: read — to read the pull request suite's runs and " +
+        "artifact — and nothing that writes",
+    ).toEqual({ contents: "read", actions: "read" });
   });
 });
 
@@ -746,14 +699,16 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
     expect(steps.filter((step) => step.name === markerName)).toHaveLength(1);
   });
 
-  it("checks markers immediately after both checkouts and before setup-node", () => {
+  it("checks markers immediately after both checkouts and the merge tree, before setup-node", () => {
     const checkouts = steps.flatMap((step, index) =>
       step.uses?.startsWith("actions/checkout@") ? [index] : [],
     );
+    const materialiseIndex = steps.findIndex((step) => (step.run ?? "").includes("git worktree add"));
     const markerIndex = steps.findIndex((step) => step.name === markerName);
     expect(checkouts).toHaveLength(2);
+    expect(materialiseIndex).toBe(checkouts[1] + 1);
     expect(markerIndex).toBeGreaterThan(-1);
-    expect(markerIndex).toBe(checkouts[1] + 1);
+    expect(markerIndex).toBe(materialiseIndex + 1);
     expect(steps[markerIndex + 1]?.uses).toMatch(/^actions\/setup-node@/);
   });
 
@@ -761,6 +716,13 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
     const step = steps.find((step) => step.name === markerName);
     expect(step).toBeDefined();
     expect(step?.run).toContain("git grep -nI -E '^(<{7}( |$)|>{7}( |$)|={7}$)' -- .");
+    // Under pull_request_target the tree searched is the pull request's,
+    // whose path is the materialise step's output.
+    expect(step?.env).toEqual({ PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
+    expect(step?.run).toContain(
+      'if [ "${GITHUB_EVENT_NAME}" = pull_request_target ]; then\n' +
+        '  cd "${PR_TREE:?the pull request tree was not materialised}"\nfi\n',
+    );
     expect(step?.if).toBeUndefined();
     expect(Boolean(step?.["continue-on-error"])).toBe(false);
   });
@@ -769,19 +731,23 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
     expect(steps.filter((step) => step.name === scopeName)).toHaveLength(1);
   });
 
-  it("runs the commit-scope gate immediately after Base freshness as the last step", () => {
+  it("runs the commit-scope gate before Base freshness, which stays the last step", () => {
     const freshnessIndex = steps.findIndex((step) => step.name === "Base freshness");
     const scopeIndex = steps.findIndex((step) => step.name === scopeName);
     expect(freshnessIndex).toBeGreaterThan(-1);
     expect(scopeIndex).toBeGreaterThan(-1);
-    expect(scopeIndex).toBe(freshnessIndex + 1);
-    expect(scopeIndex).toBe(steps.length - 1);
+    expect(scopeIndex).toBeLessThan(freshnessIndex);
+    expect(freshnessIndex).toBe(steps.length - 1);
   });
 
   it("runs the Python gate only for pull_request_target without tolerating failure", () => {
     const step = steps.find((step) => step.name === scopeName);
     expect(step).toBeDefined();
-    expect(step?.run).toBe("python3 scripts/commit_scopes.py");
+    expect(
+      step?.run,
+      "the base checkout's copy judges the merge tree's outgoing range",
+    ).toBe('python3 "${GITHUB_WORKSPACE}/scripts/commit_scopes.py" --root "${PR_TREE:?}"');
+    expect(step?.env).toEqual({ PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
     expect(step?.if).toBe("${{ github.event_name == 'pull_request_target' }}");
     expect(Boolean(step?.["continue-on-error"])).toBe(false);
   });

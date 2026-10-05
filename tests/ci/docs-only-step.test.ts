@@ -21,6 +21,8 @@ type WorkflowStep = {
  * parent on pull_request_target runs, the push's `before` SHA on push runs,
  * and an optional validated base on workflow_dispatch runs. A dispatch
  * without a base and every undecidable push must end in docs_only=false.
+ * Under pull_request_target the script that runs is the BASE checkout's copy,
+ * with the materialised merge tree (PR_TREE) as its working directory.
  *
  * The wiring is pinned on the parsed YAML, and the step's own run script is
  * then executed with bash -e (GitHub's default shell) inside scratch
@@ -55,42 +57,44 @@ describe("the verify workflow's docs-only detection step", () => {
       PUSH_BEFORE: "${{ github.event.before }}",
       DISPATCH_BASE: "${{ inputs.base }}",
       PR_NUMBER: "${{ github.event.pull_request.number }}",
+      PR_TREE: "${{ steps.pr-tree.outputs.path }}",
     });
     expect(step?.run).toBeDefined();
     expect(step?.run?.includes("${{")).toBe(false);
   });
 
-  it("deepens the checked-out merge ref, never GITHUB_SHA, on the PR branch", () => {
+  it("runs the base copy over the materialised merge tree on the PR branch", () => {
     const run = step?.run ?? "";
 
-    // GITHUB_SHA is the BASE TIP under pull_request_target (issue 822's event
-    // swap): deepening it leaves the checked-out merge commit's graft at depth
-    // 1 and HEAD^1 unreadable. The branch must fetch the merge ref itself —
-    // the same tip as the checkout, so the shallow graft moves — and the
-    // number must arrive through env.
+    // Under pull_request_target the workspace is the base checkout and the
+    // pull request's merge commit is the detached worktree at PR_TREE. The
+    // base copy of the script judges it against its first parent; nothing is
+    // fetched or deepened here, and the branch exits before the push and
+    // dispatch logic.
     expect(
-      run,
-      "the pull_request_target branch must deepen the checked-out merge ref by " +
-        'fetching refs/pull/<N>/merge at depth 2 before reading HEAD^1',
-    ).toContain(
-      'if [ "${EVENT_NAME}" = pull_request_target ]; then\n' +
-        '  git fetch --depth=2 origin "+refs/pull/${PR_NUMBER}/merge"\n' +
-        "  base=HEAD^1\n",
-    );
-    // The push and workflow_dispatch branches keep their byte-identical
-    // deepening of GITHUB_SHA (the checked-out commit on those events): two
-    // --unshallow lines, and the leading depth-2 fetch stays first.
-    expect(run.startsWith('git fetch --depth=2 origin "${GITHUB_SHA}"\n')).toBe(true);
+      run.startsWith(
+        'if [ "${EVENT_NAME}" = pull_request_target ]; then\n' +
+          '  cd "${PR_TREE:?the pull request tree was not materialised}"\n' +
+          '  changed=$(node "${GITHUB_WORKSPACE}/scripts/docs-only.ts" HEAD^1)\n' +
+          '  echo "docs_only=${changed}" >> "$GITHUB_OUTPUT"\n' +
+          "  exit 0\n" +
+          "fi\n",
+      ),
+    ).toBe(true);
+    // The push and workflow_dispatch branches keep their deepening of
+    // GITHUB_SHA (the checked-out commit on those events): a leading depth-2
+    // fetch right after the pull request branch, then two --unshallow lines.
+    expect(run).toContain('fi\ngit fetch --depth=2 origin "${GITHUB_SHA}"\nbase=""\n');
     expect(run.match(/git fetch --no-tags --unshallow origin "\$\{GITHUB_SHA\}"/g)).toHaveLength(2);
-    expect(run).toContain('elif [ "${EVENT_NAME}" = push ]; then');
+    expect(run).toContain('if [ "${EVENT_NAME}" = push ]; then');
     expect(run).toContain(
       'elif [ "${EVENT_NAME}" = workflow_dispatch ] && [ -n "${DISPATCH_BASE}" ]; then',
     );
   });
 
   it("hands the base to the docs-only CLI instead of piping a diff into it", () => {
-    expect(step?.run).toMatch(/node scripts\/docs-only\.ts "\$\{?\w+\}?"/);
-    expect(step?.run).not.toMatch(/\|\s*node scripts\/docs-only\.ts/);
+    expect(step?.run).toMatch(/node "\$\{GITHUB_WORKSPACE\}\/scripts\/docs-only\.ts" "\$\{?\w+\}?"/);
+    expect(step?.run).not.toMatch(/\|\s*node /);
   });
 
   describe("run in a shallow checkout", () => {
@@ -144,8 +148,21 @@ describe("the verify workflow's docs-only detection step", () => {
       await mkdir(checkout);
       git(checkout, "init", "--quiet");
       git(checkout, "remote", "add", "origin", `file://${origin}`);
-      git(checkout, "fetch", "--quiet", "--depth=1", "origin", sha);
-      git(checkout, "checkout", "--quiet", "--detach", "FETCH_HEAD");
+      let prTree: Record<string, string> = {};
+      if (env.EVENT_NAME === "pull_request_target") {
+        // The runner state the materialise step leaves: a full-history
+        // checkout of the base tip, and the merge commit `sha` as a detached
+        // worktree outside it.
+        const baseTip = options?.githubSha ?? sha;
+        git(checkout, "fetch", "--quiet", "origin", baseTip, `+refs/pull/${env.PR_NUMBER}/merge:refs/remotes/pr/merge`);
+        git(checkout, "checkout", "--quiet", "--detach", baseTip);
+        const tree = `${checkout}-pr-tree`;
+        git(checkout, "worktree", "add", "--quiet", "--detach", tree, sha);
+        prTree = { PR_TREE: tree };
+      } else {
+        git(checkout, "fetch", "--quiet", "--depth=1", "origin", sha);
+        git(checkout, "checkout", "--quiet", "--detach", "FETCH_HEAD");
+      }
 
       const scriptPath = join(root, `step-${counter}.sh`);
       const outputPath = join(root, `output-${counter}`);
@@ -157,6 +174,8 @@ describe("the verify workflow's docs-only detection step", () => {
         env: {
           ...scratchGitEnv,
           ...env,
+          ...prTree,
+          GITHUB_WORKSPACE: checkout,
           GITHUB_SHA: options?.githubSha ?? sha,
           GITHUB_OUTPUT: outputPath,
           PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
