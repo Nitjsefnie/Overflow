@@ -24,6 +24,10 @@
 #
 # DATABASE_URL                      required; without it the script refuses to
 #                                   guess which database to dump.
+# CREDENTIALS_DIRECTORY             set by the unit: a readable osc_token
+#                                   under it is bridged to DISCORD_TOKEN
+#                                   before anything runs (the token is not an
+#                                   entry in backup.env).
 # OVERFLOW_BACKUP_AGE_RECIPIENT     required age recipient public key. An
 #                                   unset or empty value is refused before
 #                                   anything runs: nothing is ever posted
@@ -108,6 +112,19 @@ case "$max_bytes" in
         fail "OVERFLOW_BACKUP_MAX_BYTES must be a number of bytes, got: $max_bytes"
         ;;
 esac
+
+# The osc identity's bot token reaches this script as a systemd credential
+# loaded from the canonical file (deploy/overflow-offhost-backup.service's
+# LoadCredential=): if the unit's CREDENTIALS_DIRECTORY carries a readable
+# osc_token, bridge it into the environment the mailbox CLI already reads.
+# Command substitution into the export - never an argument, never echoed, never
+# logged: the token's only appearances are in the environment and inside the
+# command substitution. A trailing newline in the file is not part of the
+# token; command substitution strips it.
+if [ -n "${CREDENTIALS_DIRECTORY:-}" ] && [ -r "${CREDENTIALS_DIRECTORY}/osc_token" ]; then
+    DISCORD_TOKEN=$(cat "${CREDENTIALS_DIRECTORY}/osc_token")
+    export DISCORD_TOKEN
+fi
 
 mb=${OVERFLOW_OFFHOST_MB:-/root/.agent-bundle/scripts/discord_mb.py}
 if [ ! -x "$mb" ]; then
