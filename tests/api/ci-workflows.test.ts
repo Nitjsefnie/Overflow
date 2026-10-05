@@ -529,17 +529,20 @@ fi
       .map((step) => step.uses)).toEqual([
       "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
     ]);
-    // Exactly one checkout: under push and workflow_dispatch the plain default
-    // checkout takes the event's own commit. It carries no event gate because
-    // this file admits nothing else — the pull_request_target checkout, with
-    // full history and no ref input, is in ci-pr.yml.
+    // Exactly one checkout: under push and workflow_dispatch the default
+    // checkout takes the event's own commit, at full history (issue 1098) so
+    // the suite's secret-scan provenance check has the history its baseline
+    // names. It carries no event gate because this file admits nothing else —
+    // no pull_request trigger and no pull_request.* value, so the depth pulls
+    // in no pull-request data. The pull_request_target checkout, with full
+    // history and no ref input, is in ci-pr.yml.
     const verifyCheckouts = verify.steps.filter((step) =>
       step.uses?.startsWith("actions/checkout@"),
     );
     expect(verifyCheckouts, "the verify job must keep exactly one checkout").toHaveLength(1);
     expect(verifyCheckouts[0]).toEqual({
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-      with: { "persist-credentials": false },
+      with: { "persist-credentials": false, "fetch-depth": 0 },
     });
     expect(verify.steps.find((step) => step.uses?.startsWith("actions/setup-node@"))?.with)
       .toEqual(expect.objectContaining({ "node-version": "24.17.0" }));

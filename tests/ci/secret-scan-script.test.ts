@@ -31,14 +31,16 @@ import {
  *
  * **Covered only where the history is present:** the committed baseline's
  * provenance — that each finding's redacted residue really came from the source
- * line it names. That check reads the blobs the baseline points at, and
- * `.github/workflows/ci.yml`'s `verify` job checks out at `actions/checkout`'s
- * default depth of 1, where the six commits the baseline's eight entries name do
- * not exist. The test that does it therefore **SKIPS in CI, and the skip is
- * reported in the run summary rather than passing quietly.** In a full-depth
- * checkout it runs. Do not read a green CI run as evidence about the committed
- * baseline's provenance: it is evidence about the checker, and about the file's
- * own contents.
+ * line it names. That check reads the blobs the baseline points at, so it runs
+ * only where the checkout holds the six commits the baseline's eight entries
+ * name. Since issue 1098 that is the repository-level CI leg:
+ * `.github/workflows/ci.yml`'s `verify` job checks out `fetch-depth: 0`, and
+ * the provenance tests run there on every `main` push and dispatch. They still
+ * skip in the `pr suite` workflow, whose depth-2 checkout cannot reach
+ * September's commits — and that skip is reported in the run summary rather
+ * than passing quietly. Where the tests skip, do not read a green run as
+ * evidence about the committed baseline's provenance: it is evidence about the
+ * checker, and about the file's own contents.
  *
  * **Covered here no longer, and by design: whether the baseline's commits are
  * REACHABLE.** That assertion used to sit in this file, at both depths, and it
@@ -858,10 +860,13 @@ describe("the git reads that decide whether the deep check runs", () => {
  * entries, against the real commits they name.
  *
  * This block SKIPS wherever the checkout is shallower than the history it points
- * at, which in practice means CI: `.github/workflows/ci.yml` gives the `verify`
- * job `actions/checkout`'s default depth of 1, and the baseline's entries date
- * from September and October. The skip is deliberate and reported in the run
- * summary. A `try { … } catch { pass }` here would be the same false green this
+ * at. Since issue 1098 that is only the `pr suite` workflow:
+ * `.github/workflows/pr-suite.yml` checks out `fetch-depth: 2`, and the
+ * baseline's entries date from September and October, so the two commits it
+ * fetches do not reach them. The repository-level `ci.yml` verify checks out
+ * `fetch-depth: 0` (issue 1098) and the block runs on every `main` push and
+ * dispatch there. The skip is deliberate and reported in the run summary. A
+ * `try { … } catch { pass }` here would be the same false green this
  * whole exercise has been about, wearing a name tag: a green CI run would read
  * as coverage the run does not have. See the file header for what each
  * environment does and does not establish.
