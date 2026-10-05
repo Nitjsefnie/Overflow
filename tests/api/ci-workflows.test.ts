@@ -447,8 +447,10 @@ fi
     expect(verify.services?.postgres?.options).toContain("pg_isready");
     expect(verify.steps.filter((step) => step.uses).every((step) => /@[0-9a-f]{40}$/.test(step.uses!))).toBe(true);
     // Keep the reviewed artifact actions exact across jobs: verify uploads
-    // the pair, then the calibration job downloads the summary. The generic
-    // SHA-format check above would accept a different, valid pin.
+    // the pair on push and dispatch, then the calibration job downloads the
+    // summary; under pull_request_target verify downloads the awaited pull
+    // request suite run's summary. The generic SHA-format check above would
+    // accept a different, valid pin.
     const ciSteps = Object.values(workflow.jobs).flatMap((job) => job.steps);
     const uploadPins = ciSteps
       .filter((step) =>
@@ -462,14 +464,13 @@ fi
       .filter((step) => step.uses?.startsWith("actions/download-artifact@"))
       .map((step) => step.uses)).toEqual([
       "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
     ]);
     // Exactly two checkouts, each gated to its event. Under pull_request_target
-    // the merge-ref checkout tests the pull request's change (persist-
-    // credentials: false is what actions/checkout's fork guard requires before
-    // it admits a PR ref); under push and workflow_dispatch the plain default
-    // checkout takes the event's own commit — an unconditional ref built from
-    // github.event.pull_request.number resolves null there and broke the
-    // push and dispatch legs (fix round 1, finding A).
+    // the default checkout is the base branch's tip — whose scripts judge the
+    // pull request's merge tree as data — with full history and no ref input;
+    // under push and workflow_dispatch the plain default checkout takes the
+    // event's own commit.
     const verifyCheckouts = verify.steps.filter((step) =>
       step.uses?.startsWith("actions/checkout@"),
     );
@@ -477,10 +478,7 @@ fi
     expect(verifyCheckouts[0]).toEqual({
       if: "${{ github.event_name == 'pull_request_target' }}",
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-      with: {
-        ref: "refs/pull/${{ github.event.pull_request.number }}/merge",
-        "persist-credentials": false,
-      },
+      with: { "persist-credentials": false, "fetch-depth": 0 },
     });
     expect(verifyCheckouts[1]).toEqual({
       if: "${{ github.event_name != 'pull_request_target' }}",
@@ -1372,6 +1370,7 @@ exit 1
     expect(checkIgnore(".github/workflows/actionlint.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/dependency-audit.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/ratchet-guard.yml")).toBe(1);
+    expect(checkIgnore(".github/workflows/pr-suite.yml")).toBe(1);
     expect(checkIgnore(".github/dependabot.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/unshipped.yaml")).toBe(0);
     expect(checkIgnore(".github/junk.txt")).toBe(0);

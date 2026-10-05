@@ -3,18 +3,28 @@ name: ci
 # The complete release gate. It exercises the real migration path against
 # PostgreSQL before running every behavioral, static, and production-build check.
 #
-# pull_request_target so the executed workflow definition is main's: a pull
-# request that edits its own workflow files cannot shape the job that judges
-# it (issue 822). The boundary: pull-request code runs in a job whose
-# definition is main's, with contents: read and no secret reference anywhere
-# in this file — the App key lives only in the ledger relay's environment,
-# and only the relay posts the required contexts. The verify job checks out
-# the pull request's merge ref explicitly (under pull_request_target the
-# default checkout is main's tip): the suite must test the pull request's
-# change, and the merge ref preserves the HEAD^1/HEAD^2 parent semantics the
-# docs-only and ratchet steps rely on. persist-credentials: false is what
-# actions/checkout's fork guard requires before it admits a PR ref under
-# pull_request_target.
+# THE TRUST BOUNDARY. A pull request's own code — its install, migrations,
+# tests, lint, typecheck, build and page geometry — runs only in
+# pr-suite.yml, under `pull_request`: the pull request's own definition, a
+# read-only token, no secret, and no required context of its own. This
+# workflow runs under pull_request_target, so its definition is the base
+# branch's (issue 822), and under that event the verify job executes NO
+# pull-request code. It checks out the base branch, materialises the pull
+# request's merge commit as a detached worktree outside the workspace, and
+# runs the BASE checkout's copies of the integrity gates over that tree as
+# data — conflict markers, docs-only classification, module size ceilings,
+# migration immutability, legal revision currency, commit scopes, the
+# coverage floor — plus the suite run's outcome, read as data through the base
+# copy of scripts/await-pr-suite.ts. Base freshness runs last. A pull
+# request's tree can therefore never judge itself: replacing a gate script in
+# the pull request changes the tree being judged, not the judge.
+#
+# Push to main and workflow_dispatch test main itself, so on those events the
+# job runs the full suite on the event commit, as it always has. No secret is
+# referenced anywhere in this file — the App key lives only in the ledger
+# relay's environment, and the relay posts the required contexts only from
+# trusted runs (pull_request_target, or push/dispatch/schedule on main), never
+# from a pull_request run.
 on:
   push:
     branches: [main]
@@ -112,6 +122,11 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # actions: read lets the base copy of the suite awaiter list the pull
+    # request suite's runs and download its coverage summary.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       docs_only: ${{ steps.detect-docs.outputs.docs_only }}
 
@@ -141,28 +156,26 @@ jobs:
       APP_URL: https://overflow.invalid
       GITHUB_WEBHOOK_URL: https://overflow.invalid/api/github/webhooks
       MODERATOR_GITHUB_USER_IDS: "1"
-      # Actions `env:` is step-scoped. This job checks out the PR's merge ref;
-      # a pin on only the install step leaves later `pnpm` steps resolving the
-      # PR tree's `packageManager`. At job scope every `pnpm` step inherits
-      # both pins, so there is no step left on which to forget them.
+      # Actions `env:` is step-scoped. A pin on only the install step leaves
+      # later `pnpm` steps resolving the checkout's `packageManager`. At job
+      # scope every `pnpm` step inherits both pins, so there is no step left
+      # on which to forget them. (Under pull_request_target no `pnpm` step
+      # runs at all; the PostgreSQL service is idle there.)
       COREPACK_ENABLE_PROJECT_SPEC: "0"
       npm_config_registry: "https://registry.npmjs.org/"
 
     steps:
-      # Under pull_request_target the checkout plants the pull request's merge
-      # ref (under that event the default checkout is main's tip): the suite
-      # must test the pull request's change, and the merge ref preserves the
-      # HEAD^1/HEAD^2 parent semantics the docs-only and ratchet steps rely
-      # on. persist-credentials: false is what actions/checkout's fork guard
-      # requires before it admits a PR ref under pull_request_target. The
-      # step is event-gated because github.event.pull_request.number is null
-      # on push and workflow_dispatch, where a ref built from it would break
-      # the checkout (fix round 1, finding A).
+      # Under pull_request_target no ref input at all: GitHub points GITHUB_REF
+      # at the base branch and GITHUB_SHA at its tip when the event fired, so
+      # the default checkout is the trusted base — the copy of every gate
+      # script that executes below — and actions/checkout's fork guard exempts
+      # exactly that. Full history, because the migration and legal-revision
+      # gates walk the pull request's range and commit scopes reads main's.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ github.event_name == 'pull_request_target' }}
         with:
-          ref: "refs/pull/${{ github.event.pull_request.number }}/merge"
           persist-credentials: false
+          fetch-depth: 0
 
       # Every other event checks out the event's own commit by default: the
       # pushed main tip on a push, the dispatched ref's commit on a
@@ -171,6 +184,40 @@ jobs:
         if: ${{ github.event_name != 'pull_request_target' }}
         with:
           persist-credentials: false
+
+      # The pull request enters as git objects only: its merge ref (the head
+      # merged into the base, base tip first parent, head second) and its
+      # head ref. The merge commit is bound to the event before anything
+      # reads it — its second parent must be exactly the head SHA this event
+      # is about, or the step fails closed — and is then materialised as a
+      # detached worktree under RUNNER_TEMP, outside the workspace, as data:
+      # nothing is installed, built or executed there. Later steps receive
+      # its path and SHA as this step's outputs, through their own env: as
+      # PR_TREE and MERGE_SHA — never through the job-wide environment file.
+      # Values from the event reach the shell through env:, never through
+      # ${{ }} in run:.
+      - name: Materialise the pull request's merge tree as data
+        id: pr-tree
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags origin \
+            "+refs/pull/${PR_NUMBER}/merge:refs/remotes/pr/merge" \
+            "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+          merge_sha=$(git rev-parse --verify 'refs/remotes/pr/merge^{commit}')
+          read -r _ first_parent second_parent extra_parent \
+            <<< "$(git rev-list --parents -n 1 "${merge_sha}")"
+          if [ -z "${first_parent}" ] || [ -n "${extra_parent}" ] \
+            || [ "${second_parent}" != "${HEAD_SHA}" ]; then
+            echo "::error::refs/pull/${PR_NUMBER}/merge (${merge_sha}) is not a two-parent merge of the event's head ${HEAD_SHA}; refusing to judge a tree this event is not about"
+            exit 1
+          fi
+          pr_tree="${RUNNER_TEMP}/pr-tree"
+          git worktree add --detach "${pr_tree}" "${merge_sha}"
+          echo "path=${pr_tree}" >> "$GITHUB_OUTPUT"
+          echo "merge_sha=${merge_sha}" >> "$GITHUB_OUTPUT"
 
       - name: Check no tracked file carries a merge-conflict marker
         # Issue 988 ports this mechanical check: in the claim repository,
@@ -185,8 +232,14 @@ jobs:
         # `||||||| base` line changes nothing, because the other three are
         # still written. ci.yml's verify job runs on pull_request_target,
         # push to main and workflow_dispatch: leaving this step ungated makes
-        # it run for a docs-only pull request too.
+        # it run for a docs-only pull request too. Under pull_request_target
+        # the tree searched is the pull request's materialised merge tree.
+        env:
+          PR_TREE: ${{ steps.pr-tree.outputs.path }}
         run: |
+          if [ "${GITHUB_EVENT_NAME}" = pull_request_target ]; then
+            cd "${PR_TREE:?the pull request tree was not materialised}"
+          fi
           # git grep exits 1 for "no match" and above 1 for an error it could
           # not run, and a guard that reads its own error as a clean tree is
           # the false green this step exists to prevent.
@@ -205,26 +258,33 @@ jobs:
         with:
           node-version: "24.17.0"
 
+      # Every step from here that runs the event commit's own code — the
+      # package manager, the suite, the build — is gated to push and
+      # workflow_dispatch by an allowlist, never by "not pull_request_target",
+      # so a trigger added later runs none of it until it is named here.
       - name: Enable the pinned package manager
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: |
           corepack enable
           corepack install --global pnpm@10.33.0
           pnpm --version
 
       - name: Install dependencies
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: pnpm install --frozen-lockfile
 
       - name: Apply PostgreSQL migrations
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: pnpm db:migrate
 
       # A change that touched only documentation cannot move coverage, so the
       # measurement below would compare the same tree against itself. Detect
       # it instead of measuring it: the script checks the endpoint diff and
       # every first-parent commit since the base. A pull_request_target run
-      # uses the merge ref's first parent (the whole PR change), a push uses
-      # its before SHA, and a dispatch uses its validated optional base. A
-      # dispatch with no base, an unknown event, or an undecidable push
-      # counts as code.
+      # runs the base checkout's copy over the materialised merge tree against
+      # its first parent (the whole PR change), a push uses its before SHA,
+      # and a dispatch uses its validated optional base. A dispatch with no
+      # base, an unknown event, or an undecidable push counts as code.
       # Rename detection is off, so a code source renamed to a doc counts as
       # code (issue 646).
       - name: Detect docs-only change
@@ -234,13 +294,17 @@ jobs:
           PUSH_BEFORE: ${{ github.event.before }}
           DISPATCH_BASE: ${{ inputs.base }}
           PR_NUMBER: '${{ github.event.pull_request.number }}'
+          PR_TREE: ${{ steps.pr-tree.outputs.path }}
         run: |
+          if [ "${EVENT_NAME}" = pull_request_target ]; then
+            cd "${PR_TREE:?the pull request tree was not materialised}"
+            changed=$(node "${GITHUB_WORKSPACE}/scripts/docs-only.ts" HEAD^1)
+            echo "docs_only=${changed}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           git fetch --depth=2 origin "${GITHUB_SHA}"
           base=""
-          if [ "${EVENT_NAME}" = pull_request_target ]; then
-            git fetch --depth=2 origin "+refs/pull/${PR_NUMBER}/merge"
-            base=HEAD^1
-          elif [ "${EVENT_NAME}" = push ]; then
+          if [ "${EVENT_NAME}" = push ]; then
             base="${PUSH_BEFORE}"
             if [ -z "${base}" ] || [ -z "${base//0/}" ] \
               || ! git fetch --depth=1 origin "${base}"; then
@@ -264,34 +328,32 @@ jobs:
               exit 1
             fi
           fi
-          changed=$(node scripts/docs-only.ts "${base}")
+          changed=$(node "${GITHUB_WORKSPACE}/scripts/docs-only.ts" "${base}")
           echo "docs_only=${changed}" >> "$GITHUB_OUTPUT"
 
       - name: Test suite
-        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.detect-docs.outputs.docs_only != 'true' }}
         run: pnpm test --run --coverage --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=cobertura --coverage.include='src/**'
 
       - name: Test suite (docs-only)
-        if: ${{ steps.detect-docs.outputs.docs_only == 'true' }}
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.detect-docs.outputs.docs_only == 'true' }}
         run: pnpm test --run
 
       - name: Coverage floor
-        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.detect-docs.outputs.docs_only != 'true' }}
         run: node scripts/check-coverage-floor.ts
 
       # Informational, never a gate. The diff base is the checked-out
-      # commit's first parent — on a pull_request_target run that is the merge
-      # commit's base-side parent (GitHub merges the head into the base, so
-      # the base tip is the first parent and the head the second), which
-      # makes HEAD^1..HEAD exactly the change the pull request carries.
-      # Never the event's base SHA, which can trail the base tip the merge
-      # ref was actually built against.
+      # commit's first parent. On a pull request this report is produced by
+      # pr-suite.yml over its own merge commit; here it covers push and
+      # dispatch runs, whose calibrate job and coverage history read the
+      # same artifact names.
       - name: Patch coverage report
-        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.detect-docs.outputs.docs_only != 'true' }}
         run: git diff HEAD^1 HEAD | node scripts/patch-coverage.ts coverage/cobertura-coverage.xml
 
       - name: Upload patch coverage report
-        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.detect-docs.outputs.docs_only != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: patch-coverage
@@ -300,7 +362,7 @@ jobs:
           retention-days: 1
 
       - name: Upload coverage summary
-        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.detect-docs.outputs.docs_only != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-summary
@@ -309,66 +371,131 @@ jobs:
           retention-days: 1
 
       - name: Lint
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: pnpm lint
 
+      # The base checkout's script, run with the judged tree as its working
+      # directory: the event commit's own checkout on push and dispatch, the
+      # materialised merge tree under pull_request_target. The ceilings and
+      # baseline document the script reads is therefore the pull request's —
+      # which ratchet-guard.yml, running main's copy of check-ratchets.ts on
+      # every pull request, holds tighten-only against the merge base.
       - name: Module size ceilings
-        run: node scripts/check-module-size.ts
-
-      # A pull request must not relax its own ratchet documents (issue 647):
-      # the coverage floor, the module size ceilings and the module size
-      # baseline may only tighten. The merge ref merges the head into the
-      # base, so HEAD^1 is the base tip and HEAD^2 the head, and the check
-      # compares each document at their merge base with the head's copy. The
-      # history is still shallow by the time this step runs (the docs-only
-      # detection above fetched only to depth 2), and a shallow history makes
-      # git merge-base fail — or worse, return a wrong base without erroring
-      # — so the step first completes the history of both sides before
-      # checking.
-      - name: Ratchet documents
-        if: ${{ github.event_name == 'pull_request_target' }}
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TREE: ${{ steps.pr-tree.outputs.path }}
         run: |
-          git fetch --unshallow origin main "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
-          node scripts/check-ratchets.ts HEAD^1 HEAD^2
+          if [ "${GITHUB_EVENT_NAME}" = pull_request_target ]; then
+            cd "${PR_TREE:?the pull request tree was not materialised}"
+          fi
+          node "${GITHUB_WORKSPACE}/scripts/check-module-size.ts"
 
-      # Compares the base tip (HEAD^1) against the merge ref itself (HEAD), not the raw PR head (HEAD^2) — the merge result already carries migrations main added after the branch was cut, and a raw-head comparison false-positives such a migration as "deleted" (issue 841).
+      # No ratchet-document step here: ratchet-guard.yml runs main's copy of
+      # scripts/check-ratchets.ts on every pull request (and every push to
+      # main) as its own required context, reading the head only as git
+      # objects, so a second copy in this job would add no judge.
+
+      # Compares the base tip (the merge commit's first parent) against the
+      # merge commit itself, not the raw PR head — the merge result already
+      # carries migrations main added after the branch was cut, and a raw-head
+      # comparison false-positives such a migration as "deleted" (issue 841).
+      # The base checkout's script reads both revisions as git objects.
       - name: Migration immutability
         if: ${{ github.event_name == 'pull_request_target' }}
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          git fetch --depth=2 origin "+refs/pull/${PR_NUMBER}/merge"
-          node scripts/check-migration-edits.ts HEAD^1 HEAD
+          MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
+        run: node "${GITHUB_WORKSPACE}/scripts/check-migration-edits.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"
 
       # Unlike the migration step above — which compares the range's two
-      # endpoints, so depth=2 carries everything it reads — the legal-revision
-      # gate walks EVERY commit of base..head: a legal page edited in one
-      # commit and its revision record bumped in the next still violates, so a
-      # reordered pair cannot slip through. The per-commit walk needs the
-      # range's full ancestry, and the checkout is shallow by the time this
-      # step runs, so the step first completes the history of both sides (the
-      # Ratchet documents step is the precedent).
+      # endpoints — the legal-revision gate walks EVERY commit of base..head:
+      # a legal page edited in one commit and its revision record bumped in
+      # the next still violates, so a reordered pair cannot slip through. The
+      # checkout's full history plus the fetched merge ref carry the range's
+      # whole ancestry.
       - name: Legal revision currency
         if: ${{ github.event_name == 'pull_request_target' }}
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
+        run: node "${GITHUB_WORKSPACE}/scripts/check-legal-revisions.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"
+
+      - name: Refuse a commit whose scope names a workflow outside the ci type
+        # CONTRIBUTING.md allows a workflow's name as a scope only with type
+        # ci. This belongs in the already-required verify job: a new job would
+        # be a new required status context. The base checkout's script judges
+        # the merge tree's outgoing range against freshly fetched main, and
+        # derives the workflow-name set from the merge tree's workflows.
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          PR_TREE: ${{ steps.pr-tree.outputs.path }}
+        run: python3 "${GITHUB_WORKSPACE}/scripts/commit_scopes.py" --root "${PR_TREE:?}"
+
+      # The pull request's suite — install, migrations, tests, lint,
+      # typecheck, build, page geometry — runs as its own code in pr-suite.yml
+      # under `pull_request`. This step reads that run's outcome as data: the
+      # base copy of the awaiter succeeds only for a completed, successful
+      # pull_request run of exactly .github/workflows/pr-suite.yml at exactly
+      # the event's head SHA, and writes that run's id. Its run listing is
+      # .../actions/workflows/pr-suite.yml/runs, which exists once pr-suite.yml
+      # is on main — it lands in the same merge as this step.
+      - name: Await the pull request suite
+        id: suite
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node "${GITHUB_WORKSPACE}/scripts/await-pr-suite.ts"
+
+      # Success must be a positive signal here too, not the absence of a
+      # failure: without the awaited run's id there is no run whose outcome
+      # was read.
+      - name: Require the awaited suite run's id
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          RUN_ID: ${{ steps.suite.outputs.run_id }}
         run: |
-          git fetch --unshallow origin main "+refs/pull/${PR_NUMBER}/merge"
-          node scripts/check-legal-revisions.ts HEAD^1 HEAD
+          if [[ ! "${RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::the suite awaiter wrote no run id (got '${RUN_ID}'); refusing to pass without a suite outcome"
+            exit 1
+          fi
+
+      # The coverage floor over the awaited run's measurement. The summary is
+      # the suite run's (pull-request-produced) output, downloaded as data
+      # into the merge tree's coverage/; a missing artifact fails the
+      # download. The decision to require it is the BASE docs-only verdict
+      # above, not the suite's own.
+      - name: Download the suite's coverage summary
+        if: ${{ github.event_name == 'pull_request_target' && steps.detect-docs.outputs.docs_only != 'true' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-summary
+          path: ${{ steps.pr-tree.outputs.path }}/coverage
+          run-id: ${{ steps.suite.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      # The base checkout's script, run in the merge tree: the floor document
+      # it reads is the pull request's, held tighten-only by ratchet-guard.yml.
+      - name: Coverage floor over the suite's summary
+        if: ${{ github.event_name == 'pull_request_target' && steps.detect-docs.outputs.docs_only != 'true' }}
+        env:
+          PR_TREE: ${{ steps.pr-tree.outputs.path }}
+        run: |
+          cd "${PR_TREE:?the pull request tree was not materialised}"
+          node "${GITHUB_WORKSPACE}/scripts/check-coverage-floor.ts"
 
       - name: Typecheck
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: pnpm typecheck
 
       - name: Production build
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: pnpm build
         env:
           NEXT_TELEMETRY_DISABLED: "1"
 
       - name: Page geometry check
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: node scripts/check-page-geometry.mjs
 
-      # A pull_request_target run tests refs/pull/N/merge — the head merged with the
+      # A pull_request_target run judges refs/pull/N/merge — the head merged with the
       # base as it stood at event time — and branch protection keeps strict
       # up-to-date checking disabled, so a run that went green against an older
       # main stays green after main advances: the tree GitHub actually lands
@@ -376,15 +503,15 @@ jobs:
       # (issue 441). LAST step, deliberately: the freshness certificate is
       # issued as late as the workflow can issue it, because an earlier step
       # re-opens the whole run duration as the stale-base window. The step runs
-      # scripts/ci-base-freshness.sh, which certifies when the base is
-      # unchanged OR advanced only disjointly from the files this pull request
-      # changes — an advance that touched none of them carried its own required
-      # checks, and only cross-file interaction goes unverified — and refuses
-      # on everything else: an overlapping advance, a failed or empty API
-      # response, an unrepresentative compare (issue 510; the first version
-      # demanded main frozen for the whole run, which no run could satisfy at
-      # the repository's merge cadence). Push and workflow_dispatch runs test
-      # main itself and skip the gate.
+      # the base checkout's scripts/ci-base-freshness.sh, which certifies when
+      # the base is unchanged OR advanced only disjointly from the files this
+      # pull request changes — an advance that touched none of them carried
+      # its own required checks, and only cross-file interaction goes
+      # unverified — and refuses on everything else: an overlapping advance, a
+      # failed or empty API response, an unrepresentative compare (issue 510;
+      # the first version demanded main frozen for the whole run, which no run
+      # could satisfy at the repository's merge cadence). Push and
+      # workflow_dispatch runs test main itself and skip the gate.
       - name: Base freshness
         if: ${{ github.event_name == 'pull_request_target' }}
         env:
@@ -394,16 +521,7 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: bash scripts/ci-base-freshness.sh
-
-      - name: Refuse a commit whose scope names a workflow outside the ci type
-        # CONTRIBUTING.md allows a workflow's name as a scope only with type
-        # ci. This belongs in the already-required verify job: a new job would
-        # be a new required status context. After Base freshness: both steps
-        # compare the head against freshly fetched main and must read the
-        # rebased head (issue 988).
-        if: ${{ github.event_name == 'pull_request_target' }}
-        run: python3 scripts/commit_scopes.py
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci-base-freshness.sh"
 
   # Raises the committed coverage floor when a main push measured higher
   # than the record by more than the hysteresis, and doubles as the calibrate

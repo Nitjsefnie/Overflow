@@ -531,10 +531,19 @@ type Scenario = {
   event: string;
   /** What `scripts/docs-only.ts` wrote into `detect-docs`'s output. */
   docsOnly: "true" | "false";
-  /** Whether the coverage measurement is expected to run — the two-branch
-   *  design ci.yml ships, written out as data so a reviewer reads the expected
-   *  outcome per run rather than deriving it from the branch under test. */
+  /** Whether this job itself runs the suite. Under pull_request_target it
+   *  never does: the pull request's code runs only in pr-suite.yml, and verify
+   *  awaits that run's outcome as data. */
+  runsSuite: boolean;
+  /** Whether the coverage measurement is expected to run IN THIS JOB — the
+   *  two-branch design ci.yml ships, written out as data so a reviewer reads
+   *  the expected outcome per run rather than deriving it from the branch
+   *  under test. */
   coverage: boolean;
+  /** Whether the coverage floor is checked: by this job's own measurement on
+   *  push and dispatch, and over the awaited suite run's coverage summary on
+   *  a pull request carrying code. */
+  floor: boolean;
 };
 
 const SCENARIOS: Scenario[] = [
@@ -542,25 +551,42 @@ const SCENARIOS: Scenario[] = [
     label: "a pull request carrying a code change",
     event: "pull_request_target",
     docsOnly: "false",
-    coverage: true,
+    runsSuite: false,
+    coverage: false,
+    floor: true,
   },
   {
     label: "a pull request carrying a docs-only change",
     event: "pull_request_target",
     docsOnly: "true",
+    runsSuite: false,
     coverage: false,
+    floor: false,
   },
-  { label: "a push to main", event: "push", docsOnly: "false", coverage: true },
+  {
+    label: "a push to main",
+    event: "push",
+    docsOnly: "false",
+    runsSuite: true,
+    coverage: true,
+    floor: true,
+  },
   {
     label: "a workflow_dispatch",
     event: "workflow_dispatch",
     docsOnly: "false",
+    runsSuite: true,
     coverage: true,
+    floor: true,
   },
 ];
 
 const TEST_SUITE_COMMAND = "pnpm test --run";
-const COVERAGE_FLOOR_COMMAND = "node scripts/check-coverage-floor.ts";
+// The script's path, not its invocation: the push leg runs it relative to the
+// event commit's checkout, the pull_request_target leg by absolute path into
+// the base checkout.
+const COVERAGE_FLOOR_COMMAND = "scripts/check-coverage-floor.ts";
+const AWAIT_SUITE_COMMAND = "scripts/await-pr-suite.ts";
 const MIGRATE_COMMAND = "pnpm db:migrate";
 const DETECT_STEP_ID = "detect-docs";
 const DETECT_STEP_NAME = "Detect docs-only change";
@@ -634,11 +660,13 @@ const COVERAGE_ARTIFACTS: { label: string; matches: (step: WorkflowStep) => bool
   },
   {
     label: "the patch coverage upload",
-    matches: (step) => step.with?.name === "patch-coverage",
+    matches: (step) =>
+      (step.uses ?? "").startsWith("actions/upload-artifact@") && step.with?.name === "patch-coverage",
   },
   {
     label: "the coverage summary upload",
-    matches: (step) => step.with?.name === "coverage-summary",
+    matches: (step) =>
+      (step.uses ?? "").startsWith("actions/upload-artifact@") && step.with?.name === "coverage-summary",
   },
 ];
 
@@ -1025,7 +1053,7 @@ describe("the docs-only detection the scenarios above assume", () => {
     expect(
       producers[0]?.run ?? "",
       "the docs-only producer must be the step that runs scripts/docs-only.ts",
-    ).toContain("node scripts/docs-only.ts");
+    ).toContain("scripts/docs-only.ts");
     expect(
       producers[0]?.if,
       "the docs-only producer must run unconditionally — a condition on it means the output the " +
@@ -1103,45 +1131,72 @@ for (const scenario of SCENARIOS) {
         .map((step) => step.run ?? "")
         .filter((run) => shellWords(run).includes("--coverage"));
 
-    it("runs the test suite exactly once", () => {
-      // Zero is issue 849's own failure mode: a condition that can never fire
-      // leaves the step in the file, so every presence assertion in tests/ci/
-      // stays green while CI executes no tests. Two is a different bug — the
-      // suite would run twice against the same database — and neither count is
-      // acceptable, which is why this asserts the cardinality and not a
-      // substring.
-      expect(
-        testSteps().map(label),
-        `on ${scenario.event} with docs_only=${scenario.docsOnly}, exactly one executed step may ` +
-          `invoke \`${TEST_SUITE_COMMAND}\`. Zero means the gate stopped gating with nothing failing; ` +
-          `two means the suite runs twice against one database. Steps that execute a command here: ` +
-          `${executedRunSteps().map(label).join(", ") || "none"}`,
-      ).toHaveLength(1);
-    });
+    it(
+      scenario.runsSuite
+        ? "runs the test suite exactly once"
+        : "runs no test suite of its own and awaits the pull request suite exactly once",
+      () => {
+        // Zero is issue 849's own failure mode: a condition that can never fire
+        // leaves the step in the file, so every presence assertion in tests/ci/
+        // stays green while CI executes no tests. Two is a different bug — the
+        // suite would run twice against the same database — and neither count
+        // is acceptable, which is why this asserts the cardinality and not a
+        // substring. Under pull_request_target the suite is the pull request's
+        // own code, so it runs only in pr-suite.yml and this job awaits that
+        // run's outcome instead: the awaiter is then the step whose absence
+        // would stop the gate gating.
+        expect(
+          testSteps().map(label),
+          `on ${scenario.event} with docs_only=${scenario.docsOnly}, ` +
+            `${scenario.runsSuite ? "exactly one" : "no"} executed step may invoke ` +
+            `\`${TEST_SUITE_COMMAND}\`. Steps that execute a command here: ` +
+            `${executedRunSteps().map(label).join(", ") || "none"}`,
+        ).toHaveLength(scenario.runsSuite ? 1 : 0);
+        expect(
+          runsContaining(selected(), AWAIT_SUITE_COMMAND).map(label),
+          `on ${scenario.event} with docs_only=${scenario.docsOnly}, ` +
+            `${scenario.runsSuite ? "no" : "exactly one"} executed step may await the pull ` +
+            `request suite`,
+        ).toHaveLength(scenario.runsSuite ? 0 : 1);
+      },
+    );
 
-    it("applies the migrations before it runs the tests", () => {
-      // The suite cannot pass against a schema it never applied. Ordering is
-      // asserted as the one relative order that carries meaning; no absolute
-      // index is pinned anywhere in this file, so moving an unrelated step
-      // cannot fail it.
-      const selectedSteps = selected();
-      const migrate = selectedSteps.findIndex((step) => (step.run ?? "").includes(MIGRATE_COMMAND));
-      const test = selectedSteps.findIndex((step) => (step.run ?? "").includes(TEST_SUITE_COMMAND));
+    it(
+      scenario.runsSuite
+        ? "applies the migrations before it runs the tests"
+        : "applies no migration, because it runs no pull-request code",
+      () => {
+        if (!scenario.runsSuite) {
+          expect(
+            runsContaining(selected(), MIGRATE_COMMAND).map(label),
+            `on ${scenario.event} the verify job must not run \`${MIGRATE_COMMAND}\`: it executes the ` +
+              `pull request's migration runner`,
+          ).toEqual([]);
+          return;
+        }
+        // The suite cannot pass against a schema it never applied. Ordering is
+        // asserted as the one relative order that carries meaning; no absolute
+        // index is pinned anywhere in this file, so moving an unrelated step
+        // cannot fail it.
+        const selectedSteps = selected();
+        const migrate = selectedSteps.findIndex((step) => (step.run ?? "").includes(MIGRATE_COMMAND));
+        const test = selectedSteps.findIndex((step) => (step.run ?? "").includes(TEST_SUITE_COMMAND));
 
-      expect(
-        migrate,
-        `on ${scenario.event} the verify job must execute \`${MIGRATE_COMMAND}\``,
-      ).toBeGreaterThan(-1);
-      expect(
-        test,
-        `on ${scenario.event} the verify job must execute \`${TEST_SUITE_COMMAND}\``,
-      ).toBeGreaterThan(-1);
-      expect(
-        migrate,
-        `on ${scenario.event} the migrations must be applied before the tests run — a suite that ` +
-          `runs against a schema it never applied can pass against the wrong database`,
-      ).toBeLessThan(test);
-    });
+        expect(
+          migrate,
+          `on ${scenario.event} the verify job must execute \`${MIGRATE_COMMAND}\``,
+        ).toBeGreaterThan(-1);
+        expect(
+          test,
+          `on ${scenario.event} the verify job must execute \`${TEST_SUITE_COMMAND}\``,
+        ).toBeGreaterThan(-1);
+        expect(
+          migrate,
+          `on ${scenario.event} the migrations must be applied before the tests run — a suite that ` +
+            `runs against a schema it never applied can pass against the wrong database`,
+        ).toBeLessThan(test);
+      },
+    );
 
     it(
       scenario.coverage
@@ -1158,7 +1213,12 @@ for (const scenario of SCENARIOS) {
           `nothing. Steps that execute a command here: ${executedRunSteps().map(label).join(", ") || "none"}`;
 
         expect(coverageInvocations(), expectation).toHaveLength(scenario.coverage ? 1 : 0);
-        expect(joined.includes(COVERAGE_FLOOR_COMMAND), expectation).toBe(scenario.coverage);
+        expect(
+          runsContaining(selected(), COVERAGE_FLOOR_COMMAND).map(label),
+          `on ${scenario.event} with docs_only=${scenario.docsOnly} the coverage floor ` +
+            `${scenario.floor ? "must be checked exactly once" : "must not be checked"}`,
+        ).toHaveLength(scenario.floor ? 1 : 0);
+        expect(joined.includes(COVERAGE_FLOOR_COMMAND), expectation).toBe(scenario.floor);
         // Every flag the step passes, one at a time, as a whole token of the
         // command: check-coverage-floor.ts and the patch-coverage step read
         // what these write, so a dropped flag is a silently unreadable
@@ -1202,10 +1262,12 @@ for (const scenario of SCENARIOS) {
       // Selected is not the same as gating: a step may be selected and still
       // have its failure ignored, which would leave the same green conclusion
       // this suite exists to deny, one level up.
-      for (const step of [
+      const gating = [
         ...testSteps(),
         ...runsContaining(selected(), COVERAGE_FLOOR_COMMAND),
-      ]) {
+        ...runsContaining(selected(), AWAIT_SUITE_COMMAND),
+      ];
+      for (const step of gating) {
         expect(
           step["continue-on-error"],
           `${label(step)} runs on ${scenario.event} and must not be continue-on-error — a tolerated ` +
@@ -1213,9 +1275,221 @@ for (const scenario of SCENARIOS) {
         ).toBeFalsy();
       }
       expect(
-        [...testSteps(), ...runsContaining(selected(), COVERAGE_FLOOR_COMMAND)].length,
-        `on ${scenario.event} at least one test or coverage step must exist to carry this check`,
+        gating.length,
+        `on ${scenario.event} at least one test, coverage or suite-awaiting step must exist to ` +
+          `carry this check`,
       ).toBeGreaterThan(0);
     });
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Half 3 — the trust boundary of the pull_request_target leg                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Under pull_request_target the executed definition is the base branch's and
+ * the job's token is the base repository's, so nothing the pull request
+ * carries may execute there: not its package manager, its install scripts,
+ * its tests or build, and not its copies of the integrity gates. The pull
+ * request's code runs only in pr-suite.yml under `pull_request`; this leg
+ * runs the BASE checkout's gate scripts over the pull request's merge tree
+ * as data, plus the suite run's outcome as data.
+ *
+ * These assertions are over the steps the selector picks for each
+ * pull_request_target scenario, so a step that becomes reachable under that
+ * event is judged whatever its name, and a step that stops being reachable
+ * stops satisfying the gate list below.
+ */
+
+const PRT_SCENARIOS = SCENARIOS.filter((scenario) => scenario.event === "pull_request_target");
+
+/** Commands that run a package manager, which would install or execute the
+ *  pull request's dependencies, lifecycle scripts or package.json scripts. */
+const PACKAGE_MANAGER = /(?<![\w./-])(pnpm|npm|npx|yarn|corepack|bun|bunx)(?![\w.-])/;
+
+/** An interpreter followed by the first argument it would execute. Options
+ *  before that argument are skipped; an inline-code option is refused below. */
+const INTERPRETER_CALL =
+  /(?<![\w./-])(node|python3?|bash|sh|tsx|deno)((?:\s+-[\w-]+(?:=\S+)?)*)\s+(\S+)/g;
+
+/** The base checkout's own scripts directory, the only place an executed
+ *  script may live: one path segment below it, no `..`, nothing else. */
+const BASE_SCRIPTS_DIR = /^(?:\$GITHUB_WORKSPACE|\$\{GITHUB_WORKSPACE\})\/scripts\/$/;
+const BASE_SCRIPT = /^(?:\$GITHUB_WORKSPACE|\$\{GITHUB_WORKSPACE\})\/scripts\/[\w-]+(\.[\w-]+)*$/;
+
+/** The actions a pull_request_target step may use: none of them executes
+ *  anything from the tree they operate on. */
+const PRT_ACTIONS = ["actions/checkout@", "actions/setup-node@", "actions/download-artifact@"];
+
+function unquoted(word: string): string {
+  return word.replaceAll("'", "").replaceAll('"', "");
+}
+
+/** Every reason one step's run block executes something other than the base
+ *  checkout's own scripts. Empty when the step is clean. */
+export function untrustedExecutions(run: string): string[] {
+  const reasons: string[] = [];
+  const manager = PACKAGE_MANAGER.exec(run);
+  if (manager) reasons.push(`runs the package manager \`${manager[1]}\``);
+  for (const call of run.matchAll(INTERPRETER_CALL)) {
+    const [, interpreter, options = "", target = ""] = call;
+    if (/(^|\s)-(e|c|p|-eval|-print)(\s|=|$)/.test(options)) {
+      reasons.push(`runs inline code through \`${interpreter}${options}\``);
+      continue;
+    }
+    if (!BASE_SCRIPT.test(unquoted(target))) {
+      reasons.push(
+        `runs \`${interpreter} ${target}\`, which does not resolve into the base checkout ` +
+          `($GITHUB_WORKSPACE)`,
+      );
+    }
+  }
+  // A script named by a repository-relative path resolves against whatever
+  // the working directory is, and under this event that may be the pull
+  // request's tree; only the base checkout's absolute prefix is unambiguous.
+  for (const reference of run.matchAll(/(\S*?)scripts\/[^\s"']*/g)) {
+    if (!BASE_SCRIPTS_DIR.test(`${unquoted(reference[1] ?? "")}scripts/`)) {
+      reasons.push(`names \`${reference[0]}\` without the base checkout's $GITHUB_WORKSPACE prefix`);
+    }
+  }
+  return reasons;
+}
+
+describe("the untrusted-execution detector the boundary assertions rely on", () => {
+  it("accepts a base-checkout script invocation and plain git", () => {
+    expect(untrustedExecutions('node "$GITHUB_WORKSPACE/scripts/check-migration-edits.ts" a b')).toEqual([]);
+    expect(untrustedExecutions('python3 "${GITHUB_WORKSPACE}/scripts/commit_scopes.py" --root "$PR_TREE"')).toEqual([]);
+    expect(untrustedExecutions('bash "$GITHUB_WORKSPACE/scripts/ci-base-freshness.sh"')).toEqual([]);
+    expect(untrustedExecutions("git grep -nI -E 'x' -- .")).toEqual([]);
+    expect(untrustedExecutions('echo "npm_config_registry is a job variable"')).toEqual([]);
+  });
+
+  it("refuses a package manager, a relative script and a pull-request-tree script", () => {
+    expect(untrustedExecutions("pnpm test --run")).not.toEqual([]);
+    expect(untrustedExecutions("x=$(npx tsc)")).not.toEqual([]);
+    expect(untrustedExecutions("node scripts/check-migration-edits.ts HEAD^1 HEAD")).not.toEqual([]);
+    expect(untrustedExecutions('cd "$PR_TREE" && node ./scripts/docs-only.ts HEAD^1')).not.toEqual([]);
+    expect(untrustedExecutions('node "$PR_TREE/scripts/check-module-size.ts"')).not.toEqual([]);
+    expect(untrustedExecutions('node "$PR_TREE/tool.mjs"')).not.toEqual([]);
+    expect(untrustedExecutions("bash scripts/ci-base-freshness.sh")).not.toEqual([]);
+    expect(untrustedExecutions("./scripts/run.sh")).not.toEqual([]);
+    expect(untrustedExecutions('node -e "require(process.env.PR_TREE)"')).not.toEqual([]);
+    expect(untrustedExecutions('node "$GITHUB_WORKSPACE/../pr-tree/scripts/x.ts"')).not.toEqual([]);
+  });
+});
+
+for (const scenario of PRT_SCENARIOS) {
+  describe(`the pull_request_target leg's trust boundary for ${scenario.label}`, () => {
+    const selected = () => selectSteps(verify.steps, contextFor(scenario));
+
+    it("runs no package manager and executes only the base checkout's scripts", () => {
+      const offences = selected().flatMap((step) =>
+        untrustedExecutions(step.run ?? "").map((reason) => `${label(step)}: ${reason}`),
+      );
+      expect(
+        offences,
+        "a step reachable under pull_request_target executes with the base repository's token " +
+          "and definition, so it may run only the base checkout's gate scripts over the pull " +
+          "request's tree as data — the pull request's own code runs in pr-suite.yml",
+      ).toEqual([]);
+    });
+
+    it("uses only actions that execute nothing from the tree they touch", () => {
+      const used = selected().flatMap((step) => (step.uses ? [step.uses] : []));
+      expect(used.length).toBeGreaterThan(0);
+      for (const uses of used) {
+        expect(
+          PRT_ACTIONS.some((prefix) => uses.startsWith(prefix)),
+          `${uses} is reachable under pull_request_target; only ${PRT_ACTIONS.join(", ")} may be`,
+        ).toBe(true);
+      }
+    });
+
+    it("checks out the base branch by default, with full history and no persisted token", () => {
+      const checkouts = selected().filter((step) => (step.uses ?? "").startsWith("actions/checkout@"));
+      expect(checkouts).toHaveLength(1);
+      expect(checkouts[0]?.with).toEqual({ "persist-credentials": false, "fetch-depth": 0 });
+    });
+
+    it("runs every integrity gate from the base checkout, and base freshness last", () => {
+      const steps = selected();
+      const gates = [
+        { gate: "conflict markers", needle: "git grep -nI" },
+        { gate: "docs-only classification", needle: "/scripts/docs-only.ts" },
+        { gate: "module size ceilings", needle: "/scripts/check-module-size.ts" },
+        { gate: "migration immutability", needle: "/scripts/check-migration-edits.ts" },
+        { gate: "legal revision currency", needle: "/scripts/check-legal-revisions.ts" },
+        { gate: "commit scopes", needle: "/scripts/commit_scopes.py" },
+        { gate: "the pull request suite's outcome", needle: "/scripts/await-pr-suite.ts" },
+        { gate: "base freshness", needle: "/scripts/ci-base-freshness.sh" },
+      ];
+      for (const { gate, needle } of gates) {
+        expect(
+          runsContaining(steps, needle).map(label),
+          `${gate} must be judged by exactly one step under pull_request_target`,
+        ).toHaveLength(1);
+      }
+      expect(
+        label(steps.at(-1)!),
+        "base freshness must be the LAST step: its certificate is issued as late as the run can " +
+          "issue it",
+      ).toBe(label(runsContaining(steps, "/scripts/ci-base-freshness.sh")[0]!));
+      expect(
+        runsContaining(steps, "scripts/check-ratchets.ts"),
+        "ratchet-guard.yml already runs main's copy of the ratchet check on every pull request",
+      ).toEqual([]);
+    });
+
+    it("judges the merge tree it materialised from the pull request's merge ref", () => {
+      const steps = selected();
+      const materialise = runsContaining(steps, "git worktree add --detach");
+      expect(materialise, "exactly one step materialises the merge tree").toHaveLength(1);
+      const step = materialise[0]!;
+      expect(step.run).toContain('"+refs/pull/${PR_NUMBER}/merge:');
+      expect(step.run).toContain('"+refs/pull/${PR_NUMBER}/head:');
+      expect((step as { env?: Record<string, string> }).env).toEqual({
+        PR_NUMBER: "${{ github.event.pull_request.number }}",
+        HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+      });
+      // Materialised before any gate reads it.
+      expect(steps.indexOf(step)).toBeLessThan(
+        steps.indexOf(runsContaining(steps, "git grep -nI")[0]!),
+      );
+    });
+
+    it("refuses success unless the awaited run's id is a positive integer", () => {
+      const steps = selected();
+      const awaiter = runsContaining(steps, AWAIT_SUITE_COMMAND)[0]!;
+      const required = steps.filter((step) =>
+        Object.values((step as { env?: Record<string, string> }).env ?? {}).includes(
+          `\${{ steps.${awaiter.id ?? "(no id)"}.outputs.run_id }}`,
+        ) && (step.run ?? "").includes("RUN_ID"),
+      );
+      expect(awaiter.id, "the awaiter must carry an id its run_id output is read by").toBeDefined();
+      expect(required.map(label), "exactly one step must check the run id").toHaveLength(1);
+      expect(steps.indexOf(required[0]!)).toBeGreaterThan(steps.indexOf(awaiter));
+    });
+
+    it(
+      scenario.floor
+        ? "downloads the awaited run's coverage summary into the pull request tree, failing when absent"
+        : "downloads nothing for a docs-only change",
+      () => {
+        const downloads = selected().filter((step) =>
+          (step.uses ?? "").startsWith("actions/download-artifact@"),
+        );
+        expect(downloads).toHaveLength(scenario.floor ? 1 : 0);
+        if (!scenario.floor) return;
+        const awaiter = runsContaining(selected(), AWAIT_SUITE_COMMAND)[0]!;
+        expect(downloads[0]?.with).toEqual({
+          name: "coverage-summary",
+          path: "${{ steps.pr-tree.outputs.path }}/coverage",
+          "run-id": `\${{ steps.${awaiter.id}.outputs.run_id }}`,
+          "github-token": "${{ github.token }}",
+        });
+        expect(downloads[0]?.["continue-on-error"]).toBeFalsy();
+      },
+    );
   });
 }
