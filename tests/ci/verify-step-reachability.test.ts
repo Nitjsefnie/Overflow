@@ -1494,20 +1494,26 @@ for (const scenario of PRT_SCENARIOS) {
       ).toEqual([]);
     });
 
-    it("judges the merge tree it materialised from the pull request's merge ref", () => {
+    it("judges the merge tree it materialised from the event's merge commit", () => {
       const steps = selected();
       const materialise = runsContaining(steps, "git worktree add --detach");
       expect(materialise, "exactly one step materialises the merge tree").toHaveLength(1);
       const step = materialise[0]!;
-      expect(step.run).toContain('"+refs/pull/${PR_NUMBER}/merge:');
-      expect(step.run).toContain('"+refs/pull/${PR_NUMBER}/head:');
+      // The merge commit is named by its event provenance and fetched by
+      // SHA — no refs/pull refspec, no PR-number-named env on the fetching
+      // step (tests/ci/verify-fetch-provenance.test.ts pins the pattern
+      // repo-wide for this job).
+      expect(step.run).toContain('git fetch --no-tags origin "${MERGE_BIND_SHA:?}"');
       expect((step as { env?: Record<string, string> }).env).toEqual({
-        PR_NUMBER: "${{ github.event.pull_request.number }}",
+        MERGE_BIND_SHA: "${{ github.event.pull_request.merge_commit_sha }}",
         HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
         // actions/checkout's default: the worktree checkout fetches no LFS
         // object the pull request's attributes point at.
         GIT_LFS_SKIP_SMUDGE: "1",
       });
+      // The trust boundary: the fetched commit must be a two-parent merge of
+      // exactly the event's head SHA, or the step fails closed.
+      expect(step.run).toContain('[ "${second_parent}" != "${HEAD_SHA}" ]');
       // Materialised before any gate reads it.
       expect(steps.indexOf(step)).toBeLessThan(
         steps.indexOf(runsContaining(steps, "git grep -nI")[0]!),
