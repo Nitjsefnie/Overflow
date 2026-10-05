@@ -1494,25 +1494,28 @@ for (const scenario of PRT_SCENARIOS) {
       ).toEqual([]);
     });
 
-    it("judges the merge tree it materialised from the event's merge commit", () => {
+    it("judges the merge tree it materialised from this event's head and base", () => {
       const steps = selected();
       const materialise = runsContaining(steps, "git worktree add --detach");
       expect(materialise, "exactly one step materialises the merge tree").toHaveLength(1);
       const step = materialise[0]!;
-      // The merge commit is named by its event provenance and fetched by
-      // SHA — no refs/pull refspec, no PR-number-named env on the fetching
-      // step (tests/ci/verify-fetch-provenance.test.ts pins the pattern
-      // repo-wide for this job).
-      expect(step.run).toContain('git fetch --no-tags origin "${MERGE_BIND_SHA:?}"');
+      // Both ends of the merge enter as this event's own SHA values — no
+      // refs/pull refspec, no PR-number-named env on the fetching step, and no
+      // read of the event's asynchronously computed merge commit
+      // (tests/ci/verify-fetch-provenance.test.ts pins the pattern repo-wide
+      // for this job).
+      expect(step.run).toContain('git fetch --no-tags origin "${HEAD_SHA:?}"');
+      expect(step.run).not.toContain("merge_commit_sha");
       expect((step as { env?: Record<string, string> }).env).toEqual({
-        MERGE_BIND_SHA: "${{ github.event.pull_request.merge_commit_sha }}",
         HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+        BASE_SHA: "${{ github.event.pull_request.base.sha }}",
         // actions/checkout's default: the worktree checkout fetches no LFS
         // object the pull request's attributes point at.
         GIT_LFS_SKIP_SMUDGE: "1",
       });
-      // The trust boundary: the fetched commit must be a two-parent merge of
-      // exactly the event's head SHA, or the step fails closed.
+      // The trust boundary: what is materialised must be a two-parent merge of
+      // exactly this event's base and head, or the step fails closed.
+      expect(step.run).toContain('git merge-tree --write-tree "${BASE_SHA:?}" "${HEAD_SHA:?}"');
       expect(step.run).toContain('[ "${second_parent}" != "${HEAD_SHA}" ]');
       // Materialised before any gate reads it.
       expect(steps.indexOf(step)).toBeLessThan(

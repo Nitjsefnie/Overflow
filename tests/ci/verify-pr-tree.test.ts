@@ -10,7 +10,7 @@ import { commitFiles, git, scratchGitEnv } from "../support/scratch-git";
  * The verify job's pull_request_target leg, EXECUTED rather than read.
  *
  * Under that event the job checks out the base branch, materialises the pull
- * request's merge commit as a detached worktree outside the workspace, and
+ * request's merge tree as a detached worktree outside the workspace, and
  * runs the base checkout's own gate scripts over that tree as data. The
  * property that matters is that the pull request cannot judge itself: a pull
  * request that edits a gated file AND replaces the gate script that would
@@ -18,14 +18,17 @@ import { commitFiles, git, scratchGitEnv } from "../support/scratch-git";
  * base's.
  *
  * Each case builds an origin repository whose main carries the real gate
- * scripts, a pull request branch, and a merge commit published as
- * refs/pull/1/merge (base tip first parent, head second, the shape GitHub
- * publishes). The workspace is a full clone of main — the checkout the step
- * list starts from — and the steps' own `run:` blocks are executed with the
- * runner's shell flags. Each step's own `env:` is resolved the way the runner
- * would: `${{ steps.pr-tree.outputs.* }}` from what the materialise step wrote
- * to GITHUB_OUTPUT, and any other expression only from a value the case
- * supplies — an expression nobody resolves throws rather than reading empty.
+ * scripts, a pull request branch, and the merge commit GitHub would publish
+ * for it as refs/pull/1/merge (base tip first parent, head second). The
+ * workspace is a full clone of main — the checkout the step list starts from
+ * — and the steps' own `run:` blocks are executed with the runner's shell
+ * flags. Each step's own `env:` is resolved the way the runner would:
+ * `${{ steps.pr-tree.outputs.* }}` from what the materialise step wrote to
+ * GITHUB_OUTPUT, and any other expression only from a value the case supplies
+ * — an expression nobody resolves throws rather than reading empty. The event
+ * payload's `merge_commit_sha` goes into every case's environment, published
+ * or stale, because a step that reads it must fail here rather than in the
+ * next push.
  */
 
 type Step = { name?: string; id?: string; run?: string; env?: Record<string, string> };
@@ -71,19 +74,34 @@ const MODULE_SIZE_DOC = `${JSON.stringify(
 
 const NEUTERED = "process.exit(0);\n";
 
-type Fixture = { origin: string; workspace: string; merge: string; head: string };
+type Fixture = { origin: string; workspace: string; merge: string; head: string; base: string };
+
+type FixtureOptions = {
+  /**
+   * What the head commits AFTER GitHub published the merge ref — the shape a
+   * `synchronize` event has when the payload's head SHA has moved on but its
+   * asynchronously computed merge commit has not.
+   */
+  afterPublish?: Record<string, string>;
+  /** Whether GitHub published a merge ref at all. It publishes none for a head that does not merge cleanly. */
+  publishMerge?: boolean;
+};
 
 /**
  * An origin whose main carries the real gate scripts, a pull request whose
  * head commits `files`, and the merge ref GitHub would publish for it.
  */
-async function fixture(files: Record<string, string>, message = "pull request change"): Promise<Fixture> {
+async function fixture(
+  files: Record<string, string>,
+  message = "pull request change",
+  options: FixtureOptions = {},
+): Promise<Fixture> {
   counter += 1;
   const origin = join(root, `origin-${counter}`);
   await mkdir(join(origin, "scripts"), { recursive: true });
   git(origin, "init", "--quiet", "--initial-branch=main");
-  // The materialise step fetches the merge commit by SHA. The Actions origin
-  // serves a fetch for any object it holds; a stock local upload-pack
+  // The materialise step fetches the event's SHAs by value. The Actions
+  // origin serves a fetch for any object it holds; a stock local upload-pack
   // refuses one, so the fixture's origin carries the same allowance.
   git(origin, "config", "uploadpack.allowAnySHA1InWant", "true");
   for (const script of GATE_SCRIPTS) {
@@ -102,19 +120,27 @@ async function fixture(files: Record<string, string>, message = "pull request ch
     "root",
   );
   git(origin, "checkout", "--quiet", "-b", "feature");
-  const head = await commitFiles(origin, files, message);
+  let head = await commitFiles(origin, files, message);
   git(origin, "checkout", "--quiet", "main");
-  await commitFiles(origin, { "CHANGELOG.md": "# changes\n" }, "base advance");
-  git(origin, "checkout", "--quiet", "--detach", "main");
-  git(origin, "merge", "--quiet", "--no-ff", "--no-edit", "feature");
-  const merge = git(origin, "rev-parse", "HEAD");
-  git(origin, "update-ref", "refs/pull/1/merge", merge);
+  const base = await commitFiles(origin, { "CHANGELOG.md": "# changes\n" }, "base advance");
   git(origin, "update-ref", "refs/pull/1/head", head);
+  let merge = "";
+  if (options.publishMerge ?? true) {
+    git(origin, "checkout", "--quiet", "--detach", "main");
+    git(origin, "merge", "--quiet", "--no-ff", "--no-edit", "feature");
+    merge = git(origin, "rev-parse", "HEAD");
+    git(origin, "update-ref", "refs/pull/1/merge", merge);
+  }
+  if (options.afterPublish) {
+    git(origin, "checkout", "--quiet", "feature");
+    head = await commitFiles(origin, options.afterPublish, "head advances");
+    git(origin, "update-ref", "refs/pull/1/head", head);
+  }
   git(origin, "checkout", "--quiet", "main");
 
   const workspace = join(root, `workspace-${counter}`);
   git(root, "clone", "--quiet", "--no-local", `file://${origin}`, workspace);
-  return { origin, workspace, merge, head };
+  return { origin, workspace, merge, head, base };
 }
 
 type StepResult = { status: number | null; stdout: string; stderr: string; output: string };
@@ -190,39 +216,124 @@ function readOutputs(text: string): Record<string, string> {
   return entries;
 }
 
-/** Materialises the merge tree; returns the outputs later steps read. */
-async function materialise(fx: Fixture, headSha = fx.head) {
+/** The two parents of `sha` in `repo`, first and second, as git lists them. */
+function parents(repo: string, sha: string): string[] {
+  return git(repo, "rev-list", "--parents", "-n", "1", sha).split(" ").slice(1);
+}
+
+/**
+ * Materialises the merge tree from the event's head and base; returns the
+ * outputs later steps read.
+ *
+ * The event's payload `merge_commit_sha` goes into the environment of every
+ * case, published or not, whether or not the step declares it: a step that
+ * reads it must fail here rather than in the next `synchronize` event, because
+ * GitHub computes that field asynchronously and it can name the merge of the
+ * head this event has already moved past.
+ */
+async function materialise(
+  fx: Fixture,
+  options: { step?: Step; env?: Record<string, string> } = {},
+) {
   counter += 1;
   const runnerTemp = join(root, `runner-temp-${counter}`);
   await mkdir(runnerTemp);
   const result = await runStep(
-    stepRunning("git worktree add --detach"),
+    options.step ?? stepRunning("git worktree add --detach"),
     fx,
-    { MERGE_BIND_SHA: fx.merge, HEAD_SHA: headSha, RUNNER_TEMP: runnerTemp },
+    {
+      BASE_SHA: fx.base,
+      HEAD_SHA: fx.head,
+      MERGE_BIND_SHA: fx.merge,
+      RUNNER_TEMP: runnerTemp,
+      ...options.env,
+    },
     {},
   );
   return { result, outputs: readOutputs(result.output), runnerTemp };
 }
 
 describe("the pull request tree the pull_request_target leg judges", () => {
-  it("is the merge commit, checked out outside the workspace and exported to later steps", async () => {
+  it("is the two-parent merge of the event's head into the event's base, outside the workspace", async () => {
     const fx = await fixture({ "src/a.ts": "export const a = 1;\n" });
     const { result, outputs, runnerTemp } = await materialise(fx);
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(outputs.merge_sha).toBe(fx.merge);
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     expect(outputs.path?.startsWith(`${runnerTemp}/`)).toBe(true);
-    expect(git(outputs.path!, "rev-parse", "HEAD")).toBe(fx.merge);
+    expect(git(outputs.path!, "rev-parse", "HEAD")).toBe(outputs.merge_sha);
+    expect(parents(outputs.path!, "HEAD")).toEqual([fx.base, fx.head]);
+    // The tree carries both sides of the merge, which is what makes it the
+    // tree the gates have to judge.
+    expect(await readFile(join(outputs.path!, "src/a.ts"), "utf8")).toBe("export const a = 1;\n");
+    expect(await readFile(join(outputs.path!, "CHANGELOG.md"), "utf8")).toBe("# changes\n");
     // The workspace itself stays on the base tip: that is the copy that runs.
     expect(git(fx.workspace, "rev-parse", "HEAD")).toBe(git(fx.origin, "rev-parse", "main"));
   });
 
-  it("fails closed when the merge commit's second parent is not the event's head", async () => {
-    const fx = await fixture({ "src/a.ts": "export const a = 1;\n" });
-    const stale = git(fx.origin, "rev-parse", "main");
-    const { result, outputs } = await materialise(fx, stale);
+  it("is built from the head THIS event carries, when the payload's merge commit names the PREVIOUS head", async () => {
+    // GitHub computes pull_request.merge_commit_sha asynchronously: the push
+    // that advanced the head can still arrive with the merge of the head
+    // before it in the payload. Reading that commit judges a tree this event
+    // is not about, and on a synchronize event it names the previous head.
+    const fx = await fixture(
+      { "src/a.ts": "export const a = 1;\n" },
+      "first head",
+      { afterPublish: { "src/b.ts": "export const b = 2;\n" } },
+    );
+    const { result, outputs } = await materialise(fx);
 
-    expect(result.status).not.toBe(0);
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(parents(outputs.path!, "HEAD")).toEqual([fx.base, fx.head]);
+    // Only the CURRENT head's change is in the tree: the commit the payload
+    // named as merged is the merge of a head that no longer exists.
+    expect(await readFile(join(outputs.path!, "src/b.ts"), "utf8")).toBe("export const b = 2;\n");
+  });
+
+  it("refuses, with no outputs, when the head does not merge cleanly into the base", async () => {
+    // Both sides add CHANGELOG.md with different content, so the head does
+    // not merge cleanly and GitHub publishes no merge commit for it: the
+    // payload carries none.
+    const fx = await fixture(
+      { "CHANGELOG.md": "# pulled request\n" },
+      "conflicting change",
+      { publishMerge: false },
+    );
+    const { result, outputs } = await materialise(fx);
+
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain("::error::");
+    expect(result.stdout + result.stderr).toContain("does not merge cleanly");
+    expect(outputs).toEqual({});
+  });
+
+  it("is refused by the two-parent bind when the merge is built from a head other than the event's", async () => {
+    const fx = await fixture({ "src/a.ts": "export const a = 3;\n" });
+    const step = stepRunning("git worktree add --detach");
+    // The mutant: build the merge from the base's PARENT instead of the
+    // event's head — a commit that is present, that merges cleanly, and whose
+    // merge tree is the base's own tree. Nothing about it is malformed, so
+    // nothing but the bind can refuse it, and without the bind the gates
+    // would judge the base and every pull request would pass vacuously. The
+    // fetch is left alone: it names a revision git cannot fetch, so a
+    // mutation there would be refused by the wrong command.
+    const wrong = '"${BASE_SHA:?}^"';
+    const mutant: Step = {
+      ...step,
+      run: (step.run ?? "")
+        .replace(
+          'git merge-tree --write-tree "${BASE_SHA:?}" "${HEAD_SHA:?}"',
+          'git merge-tree --write-tree "${BASE_SHA:?}" ' + wrong,
+        )
+        .replace('-p "${BASE_SHA:?}" -p "${HEAD_SHA:?}"', '-p "${BASE_SHA:?}" -p ' + wrong),
+    };
+    expect(mutant.run, "the mutant must have replaced the head the merge is built from").not.toBe(step.run);
+    expect(mutant.run, "the fetch must still name the event's head").toContain(
+      'git fetch --no-tags origin "${HEAD_SHA:?}"',
+    );
+
+    const { result, outputs } = await materialise(fx, { step: mutant });
+
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
     expect(result.stdout + result.stderr).toContain("::error::");
     expect(outputs).toEqual({});
   });
