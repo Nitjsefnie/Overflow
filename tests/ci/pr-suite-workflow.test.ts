@@ -71,6 +71,16 @@ function stepRunning(command: string): Step {
 }
 
 /**
+ * What a step IS, for the purpose of pinning an ordered list of them: the
+ * pinned action, or the whole run block on one line. Deliberately the full
+ * text rather than its first word — an identity a rename can satisfy is not an
+ * identity, which is the defect the step-list assertion below exists to catch.
+ */
+function stepIdentity(step: Step): string {
+  return step.uses ?? `run ${(step.run ?? "").trim().replace(/\s+/g, " ")}`;
+}
+
+/**
  * Join a `\`+newline line CONTINUATION, keeping the literal backslashes of an
  * even run.
  *
@@ -180,8 +190,26 @@ function shellWords(command: string): string[] {
         continue;
       }
       if (quote === '"' && char === "\\") {
-        index += 1;
-        word += command[index] ?? "";
+        // Inside double quotes POSIX treats `\` as an escape for exactly FIVE
+        // characters — `$`, a backtick, `"`, `\` and newline — and as a literal
+        // backslash for anything else. Honouring it for every character is how
+        // this helper came to agree with a spelling bash does not: it read
+        // `--dest "…hash\-check"` as the committed path while bash passes a name
+        // with a backslash in it. Measured: bash delivers
+        // `</zizmor-hash\-check>` where the word list expected
+        // `${RUNNER_TEMP}/zizmor-hash-check`.
+        const next = command[index + 1];
+        if (next !== undefined && "$`\"\\\n".includes(next)) {
+          // An escaped newline is a line continuation: it contributes nothing.
+          // In the guard's own call path this case is already consumed upstream
+          // by `joinContinuations`, which is quote-blind; the divergence it
+          // leaves is a space where bash has none, so it reds the word equality
+          // rather than passing it — the fail-closed direction.
+          if (next !== "\n") word += next;
+          index += 1;
+        } else {
+          word += "\\";
+        }
         started = true;
         continue;
       }
@@ -269,6 +297,41 @@ describe("the shell parser the hash-binding case reads", () => {
   it("reads the committed block as the one command it is", () => {
     expect(shellCommands(stepRunning("--require-hashes").run!)).toHaveLength(1);
   });
+
+  // The normalising half of the word comparison, pinned. Its whole value is
+  // agreeing with the shell about which spellings are the SAME invocation, so
+  // the boundary of each rule is the thing to test — not its happy path. Both
+  // rows below marked `bash` were measured against
+  // `bash --noprofile --norc -eo pipefail -c 'printf "<%s>\n" …'` rather than
+  // read out of the manual, and the second pair is the finding this table
+  // exists for: a spelling the helper once read as the committed word and the
+  // shell does not deliver.
+  const WORD_TABLE: ReadonlyArray<readonly [string, string[], string]> = [
+    ['pip download --no-deps', ["pip", "download", "--no-deps"], "plain"],
+    ['pip "download" --no-deps', ["pip", "download", "--no-deps"], "quoted word"],
+    ["pip 'download' --no-deps", ["pip", "download", "--no-deps"], "single quotes"],
+    ['pip download --dest "a b"', ["pip", "download", "--dest", "a b"], "quoted space"],
+    ['pip download --dest "a;b"', ["pip", "download", "--dest", "a;b"], "quoted separator"],
+    ["pip\\ download --no-deps", ["pip download", "--no-deps"], "escaped space"],
+    ['pip download --dest "a"b', ["pip", "download", "--dest", "ab"], "empty quotes join"],
+    ['pip download --dest "$HOME"', ["pip", "download", "--dest", "$HOME"], "not expanded"],
+    ['pip download --dest "\\$HOME"', ["pip", "download", "--dest", "$HOME"], 'escape "$"'],
+    ['pip download --dest "\\"q\\""', ["pip", "download", "--dest", '"q"'], 'escape `"`'],
+    ["pip download --dest '\\$'", ["pip", "download", "--dest", "\\$"], "single quotes literal"],
+    // The five escapes inside double quotes, and one that is not one.
+    ['pip download "a\\$b"', ["pip", "download", "a$b"], 'escape `$`'],
+    ['pip download "a\\`b"', ["pip", "download", "a`b"], "escape backtick"],
+    ['pip download "a\\\\b"', ["pip", "download", "a\\b"], "escape `\\`"],
+    ['pip download "a\\\nb"', ["pip", "download", "ab"], "escape newline"],
+    ['pip download "a\\tb"', ["pip", "download", "a\\tb"], "bash: `\\t` keeps both"],
+    ['pip download "a\\-b"', ["pip", "download", "a\\-b"], "bash: `\\-` keeps both"],
+  ];
+
+  for (const [command, words, note] of WORD_TABLE) {
+    it(`reads ${JSON.stringify(command)} as ${words.length} word(s) — ${note}`, () => {
+      expect(shellWords(command)).toEqual(words);
+    });
+  }
 });
 
 describe("the pull request suite workflow", () => {
@@ -591,6 +654,39 @@ describe("the pull request suite workflow", () => {
     // workspace: this is the whole property actionlint.yml lacks.
     const checkout = suite.steps.findIndex((s) => (s.uses ?? "").startsWith("actions/checkout@"));
     expect(suite.steps.indexOf(step)).toBeGreaterThan(checkout);
+    // ...and nothing at all runs between the checkout and it. Position alone is
+    // not the property; the LIST is. `expect(…).toBeGreaterThan(checkout)` says
+    // "somewhere later", which is satisfied by a step inserted anywhere in
+    // between — and an earlier step is the cheapest way to stop this check
+    // binding. Four spellings, each planted on this workflow and each green
+    // against everything else in this file and in a 440-test CI-workflow sweep:
+    //
+    //   * `pip config set global.no-index true` + `global.find-links <dir>`
+    //   * `echo "PIP_NO_INDEX=1" >> $GITHUB_ENV` (and the same for find-links)
+    //   * `sed -i` rewriting the manifest the step reads
+    //   * `run: echo hello` — nothing pip-shaped at all, which is what shows the
+    //     gap is the step list and not the shape of a step
+    //
+    // The first is LIVE, measured: with a manifest carrying 1.29.0's eleven real
+    // hashes plus one hash of a wheel the pull request ships in its own tree,
+    // the control run is rc=1 and the primed run is rc=0 —
+    // `Successfully downloaded zizmor`, resolved from the request's directory.
+    // Pinned zizmor and the pinned actionlint report nothing on any of them.
+    //
+    // So the job's prefix is pinned as an ordered list of identities: the three
+    // actions, by their commit SHAs. Insert a step, reorder, remove one, or swap
+    // an action, and this reds with the diff of the list.
+    expect(
+      suite.steps.slice(0, suite.steps.indexOf(step)).map(stepIdentity),
+      "nothing may run between the checkout and the hash binding: an earlier step can prime " +
+        "pip's resolver (`pip config set`, `>> $GITHUB_ENV`) or rewrite the manifest itself, " +
+        "and then the check reports success whatever PyPI's record says. Add a step here " +
+        "deliberately, with its reason.",
+    ).toEqual([
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+    ]);
     // No secret and no environment: `pip download` against PyPI needs neither,
     // and this workflow's read-only-token, no-secret property is what makes
     // running the request's own bytes here acceptable at all.
