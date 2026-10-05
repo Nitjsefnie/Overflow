@@ -355,6 +355,90 @@ jobs:
           PR_TREE: ${{ steps.pr-tree.outputs.path }}
         run: python3 "${GITHUB_WORKSPACE}/scripts/commit_scopes.py" --root "${PR_TREE:?}"
 
+      # Issue 1099. pr-suite.yml's pin check runs under `pull_request` — the pull
+      # request's own definition — so a pull request can delete the one step its
+      # manifest is judged by. This is the base's own copy of that gate, and it
+      # never opens a path under PR_TREE: the pin is read from the merge commit's
+      # GIT OBJECTS (`git ls-tree` + `git cat-file`), so neither a symlinked leaf
+      # nor a symlinked `.github` parent can redirect the read — a symlink entry
+      # is a leaf, so the path lookup finds no subtree at all. Refusals name the
+      # rule and, per line, the 1-based line number; nothing else from the file
+      # is ever printed, so unvalidated bytes cannot reach the run log.
+      #
+      # The pre-parse is strict on purpose, because pip's own options would
+      # otherwise be steerable from inside the file: an in-file `--index-url`
+      # beats the command line's, a `name @ url` line satisfies
+      # `--require-hashes` against attacker-chosen content, and a `; marker`
+      # suffix makes pip skip the requirement entirely (all three measured). So
+      # pip is handed ONLY a fresh sanitized copy under RUNNER_TEMP — a
+      # directory this step created, refusing one that already exists, exactly
+      # the suite-coverage step's hygiene — holding exactly the one accepted
+      # `zizmor==<version> --hash=...` line. The step maps MERGE_SHA and
+      # nothing else: no token is mapped, and PyPI is anonymous.
+      - name: Verify the zizmor pin's hashes match its version
+        env:
+          MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
+        run: |
+          manifest=.github/requirements-zizmor.txt
+          entries=$(git ls-tree "${MERGE_SHA:?}" -- "${manifest}")
+          count=0
+          entry_mode=""
+          entry_type=""
+          entry_blob=""
+          while IFS=$'\t' read -r meta _path; do
+            count=$((count + 1))
+            entry_mode=${meta%% *}
+            rest=${meta#* }
+            entry_type=${rest%% *}
+            entry_blob=${rest#* }
+          done <<< "${entries}"
+          if [ "${count}" -ne 1 ] || [ "${entry_mode}" != "100644" ] || [ "${entry_type}" != "blob" ]; then
+            echo "::error::${manifest} must be exactly one mode-100644 blob entry in the merge tree; found ${count} matching entries${entry_mode:+ with mode ${entry_mode}}${entry_type:+ of type ${entry_type}}. The pin is read from git objects, never from the filesystem (issue 1099), so a symlink leaf, a symlinked .github parent, a wrong mode and a non-blob type are all refused."
+            exit 1
+          fi
+          pre_parse=$(cat <<'PY'
+          import os
+          import re
+          import sys
+
+          data = sys.stdin.buffer.read()
+          if 65536 < len(data):
+              sys.stderr.write("::error::the zizmor manifest is larger than the 65536-byte cap; refusing\n")
+              sys.exit(1)
+          try:
+              text = data.decode("utf-8")
+          except UnicodeDecodeError:
+              sys.stderr.write("::error::the zizmor manifest is not valid UTF-8; refusing\n")
+              sys.exit(1)
+          pin = re.compile(r"zizmor==[A-Za-z0-9][A-Za-z0-9._+-]*( --hash=sha256:[0-9a-f]{64}){1,32}")
+          accepted = None
+          for number, line in enumerate(text.split("\n"), start=1):
+              if line == "" or line.startswith("#"):
+                  continue
+              if accepted is not None:
+                  sys.stderr.write(f"::error::line {number}: the manifest carries a second requirement line; exactly one is allowed\n")
+                  sys.exit(1)
+              if pin.fullmatch(line) is None:
+                  sys.stderr.write(f"::error::line {number}: refused by the pin grammar — the one accepted shape is zizmor==VERSION followed by one to 32 --hash=sha256:HEX64 values; includes, index options, URL lines, environment markers, CRLF and stray whitespace are refused\n")
+                  sys.exit(1)
+              accepted = line
+          if accepted is None:
+              sys.stderr.write("::error::the manifest carries no requirement line; refusing\n")
+              sys.exit(1)
+          with open(os.environ["ZIZMOR_SANITIZED_REQUIREMENTS"], "w", encoding="utf-8", newline="\n") as handle:
+              handle.write(accepted)
+              handle.write("\n")
+          PY
+          )
+          sanitized="${RUNNER_TEMP}/zizmor-manifest-check"
+          if [ -e "${sanitized}" ] || [ -L "${sanitized}" ]; then
+            echo "::error::${sanitized} already exists; refusing to write the sanitized pin into a directory this run did not create"
+            exit 1
+          fi
+          mkdir -- "${sanitized}" "${sanitized}/download"
+          git cat-file blob "${entry_blob}" | ZIZMOR_SANITIZED_REQUIREMENTS="${sanitized}/requirements.txt" python3 -c "${pre_parse}"
+          pip download --no-deps --only-binary=:all: --require-hashes --index-url https://pypi.org/simple --no-input --disable-pip-version-check --retries 2 --timeout 60 -d "${sanitized}/download" -r "${sanitized}/requirements.txt"
+
       # The pull request's suite — install, migrations, tests, lint,
       # typecheck, build, page geometry — runs as its own code in pr-suite.yml
       # under `pull_request`. This step reads that run's outcome as data: the
