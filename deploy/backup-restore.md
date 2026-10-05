@@ -518,6 +518,97 @@ exactly what (e.2) does before its rename — or the nightly backup fails
 with "permission denied" for `overflow_backup`. The replacement path (e.2)
 needs neither repair.
 
+### (e.4) Restoring the encrypted off-host copy
+
+The path for "the host is gone" — or for a restore anywhere the reduced set
+is enough. Its order carries a step the full-dump paths never need — a forced
+full rederivation of every registered repository afterwards — and a limit the
+full dumps do not have.
+
+**The limit first, because it bounds what this path recovers:** a forge
+object deleted since the backup keeps its settlement row but loses its
+evidence facts. The copy excludes section (i)'s seven tables by data, and the
+forced rederivation rebuilds their rows from the forge as it stands when it
+runs — rows the forge no longer has are not recovered by this path. Every
+other table restores as of the backup moment, `schema_migrations` among them,
+so a restored copy is behind the tree by exactly the deploys since the
+backup, and (e.2)'s migration discussion applies unchanged.
+
+**The restore order.** Fetch the newest
+`overflow-reduced-<UTC timestamp>.sql.xz.age` attachment from the dedicated
+backups channel (section (i)). Retrieve the age private key from the fleet's
+#credentials store — restoring anywhere requires it (section (i)) — and write
+its `AGE-SECRET-KEY-` line to a scratch identity file, mode `0600`, removed
+when this section is done. `age` reads identity files of `AGE-SECRET-KEY-`
+lines, comments allowed around them.
+
+Decrypt, decompress, and restore into an EMPTY database. The copy is plain
+SQL, not a `pg_restore` archive, so `db-restore.sh` does not apply here: its
+`--clean`, `--if-exists` and `--allow-live` machinery is for (a)'s
+custom-format dumps. The empty target is what stands in for those guards —
+nothing pre-exists for a restore to drop or half-overwrite, and the live
+database is never named:
+
+```bash
+# The stamp is the one in the fetched attachment's name.
+stamp=20261005T021000Z
+age -d -i overflow-offhost-age.txt \
+  < "overflow-reduced-$stamp.sql.xz.age" \
+  | xz -d > "overflow-reduced-$stamp.sql"
+sudo -u postgres createdb -O overflow_app overflow_from_offhost
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d overflow_from_offhost \
+  -f "overflow-reduced-$stamp.sql"
+```
+
+`ON_ERROR_STOP=1` because a restore that silently continues past a failed
+statement is a half-restore: a missing role or a failed grant should stop it,
+not be skipped.
+
+**Roles first, though.** The dump carries no roles — (a) — and its ownership
+statements name `overflow_app` while the table grants it carries name
+`overflow_backup`, so both roles must exist before the restore runs. On the
+same host they do; on a replacement host recreate them first, from section
+(b) and the deploy procedure. Restored as a superuser with both roles
+present, the dump's own `ALTER ... OWNER TO` statements leave every object
+owned by `overflow_app` — no (e.3) fixup — and the grants section (b)
+applied to the tables come back with the dump, so the first nightly backup
+against a reduced restore does not fail the way (e.2) warns its swap can.
+(e.3) applies on this path only where the restore ran as a role that is
+neither superuser nor `overflow_app`.
+
+**Migrate and verify as (e.2) has it.** The restored `schema_migrations`
+records the backup moment, so the copy is behind the tree, and (e.2)'s
+migration block — run from `/srv/overflow` with the inline `DATABASE_URL` —
+plus its schema gate apply here unchanged. On a replacement host the tree
+comes from the public repository per [deploy/README.md](README.md).
+
+**Then rebuild what the copy left out.** Request a forced full rederivation
+for every registered repository — `POST /api/moderation/rederivation` with
+`{"repositoryId": "<uuid>"}` as a moderator, from the moderation page's
+rederivation control or with a moderator API token as the bearer credential:
+
+```bash
+curl -X POST https://<public-host>/api/moderation/rederivation \
+  -H "Authorization: Bearer <moderator api token>" \
+  -H "Content-Type: application/json" \
+  -d '{"repositoryId":"<uuid>"}'
+```
+
+Each request makes the repository's next fold a full pass
+(`rederive: true`), which rebuilds the excluded tables from the forge. The
+restored `registered_repositories` rows carry every id, so the list of
+repositories to request comes from the restored database itself:
+
+```bash
+sudo -u postgres psql -d overflow_from_offhost \
+  -c "select id, owner, name from registered_repositories order by name"
+```
+
+Compare per-table counts as in (e.1), production against the restore —
+reading the seven excluded tables as populated only to the forge's current
+state. Swapping the restore in for the live database is (e.2)'s swap: its
+rename block and the service start, after the migration and its gate.
+
 ## (f) RPO and RTO
 
 **RPO (data at risk): up to 24 hours.** The timer fires daily; a failure at
@@ -583,3 +674,166 @@ stand between the dump and that state, and neither is the alert route:
 database is untouched and a wrong answer costs a re-run, and the readiness
 curl in README section 7 confirms it end to end once the service is restarted.
 A swap that reached a `503` readiness skipped both.
+
+## (i) The encrypted off-host copy
+
+A second, smaller copy of the database leaves the host nightly, so a lost
+host no longer loses every backup with it. `overflow-offhost-backup.timer`
+fires `overflow-offhost-backup.service` daily at 02:10 UTC — forty minutes
+after the 01:30 UTC full backup, so the reduced copy always reflects a
+completed full dump and the two jobs never contend for the database or the
+backup directory — and `Persistent=true` catches up a run missed while the
+host was down. The service runs `scripts/db-offhost-backup.sh` as root with
+the same `EnvironmentFile=/etc/overflow/backup.env` as the full backup, plus
+the entries this section stands up.
+
+The copy is a **reduced set**: one `pg_dump --format=plain` of every table's
+schema, with data excluded for exactly the 7 tables whose rows a forced full
+rederivation rebuilds or that hold only work-queue state. Their schema still
+travels with the copy; only their rows are left out. The 7, in the order the
+script excludes them:
+
+- `repository_reconciliation_evidence_facts`
+- `repository_reconciliation_evidence`
+- `webhook_deliveries`
+- `repository_policy_violations`
+- `repository_reconciliation_dirty_subjects`
+- `repository_reconciliation_jobs`
+- `repository_reconciliation_usage`
+
+Every other table keeps its data, for two reasons: authoritative rows refer
+to the forge-derived projections by id — `settlement_override_requests`
+refers to `issues`, and `settlements` and `self_work_calibrations` refer to
+`pull_request_issues` — and a rebuild mints new ids that would orphan them;
+and `reconciliation_changes` and `reconciliation_runs` are local history no
+forge replay recreates.
+
+The dump is compressed with `xz -9e`, encrypted with `age -r` to the
+operator's age public key — the only key material on the host — and
+installed in `/var/backups/overflow` as `overflow-reduced-<UTC
+timestamp>.sql.xz.age`, mode `0600` in the root-only `0700` directory like
+(d)'s dumps. The job then posts the file as the `osc` identity to the
+dedicated private Discord channel through the mailbox CLI, bringing a
+connector up for itself and stopping it afterwards when none was running.
+Retention is 14 days on both copies: the job deletes its own posted messages
+older than 14 days from that channel — one generous page per run, and a
+message the page misses is swept on a later run — and prunes local
+`overflow-reduced-*.sql.xz.age` files older than 14 days, each prune only
+after a successful run, on the same only-after-success shape (d) documents.
+
+The size guard comes before anything is posted: an encrypted file at or over
+`OVERFLOW_BACKUP_MAX_BYTES` (default 9961472 bytes — 9.5 MiB, under Discord's
+attachment limit) is never posted and never split. The run fails instead, so
+`OnFailure=` alerts through `overflow-alert@` exactly as (h) documents for
+the full backup, and the local encrypted file stays behind as a good local
+copy — delete it once the limit is raised; it is not in the posted series.
+
+**Key custody.** Only the age public key is on the host: the job cannot read
+what it writes, and neither can anything that takes the host. The private key
+is stored once, in the fleet's Discord #credentials store — never in the
+backups channel, never on the host. The backups channel holds ciphertext;
+#credentials holds the one key that opens it; a reader of one store holds
+neither both. Restoring anywhere requires retrieving the key from there,
+which is (e.4)'s first step.
+
+The unit's sandbox is the full-backup shape with one addition the full backup
+never needs: the mailbox CLI, a python3 script under `/root`, reached through
+a single `BindReadOnlyPaths` entry with `ProtectHome` spelled `tmpfs` rather
+than `yes` — the pairing systemd.exec(5) sanctions for a bind destination
+under a protected directory, probed on this host's systemd (the unit file's
+comments carry the record). Nothing else under `/root` is reachable, and the
+`osc` token reaches the CLI through `DISCORD_TOKEN` in the environment file,
+so no token file under `/root` is read.
+
+**Operator setup.** The steps off the host come first (any machine that runs
+the fleet's mailbox CLI — the host does), then the host.
+
+**Off the host.** Generate the age keypair — the private half must not stay
+wherever this runs, so plan its removal before generating:
+
+```bash
+umask 077
+age-keygen -o overflow-offhost-age.txt
+# prints: Public key: age1...
+```
+
+Store the private key once in #credentials, through the mailbox CLI's `creds`
+subcommand — never in the backups channel:
+
+```bash
+~/.agent-bundle/scripts/discord_mb.py creds osc add overflow-backup age \
+  "$(grep -v '^#' overflow-offhost-age.txt)"
+```
+
+The key rides the command line here, the one-time exposure (b) already
+accepts for the backup role's connection string on a single-administrator
+host — and unlike (b)'s password, this key's custody is off-host the moment
+the command lands. Then remove the file the keypair was generated into; if
+that was the host, removing it is what keeps the custody promise:
+
+```bash
+rm overflow-offhost-age.txt
+```
+
+Still in Discord: create the dedicated backups channel and make it private.
+The CLI creates the channel but cannot set permission overwrites, so
+restricting who may view it — only the `osc` identity's account and the
+maintainer's own — is the operator's Discord-side step, in the channel's
+settings. The job posts ciphertext and file names there and nothing else,
+ever: never point `OVERFLOW_BACKUP_DISCORD_CHANNEL` at a chat channel.
+
+```bash
+~/.agent-bundle/scripts/discord_mb.py channels osc create overflow-backups \
+  --topic "Overflow encrypted off-host database backups"
+~/.agent-bundle/scripts/discord_mb.py channels osc list
+```
+
+Copy the numeric channel id from the list output.
+
+**On the host.** Add the off-host entries to `/etc/overflow/backup.env`
+(root:root `0600`, created in (c)). `OVERFLOW_BACKUP_AGE_RECIPIENT` is the
+public key age-keygen printed (`age1...`),
+`OVERFLOW_BACKUP_DISCORD_CHANNEL` is the numeric channel id, and
+`DISCORD_TOKEN` is the `osc` identity's token value — the contents of
+`~/.agent-bundle/discord/osc.token` on a machine that runs the fleet's
+bundle:
+
+```bash
+OVERFLOW_BACKUP_AGE_RECIPIENT="age1..."
+OVERFLOW_BACKUP_DISCORD_CHANNEL="<numeric channel id>"
+DISCORD_TOKEN="<the osc identity's token value>"
+```
+
+The optional `OVERFLOW_BACKUP_MAX_BYTES` overrides the 9.5 MiB posting
+limit; nothing else in the file changes, and the full backup keeps running
+unchanged.
+
+Install and enable the units, the same shape as (c):
+
+```bash
+install -o root -g root -m 0644 \
+  /srv/overflow/deploy/overflow-offhost-backup.service /etc/systemd/system/
+install -o root -g root -m 0644 \
+  /srv/overflow/deploy/overflow-offhost-backup.timer /etc/systemd/system/
+systemd-analyze verify /etc/systemd/system/overflow-offhost-backup.service \
+  /etc/systemd/system/overflow-offhost-backup.timer
+systemctl daemon-reload
+systemctl enable --now overflow-offhost-backup.timer
+```
+
+`enable --now` is right for a timer, as (c) says — there is no serving
+process to switch.
+
+Read back what a run leaves, after the first 02:10 UTC firing:
+
+```bash
+systemctl list-timers overflow-offhost-backup.timer
+systemctl show overflow-offhost-backup.service -p OnFailure
+journalctl -u overflow-offhost-backup.service -n 50 --no-pager
+```
+
+and that an `overflow-reduced-<UTC timestamp>.sql.xz.age` file appeared in
+`/var/backups/overflow` and the message appeared in the backups channel. A
+failed run alerts through the same `OnFailure=` route as (h). The drill that
+proves this path end to end — fetch, decrypt, restore, compare, rederive —
+is (e.4) read against the posted copies.
