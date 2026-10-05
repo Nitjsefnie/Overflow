@@ -86,22 +86,35 @@ describe("verifyGitHubWebhookSignature", () => {
     expect(verifyGitHubWebhookSignature(rawBody, `sha256=${otherDigest}`, secret)).toBe(false);
   });
 
-  it("compares through timingSafeEqual over the two 32-byte digests", async () => {
+  it("lets timingSafeEqual decide every verdict, over both full 32-byte digests", async () => {
     // Earlier files can cache this module with real crypto in the shared graph.
     vi.resetModules();
     const { verifyGitHubWebhookSignature } = await import("@/lib/github/webhook-signature");
     const comparison = vi.mocked(timingSafeEqual);
     comparison.mockClear();
+    const verify = (digest: Buffer) =>
+      verifyGitHubWebhookSignature(rawBody, `sha256=${digest.toString("hex")}`, secret);
 
     const expected = trueDigest();
-    const lastByteChanged = withByteFlipped(expected, 31);
+    expect(verify(expected)).toBe(true);
+    expect(comparison).toHaveBeenLastCalledWith(expected, expected);
 
-    expect(verifyGitHubWebhookSignature(rawBody, `sha256=${expected.toString("hex")}`, secret)).toBe(true);
-    expect(verifyGitHubWebhookSignature(rawBody, `sha256=${lastByteChanged.toString("hex")}`, secret)).toBe(false);
+    // Each flipped digest must reach the comparison: a shortcut that rejects
+    // on any byte before timingSafeEqual runs leaves the previous call last.
+    for (const position of digestPositions) {
+      const altered = withByteFlipped(expected, position);
 
-    expect(comparison).toHaveBeenCalledTimes(2);
-    expect(comparison).toHaveBeenNthCalledWith(1, expected, expected);
-    expect(comparison).toHaveBeenNthCalledWith(2, expected, lastByteChanged);
+      expect(verify(altered)).toBe(false);
+      expect(comparison).toHaveBeenLastCalledWith(expected, altered);
+    }
+    expect(comparison).toHaveBeenCalledTimes(1 + digestPositions.length);
+
+    // The spy's verdict is the one returned, not a second comparison's. The
+    // queued value is consumed by this call, which the count below proves.
+    comparison.mockReturnValueOnce(false);
+    expect(verify(expected)).toBe(false);
+    expect(comparison).toHaveBeenCalledTimes(2 + digestPositions.length);
+
     for (const [left, right] of comparison.mock.calls) {
       expect(left.byteLength).toBe(32);
       expect(right.byteLength).toBe(32);
