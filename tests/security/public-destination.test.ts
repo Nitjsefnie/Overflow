@@ -16,7 +16,7 @@ import {
   DestinationRefusedError,
   isPublicAddress,
 } from "@/lib/security/public-destination";
-import { hostPublicAddresses, urlHost } from "../support/public-destination-harness";
+import { publicStandIns, urlHost, usePublicStandInRoute } from "../support/public-destination-harness";
 
 const bodyLimit = 1024 * 1024;
 
@@ -695,12 +695,14 @@ describe("honouring the abort signal", () => {
 
 describe("with a deny list of extra refused destinations", () => {
   // The deny list may only ever refuse more, so a case whose GREEN outcome is
-  // a refusal must aim at a destination the unfixed transport would have
-  // dialled: the host's own public interface address, which a self-connect
-  // answers over loopback. Where the host has none (a CI runner), the
-  // public-address cases have no local stand-in and skip.
-  const hostPublic = hostPublicAddresses();
-  const publicCase = hostPublic[0];
+  // a refusal must aim at a destination the address class admits: a public
+  // stand-in, which the route carries to a loopback listener rather than the
+  // network, so a deny list that stops applying shows up as a reached listener.
+  const route = usePublicStandInRoute();
+  const standIns = [
+    ["IPv4", publicStandIns.ipv4, 24],
+    ["IPv6", publicStandIns.ipv6, 64],
+  ] as const;
 
   it("refuses construction when a deny list is supplied beside an explicit permission check", () => {
     expect(
@@ -744,64 +746,66 @@ describe("with a deny list of extra refused destinations", () => {
     expect(listener.connections).toBe(1);
   });
 
-  it("refuses an IP literal the deny list contains, before connecting", async (context) => {
-    if (publicCase === undefined) {
-      context.skip();
-      return;
-    }
-    const listener = await listen(publicCase);
-    const guardedFetch = createPublicFetch({ denyCidrs: [publicCase], maxBodyBytes: bodyLimit });
+  it.each(standIns)("refuses an %s literal the deny list contains, before connecting", async (_family, standIn) => {
+    const listener = await listen("127.0.0.1");
+    const guardedFetch = createPublicFetch({ denyCidrs: [standIn], maxBodyBytes: bodyLimit });
 
-    await expectRefusal(guardedFetch(`http://${urlHost(publicCase)}:${listener.port}/`), [
-      publicCase,
+    await expectRefusal(guardedFetch(`http://${urlHost(standIn)}:${listener.port}/`), [
+      standIn,
       String(listener.port),
     ]);
+    expect(route.dialled).toEqual([]);
     expect(listener.connections).toBe(0);
   });
 
-  it("refuses an IP literal a deny-list subnet covers", async (context) => {
-    if (publicCase === undefined) {
-      context.skip();
-      return;
-    }
-    const listener = await listen(publicCase);
-    const prefix = isIP(publicCase) === 4 ? 24 : 64;
-    const guardedFetch = createPublicFetch({ denyCidrs: [`${publicCase}/${prefix}`], maxBodyBytes: bodyLimit });
+  it.each(standIns)("refuses an %s literal a deny-list subnet covers", async (_family, standIn, prefix) => {
+    const listener = await listen("127.0.0.1");
+    const guardedFetch = createPublicFetch({ denyCidrs: [`${standIn}/${prefix}`], maxBodyBytes: bodyLimit });
 
-    await expectRefusal(guardedFetch(`http://${urlHost(publicCase)}:${listener.port}/`), [
-      publicCase,
+    await expectRefusal(guardedFetch(`http://${urlHost(standIn)}:${listener.port}/`), [
+      standIn,
       String(listener.port),
     ]);
+    expect(route.dialled).toEqual([]);
     expect(listener.connections).toBe(0);
   });
 
-  it("refuses a hostname whose resolved answer the deny list contains", async (context) => {
-    if (publicCase === undefined) {
-      context.skip();
-      return;
-    }
-    const listener = await listen(publicCase);
-    const { lookup } = scriptedLookup([[publicCase]]);
-    const guardedFetch = createPublicFetch({ lookup, denyCidrs: [publicCase], maxBodyBytes: bodyLimit });
+  it.each(standIns)("refuses a hostname whose resolved %s answer the deny list contains", async (_family, standIn) => {
+    const listener = await listen("127.0.0.1");
+    const { lookup, calls } = scriptedLookup([[standIn]]);
+    const guardedFetch = createPublicFetch({ lookup, denyCidrs: [standIn], maxBodyBytes: bodyLimit });
 
     await expectRefusal(guardedFetch(`http://gitlab.rebind.test:${listener.port}/`), [
-      publicCase,
+      standIn,
       String(listener.port),
     ]);
+    // The name was resolved, so the refusal is the deny list's verdict on the
+    // answer, not a failure to look it up.
+    expect(calls).toHaveLength(1);
+    expect(route.dialled).toEqual([]);
     expect(listener.connections).toBe(0);
   });
 
-  it("completes a fetch whose destination the deny list does not contain", async (context) => {
-    if (publicCase === undefined) {
-      context.skip();
-      return;
-    }
-    const listener = await listen(publicCase);
+  it.each(standIns)("completes a fetch to an %s destination the deny list does not contain", async (_family, standIn) => {
+    const listener = await listen("127.0.0.1");
     const guardedFetch = createPublicFetch({ denyCidrs: ["8.8.8.8"], maxBodyBytes: bodyLimit });
 
-    const response = await guardedFetch(`http://${urlHost(publicCase)}:${listener.port}/`);
+    const response = await guardedFetch(`http://${urlHost(standIn)}:${listener.port}/`);
 
     expect(await response.text()).toBe("reached");
+    expect(route.dialled).toEqual([standIn]);
+    expect(listener.connections).toBe(1);
+  });
+
+  it.each(standIns)("completes a fetch to a hostname whose %s answer the deny list does not contain", async (_family, standIn) => {
+    const listener = await listen("127.0.0.1");
+    const { lookup } = scriptedLookup([[standIn]]);
+    const guardedFetch = createPublicFetch({ lookup, denyCidrs: ["8.8.8.8"], maxBodyBytes: bodyLimit });
+
+    const response = await guardedFetch(`http://gitlab.rebind.test:${listener.port}/`);
+
+    expect(await response.text()).toBe("reached");
+    expect(route.dialled).toEqual([standIn]);
     expect(listener.connections).toBe(1);
   });
 

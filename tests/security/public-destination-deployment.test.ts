@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { networkInterfaces } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import { isPublicAddress } from "@/lib/security/public-destination";
@@ -5,10 +6,11 @@ import { listen, useLoopbackListeners } from "../support/loopback-listener";
 import {
   denyCidrsEnvName as envName,
   expectRefused,
-  hostPublicAddresses,
+  publicStandIns,
   reachedResponder,
   urlHost,
   useDeploymentDenyCidrs,
+  usePublicStandInRoute,
 } from "../support/public-destination-harness";
 
 /**
@@ -20,13 +22,43 @@ import {
  * observable: unwire the deny composition and the acceptance fixture below
  * connects to its own listener instead of refusing it.
  *
- * The harness — the deny-list environment's lifecycle, the host addresses, the
- * listener, the refusal assertion — is `tests/support`, shared with
- * `identity-link-fetch.test.ts`.
+ * The harness — the deny-list environment's lifecycle, the public stand-ins
+ * for the host's own addresses and their route to a loopback listener, the
+ * refusal assertion — is `tests/support`, shared with
+ * `identity-link-fetch.test.ts`. The host's interfaces are scripted, never
+ * read, so every case runs on a machine with no public interface of its own.
  */
 
 useDeploymentDenyCidrs();
 useLoopbackListeners();
+const route = usePublicStandInRoute();
+
+type InterfaceEntry = ReturnType<typeof networkInterfaces>[string] extends (infer Entry)[] | undefined ? Entry : never;
+
+function interfaceEntry(address: string, internal = false): InterfaceEntry {
+  const common = { address, mac: "00:00:00:00:00:00", internal };
+  return isIP(address) === 4
+    ? { ...common, family: "IPv4", netmask: "255.255.255.0", cidr: `${address}/24` }
+    : { ...common, family: "IPv6", netmask: "ffff:ffff:ffff:ffff::", cidr: `${address}/64`, scopeid: 0 };
+}
+
+/**
+ * The interfaces of a host whose public addresses are the stand-ins, beside
+ * the loopback, private and link-local addresses every host also carries, and
+ * one public address reported on two interfaces.
+ */
+function standInHostInterfaces(): ReturnType<typeof networkInterfaces> {
+  return {
+    lo: [interfaceEntry("127.0.0.1", true), interfaceEntry("::1", true)],
+    eth0: [
+      interfaceEntry("10.0.0.5"),
+      interfaceEntry(publicStandIns.ipv4),
+      interfaceEntry("fe80::1"),
+      interfaceEntry(publicStandIns.ipv6),
+    ],
+    eth1: [interfaceEntry(publicStandIns.ipv4)],
+  };
+}
 
 async function loadDeploymentDenyCidrs(): Promise<
   (env?: NodeJS.ProcessEnv, enumerateInterfaces?: typeof networkInterfaces) => string[]
@@ -70,12 +102,11 @@ async function loadSingletons(): Promise<{
 
 describe("deploymentDenyCidrs", () => {
   it("seeds the host's public interface addresses through the injected enumerator when the environment is unset", async () => {
-    const hostPublic = hostPublicAddresses();
     const deploymentDenyCidrs = await loadDeploymentDenyCidrs();
 
-    const entries = deploymentDenyCidrs(process.env, networkInterfaces);
+    const entries = deploymentDenyCidrs(process.env, standInHostInterfaces);
 
-    expect(entries.sort()).toEqual([...hostPublic].sort());
+    expect(entries.sort()).toEqual([publicStandIns.ipv4, publicStandIns.ipv6].sort());
     expect(new Set(entries).size).toBe(entries.length);
     for (const entry of entries) {
       expect(isPublicAddress(entry)).toBe(true);
@@ -181,35 +212,44 @@ describe("deploymentDenyCidrs", () => {
 });
 
 describe("the deployment-wired singletons", () => {
-  it("refuse a fetch to the host's own public address", async (context) => {
-    const host = hostPublicAddresses()[0];
-    if (host === undefined) {
-      context.skip();
-      return;
-    }
-    const listener = await listen(host, reachedResponder);
-    const { gitlabApiFetch, identityLinkFetch, DestinationRefusedError: RefusedError } = await loadSingletons();
+  it.each([
+    ["IPv4", publicStandIns.ipv4],
+    ["IPv6", publicStandIns.ipv6],
+  ])("refuse a fetch to the host's own public %s address", async (_family, host) => {
+    // The environment is unset, so the singletons seed their deny list from
+    // the host's interfaces as `node:os` reports them: here, the stand-ins.
+    vi.doMock("node:os", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:os")>();
+      const scripted = { ...actual, networkInterfaces: standInHostInterfaces };
+      return { ...scripted, default: scripted };
+    });
+    try {
+      const listener = await listen("127.0.0.1", reachedResponder);
+      const { gitlabApiFetch, identityLinkFetch, DestinationRefusedError: RefusedError } = await loadSingletons();
 
-    await expectRefused(gitlabApiFetch(`http://${urlHost(host)}:${listener.port}/`), RefusedError);
-    await expectRefused(identityLinkFetch(`http://${urlHost(host)}:${listener.port}/`), RefusedError);
-    expect(listener.connections).toBe(0);
+      await expectRefused(gitlabApiFetch(`http://${urlHost(host)}:${listener.port}/`), RefusedError);
+      await expectRefused(identityLinkFetch(`http://${urlHost(host)}:${listener.port}/`), RefusedError);
+      expect(route.dialled).toEqual([]);
+      expect(listener.connections).toBe(0);
+    } finally {
+      // The singletons evaluated against the scripted `node:os`; drop that
+      // graph with the mock so nothing after this case inherits it.
+      vi.doUnmock("node:os");
+      vi.resetModules();
+    }
   });
 
-  it("complete a fetch to a public destination the deny list does not name", async (context) => {
-    const host = hostPublicAddresses()[0];
-    if (host === undefined) {
-      context.skip();
-      return;
-    }
-    // An override that does not name the host: the wiring must carry the
+  it("complete a fetch to a public destination the deny list does not name", async () => {
+    // An override that does not name the stand-in: the wiring must carry the
     // environment's list into the transports without broadening it.
     process.env[envName] = "8.8.8.8";
-    const listener = await listen(host, reachedResponder);
+    const listener = await listen("127.0.0.1", reachedResponder);
     const { gitlabApiFetch } = await loadSingletons();
 
-    const response = await gitlabApiFetch(`http://${urlHost(host)}:${listener.port}/`);
+    const response = await gitlabApiFetch(`http://${urlHost(publicStandIns.ipv4)}:${listener.port}/`);
 
     expect(await response.text()).toBe("reached");
+    expect(route.dialled).toEqual([publicStandIns.ipv4]);
     expect(listener.connections).toBe(1);
   });
 });
