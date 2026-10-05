@@ -314,6 +314,7 @@ public/*
 !scripts/
 scripts/*
 !scripts/deploy-revision.sh
+!scripts/required-checks-parse.jq
 !scripts/db-backup.sh
 !scripts/db-offhost-backup.sh
 !scripts/db-restore.sh

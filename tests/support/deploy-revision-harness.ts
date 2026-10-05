@@ -12,6 +12,12 @@ import { expect } from "vitest";
 
 export const script = fileURLToPath(new URL("../../scripts/deploy-revision.sh", import.meta.url));
 /**
+ * The gate's jq parser, tracked beside the script so the map and the code
+ * that knows its shape travel together (issue 1104). The fixture tree holds
+ * the repository's current bytes at this path, exactly as for the script.
+ */
+export const parser = fileURLToPath(new URL("../../scripts/required-checks-parse.jq", import.meta.url));
+/**
  * The refusal the procedure's serialization notes mandate, byte for byte, with
  * the lock spelled as configured. Production defaults to /run/overflow-deploy.lock;
  * the behavioral test substitutes the fixture lock.
@@ -320,9 +326,11 @@ export async function makeFixture(options: {
   await symlink(path.basename(prevDir), path.join(tree, ".next"));
   // The post-fast-forward half executes $tree's own copy of the deploy script
   // (issue 747), so the fixture tree holds the repository's current bytes at
-  // that path.
+  // that path. The gate parses the pin map with the tree's own copy of the
+  // parser beside it (issue 1104), so that path is carried the same way.
   await mkdir(path.join(tree, "scripts"));
   await writeFile(path.join(tree, "scripts", "deploy-revision.sh"), await readFile(script, "utf8"));
+  await writeFile(path.join(tree, "scripts", "required-checks-parse.jq"), await readFile(parser, "utf8"));
   const envFile = path.join(dir, "overflow.env");
   await writeFile(envFile, "OVERFLOW_FIXTURE_ENV_MARKER=loaded\n");
   const logDir = path.join(dir, "logs");

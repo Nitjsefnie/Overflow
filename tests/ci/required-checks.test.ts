@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -83,6 +84,31 @@ beforeAll(async () => {
 describe(".github/required-checks.json", () => {
   it("pins at least the checks branch protection on main requires", () => {
     expect(Object.keys(pins)).toEqual(expect.arrayContaining(["actionlint", "ratchet-guard", "verify"]));
+  });
+
+  it("parses under the committed scripts/required-checks-parse.jq with real jq, one check<TAB>path line per pin pair", () => {
+    // The deploy gate parses the map with this tracked file (issue 1104), so
+    // the shapes the map may hold and the parser that accepts them travel
+    // together: a parser edit and a map-shape change land in the same commit
+    // or not at all. Real jq, because the gate runs jq and jq ships on
+    // GitHub-hosted runners.
+    const parsed = spawnSync(
+      "jq",
+      [
+        "-rs",
+        "-f",
+        resolve(root, "scripts/required-checks-parse.jq"),
+        resolve(root, ".github/required-checks.json"),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(parsed.status, parsed.stderr).toBe(0);
+    const lines = parsed.stdout.split("\n").filter((line) => line !== "");
+    const expected: string[] = [];
+    for (const [check, pin] of Object.entries(pins)) {
+      for (const workflowPath of pinsOf(pin)) expected.push(`${check}\t${workflowPath}`);
+    }
+    expect(lines.sort()).toEqual(expected.sort());
   });
 
   it("points every pin at an existing workflow file", () => {

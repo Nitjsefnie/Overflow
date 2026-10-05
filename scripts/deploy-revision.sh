@@ -65,7 +65,10 @@ is_operational_ignored() {
 # the fetch's refs (FETCH_HEAD, origin/main) have moved. The required
 # contexts come from main's branch protection; .github/required-checks.json,
 # read from the deployed SHA itself, pins each one to the workflow file whose
-# job produces it, and a context with no pin refuses at once. Per context, a
+# job produces it, and a context with no pin refuses at once. The map is
+# parsed with the tree's own scripts/required-checks-parse.jq, the tracked
+# file beside this script that defines the shapes the map may hold. Per
+# context, a
 # check-run posted by the ledger App (OVERFLOW_DEPLOY_LEDGER_APP_ID, default
 # 5118623) attributes the context, and the NEWEST App check-run for it
 # (highest id) decides. When no App check-run exists, the pinned workflow's
@@ -100,6 +103,7 @@ is_operational_ignored() {
 # run is.
 required_checks_gate() {
   local remote_url repo required pins check check_pins unmapped check_runs runs run_id run_path run_jobs jobs
+  local map map_status jq_status
   local job_line job_run job_path job_id job_name job_attempt job_status job_conclusion
   local cr_id cr_name cr_app cr_status cr_conclusion producer_ids status conclusion
   local decided_run decided_attempt pending timeout deadline ledger_app_id ledger_id
@@ -126,14 +130,17 @@ required_checks_gate() {
   # pull_request_target file and a push file), and every path it names is a
   # workflow whose job for that check counts. A missing file, invalid JSON,
   # anything but exactly one object of .github/workflows/*.yml paths or
-  # non-empty lists of them, or an absent jq all fail here.
-  if ! pins=$(git show "$full_sha:.github/required-checks.json" | jq -rs '
-      def ispath: type == "string" and test("\\A\\.github/workflows/[^/]+\\.ya?ml\\z");
-      def pinpaths: if type == "string" then [.] elif (type == "array" and length > 0) then . else null end;
-      if length == 1
-          and (.[0] | type == "object" and all(.[]; pinpaths != null and all(pinpaths[]; ispath)))
-      then .[0] | to_entries[] | .key as $key | (.value | pinpaths[]) | [$key, .] | @tsv
-      else error("not exactly one object of .github/workflows/*.yml paths or non-empty lists of them") end'); then
+  # non-empty lists of them, or an absent jq all fail here. The jq program is
+  # scripts/required-checks-parse.jq, a tracked file beside this script: the
+  # map and the code that knows its shape travel together, and the parse runs
+  # the working tree's copy.
+  map_status=0
+  map=$(git show "$full_sha:.github/required-checks.json") || map_status=$?
+  jq_status=0
+  if [ "$map_status" -eq 0 ]; then
+    pins=$(jq -rs -f "$tree/scripts/required-checks-parse.jq" <<<"$map") || jq_status=$?
+  fi
+  if [ "$map_status" -ne 0 ] || [ "$jq_status" -ne 0 ]; then
     printf 'Could not read a valid .github/required-checks.json at %s (a JSON object mapping each required check to a .github/workflows/*.yml path or a non-empty list of them); refusing to deploy.\n' "$full_sha" >&2
     exit 1
   fi
