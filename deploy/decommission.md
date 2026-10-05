@@ -415,8 +415,10 @@ channel. A deletion failure is recorded, not retried forever, like phase 4's
 webhook sweep:
 
 ```sh
-# The channel id and the osc identity's token come from the environment file
-# the nightly unit read; this phase runs before phase 7 destroys it.
+# The channel id comes from the environment file the nightly unit read; this
+# phase runs before phase 7 destroys it. The osc token is not in the file:
+# export DISCORD_TOKEN from the fleet's ~/.agent-bundle/discord/osc.token
+# before running this block.
 set -a
 . /etc/overflow/backup.env
 set +a
@@ -484,7 +486,10 @@ account so the ledger app's key stays readable — and the files within it are
 - `backup.env` — the backup role's `DATABASE_URL` and password
   ([backup-restore.md](backup-restore.md#b-the-least-privilege-backup-role)),
   plus, on a deployment running the off-host copy, the age recipient public
-  key, the backups channel id and the `osc` identity's `DISCORD_TOKEN`
+  key and the backups channel id. The `osc` identity's token is not in the
+  file: the off-host unit loads it from the fleet's
+  `~/.agent-bundle/discord/osc.token` at each start — a fleet-side file other
+  products share, not part of this host's disposal inventory
   ([backup-restore.md](backup-restore.md#i-the-encrypted-off-host-copy)).
 - `alert-recipient`, `canary-recipient` — the two mail addresses alerts and
   canary probes are sent to, off this host.
@@ -525,8 +530,8 @@ channel's integration settings, which invalidates the URL whose local copy
 was destroyed above. Record both closures in the preflight record. The
 backups channel's posted copies were disposed of in
 [phase 6](#6-backup-disposal), which had to run first: that disposal reads
-the channel id and the `osc` token out of the `backup.env` this phase
-destroys.
+the channel id out of the `backup.env` this phase destroys, and speaks as
+`osc` through a token the operator supplies from the fleet's canonical file.
 
 ## 8. Remaining stores
 
