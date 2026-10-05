@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AUTH_ERROR_LOG_LINE_MAX, boundedAuthErrorLine } from "@/lib/auth/bounded-logger";
+import { AUTH_ERROR_LOG_LINE_MAX, boundedAuthErrorLine, truncateBoundedLine } from "@/lib/auth/bounded-logger";
 
 /**
  * The bounded-line encoder for @auth/core errors, unit-pinned at its
@@ -16,6 +16,17 @@ function authShapedError(inner: Error, className = "JWTSessionError"): Error {
   error.name = className;
   (error as Error & { cause: unknown }).cause = { err: inner };
   return error;
+}
+
+/**
+ * A V8 stack frame, joined inline into a single line: ` at fn (file:1:2)` or
+ * ` at file:1:2`. Tighter than a bare " at " probe, which a future legitimate
+ * message like "failed at step (3)" would false-positive on: a frame needs a
+ * location with `:line:column` inside or after its shape to match.
+ */
+function stackFrame(text: string): boolean {
+  return /\s+at\s+[^\s(]+\s*\([^)]*:\d+:\d+\s*\)/.test(text)
+    || /\s+at\s+[^()\s]+:\d+:\d+/.test(text);
 }
 
 /** No C0, no DEL/C1, no line or paragraph separator anywhere in the text. */
@@ -43,10 +54,15 @@ describe("boundedAuthErrorLine", () => {
     const line = boundedAuthErrorLine(authShapedError(inner));
 
     expect(line.length).toBeLessThanOrEqual(AUTH_ERROR_LOG_LINE_MAX);
-    expect(line.length).toBeLessThanOrEqual(512);
     expect(firstControlCharacter(line), `control character in ${JSON.stringify(line)}`).toBeUndefined();
     // The bounded tail keeps the truncation visible instead of silently cut.
     expect(line).toMatch(/…|more/);
+  });
+
+  it("pins the documented cap at 512 code units", () => {
+    // The one place the value itself is asserted, so a deliberate change of
+    // the documented cap fails loudly instead of drifting silently.
+    expect(AUTH_ERROR_LOG_LINE_MAX).toBe(512);
   });
 
   it("carries no stack-trace text from the error or its cause", () => {
@@ -57,7 +73,7 @@ describe("boundedAuthErrorLine", () => {
 
     const line = boundedAuthErrorLine(error);
 
-    expect(/\s at \s/.test(line), `stack frame in ${JSON.stringify(line)}`).toBe(false);
+    expect(stackFrame(line), `stack frame in ${JSON.stringify(line)}`).toBe(false);
     expect(line).not.toContain("session.js:59");
     expect(line).not.toContain("jwt.js:10");
   });
@@ -114,5 +130,82 @@ describe("boundedAuthErrorLine", () => {
     expect(line).toContain("Error");
     expect(line.length).toBeLessThanOrEqual(AUTH_ERROR_LOG_LINE_MAX);
     expect(firstControlCharacter(line)).toBeUndefined();
+  });
+});
+
+/**
+ * The cap backstop, exercised directly: with the current logField cap a
+ * composed line never reaches AUTH_ERROR_LOG_LINE_MAX, so these build lines
+ * that do and pin what the cut may leave behind.
+ */
+describe("truncateBoundedLine", () => {
+  /** A trailing partial escape: a lone `\`, or `\u` with fewer than four hex digits. */
+  function hasPartialEscape(text: string): boolean {
+    return /\\u?[0-9a-fA-F]{0,3}$/.test(text);
+  }
+
+  /** A high surrogate without its low partner, or a low without its high. */
+  function firstLoneSurrogate(text: string): string | undefined {
+    for (let index = 0; index < text.length; index += 1) {
+      const unit = text.charCodeAt(index);
+      const previous = index > 0 ? text.charCodeAt(index - 1) : 0;
+      if (unit >= 0xdc00 && unit <= 0xdfff && !(previous >= 0xd800 && previous <= 0xdbff)) {
+        return text[index];
+      }
+      if (unit >= 0xd800 && unit <= 0xdbff) {
+        const next = index + 1 < text.length ? text.charCodeAt(index + 1) : 0;
+        if (!(next >= 0xdc00 && next <= 0xdfff)) return text[index];
+      }
+    }
+    return undefined;
+  }
+
+  /** Every `(+` in the text must begin a complete logField truncation marker. */
+  function hasPartialMarker(text: string): boolean {
+    const open = text.indexOf("(+");
+    return open !== -1 && !/^\(\+\d+ more\)/.test(text.slice(open));
+  }
+
+  it("keeps a boundary-straddling backslash-u escape whole", () => {
+    const line = "x".repeat(509) + "\\u00e9" + "tail";
+    expect(line.length).toBeGreaterThan(AUTH_ERROR_LOG_LINE_MAX);
+
+    const truncated = truncateBoundedLine(line);
+
+    expect(truncated.length).toBeLessThanOrEqual(AUTH_ERROR_LOG_LINE_MAX);
+    expect(truncated.endsWith("…"), `no closing ellipsis: ${JSON.stringify(truncated)}`).toBe(true);
+    expect(
+      hasPartialEscape(truncated.slice(0, -1)),
+      `partial escape in ${JSON.stringify(truncated)}`,
+    ).toBe(false);
+  });
+
+  it("never splits a surrogate pair at the cut", () => {
+    const line = "x".repeat(511) + "\u{1d11e}" + "y".repeat(8);
+
+    const truncated = truncateBoundedLine(line);
+
+    expect(truncated.length).toBeLessThanOrEqual(AUTH_ERROR_LOG_LINE_MAX);
+    expect(
+      firstLoneSurrogate(truncated),
+      `lone surrogate in ${JSON.stringify(truncated)}`,
+    ).toBeUndefined();
+  });
+
+  it("drops the logField truncation marker whole instead of leaving a fragment", () => {
+    const line = "x".repeat(500) + "… (+123 more)" + "y".repeat(10);
+
+    const truncated = truncateBoundedLine(line);
+
+    expect(truncated.length).toBeLessThanOrEqual(AUTH_ERROR_LOG_LINE_MAX);
+    expect(
+      hasPartialMarker(truncated),
+      `partial marker in ${JSON.stringify(truncated)}`,
+    ).toBe(false);
+  });
+
+  it("leaves a short line untouched", () => {
+    const line = '[auth][error] "JWTSessionError: Invalid Compact JWE"';
+    expect(truncateBoundedLine(line)).toBe(line);
   });
 });
