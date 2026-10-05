@@ -134,9 +134,11 @@ describe("boundedAuthErrorLine", () => {
 });
 
 /**
- * The cap backstop, exercised directly: with the current logField cap a
- * composed line never reaches AUTH_ERROR_LOG_LINE_MAX, so these build lines
- * that do and pin what the cut may leave behind.
+ * The hard cap, exercised directly: it is live code, not a removable
+ * backstop — logField keeps 256 input units but each escapable unit becomes
+ * a 6-unit escape in the line, so an escape-dense cause composes past
+ * AUTH_ERROR_LOG_LINE_MAX (a real-module probe measured 507 units out,
+ * truncated). These lines pin what the cut may leave behind.
  */
 describe("truncateBoundedLine", () => {
   /** A trailing partial escape: a lone `\`, or `\u` with fewer than four hex digits. */
