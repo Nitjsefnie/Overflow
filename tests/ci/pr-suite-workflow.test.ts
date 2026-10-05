@@ -216,11 +216,44 @@ describe("the pull request suite workflow", () => {
     expect(step.run).toContain("--no-deps");
     expect(step.run).toContain("--require-hashes");
     expect(step.run).toContain("-r .github/requirements-zizmor.txt");
+    // The step may carry no key that can skip it or swallow its exit status.
+    // Asserting `if` alone was not enough: it pins the absence of ONE
+    // suppression key and leaves its siblings unpinned, so `continue-on-error:
+    // true` — or a `|| true` appended to the command — left this case green
+    // while the run concluded `success`, `await-pr-suite.ts` returned 0 and the
+    // merge went through with the check inert. That is the same failure this
+    // case exists to prevent, reached by a different key, so the assertion is
+    // over the whole key set: anything not in the allow-list below has to be
+    // added here deliberately, with its reason, rather than slipped in beside
+    // the command. Every allowed key is inert with respect to whether this step
+    // gates — none can skip it, mark it tolerated, or detach its status.
+    const inert = new Set(["name", "run", "id", "shell", "working-directory", "timeout-minutes", "env"]);
+    expect(
+      Object.keys(step).filter((key) => !inert.has(key)),
+      "the hash-binding step carries a key that can suppress or skip it; if that key is " +
+        "inert, add it to the allow-list with its reason, and if it is not, the check " +
+        "no longer gates and the merge is unblocked with it inert",
+    ).toEqual([]);
+    expect(
+      (step as { "continue-on-error"?: unknown })["continue-on-error"],
+      "continue-on-error turns a hash mismatch into a green run",
+    ).toBeUndefined();
     // Unconditional. A docs-only pull request must not skip it: the manifest is
     // not application code, and a stale-hash bump reaches this workflow on a
     // change that `docs-only.ts` would call docs-only (the pin line lives in a
     // header-carrying requirements file the docs detector never reads).
     expect(step.if, "the hash binding must hold on every pull request").toBeUndefined();
+    // The command's own exit status is the verdict, so it may not be masked
+    // inside the shell block. `||` has no legitimate use in a single pip
+    // invocation: `|| true` and `|| :` both discard pip's non-zero, and a
+    // trailing `&` detaches it from the step entirely. Asserted as a property
+    // of the whole block rather than of its last line, so a fallback added
+    // earlier in a multi-line `run:` trips it too.
+    expect(
+      step.run,
+      "the pip download's exit status must reach the step; a `||` fallback or a trailing " +
+        "`&` would make a hash mismatch report success",
+    ).not.toMatch(/\|\||&/);
     // After the checkout, so it reads the request's tree rather than an empty
     // workspace: this is the whole property actionlint.yml lacks.
     const checkout = suite.steps.findIndex((s) => (s.uses ?? "").startsWith("actions/checkout@"));

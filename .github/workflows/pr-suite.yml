@@ -116,16 +116,26 @@ jobs:
       # Reads no secret and needs no token: PyPI is anonymous, and the hash
       # pinning is what makes the download trustworthy.
       #
-      # SCOPE, stated rather than left to be assumed: pip resolves the artifact
-      # for THIS runner, so what is verified here is the platform's entry against
-      # the version — the case that actually occurs (a bump carrying the whole
-      # previous hash set, as PR 1007 does). It is not proof that all eleven
-      # entries belong to the version: a manifest stale in only some other
-      # platform's wheel would pass here and fail on that platform's runner. The
-      # test file's own hash assertions do not close that either, and are not
-      # asked to — see the dependabot pip lane's comment. Catching every entry
-      # would need a matrix over the platforms, which is more than this gap is
-      # worth; if that day comes it is a separate change.
+      # SCOPE, stated rather than left to be assumed: with no --platform flag pip
+      # resolves the artifact for THIS runner, so what is verified here is the
+      # platform's entry against the version — the case that actually occurs (a
+      # bump carrying the whole previous hash set, as PR 1007 does). It is not
+      # proof that all eleven entries belong to the version: a manifest stale in
+      # only some other platform's wheel would pass here. Verified, not assumed —
+      # a manifest with this platform's wheel correct and the other ten entries
+      # from 1.29.0 still exits 0. The test file's own hash assertions do not
+      # close that either, and are not asked to; see the dependabot pip lane.
+      #
+      # What WOULD close it is not a matrix: pip resolves cross-platform from one
+      # runner, so a loop over the published filenames with
+      # `--only-binary=:all: --platform <tag> --python-version 3.13
+      # --implementation cp --abi cp313` checks every entry from here (measured:
+      # rc=0 on the correct macOS arm64 digest, rc=1 on 1.29.0's). Left open
+      # because it costs one download per artifact per pull request — eleven
+      # here, against the one this step runs — and the arrival this branch exists
+      # to catch is wholesale, which one download already catches. A future
+      # change that wants the stronger guarantee should loop; nothing about the
+      # current step prevents it.
       - name: Verify the zizmor pin's hashes match its version
         run: |
           pip download --no-deps --require-hashes \

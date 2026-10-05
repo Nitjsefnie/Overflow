@@ -139,12 +139,12 @@ updates:
   # So the header comment naming the version is load-bearing for this failure,
   # and every future bump hits it the same way.
   #
-  # Fix it on the branch before merging. The manifest header now carries the
-  # recipe (one GET against the index's JSON record for the new version, one
-  # line, every artifact it published), so follow that rather than a second one
-  # here. It is pip-compile rather than that recipe on purpose:
-  # `--generate-hashes` emits hashes for the platform it runs on, which would
-  # silently drop the other platforms' wheels.
+  # Fix it on the branch before merging. The manifest header carries the recipe
+  # — one GET against the index's JSON record for the new version — so follow
+  # that. `pip-compile` reaches the same eleven hashes (measured with pip-tools
+  # 7.6.1, which collects every published artifact of the release, not one
+  # platform's subset) and is equally correct; the header explains why the GET
+  # is the one it names. Read it there rather than taking a second recipe here.
   #
   # A stale-hash arrival is now RED ON THE PULL REQUEST, before the merge:
   # pr-suite.yml runs `pip download --no-deps --require-hashes -r` against this
