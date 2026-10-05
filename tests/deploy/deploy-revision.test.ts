@@ -29,6 +29,7 @@ import {
   gateReads,
   listedOffenders,
   makeFixture,
+  parser,
   readLog,
   refusalFor,
   runDeploy,
@@ -503,6 +504,12 @@ describe("scripts/deploy-revision.sh", () => {
     const source = await readFile(script, "utf8");
     expect(source).toContain('gh api "repos/$repo/branches/main/protection"');
     expect(source).toContain('git show "$full_sha:.github/required-checks.json"');
+    // The parser is a tracked file beside the script, run as `jq -rs -f`
+    // against the tree's copy; when that parse fails with jq itself present,
+    // the gate falls back to the target SHA's own copy of the same file, so a
+    // map-shape change cannot deadlock a tree whose parser predates it.
+    expect(source).toContain("scripts/required-checks-parse.jq");
+    expect(source).toContain('jq -rs -f "$tree/scripts/required-checks-parse.jq"');
     expect(source).toContain('"repos/$repo/commits/$full_sha/check-runs?filter=all&per_page=100"');
     expect(source).toContain('"repos/$repo/actions/runs?head_sha=$full_sha&per_page=100"');
     expect(source).toContain('"repos/$repo/actions/runs/$run_id/jobs?filter=all&per_page=100"');
@@ -1699,10 +1706,13 @@ async function makeGitFixture(): Promise<{ fixture: Fixture; behind: string; tip
   await writeFile(path.join(origin, MAP_PATH), await readFile(fixture.requiredChecks, "utf8"));
   // The post-fast-forward half executes the merged tree's own copy of the
   // deploy script, so the origin base commit carries the repository's current
-  // bytes at that path: the exec target must exist in the fixture tree.
+  // bytes at that path: the exec target must exist in the fixture tree. The
+  // gate parses the pin map with the tree's own copy of the parser beside it
+  // (issue 1104), so that path is carried the same way.
   await mkdir(path.join(origin, "scripts"));
   await writeFile(path.join(origin, "scripts", "deploy-revision.sh"), await readFile(script, "utf8"));
-  run(origin, ["add", ".gitignore", "app.txt", SOURCE_PATH, MAP_PATH, "scripts/deploy-revision.sh"]);
+  await writeFile(path.join(origin, "scripts", "required-checks-parse.jq"), await readFile(parser, "utf8"));
+  run(origin, ["add", ".gitignore", "app.txt", SOURCE_PATH, MAP_PATH, "scripts/deploy-revision.sh", "scripts/required-checks-parse.jq"]);
   run(origin, ["commit", "-q", "-m", "base"]);
   const behind = run(origin, ["rev-parse", "HEAD"]);
   const git = (...args: string[]): string => run(fixture.tree, args);
@@ -1710,10 +1720,11 @@ async function makeGitFixture(): Promise<{ fixture: Fixture; behind: string; tip
   git("remote", "add", "origin", FIXTURE_REMOTE_URL);
   git("config", `url.${origin}.insteadOf`, FIXTURE_REMOTE_URL);
   git("fetch", "-q", "origin", "main");
-  // The base commit carries the deploy script, so the checkout materializes
-  // the tree's own copy from git; makeFixture's untracked placeholder would
-  // collide with it.
+  // The base commit carries the deploy script and the parser, so the
+  // checkout materializes the tree's own copies from git; makeFixture's
+  // untracked placeholders would collide with them.
   await rm(path.join(fixture.tree, "scripts", "deploy-revision.sh"));
+  await rm(path.join(fixture.tree, "scripts", "required-checks-parse.jq"));
   git("checkout", "-q", "-B", "main", behind);
   for (const n of [1, 2, 3]) {
     await writeFile(path.join(origin, "incoming.txt"), `${n}\n`);
