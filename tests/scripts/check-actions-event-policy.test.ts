@@ -55,7 +55,10 @@ function activePolicyDetail(id: number): Response {
   }), { status: 200 });
 }
 
-const events = ["pull_request_target", "workflow_run"];
+// pull_request is required because ci.yml's verify awaits the pr suite's
+// pull_request run: a policy that blocks it must fail here, not surface as a
+// verify that times out waiting for a run that can never start.
+const events = ["pull_request", "pull_request_target", "workflow_run"];
 
 function listResponse(policyCount: number): ApiResponse {
   return {
@@ -113,10 +116,27 @@ describe("Actions event policy classification", () => {
     expect(result.reason).toContain("Administration read");
   });
 
-  it("passes when an active ~ALL policy allows both required events", () => {
+  it("passes when an active ~ALL policy allows every required event, naming them", () => {
     const result = classify(listResponse(1), [detailResponse()]);
 
     expect(result.outcome).toBe("pass");
+    expect(result.reason).toContain("allows pull_request, pull_request_target and workflow_run.");
+  });
+
+  it("fails when the policy blocks pull_request, which the pr suite runs on", () => {
+    const result = classify(listResponse(1), [
+      detailResponse({
+        rules: [
+          {
+            type: "restrict_action_events",
+            parameters: { allowed_events: ["pull_request_target", "workflow_run"] },
+          },
+        ],
+      }),
+    ]);
+
+    expect(result.outcome).toBe("fail");
+    expect(result.reason).toContain("is missing or blocks required event(s): pull_request.");
   });
 
   it("fails when a required event is missing and names it", () => {

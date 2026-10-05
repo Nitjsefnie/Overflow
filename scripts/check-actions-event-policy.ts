@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Verify the repository's active Actions policy admits every event used by its
-// pull-request gates and ledger relay.
+// pull-request gates and ledger relay: pull_request for the pr suite whose
+// run ci.yml's verify awaits, pull_request_target for the required gates, and
+// workflow_run for the relay.
 
 import { pathToFileURL } from "node:url";
 
@@ -14,7 +16,7 @@ import {
 const POLICY_LIST_URL =
   "https://api.github.com/repos/Nitjsefnie/Overflow/actions/policies";
 const POLICY_LIST_PAGE_SIZE = 100;
-const REQUIRED_EVENTS = ["pull_request_target", "workflow_run"] as const;
+const REQUIRED_EVENTS = ["pull_request", "pull_request_target", "workflow_run"] as const;
 
 type RequiredEvent = (typeof REQUIRED_EVENTS)[number];
 /** The three-state outcome: verified-good, verified-bad, and cannot-verify. */
@@ -206,9 +208,14 @@ function parseDocument(response: ApiResponse): { document?: unknown; error?: str
   }
 }
 
+/** The required events as prose: "a, b and c". */
+function requiredEventsProse(): string {
+  return `${REQUIRED_EVENTS.slice(0, -1).join(", ")} and ${REQUIRED_EVENTS.at(-1)}`;
+}
+
 function summarizeMissingEvents(rules: unknown[]): RequiredEvent[] | undefined {
   let bestMissing: RequiredEvent[] | undefined;
-  let allowsBoth = false;
+  let allowsAll = false;
   for (const value of rules) {
     if (!isRecord(value) || typeof value.type !== "string") return undefined;
     if (value.type !== "restrict_action_events") continue;
@@ -219,12 +226,12 @@ function summarizeMissingEvents(rules: unknown[]): RequiredEvent[] | undefined {
     if (!allowedEvents.every((event) => typeof event === "string")) return undefined;
     const missing = REQUIRED_EVENTS.filter((event) => !allowedEvents.includes(event));
     if (missing.length === 0) {
-      allowsBoth = true;
+      allowsAll = true;
       continue;
     }
     if (bestMissing === undefined || missing.length < bestMissing.length) bestMissing = missing;
   }
-  if (allowsBoth) return [];
+  if (allowsAll) return [];
   return bestMissing ?? [...REQUIRED_EVENTS];
 }
 
@@ -437,7 +444,7 @@ export function classify(
       outcome: "pass",
       reason:
         `${policyLabel(qualifying.policy)} is active, targets all workflows, and allows ` +
-        `${REQUIRED_EVENTS.join(" and ")}.`,
+        `${requiredEventsProse()}.`,
     };
   }
 
