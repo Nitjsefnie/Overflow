@@ -83,6 +83,9 @@ export function readGitHubAppAuthConfig(
   return { appId, privateKey: readFile(keyPath) };
 }
 
+/** One response of the two App JWT requests: an installation lookup or a mint. */
+type JwtAppResponse = { status: number; headers: Headers; body: string | null };
+
 export function createAppInstallationTokenResolver(options: {
   config: GitHubAppAuthConfig;
   apiUrl?: string;
@@ -177,12 +180,18 @@ export function createAppInstallationTokenResolver(options: {
     return { token, expiresAt };
   }
 
+  // The overloads tie the request body to the method at compile time: a POST
+  // call site MUST pass a body (a bodyless POST would mint the installation
+  // token with the App's FULL permission grant — the exact regression the
+  // scoped mint exists to prevent) and a GET call site MUST pass none.
+  function fetchWithJwt(path: string, method: "GET", jwt: string, requestBody: undefined): Promise<JwtAppResponse>;
+  function fetchWithJwt(path: string, method: "POST", jwt: string, requestBody: string): Promise<JwtAppResponse>;
   async function fetchWithJwt(
     path: string,
     method: "GET" | "POST",
     jwt: string,
     requestBody: string | undefined,
-  ): Promise<{ status: number; headers: Headers; body: string | null }> {
+  ): Promise<JwtAppResponse> {
     let response: Response;
     try {
       response = await fetchImplementation(`${apiUrl}${path}`, {
