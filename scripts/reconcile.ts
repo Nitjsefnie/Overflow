@@ -63,10 +63,10 @@ function productionDependencies(): ReconcileCliDependencies {
   // App is configured (issue 804), instead of the sponsor's OAuth token.
   // Unconfigured — either variable unset or empty — the option stays unwired
   // and every fold reads the sponsor's OAuth token exactly as before;
-  // configured with a key file that cannot be read or parsed the factory
-  // throws here, failing the CLI run before any fold (fail-closed, the
-  // GitLab credential precedent). Unconfigured reading as null from the
-  // factory, unwired reading
+  // configured with a key file that cannot be read or parsed, or that is not
+  // an RSA-family key, the factory throws here, failing the CLI run before
+  // any fold (fail-closed, the GitLab credential precedent). Unconfigured
+  // reading as null from the factory, unwired reading
   // as undefined on the options — both leave the option off, so
   // `?? undefined` carries the factory's null across.
   const resolveAppInstallationToken =
