@@ -606,19 +606,31 @@ describe("the ledger relay's producer filter", () => {
   //
   // WHAT THIS STILL DOES NOT CATCH, stated rather than implied. Dropping a
   // declaration AND its filter line together still passes, leaving a workflow
-  // that is shipped, unpinned, undeclared and unforwarded. No in-file assertion
-  // closes that, because "is this workflow meant to be a producer?" has no
-  // source in the repository except the declaration itself: once the two move
-  // together, the observable state is identical to "this was never a
-  // producer". The tempting alternative — every shipped non-pinned workflow must
-  // be declared — is not weaker but WRONG: 11 of the 16 shipped workflows are
-  // unpinned and 9 of those are deliberately NOT relayed (claim, pr-suite,
-  // pr-gate, scorecard, code-scanning, coverage-comment, dependency-audit,
-  // event-policy, ledger-relay), so declaring them would demand a filter entry
-  // for each. Closing it would take a hard-coded pin of the filter's contents,
-  // trading away the derivation above and reinstating the hand-maintained list
-  // this sweep replaced — a judgement for whoever owns the relay, not a silent
-  // change made here.
+  // that is shipped, unpinned, undeclared and unforwarded. Within {FILTER,
+  // PINNED, FORWARD_WIRED} this sweep cannot separate that state from "this was
+  // never a producer": once the declaration and its filter line move together,
+  // the two sets still agree, and nothing else in the derivation changes.
+  //
+  // It is NOT true, though, that no derivation could — an earlier version of
+  // this paragraph said so, and it was wrong. A RELATIONAL rule separates the
+  // two: every SHIPPED workflow whose `name:` is a DECLARED producer plus a
+  // space-suffix must itself be declared. Measured, it is empty on today's
+  // tree and fires on exactly the coordinated deletion:
+  //
+  //   today                    -> []
+  //   "secret scan pull request" declared and filtered, then BOTH removed
+  //                            -> ["secret scan pull request"]
+  //
+  // because secret-scan-pr.yml still ships under that name while its
+  // declaration and its filter line are gone. It is not written here because it
+  // is a judgement about the relay's contract — a rule about which workflows
+  // MUST be relayed, which is the relay owner's call — not a silent change made
+  // by a trigger sweep. The cheap alternative is measurably wrong rather than
+  // merely weaker: "every shipped non-pinned workflow must be declared" fails
+  // on today's tree, where 11 of the 17 shipped workflows are unpinned and 9 of
+  // those are deliberately NOT relayed (claim, pr-suite, pr-gate, scorecard,
+  // code-scanning, coverage-comment, dependency-audit, event-policy,
+  // ledger-relay), so it would demand a declaration and a filter entry for each.
   //
   // The residual is unchanged from what this sweep replaced, and it is not the
   // silent direction: removing a line from a tracked workflow is a reviewable

@@ -10,7 +10,8 @@ import { parse } from "yaml";
  * The checkout analysers read a `git fetch` whose command — or whose in-scope
  * environment, by NAME — carries the pull request's number as a fetch of
  * untrusted history, whatever the job later proves about the commit it lands.
- * ci.yml's verify job materialises the pull request's merge tree as data, so
+ * ci-pr.yml's verify job — the pull-request leg of the split ci.yml (issue
+ * 1090) — materialises the pull request's merge tree as data, so
  * the pattern it must not carry is a `refs/pull/<number>` refspec or a
  * PR-number env name on any step that fetches: the tree is built from this
  * event's own head and base SHA values instead, and the two-parent bind
@@ -32,7 +33,7 @@ type WorkflowStep = {
 let steps: WorkflowStep[] = [];
 
 beforeAll(async () => {
-  const workflow = parse(await readFile(resolve(".github/workflows/ci.yml"), "utf8")) as {
+  const workflow = parse(await readFile(resolve(".github/workflows/ci-pr.yml"), "utf8")) as {
     jobs?: { verify?: { steps?: WorkflowStep[] } };
   };
   steps = workflow.jobs?.verify?.steps ?? [];

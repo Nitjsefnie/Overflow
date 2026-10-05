@@ -464,12 +464,12 @@ fi
       packageManager: "pnpm@10.33.0",
       engines: { node: "24.17.0", pnpm: "10.33.0" },
     });
-    expect(workflow.on).toEqual(expect.objectContaining({
+    // Issue 1090 split this workflow, so ci.yml is now the push/dispatch leg
+    // and ci-pr.yml the pull-request leg; the trigger set below is asserted
+    // WHOLE per file rather than by objectContaining over one, so a trigger
+    // re-added to either is a failure rather than a tolerated extra key.
+    expect(workflow.on).toEqual({
       push: { branches: ["main"] },
-      // pull_request_target executes main's workflow definition, so a pull
-      // request that edits its own ci.yml cannot shape the job that judges it
-      // (issue 822). Same trigger shape as ratchet-guard.yml.
-      pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
       // The dispatch trigger carries the calibrate self-test's input: a
       // boolean, defaulting false, whose fabricated raise must be refused by
       // branch protection so the calibrate job fails visibly (issue 684).
@@ -490,17 +490,17 @@ fi
           },
         },
       },
-    }));
+    });
     expect(workflow.on.push).not.toHaveProperty("paths");
-    expect(workflow.on.pull_request_target).not.toHaveProperty("paths");
-    // The migration's whole point: no pull_request trigger beside
-    // pull_request_target. objectContaining tolerates a re-added trigger, so
-    // the absence is pinned on its own — a re-add silently reopens the hole
-    // this branch closes (final-review mutant M1).
     expect(workflow.on).not.toHaveProperty("pull_request");
+    // Nor a pull_request_target: the pull-request leg of this gate is
+    // ci-pr.yml, whose `on:` is exactly {pull_request_target}. A trigger
+    // re-added here would put pull-request data back under a privileged
+    // trigger, which is the class the split exists to close.
+    expect(workflow.on).not.toHaveProperty("pull_request_target");
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.concurrency).toEqual({
-      group: "ci-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+      group: "ci-${{ github.sha }}",
       "cancel-in-progress": false,
     });
 
@@ -510,9 +510,10 @@ fi
     expect(verify.steps.filter((step) => step.uses).every((step) => /@[0-9a-f]{40}$/.test(step.uses!))).toBe(true);
     // Keep the reviewed artifact actions exact across jobs: verify uploads
     // the pair on push and dispatch, then the calibration job downloads the
-    // summary; under pull_request_target verify downloads the awaited pull
-    // request suite run's summary. The generic SHA-format check above would
-    // accept a different, valid pin.
+    // summary. The generic SHA-format check above would accept a different,
+    // valid pin. The pull-request leg's one download is asserted in ci-pr.yml's
+    // own case below, so neither file's artifact actions are checked by a
+    // derivation that only reads this one.
     const ciSteps = Object.values(workflow.jobs).flatMap((job) => job.steps);
     const uploadPins = ciSteps
       .filter((step) =>
@@ -526,24 +527,16 @@ fi
       .filter((step) => step.uses?.startsWith("actions/download-artifact@"))
       .map((step) => step.uses)).toEqual([
       "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
-      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
     ]);
-    // Exactly two checkouts, each gated to its event. Under pull_request_target
-    // the default checkout is the base branch's tip — whose scripts judge the
-    // pull request's merge tree as data — with full history and no ref input;
-    // under push and workflow_dispatch the plain default checkout takes the
-    // event's own commit.
+    // Exactly one checkout: under push and workflow_dispatch the plain default
+    // checkout takes the event's own commit. It carries no event gate because
+    // this file admits nothing else — the pull_request_target checkout, with
+    // full history and no ref input, is in ci-pr.yml.
     const verifyCheckouts = verify.steps.filter((step) =>
       step.uses?.startsWith("actions/checkout@"),
     );
-    expect(verifyCheckouts, "the verify job must keep exactly two checkouts").toHaveLength(2);
+    expect(verifyCheckouts, "the verify job must keep exactly one checkout").toHaveLength(1);
     expect(verifyCheckouts[0]).toEqual({
-      if: "${{ github.event_name == 'pull_request_target' }}",
-      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-      with: { "persist-credentials": false, "fetch-depth": 0 },
-    });
-    expect(verifyCheckouts[1]).toEqual({
-      if: "${{ github.event_name != 'pull_request_target' }}",
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
       with: { "persist-credentials": false },
     });
@@ -557,6 +550,91 @@ fi
       "pnpm typecheck",
       "pnpm build",
     ]));
+    expect(verify.env).toEqual(expect.objectContaining({
+      DATABASE_URL: "postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci",
+      GITHUB_WEBHOOK_URL: "https://overflow.invalid/api/github/webhooks",
+      TOKEN_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    }));
+  });
+
+  it("parses the pull-request leg of the release gate with no privileged trigger beside it", async () => {
+    // The other half of the split ci.yml into two (issue 1090). Every property
+    // is asserted here per file rather than over the pair, because the two legs
+    // genuinely differ and a single equality covering both would have to be
+    // loosened to fit: this one has no PostgreSQL service, no package manager
+    // and no build, because the pull request's own code runs in pr-suite.yml.
+    const workflow = await readWorkflow("ci-pr.yml");
+    // The whole `on:` set is pinned, and it is exactly one event. This file
+    // materialises the pull request's merge commit, so a privileged trigger
+    // here is the shape CodeQL's cache-poisoning and untrusted-checkout alerts
+    // report. Asserted whole rather than by objectContaining, which would
+    // tolerate a second event sitting beside the one this leg needs.
+    expect(workflow.on).toEqual({
+      pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
+    });
+    expect(workflow.on.pull_request_target).not.toHaveProperty("paths");
+    expect(workflow.on, "a pull_request trigger would execute the PR's own workflow files").not.toHaveProperty("pull_request");
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    // Concurrency group names are repository-global, so this one must not be
+    // ci.yml's: a collision would let a pull request cancel a merged SHA's
+    // pending push run, which the deploy gate refuses on (issue 474).
+    expect(workflow.concurrency).toEqual({
+      group: "ci-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+      "cancel-in-progress": false,
+    });
+    const verify = workflow.jobs.verify!;
+    // No PostgreSQL service: nothing in this leg applies a migration, because
+    // the pull request's own code — which is what would need the schema — runs
+    // in pr-suite.yml under `pull_request`.
+    expect(verify.services, "the pull-request leg must not pay for a database it never connects to")
+      .toEqual(undefined);
+    expect(verify.permissions).toEqual({ contents: "read", actions: "read" });
+    expect(verify.steps.filter((step) => step.uses).every((step) => /@[0-9a-f]{40}$/.test(step.uses!))).toBe(true);
+    // One download — the awaited pull request suite run's coverage summary —
+    // and no upload: the artifacts a pull request's coverage report is built
+    // from are pr-suite.yml's, not this job's.
+    const prSteps = Object.values(workflow.jobs).flatMap((job) => job.steps);
+    expect(prSteps
+      .filter((step) => step.uses?.startsWith("actions/download-artifact@"))
+      .map((step) => step.uses)).toEqual([
+      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+    ]);
+    expect(
+      prSteps.filter((step) => step.uses?.startsWith("actions/upload-artifact@")),
+      "the pull-request leg must upload nothing — the coverage and patch-coverage artifacts on a " +
+        "pull request come from pr-suite.yml, and an upload here would overwrite that run's",
+    ).toEqual([]);
+    // Exactly one checkout, and it is the base branch's tip with full history
+    // and no ref input: under pull_request_target that is actions/checkout's
+    // default, which is what makes the pull request's own edit to a gated
+    // script unable to change the judge (issue 822). It carries no event gate
+    // because this file admits nothing else.
+    const verifyCheckouts = verify.steps.filter((step) =>
+      step.uses?.startsWith("actions/checkout@"),
+    );
+    expect(verifyCheckouts, "the verify job must keep exactly one checkout").toHaveLength(1);
+    expect(verifyCheckouts[0]).toEqual({
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: { "persist-credentials": false, "fetch-depth": 0 },
+    });
+    expect(verify.steps.find((step) => step.uses?.startsWith("actions/setup-node@"))?.with)
+      .toEqual(expect.objectContaining({ "node-version": "24.17.0" }));
+    // The trust boundary, as data: no package manager, no install, no suite,
+    // no build — the base checkout's copies of the gate scripts over the pull
+    // request's materialised tree are the whole job.
+    expect(verify.steps.map((step) => step.run).filter(Boolean)).toEqual(expect.arrayContaining([
+      'node "${GITHUB_WORKSPACE}/scripts/check-migration-edits.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"',
+      'node "${GITHUB_WORKSPACE}/scripts/check-legal-revisions.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"',
+      'node "${GITHUB_WORKSPACE}/scripts/await-pr-suite.ts"',
+      'bash "${GITHUB_WORKSPACE}/scripts/ci-base-freshness.sh"',
+    ]));
+    expect(
+      verify.steps.map((step) => step.run ?? "").join("\n"),
+      "the pull-request leg must run no package manager at all — the pull request's install, " +
+        "migrations, tests and build run in pr-suite.yml, whose outcome this job awaits as data",
+    ).not.toMatch(/\b(pnpm|npm|npx|yarn|corepack)\b/);
+    // Base freshness last, over the materialised merge tree.
+    expect(verify.steps.at(-1)?.name).toBe("Base freshness");
     expect(verify.env).toEqual(expect.objectContaining({
       DATABASE_URL: "postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci",
       GITHUB_WEBHOOK_URL: "https://overflow.invalid/api/github/webhooks",
@@ -1518,6 +1596,7 @@ exit 1
     // on disk and is invisible to git ships nothing, and the check that would
     // notice is the one this line stands in for.
     expect(checkIgnore(".github/workflows/actionlint-pr.yml")).toBe(1);
+    expect(checkIgnore(".github/workflows/ci-pr.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/ratchet-guard-pr.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/secret-scan-pr.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/dependency-audit.yml")).toBe(1);
