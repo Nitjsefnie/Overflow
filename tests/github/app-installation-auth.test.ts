@@ -131,6 +131,42 @@ describe("readGitHubAppAuthConfig", () => {
     expect(message).toContain("GITHUB_APP_PRIVATE_KEY_PATH");
     expect(message).not.toContain("not a pem key");
   });
+
+  it("throws when the key file carries a convincing PEM header over a garbage body", () => {
+    let thrown: unknown = null;
+    try {
+      readGitHubAppAuthConfig(
+        { GITHUB_APP_ID: appId, GITHUB_APP_PRIVATE_KEY_PATH: "/keys/header-only.pem" },
+        () => "-----BEGIN PRIVATE KEY-----\nbroken",
+      );
+    } catch (error: unknown) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain("GITHUB_APP_PRIVATE_KEY_PATH");
+    expect(message).not.toContain("broken");
+  });
+
+  it("attaches the underlying parse failure as a cause that carries no key material", () => {
+    let thrown: unknown = null;
+    try {
+      readGitHubAppAuthConfig(
+        { GITHUB_APP_ID: appId, GITHUB_APP_PRIVATE_KEY_PATH: "/keys/garbage.pem" },
+        () => "not a pem key",
+      );
+    } catch (error: unknown) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const { cause } = thrown as { cause?: unknown };
+    // The parse failure survives for diagnostics, without carrying the file's
+    // contents into the visible error surface.
+    expect(cause).toBeInstanceOf(Error);
+    expect(String(cause)).not.toContain("not a pem key");
+  });
 });
 
 describe("createAppInstallationTokenResolver", () => {
