@@ -28,10 +28,16 @@
 # pip-compile also works and reaches the same eleven hashes — measured with
 # pip-tools 7.6.1, whose `--generate-hashes` collects every published artifact
 # of the release, not one platform's subset. (An earlier version of this header
-# claimed it emitted only the resolving platform's wheel; that was 6.x
-# behaviour and is no longer true, so do not carry that reason forward.) It is
-# not the route named above for one reason, about this file's FORMAT rather than
-# its contents: it emits one backslash-continued line per hash, so the output
+# claimed it emitted only the resolving platform's wheel. That claim is false,
+# so do not carry that reason forward: `--generate-hashes` emitted all eleven in
+# every pip-tools release measured against this exact input — 5.5.0, 6.0.0,
+# 6.4.0, 6.9.0, 6.14.0, 7.0.0 and 7.6.1, each `sort -u`-identical to the pin line
+# below. No version boundary was found. The three oldest (5.5.0, 6.0.0, 6.4.0)
+# import `BAR_TYPES`, removed in pip 22.1, so they only run against a
+# contemporary pip (21.3.1/22.0.4 on Python 3.10); 6.9.0 upward ran on the
+# default interpreter. Releases older than 5.5.0 were not measured.)
+# It is not the route named above for one reason, about this file's FORMAT rather
+# than its contents: it emits one backslash-continued line per hash, so the output
 # has to be joined onto a single line by hand before it is committed — the step
 # this file's shape actually depends on, and the one most easily done wrong.
 # The GET above emits the values already in final form. Either route is

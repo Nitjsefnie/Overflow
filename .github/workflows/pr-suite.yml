@@ -127,15 +127,19 @@ jobs:
       # close that either, and are not asked to; see the dependabot pip lane.
       #
       # What WOULD close it is not a matrix: pip resolves cross-platform from one
-      # runner, so a loop over the published filenames with
-      # `--only-binary=:all: --platform <tag> --python-version 3.13
-      # --implementation cp --abi cp313` checks every entry from here (measured:
-      # rc=0 on the correct macOS arm64 digest, rc=1 on 1.29.0's). Left open
-      # because it costs one download per artifact per pull request — eleven
-      # here, against the one this step runs — and the arrival this branch exists
-      # to catch is wholesale, which one download already catches. A future
-      # change that wants the stronger guarantee should loop; nothing about the
-      # current step prevents it.
+      # runner, so a loop over the published filenames checks every WHEEL from
+      # here — `--only-binary=:all: --platform <tag> --python-version 3.13
+      # --implementation cp --abi cp313`, one iteration per wheel (measured:
+      # rc=0 on the correct macOS arm64 digest, rc=1 on 1.29.0's). Every wheel,
+      # NOT every entry: `--only-binary=:all:` means pip never fetches the sdist,
+      # so that eleventh hash needs its own `--no-binary=:all:` pass, without the
+      # `--platform` flags (measured both ways — the sdist loop as written exits
+      # 0 on a stale sdist digest, and the `--no-binary=:all:` arm exits 1). Left
+      # open because it costs one download per artifact per pull request — ten
+      # wheels plus that sdist pass, against the one this step runs — and the
+      # arrival this branch exists to catch is wholesale, which one download
+      # already catches. A future change that wants the stronger guarantee should
+      # loop; nothing about the current step prevents it.
       - name: Verify the zizmor pin's hashes match its version
         run: |
           pip download --no-deps --require-hashes \
