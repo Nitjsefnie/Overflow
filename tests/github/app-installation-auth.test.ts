@@ -1,4 +1,4 @@
-import { createVerify, generateKeyPairSync } from "node:crypto";
+import { createSign, createVerify, generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   appInstallationTokenResolverFromEnv,
@@ -166,6 +166,42 @@ describe("readGitHubAppAuthConfig", () => {
     // contents into the visible error surface.
     expect(cause).toBeInstanceOf(Error);
     expect(String(cause)).not.toContain("not a pem key");
+  });
+
+  it("throws when the key file contains a parseable non-RSA private key", () => {
+    const ed25519Pem = generateKeyPairSync("ed25519")
+      .privateKey.export({ type: "pkcs8", format: "pem" })
+      .toString();
+    let thrown: unknown = null;
+    try {
+      readGitHubAppAuthConfig(
+        { GITHUB_APP_ID: appId, GITHUB_APP_PRIVATE_KEY_PATH: "/keys/ed25519.pem" },
+        () => ed25519Pem,
+      );
+    } catch (error: unknown) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain("GITHUB_APP_PRIVATE_KEY_PATH");
+    expect(message).not.toContain("BEGIN PRIVATE KEY");
+  });
+
+  it("accepts an rsa-pss private key, which the RS256 mint can sign with", () => {
+    const pssPem = generateKeyPairSync("rsa-pss", { modulusLength: 2048 })
+      .privateKey.export({ type: "pkcs8", format: "pem" })
+      .toString();
+
+    const config = readGitHubAppAuthConfig(
+      { GITHUB_APP_ID: appId, GITHUB_APP_PRIVATE_KEY_PATH: "/keys/app-pss.pem" },
+      () => pssPem,
+    );
+
+    expect(config).toEqual({ appId, privateKey: pssPem });
+    // The reason rsa-pss is admitted: the mint's RS256 signing input accepts
+    // it, so admitting the type never defers the failure to the first mint.
+    createSign("RSA-SHA256").update("probe").sign(pssPem);
   });
 });
 
