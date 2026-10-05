@@ -317,6 +317,62 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     expect(await pipInvocations(result.log)).toEqual([]);
   });
 
+  it("never prints a grammar-refused line's content, marker carried or not", async () => {
+    // The refused line itself carries the MARKER, so a pre-parse that echoes
+    // the offending line (the M3 mutant) fails this on the marker's presence,
+    // not on a wording guess.
+    const fx = await fixture({
+      kind: "file",
+      content: `zizmor==1.30.1 --hash=sha256:${"a".repeat(64)} ${MARKER}\n`,
+    });
+    const result = await runStep(fx);
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain("::error::");
+    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    expect(await pipInvocations(result.log)).toEqual([]);
+  });
+
+  it("refuses a tree with no manifest at all", async () => {
+    // A pull request that simply deletes the pin gets its own case: zero
+    // entries is the ls-tree refusal, not a pip run against a stale copy.
+    const fx = await fixture({ kind: "absent" });
+    const result = await runStep(fx);
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain("::error::");
+    expect(await pipInvocations(result.log)).toEqual([]);
+  });
+
+  it("refuses a NUL byte anywhere in the file, comment line included", async () => {
+    // A NUL byte is invalid UTF-8 CONTENT per the design, wherever it sits:
+    // the byte decodes to U+0000, so the decoder alone accepts it and a
+    // comment line would carry it past the grammar unrefused.
+    const fx = await fixture({
+      kind: "file",
+      content: `# a comment with a \0 in the middle\nzizmor==1.30.1 --hash=sha256:${"a".repeat(64)}\n`,
+    });
+    const result = await runStep(fx);
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain("::error::");
+    expect(await pipInvocations(result.log)).toEqual([]);
+  });
+
+  it.each([
+    ["a CRLF line", `zizmor==1.30.1 --hash=sha256:${"a".repeat(64)}\r\n`],
+    ["a line with trailing whitespace", `zizmor==1.30.1 --hash=sha256:${"a".repeat(64)} \n`],
+    ["a pin with zero hashes", "zizmor==1.30.1\n"],
+    [
+      "a pin with 33 hashes",
+      `zizmor==1.30.1 ${Array.from({ length: 33 }, (_, i) => `--hash=sha256:${(i % 16).toString(16)}${"a".repeat(63)}`).join(" ")}\n`,
+    ],
+    ["a version with a unicode digit", `zizmor==1.３0.1 --hash=sha256:${"a".repeat(64)}\n`],
+  ])("refuses %s by the grammar", async (_label, content) => {
+    const fx = await fixture({ kind: "file", content });
+    const result = await runStep(fx);
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain("::error::");
+    expect(await pipInvocations(result.log)).toEqual([]);
+  });
+
   it("passes 1007's exact bad manifest to pip, and fails the step when pip refuses it", async () => {
     const fx = await fixture({ kind: "file", content: BAD_MANIFEST_1007 });
     const result = await runStep(fx, { stubExit: "1" });

@@ -1392,21 +1392,77 @@ const PRT_SCENARIOS = SCENARIOS.filter((scenario) => scenario.event === "pull_re
  */
 const ZIZMOR_PIN_STEP_NAME = "Verify the zizmor pin's hashes match its version";
 
-/** The sanitized copy's directory, created fresh under RUNNER_TEMP by the step. */
-const ZIZMOR_PIN_SANITIZED_ASSIGNMENT = 'sanitized="${RUNNER_TEMP}/zizmor-manifest-check"';
+/** The step's FULL run text, pinned line for line: the exception is sanctioned only when the workflow step is byte-identical to this, so ANY future addition - a flag, a variable, a probe - de-sanctions the step and re-arms the reachability assertions. Extracted verbatim from the step as shipped (never hand-copied). */
+const ZIZMOR_PIN_RUN_TEXT = [
+  "manifest=.github/requirements-zizmor.txt",
+  "entries=$(git ls-tree \"${MERGE_SHA:?}\" -- \"${manifest}\")",
+  "count=0",
+  "entry_mode=\"\"",
+  "entry_type=\"\"",
+  "entry_blob=\"\"",
+  "while IFS=$'\\t' read -r meta _path; do",
+  "  count=$((count + 1))",
+  "  entry_mode=${meta%% *}",
+  "  rest=${meta#* }",
+  "  entry_type=${rest%% *}",
+  "  entry_blob=${rest#* }",
+  "done <<< \"${entries}\"",
+  "if [ \"${count}\" -ne 1 ] || [ \"${entry_mode}\" != \"100644\" ] || [ \"${entry_type}\" != \"blob\" ]; then",
+  "  echo \"::error::${manifest} must be exactly one mode-100644 blob entry in the merge tree; found ${count} matching entries${entry_mode:+ with mode ${entry_mode}}${entry_type:+ of type ${entry_type}}. The pin is read from git objects, never from the filesystem (issue 1099), so a symlink leaf, a symlinked .github parent, a wrong mode and a non-blob type are all refused.\"",
+  "  exit 1",
+  "fi",
+  "pre_parse=$(cat <<'PY'",
+  "import os",
+  "import re",
+  "import sys",
+  "",
+  "data = sys.stdin.buffer.read()",
+  "if 65536 < len(data):",
+  "    sys.stderr.write(\"::error::the zizmor manifest is larger than the 65536-byte cap; refusing\\n\")",
+  "    sys.exit(1)",
+  "if b\"\\x00\" in data:",
+  "    sys.stderr.write(\"::error::the zizmor manifest carries a NUL byte, which is invalid content wherever it sits; refusing\\n\")",
+  "    sys.exit(1)",
+  "try:",
+  "    text = data.decode(\"utf-8\")",
+  "except UnicodeDecodeError:",
+  "    sys.stderr.write(\"::error::the zizmor manifest is not valid UTF-8; refusing\\n\")",
+  "    sys.exit(1)",
+  "pin = re.compile(r\"zizmor==[A-Za-z0-9][A-Za-z0-9._+-]*( --hash=sha256:[0-9a-f]{64}){1,32}\")",
+  "accepted = None",
+  "for number, line in enumerate(text.split(\"\\n\"), start=1):",
+  "    if line == \"\" or line.startswith(\"#\"):",
+  "        continue",
+  "    if accepted is not None:",
+  "        sys.stderr.write(f\"::error::line {number}: the manifest carries a second requirement line; exactly one is allowed\\n\")",
+  "        sys.exit(1)",
+  "    if pin.fullmatch(line) is None:",
+  "        sys.stderr.write(f\"::error::line {number}: refused by the pin grammar — the one accepted shape is zizmor==VERSION followed by one to 32 --hash=sha256:HEX64 values; includes, index options, URL lines, environment markers, CRLF and stray whitespace are refused\\n\")",
+  "        sys.exit(1)",
+  "    accepted = line",
+  "if accepted is None:",
+  "    sys.stderr.write(\"::error::the manifest carries no requirement line; refusing\\n\")",
+  "    sys.exit(1)",
+  "with open(os.environ[\"ZIZMOR_SANITIZED_REQUIREMENTS\"], \"w\", encoding=\"utf-8\", newline=\"\\n\") as handle:",
+  "    handle.write(accepted)",
+  "    handle.write(\"\\n\")",
+  "PY",
+  ")",
+  "sanitized=\"${RUNNER_TEMP}/zizmor-manifest-check\"",
+  "if [ -e \"${sanitized}\" ] || [ -L \"${sanitized}\" ]; then",
+  "  echo \"::error::${sanitized} already exists; refusing to write the sanitized pin into a directory this run did not create\"",
+  "  exit 1",
+  "fi",
+  "mkdir -- \"${sanitized}\" \"${sanitized}/download\"",
+  "git cat-file blob \"${entry_blob}\" | ZIZMOR_SANITIZED_REQUIREMENTS=\"${sanitized}/requirements.txt\" python3 -c \"${pre_parse}\"",
+  "pip download --no-deps --only-binary=:all: --require-hashes --index-url https://pypi.org/simple --no-input --disable-pip-version-check --retries 2 --timeout 60 -d \"${sanitized}/download\" -r \"${sanitized}/requirements.txt\"",
+  "",
+].join("\n");
 
-/** The exact pip command the step must run, onto the sanitized copy and no other target. */
-const ZIZMOR_PIN_PIP_LINE =
-  "pip download --no-deps --only-binary=:all: --require-hashes " +
-  "--index-url https://pypi.org/simple --no-input --disable-pip-version-check " +
-  '--retries 2 --timeout 60 -d "${sanitized}/download" -r "${sanitized}/requirements.txt"';
-
-/** Whether `step` carries the sanctioned shape exactly: the named step, the sanitized-copy assignment, and the pinned pip line. */
+/** Sanctioned only when the named step is byte-identical to the pinned run text. */
 function isSanctionedZizmorPinStep(step: WorkflowStep): boolean {
-  const run = step.run ?? "";
-  return run.includes(ZIZMOR_PIN_SANITIZED_ASSIGNMENT) && run.includes(ZIZMOR_PIN_PIP_LINE);
+  return (step.run ?? "") === ZIZMOR_PIN_RUN_TEXT;
 }
-
 /** A run block that invokes pip at all — the one-step allowance is judged over this set. */
 function runsPip(step: WorkflowStep): boolean {
   return /(?<![\w./-])pip(?![\w-])/.test(step.run ?? "");
@@ -1605,8 +1661,8 @@ for (const scenario of PRT_SCENARIOS) {
       ).toEqual([ZIZMOR_PIN_STEP_NAME]);
       expect(
         isSanctionedZizmorPinStep(pipSteps[0]!),
-        `the sanctioned step's run text drifted from the pinned shape — it must carry ` +
-          `${ZIZMOR_PIN_SANITIZED_ASSIGNMENT} and the exact pip line ${ZIZMOR_PIN_PIP_LINE}`,
+        `the sanctioned step's run text drifted from the pinned shape — it must be byte-identical ` +
+          `to ZIZMOR_PIN_RUN_TEXT in this file`,
       ).toBe(true);
     });
 

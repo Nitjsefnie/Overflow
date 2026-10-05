@@ -405,6 +405,9 @@ jobs:
           if 65536 < len(data):
               sys.stderr.write("::error::the zizmor manifest is larger than the 65536-byte cap; refusing\n")
               sys.exit(1)
+          if b"\x00" in data:
+              sys.stderr.write("::error::the zizmor manifest carries a NUL byte, which is invalid content wherever it sits; refusing\n")
+              sys.exit(1)
           try:
               text = data.decode("utf-8")
           except UnicodeDecodeError:
