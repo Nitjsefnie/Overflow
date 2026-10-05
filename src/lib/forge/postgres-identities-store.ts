@@ -112,12 +112,24 @@ export class PostgresForgeIdentityStore implements ForgeIdentityStore {
     forgeLogin: string;
     encryptedToken: string;
   }): Promise<ForgeIdentityView | null> {
+    // The write is gated on a live account inside the statement itself: the
+    // `eligible_account` CTE takes the same users row lock `deleteAccount`
+    // holds, so the deleted_at re-check reads whichever transaction committed
+    // second — a link cannot slip past the deletion, and the deletion cannot
+    // scrub a link that has not happened yet. With the CTE empty (deleted or
+    // absent account) the insert has no source rows, so neither the insert
+    // leg nor the conflict-update leg writes anything and the caller's
+    // existing null → FORBIDDEN mapping answers the refusal.
     const [row] = await this.sql<IdentityRow[]>`
-      insert into user_forge_identities
-        (user_id, provider, instance_url, forge_user_id, forge_login, encrypted_token, verified_at, token_failed_at)
-      values
-        (${input.userId}, ${input.provider}, ${input.instanceUrl}, ${input.forgeUserId},
-         ${input.forgeLogin}, ${Buffer.from(input.encryptedToken, "utf8")}, now(), null)
+      with eligible_account as (
+        select id from users
+        where id = ${input.userId} and deleted_at is null
+        for update
+      )
+      insert into user_forge_identities (user_id, provider, instance_url, forge_user_id, forge_login, encrypted_token, verified_at, token_failed_at)
+      select ${input.userId}, ${input.provider}, ${input.instanceUrl}, ${input.forgeUserId},
+             ${input.forgeLogin}, ${Buffer.from(input.encryptedToken, "utf8")}, now(), null
+      from eligible_account
       on conflict (provider, instance_url, forge_user_id) do update
         set forge_login = excluded.forge_login,
             encrypted_token = excluded.encrypted_token,
