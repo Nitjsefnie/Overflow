@@ -36,10 +36,11 @@ export async function registerNodejs(): Promise<void> {
   // App is configured (issue 804), instead of the sponsor's OAuth token. The
   // resolver is built once at wiring time, never per fold: unconfigured —
   // either variable unset or empty — it is undefined and every fold reads the
-  // sponsor's OAuth token exactly as before; configured with an unreadable key
-  // file it throws here, failing the start before any fold (fail-closed, the
-  // GitLab credential precedent). Unconfigured reading as null from the
-  // factory, unwired reading as undefined on the options — both leave the
+  // sponsor's OAuth token exactly as before; configured with a key file that
+  // cannot be read or parsed it throws here, failing the start before any
+  // fold (fail-closed, the GitLab credential precedent). Unconfigured reading
+  // as null from the factory, unwired reading as undefined on the options —
+  // both leave the
   // option off, so `?? undefined` carries the factory's null across.
   const resolveAppInstallationToken =
     appInstallationTokenResolverFromEnv(process.env) ?? undefined;

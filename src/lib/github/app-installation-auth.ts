@@ -1,4 +1,4 @@
-import { createSign } from "node:crypto";
+import { createPrivateKey, createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
 
@@ -68,8 +68,8 @@ type GitHubAppAuthEnv = {
 /**
  * The App credentials from the environment, or null when unconfigured — the
  * OAuth-fallback posture. Either var unset or empty is unconfigured. A
- * configured but unreadable key file throws: fail-closed at wiring time, not
- * first-run time.
+ * configured key file that cannot be read or parsed throws: fail-closed at
+ * wiring time, not first-run time.
  */
 export function readGitHubAppAuthConfig(
   env: GitHubAppAuthEnv,
@@ -80,7 +80,18 @@ export function readGitHubAppAuthConfig(
   if (appId === undefined || appId.length === 0 || keyPath === undefined || keyPath.length === 0) {
     return null;
   }
-  return { appId, privateKey: readFile(keyPath) };
+  const pem = readFile(keyPath);
+  try {
+    createPrivateKey(pem);
+  } catch (cause) {
+    // The message carries the variable and the path, never the file's
+    // contents: a key file's text must not reach a log through this error.
+    throw new Error(
+      `GITHUB_APP_PRIVATE_KEY_PATH (${keyPath}) does not contain a parseable private key.`,
+      { cause },
+    );
+  }
+  return { appId, privateKey: pem };
 }
 
 /** One response of the two App JWT requests: an installation lookup or a mint. */
@@ -233,7 +244,7 @@ export function createAppInstallationTokenResolver(options: {
   }
 }
 
-/** Production glue: null when unconfigured; throws on an unreadable key file. */
+/** Production glue: null when unconfigured; throws on a key file that cannot be read or parsed. */
 export function appInstallationTokenResolverFromEnv(
   env: GitHubAppAuthEnv,
   readFile: (path: string) => string = (path) => readFileSync(path, "utf8"),
