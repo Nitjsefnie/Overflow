@@ -70,6 +70,69 @@ function stepRunning(command: string): Step {
   return matching[0]!;
 }
 
+/**
+ * Split a `run:` block into the shell commands it would execute.
+ *
+ * The operator set is closed rather than denylisted, which is the whole point:
+ * in POSIX sh a command list is separated only by `;`, `&`, `&&`, `||`, `|`,
+ * `|&`, and newline. Every one of those starts a second command, so a block that
+ * yields a single segment cannot have had its exit status diverted by any of
+ * them. A `\`+newline is a line CONTINUATION, not a separator, so it is joined
+ * first — that is what keeps the committed three-line block one command rather
+ * than three.
+ *
+ * Deliberately not a shell parser: it does not expand variables, honour
+ * subshells, or resolve quoting rules beyond not splitting inside quotes and not
+ * mistaking a redirection's `&` for a separator. It answers one question — is
+ * there anything here but the one command — and a block that needed more than
+ * that to pass would not be one this repository should be running untrusted.
+ */
+function shellCommands(block: string): string[] {
+  const joined = block.replace(/\\\r?\n/g, " ");
+  const segments: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < joined.length; index += 1) {
+    const char = joined[index]!;
+    if (quote) {
+      if (char === quote) quote = null;
+      current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    // `2>&1` and `&> log`: the `&` belongs to a REDIRECTION, not to a command
+    // separator. Without this a plain `2>&1` splits the block in two and the
+    // guard reds on a legitimate, harmless line — the same false red as the
+    // over-narrow denylist it replaced, which rejected every `&` including this
+    // one.
+    if (char === "&" && (joined[index + 1] === ">" || joined[index - 1] === ">")) {
+      current += char;
+      continue;
+    }
+    // `&&`, `||` and `|&` are two characters but one operator; consume the pair
+    // so the second half is not read as a fresh command.
+    const pair = joined.slice(index, index + 2);
+    if (pair === "&&" || pair === "||" || pair === "|&") {
+      segments.push(current);
+      current = "";
+      index += 1;
+      continue;
+    }
+    if (char === ";" || char === "|" || char === "&" || char === "\n") {
+      segments.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  segments.push(current);
+  return segments.map((segment) => segment.trim()).filter((segment) => segment !== "");
+}
+
 describe("the pull request suite workflow", () => {
   it("is named `pr suite`, the name the coverage comment keys on", async () => {
     expect(workflow.name).toBe("pr suite");
@@ -262,38 +325,45 @@ describe("the pull request suite workflow", () => {
     // status-masking spellings is a guess about a language; "nothing but the
     // command" is a property of the command.
     //
-    // `set +e` is the one that made this assertion necessary rather than
-    // merely tidy: Actions runs an unset `shell:` as `bash --noprofile --norc
-    // -eo pipefail {0}`, and `set +e` switches off the `-e` the runner
-    // supplies, so the failing download no longer aborts the block and the
-    // last command's status becomes the step's. Measured on this box:
-    // `set +e; false; echo done` exits 0 under the default shell, and
-    // `false; exit 0` exits 0 under a custom shell string. Both were live, and
-    // both were green against the previous denylist.
-    const runLines = step.run!.trim().split("\n");
+    // `set +e` is the one that made any of this necessary rather than merely
+    // tidy: Actions runs an unset `shell:` as `bash --noprofile --norc -eo
+    // pipefail {0}`, and `set +e` switches off the `-e` the runner supplies, so
+    // the failing download no longer aborts the block and the last command's
+    // status becomes the step's. Measured here: `set +e; false; echo done` exits
+    // 0 under the default shell, and `false; exit 0` exits 0 under a custom
+    // shell string. Both were live, and both were green against a denylist.
+    //
+    // The assertion is STRUCTURAL: the block is split on shell control
+    // operators and must be exactly one command. Two earlier attempts were
+    // denylists over spellings — `/\|\||&/`, then a per-line shape check — and
+    // each was defeated by an operator it had not enumerated, `;` among them.
+    // The set here is closed instead. In POSIX sh a command sequence is joined
+    // only by `;`, `&`, `&&`, `||`, `|`, `|&`, and newline; there is nothing
+    // else, so a block whose segments number one cannot have had its exit
+    // status diverted by any of them — including ones nobody thought to list,
+    // and including `2>&1`, which no longer needs a sanctioned escape because
+    // it is not an operator that starts a second command. The flag lines are
+    // line-continuations of that one command, so they are joined before
+    // splitting rather than counted as commands of their own.
+    //
+    // What this does NOT settle, and is not claimed to: the shell the block runs
+    // under. That is the other half of the composition, and it is a KEY
+    // (`shell:`, or a `defaults.run.shell` at job or workflow level) rather
+    // than anything inside the block — which is why `shell` is not allow-listed
+    // on the step and why the job case below bans `defaults`. Two individually
+    // defensible halves, each green on its own, composed into a live
+    // suppression; the guard now constrains both or neither is claimed.
+    const segments = shellCommands(step.run!);
     expect(
-      runLines[0],
-      "the run block must begin with the pip download itself, so no line can be " +
-        "prepended ahead of it (a leading `set +e` disables the -e the runner supplies)",
-    ).toMatch(/^\s*pip download\b/);
+      segments,
+      "the run block must be exactly one shell command — the pip download with its " +
+        "continuation flags. A second command (a leading `set +e`, a trailing `exit 0`, a " +
+        "`| tee`) can report success whatever pip returned.",
+    ).toHaveLength(1);
     expect(
-      runLines.filter((line) => line.trim() !== "" && !/^\s*(--|-\w|pip download)/.test(line)),
-      "the run block must contain the pip download and its continuation flags and nothing " +
-        "else; a trailing `exit 0` reports success whatever pip returned",
-    ).toEqual([]);
-    // The command's own exit status is the verdict, so it may not be masked
-    // inside the shell block. `||` has no legitimate use in a single pip
-    // invocation: `|| true` and `|| :` both discard pip's non-zero, and a
-    // trailing `&` detaches it from the step entirely. Asserted as a property
-    // of the whole block rather than of its last line, so a fallback added
-    // earlier in a multi-line `run:` trips it too. Conservative on purpose: a
-    // legitimate future `2>&1` would trip it with no sanctioned escape, which
-    // is the right way round for a guard on a security check.
-    expect(
-      step.run,
-      "the pip download's exit status must reach the step; a `||` fallback or a trailing " +
-        "`&` would make a hash mismatch report success",
-    ).not.toMatch(/\|\||&/);
+      segments[0],
+      "the one command must be the pip download itself",
+    ).toMatch(/^pip download\b/);
     // After the checkout, so it reads the request's tree rather than an empty
     // workspace: this is the whole property actionlint.yml lacks.
     const checkout = suite.steps.findIndex((s) => (s.uses ?? "").startsWith("actions/checkout@"));
@@ -312,7 +382,42 @@ describe("the pull request suite workflow", () => {
   // and a 419-test sweep of the CI-workflow suites saw neither. The premise
   // this file's other case asserts is about the WORKFLOW — "the hash binding
   // must hold on every pull request" — so it has to hold of the job too.
+  //
+  // Carried to the job as the SAME whole-key-set allow-list the step case uses,
+  // rather than as a third and fourth named key. That generalization is the
+  // point: this repository already holds a top-level allow-list in
+  // `tests/ci/concurrency.test.ts`, which demonstrably reds on a WORKFLOW-level
+  // `defaults:` — so the one spelling nobody read was the JOB-level one, exactly
+  // the asymmetry that let `defaults.run.shell` + a one-line `run: …; exit 0`
+  // through the guard file, a 420-test sweep, actionlint and zizmor while being a
+  // live suppression. An allow-list at the outer scope is the most dangerous
+  // evidence of coverage at the inner one: it shows the key is policed SOMEWHERE,
+  // and the somewhere is rarely where the next reader looks.
+  //
+  // `needs` is banned for the same reason and is not hypothetical: a
+  // `needs:` naming a job that does not exist is a third job-scope gating key,
+  // and it survives the sweep. Its liveness needs a real Actions run to establish,
+  // which this file does not have — so it is closed by assertion rather than
+  // left as an open question.
   it("carries no job-level suppression on the suite job", () => {
+    const jobInert = new Set([
+      "name",
+      "runs-on",
+      "timeout-minutes",
+      "env",
+      "services",
+      "steps",
+    ]);
+    expect(
+      Object.keys(suite).filter((key) => !jobInert.has(key)),
+      "the suite job carries a key that can suppress or skip the whole job — a " +
+        "`defaults.run.shell` reinterprets how every step's run block executes, a `needs` " +
+        "conditions the job at all, `if`/`continue-on-error` skip or excuse it. If the key " +
+        "is inert, allow-list it here with its reason; if it is not, the hash binding no " +
+        "longer gates anything.",
+    ).toEqual([]);
+    // Named, as defence in depth: the allow-list stops a key being ADDED, and
+    // these stop the two most likely suppressions being allow-listed away later.
     expect(
       (suite as { "continue-on-error"?: unknown })["continue-on-error"],
       "continue-on-error on the suite job makes a failed suite green, so a hash mismatch " +
