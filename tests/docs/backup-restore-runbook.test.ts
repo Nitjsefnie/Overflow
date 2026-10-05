@@ -274,8 +274,12 @@ describe("backup-restore runbook", () => {
 
     it("takes the osc token from the canonical file, not from backup.env", () => {
       const body = sectionBody("## (i) The encrypted off-host copy");
-      const setup = body.slice(body.indexOf("**Operator setup.**"));
-      expect(setup, `section (i) in ${document} carries no operator-setup marker`).not.toBe("");
+      // The index is captured and asserted before the slice: slice(-1) on a
+      // missing marker yields the body's last character, so a nonempty
+      // assertion on the slice passes vacuously and the guard cannot fail.
+      const marker = body.indexOf("**Operator setup.**");
+      expect(marker, `section (i) in ${document} carries no operator-setup marker`).not.toBe(-1);
+      const setup = body.slice(marker);
 
       expect(
         setup,
