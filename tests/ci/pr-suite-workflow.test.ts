@@ -71,6 +71,29 @@ function stepRunning(command: string): Step {
 }
 
 /**
+ * Join a `\`+newline line CONTINUATION, keeping the literal backslashes of an
+ * even run.
+ *
+ * POSIX reads a backslash run before a newline as a continuation only when its
+ * length is ODD: the last backslash escapes the newline, and an even run leaves
+ * an escaped backslash with a REAL newline separator still in play. Matching the
+ * last backslash of the run cannot see that difference — `/\\\r?\n/g` happily
+ * joins `\\`+newline, so a block the shell runs as two commands parses as one.
+ * Counting the run is the whole of the fix; what is left of an odd run (its even
+ * prefix) is what the shell would carry as a literal backslash.
+ */
+function joinContinuations(block: string): string {
+  return block.replace(/\\+\r?\n/g, (run) => {
+    const backslashes = run.replace(/\r?\n$/, "");
+    // An odd run is pairs (one literal backslash each) plus the one that eats
+    // the newline; those pairs are what the shell carries into the argument.
+    return backslashes.length % 2 === 1
+      ? `${"\\".repeat((backslashes.length - 1) / 2)} `
+      : run;
+  });
+}
+
+/**
  * Split a `run:` block into the shell commands it would execute.
  *
  * The operator set is closed rather than denylisted, which is the whole point:
@@ -78,8 +101,8 @@ function stepRunning(command: string): Step {
  * `|&`, and newline. Every one of those starts a second command, so a block that
  * yields a single segment cannot have had its exit status diverted by any of
  * them. A `\`+newline is a line CONTINUATION, not a separator, so it is joined
- * first — that is what keeps the committed three-line block one command rather
- * than three.
+ * first (by `joinContinuations`, which is where the parity lives) — that is what
+ * keeps the committed three-line block one command rather than three.
  *
  * Deliberately not a shell parser: it does not expand variables, honour
  * subshells, or resolve quoting rules beyond not splitting inside quotes and not
@@ -88,7 +111,7 @@ function stepRunning(command: string): Step {
  * that to pass would not be one this repository should be running untrusted.
  */
 function shellCommands(block: string): string[] {
-  const joined = block.replace(/\\\r?\n/g, " ");
+  const joined = joinContinuations(block);
   const segments: string[] = [];
   let current = "";
   let quote: '"' | "'" | null = null;
@@ -132,6 +155,121 @@ function shellCommands(block: string): string[] {
   segments.push(current);
   return segments.map((segment) => segment.trim()).filter((segment) => segment !== "");
 }
+
+/**
+ * Split one command into the argument words the shell would pass to it.
+ *
+ * Quoting and backslash escapes are honoured and then removed, because the
+ * assertion this feeds compares the words a command IS against the words it is
+ * supposed to be — so `--dest "x"` and `--dest x` are the same invocation, and
+ * `$(rm -rf .github)` is not a word at all but three. Not a shell parser: no
+ * expansion, so `${RUNNER_TEMP}` is carried as written, which is the correct
+ * granularity here — the assertion is about the command's SHAPE on the page, not
+ * about what the environment turns it into.
+ */
+function shellWords(command: string): string[] {
+  const words: string[] = [];
+  let word = "";
+  let started = false;
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index]!;
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+        continue;
+      }
+      if (quote === '"' && char === "\\") {
+        index += 1;
+        word += command[index] ?? "";
+        started = true;
+        continue;
+      }
+      word += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      started = true;
+      continue;
+    }
+    if (char === "\\") {
+      index += 1;
+      word += command[index] ?? "";
+      started = true;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (started) {
+        words.push(word);
+        word = "";
+        started = false;
+      }
+      continue;
+    }
+    word += char;
+    started = true;
+  }
+  if (started) words.push(word);
+  return words;
+}
+
+describe("the shell parser the hash-binding case reads", () => {
+  /**
+   * A backslash run of `slashes` before a newline, then `tail` on its own line.
+   * Built by repetition because the whole finding is about the run's PARITY, and
+   * a literal spelled by hand is exactly where that parity goes wrong twice.
+   */
+  const continued = (slashes: number, tail: string): string =>
+    `pip download --no-deps --require-hashes${"\\".repeat(slashes)}\n${tail}`;
+
+  // [block, how many commands the shell runs it as]
+  const OPERATOR_TABLE: ReadonlyArray<readonly [string, number]> = [
+    // Continuations. Odd runs join, even runs are an escaped backslash plus a
+    // REAL separator — the second half of this pair is the finding.
+    [continued(1, "  --no-deps"), 1],
+    [continued(2, "exit 0"), 2],
+    [continued(3, "  --no-deps"), 1],
+    [continued(4, "exit 0"), 2],
+    ["pip download \\\r\n  --no-deps", 1],
+    // The separators. Every one of these starts a second command, which is why
+    // "exactly one segment" is a property rather than a denylist.
+    ["pip download; exit 0", 2],
+    ["pip download && exit 0", 2],
+    ["pip download || exit 0", 2],
+    ["pip download | tee log", 2],
+    ["pip download |& tee log", 2],
+    ["pip download &\nexit 0", 2],
+    ["pip download\nexit 0", 2],
+    ["set +e\npip download", 2],
+    // Not separators: a redirection's `&`, and anything inside quotes.
+    ["pip download 2>&1", 1],
+    ["pip download &> log", 1],
+    ['pip download --dest "a; b"', 1],
+    ['pip download --dest "a b" --no-deps', 1],
+    ["pip\\ download --no-deps", 1],
+  ];
+
+  for (const [block, expected] of OPERATOR_TABLE) {
+    it(`reads ${JSON.stringify(block)} as ${expected} command${expected === 1 ? "" : "s"}`, () => {
+      expect(shellCommands(block)).toHaveLength(expected);
+    });
+  }
+
+  // An odd run of three is `\` (a literal backslash the shell carries into the
+  // argument) plus a continuation, and the join must preserve the first half —
+  // replacing the whole run with a space would hide a stray `\` argument. The
+  // tail carries no indent here so the expected segment has one space in it.
+  it("carries the literal backslash of an odd run longer than one", () => {
+    expect(shellCommands(continued(3, "--no-deps"))).toEqual([
+      "pip download --no-deps --require-hashes\\ --no-deps",
+    ]);
+  });
+
+  it("reads the committed block as the one command it is", () => {
+    expect(shellCommands(stepRunning("--require-hashes").run!)).toHaveLength(1);
+  });
+});
 
 describe("the pull request suite workflow", () => {
   it("is named `pr suite`, the name the coverage comment keys on", async () => {
@@ -214,6 +352,40 @@ describe("the pull request suite workflow", () => {
       npm_config_registry: "https://registry.npmjs.org/",
       DATABASE_URL: "postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci",
     }));
+    // The job's environment is an exact SET, for the same reason the step's keys
+    // and the job's keys are: an environment every step inherits is an input to
+    // every step, and one arbitrary key there was measured defeating the hash
+    // binding outright. `PIP_NO_INDEX=1` plus `PIP_FIND_LINKS=<a directory in
+    // the pull request>` moves pip off the index, and the run then passes against
+    // a manifest whose digest is that directory's wheel and nothing to do with
+    // PyPI's record — measured, rc=0, `Successfully downloaded zizmor`, with the
+    // manifest carrying a hash pip had never seen. `objectContaining` above is
+    // what let it through: it fixes the values that must be present and says
+    // nothing about the ones that may be.
+    //
+    // The check's whole value is that the hashes come from OUTSIDE the pull
+    // request. An environment the pull request can steer is another way to put
+    // them back inside it, and this is the third time on this branch that a
+    // property held at one scope was not read at the next one out — the shell at
+    // job scope (F10), `defaults` at job scope, and now `env` at job scope.
+    expect(
+      Object.keys(suite.env ?? {}).sort(),
+      "the suite job's environment is an input to every step, so its key set is pinned " +
+        "exactly: a pip-resolving key (`PIP_FIND_LINKS`, `PIP_NO_INDEX`, `PIP_INDEX_URL`, " +
+        "`PIP_CONFIG_FILE`) there lets the pull request supply the artifact the hashes are " +
+        "checked against. Add a key here deliberately, with its reason.",
+    ).toEqual([
+      "APP_URL",
+      "AUTH_GITHUB_ID",
+      "AUTH_GITHUB_SECRET",
+      "AUTH_SECRET",
+      "COREPACK_ENABLE_PROJECT_SPEC",
+      "DATABASE_URL",
+      "GITHUB_WEBHOOK_URL",
+      "MODERATOR_GITHUB_USER_IDS",
+      "TOKEN_ENCRYPTION_KEY",
+      "npm_config_registry",
+    ]);
   });
 
   it("measures coverage unless its own detection says docs-only, and plain-tests otherwise", () => {
@@ -344,7 +516,14 @@ describe("the pull request suite workflow", () => {
     // and including `2>&1`, which no longer needs a sanctioned escape because
     // it is not an operator that starts a second command. The flag lines are
     // line-continuations of that one command, so they are joined before
-    // splitting rather than counted as commands of their own.
+    // splitting rather than counted as commands of their own — and only an ODD
+    // backslash run is a continuation at all, which is why `joinContinuations`
+    // counts the run rather than matching its last backslash. An even run is an
+    // escaped backslash with a REAL newline after it, and joining that calls a
+    // two-command block one command: measured, admitted by the round-3 guard, and
+    // not live only because `pip download` rejects the stray `\` argument it
+    // leaves behind. A guarantee that rests on another program's argument parser
+    // is not this assertion's, so the parity is fixed here.
     //
     // What this does NOT settle, and is not claimed to: the shell the block runs
     // under. That is the other half of the composition, and it is a KEY
@@ -364,6 +543,50 @@ describe("the pull request suite workflow", () => {
       segments[0],
       "the one command must be the pip download itself",
     ).toMatch(/^pip download\b/);
+    // ...and its CONTENT, structurally, by the same standard. "One command" is
+    // a claim about how many commands run; it says nothing about WHICH, and a
+    // structural assertion replaces a lexical one only on the axes the
+    // structural one also constrains. This one had a lexical predecessor that
+    // the operator parse did not subsume — every continuation line had to start
+    // `--`, `-\w` or `pip download` — and round 3 dropped it without noticing,
+    // so for one commit `pip download … $(echo -r /dev/null)` passed this case.
+    //
+    // So this asserts what the command IS rather than enumerating what it must
+    // not contain: the argument words, in order, by equality against the one
+    // invocation this step exists to run. A second `-r`, a `--hash=` that would
+    // forgive a stale manifest outright, a `-c`, a `--version`, a `$(…)` — none
+    // is named here and none survives, because a word that is not in the list
+    // fails the comparison whether or not anyone thought of it. That is the
+    // operator set's argument applied to the argument list: enumerate the
+    // ATTACKS and the list is always short one; enumerate the COMMAND and it is
+    // finite on the first try.
+    //
+    // Strictly stronger than the line rule it replaces, which accepted ANY
+    // `--anything` on any continuation line — including a second `--require-
+    // hashes` argument and any `--hash=` — so restoring that rule as well would
+    // be restoring a weaker duplicate. Nothing it admitted does this refuse.
+    //
+    // The words are compared with quoting and escaping already resolved
+    // (`shellWords`), so `--dest x` and `--dest "x"` are the same invocation
+    // and do not each need their own assertion. `${RUNNER_TEMP}` is compared as
+    // written: the assertion is about the command on the page, and expanding it
+    // here would assert against a runner's environment rather than the workflow.
+    expect(
+      shellWords(segments[0]!),
+      "the one command must be exactly the pip download this step exists to run — " +
+        "no extra argument of any kind, on any line. `--hash=` would forgive a stale " +
+        "manifest outright, a second `-r` or a `-c` re-points what is checked, and a " +
+        "`$(…)` runs before pip does. Add an argument only here, with its reason.",
+    ).toEqual([
+      "pip",
+      "download",
+      "--no-deps",
+      "--require-hashes",
+      "--dest",
+      "${RUNNER_TEMP}/zizmor-hash-check",
+      "-r",
+      ".github/requirements-zizmor.txt",
+    ]);
     // After the checkout, so it reads the request's tree rather than an empty
     // workspace: this is the whole property actionlint.yml lacks.
     const checkout = suite.steps.findIndex((s) => (s.uses ?? "").startsWith("actions/checkout@"));
