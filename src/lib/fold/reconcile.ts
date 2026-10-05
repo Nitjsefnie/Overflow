@@ -54,6 +54,10 @@ export type ReconciliationRepository = RepositoryFoldSnapshot["repository"];
 
 export type RepositoryUnavailableReason = "NOT_FOUND" | "NOT_PUBLIC" | "IDENTITY_MISMATCH";
 
+// The GitHub App installation token authenticates exactly these reads, with
+// the permission set named by `installationTokenPermissions`
+// (src/lib/github/app-installation-auth.ts): when a GitHub call joins this
+// interface, that set must grow with it, or the new call 403s at runtime.
 export type ReconciliationGateway = {
   getRepositoryById(githubRepositoryId: number): Promise<GitHubRepository | null>;
   listIssues(repository: GitHubRepositoryReference, options?: GitHubIssueListOptions): Promise<GitHubIssue[]>;
