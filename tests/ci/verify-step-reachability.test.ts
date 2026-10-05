@@ -1379,6 +1379,39 @@ for (const scenario of SCENARIOS) {
 
 const PRT_SCENARIOS = SCENARIOS.filter((scenario) => scenario.event === "pull_request_target");
 
+/**
+ * Issue 1099: the ONE sanctioned package-manager invocation on this leg. The
+ * base-defined zizmor gate resolves the pull request's pin against PyPI — with
+ * the strict pre-parse standing between the pull request's bytes and pip, and
+ * with NO token mapped (PyPI is anonymous). Sanctioned by exact step name and
+ * by the exact pip argv shape: a dropped or reordered flag, a widened path, or
+ * the same shape on any other step fails the assertions below. The step's
+ * behavioural contract is executed end to end in
+ * tests/ci/verify-zizmor-step.test.ts; this file pins only that the exception
+ * cannot quietly widen.
+ */
+const ZIZMOR_PIN_STEP_NAME = "Verify the zizmor pin's hashes match its version";
+
+/** The sanitized copy's directory, created fresh under RUNNER_TEMP by the step. */
+const ZIZMOR_PIN_SANITIZED_ASSIGNMENT = 'sanitized="${RUNNER_TEMP}/zizmor-manifest-check"';
+
+/** The exact pip command the step must run, onto the sanitized copy and no other target. */
+const ZIZMOR_PIN_PIP_LINE =
+  "pip download --no-deps --only-binary=:all: --require-hashes " +
+  "--index-url https://pypi.org/simple --no-input --disable-pip-version-check " +
+  '--retries 2 --timeout 60 -d "${sanitized}/download" -r "${sanitized}/requirements.txt"';
+
+/** Whether `step` carries the sanctioned shape exactly: the named step, the sanitized-copy assignment, and the pinned pip line. */
+function isSanctionedZizmorPinStep(step: WorkflowStep): boolean {
+  const run = step.run ?? "";
+  return run.includes(ZIZMOR_PIN_SANITIZED_ASSIGNMENT) && run.includes(ZIZMOR_PIN_PIP_LINE);
+}
+
+/** A run block that invokes pip at all — the one-step allowance is judged over this set. */
+function runsPip(step: WorkflowStep): boolean {
+  return /(?<![\w./-])pip(?![\w-])/.test(step.run ?? "");
+}
+
 /** Commands that run a package manager, which would install or execute the
  *  pull request's dependencies, lifecycle scripts or package.json scripts. */
 const PACKAGE_MANAGER = /(?<![\w./-])(pnpm|npm|npx|yarn|corepack|bun|bunx)(?![\w.-])/;
@@ -1548,15 +1581,33 @@ for (const scenario of PRT_SCENARIOS) {
     const selected = () => selectSteps(stepsFor(scenario), contextFor(scenario));
 
     it("runs no package manager and executes only the base checkout's scripts", () => {
-      const offences = selected().flatMap((step) =>
-        untrustedExecutions(step.run ?? "").map((reason) => `${label(step)}: ${reason}`),
-      );
+      const offences = selected().flatMap((step) => {
+        // The one exception, by exact name AND exact argv: anything else, in
+        // any workflow, fails here exactly as before (see the structural pin
+        // directly below, which fails closed if the step's shape drifts).
+        if (step.name === ZIZMOR_PIN_STEP_NAME && isSanctionedZizmorPinStep(step)) return [];
+        return untrustedExecutions(step.run ?? "").map((reason) => `${label(step)}: ${reason}`);
+      });
       expect(
         offences,
         "a step reachable under pull_request_target executes with the base repository's token " +
           "and definition, so it may run only the base checkout's gate scripts over the pull " +
           "request's tree as data — the pull request's own code runs in pr-suite.yml",
       ).toEqual([]);
+    });
+
+    it("sanctions the zizmor pin gate as the ONLY pip step, and only with the pinned argv", () => {
+      const pipSteps = selected().filter(runsPip);
+      expect(
+        pipSteps.map(label),
+        "the issue-1099 zizmor gate is the one step on this leg allowed to invoke pip; a second " +
+          "package-manager step must fail here, sanctioned or not",
+      ).toEqual([ZIZMOR_PIN_STEP_NAME]);
+      expect(
+        isSanctionedZizmorPinStep(pipSteps[0]!),
+        `the sanctioned step's run text drifted from the pinned shape — it must carry ` +
+          `${ZIZMOR_PIN_SANITIZED_ASSIGNMENT} and the exact pip line ${ZIZMOR_PIN_PIP_LINE}`,
+      ).toBe(true);
     });
 
     it("uses only actions that execute nothing from the tree they touch", () => {

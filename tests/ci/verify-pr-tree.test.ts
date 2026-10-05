@@ -35,6 +35,23 @@ import { commitFiles, git, hasCommit, scratchGitEnv } from "../support/scratch-g
 
 type Step = { name?: string; id?: string; run?: string; env?: Record<string, string> };
 
+/**
+ * Issue 1099's zizmor gate is NOT executed by this suite: there is no stub pip
+ * here and this file must stay off the network. The step's contract — the
+ * git-objects read, the strict grammar, the sanitized copy, the pinned pip
+ * argv — is executed end to end in tests/ci/verify-zizmor-step.test.ts, which
+ * builds the merge commit and supplies the stub. Selecting the step here is a
+ * bug in this file, not a case to run.
+ */
+const ZIZMOR_PIN_STEP_NAME = "Verify the zizmor pin's hashes match its version";
+
+function assertNotZizmorPinStep(step: Step): void {
+  expect(
+    step.name,
+    "verify-pr-tree must not execute the zizmor pin step (issue 1099); it is executed, with a stub pip and its own fixtures, in tests/ci/verify-zizmor-step.test.ts",
+  ).not.toBe(ZIZMOR_PIN_STEP_NAME);
+}
+
 let steps: Step[] = [];
 let root = "";
 let counter = 0;
@@ -231,6 +248,7 @@ async function runStep(
   outputs: Record<string, string>,
   byStep: Record<string, Record<string, string>> = {},
 ): Promise<StepResult> {
+  assertNotZizmorPinStep(step);
   counter += 1;
   const script = join(root, `step-${counter}.sh`);
   const output = join(root, `output-${counter}`);
@@ -281,6 +299,7 @@ async function runStepOnOpenStdin(
   step: Step,
   fx: Fixture,
 ): Promise<{ status: number | null; stdout: string; stderr: string; blocked: boolean }> {
+  assertNotZizmorPinStep(step);
   counter += 1;
   const script = join(root, `open-stdin-${counter}.sh`);
   const output = join(root, `open-stdin-output-${counter}`);
