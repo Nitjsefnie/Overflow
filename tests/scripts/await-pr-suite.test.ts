@@ -405,6 +405,18 @@ describe("awaitPrSuite — API failures", () => {
     }
   });
 
+  it("refuses a listing whose total_count is absent or not a number, naming the field", async () => {
+    for (const body of ['{"workflow_runs":[]}', '{"total_count":"0","workflow_runs":[]}']) {
+      const h = harness([{ status: 200, body }]);
+      const outcome = await awaitPrSuite(h.deps);
+      expect(outcome.exitCode).toBe(1);
+      expect(outcome.runId).toBeUndefined();
+      const errors = errorLines(outcome.lines);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain("the workflow-run listing returned no total_count");
+    }
+  });
+
   it("fails closed when total_count says the listing holds more runs than it returned", async () => {
     const body = JSON.stringify({ total_count: 101, workflow_runs: [suiteRun()] });
     const h = harness([{ status: 200, body }]);
