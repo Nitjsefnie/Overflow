@@ -105,7 +105,11 @@ export interface SweepDeps {
  *   never had a check-run to orphan;
  * - its executed workflow definition is the base branch's, judged from its
  *   `event` and `head_branch` by the same isTrustedProducerRun the mirror
- *   applies — an absent or non-string field reads as empty, which refuses it;
+ *   applies — an absent or non-string field reads as empty, which refuses it.
+ *   A path reached through a LIST pin (issue 1090's split) gets no exemption:
+ *   being pinned twice says the path produces a required context, not that the
+ *   run at it may attest one, so the check runs for those paths exactly as it
+ *   does for a single-path pin;
  * - its id is not the triggering run's — the mirror above already posted it,
  *   and re-deciding it here would duplicate every context on every start;
  * - it carries both a head SHA and an html_url — a check-run needs the first as

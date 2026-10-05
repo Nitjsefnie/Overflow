@@ -29,6 +29,8 @@ import { decideContexts } from "../../scripts/ledger-relay.ts";
 
 const PATH_CI = ".github/workflows/ci.yml";
 const PATH_ACTIONLINT = ".github/workflows/actionlint.yml";
+/** A context's second producer path. Not a committed pin. */
+const PATH_CI_PR = ".github/workflows/ci-pr.yml";
 const HEAD_SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
 const APP_ID = "5118623";
@@ -38,6 +40,18 @@ const PIN_MAP = {
   actionlint: PATH_ACTIONLINT,
   "ratchet-guard": ".github/workflows/ratchet-guard.yml",
   verify: PATH_CI,
+};
+
+/**
+ * One context pinned to TWO workflow paths — the shape issue 1090's split
+ * produces. Every event row below drives the all-string PIN_MAP, so nothing in
+ * this file reached the sweep's trusted-producer filter through a list pin until
+ * the suite that follows; the mirror's equivalent filter is pinned at
+ * tests/scripts/ledger-relay.test.ts.
+ */
+const TWO_PATH_PIN_MAP = {
+  verify: [PATH_CI, PATH_CI_PR],
+  "ratchet-guard": ".github/workflows/ratchet-guard.yml",
 };
 
 /**
@@ -163,6 +177,57 @@ describe("selectSweepCandidates", () => {
       "9001",
     );
     expect(selected.map((entry) => entry.runId)).toEqual(["9010", "9011", "9012", "9013"]);
+  });
+
+  // Issue 1090's shape, at the sweep's own door. Flattening list pins is what
+  // makes a SECOND producer path reach this filter for the first time, so the
+  // filter has to be pinned on the new shape and not only on the all-string
+  // map every row above drives: a sweep that treated a list-pinned path as
+  // already vetted would hand an untrusted run to an App-owned check-run POST,
+  // which is the one thing the sweep must never do — it would attest a required
+  // context from a run that executed a definition a pull request could shape.
+  it("refuses an untrusted run at a SECOND pinned path", () => {
+    const selected = selectSweepCandidates(
+      [
+        runEntry({ id: 9401, path: PATH_CI_PR, event: "pull_request", head_branch: "main" }),
+        runEntry({ id: 9402, path: PATH_CI_PR, event: "pull_request", head_branch: "feature/x" }),
+        runEntry({ id: 9403, path: PATH_CI_PR, event: "push", head_branch: "feature/x" }),
+        runEntry({ id: 9404, path: PATH_CI_PR, event: "issue_comment", head_branch: "main" }),
+      ],
+      TWO_PATH_PIN_MAP,
+      "1",
+    );
+    expect(selected).toEqual([]);
+  });
+
+  it("refuses an untrusted run at a path TWO contexts are pinned to", () => {
+    // The other way into the same filter: not a second path but a second
+    // context. The mirror's equivalent wiring survived exactly this mutant, so
+    // the sweep holds it too rather than leaving it to a future reader.
+    const selected = selectSweepCandidates(
+      [
+        runEntry({ id: 9410, event: "pull_request", head_branch: "main" }),
+        runEntry({ id: 9411, event: "pull_request", head_branch: "feature/x" }),
+      ],
+      { verify: [PATH_CI, PATH_CI_PR], "ratchet-guard": PATH_CI },
+      "1",
+    );
+    expect(selected).toEqual([]);
+  });
+
+  it("still selects a TRUSTED run at a second pinned path", () => {
+    // The positive control for the two refusals above: they must be refusing
+    // the event, not refusing the shape. A second-path run whose definition is
+    // main's is exactly the orphan the sweep exists to heal.
+    const selected = selectSweepCandidates(
+      [
+        runEntry({ id: 9420, path: PATH_CI_PR, event: "pull_request_target", head_branch: "feature/x" }),
+        runEntry({ id: 9421, path: PATH_CI_PR, event: "push", head_branch: "main" }),
+      ],
+      TWO_PATH_PIN_MAP,
+      "1",
+    );
+    expect(selected.map((entry) => entry.runId)).toEqual(["9420", "9421"]);
   });
 
   it("fails closed on a run whose event or head branch is absent or not a string", () => {
