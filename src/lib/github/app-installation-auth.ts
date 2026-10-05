@@ -1,4 +1,4 @@
-import { createPrivateKey, createSign } from "node:crypto";
+import { createPrivateKey, createSign, type KeyObject } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
 
@@ -68,8 +68,9 @@ type GitHubAppAuthEnv = {
 /**
  * The App credentials from the environment, or null when unconfigured — the
  * OAuth-fallback posture. Either var unset or empty is unconfigured. A
- * configured key file that cannot be read or parsed throws: fail-closed at
- * wiring time, not first-run time.
+ * configured key file that cannot be read, parsed, or used for the RS256 mint
+ * (the key must be RSA) throws: fail-closed at wiring time, not first-run
+ * time.
  */
 export function readGitHubAppAuthConfig(
   env: GitHubAppAuthEnv,
@@ -81,14 +82,23 @@ export function readGitHubAppAuthConfig(
     return null;
   }
   const pem = readFile(keyPath);
+  let key: KeyObject;
   try {
-    createPrivateKey(pem);
+    key = createPrivateKey(pem);
   } catch (cause) {
     // The message carries the variable and the path, never the file's
     // contents: a key file's text must not reach a log through this error.
     throw new Error(
       `GITHUB_APP_PRIVATE_KEY_PATH (${keyPath}) does not contain a parseable private key.`,
       { cause },
+    );
+  }
+  // A parseable non-RSA key (Ed25519, EC, ...) would still fail on the first
+  // mint — the JWT is signed RS256, `createSign("RSA-SHA256")` — so reject it
+  // at this same wiring-time gate. rsa-pss signs fine and is admitted.
+  if (key.asymmetricKeyType !== "rsa" && key.asymmetricKeyType !== "rsa-pss") {
+    throw new Error(
+      `GITHUB_APP_PRIVATE_KEY_PATH (${keyPath}) does not contain an RSA private key (received ${key.asymmetricKeyType}).`,
     );
   }
   return { appId, privateKey: pem };
@@ -244,7 +254,7 @@ export function createAppInstallationTokenResolver(options: {
   }
 }
 
-/** Production glue: null when unconfigured; throws on a key file that cannot be read or parsed. */
+/** Production glue: null when unconfigured; throws on a key file that cannot be read, parsed, or used for the RS256 mint. */
 export function appInstallationTokenResolverFromEnv(
   env: GitHubAppAuthEnv,
   readFile: (path: string) => string = (path) => readFileSync(path, "utf8"),
