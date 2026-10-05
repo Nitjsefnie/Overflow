@@ -65,8 +65,11 @@ describe("issue admission surface", () => {
   it("auto-applies and auto-assigns nothing from either new template", () => {
     for (const template of ["conduct-report.md", "general.md"]) {
       const frontMatter = readFrontMatter(template);
-      expect(frontMatter.labels ?? []).toStrictEqual([]);
-      expect(frontMatter.assignees ?? []).toStrictEqual([]);
+      // No `?? []` fallback: an absent key must fail, since the front matter
+      // carries the explicit-empty contract and omitting the key is how a
+      // later edit would silently drop it.
+      expect(frontMatter.labels).toStrictEqual([]);
+      expect(frontMatter.assignees).toStrictEqual([]);
     }
   });
 
@@ -81,6 +84,10 @@ describe("issue admission surface", () => {
       expect(frontMatter.name, `${template} name`).toBeTruthy();
       expect(frontMatter.about, `${template} about`).toBeTruthy();
     }
+    // All three names must be present before the distinctness check: a Set
+    // counts `undefined` as a member, so a deleted bug-form `name:` line
+    // would otherwise pass as a third "distinct" name.
+    expect(bug.name, "bug-report.md name").toBeTruthy();
     const names = [conduct.name, general.name, bug.name];
     expect(new Set(names).size, `template names ${JSON.stringify(names)}`).toBe(3);
   });
