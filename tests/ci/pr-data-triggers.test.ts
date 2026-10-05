@@ -66,6 +66,31 @@ import { parse } from "yaml";
  * entry that no longer covers a violating file fails this suite, so the split
  * of ci.yml cannot land without the exclusion being removed, and an exclusion
  * widened past a file that still violates it fails the assertion below it.
+ *
+ * WHAT THIS DETECTOR DOES NOT SEE — two limits, and they are not the same kind
+ * of boundary. Neither is fixed here, and the reasons are different, so they
+ * are stated separately rather than lumped together as "known gaps".
+ *
+ * 1. A COMPOSITE ACTION is invisible, and that hole is unreachable today. A
+ *    step reading `uses: ./.github/actions/<name>` runs steps whose text lives
+ *    in ANOTHER file; `stepText` sees only the `uses:` string. So a composite
+ *    that fetched a pull request would not be caught. `.github/actions/` does
+ *    not exist in this repository and no workflow uses a local `uses: ./`, so
+ *    there is nothing to catch, and the change that would close it is scope
+ *    expansion into a hazard this task did not introduce: a composite action
+ *    has no `on:` of its own, so the right control is a SEPARATE sweep over
+ *    `.github/actions/` keyed on the CALLER's `uses:` line, not a widening of a
+ *    trigger pin. If a composite is ever added here, that sweep is the thing
+ *    to write first.
+ *
+ * 2. A pull-request read with NO checkout, fetch or pull at all — `gh pr view`,
+ *    an HTTP GET of a diff — is outside this rule, and that is FIDELITY rather
+ *    than a gap. The rule is the analysers' own: a step is flagged when it both
+ *    performs a checkout/fetch/pull AND names a pull-request value, because
+ *    that conjunction is what `actions/cache-poisoning/poisonable-step` and
+ *    `actions/untrusted-checkout` describe. Detecting more than the analysers do
+ *    would report shapes those tools do not, which is a different (and
+ *    separately debatable) question from whether this pin tracks them.
  */
 
 type Block = Record<string, unknown>;
@@ -537,11 +562,33 @@ describe("the ledger relay's producer filter", () => {
   // secret-scan legs, and deleting `actionlint pull request` and
   // `ratchet guard pull request` from the filter left every suite green.
   //
-  // A producer is any workflow whose job produces a required context — read
-  // from .github/required-checks.json, every path of every pin — PLUS every
-  // workflow the filter names that the pin map does not (the forward wiring
-  // for unpinned producers like secret scan). Both directions are asserted, so
-  // the filter cannot accumulate a stale name either.
+  // WHAT COUNTS AS A PRODUCER, and why it is two sets rather than one.
+  //
+  // The first version of this sweep derived its producers from
+  // .github/required-checks.json alone, and its header claimed it covered "the
+  // forward wiring for unpinned producers like secret scan". It did not: nothing
+  // in the pin map names secret-scan, so deleting `secret scan pull request`
+  // from the filter left every suite green. The claim was aspirational, and a
+  // doc that overstates a guard's reach is the same defect as a guard with a
+  // hole — it tells the next reader they are covered when they are not.
+  //
+  // So the producer set is the UNION of two explicit sets, and neither is
+  // inferred:
+  //
+  //  - PINNED: every workflow the pin map names (every path of every pin).
+  //  - FORWARD_WIRED: named here, explicitly, with the reason it is relayed at
+  //    all. A fourth unpinned producer has to be ADDED to this list, which is
+  //    the point — making it deliberate rather than an omission the sweep
+  //    silently fails to notice. It self-heals the day that context is pinned:
+  //    the name then arrives through PINNED and the entry becomes redundant.
+  const FORWARD_WIRED: Record<string, string> = {
+    "secret scan": "the secret-scan workflow is not a required context, so nothing in " +
+      ".github/required-checks.json names it; the relay still forwards its completions so the " +
+      "context can be pinned later without a second change to the relay.",
+    "secret scan pull request": "the pull-request leg of the same workflow (issue 1090). " +
+      "Naming only the push leg would relay half of that workflow's runs.",
+  };
+
   const relayNames = async (): Promise<string[]> => {
     const relay = parse(await readFile(resolve(".github/workflows/ledger-relay.yml"), "utf8")) as {
       on: { workflow_run: { workflows: string[] } };
@@ -549,7 +596,7 @@ describe("the ledger relay's producer filter", () => {
     return relay.on.workflow_run.workflows;
   };
 
-  it("names every required-check producer's workflow name", async () => {
+  it("names every PINNED and every FORWARD-WIRED producer's workflow name", async () => {
     const pins = JSON.parse(await readFile(resolve(".github/required-checks.json"), "utf8")) as unknown;
     const paths = Object.values(pins as Record<string, unknown>)
       .flatMap((value) => (typeof value === "string" ? [value] : Array.isArray(value) ? value : []))
@@ -561,21 +608,40 @@ describe("the ledger relay's producer filter", () => {
       expect(name, `${file} is pinned as a required-check producer and must carry a readable name`).toBeTruthy();
       producerNames.add(name!);
     }
+    for (const name of Object.keys(FORWARD_WIRED)) producerNames.add(name);
     // The anti-vacuity control: a producer set derived from a pin map that
-    // resolved to nothing would satisfy the containment assertion below without
-    // having checked a name.
+    // resolved to nothing, plus an empty forward-wired list, would satisfy the
+    // containment assertion below without having checked a name.
     expect(
       [...producerNames].sort(),
-      ".github/required-checks.json pins no workflow this suite read, so the relay filter sweep " +
-        "below is checking an empty set",
+      "no producer this suite derived is non-empty, so the relay filter sweep below is checking " +
+        "an empty set. Either .github/required-checks.json pins no workflow this suite read, or " +
+        "FORWARD_WIRED is empty.",
     ).not.toEqual([]);
     const relayed = await relayNames();
     expect(
       [...producerNames].filter((name) => !relayed.includes(name)),
-      "these required-check producers are absent from the ledger relay's `workflows:` filter, so " +
-        "their completions are NEVER relayed and the required context stops arriving on " +
-        "pull-request heads. The filter matches the workflow `name:` field, not the filename. " +
-        "Add the name — do not delete the producer.",
+      "these producers are absent from the ledger relay's `workflows:` filter, so their " +
+        "completions are NEVER relayed. For a PINNED producer the required context stops " +
+        "arriving on pull-request heads; for a FORWARD_WIRED one it silently stops being " +
+        "forwarded, and nothing waits on that today — which is exactly why it needs a control. " +
+        "The filter matches the workflow `name:` field, not the filename. Add the name; do not " +
+        "delete the producer.",
+    ).toEqual([]);
+  });
+
+  it("declares a forward-wired producer only when the directory actually ships it", async () => {
+    // The other direction for FORWARD_WIRED. A name left in that list after its
+    // workflow is renamed or deleted keeps the containment assertion above
+    // green while checking a producer that does not exist — the list would
+    // paper over exactly the absence the second assertion below is there to
+    // catch.
+    const shipped = new Set([...workflows.values()].map((workflow) => workflow.name));
+    expect(
+      Object.keys(FORWARD_WIRED).filter((name) => !shipped.has(name)),
+      "these FORWARD_WIRED entries name workflows the directory does not ship. Remove the entry: " +
+        "keeping it makes the sweep assert the relay names something that no longer exists, which " +
+        "hides a renamed or deleted producer from the assertion below.",
     ).toEqual([]);
   });
 
