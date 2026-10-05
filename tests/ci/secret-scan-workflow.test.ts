@@ -71,71 +71,122 @@ type Workflow = {
   >;
 };
 
-describe(".github/workflows/secret-scan.yml", () => {
+/**
+ * The two files issue 1090 split the single scan workflow into, and the job
+ * shape this suite pins. Every assertion below is stated over BOTH legs: the
+ * two files were one file before the split, and a pin that held for the whole
+ * of it must hold for each half of it, or the split quietly dropped coverage
+ * on the side nobody was looking at. The few assertions that genuinely differ
+ * between the legs — the `on:` set, the checkout, the fetch, the reachability
+ * root — are stated per file in their own `it`.
+ */
+const LEGS = [
+  { file: ".github/workflows/secret-scan.yml", pr: false },
+  { file: ".github/workflows/secret-scan-pr.yml", pr: true },
+] as const;
+
+/** The file that carries a given leg, as it is named inside `.github/workflows/`. */
+const basename = (file: string): string => file.slice(".github/workflows/".length);
+
+describe.each(LEGS)("$file", ({ file, pr }) => {
   let workflow: Workflow;
   let scan: Workflow["jobs"][string];
 
   beforeAll(async () => {
-    workflow = parse(await readFile(resolve(".github/workflows/secret-scan.yml"), "utf8")) as Workflow;
+    workflow = parse(await readFile(resolve(file), "utf8")) as Workflow;
     scan = workflow.jobs["secret-scan"] ?? workflow.jobs.scan;
   });
 
-  it("is named for what it does", () => {
-    expect(workflow.name).toBe("secret scan");
+  it("is named for what it does, and names its leg distinctly", () => {
+    // Two workflows sharing one `name:` would make the ledger relay's
+    // `workflows:` filter ambiguous, and GitHub's own UI would show two runs
+    // under one heading with nothing to tell them apart.
+    expect(workflow.name).toBe(pr ? "secret scan pull request" : "secret scan");
   });
 
-  it("runs on every main push and pull request, daily, and on dispatch", () => {
-    expect(workflow.on).toEqual({
-      pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
-      push: { branches: ["main"] },
-      schedule: [{ cron: "41 4 * * *" }],
-      workflow_dispatch: null,
+  it(pr ? "runs on pull_request_target alone" : "runs on push, daily, and on dispatch", () => {
+    expect(workflow.on).toEqual(
+      pr
+        ? { pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] } }
+        : {
+            push: { branches: ["main"] },
+            schedule: [{ cron: "41 4 * * *" }],
+            workflow_dispatch: null,
+          },
+    );
+  });
+
+  if (!pr) {
+    it("ticks daily at the pinned off-peak UTC slot", () => {
+      expect(workflow.on.schedule).toEqual([{ cron: "41 4 * * *" }]);
     });
-  });
+  }
 
-  it("scopes the trusted PR trigger to main only, with no pull_request trigger", () => {
-    expect(workflow.on).not.toHaveProperty("pull_request");
-    expect(workflow.on.pull_request_target).toEqual({
-      branches: ["main"], types: ["opened", "synchronize", "reopened"],
+  if (pr) {
+    it("scopes the trusted PR trigger to main only, with no pull_request trigger", () => {
+      expect(workflow.on).not.toHaveProperty("pull_request");
+      expect(workflow.on.pull_request_target).toEqual({
+        branches: ["main"], types: ["opened", "synchronize", "reopened"],
+      });
     });
-  });
+  }
 
-  it("ticks daily at the pinned off-peak UTC slot", () => {
-    expect(workflow.on.schedule).toEqual([{ cron: "41 4 * * *" }]);
-  });
-
-  it("produces exactly the future secret-scan check context", () => {
+  it("produces exactly the secret-scan check context", () => {
     expect(Object.keys(workflow.jobs)).toEqual(["secret-scan"]);
     expect(scan.name ?? "secret-scan").toBe("secret-scan");
   });
 
-  it("uses main's checkout and fetches the PR head only as git objects", async () => {
+  it("wires its own workflow name into the ledger relay", async () => {
+    // The relay's `workflows:` filter matches the workflow `name:` FIELD, not
+    // the filename, so a producer file whose `name:` is absent from it is never
+    // relayed — and secret-scan is an unpinned producer today, so nothing else
+    // would notice the omission. Per file, because each leg carries its own
+    // name and a name added for one says nothing about the other.
+    const relay = parse(await readFile(resolve(".github/workflows/ledger-relay.yml"), "utf8")) as {
+      on: { workflow_run: { workflows: string[] } };
+    };
+    expect(relay.on.workflow_run.workflows, `${workflow.name} must be relayed`).toContain(workflow.name);
+  });
+
+  it(pr ? "uses main's checkout and fetches the PR head only as git objects" : "uses main's checkout, and fetches no pull-request ref", () => {
     const checkouts = scan.steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
-    expect(checkouts).toHaveLength(2);
-    expect(checkouts.map((step) => step.if)).toEqual([
-      "${{ github.event_name == 'pull_request_target' }}",
-      "${{ github.event_name != 'pull_request_target' }}",
-    ]);
-    for (const checkout of checkouts) {
-      expect(checkout.with).toEqual({ "fetch-depth": 0, "persist-credentials": false });
-    }
+    // One checkout per file since the split: the event-name split that used to
+    // produce two checkouts in one job is the thing the split removed, and
+    // these workflows no longer need it.
+    expect(checkouts).toHaveLength(1);
+    // Ungated on both legs: each file has exactly one event class, so there is
+    // nothing left to switch on.
+    expect(checkouts[0].if).toBeUndefined();
+    expect(checkouts[0].with).toEqual({ "fetch-depth": 0, "persist-credentials": false });
     const fetch = scan.steps.find((step) => step.name === "Fetch the pull request head");
-    expect(fetch?.if).toBe("${{ github.event_name == 'pull_request_target' }}");
-    expect(fetch?.env).toEqual({ PR_NUMBER: "${{ github.event.pull_request.number }}" });
-    expect(fetch?.run).toBe('git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"');
-    const fetchIndex = scan.steps.indexOf(fetch!);
-    const installIndex = scan.steps.findIndex((step) => step.name === "Install gitleaks");
-    expect(fetchIndex).toBeGreaterThan(scan.steps.indexOf(checkouts[1]));
-    expect(fetchIndex).toBeLessThan(installIndex);
+    if (pr) {
+      expect(fetch?.if).toBeUndefined();
+      expect(fetch?.env).toEqual({ PR_NUMBER: "${{ github.event.pull_request.number }}" });
+      expect(fetch?.run).toBe('git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"');
+      const installIndex = scan.steps.findIndex((step) => step.name === "Install gitleaks");
+      expect(scan.steps.indexOf(fetch!)).toBeGreaterThan(scan.steps.indexOf(checkouts[0]));
+      expect(scan.steps.indexOf(fetch!)).toBeLessThan(installIndex);
+    } else {
+      // The load-bearing half of the split, asserted on the FILE that has to
+      // be free of it: no pull-request fetch survives on the push leg, which is
+      // what keeps a privileged trigger from reaching a `refs/pull` fetch.
+      expect(fetch, "the push/schedule/dispatch leg must fetch no pull-request ref").toBeUndefined();
+    }
     for (const step of scan.steps) {
       expect(step.run ?? "").not.toMatch(/git\s+(checkout|switch|reset|worktree)\b/);
       expect(step.uses ?? "").not.toMatch(/^\.\//);
     }
-    const source = await readFile(resolve(".github/workflows/secret-scan.yml"), "utf8");
-    expect(source).toMatch(/pull_request_target:\s*# zizmor: ignore\[dangerous-triggers\]/);
+    // Asserted on the parsed `on:` above and on the step list here, never on
+    // the raw source: a file's comments legitimately name the leg that moved
+    // out of it, and a source-text assertion would go red on a comment and stay
+    // green on the shape.
+    if (pr) {
+      const source = readFileSync(resolve(file), "utf8");
+      expect(source).toMatch(/pull_request_target:\s*# zizmor: ignore\[dangerous-triggers\]/);
+    }
   });
 
-  it("scans and uploads for every event, with a PR-specific reachability root", () => {
+  it("scans and uploads, with the reachability root its leg needs", () => {
     const scanStep = scan.steps.find((step) => step.name === "Scan the full history");
     const upload = scan.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
     expect(scanStep?.run).toBe("bash scripts/secret-scan.sh");
@@ -145,8 +196,7 @@ describe(".github/workflows/secret-scan.yml", () => {
     expect(upload?.with?.path).toBe("gitleaks-report.json");
     const checks = scan.steps.filter((step) => /scripts\/secret-scan-baseline\.sh/.test(step.run ?? ""));
     expect(checks.map((step) => [step.if, step.run])).toEqual([
-      ["${{ github.event_name == 'pull_request_target' }}", "bash scripts/secret-scan-baseline.sh refs/remotes/pr/head"],
-      ["${{ github.event_name != 'pull_request_target' }}", "bash scripts/secret-scan-baseline.sh"],
+      [undefined, pr ? "bash scripts/secret-scan-baseline.sh refs/remotes/pr/head" : "bash scripts/secret-scan-baseline.sh"],
     ]);
     for (const check of checks) expect(scan.steps.indexOf(check)).toBeGreaterThan(scan.steps.indexOf(upload!));
   });
@@ -155,21 +205,15 @@ describe(".github/workflows/secret-scan.yml", () => {
     const gate = scan.steps.find((step) => step.name === "Refuse unhandled events");
     expect(gate?.run).toBeDefined();
     expect(scan.steps.indexOf(gate!)).toBe(0);
+    const accepted = pr ? ["pull_request_target"] : ["push", "schedule", "workflow_dispatch"];
     for (const event of ["push", "pull_request_target", "schedule", "workflow_dispatch", "pull_request", "unknown"]) {
       const result = spawnSync("bash", ["-e", "-c", gate!.run!], {
         encoding: "utf8", env: { ...scratchGitEnv, GITHUB_EVENT_NAME: event },
       });
-      expect(result.status, `${event}: ${result.stdout} ${result.stderr}`).toBe(
-        ["push", "pull_request_target", "schedule", "workflow_dispatch"].includes(event) ? 0 : 1,
+      expect(result.status, `${basename(file)} / ${event}: ${result.stdout} ${result.stderr}`).toBe(
+        accepted.includes(event) ? 0 : 1,
       );
     }
-  });
-
-  it("wires the producer's workflow name into the ledger relay", async () => {
-    const relay = parse(await readFile(resolve(".github/workflows/ledger-relay.yml"), "utf8")) as {
-      on: { workflow_run: { workflows: string[] } };
-    };
-    expect(relay.on.workflow_run.workflows).toContain("secret scan");
   });
 
   it("reads the repository and nothing more", () => {
@@ -583,11 +627,16 @@ describe(".github/workflows/secret-scan.yml", () => {
    */
   describe("the reachability step, executed against repositories this suite builds", () => {
     const SCRIPT = "scripts/secret-scan-baseline.sh";
-    const step = (pr = false) => {
-      const found = scan.steps.find((candidate) => {
-        const isPrStep = candidate.if === "${{ github.event_name == 'pull_request_target' }}";
-        return /scripts\/secret-scan-baseline\.sh/.test(candidate.run ?? "") && isPrStep === pr;
-      });
+    /**
+     * The file's own reachability step. Since issue 1090 split this workflow,
+     * the step is found by its `run:` rather than by its `if:` — there is no
+     * longer an event-name split inside one job to select between, and a
+     * selector that expected one would quietly resolve to the PR leg's step on
+     * both files, executing one workflow's block and reporting it as the
+     * other's.
+     */
+    const step = () => {
+      const found = scan.steps.find((candidate) => /scripts\/secret-scan-baseline\.sh/.test(candidate.run ?? ""));
       expect(found, "no step runs the baseline-reachability check").toBeDefined();
       return found!;
     };
@@ -605,6 +654,16 @@ describe(".github/workflows/secret-scan.yml", () => {
     let unmerged = "";
     /** An ancestor of HEAD, so the positive direction has something real to pass on. */
     let reachable = "";
+    /**
+     * Reachable from NEITHER root: not an ancestor of HEAD, and not the pull
+     * request's head. `unmerged` is the PR root's own tip, so it is a valid
+     * entry on the pull-request leg and only on that leg — which makes it the
+     * wrong fixture for an assertion that must hold on both. This one is built
+     * by deleting the branch that carried it, so git still holds the object
+     * (what `rev-parse` resolves, and what a bare existence test would wave
+     * through) while no ref in the fixture names it.
+     */
+    let orphaned = "";
 
     const finding = (commit: string, file: string) => ({
       RuleID: "generic-api-key",
@@ -619,9 +678,9 @@ describe(".github/workflows/secret-scan.yml", () => {
     });
 
     /** Run the step's `run:` block verbatim in `repoPath`, with `baseline` as its committed file. */
-    const runStep = (repoPath: string, baseline: unknown, pr = false) => {
+    const runStep = (repoPath: string, baseline: unknown) => {
       writeFileSync(join(repoPath, ".github", "gitleaks-baseline.json"), `${JSON.stringify(baseline, null, 1)}\n`, "utf8");
-      return spawnSync("bash", ["-e", "-c", step(pr).run!], {
+      return spawnSync("bash", ["-e", "-c", step().run!], {
         cwd: repoPath,
         encoding: "utf8",
         // `scratchGitEnv` already carries this session's NODE_ENV and strips
@@ -642,6 +701,16 @@ describe(".github/workflows/secret-scan.yml", () => {
       unmerged = await commitFiles(repoPath, { "b.txt": "b\n" }, "on a branch that is never merged");
       git(repoPath, "checkout", "--quiet", "main");
       git(repoPath, "update-ref", "refs/remotes/pr/head", unmerged);
+      // A second branch, committed and then deleted: the object survives (no gc
+      // runs in this fixture) but nothing names it, so it is on neither HEAD nor
+      // the PR root. `unmerged` above cannot play this part — it IS the PR root.
+      git(repoPath, "checkout", "--quiet", "-b", "orphan");
+      orphaned = await commitFiles(repoPath, { "c.txt": "c\n" }, "on a branch that is deleted");
+      git(repoPath, "checkout", "--quiet", "main");
+      git(repoPath, "branch", "-D", "orphan");
+      expect(tryGit(repoPath, "cat-file", "-e", `${orphaned}^{commit}`).status).toBe(0);
+      expect(tryGit(repoPath, "merge-base", "--is-ancestor", orphaned, "HEAD").status).toBe(1);
+      expect(tryGit(repoPath, "merge-base", "--is-ancestor", orphaned, "refs/remotes/pr/head").status).toBe(1);
       // Staged last, so the history above is the history git actually has. The
       // script resolves its repository from its OWN location, which is what makes
       // a staged copy the checkout as far as the step is concerned.
@@ -667,16 +736,20 @@ describe(".github/workflows/secret-scan.yml", () => {
       expect(result.stdout, "the step must report how many entries it checked").toMatch(/1\b/);
     });
 
-    it("fails, naming the fingerprint and the commit, on an entry that is not an ancestor of HEAD", () => {
-      const orphan = finding(unmerged, "tests/security/orphan.test.ts");
+    it("fails, naming the fingerprint and the commit, on an entry on neither root", () => {
+      // `orphaned`, not `unmerged`: this assertion has to hold on BOTH legs, and
+      // `unmerged` is the pull request's own head — a valid baseline entry on
+      // the pull-request leg, which reads it as a second root. The commit on
+      // neither root is the only one both legs reject.
+      const orphan = finding(orphaned, "tests/security/orphan.test.ts");
       const result = runStep(join(root, "checkout"), [
         finding(reachable, "tests/security/token-cipher.test.ts"),
         orphan,
       ]);
       expect(
         result.status,
-        "a baseline naming a commit that is not an ancestor of HEAD is a defect in a tracked artefact, and " +
-          "this step is the only thing that ever notices it",
+        "a baseline naming a commit on neither HEAD nor the pull request is a defect in a tracked " +
+          "artefact, and this step is the only thing that ever notices it",
       ).not.toBe(0);
       // Both halves, in one substring. Asserting the fingerprint alone would be
       // satisfied by any message echoing the commit, because gitleaks builds the
@@ -686,16 +759,28 @@ describe(".github/workflows/secret-scan.yml", () => {
       expect(
         `${result.stdout}\n${result.stderr}`,
         "the failure must name the entry's fingerprint AND the commit it names",
-      ).toContain(`${orphan.Fingerprint} names commit ${unmerged}`);
+      ).toContain(`${orphan.Fingerprint} names commit ${orphaned}`);
       expect(`${result.stdout}\n${result.stderr}`).toMatch(/not an ancestor/i);
     });
 
-    it("accepts a baseline entry reachable only from the PR root", () => {
+    it(pr
+      ? "accepts a baseline entry reachable only from the PR root"
+      : "rejects a baseline entry reachable only from a pull-request ref, because this leg has no PR root", () => {
       const repo = join(root, "checkout");
       expect(tryGit(repo, "merge-base", "--is-ancestor", unmerged, "HEAD").status).toBe(1);
-      const result = runStep(repo, [finding(reachable, "tests/main.ts"), finding(unmerged, "tests/pr.ts")], true);
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(result.stdout).toContain("all 2 entries");
+      const result = runStep(repo, [finding(reachable, "tests/main.ts"), finding(unmerged, "tests/pr.ts")]);
+      // The two legs carry different roots, and this is the assertion that says
+      // so: the pull-request leg is handed `refs/remotes/pr/head` as a second
+      // root, so an entry reachable only there passes there and FAILS on the
+      // push leg, whose step takes no root at all. Asserting one status for both
+      // files would have papered over the split rather than pinned it.
+      if (pr) {
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+        expect(result.stdout).toContain("all 2 entries");
+      } else {
+        expect(result.status, "the push leg must not resolve a baseline entry against a pull-request ref").not.toBe(0);
+        expect(result.stderr).toContain(`${finding(unmerged, "tests/pr.ts").Fingerprint} names commit ${unmerged}`);
+      }
     });
 
     it("rejects an entry reachable from neither HEAD nor the additional root", () => {
@@ -705,7 +790,7 @@ describe(".github/workflows/secret-scan.yml", () => {
       const orphanCommit = git(repo, "rev-parse", "HEAD").trim();
       git(repo, "checkout", "--quiet", "main");
       const orphan = finding(orphanCommit, "tests/neither.ts");
-      const result = runStep(repo, [finding(unmerged, "tests/pr.ts"), orphan], true);
+      const result = runStep(repo, [finding(unmerged, "tests/pr.ts"), orphan]);
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
       expect(result.stderr).toContain(`${orphan.Fingerprint} names commit ${orphanCommit}`);
       expect(result.stderr).toMatch(/not an ancestor/i);
@@ -772,7 +857,10 @@ describe(".github/workflows/secret-scan.yml", () => {
 
   it("is tracked under the deny-by-default ignore policy", () => {
     for (const path of [
-      ".github/workflows/secret-scan.yml",
+      // Both legs, per the file under test: a split producer whose new file is
+      // invisible to git ships nothing, and this workflow's whole job is to
+      // scan what actually landed.
+      file,
       ".github/gitleaks-baseline.json",
       "scripts/secret-scan.sh",
       "scripts/secret-scan-baseline.sh",

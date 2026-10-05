@@ -1,5 +1,11 @@
 {
-  "actionlint": ".github/workflows/actionlint.yml",
-  "ratchet-guard": ".github/workflows/ratchet-guard.yml",
+  "actionlint": [
+    ".github/workflows/actionlint.yml",
+    ".github/workflows/actionlint-pr.yml"
+  ],
+  "ratchet-guard": [
+    ".github/workflows/ratchet-guard.yml",
+    ".github/workflows/ratchet-guard-pr.yml"
+  ],
   "verify": ".github/workflows/ci.yml"
 }

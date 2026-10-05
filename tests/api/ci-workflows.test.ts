@@ -186,25 +186,104 @@ describe("GitHub Actions release gates", () => {
     });
   });
 
-  it("judges the pull request head only as git data, executed entirely from main", async () => {
+it("judges the pull request head only as git data, executed entirely from main", async () => {
+    const workflow = await readWorkflow("ratchet-guard-pr.yml");
+    // pull_request_target keeps the gate alive when a pull request disables a
+    // workflow's own pull_request run: the workflow definition, the checkout
+    // and the script that executes all come from main — ci.yml's PR leg fires
+    // pull_request_target since issue 822, so the ci run can no longer be
+    // silenced that way. `branches: [main]` keeps a PR retargeted to main
+    // (an edited event, which gets no new run) from carrying its stale green
+    // over.
+    //
+    // Issue 1090 moved this leg into a file of its own so its `on:` set is
+    // exactly {pull_request_target}: a privileged trigger on a file carrying a
+    // `refs/pull` fetch is what CodeQL's cache-poisoning and untrusted-checkout
+    // alerts describe. The push and dispatch legs that used to share this file
+    // are in ratchet-guard.yml, which reads no pull-request data at all.
+    expect(workflow.on).toEqual({
+      pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
+    });
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    // Every pull request shares one repository-level group, so the repository's
+    // Actions minutes stop scaling with the number of open pull requests;
+    // GitHub keeps one PENDING run per group and cancels the superseded one.
+    // cancel-in-progress is the literal false because that group is shared by
+    // every pull request and this job is a required context — see ci.yml's
+    // concurrency block for the full argument.
+    expect(workflow.concurrency).toEqual({
+      group: "ratchet-guard-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+      "cancel-in-progress": false,
+    });
+    // The whole job, exactly, in the dependency-audit style. One checkout with
+    // no ref input at all — actions/checkout's default, main's last commit, the
+    // checkout its fork guard exempts. No step installs or builds anything. The
+    // PR head enters only as a git object; the ratchet script comes from the
+    // trusted checked-out base and reads the target with `git show`. The base of
+    // the comparison is the checked-out commit itself (HEAD), never the event's
+    // base.sha: that value is recorded when the pull request opens and can
+    // trail main, and after a rebase onto a newer main the merge base of the
+    // stale base and the head sits below the real fork point, so a real
+    // relaxation would pass against the looser document there. Every event value
+    // travels through env, never ${{ }} in run:.
+    expect(workflow.jobs).toEqual({
+      "ratchet-guard": {
+        "runs-on": "ubuntu-latest",
+        "timeout-minutes": 10,
+        steps: [
+          {
+            name: "Refuse unhandled events",
+            run: `if [[ "$GITHUB_EVENT_NAME" != "pull_request_target" ]]; then
+  echo "::error::Unhandled ratchet-guard event: $GITHUB_EVENT_NAME"
+  exit 1
+fi
+`,
+          },
+          {
+            uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            with: {
+              "persist-credentials": false,
+              "fetch-depth": 0,
+            },
+          },
+          {
+            uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+            with: { "node-version": "24.17.0" },
+          },
+          {
+            name: "Fetch the pull request head",
+            env: { PR_NUMBER: "${{ github.event.pull_request.number }}" },
+            run: 'git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"',
+          },
+          {
+            name: "Ratchet documents",
+            env: { HEAD_SHA: "${{ github.event.pull_request.head.sha }}" },
+            run: 'node scripts/check-ratchets.ts HEAD "$HEAD_SHA"',
+          },
+        ],
+      },
+    });
+  });
+
+  it("judges main's own commits against the ratchet documents they replaced", async () => {
     const workflow = await readWorkflow("ratchet-guard.yml");
-    // pull_request_target keeps the gate alive when a pull request disables
-    // a workflow's own pull_request run: the workflow definition, the
-    // checkout and the script that executes all come from main — ci.yml's
-    // PR leg fires pull_request_target since issue 822, so the ci run can
-    // no longer be silenced that way. `branches: [main]` keeps a PR
-    // retargeted to main (an edited event, which gets no new run) from
-    // carrying its stale green over. push covers the commits main itself
-    // lands: the repo merges with --rebase, so a merged SHA is a brand-new
-    // commit no pull_request run covered, and every push to main must carry
-    // a ratchet-guard run for the check to be required and for the deploy
-    // gate (scripts/deploy-revision.sh) to pass on the tip it lands. No
-    // paths filter: a push without one of the compared files still needs its
-    // own run, or deploys of the tip it lands hang on `(absent)`. Dispatch
-    // recovers a main tip when the push event launched no runs (issue 796).
+    // The other half of the split (issue 1090). push covers the commits main
+    // itself lands: the repo merges with --rebase, so a merged SHA is a
+    // brand-new commit no pull_request run covered, and every push to main must
+    // carry a ratchet-guard run for the check to be required and for the deploy
+    // gate (scripts/deploy-revision.sh) to pass on the tip it lands. No paths
+    // filter: a push without one of the compared files still needs its own run,
+    // or deploys of the tip it lands hang on `(absent)`. Dispatch recovers a
+    // main tip when the push event launched no runs (issue 796).
+    //
+    // This file reads NO pull-request data — no `refs/pull` fetch, and no
+    // `pull_request.*` value in any step's run or env — which is the property
+    // the split exists to establish. Asserted on the parsed job below, where
+    // every event value is a push/dispatch spelling (`${{ github.sha }}`,
+    // `${{ github.event.before }}`, `${{ inputs.base }}`), and on the absence of
+    // a step fetching a pull request head at all.
     expect(workflow.on).toEqual({
       push: { branches: ["main"] },
-      pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
       workflow_dispatch: {
         inputs: {
           base: {
@@ -220,49 +299,30 @@ describe("GitHub Actions release gates", () => {
     // run per concurrency group and cancels the older pending one even with
     // cancel-in-progress false, and a cancelled conclusion on a merged SHA
     // makes the deploy gate refuse immediately. Keying on the SHA gives each
-    // push its own group; every pull request shares one repository-level
-    // group, so the repository's Actions minutes stop scaling with the number
-    // of open pull requests. cancel-in-progress is the literal false on every
-    // leg because that group is shared by every pull request and this job is a
-    // required context — see ci.yml's concurrency block for the argument.
+    // push its own group. There is no pull-request leg in this file, so there is
+    // no repository-level arm to bound here.
     expect(workflow.concurrency).toEqual({
-      group: "ratchet-guard-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+      group: "ratchet-guard-${{ github.sha }}",
       "cancel-in-progress": false,
     });
-    // The whole job, exactly, in the dependency-audit style. Three checkouts,
-    // each gated on the event name: under pull_request_target the checkout
-    // has no ref input at all — actions/checkout's default, main's last
-    // commit, the checkout its fork guard exempts; under push its ref is
-    // github.event.before, the previous main tip, whose copy of
-    // scripts/check-ratchets.ts executes. Splitting the steps on the event
-    // name keeps each checkout's ref visible without evaluating an
-    // expression: the pull_request_target step has no ref input at all, so
-    // it is visibly the default checkout (main's tip, exempt from
-    // checkout's fork guard), and the push step visibly pins the previous
-    // main tip. Dispatch takes the last certified main tip as input, validates
-    // its format before checkout, then fetches the dispatched tip and checks
-    // ancestry before setup-node can probe checkout-controlled Yarn files.
-    // On a push GitHub always sets `before` to a 40-hex SHA. No step installs
-    // or builds anything. The PR head and pushed tip enter only as git
-    // objects; dispatch checks out the candidate base but runs only git
-    // commands until it proves main ancestry. The ratchet script then comes
-    // from the trusted checked-out base and reads the target with `git show`.
-    // The base of the comparison is the
-    // checked-out commit itself (HEAD) under all three events, never the event's
-    // base.sha: under pull_request_target that value is recorded when the
-    // pull request opens and can trail main, and after a rebase onto a newer
-    // main the merge base of the stale base and the head sits below the real
-    // fork point, so a real relaxation would pass against the looser
-    // document there. Under push the checked-out previous tip is, for a
-    // non-forced push, a direct ancestor of the pushed SHA, so the merge
-    // base is the previous tip
+    // The whole job, exactly. Two checkouts, each gated on the event name:
+    // under push its ref is github.event.before, the previous main tip, whose
+    // copy of scripts/check-ratchets.ts executes; dispatch takes the last
+    // certified main tip as input, validates its format before checkout, then
+    // fetches the dispatched tip and checks ancestry before setup-node can probe
+    // checkout-controlled Yarn files. On a push GitHub always sets `before` to
+    // a 40-hex SHA. No step installs or builds anything. The pushed tip and the
+    // dispatched tip enter only as git objects; dispatch checks out the
+    // candidate base but runs only git commands until it proves main ancestry.
+    // Under push the checked-out previous tip is, for a non-forced push, a
+    // direct ancestor of the pushed SHA, so the merge base is the previous tip
     // itself and the comparison is exactly "did this push relax a ratchet
-    // document relative to the main it replaced". Dispatch judges the
-    // interval from the last certified tip to main's tip as one endpoint
-    // change, like a multi-commit push. It is coarser than separate push
-    // runs when consecutive pushes were dropped: an intermediate relaxation
-    // later re-tightened past the base is not flagged. Every event value
-    // travels through env, never ${{ }} in run:.
+    // document relative to the main it replaced". Dispatch judges the interval
+    // from the last certified tip to main's tip as one endpoint change, like a
+    // multi-commit push. It is coarser than separate push runs when consecutive
+    // pushes were dropped: an intermediate relaxation later re-tightened past
+    // the base is not flagged. Every event value travels through env, never
+    // ${{ }} in run:.
     expect(workflow.jobs).toEqual({
       "ratchet-guard": {
         "runs-on": "ubuntu-latest",
@@ -270,7 +330,7 @@ describe("GitHub Actions release gates", () => {
         steps: [
           {
             name: "Refuse unhandled events",
-            run: `if [[ "$GITHUB_EVENT_NAME" != "pull_request_target" && "$GITHUB_EVENT_NAME" != "push" && "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+            run: `if [[ "$GITHUB_EVENT_NAME" != "push" && "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
   echo "::error::Unhandled ratchet-guard event: $GITHUB_EVENT_NAME"
   exit 1
 fi
@@ -289,14 +349,6 @@ if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   exit 1
 fi
 `,
-          },
-          {
-            if: "${{ github.event_name == 'pull_request_target' }}",
-            uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            with: {
-              "persist-credentials": false,
-              "fetch-depth": 0,
-            },
           },
           {
             if: "${{ github.event_name == 'push' }}",
@@ -341,18 +393,6 @@ fi
             with: { "node-version": "24.17.0" },
           },
           {
-            if: "${{ github.event_name == 'pull_request_target' }}",
-            name: "Fetch the pull request head",
-            env: { PR_NUMBER: "${{ github.event.pull_request.number }}" },
-            run: 'git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"',
-          },
-          {
-            if: "${{ github.event_name == 'pull_request_target' }}",
-            name: "Ratchet documents",
-            env: { HEAD_SHA: "${{ github.event.pull_request.head.sha }}" },
-            run: 'node scripts/check-ratchets.ts HEAD "$HEAD_SHA"',
-          },
-          {
             if: "${{ github.event_name == 'push' }}",
             name: "Fetch the pushed commit",
             env: { PUSHED_SHA: "${{ github.sha }}" },
@@ -376,20 +416,42 @@ fi
   });
 
   it("fails an unhandled ratchet-guard event before checkout", async () => {
-    const workflow = await readWorkflow("ratchet-guard.yml");
-    const guard = workflow.jobs["ratchet-guard"]!.steps[0]!.run!;
-    const unknown = spawnSync("bash", ["-e", "-c", guard], {
-      encoding: "utf8",
-      env: { ...process.env, GITHUB_EVENT_NAME: "schedule" },
-    });
-    expect(unknown.status).toBe(1);
-    expect(unknown.stdout).toContain("::error::Unhandled ratchet-guard event: schedule");
-
-    const push = spawnSync("bash", ["-e", "-c", guard], {
-      encoding: "utf8",
-      env: { ...process.env, GITHUB_EVENT_NAME: "push" },
-    });
-    expect(push.status).toBe(0);
+    // Both files, each against the events IT accepts. The pull-request leg's
+    // guard no longer mentions push at all — its file has no push trigger — so
+    // reading the guard out of only one file would test one leg's gate twice
+    // and the other's not at all.
+    const cases: Array<{ file: string; accepted: string[]; refused: string[] }> = [
+      {
+        file: "ratchet-guard-pr.yml",
+        accepted: ["pull_request_target"],
+        refused: ["push", "schedule", "workflow_dispatch"],
+      },
+      {
+        file: "ratchet-guard.yml",
+        accepted: ["push", "workflow_dispatch"],
+        refused: ["pull_request_target", "schedule"],
+      },
+    ];
+    for (const { file, accepted, refused } of cases) {
+      const workflow = await readWorkflow(file);
+      const guard = workflow.jobs["ratchet-guard"]!.steps.find((step) => step.name === "Refuse unhandled events")?.run;
+      expect(guard, `${file} must refuse an event it has no comparison path for`).toBeDefined();
+      for (const event of accepted) {
+        const result = spawnSync("bash", ["-e", "-c", guard!], {
+          encoding: "utf8",
+          env: { ...process.env, GITHUB_EVENT_NAME: event },
+        });
+        expect(result.status, `${file} must accept ${event}: ${result.stdout} ${result.stderr}`).toBe(0);
+      }
+      for (const event of refused) {
+        const result = spawnSync("bash", ["-e", "-c", guard!], {
+          encoding: "utf8",
+          env: { ...process.env, GITHUB_EVENT_NAME: event },
+        });
+        expect(result.status, `${file} must refuse ${event}: ${result.stdout} ${result.stderr}`).toBe(1);
+        expect(result.stdout).toContain(`::error::Unhandled ratchet-guard event: ${event}`);
+      }
+    }
   });
 
   it("parses a complete PostgreSQL 17 gate with pinned actions and every release command", async () => {
@@ -502,25 +564,30 @@ fi
     }));
   });
 
-  it("parses a catalogue-style workflow gate with explicit least privilege and pinned actions", async () => {
-    const workflow = await readWorkflow("actionlint.yml");
+it("parses a catalogue-style workflow gate with explicit least privilege and pinned actions", async () => {
+    // Both legs of the gate (issue 1090 split this workflow in two), asserted
+    // per file. The pin is per-leg rather than shared, because the two legs
+    // genuinely differ — the pull-request leg extracts the head ref's workflows
+    // with `git show`, the push leg copies its own checked-out tree — and a
+    // single equality covering both would have to be loosened to fit.
+    const workflow = await readWorkflow("actionlint-pr.yml");
     // pull_request_target executes main's definition and main's tools; the
     // pull request head enters only as git objects extracted with `git show`
-    // (issue 822). Same trigger shape as ratchet-guard.yml.
-    expect(workflow.on).toEqual(expect.objectContaining({
-      push: { branches: ["main"] },
+    // (issue 822). Same trigger shape as ratchet-guard-pr.yml.
+    //
+    // The whole `on:` set is pinned, and it is exactly one event: the file
+    // holds a `refs/pull` fetch, so a privileged trigger here is the shape
+    // CodeQL's cache-poisoning and untrusted-checkout alerts report. Asserted
+    // whole rather than by objectContaining, which would tolerate a second
+    // event sitting beside the one this leg needs.
+    expect(workflow.on).toEqual({
       pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
-      workflow_dispatch: null,
-    }));
-    expect(workflow.on.push).not.toHaveProperty("paths");
+    });
     expect(workflow.on.pull_request_target).not.toHaveProperty("paths");
-    // Same RE-ADD guard as the ci.yml pin: objectContaining tolerates a
-    // pull_request trigger beside pull_request_target, so the absence is
-    // pinned on its own (final-review mutant M1).
-    expect(workflow.on).not.toHaveProperty("pull_request");
+    expect(workflow.on, "a pull_request trigger would execute the PR's own workflow files").not.toHaveProperty("pull_request");
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.concurrency).toEqual({
-      group: "actionlint-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+      group: "actionlint-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
       "cancel-in-progress": false,
     });
     const steps = workflow.jobs.actionlint!.steps;
@@ -538,7 +605,9 @@ fi
         // 1.7.12, and its workflow schema has no `queue` key under
         // `concurrency`, so it rejects claim.yml as an unknown key. The
         // repository and version live in env beside the checksum that pins the
-        // fork's own tarball.
+        // fork's own tarball. tests/ci/pr-data-triggers.test.ts and the
+        // equality below decide which leg holds pull-request data, so these
+        // three must be bumped in BOTH actionlint files together.
         ACTIONLINT_REPO: "Nitjsefnie-OSC/actionlint",
         ACTIONLINT_VERSION: "1.7.12-queue.1",
         ACTIONLINT_SHA256: "dcc2c42a7caaa197dfe63584a3851f62ef260f80b2cf221baaf05479661e1521",
@@ -550,7 +619,6 @@ fi
         },
         {
           name: "Fetch the pull request head",
-          if: "${{ github.event_name == 'pull_request_target' }}",
           env: { PR_NUMBER: "${{ github.event.pull_request.number }}" },
           run: 'git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"',
         },
@@ -576,14 +644,10 @@ tar -xzf "$tarball" actionlint
         {
           name: "Collect the workflow files to lint",
           run: `mkdir -p .github/workflows-pr
-if [ "\${GITHUB_EVENT_NAME}" = pull_request_target ]; then
-  git ls-tree -z --name-only refs/remotes/pr/head:.github/workflows/ |
-    while IFS= read -r -d '' f; do
-      git show "refs/remotes/pr/head:.github/workflows/$f" > ".github/workflows-pr/$f"
-    done
-else
-  cp .github/workflows/*.yml .github/workflows-pr/
-fi
+git ls-tree -z --name-only refs/remotes/pr/head:.github/workflows/ |
+  while IFS= read -r -d '' f; do
+    git show "refs/remotes/pr/head:.github/workflows/$f" > ".github/workflows-pr/$f"
+  done
 `,
         },
         {
@@ -599,7 +663,6 @@ fi
         },
         {
           name: "Base freshness",
-          if: "${{ github.event_name == 'pull_request_target' }}",
           env: {
             GH_TOKEN: "${{ github.token }}",
             REPO_SLUG: "${{ github.repository }}",
@@ -609,6 +672,83 @@ fi
             HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
           },
           run: "bash scripts/ci-base-freshness.sh",
+        },
+      ],
+    });
+  });
+
+  it("lints main's own workflows on push and dispatch, reading no pull-request data", async () => {
+    const workflow = await readWorkflow("actionlint.yml");
+    // The other half of the split (issue 1090). `on:` is pinned whole, and it
+    // names no pull-request event at all: this file's remaining legs lint the
+    // checked-out, trusted tree, so a `refs/pull` fetch or a
+    // `github.event.pull_request.*` value here would be a privileged trigger
+    // reaching untrusted content.
+    expect(workflow.on).toEqual({
+      push: { branches: ["main"] },
+      workflow_dispatch: null,
+    });
+    expect(workflow.on.push).not.toHaveProperty("paths");
+    expect(workflow.on, "this leg reads no pull-request data, so no pull-request trigger may reach it")
+      .not.toHaveProperty("pull_request_target");
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(workflow.concurrency).toEqual({
+      group: "actionlint-${{ github.sha }}",
+      "cancel-in-progress": false,
+    });
+    const steps = workflow.jobs.actionlint!.steps;
+    expect(steps.filter((step) => step.uses).every((step) => /@[0-9a-f]{40}$/.test(step.uses!))).toBe(true);
+    // The whole job, exactly. No fetch step for a pull request head, and no
+    // `Base freshness` step: both belong to the pull-request leg, and a
+    // surviving copy here is exactly the failure the split removes.
+    expect(workflow.jobs.actionlint).toEqual({
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 15,
+      env: {
+        ACTIONLINT_REPO: "Nitjsefnie-OSC/actionlint",
+        ACTIONLINT_VERSION: "1.7.12-queue.1",
+        ACTIONLINT_SHA256: "dcc2c42a7caaa197dfe63584a3851f62ef260f80b2cf221baaf05479661e1521",
+      },
+      steps: [
+        {
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          with: { "persist-credentials": false },
+        },
+        {
+          uses: "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+          with: { "python-version": "3.13" },
+        },
+        {
+          name: "Install actionlint",
+          run: `tarball="actionlint_\${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+curl -fsSL --retry 3 -o "$tarball" \\
+  "https://github.com/\${ACTIONLINT_REPO}/releases/download/v\${ACTIONLINT_VERSION}/\${tarball}"
+echo "\${ACTIONLINT_SHA256}  \${tarball}" | sha256sum -c -
+tar -xzf "$tarball" actionlint
+./actionlint --version
+`,
+        },
+        {
+          name: "Install zizmor",
+          id: "install_zizmor",
+          run: "pip install --require-hashes -r .github/requirements-zizmor.txt\n",
+        },
+        {
+          name: "Collect the workflow files to lint",
+          run: `mkdir -p .github/workflows-pr
+cp .github/workflows/*.yml .github/workflows-pr/
+`,
+        },
+        {
+          name: "actionlint",
+          id: "actionlint",
+          run: "./actionlint -color .github/workflows-pr/*.yml",
+        },
+        {
+          name: "zizmor",
+          if: "${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}",
+          env: { GH_TOKEN: "${{ github.token }}" },
+          run: "zizmor --no-progress .github/workflows-pr/*.yml",
         },
       ],
     });
@@ -1095,7 +1235,12 @@ exit 1
   });
 
   it("hash-pins the zizmor install through the tracked requirements file", async () => {
-    const workflow = await readWorkflow("actionlint.yml");
+    // Both actionlint files. Issue 1090 split the gate in two and each leg
+    // installs its own copy of zizmor, so pinning one leg's install left the
+    // other installing from wherever it liked — a hash-free `pip install
+    // zizmor` in the leg nobody read.
+    for (const file of ["actionlint-pr.yml", "actionlint.yml"]) {
+    const workflow = await readWorkflow(file);
     const steps = workflow.jobs.actionlint!.steps;
 
     const install = steps.find((step) => step.id === "install_zizmor");
@@ -1117,8 +1262,9 @@ exit 1
     // (fix round 2, finding C) — and never the checked-out tree's own
     // workflows.
     const zizmor = steps.find((step) => step.run === "zizmor --no-progress .github/workflows-pr/*.yml");
-    expect(zizmor).toBeDefined();
+    expect(zizmor, `${file} must run zizmor over the extracted workflow copies`).toBeDefined();
     expect(zizmor!.if).toBe("${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}");
+    }
   });
 
   // zizmor's ref-version-mismatch audit is the mechanism that catches a pin's
@@ -1368,8 +1514,15 @@ exit 1
   it("reopens only shipped yml workflows in the deny-by-default ignore policy", () => {
     expect(checkIgnore(".github/workflows/ci.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/actionlint.yml")).toBe(1);
+    // The split's new producer files (issue 1090). A workflow file that exists
+    // on disk and is invisible to git ships nothing, and the check that would
+    // notice is the one this line stands in for.
+    expect(checkIgnore(".github/workflows/actionlint-pr.yml")).toBe(1);
+    expect(checkIgnore(".github/workflows/ratchet-guard-pr.yml")).toBe(1);
+    expect(checkIgnore(".github/workflows/secret-scan-pr.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/dependency-audit.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/ratchet-guard.yml")).toBe(1);
+    expect(checkIgnore(".github/workflows/secret-scan.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/pr-suite.yml")).toBe(1);
     expect(checkIgnore(".github/dependabot.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/unshipped.yaml")).toBe(0);
