@@ -186,19 +186,19 @@ jobs:
           persist-credentials: false
 
       # The pull request enters as git objects only: this event's head, fetched
-      # by its SHA, and this event's base, which actions/checkout's full-history
-      # checkout already holds. No refs/pull/<number> refspec is used and the
-      # head is never checked out, installed or executed from — the checkout
-      # analysers read a fetch whose command or env names the pull request's
-      # NUMBER or a head REF as pulling untrusted history, which is why nothing
-      # here is named like a pull-request ref. What is fetched is a SHA value,
-      # and what carries the trust is not the name but the two-parent bind
-      # below: the commit that gets materialised must be a two-parent merge
-      # whose parents are exactly this event's base and this event's head, or
-      # the step fails closed. That bind is the security boundary and it is
-      # unchanged; it is checked even though the commit below is built here
-      # from those two SHAs, because it is the tripwire against a future edit
-      # that builds the merge from anything else.
+      # by its SHA, and this event's base, which the full-history checkout above
+      # normally already holds and which the step fetches by SHA when it does
+      # not. No refs/pull/<number> refspec is used and the head is never checked
+      # out, installed or executed from — the checkout analysers read a fetch
+      # whose command or env names the pull request's NUMBER or a head REF as
+      # pulling untrusted history, which is why nothing here is named like a
+      # pull-request ref. What is fetched is a SHA value, and what carries the
+      # trust is not the name but the two-parent bind below: what gets
+      # materialised must be a two-parent merge whose parents are exactly this
+      # event's base and this event's head, or the step fails closed. That bind
+      # is the security boundary and it is unchanged; it is checked even though
+      # the commit below is built here from those two SHAs, because it is the
+      # tripwire against a future edit that builds the merge from anything else.
       #
       # The merge tree is BUILT here rather than read out of the event payload.
       # GitHub computes pull_request.merge_commit_sha asynchronously, so on a
@@ -233,7 +233,10 @@ jobs:
           # object the pull request's attributes point at.
           GIT_LFS_SKIP_SMUDGE: "1"
         run: |
-          git fetch --no-tags origin "${HEAD_SHA:?}"
+          if ! git fetch --no-tags origin "${HEAD_SHA:?}"; then
+            echo "::error::could not fetch the pull request's head ${HEAD_SHA} from origin; refusing to judge a tree this event is not about"
+            exit 1
+          fi
           if ! git cat-file -e "${BASE_SHA:?}^{commit}" 2>/dev/null; then
             git fetch --no-tags origin "${BASE_SHA:?}"
           fi
