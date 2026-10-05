@@ -167,3 +167,53 @@ describe("coverage floor CLI", () => {
     expect(missingDoc.status).toBe(2);
   });
 });
+
+describe("coverage floor CLI --summary", () => {
+  let elsewhere: string;
+  beforeEach(() => {
+    elsewhere = mkdtempSync(join(tmpdir(), "coverage-floor-summary-"));
+    spawnSync("git", ["init", "-q"], { cwd: root, encoding: "utf8" });
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    writeFileSync(join(root, "scripts/coverage.json"), `${JSON.stringify(doc(74.0, 73.0), null, 2)}\n`);
+  });
+  afterEach(() => {
+    rmSync(elsewhere, { recursive: true, force: true });
+  });
+
+  const write = (path: string, pct: number) => {
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, `${JSON.stringify(summary(pct), null, 2)}\n`);
+  };
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: "utf8" });
+
+  it("reads the summary it is given, not the one under coverage/", () => {
+    // A passing summary in the default location must not mask a failing one
+    // at the named location, and the reverse.
+    write(join(root, "coverage/coverage-summary.json"), 99);
+    write(join(elsewhere, "coverage-summary.json"), 50);
+    const failing = run("--summary", join(elsewhere, "coverage-summary.json"));
+    expect(failing.status).toBe(1);
+    expect(failing.stdout).toContain("below the 73% floor");
+
+    write(join(root, "coverage/coverage-summary.json"), 10);
+    write(join(elsewhere, "coverage-summary.json"), 80);
+    const passing = run("--summary", join(elsewhere, "coverage-summary.json"));
+    expect(passing.status).toBe(0);
+    expect(passing.stdout).toContain("80% against the 73% floor");
+  });
+
+  it("exits 2 when the named summary is missing, even with one under coverage/", () => {
+    write(join(root, "coverage/coverage-summary.json"), 99);
+    const result = run("--summary", join(elsewhere, "absent.json"));
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(join(elsewhere, "absent.json"));
+  });
+
+  it("exits 2 on --summary without a path or on an unknown argument", () => {
+    write(join(root, "coverage/coverage-summary.json"), 99);
+    expect(run("--summary").status).toBe(2);
+    expect(run("--summary", "").status).toBe(2);
+    expect(run("--sumary", join(elsewhere, "x.json")).status).toBe(2);
+  });
+});

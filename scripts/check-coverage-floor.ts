@@ -2,10 +2,12 @@
 // Coverage floor ratchet (issue 592): fails when line coverage drops below
 // the floor recorded in scripts/coverage.json.
 //
-//   node scripts/check-coverage-floor.ts
+//   node scripts/check-coverage-floor.ts [--summary <path>]
 //
-// Reads the vitest json-summary output at coverage/coverage-summary.json and
-// the committed floor document at scripts/coverage.json. Exit 0 when
+// Reads the vitest json-summary output — coverage/coverage-summary.json under
+// the repository, or exactly the file --summary names — and the committed
+// floor document at scripts/coverage.json. --summary lets a caller keep the
+// measurement outside the tree being judged. Exit 0 when
 // total.lines.pct is at or above the floor, 1 when it is below it, 2 when
 // either file is missing or unreadable. The floor itself is only ever moved
 // by scripts/calibrate-coverage.ts, which raises it — never by hand.
@@ -70,8 +72,21 @@ export function readDoc(root: string): CoverageFloorDoc {
   return JSON.parse(readFileSync(join(root, DOC_PATH), "utf8"));
 }
 
-export function readSummary(root: string): CoverageSummary {
-  return JSON.parse(readFileSync(join(root, SUMMARY_PATH), "utf8"));
+export function readSummary(root: string, summaryPath = join(root, SUMMARY_PATH)): CoverageSummary {
+  return JSON.parse(readFileSync(summaryPath, "utf8"));
+}
+
+/**
+ * The summary location the command line names, or the default under `root`.
+ * Returns null on a malformed command line: an unknown argument or a
+ * --summary with no path is refused rather than read as the default.
+ */
+export function summaryPathFrom(args: readonly string[], root: string): string | null {
+  if (args.length === 0) return join(root, SUMMARY_PATH);
+  if (args.length === 2 && args[0] === "--summary" && (args[1] ?? "") !== "") {
+    return args[1]!;
+  }
+  return null;
 }
 
 export function repoRoot(): string {
@@ -87,14 +102,19 @@ export function repoRoot(): string {
 
 function main(): void {
   const root = repoRoot();
+  const summaryPath = summaryPathFrom(process.argv.slice(2), root);
+  if (summaryPath === null) {
+    console.error("usage: node scripts/check-coverage-floor.ts [--summary <path>]");
+    process.exit(2);
+  }
   let doc: CoverageFloorDoc;
   let summary: CoverageSummary;
   try {
     doc = readDoc(root);
-    summary = readSummary(root);
+    summary = readSummary(root, summaryPath);
   } catch (error) {
     console.error(
-      `coverage floor check: cannot read ${DOC_PATH} or ${SUMMARY_PATH}: ${error}`,
+      `coverage floor check: cannot read ${DOC_PATH} or ${summaryPath}: ${error}`,
     );
     process.exit(2);
   }
