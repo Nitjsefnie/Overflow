@@ -1545,8 +1545,13 @@ exit 1
     // "1.30.0" lexically, so a string compare would admit a pin the floor
     // exists to reject. Encoded as major*1e6 + minor*1e3 + patch, which orders
     // correctly for any version pip can resolve here (no prerelease tags).
+    // Report the version the manifest actually names, not `${zizmor}`: the pin
+    // line carries every hash on one line, so interpolating it would dump ~700
+    // characters of `--hash=sha256:` into a failure message whose reader needs
+    // one fact — which version failed to parse.
+    const named = /^zizmor==(\S+)/.exec(zizmor!)?.[1] ?? "(no zizmor== pin)";
     const pinned = /^zizmor==(\d+)\.(\d+)\.(\d+)\b/.exec(zizmor!);
-    expect(pinned, `no major.minor.patch zizmor pin in ${zizmor}`).not.toBeNull();
+    expect(pinned, `no major.minor.patch zizmor pin: the manifest pins ${named}`).not.toBeNull();
     const [major, minor, patch] = pinned!.slice(1, 4).map(Number);
     expect(
       major * 1_000_000 + minor * 1_000 + patch,

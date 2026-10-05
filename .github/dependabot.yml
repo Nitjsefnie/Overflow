@@ -114,24 +114,54 @@ updates:
   # install for the actionlint workflow. The pip ecosystem picks up the file
   # because its name contains "requirements" within this configured directory.
   #
-  # A Dependabot PR here arrives STALE-HASH broken, which is the whole of the
-  # handler's job on that branch. Measured on PR 1007 (the 1.29.0 -> 1.30.1
-  # bump, against this exact base): it rewrites the version string and leaves
-  # every `--hash=sha256:` at the old release's values, so
-  # `pip install --require-hashes -r .github/requirements-zizmor.txt` exits 1
-  # with "THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE".
-  # dependabot-core's python requirement_file_updater passes new_hash_version to
-  # RequirementReplacer, which is supposed to fetch the new version's full
-  # --hash set from the package index; on this file it does not. Take the
-  # hashes from the index directly instead — one GET, no pip-tools install:
+  # A Dependabot PR here arrives STALE-HASH broken: it bumps the version string
+  # and leaves every `--hash=sha256:` at the old release's values, so
+  # `pip install --require-hashes -r .github/requirements-zizmor.txt` fails with
+  # "THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE".
+  # Measured on PR 1007 (the 1.29.0 -> 1.30.1 bump, against this exact base).
+  #
+  # WHY, traced through dependabot-core (python RequirementFileUpdater ->
+  # RequirementReplacer, `updated_matched_declaration`): the hash refresh is
+  # gated on `matched_declaration.match?(RequirementParser::HASHES)` — the
+  # DECLARATION it is rewriting has to carry hashes. The declaration it picks is
+  # the first INSTALL_REQ_WITH_REQUIREMENT match whose requirement equals the OLD
+  # version, and in this file that is the header comment naming that old version
+  # (for the 1.29.0 -> 1.30.1 bump, line 4's "# zizmor==1.29.0 has no transitive
+  # dependencies…"). A comment is not excluded from that scan, so it wins, carries
+  # no hashes, and the refresh is skipped while the version substitution still
+  # applies to every occurrence. Reproduced by running dependabot-core's own
+  # regexes and constants (from requirement_parser.rb) over this file: with the
+  # header comment present the hash branch does not fire and the edit lands on
+  # exactly the three lines PR 1007 changed (4, 15, 18) with the hash set
+  # untouched; with the comment lines removed the same pass picks the real pin
+  # line and the hash branch fires. (A simulation of upstream's regexes, not a
+  # run of dependabot-core itself, but its output matches PR 1007 exactly.)
+  # So the header comment naming the version is load-bearing for this failure,
+  # and every future bump hits it the same way.
+  #
+  # Fix it on the branch before merging, from the index directly — one GET, no
+  # pip-tools install:
   #   https://pypi.org/pypi/zizmor/<version>/json  ->  urls[].digests.sha256
   # (the file header's pip-compile recipe reaches the same set; the JSON API is
-  # just the cheaper route for a single-pin file).
+  # the cheaper route for a single-pin file.)
   #
-  # No second edit is needed. tests/api/ci-workflows.test.ts asserts a version
-  # FLOOR (>= 1.30.0), not an exact literal, precisely so a Dependabot bump is
-  # not red on arrival for the pin reason (issue 1091); the hash-pinning
-  # assertions in that test are what a stale-hash PR still trips, correctly.
+  # NOTHING catches a stale-hash bump BEFORE it merges. The zizmor case in
+  # tests/api/ci-workflows.test.ts asserts a version FLOOR (>= 1.30.0), not an
+  # exact literal, so the pin reason is deliberately not red on arrival (issue
+  # 1091); and its hash assertions — "every line carries --hash=sha256:" and
+  # "at least two distinct hashes" — do not bind a hash to a version, so PR
+  # 1007's exact content passes them (verified: the focused test is green with
+  # 1.30.1 carrying 1.29.0's eleven well-formed hashes). PR suites run the PR's
+  # tests, not its manifest install. The catcher is
+  # .github/workflows/actionlint.yml's
+  # `pip install --require-hashes`, and it fires on the PUSH TO MAIN that
+  # installs the merged manifest: under pull_request_target that step installs
+  # main's own manifest, never the PR's, so it cannot see the PR's hashes.
+  # The merge is therefore green and the required `actionlint` context goes red
+  # afterwards. That trade is issue 1091's, deliberately: a pre-merge catch would
+  # belong in pr-suite.yml as a --require-hashes step over the PR's tree, which
+  # is a separate change.
+  #
   # This is the same "handler completes the coordinated edit before merging"
   # regime as the two lanes above, with one file to regenerate instead of a
   # workflow and its test constant.
