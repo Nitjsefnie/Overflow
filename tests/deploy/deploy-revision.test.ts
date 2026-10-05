@@ -11,6 +11,7 @@ import {
   DEFAULT_LOCK,
   FIXTURE_HASH,
   FIXTURE_PINS,
+  FIXTURE_REPO,
   FIXTURE_REMOTE_URL,
   IGNORED_LISTING,
   LISTING_REGEX,
@@ -791,12 +792,101 @@ describe("scripts/deploy-revision.sh", () => {
     expectGateRefused(entries);
   });
 
+  it("counts a producer job at a context's SECOND pinned path as that context's producer", async () => {
+    // Issue 1090. The split leaves one required context produced by two
+    // workflow files, and the gate resolves each required check through its
+    // pin. Reading only the first path would leave the second file's check-run
+    // unattributed: the gate would report `verify (unattributed check-run N)`
+    // and hold a deploy on a context that had in fact been judged — a stall,
+    // not a red, because the run itself concluded success.
+    const fixture = await makeFixture();
+    await writeFile(
+      fixture.requiredChecks,
+      JSON.stringify({
+        ...FIXTURE_PINS,
+        verify: [FIXTURE_PINS.verify, ".github/workflows/ci-pr.yml"],
+      }),
+    );
+    // The verify job exists only at the SECOND path: nothing at the first can
+    // mask a gate that still only reads the first.
+    const state = await writeGateState(fixture, "gate-second-path", [
+      {
+        id: 100,
+        path: ".github/workflows/ci-pr.yml",
+        jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "success" }],
+      },
+      {
+        id: 200,
+        path: FIXTURE_PINS["deploy-gate"]!,
+        jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }],
+      },
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state });
+
+    expect(result.status, result.stderr).toBe(0);
+    // The second path's run is read for jobs at all, so it is judged rather
+    // than filtered out as a workflow nothing is pinned to.
+    const jobsReads = (await readLog(fixture.shimLog))
+      .filter((entry) => entry.cmd === "gh" && entry.args[1]?.includes("/jobs?"))
+      .map((entry) => entry.args[1]);
+    expect(jobsReads).toEqual(
+      expect.arrayContaining([
+        `repos/${FIXTURE_REPO}/actions/runs/100/jobs?filter=all&per_page=100`,
+        `repos/${FIXTURE_REPO}/actions/runs/200/jobs?filter=all&per_page=100`,
+      ]),
+    );
+  });
+
+  it("still refuses a same-named job in a workflow the pin does NOT name", async () => {
+    // The other half of the same guard, and the reason the pin is read as a
+    // membership test rather than as "the list's first entry": widening what
+    // counts as a producer would let an untrusted workflow attest a required
+    // context.
+    const fixture = await makeFixture();
+    await writeFile(
+      fixture.requiredChecks,
+      JSON.stringify({
+        ...FIXTURE_PINS,
+        verify: [FIXTURE_PINS.verify, ".github/workflows/ci-pr.yml"],
+      }),
+    );
+    const state = await writeGateState(fixture, "gate-unpinned-path", [
+      {
+        id: 100,
+        path: FIXTURE_PINS.verify!,
+        jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "success" }],
+      },
+      {
+        id: 400,
+        path: ".github/workflows/impostor.yml",
+        jobs: [{ id: 4001, name: "verify", status: "completed", conclusion: "success" }],
+      },
+      {
+        id: 200,
+        path: FIXTURE_PINS["deploy-gate"]!,
+        jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }],
+      },
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "1" });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("verify (unattributed check-run 4001)");
+    expectGateRefused(await readLog(fixture.shimLog));
+  });
+
   it("refuses when the pin map at the SHA is missing, unparsable or misshapen", async () => {
     const cases: Array<[string, Record<string, string>]> = [
       ["missing at the SHA", { GIT_SHIM_SHOW_RC: "128" }],
       ["invalid JSON", { map: "{ not json" }],
       ["not an object", { map: JSON.stringify(Object.values(FIXTURE_PINS)) }],
       ["a non-string value", { map: JSON.stringify({ ...FIXTURE_PINS, verify: 7 }) }],
+      ["an empty list", { map: JSON.stringify({ ...FIXTURE_PINS, verify: [] }) }],
+      [
+        "a list holding a path outside .github/workflows/",
+        { map: JSON.stringify({ ...FIXTURE_PINS, verify: [FIXTURE_PINS.verify, "scripts/ci.yml"] }) },
+      ],
+      ["a list holding a non-string", { map: JSON.stringify({ ...FIXTURE_PINS, verify: [FIXTURE_PINS.verify, 7] }) }],
+      ["a nested list", { map: JSON.stringify({ ...FIXTURE_PINS, verify: [[FIXTURE_PINS.verify]] }) }],
       ["a value outside .github/workflows/", { map: JSON.stringify({ ...FIXTURE_PINS, verify: "scripts/ci.yml" }) }],
       ["a nested workflow path", { map: JSON.stringify({ ...FIXTURE_PINS, verify: ".github/workflows/x/ci.yml" }) }],
       ["a non-YAML file", { map: JSON.stringify({ ...FIXTURE_PINS, verify: ".github/workflows/ci.json" }) }],

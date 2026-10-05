@@ -99,7 +99,7 @@ is_operational_ignored() {
 # just after a merge, a legitimate job's check-run can be listed before its
 # run is.
 required_checks_gate() {
-  local remote_url repo required pins check pin unmapped check_runs runs run_id run_path run_jobs jobs
+  local remote_url repo required pins check unmapped check_runs runs run_id run_path run_jobs jobs
   local job_line job_run job_path job_id job_name job_attempt job_status job_conclusion
   local cr_id cr_name cr_app cr_status cr_conclusion producer_ids status conclusion
   local decided_run decided_attempt pending timeout deadline ledger_app_id ledger_id
@@ -120,21 +120,27 @@ required_checks_gate() {
     printf 'could not determine required checks for main; refusing to deploy\n' >&2
     exit 1
   fi
-  # The pin map as `check<TAB>workflow path` lines. A missing file, invalid
-  # JSON, anything but exactly one object of .github/workflows/*.yml paths,
-  # or an absent jq all fail here.
+  # The pin map as `check<TAB>workflow path` lines, one line per path: a check
+  # may be pinned to several workflow files (issue 1090 splits the workflows
+  # that read pull-request data, leaving one required context produced by a
+  # pull_request_target file and a push file), and every path it names is a
+  # workflow whose job for that check counts. A missing file, invalid JSON,
+  # anything but exactly one object of .github/workflows/*.yml paths or
+  # non-empty lists of them, or an absent jq all fail here.
   if ! pins=$(git show "$full_sha:.github/required-checks.json" | jq -rs '
-      if length == 1 and (.[0] | type == "object"
-          and all(.[]; type == "string" and test("\\A\\.github/workflows/[^/]+\\.ya?ml\\z")))
-      then .[0] | to_entries[] | [.key, .value] | @tsv
-      else error("not exactly one object of .github/workflows/*.yml paths") end'); then
-    printf 'Could not read a valid .github/required-checks.json at %s (a JSON object mapping each required check to a .github/workflows/*.yml path); refusing to deploy.\n' "$full_sha" >&2
+      def ispath: type == "string" and test("\\A\\.github/workflows/[^/]+\\.ya?ml\\z");
+      def pinpaths: if type == "string" then [.] elif (type == "array" and length > 0) then . else null end;
+      if length == 1
+          and (.[0] | type == "object" and all(.[]; pinpaths != null and all(pinpaths[]; ispath)))
+      then .[0] | to_entries[] | .key as $key | (.value | pinpaths[]) | [$key, .] | @tsv
+      else error("not exactly one object of .github/workflows/*.yml paths or non-empty lists of them") end'); then
+    printf 'Could not read a valid .github/required-checks.json at %s (a JSON object mapping each required check to a .github/workflows/*.yml path or a non-empty list of them); refusing to deploy.\n' "$full_sha" >&2
     exit 1
   fi
   unmapped=
   while IFS= read -r check; do
     [ -n "$check" ] || continue
-    [ -n "$(pin_for "$check")" ] || unmapped+="${unmapped:+, }$check"
+    [ -n "$(pins_for "$check")" ] || unmapped+="${unmapped:+, }$check"
   done <<<"$required"
   if [ -n "$unmapped" ]; then
     printf 'Required checks with no pin in .github/required-checks.json at %s: %s; refusing to deploy.\n' "$full_sha" "$unmapped" >&2
@@ -183,14 +189,13 @@ required_checks_gate() {
     pending=
     while IFS= read -r check; do
       [ -n "$check" ] || continue
-      pin=$(pin_for "$check")
-      # The check's producers are the pinned workflow's jobs named for it, in
+      # The check's producers are the pinned workflows' jobs named for it, in
       # any run and attempt. The newest run decides, and within it the latest
       # attempt. On equal keys (two same-named jobs in one attempt) a
       # non-success replaces a success, so a tie can only hold the deploy back.
       producer_ids=$'\n' decided_run=0 decided_attempt=0 status='' conclusion=''
       while IFS=$'\t' read -r job_run job_path job_id job_name job_attempt job_status job_conclusion; do
-        [ "$job_path" = "$pin" ] && [ "$job_name" = "$check" ] || continue
+        is_pinned_path_of "$check" "$job_path" && [ "$job_name" = "$check" ] || continue
         producer_ids+="$job_id"$'\n'
         if [ "$job_run" -gt "$decided_run" ] \
           || { [ "$job_run" -eq "$decided_run" ] && [ "$job_attempt" -gt "$decided_attempt" ]; } \
@@ -240,23 +245,37 @@ required_checks_gate() {
   done
 }
 
-# The workflow path the gate's parsed pin map ($pins) gives a check; empty
-# when the check has no pin.
-pin_for() {
+# Every workflow path the gate's parsed pin map ($pins) gives a check, one per
+# line; nothing when the check has no pin. A check pinned to several workflow
+# files (issue 1090's split) yields all of them, so a producer job in ANY of
+# them counts as that check's producer — pinning only the first would leave the
+# others' check-runs unattributed and the deploy waiting on a context that had
+# in fact been judged.
+pins_for() {
   local key value
   while IFS=$'\t' read -r key value; do
     if [ "$key" = "$1" ]; then
-      printf '%s' "$value"
-      return
+      printf '%s\n' "$value"
     fi
   done <<<"$pins"
 }
 
-# Whether a workflow path is the pin of some required check.
+# Whether a workflow path is one of the pins of a check.
+is_pinned_path_of() {
+  local pin
+  while IFS= read -r pin; do
+    if [ -n "$pin" ] && [ "$pin" = "$2" ]; then
+      return 0
+    fi
+  done <<<"$(pins_for "$1")"
+  return 1
+}
+
+# Whether a workflow path is a pin of some required check.
 is_pinned_path() {
   local check
   while IFS= read -r check; do
-    if [ -n "$check" ] && [ "$(pin_for "$check")" = "$1" ]; then
+    if [ -n "$check" ] && is_pinned_path_of "$check" "$1"; then
       return 0
     fi
   done <<<"$required"

@@ -1094,17 +1094,20 @@ describe("the workflows left unbounded", () => {
  * The workflow filenames whose jobs are required check contexts, read from
  * .github/required-checks.json rather than hardcoded — the same file the deploy
  * gate resolves through, so a required check added there is covered here without
- * editing this suite. A path is taken as a basename, and anything that does not
- * resolve to a workflow in the directory is left for the caller's
- * `workflows.has` assertion to name.
+ * editing this suite. A pin may name several files (issue 1090's split), so
+ * every path of every pin is read; dropping the list form would let a
+ * required-check workflow escape the bound this suite enforces. A path is taken
+ * as a basename, and anything that does not resolve to a workflow in the
+ * directory is left for the caller's `workflows.has` assertion to name.
  */
 function requiredCheckWorkflows(): string[] {
   // Typed as `unknown` and narrowed, not as `Record<string, string>`: a future
-  // object- or array-valued entry would otherwise throw a bare TypeError from
-  // `.split` with no actionable message, which reads as a broken test rather
-  // than a contract that needs updating.
+  // object-valued entry would otherwise throw a bare TypeError from `.split`
+  // with no actionable message, which reads as a broken test rather than a
+  // contract that needs updating.
   const pins: unknown = JSON.parse(readFileSync(resolve(".github/required-checks.json"), "utf8"));
-  const paths = pins && typeof pins === "object" ? Object.values(pins) : [];
+  const values = pins && typeof pins === "object" ? Object.values(pins) : [];
+  const paths = values.flatMap((value) => (typeof value === "string" ? [value] : Array.isArray(value) ? value : []));
   return [
     ...new Set(
       paths

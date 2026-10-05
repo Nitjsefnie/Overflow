@@ -1707,11 +1707,17 @@ exit 1
     // clause still does most of the work and still stays.
     const requiredChecks = JSON.parse(
       await readFile(resolve(".github/required-checks.json"), "utf8"),
-    ) as Record<string, string>;
+    ) as Record<string, string | string[]>;
     const promotableCheckNames = [workflow.name, analysis.name ?? "analysis"];
+    // A pin may name several files (issue 1090's split), so the path clause
+    // reads every path of a pin: stringifying a list would compare
+    // ".github/workflows/a.yml,.github/workflows/b.yml" and find no
+    // ".yml" suffix, letting a scorecard pin through this guard.
     expect(
       Object.entries(requiredChecks).filter(
-        ([check, file]) => promotableCheckNames.includes(check) || String(file).endsWith("scorecard.yml"),
+        ([check, pin]) =>
+          promotableCheckNames.includes(check) ||
+          (Array.isArray(pin) ? pin : [pin]).some((file) => file.endsWith("scorecard.yml")),
       ),
       "scorecard is a weekly trend signal, not a per-commit gate: a required check naming it — " +
         "by its workflow name, by the analysis job's check-run name, or by pinning its file — " +

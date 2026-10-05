@@ -29,7 +29,9 @@
 
 import {
   isTrustedProducerRun,
+  pinsFor,
   type ContextDecision,
+  type PinMap,
   type RelayJob,
 } from "./ledger-relay-decisions.ts";
 
@@ -80,12 +82,12 @@ export interface SweepDeps {
   api: SweepApi;
   /** The mirror's own context decider, so a swept run is decided identically to a triggered one. */
   decide: (
-    pinMap: Readonly<Record<string, string>>,
+    pinMap: PinMap,
     runPath: string,
     runConclusion: string | null,
     jobs: readonly RelayJob[],
   ) => ContextDecision[];
-  pinMap: Readonly<Record<string, string>>;
+  pinMap: PinMap;
   /** The REST base the caller also uses. Injected rather than named here, so this module never holds a second copy of a constant the two modules would then drift on — and so the dependency stays one-way: a runtime import of it back from scripts/ledger-relay.ts would be a cycle. */
   apiRoot: string;
   repo: string;
@@ -117,11 +119,15 @@ export interface SweepDeps {
  */
 export function selectSweepCandidates(
   entries: unknown,
-  pinMap: Readonly<Record<string, string>>,
+  pinMap: PinMap,
   triggerRunId: string,
 ): SweepCandidate[] {
   if (!Array.isArray(entries)) return [];
-  const pinnedPaths = new Set(Object.values(pinMap));
+  // Flattened across every context and every path of every pin: a run of a
+  // context's SECOND pinned path (issue 1090's split) is just as much a
+  // candidate as a run of the first, and filtering it out here would leave its
+  // completion unattested forever with nothing to report it.
+  const pinnedPaths = new Set(Object.values(pinMap).flatMap(pinsFor));
   const candidates: SweepCandidate[] = [];
   for (const entry of entries) {
     if (typeof entry !== "object" || entry === null) continue;
@@ -162,9 +168,10 @@ export function selectSweepCandidates(
 }
 
 /**
- * The missing-context computation, pure. The contexts pinned to the
- * candidate's path, minus the names the App already holds at that commit, minus
- * the contexts this same sweep has already relayed at that commit.
+ * The missing-context computation, pure. The contexts one of whose pinned paths
+ * is the candidate's path, minus the names the App already holds at that
+ * commit, minus the contexts this same sweep has already relayed at that
+ * commit.
  *
  * The last subtraction is what makes the sweep safe to run on every relay
  * start: two completed runs of the same workflow at one head are two
@@ -174,14 +181,14 @@ export function selectSweepCandidates(
  * other is what this invocation has itself just written.
  */
 export function missingContextsFor(
-  pinMap: Readonly<Record<string, string>>,
+  pinMap: PinMap,
   candidate: SweepCandidate,
   attested: ReadonlySet<string>,
   relayedThisSweep: ReadonlySet<string>,
 ): string[] {
   const missing: string[] = [];
-  for (const [context, path] of Object.entries(pinMap)) {
-    if (path !== candidate.path) continue;
+  for (const [context, pins] of Object.entries(pinMap)) {
+    if (!pinsFor(pins).includes(candidate.path)) continue;
     if (attested.has(context) || relayedThisSweep.has(context)) continue;
     missing.push(context);
   }

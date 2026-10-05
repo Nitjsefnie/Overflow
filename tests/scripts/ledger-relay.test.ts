@@ -9,6 +9,7 @@ import {
   RERUN_ATTEMPT_CAP,
   renderRelayResult,
   runRelay,
+  validatePinMap,
   type ContextDecision,
   type RelayJob,
 } from "../../scripts/ledger-relay.ts";
@@ -26,11 +27,25 @@ import { SWEEP_RUN_LIMIT } from "../../scripts/ledger-relay-sweep.ts";
 
 const PATH_CI = ".github/workflows/ci.yml";
 const PATH_ACTIONLINT = ".github/workflows/actionlint.yml";
+/** The second producer path of the split shape. Not a committed pin. */
+const PATH_CI_PR = ".github/workflows/ci-pr.yml";
 
 const PIN_MAP = {
   verify: PATH_CI,
   "ratchet-guard": ".github/workflows/ratchet-guard.yml",
   actionlint: PATH_ACTIONLINT,
+};
+
+/**
+ * One context pinned to TWO workflow paths — the shape issue 1090's workflow
+ * split produces, where a required context's pull-request leg and its push leg
+ * live in separate files. Neither path here is a committed pin: the real
+ * .github/required-checks.json stays all-strings until the split lands, so
+ * every assertion below runs against a test-local map.
+ */
+const TWO_PATH_PIN_MAP = {
+  verify: [PATH_CI, PATH_CI_PR],
+  "ratchet-guard": ".github/workflows/ratchet-guard.yml",
 };
 
 function job(over: Partial<RelayJob>): RelayJob {
@@ -79,6 +94,53 @@ describe("isTrustedProducerRun", () => {
     ["pull_request_target ", "main", false],
   ])("event %j on head branch %j is trusted: %s", (event, headBranch, expected) => {
     expect(isTrustedProducerRun(event, headBranch)).toBe(expected);
+  });
+});
+
+/**
+ * The pin map's shape, as the relay reads it. Two forms are legal per context:
+ * the string every committed entry uses today, and a non-empty list of paths,
+ * which is what a required context whose pull-request and push legs live in
+ * separate workflow files has to name (issue 1090). An EMPTY list is refused:
+ * it is the shape that reads as "this context has no producer", which is the
+ * condition the deploy gate refuses a map for and the relay must not mint a
+ * token over.
+ */
+describe("validatePinMap", () => {
+  it("accepts today's single-string form, unchanged", () => {
+    expect(validatePinMap(PIN_MAP)).toEqual(PIN_MAP);
+  });
+
+  it("accepts a non-empty list of workflow paths for one context", () => {
+    expect(validatePinMap({ verify: [PATH_CI, PATH_CI_PR] })).toEqual({
+      verify: [PATH_CI, PATH_CI_PR],
+    });
+  });
+
+  it("accepts a map mixing a string pin and a list pin", () => {
+    expect(validatePinMap({ verify: [PATH_CI, PATH_CI_PR], actionlint: PATH_ACTIONLINT })).toEqual({
+      verify: [PATH_CI, PATH_CI_PR],
+      actionlint: PATH_ACTIONLINT,
+    });
+  });
+
+  it.each([
+    ["an empty list", { verify: [] }],
+    ["a list holding a path outside .github/workflows/", { verify: [PATH_CI, "scripts/ci.yml"] }],
+    ["a list holding a nested list", { verify: [PATH_CI, [PATH_CI_PR]] }],
+    ["a list holding a number", { verify: [PATH_CI, 7] }],
+    ["a list holding null", { verify: [PATH_CI, null] }],
+    ["a bare number", { verify: 7 }],
+    ["null", { verify: null }],
+    ["a top-level array", [PATH_CI]],
+    ["a top-level string", PATH_CI],
+    ["a top-level array of objects", [{ verify: PATH_CI }]],
+  ])("refuses %s", (_name, value) => {
+    expect(() => validatePinMap(value)).toThrow(/required-checks\.json/);
+  });
+
+  it("names the offending context, so the refusal is actionable", () => {
+    expect(() => validatePinMap({ verify: PATH_CI, actionlint: [] })).toThrow(/actionlint/);
   });
 });
 
@@ -313,6 +375,44 @@ describe("decideContexts", () => {
       [job({}), job({ name: "a-context" })],
     );
     expect(decisions.map((decision) => decision.context)).toEqual(["z-context", "a-context"]);
+  });
+
+  // Issue 1090. Before the split every context had exactly one producing
+  // workflow, so pinning it to a single path was the whole contract. The split
+  // gives one context two producing workflows, and a pin that names only the
+  // first leaves the second path's runs relaying NOTHING — a silent no-op, not
+  // a red relay, because the second run's path simply matches no pin.
+  it("resolves the context from EITHER path a list pin names", () => {
+    for (const runPath of [PATH_CI, PATH_CI_PR]) {
+      const decisions = decideContexts(TWO_PATH_PIN_MAP, runPath, "success", [job({})]);
+      expect(decisions.map((decision) => decision.context), runPath).toEqual(["verify"]);
+    }
+  });
+
+  it("still resolves today's single-string form", () => {
+    const decisions = decideContexts(PIN_MAP, PATH_ACTIONLINT, "success", [
+      job({ name: "actionlint" }),
+    ]);
+    expect(decisions.map((decision) => decision.context)).toEqual(["actionlint"]);
+  });
+
+  it("gives a list pin no reach beyond its own paths", () => {
+    expect(decideContexts(TWO_PATH_PIN_MAP, PATH_ACTIONLINT, "success", [job({})])).toEqual([]);
+  });
+
+  it("decides a list pin once per context, never once per path", () => {
+    const decisions = decideContexts(TWO_PATH_PIN_MAP, PATH_CI_PR, "success", [job({})]);
+    expect(decisions).toHaveLength(1);
+  });
+
+  it("keeps two different contexts naming the same path", () => {
+    const decisions = decideContexts(
+      { verify: PATH_CI, actionlint: [PATH_CI, PATH_CI_PR] },
+      PATH_CI,
+      "success",
+      [job({}), job({ name: "actionlint" })],
+    );
+    expect(decisions.map((decision) => decision.context)).toEqual(["verify", "actionlint"]);
   });
 
   it.each([
@@ -1164,6 +1264,134 @@ describe("runRelay", () => {
     });
   });
 
+  // --- A context pinned to two workflow paths (issue 1090) ---
+
+  describe("a context pinned to two workflow paths", () => {
+    it("relays the context for a run of EITHER path", async () => {
+      for (const runPath of [PATH_CI, PATH_CI_PR]) {
+        const fetchStub = makeFetch([
+          token(),
+          jobsListing([job({})]),
+          { status: 201, body: { id: 1 } },
+          noSweepRuns(),
+        ]);
+        const result = await runRelay({
+          env: relayEnv({ GITHUB_WORKFLOW_RUN_PATH: runPath }),
+          fetchFn: fetchStub.fn,
+          delayFn: makeDelay().fn,
+          readPinMap: async () => TWO_PATH_PIN_MAP,
+        });
+
+        expect(result.posted, runPath).toEqual(["verify"]);
+        expect(fetchStub.requests.map((request) => request.url), runPath).toEqual([
+          TOKEN_URL,
+          JOBS_URL,
+          CHECK_RUNS_URL,
+          SWEEP_RUNS_URL,
+        ]);
+        const [body] = bodiesOf(fetchStub.requests);
+        expect(body?.name, runPath).toBe("verify");
+        expect(body?.head_sha, runPath).toBe(HEAD_SHA);
+      }
+    });
+
+    it("keeps the trusted-producer refusal for a run of the SECOND path", async () => {
+      // The narrowness pin, and the reason it is written against the SECOND
+      // path rather than the first. Widening the pin map is a change to WHICH
+      // runs relay a context; it must not become a change to WHICH runs may.
+      // Before this map existed, a pull_request run could never even reach the
+      // predicate — contextsFor matched nothing, so the relay returned quietly.
+      // Now that the second path matches, the predicate is the only thing
+      // between a run that executed a definition a pull request could shape
+      // and an App-owned check-run branch protection would merge on.
+      const fetchStub = makeFetch([token(), ...acceptingOutcomes()]);
+      const error = await caughtError(
+        runRelay({
+          env: relayEnv({
+            GITHUB_WORKFLOW_RUN_PATH: PATH_CI_PR,
+            GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
+            GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
+          }),
+          fetchFn: fetchStub.fn,
+          delayFn: makeDelay().fn,
+          readPinMap: async () => TWO_PATH_PIN_MAP,
+        }),
+      );
+
+      expect(error, "an untrusted run of a second pinned path must fail the relay visibly").toBeInstanceOf(
+        Error,
+      );
+      expect(error?.message).toContain(`run ${RUN_ID}`);
+      expect(error?.message).toContain('event "pull_request"');
+      expect(error?.message).toContain('head branch "feature/some-branch"');
+      expect(error?.message).toContain("no required context was relayed");
+      // Refused before the installation-token mint: not one request left the relay.
+      expect(fetchStub.requests).toHaveLength(0);
+      expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
+    });
+
+    it("still refuses an untrusted run of a path TWO contexts are pinned to", async () => {
+      // The same wiring, reached the other way: not a second path but a second
+      // context. A relay that grew to skip its trusted-producer check for a
+      // run resolving "more than one" context would be skipped here, and this
+      // repository has two contexts naming one path today.
+      const fetchStub = makeFetch([token(), ...acceptingOutcomes()]);
+      const error = await caughtError(
+        runRelay({
+          env: relayEnv({
+            GITHUB_WORKFLOW_RUN_PATH: PATH_CI,
+            GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
+            GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
+          }),
+          fetchFn: fetchStub.fn,
+          delayFn: makeDelay().fn,
+          readPinMap: async () => ({ verify: [PATH_CI, PATH_CI_PR], "ratchet-guard": PATH_CI }),
+        }),
+      );
+
+      expect(
+        requestsTo(fetchStub.requests, CHECK_RUNS_URL),
+        "the trusted-producer check must precede any posting, however many contexts the path resolves",
+      ).toHaveLength(0);
+      expect(error?.message).toContain("no required context was relayed");
+      expect(fetchStub.requests).toHaveLength(0);
+    });
+
+    it("still relays nothing for a path neither pin names", async () => {
+      const fetchStub = makeFetch([]);
+      const result = await runRelay({
+        env: relayEnv({
+          GITHUB_WORKFLOW_RUN_PATH: PATH_ACTIONLINT,
+          GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
+          GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
+        }),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => TWO_PATH_PIN_MAP,
+      });
+
+      expect(result.posted).toEqual([]);
+      expect(fetchStub.requests).toHaveLength(0);
+    });
+
+    it("validates the map before it decides, so an unusable list pin never mints a token", async () => {
+      const fetchStub = makeFetch([]);
+      const error = await caughtError(
+        runRelay({
+          env: relayEnv(),
+          fetchFn: fetchStub.fn,
+          delayFn: makeDelay().fn,
+          readPinMap: async () => ({ verify: [] }),
+        }),
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error?.message).toContain(".github/required-checks.json");
+      expect(error?.message).toContain("verify");
+      expect(fetchStub.requests).toHaveLength(0);
+    });
+  });
+
   // --- The rerun-heal (issue 861) ---
 
   const PULLS_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${HEAD_SHA}/pulls?per_page=100`;
@@ -1683,6 +1911,35 @@ describe("runRelay", () => {
   }
 
   describe("orphan sweep (issue 885)", () => {
+    it("heals an orphan whose run is at a context's SECOND pinned path", async () => {
+      // The sweep keeps its own pin map, so the second path has to reach it too
+      // — not only the mirror's contextsFor. A split that leaves the sweep
+      // blind to the new path does not break the mirror and does break the
+      // orphan heal, silently: the candidate is filtered out as "a run nothing
+      // is pinned to" and the completion stays unattested forever.
+      const fetchStub = makeFetch([
+        token(),
+        jobsListing([job({})]),
+        { status: 201, body: { id: 1 } },
+        sweepListing([sweepRun(9001, { path: PATH_CI }), sweepRun(9002, { path: PATH_CI_PR })]),
+        checkRunsListing([]),
+        jobsListing([job({})]),
+        { status: 201, body: { id: 2 } },
+      ]);
+      const result = await runRelay({
+        env: relayEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => TWO_PATH_PIN_MAP,
+      });
+
+      expect(result.sweep.examined).toBe(1);
+      expect(result.sweep.relayed).toEqual([{ context: "verify", runId: "9002" }]);
+      expect(bodiesOf(fetchStub.requests)).toContainEqual(
+        expect.objectContaining({ name: "verify", head_sha: HEAD_SHA }),
+      );
+    });
+
     it("relays the context whose own relay instance was cancelled, at the orphan's own head SHA", async () => {
       // Two producer runs complete within seconds of each other. GitHub keeps
       // one PENDING run per concurrency group and cancels the previous pending

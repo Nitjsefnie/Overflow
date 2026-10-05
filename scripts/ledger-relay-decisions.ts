@@ -32,6 +32,34 @@ export interface ContextDecision {
 
 export const PIN_SHAPE = /^\.github\/workflows\/[^/]+\.ya?ml$/;
 
+/**
+ * One required context's producer workflow paths: the single path every
+ * committed entry uses, or a non-empty list of them.
+ *
+ * The list form exists because issue 1090 splits a workflow that reads
+ * pull-request data out of its privileged triggers, which leaves one required
+ * context produced by TWO workflow files — a `pull_request_target` leg and a
+ * `push`/`workflow_dispatch` leg. A context pinned to a single path cannot
+ * name both, and the paths it does not name are not merely unverified: the
+ * relay's "nothing is pinned to this run's workflow" branch makes them
+ * SILENT, so the second file's completions post no App check-run at all.
+ *
+ * Read through {@link pinsFor} everywhere rather than narrowed by hand, so a
+ * consumer cannot learn the shape by accident and split on it.
+ */
+export type ContextPins = string | readonly string[];
+
+/** The pin map: each required context, and the workflow paths that may attest it. */
+export type PinMap = Readonly<Record<string, ContextPins>>;
+
+/**
+ * The paths one context's pin names, whichever form it is written in. The only
+ * place the two forms are distinguished.
+ */
+export function pinsFor(pins: ContextPins): readonly string[] {
+  return typeof pins === "string" ? [pins] : pins;
+}
+
 /** The base branch: the one protected ref whose workflow definitions the relay trusts. */
 const BASE_BRANCH = "main";
 
@@ -78,8 +106,9 @@ export function isTrustedProducerRun(event: string, headBranch: string): boolean
 }
 
 /**
- * The relay's core. Contexts come from the pin map entries whose path equals
- * the triggering run's path, in pin-map order. For each:
+ * The relay's core. Contexts come from the pin map entries whose pin NAMES the
+ * triggering run's path — every path of a list pin, in pin-map order, and one
+ * decision per context however many of its paths match. For each:
  *
  * - jobs named exactly the context: the highest run_attempt decides, and on
  *   an attempt tie a non-success replaces a success — the deploy gate's
@@ -96,14 +125,14 @@ export function isTrustedProducerRun(event: string, headBranch: string): boolean
  *   neutral outcomes fail closed.
  */
 export function decideContexts(
-  pinMap: Readonly<Record<string, string>>,
+  pinMap: PinMap,
   runPath: string,
   runConclusion: string | null,
   jobs: readonly RelayJob[],
 ): ContextDecision[] {
   const decisions: ContextDecision[] = [];
-  for (const [context, path] of Object.entries(pinMap)) {
-    if (path !== runPath) continue;
+  for (const [context, pins] of Object.entries(pinMap)) {
+    if (!pinsFor(pins).includes(runPath)) continue;
     decisions.push(decideOne(context, runPath, runConclusion, jobs));
   }
   return decisions;
@@ -194,19 +223,37 @@ function conclusionWord(conclusion: string | null): string {
   return conclusion === null || conclusion === "" ? "without a conclusion" : conclusion;
 }
 
-/** The same shape the deploy gate demands: one flat object of workflow paths. */
-export function validatePinMap(value: unknown): Record<string, string> {
+/**
+ * The pin map, checked against the shape the deploy gate demands: one flat JSON
+ * object whose every value is a workflow path, or a non-empty list of them.
+ * The string form is what every committed entry uses, and it is kept rather
+ * than normalised away so the file stays readable; the list form is what a
+ * context with more than one producing workflow writes (issue 1090).
+ *
+ * An EMPTY list is refused rather than read as "no producer". It is the one
+ * shape that would let a context name itself into the map and then never be
+ * decided — the relay would relay nothing for it while every run of its
+ * workflow looked successful — and the deploy gate refuses a required check
+ * with no pin for the same reason.
+ */
+export function validatePinMap(value: unknown): PinMap {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(".github/required-checks.json must be one JSON object");
   }
-  const pinMap: Record<string, string> = {};
-  for (const [context, path] of Object.entries(value)) {
-    if (typeof path !== "string" || !PIN_SHAPE.test(path)) {
+  const pinMap: Record<string, ContextPins> = {};
+  for (const [context, pins] of Object.entries(value)) {
+    const paths = typeof pins === "string" ? [pins] : pins;
+    const usable =
+      Array.isArray(paths) &&
+      paths.length > 0 &&
+      paths.every((path) => typeof path === "string" && PIN_SHAPE.test(path));
+    if (!usable) {
       throw new Error(
-        `.github/required-checks.json: the pin for ${context} is not a workflow path: ${JSON.stringify(path)}`,
+        `.github/required-checks.json: the pin for ${context} is not a workflow path, ` +
+          `or a non-empty list of them: ${JSON.stringify(pins)}`,
       );
     }
-    pinMap[context] = path;
+    pinMap[context] = pins;
   }
   return pinMap;
 }

@@ -20,14 +20,18 @@
 // named in .github/workflows/ledger-relay.yml) or by workflow_dispatch with
 // LEDGER_DISPATCH_RUN_ID, recovering a run whose relay posting died. The pin
 // map (.github/required-checks.json) is read from the relay's own checkout —
-// the trusted main tip — and each context pinned to the triggering run's path
-// is decided from that run's job records and posted as a check-run under an
-// App installation token minted in-process. A pinned run is relayed only when
-// the workflow definition it executed is the base branch's
+// the trusted main tip — and each context whose pin names the triggering run's
+// path is decided from that run's job records and posted as a check-run under
+// an App installation token minted in-process. A pin may name several paths
+// (issue 1090 splits the workflows that read pull-request data, leaving one
+// required context produced by a pull_request_target file and a push file),
+// and every path it names relays. A pinned run is relayed only when the
+// workflow definition it executed is the base branch's
 // (isTrustedProducerRun); any other pinned run fails the relay without
-// posting. The App key arrives only through the LEDGER_APP_KEY secret and is
-// never logged; every failure exits nonzero so a dead relay is visible as a
-// red job, never as silence.
+// posting, whichever of its context's paths the run came from. The App key
+// arrives only through the LEDGER_APP_KEY secret and is never logged; every
+// failure exits nonzero so a dead relay is visible as a red job, never as
+// silence.
 
 import { createSign } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -48,13 +52,15 @@ import {
   decideContexts,
   isTrustedProducerRun,
   PIN_SHAPE,
+  pinsFor,
   validatePinMap,
   type ContextDecision,
+  type PinMap,
   type RelayJob,
 } from "./ledger-relay-decisions.ts";
 
-export { decideContexts, isTrustedProducerRun, PIN_SHAPE, validatePinMap };
-export type { ContextDecision, RelayJob };
+export { decideContexts, isTrustedProducerRun, PIN_SHAPE, pinsFor, validatePinMap };
+export type { ContextDecision, PinMap, RelayJob };
 
 /** The triggering run's identifying fields, validated on entry. */
 export interface TriggeringRun {
@@ -160,7 +166,7 @@ export interface RelayDeps {
   fetchFn: typeof fetch;
   delayFn: (ms: number) => Promise<void>;
   /** Defaults to reading and validating .github/required-checks.json from the working directory. */
-  readPinMap?: () => Promise<Record<string, string>>;
+  readPinMap?: () => Promise<PinMap>;
 }
 
 export interface RelayResult {
@@ -620,10 +626,23 @@ function assertTrustedProducer(run: TriggeringRun): void {
   );
 }
 
-function contextsFor(pinMap: Readonly<Record<string, string>>, path: string): string[] {
+/**
+ * The contexts a run of `path` may attest: every pin map entry whose pin names
+ * that path. A context pinned to several paths (issue 1090's split, where one
+ * required context is produced by a `pull_request_target` file and a push
+ * file) resolves from EACH of them — matching only one would leave the other
+ * file's runs on the "nothing is pinned to this run's workflow" branch, which
+ * returns without posting anything and without failing.
+ *
+ * This decides WHICH runs relay; it decides nothing about which runs MAY
+ * (assertTrustedProducer). The two are deliberately separate: widening this
+ * cannot widen that, and the narrowness of the predicate is pinned against a
+ * second path in tests/scripts/ledger-relay.test.ts.
+ */
+function contextsFor(pinMap: PinMap, path: string): string[] {
   const contexts: string[] = [];
-  for (const [context, pinned] of Object.entries(pinMap)) {
-    if (pinned === path) contexts.push(context);
+  for (const [context, pins] of Object.entries(pinMap)) {
+    if (pinsFor(pins).includes(path)) contexts.push(context);
   }
   return contexts;
 }
