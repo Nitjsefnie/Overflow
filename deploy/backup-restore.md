@@ -742,9 +742,11 @@ never needs: the mailbox CLI, a python3 script under `/root`, reached through
 a single `BindReadOnlyPaths` entry with `ProtectHome` spelled `tmpfs` rather
 than `yes` — the pairing systemd.exec(5) sanctions for a bind destination
 under a protected directory, probed on this host's systemd (the unit file's
-comments carry the record). Nothing else under `/root` is reachable, and the
-`osc` token reaches the CLI through `DISCORD_TOKEN` in the environment file,
-so no token file under `/root` is read.
+comments carry the record). Nothing else under `/root` is reachable. The
+`osc` token reaches the CLI as a systemd credential: the unit loads
+`~/.agent-bundle/discord/osc.token` at every start and the job's script
+bridges it to `DISCORD_TOKEN` in the process environment, so the environment
+file carries no token and a rotation needs no Overflow-side edit.
 
 **Operator setup.** The steps off the host come first (any machine that runs
 the fleet's mailbox CLI — the host does), then the host.
@@ -793,17 +795,19 @@ Copy the numeric channel id from the list output.
 
 **On the host.** Add the off-host entries to `/etc/overflow/backup.env`
 (root:root `0600`, created in (c)). `OVERFLOW_BACKUP_AGE_RECIPIENT` is the
-public key age-keygen printed (`age1...`),
-`OVERFLOW_BACKUP_DISCORD_CHANNEL` is the numeric channel id, and
-`DISCORD_TOKEN` is the `osc` identity's token value — the contents of
-`~/.agent-bundle/discord/osc.token` on a machine that runs the fleet's
-bundle:
+public key age-keygen printed (`age1...`) and
+`OVERFLOW_BACKUP_DISCORD_CHANNEL` is the numeric channel id:
 
 ```bash
 OVERFLOW_BACKUP_AGE_RECIPIENT="age1..."
 OVERFLOW_BACKUP_DISCORD_CHANNEL="<numeric channel id>"
-DISCORD_TOKEN="<the osc identity's token value>"
 ```
+
+No `DISCORD_TOKEN` line: the token is not configured in the file at all. The
+unit loads `~/.agent-bundle/discord/osc.token` as a systemd credential at
+every start and the job bridges it to `DISCORD_TOKEN` in the process
+environment, so rotating the `osc` token edits only that canonical file and
+needs no Overflow-side edit — the next unit start picks the new value up.
 
 The optional `OVERFLOW_BACKUP_MAX_BYTES` overrides the 9.5 MiB posting
 limit; nothing else in the file changes, and the full backup keeps running

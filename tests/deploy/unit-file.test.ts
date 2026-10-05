@@ -545,7 +545,20 @@ describe("Overflow off-host backup units", () => {
     expect(binds[0]!.value).toBe("/root/.agent-bundle/scripts/discord_mb.py");
   });
 
-  it("keeps the rest of the full-backup sandbox, with /root reachable only through the one bind", () => {
+  it("loads the osc token from its canonical file as a credential", () => {
+    // The copy in /etc/overflow/backup.env is what a rotation silently broke:
+    // the unit reads the token from the canonical file at every start, so a
+    // rotation needs no Overflow-side edit. PID 1 opens the file before the
+    // sandbox is assembled and hands the content over through
+    // CREDENTIALS_DIRECTORY, which the script bridges to DISCORD_TOKEN.
+    const credentials = entries().filter((entry) => entry.key === "LoadCredential");
+
+    expect(credentials, "exactly one credential is loaded").toHaveLength(1);
+    expect(credentials[0]!.section).toBe("Service");
+    expect(credentials[0]!.value).toBe("osc_token:/root/.agent-bundle/discord/osc.token");
+  });
+
+  it("keeps the rest of the full-backup sandbox, with /root touched only by the bind and the credential", () => {
     expect(only("Service", "ProtectSystem").value).toBe("strict");
     expect(only("Service", "PrivateTmp").value).toBe("yes");
     expect(only("Service", "ReadWritePaths").value).toBe("/var/backups/overflow");
@@ -553,14 +566,17 @@ describe("Overflow off-host backup units", () => {
     expect(TRUE_SPELLINGS).toContain(only("Service", "NoNewPrivileges").value.toLowerCase());
     expect(only("Service", "CapabilityBoundingSet").value).toBe("");
 
-    // tmpfs makes /root an empty mount; the single bound CLI file is the only
-    // /root path any directive may name.
+    // tmpfs makes /root an empty mount; the bound CLI file and the
+    // credential's canonical source are the only /root paths any directive
+    // may name. The credential is read by PID 1 before the sandbox is
+    // assembled, so it is not a file the namespace reaches into.
     const rootTouching = entries()
       .filter((entry) => pathCandidates(entry).some(isUnderRoot))
       .map((entry) => entry.key);
 
-    expect(rootTouching, "/root is reachable only through the single bound file").toEqual([
+    expect(rootTouching, "/root appears only through the bound CLI and the credential").toEqual([
       "BindReadOnlyPaths",
+      "LoadCredential",
     ]);
     const environment = entries().filter(
       (entry) => entry.section === "Service" && entry.key === "Environment",

@@ -271,6 +271,26 @@ describe("backup-restore runbook", () => {
         expect(body, `section (i) in ${document} does not name ${literal}`).toContain(literal);
       });
     }
+
+    it("takes the osc token from the canonical file, not from backup.env", () => {
+      const body = sectionBody("## (i) The encrypted off-host copy");
+      const setup = body.slice(body.indexOf("**Operator setup.**"));
+      expect(setup, `section (i) in ${document} carries no operator-setup marker`).not.toBe("");
+
+      expect(
+        setup,
+        `section (i)'s operator setup does not name the canonical token file`,
+      ).toContain("~/.agent-bundle/discord/osc.token");
+
+      const envBlock = bashBlocks(setup).find((block) =>
+        block.some((line) => line.startsWith("OVERFLOW_BACKUP_AGE_RECIPIENT=")),
+      );
+      expect(envBlock, "the operator setup shows the backup.env entries").toBeDefined();
+      expect(
+        envBlock!.join("\n"),
+        "the backup.env block must not configure a token",
+      ).not.toContain("DISCORD_TOKEN");
+    });
   });
 
   describe("subsection (e.4), restoring the encrypted off-host copy", () => {

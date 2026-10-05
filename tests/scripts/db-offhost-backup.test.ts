@@ -195,6 +195,8 @@ interface BackupRun {
   backupPath: string;
   /** The pid the connector fake recorded for itself, when it ran. */
   connectorPid: number | null;
+  /** The DISCORD_TOKEN the fake last observed in its environment, if any call ran. */
+  tokenSeen: string | null;
 }
 
 /**
@@ -247,6 +249,11 @@ function runBackup(
     connectorMute?: boolean;
     /** The messages the conversation stub answers with, as raw JSON text. */
     conversationJson?: string;
+    /**
+     * A CREDENTIALS_DIRECTORY the run sees, as the systemd unit hands one to
+     * the script; the bridge under test reads the osc token from there.
+     */
+    credentialsDirectory?: string;
     /**
      * Runs against a backup directory the TEST made and seeded, so the run's
      * sweep and prune can be judged on real files afterwards. Absent: a fresh
@@ -313,6 +320,10 @@ function runBackup(
       OFFHOST_TEST_MB_SEND_RC: String(options.sendRc ?? 0),
       OFFHOST_TEST_MB_DELETE_RC: String(options.deleteRc ?? 0),
       OFFHOST_TEST_MB_CONNECTOR_MUTE: options.connectorMute ? "1" : "",
+      OFFHOST_TEST_MB_TOKEN_SEEN: join(directory, "mb-token-seen"),
+      ...(options.credentialsDirectory !== undefined
+        ? { CREDENTIALS_DIRECTORY: options.credentialsDirectory }
+        : {}),
       ...(options.conversationJson !== undefined
         ? { OFFHOST_TEST_MB_CONVERSATION_JSON: conversationPath }
         : {}),
@@ -339,6 +350,7 @@ function runBackup(
     const connectorPid = existsSync(connectorPidPath)
       ? Number(readFileSync(connectorPidPath, "utf8").trim())
       : null;
+    const tokenSeenPath = join(directory, "mb-token-seen");
 
     return {
       status: result.status,
@@ -351,6 +363,7 @@ function runBackup(
       ageArgv: readArgv(ageArgvPath),
       backupPath: stdoutLines.at(-1) ?? "",
       connectorPid: connectorPid !== null && Number.isFinite(connectorPid) ? connectorPid : null,
+      tokenSeen: existsSync(tokenSeenPath) ? readFileSync(tokenSeenPath, "utf8") : null,
       backupDirectory,
     };
   }
@@ -714,6 +727,28 @@ describe("db-offhost-backup.sh discord posting", () => {
     expect(run.status).not.toBe(0);
     expect(run.stderr, "the connector's own stderr survives the bring-up redirect").toContain(
       connectorStderrCanary,
+    );
+  });
+
+  it("bridges the unit's osc credential to DISCORD_TOKEN before any mailbox call", () => {
+    // The unit loads the token as a systemd credential (#1105); the script's
+    // bridge is what hands it to the CLI. The fake records what its
+    // environment carried, so the assertion is on what the CLI observed -
+    // and the argv log proves the token never rides a command line.
+    const directory = mkdtempSync(join(tmpdir(), "overflow-offhost-cred-"));
+    runDirectories.push(directory);
+    const credentialsDirectory = join(directory, "credentials");
+    mkdirSync(credentialsDirectory);
+    writeFileSync(join(credentialsDirectory, "osc_token"), "canary-osc-token\n");
+
+    const run = runBackup({ credentialsDirectory });
+
+    expect(run.status).toBe(0);
+    expect(run.tokenSeen, "the CLI observed the credential's value in DISCORD_TOKEN").toBe(
+      "canary-osc-token",
+    );
+    expect(JSON.stringify(run.mbCalls), "the token never rides argv").not.toContain(
+      "canary-osc-token",
     );
   });
 
