@@ -34,6 +34,8 @@ type Job = {
   "timeout-minutes"?: number;
   permissions?: unknown;
   environment?: unknown;
+  if?: unknown;
+  "continue-on-error"?: unknown;
   services?: Record<string, { image?: string }>;
   env?: Record<string, string>;
   steps: Step[];
@@ -225,9 +227,18 @@ describe("the pull request suite workflow", () => {
     // case exists to prevent, reached by a different key, so the assertion is
     // over the whole key set: anything not in the allow-list below has to be
     // added here deliberately, with its reason, rather than slipped in beside
-    // the command. Every allowed key is inert with respect to whether this step
-    // gates — none can skip it, mark it tolerated, or detach its status.
-    const inert = new Set(["name", "run", "id", "shell", "working-directory", "timeout-minutes", "env"]);
+    // the command.
+    //
+    // `shell` is NOT allow-listed, and its absence is the point rather than an
+    // oversight. It was allow-listed as inert, which is true of `shell: bash`
+    // and `shell: sh` (GitHub maps both to a `-e` form) and false of any custom
+    // string, which GitHub runs verbatim with no `-e`. Allow-listed, it paired
+    // with a bare `exit 0` — which no forbidden-token assertion sees — to make
+    // the suppression live. Two individually defensible entries composed into
+    // the defect. `timeout-minutes` stays: a timed-out step FAILS the job, so
+    // it cannot green-wash (verified — `timeout-minutes: 0.0001` fails, which is
+    // the point of allow-listing it).
+    const inert = new Set(["name", "run", "id", "working-directory", "timeout-minutes", "env"]);
     expect(
       Object.keys(step).filter((key) => !inert.has(key)),
       "the hash-binding step carries a key that can suppress or skip it; if that key is " +
@@ -243,12 +254,41 @@ describe("the pull request suite workflow", () => {
     // change that `docs-only.ts` would call docs-only (the pin line lives in a
     // header-carrying requirements file the docs detector never reads).
     expect(step.if, "the hash binding must hold on every pull request").toBeUndefined();
+    // The `run:` block is EXACTLY the one pip invocation: a `pip download`
+    // line, its continuation lines, and nothing else. Asserting the shape
+    // rather than a list of forbidden tokens is what closes the shell routes,
+    // because every one of them adds a line or a suffix — `set +e` above it,
+    // `exit 0` below it, `|| true` on it, a trailing `&`. A denylist of
+    // status-masking spellings is a guess about a language; "nothing but the
+    // command" is a property of the command.
+    //
+    // `set +e` is the one that made this assertion necessary rather than
+    // merely tidy: Actions runs an unset `shell:` as `bash --noprofile --norc
+    // -eo pipefail {0}`, and `set +e` switches off the `-e` the runner
+    // supplies, so the failing download no longer aborts the block and the
+    // last command's status becomes the step's. Measured on this box:
+    // `set +e; false; echo done` exits 0 under the default shell, and
+    // `false; exit 0` exits 0 under a custom shell string. Both were live, and
+    // both were green against the previous denylist.
+    const runLines = step.run!.trim().split("\n");
+    expect(
+      runLines[0],
+      "the run block must begin with the pip download itself, so no line can be " +
+        "prepended ahead of it (a leading `set +e` disables the -e the runner supplies)",
+    ).toMatch(/^\s*pip download\b/);
+    expect(
+      runLines.filter((line) => line.trim() !== "" && !/^\s*(--|-\w|pip download)/.test(line)),
+      "the run block must contain the pip download and its continuation flags and nothing " +
+        "else; a trailing `exit 0` reports success whatever pip returned",
+    ).toEqual([]);
     // The command's own exit status is the verdict, so it may not be masked
     // inside the shell block. `||` has no legitimate use in a single pip
     // invocation: `|| true` and `|| :` both discard pip's non-zero, and a
     // trailing `&` detaches it from the step entirely. Asserted as a property
     // of the whole block rather than of its last line, so a fallback added
-    // earlier in a multi-line `run:` trips it too.
+    // earlier in a multi-line `run:` trips it too. Conservative on purpose: a
+    // legitimate future `2>&1` would trip it with no sanctioned escape, which
+    // is the right way round for a guard on a security check.
     expect(
       step.run,
       "the pip download's exit status must reach the step; a `||` fallback or a trailing " +
@@ -262,6 +302,27 @@ describe("the pull request suite workflow", () => {
     // and this workflow's read-only-token, no-secret property is what makes
     // running the request's own bytes here acceptable at all.
     expect(step.env, "the step must not need a token").toBeUndefined();
+  });
+
+  // The step-level case above cannot see the job it sits in, and a job-level
+  // suppression is the cheapest possible greenwash of the same check:
+  // `continue-on-error: true` on the job makes a failed job green, and
+  // `if: github.event_name == 'push'` skips the whole suite on pull requests.
+  // Both were live and both were green against every assertion in this file,
+  // and a 419-test sweep of the CI-workflow suites saw neither. The premise
+  // this file's other case asserts is about the WORKFLOW — "the hash binding
+  // must hold on every pull request" — so it has to hold of the job too.
+  it("carries no job-level suppression on the suite job", () => {
+    expect(
+      (suite as { "continue-on-error"?: unknown })["continue-on-error"],
+      "continue-on-error on the suite job makes a failed suite green, so a hash mismatch " +
+        "would never reach verify",
+    ).toBeUndefined();
+    expect(
+      suite.if,
+      "a conditional on the suite job skips the whole suite on pull requests, which is where " +
+        "the hash binding has to hold",
+    ).toBeUndefined();
   });
 
   it("verifies the manifest with a Python pinned by commit SHA, never a floating tag", () => {
