@@ -639,7 +639,7 @@ verification stay broken until its sponsor returns:
 location to be named. They never join the #credentials store: the
 off-host copy already carries the credential ciphertext those keys open,
 and section (i)'s custody rule — a reader of one store holds neither
-both — would leave one store holding both halves.
+both — forbids one store holding both halves.
 
 ## (f) RPO and RTO
 
