@@ -393,3 +393,40 @@ describe("a pull request that replaces the gate script guarding what it changed"
     }
   });
 });
+
+describe("the awaited suite run's id the pull_request_target leg requires", () => {
+  /**
+   * On a docs-only change nothing downstream reads the run id, so this step is
+   * the only thing between an awaiter that exits 0 without writing one and a
+   * green verify. Its real run block is executed with the id resolved from
+   * the awaiter's output the way the runner would.
+   */
+  function requireStep(): Step {
+    const awaiter = stepRunning("/scripts/await-pr-suite.ts");
+    expect(awaiter.id).toBeDefined();
+    const required = steps.filter(
+      (step) => step.env?.RUN_ID === `\${{ steps.${awaiter.id}.outputs.run_id }}`,
+    );
+    expect(required.map((step) => step.name)).toHaveLength(1);
+    return required[0]!;
+  }
+
+  async function runWith(runId: string): Promise<StepResult> {
+    const fx = await fixture({ "README.md": "# scratch, edited\n" });
+    const awaiter = stepRunning("/scripts/await-pr-suite.ts");
+    return runStep(requireStep(), fx, {}, {}, { [awaiter.id!]: { run_id: runId } });
+  }
+
+  for (const runId of ["", "0", "12a", "-1", " 123", "123\n"]) {
+    it(`refuses the id ${JSON.stringify(runId)}`, async () => {
+      const result = await runWith(runId);
+      expect(result.status, result.stdout).not.toBe(0);
+      expect(result.stdout).toContain("::error::");
+    });
+  }
+
+  it("accepts a positive integer id", async () => {
+    const result = await runWith("123");
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  });
+});
