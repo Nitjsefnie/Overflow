@@ -1,0 +1,454 @@
+name: ci pull request
+
+# The pull-request leg of the release gate, in a file of its own so that the
+# only trigger it can be started by is `pull_request_target` (issue 1090).
+#
+# WHY THE SPLIT. This job fetches a pull request's merge commit and reads the
+# pull request's number, head SHA and base SHA. `push`, `schedule` and
+# `workflow_dispatch` all run a workflow from the default branch with the
+# default branch's privileges, so a step reading pull-request content under one
+# of them is untrusted content entering a privileged job — exactly what CodeQL's
+# `actions/cache-poisoning/poisonable-step` and `actions/untrusted-checkout`
+# alerts report. The `if: github.event_name == 'pull_request_target'` gates
+# that used to hold the shapes apart made the paths SAFE, not STRUCTURAL: one
+# guard edit reopened the class. One file per leg is the structure, and
+# tests/ci/pr-data-triggers.test.ts decides which jobs read pull-request data
+# from the workflow text rather than from this comment, and requires this
+# file's whole `on:` set to be {pull_request_target}.
+#
+# The other half — the push and workflow_dispatch legs, which test main itself
+# and read no pull-request data — is .github/workflows/ci.yml, together with
+# the calibrate job. Both workflows produce the `verify` job name, and
+# .github/required-checks.json pins that context to BOTH paths, so a
+# required-context conclusion arrives on a pull-request head and on a main push
+# alike.
+#
+# THE TRUST BOUNDARY. A pull request's own code — its install, migrations,
+# tests, lint, typecheck, build and page geometry — runs only in pr-suite.yml,
+# under `pull_request`: the pull request's own definition, a read-only token,
+# no secret, and no required context of its own. This workflow runs under
+# pull_request_target, so its definition is the base branch's (issue 822), and
+# under that event the verify job executes NO pull-request code. It checks out
+# the base branch, materialises the pull request's merge commit as a detached
+# worktree outside the workspace, and runs the BASE checkout's copies of the
+# integrity gates over that tree as data — conflict markers, docs-only
+# classification, module size ceilings, migration immutability, legal revision
+# currency, commit scopes, the coverage floor over the awaited suite run — plus
+# the suite run's outcome, read as data through the base copy of
+# scripts/await-pr-suite.ts. Base freshness runs last. A pull request's tree
+# can therefore never judge itself: replacing a gate script in the pull request
+# changes the tree being judged, not the judge.
+#
+# Because this file receives nothing but pull_request_target, no step here
+# carries an event gate: the closed trigger set IS the gate. tests/ci/
+# verify-step-reachability.test.ts still selects these steps per scenario and
+# asserts that no pull-request package manager, script or write is reachable.
+on:
+  pull_request_target:  # zizmor: ignore[dangerous-triggers]
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group for every pull request, so the repository's Actions minutes stop
+  # scaling with the number of open pull requests: a per-pull-request group
+  # bounds one contributor's parallelism and nothing else, and N open pull
+  # requests produced N concurrent runs. GitHub keeps one PENDING run per group
+  # and cancels the superseded one, so `ci-pr-repo-wide` is a single slot.
+  # The parentheses are load-bearing; && binds tighter than || in a GitHub
+  # expression, and without them the pull_request arm falls through to
+  # github.sha and the bound is gone.
+  #
+  # cancel-in-progress is false, and NOT an event test gating on the pull
+  # request. GitHub's documented behaviour: "By default, any existing pending job
+  # or workflow in the same concurrency group will be canceled and the new queued
+  # job or workflow will take its place. To also cancel any currently running job
+  # or workflow in the same concurrency group, specify cancel-in-progress: true."
+  # Read that carefully: the PENDING run is cancelled whatever this flag says.
+  # The flag decides only whether the RUNNING job is destroyed as well.
+  #
+  # WHAT `false` GUARANTEES: no in-flight run is ever cancelled, so no required
+  # context concludes `cancelled` because a peer pushed while it was running.
+  # `verify` is a required context in .github/required-checks.json and
+  # ledger-relay mirrors a run conclusion onto it, so a running run destroyed
+  # here is a peer's blocked pull request. That is worth avoiding, and it is
+  # common: see the rates below.
+  #
+  # WHAT `false` DOES NOT PREVENT — the residual this design cannot remove:
+  # GitHub still cancels the PENDING run when a newer arrival claims the single
+  # pending slot. Under a per-pull-request group that pending run is always the
+  # SAME pull request's superseded head, and the push that superseded it created
+  # a replacement, so it heals itself. Under this shared group the pending run
+  # can be a DIFFERENT pull request's current head, and nothing creates a
+  # replacement: the relay mirrors the cancelled conclusion onto `verify`, and
+  # this workflow triggers on opened/synchronize/reopened with no `edited`, so a
+  # retitle or relabel produces no new run. That pull request stays blocked until
+  # its author pushes again. This is inherent to sharing one group — no value of
+  # this flag removes it, and a `true` makes it strictly worse by also
+  # destroying in-flight runs.
+  #
+  # RATES, from the 483 ci runs of the 6.13 days ending 2026-09-30. Only the
+  # 370 pull-request arrivals ever enter this group; the 106 push and 7
+  # workflow_dispatch runs key their own github.sha in ci.yml and cannot contend
+  # with anything, so counting them inflated both the arrival rate and rho. Load
+  # is also not steady - per-day all-event arrivals were 5, 0, 215, 122, 78, 17, 46.
+  # M/M/1 with one waiting place over the PR arrivals (mean PR-leg service 6.44
+  # min), where pending-cancelled is n*pi2 and running-cancelled-if-true is
+  # n*(pi1+pi2) - the flag is what adds the second, so it is the larger figure:
+  #   date        PR arrivals   rho   pending-cancelled   running-cancelled-if-true
+  #   09-26               171  0.76             ~43/day                 ~98/day
+  #   09-27                95  0.42             ~11/day                 ~36/day
+  #   09-28                59  0.26              ~3/day                 ~15/day
+  #   window mean           60  0.27              ~3/day                 ~15/day
+  # These are a LOWER bound: a Poisson fit understates a bursty arrival process.
+  # Replaying the real arrival timestamps instead gave materially higher figures
+  # (97 and 134 pending cancellations per window, depending on arrival set and
+  # service-time treatment) and neither replay reproduced stably, so no single
+  # replayed number is quoted. For reference, main already shows the mechanism
+  # inside per-PR groups: 9 of 482 completed ci runs concluded cancelled, every
+  # one a same-PR self-supersede.
+  #
+  # ON RUNNER MINUTES, stated plainly because the direction is counter-intuitive:
+  # `true` would bill FEWER minutes, not more — a destroyed run stops accruing.
+  # So `false` costs minutes relative to `true`; it is bought deliberately, as the
+  # price of not destroying a check someone is waiting on. The bound itself is
+  # unaffected either way: one running slot per group caps concurrency at 1 no
+  # matter what this flag says, and that cap is the whole point of the change. A
+  # run dropped from the pending slot never started and costs 0 minutes, so the
+  # cheap kind of cancellation is the one that remains.
+  group: ci-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # actions: read lets the base copy of the suite awaiter list the pull
+    # request suite's runs and download its coverage summary.
+    permissions:
+      contents: read
+      actions: read
+
+    # Placeholders satisfy configuration validation without carrying production
+    # credentials or granting access to an external system. There is no
+    # PostgreSQL service here and none is needed: no step in this file applies a
+    # migration or connects to a database, because the pull request's own code —
+    # which is what would need the schema — runs in pr-suite.yml.
+    env:
+      DATABASE_URL: postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci
+      AUTH_SECRET: ci-placeholder-auth-secret-not-for-production
+      AUTH_GITHUB_ID: ci-placeholder-github-client-id
+      AUTH_GITHUB_SECRET: ci-placeholder-github-client-secret
+      TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      APP_URL: https://overflow.invalid
+      GITHUB_WEBHOOK_URL: https://overflow.invalid/api/github/webhooks
+      MODERATOR_GITHUB_USER_IDS: "1"
+
+    steps:
+      # Under pull_request_target no ref input at all: GitHub points GITHUB_REF
+      # at the base branch and GITHUB_SHA at its tip when the event fired, so
+      # the default checkout is the trusted base — the copy of every gate
+      # script that executes below — and actions/checkout's fork guard exempts
+      # exactly that. Full history, because the migration and legal-revision
+      # gates walk the pull request's range and commit scopes reads main's.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # The pull request enters as git objects only: this event's head, fetched
+      # by its SHA, and this event's base, which the full-history checkout above
+      # normally already holds and which the step fetches by SHA when it does
+      # not. No refs/pull/<number> refspec is used and the head is never checked
+      # out, installed or executed from — the checkout analysers read a fetch
+      # whose command or env names the pull request's NUMBER or a head REF as
+      # pulling untrusted history, which is why nothing here is named like a
+      # pull-request ref. What is fetched is a SHA value, and what carries the
+      # trust is not the name but the two-parent bind below: what gets
+      # materialised must be a two-parent merge whose parents are exactly this
+      # event's base and this event's head, or the step fails closed. That bind
+      # is the security boundary and it is unchanged; it is checked even though
+      # the commit below is built here from those two SHAs, because it is the
+      # tripwire against a future edit that builds the merge from anything else.
+      #
+      # The merge tree is BUILT here rather than read out of the event payload.
+      # GitHub computes pull_request.merge_commit_sha asynchronously, so on a
+      # synchronize event it still names the merge commit of the pull request's
+      # PREVIOUS head; judging that tree is judging a tree this event is not
+      # about, and the bind correctly refuses it — which is why every pull
+      # request's push was failing. A local merge of this event's own two SHAs
+      # cannot be stale. merge-tree exits non-zero on a conflict, and there is
+      # no remote merge to fall back to.
+      #
+      # The merge commit is then materialised as a detached worktree under
+      # RUNNER_TEMP, outside the workspace, as data: nothing is installed,
+      # built or executed there. Later steps receive its path and SHA as this
+      # step's outputs, through their own env: as PR_TREE and MERGE_SHA — never
+      # through the job-wide environment file. Values from the event reach the
+      # shell through env:, never through ${{ }} in run:.
+      - name: Materialise the pull request's merge tree as data
+        id: pr-tree
+        env:
+          # The head this event is about: the commit the pull request carries
+          # NOW, and the one the merge below is built from. Deliberately not
+          # the event's merge_commit_sha, which is computed asynchronously and
+          # can name the previous head's merge.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # The base this event is about — the same commit GitHub's own merge
+          # preview merges into, and the same value the base-freshness gate
+          # receives as BASE_SHA, so the tree judged and the freshness
+          # certificate describe one merge.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # actions/checkout's default: checking the tree out fetches no LFS
+          # object the pull request's attributes point at.
+          GIT_LFS_SKIP_SMUDGE: "1"
+        run: |
+          if ! git fetch --no-tags origin "${HEAD_SHA:?}"; then
+            echo "::error::could not fetch the pull request's head ${HEAD_SHA} from origin; refusing to judge a tree this event is not about"
+            exit 1
+          fi
+          if ! git cat-file -e "${BASE_SHA:?}^{commit}" 2>/dev/null; then
+            if ! git fetch --no-tags origin "${BASE_SHA:?}"; then
+              echo "::error::could not fetch the pull request's base ${BASE_SHA} from origin; refusing to judge a tree this event is not about"
+              exit 1
+            fi
+          fi
+          if merged_tree=$(git merge-tree --write-tree "${BASE_SHA:?}" "${HEAD_SHA:?}" 2>&1); then
+            :
+          else
+            merge_status=$?
+            if [ "${merge_status}" -eq 1 ]; then
+              echo "::error::the pull request's head ${HEAD_SHA} does not merge cleanly into its base ${BASE_SHA}; rebase the branch onto the base and push again."
+            else
+              # git exits 1 on a merge-tree conflict and reserves everything else
+              # for its own failure: a git without --write-tree answers an
+              # unknown option with a usage error. Reporting that as a conflict
+              # would send the reader to rebase over a tool problem.
+              echo "${merged_tree}"
+              echo "::error::git merge-tree could not produce a merge tree for this pull request (exit ${merge_status}); this runner's git may not support 'git merge-tree --write-tree'"
+            fi
+            exit 1
+          fi
+          # The identity is only what lets commit-tree run: this commit is a
+          # local object read as data, and nothing on this job's path
+          # configures one for us. The -m is not cosmetic: without it
+          # commit-tree reads the commit message from stdin, and a runner that
+          # leaves stdin open turns this into a step that hangs.
+          merge_sha=$(git -c user.name='Overflow verify' -c user.email='verify@localhost' \
+            -c commit.gpgSign=false \
+            commit-tree "${merged_tree}" -p "${BASE_SHA:?}" -p "${HEAD_SHA:?}" \
+            -m "Overflow verify: this pull request's head merged into its base")
+          read -r _ first_parent second_parent extra_parent \
+            <<< "$(git rev-list --parents -n 1 "${merge_sha}")"
+          if [ -z "${first_parent}" ] || [ -n "${extra_parent}" ] \
+            || [ "${first_parent}" != "${BASE_SHA}" ] \
+            || [ "${second_parent}" != "${HEAD_SHA}" ]; then
+            echo "::error::the merge built for this event (${merge_sha}) is not a two-parent merge of its base ${BASE_SHA} and the event's head ${HEAD_SHA}; refusing to judge a tree this event is not about"
+            exit 1
+          fi
+          pr_tree="${RUNNER_TEMP}/pr-tree"
+          git worktree add --detach "${pr_tree}" "${merge_sha}"
+          echo "path=${pr_tree}" >> "$GITHUB_OUTPUT"
+          echo "merge_sha=${merge_sha}" >> "$GITHUB_OUTPUT"
+
+      # Issue 988 ports this mechanical check: in the claim repository,
+      # claim#56 shipped a conflict marker through three review rounds.
+      # A conflict marker is text that looks like prose in a Markdown file,
+      # so only a mechanical check can see it. git grep reads the tracked
+      # files out of the working tree, and -I keeps a binary from being
+      # reported as a match. The three markers are matched in the shapes git
+      # writes them: `<<<<<<< ` and `>>>>>>> ` carry the label after seven
+      # characters, and the separator is exactly seven `=`; diff3's extra
+      # `||||||| base` line changes nothing, because the other three are
+      # still written. The step carries no event gate: this file receives
+      # nothing but pull_request_target, so the tree searched is always the
+      # pull request's materialised merge tree.
+      - name: Check no tracked file carries a merge-conflict marker
+        env:
+          PR_TREE: ${{ steps.pr-tree.outputs.path }}
+        run: |
+          cd "${PR_TREE:?the pull request tree was not materialised}"
+          # git grep exits 1 for "no match" and above 1 for an error it could
+          # not run, and a guard that reads its own error as a clean tree is
+          # the false green this step exists to prevent.
+          found=0
+          git grep -nI -E '^(<{7}( |$)|>{7}( |$)|={7}$)' -- . || found=$?
+          if [ "$found" -gt 1 ]; then
+            echo "git grep exited $found, so no marker was looked for."
+            exit "$found"
+          fi
+          if [ "$found" -eq 0 ]; then
+            echo "A merge-conflict marker is committed. Resolve the conflict, rebase onto the target branch and push again."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.17.0"
+
+      # A change that touched only documentation cannot move coverage, so the
+      # measurement below would compare the same tree against itself. Detect
+      # it instead of measuring it: the script checks the endpoint diff and
+      # every first-parent commit since the base, which on this event is the
+      # whole PR change — the materialised merge tree measured against its
+      # first parent. The script that runs is the base checkout's copy. Rename
+      # detection is off, so a code source renamed to a doc counts as code
+      # (issue 646). The base checkout's copy over a push or a dispatch is in
+      # ci.yml; both write this same output, which the three steps below read.
+      - name: Detect docs-only change
+        id: detect-docs
+        env:
+          PR_TREE: ${{ steps.pr-tree.outputs.path }}
+        run: |
+          cd "${PR_TREE:?the pull request tree was not materialised}"
+          changed=$(node "${GITHUB_WORKSPACE}/scripts/docs-only.ts" HEAD^1)
+          echo "docs_only=${changed}" >> "$GITHUB_OUTPUT"
+
+      # The base checkout's script, run with the judged tree as its working
+      # directory — which here is always the materialised merge tree. The
+      # ceilings and baseline document the script reads is therefore the pull
+      # request's, which ratchet-guard.yml, running main's copy of
+      # check-ratchets.ts on every pull request, holds tighten-only against the
+      # merge base.
+      - name: Module size ceilings
+        env:
+          PR_TREE: ${{ steps.pr-tree.outputs.path }}
+        run: |
+          cd "${PR_TREE:?the pull request tree was not materialised}"
+          node "${GITHUB_WORKSPACE}/scripts/check-module-size.ts"
+
+      # No ratchet-document step here: ratchet-guard.yml runs main's copy of
+      # scripts/check-ratchets.ts on every pull request (and every push to
+      # main) as its own required context, reading the head only as git
+      # objects, so a second copy in this job would add no judge.
+
+      # Compares the base tip (the merge commit's first parent) against the
+      # merge commit itself, not the raw PR head — the merge result already
+      # carries migrations main added after the branch was cut, and a raw-head
+      # comparison false-positives such a migration as "deleted" (issue 841).
+      # The base checkout's script reads both revisions as git objects.
+      - name: Migration immutability
+        env:
+          MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
+        run: node "${GITHUB_WORKSPACE}/scripts/check-migration-edits.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"
+
+      # Unlike the migration step above — which compares the range's two
+      # endpoints — the legal-revision gate walks EVERY commit of base..head:
+      # a legal page edited in one commit and its revision record bumped in
+      # the next still violates, so a reordered pair cannot slip through. The
+      # checkout's full history plus the fetched merge ref carry the range's
+      # whole ancestry.
+      - name: Legal revision currency
+        env:
+          MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
+        run: node "${GITHUB_WORKSPACE}/scripts/check-legal-revisions.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"
+
+      # CONTRIBUTING.md allows a workflow's name as a scope only with type
+      # ci. This belongs in the already-required verify job: a new job would
+      # be a new required status context. The base checkout's script judges
+      # the merge tree's outgoing range against freshly fetched main, and
+      # derives the workflow-name set from the merge tree's workflows.
+      - name: Refuse a commit whose scope names a workflow outside the ci type
+        env:
+          PR_TREE: ${{ steps.pr-tree.outputs.path }}
+        run: python3 "${GITHUB_WORKSPACE}/scripts/commit_scopes.py" --root "${PR_TREE:?}"
+
+      # The pull request's suite — install, migrations, tests, lint,
+      # typecheck, build, page geometry — runs as its own code in pr-suite.yml
+      # under `pull_request`. This step reads that run's outcome as data: the
+      # base copy of the awaiter succeeds only for a completed, successful
+      # pull_request run of exactly .github/workflows/pr-suite.yml at exactly
+      # the event's head SHA, and writes that run's id. Its run listing is
+      # .../actions/workflows/pr-suite.yml/runs, which exists once pr-suite.yml
+      # is on main — it lands in the same merge as this step.
+      - name: Await the pull request suite
+        id: suite
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node "${GITHUB_WORKSPACE}/scripts/await-pr-suite.ts"
+
+      # Success must be a positive signal here too, not the absence of a
+      # failure: without the awaited run's id there is no run whose outcome
+      # was read.
+      - name: Require the awaited suite run's id
+        env:
+          RUN_ID: ${{ steps.suite.outputs.run_id }}
+        run: |
+          if [[ ! "${RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::the suite awaiter wrote no run id (got '${RUN_ID}'); refusing to pass without a suite outcome"
+            exit 1
+          fi
+
+      # The coverage floor over the awaited run's measurement. The summary is
+      # the suite run's (pull-request-produced) output and is handled as data
+      # in a place neither the pull request nor the base tree occupies: a
+      # directory this step creates fresh under RUNNER_TEMP, refusing one that
+      # already exists (a symlink included), so the download cannot land in
+      # the pull request's tree or in the workspace whose scripts later steps
+      # execute. The decision to require it is the BASE docs-only verdict
+      # above, not the suite's own.
+      - name: Create the suite coverage directory
+        id: suite-coverage
+        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        run: |
+          dir="${RUNNER_TEMP}/suite-coverage"
+          if [ -e "${dir}" ] || [ -L "${dir}" ]; then
+            echo "::error::${dir} already exists; refusing to download into a directory this run did not create"
+            exit 1
+          fi
+          mkdir -- "${dir}"
+          echo "dir=${dir}" >> "$GITHUB_OUTPUT"
+
+      # A missing artifact fails the download.
+      - name: Download the suite's coverage summary
+        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-summary
+          path: ${{ steps.suite-coverage.outputs.dir }}
+          run-id: ${{ steps.suite.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      # The base checkout's script, run in the merge tree and told exactly
+      # which summary to read: the floor document it reads is the pull
+      # request's, held tighten-only by ratchet-guard.yml, and nothing under
+      # the tree's own coverage/ is consulted.
+      - name: Coverage floor over the suite's summary
+        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        env:
+          PR_TREE: ${{ steps.pr-tree.outputs.path }}
+          SUMMARY_DIR: ${{ steps.suite-coverage.outputs.dir }}
+        run: |
+          cd "${PR_TREE:?the pull request tree was not materialised}"
+          node "${GITHUB_WORKSPACE}/scripts/check-coverage-floor.ts" --summary "${SUMMARY_DIR:?}/coverage-summary.json"
+
+      # A pull_request_target run judges refs/pull/N/merge — the head merged with the
+      # base as it stood at event time — and branch protection keeps strict
+      # up-to-date checking disabled, so a run that went green against an older
+      # main stays green after main advances: the tree GitHub actually lands
+      # (its rebase onto current main) was never tested by a required check
+      # (issue 441). LAST step, deliberately: the freshness certificate is
+      # issued as late as the workflow can issue it, because an earlier step
+      # re-opens the whole run duration as the stale-base window. The step runs
+      # the base checkout's scripts/ci-base-freshness.sh, which certifies when
+      # the base is unchanged OR advanced only disjointly from the files this
+      # pull request changes — an advance that touched none of them carried
+      # its own required checks, and only cross-file interaction goes
+      # unverified — and refuses on everything else: an overlapping advance, a
+      # failed or empty API response, an unrepresentative compare (issue 510;
+      # the first version demanded main frozen for the whole run, which no run
+      # could satisfy at the repository's merge cadence). The push and
+      # workflow_dispatch runs that test main itself are in ci.yml and never
+      # reach this gate; that file's only trigger here is pull_request_target.
+      - name: Base freshness
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_SLUG: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci-base-freshness.sh"
