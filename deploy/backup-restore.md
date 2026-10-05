@@ -609,6 +609,38 @@ reading the seven excluded tables as populated only to the forge's current
 state. Swapping the restore in for the live database is (e.2)'s swap: its
 rename block and the service start, after the migration and its gate.
 
+**After a host loss, the restored copy is not yet a working service.** The
+order above restores the data, but the host took its environment file with
+it, and two of its entries exist nowhere else: `TOKEN_ENCRYPTION_KEY` and
+`AUTH_SECRET` live only in `/etc/overflow/overflow.env` on the host, and
+their custody is deliberately not the #credentials store that keeps the age
+private key (section (i)). What the two keys protect travels only as
+ciphertext in this copy — sponsors' OAuth tokens, forge credentials and
+webhook secrets — so a host-loss restore without them cannot decrypt any
+stored credential. The forced full rederivation cannot run either: it
+decrypts the sponsor's OAuth token unconditionally for GraphQL cost
+accounting before any forge read (`src/lib/fold/reconcile.ts:272`), so it
+fails closed before reaching the forge.
+
+**The host-loss path.** Restore the data as the order above gives it.
+Generate a NEW `AUTH_SECRET` — every session signed under the old one ends.
+Each sponsor signs in again, which stores a fresh OAuth token. Forge
+registrations are redone and webhook secrets are replaced. Four of the
+seven registered repositories have no Overflow Ledger App installation and
+read through their sponsor's token; for each, reconciliation and webhook
+verification stay broken until its sponsor returns:
+
+- `Nitjsefnie/ai-researcher`
+- `Nitjsefnie/claudit`
+- `Nitjsefnie/gh-widgets`
+- `Nitjsefnie-Actions/pr-gate`
+
+**Key custody.** The two keys are kept by the maintainer;
+location to be named. They never join the #credentials store: the
+off-host copy already carries the credential ciphertext those keys open,
+and section (i)'s custody rule — a reader of one store holds neither
+both — would leave one store holding both halves.
+
 ## (f) RPO and RTO
 
 **RPO (data at risk): up to 24 hours.** The timer fires daily; a failure at
