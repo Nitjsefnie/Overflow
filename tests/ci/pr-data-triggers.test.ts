@@ -61,11 +61,21 @@ import { parse } from "yaml";
  * workflow there is none to split.
  *
  * SCOPE. This suite reads every workflow in `.github/workflows/` except the
- * ones named in `DEFERRED`, which is issue 1090 Task 3's file. The exclusion is
- * a `Record`, not a `Set`, and it is checked in BOTH directions: a deferred
- * entry that no longer covers a violating file fails this suite, so the split
- * of ci.yml cannot land without the exclusion being removed, and an exclusion
- * widened past a file that still violates it fails the assertion below it.
+ * ones named in `DEFERRED`. The exclusion is a `Record`, not a `Set`, and it is
+ * checked in BOTH directions: a deferred entry that no longer covers a
+ * violating file fails this suite, and an exclusion widened past a file that
+ * still violates it fails the assertion below it.
+ *
+ * `DEFERRED` is EMPTY, and that is the end state of issue 1090 rather than a
+ * hole: ci.yml was the last workflow a privileged trigger could start a
+ * pull-request job in, and Task 3 split it. The empty list is the goal here,
+ * which is the opposite of the empty-list failure mode the FORWARD_WIRED sweep
+ * below guards against — there an empty control silently stopped being a
+ * control, here an empty record means there is nothing left to defer. Re-adding
+ * an entry is what would need a reason: the two assertions at the bottom of this
+ * file then require it to name a file that exists AND still carries a violation,
+ * so an entry can only be re-created against a file the rule would otherwise
+ * already refuse.
  *
  * WHAT THIS DETECTOR DOES NOT SEE — two limits, and they are not the same kind
  * of boundary. Neither is fixed here, and the reasons are different, so they
@@ -172,13 +182,16 @@ const ALLOWED_TRIGGERS = new Set(["pull_request_target"]);
  * Workflows this suite does NOT judge, and why. Every entry is a workflow that
  * TODAY violates the rule below and is split by a later task of issue 1090.
  * The assertion "every deferred entry still covers a violation" is what keeps
- * this list honest in both directions.
+ * this list honest in both directions, and it is what made Task 3's removal of
+ * the ci.yml entry a step the split had to take rather than a cleanup somebody
+ * remembered.
+ *
+ * EMPTY since issue 1090 Task 3 split ci.yml: that was the last of the four
+ * workflows CodeQL reported a privileged-trigger path through. The two
+ * assertions at the bottom of this file are kept anyway — they are what a
+ * future entry has to satisfy, and they cost nothing while the record is empty.
  */
-const DEFERRED: Record<string, string> = {
-  "ci.yml":
-    "issue 1090 Task 3 splits ci.yml; until it lands, its verify job reads pull-request data " +
-    "under push and workflow_dispatch, which is the violation this suite exists to refuse.",
-};
+const DEFERRED: Record<string, string> = {};
 
 /** The `on:` block's event names, whatever shape it is written in. */
 function triggerKeys(on: unknown): string[] {
