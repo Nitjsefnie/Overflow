@@ -101,8 +101,8 @@ jobs:
       #
       # This had no home on a pull request: actionlint.yml is the only other
       # place the flag is used, and its pull_request_target leg checks out main's
-      # tip with no `ref:` (actionlint.yml:80), so it installs MAIN's manifest
-      # and cannot see the request's. A Dependabot bump with stale hashes
+      # tip with no `ref:` (its `actions/checkout` step), so it installs MAIN's
+      # manifest and cannot see the request's. A Dependabot bump with stale hashes
       # therefore merged green and reddened the required `actionlint` context on
       # the push to main instead. Dependabot-core's own hash refresh does not
       # fire on this file either — the manifest's header comment naming the old
