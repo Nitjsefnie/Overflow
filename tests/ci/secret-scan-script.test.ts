@@ -45,7 +45,8 @@ import {
  * **Covered here no longer, and by design: whether the baseline's commits are
  * REACHABLE.** That assertion used to sit in this file, at both depths, and it
  * could not work where it sat: the property is about a commit's place in the
- * history, `verify` checks out one commit deep, and any `--rebase` merge
+ * history, `verify` checked out one commit deep in the arrangement that
+ * carried this suite, and any `--rebase` merge
  * re-stamps the branch's commits — so the next merge to orphan an entry landed
  * as a red required check on `main` for every open pull request, over a defect
  * that is real but belongs to the weekly sweep. It is now
@@ -981,9 +982,9 @@ describe("the committed baseline's provenance, where the history is present", ()
     // weekly sweep's reachability step is where that surfaces, days later.
     //
     // It reads git rather than the file for the reason the rest of this block
-    // does, and it inherits the block's skip: at `actions/checkout`'s default
-    // depth of 1 these commits are not present, and a skip is reported in the run
-    // summary where a silent pass would not be.
+    // does, and it inherits the block's skip: in the `pr suite` workflow, whose
+    // depth-2 checkout cannot reach these commits, they are not present, and a
+    // skip is reported in the run summary where a silent pass would not be.
     const entry = asRecords(findings).find((committed) => wholeRecordEquals(committed, CAPTURED_FINDING));
     expect(
       entry,

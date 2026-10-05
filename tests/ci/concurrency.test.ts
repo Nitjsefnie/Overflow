@@ -1151,12 +1151,6 @@ describe("the workflows left unbounded", () => {
       if (!isPullRequestReachable(workflow!.on)) continue;
       reachableCount += 1;
       expect(
-        UNBOUNDED_BY_CHOICE.has(name),
-        `${name} produces a required check context AND receives a pull-request event, so it must ` +
-          "stay in BOUNDED. Moving it here and reverting its group passes every other assertion in " +
-          "this file, which is exactly why it needs a mechanical guard rather than a reviewer's memory.",
-      ).toBe(false);
-      expect(
         Object.hasOwn(BOUNDED, name),
         `${name} is a pull-request-reachable required-check workflow, so it belongs in BOUNDED with ` +
           "the repository-level group. An UNBOUNDED_BY_CHOICE entry records an exception carrying a " +

@@ -442,7 +442,7 @@ jobs:
       # the first version demanded main frozen for the whole run, which no run
       # could satisfy at the repository's merge cadence). The push and
       # workflow_dispatch runs that test main itself are in ci.yml and never
-      # reach this gate; that file's only trigger here is pull_request_target.
+      # reach this gate; this file's only trigger is pull_request_target.
       - name: Base freshness
         env:
           GH_TOKEN: ${{ github.token }}
