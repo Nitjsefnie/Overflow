@@ -322,6 +322,17 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     },
   ],
   [
+    "pr-suite.yml",
+    {
+      reason:
+        "This is where a pull request's own code runs, under pull_request with a read-only token, and its outcome is read by ci.yml's verify job for the event's exact head SHA. Its group is scoped to ONE pull request, so a run it cancels is always that same pull request's superseded head, never a peer's, and the push that superseded it scheduled the replacement run verify then awaits. Bounding it repository-wide would make every open pull request's verify wait behind every other's suite. It triggers on pull_request alone, so the literal true is the pull-request event expression with no other leg to cancel, and it names no required context: verify, not this workflow, carries the required check.",
+      group: "pr-suite-${{ github.event.pull_request.number }}",
+      "cancel-in-progress": true,
+      queue: undefined,
+      premise: "superseded-attempt",
+    },
+  ],
+  [
     "scorecard.yml",
     {
       reason:
@@ -456,6 +467,7 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   "event-policy.yml": ["event-policy", "event-policy-pull-request"],
   "ledger-relay.yml": ["relay-required-checks"],
   "pr-gate.yml": ["gate"],
+  "pr-suite.yml": ["suite"],
   "ratchet-guard.yml": ["ratchet-guard"],
   "scorecard.yml": ["analysis"],
   "secret-scan.yml": ["secret-scan"],
@@ -972,8 +984,13 @@ describe("the workflows left unbounded", () => {
           `${name} claims cancellation is safe because every run its group holds is one pull ` +
             `request's superseded attempt, but its group is not keyed on a pull request: ${entry.group}`,
         ).toContain("github.event.pull_request.number");
+        // A workflow whose ONLY trigger is pull_request may ship the literal
+        // true: on it the pull-request event expression is always true, so
+        // the two are the same flag, with no other leg for it to cancel.
+        const onlyPullRequest =
+          Object.keys(workflows.get(name)!.on ?? {}).join(",") === "pull_request";
         expect(
-          shipped,
+          onlyPullRequest && shipped === true ? "${{ github.event_name == 'pull_request' }}" : shipped,
           `${name} records the "${premise}" premise, which licenses ` +
             `${CANCELLATION_LICENCE[premise]}. It may cancel in flight only on a pull-request ` +
             "event, where its group is scoped to that one pull request and the push that superseded " +

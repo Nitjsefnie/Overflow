@@ -176,7 +176,8 @@ describe("scripts/commit_scopes.py", () => {
     expect(JSON.parse(result.stdout)).toEqual([
       "Actions event policy",
       "actionlint", "ci", "claim", "code scanning", "coverage comment",
-      "dependency audit", "ledger relay", "pr gate", "ratchet guard", "scorecard", "secret scan",
+      "dependency audit", "ledger relay", "pr gate", "pr suite", "ratchet guard", "scorecard",
+      "secret scan",
     ]);
   });
 });
