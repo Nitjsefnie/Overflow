@@ -56,7 +56,6 @@ describe("the verify workflow's docs-only detection step", () => {
       EVENT_NAME: "${{ github.event_name }}",
       PUSH_BEFORE: "${{ github.event.before }}",
       DISPATCH_BASE: "${{ inputs.base }}",
-      PR_NUMBER: "${{ github.event.pull_request.number }}",
       PR_TREE: "${{ steps.pr-tree.outputs.path }}",
     });
     expect(step?.run).toBeDefined();

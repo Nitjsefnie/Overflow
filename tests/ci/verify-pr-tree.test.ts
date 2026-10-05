@@ -82,6 +82,10 @@ async function fixture(files: Record<string, string>, message = "pull request ch
   const origin = join(root, `origin-${counter}`);
   await mkdir(join(origin, "scripts"), { recursive: true });
   git(origin, "init", "--quiet", "--initial-branch=main");
+  // The materialise step fetches the merge commit by SHA. The Actions origin
+  // serves a fetch for any object it holds; a stock local upload-pack
+  // refuses one, so the fixture's origin carries the same allowance.
+  git(origin, "config", "uploadpack.allowAnySHA1InWant", "true");
   for (const script of GATE_SCRIPTS) {
     await copyFile(resolve(script), join(origin, script));
   }
@@ -194,7 +198,7 @@ async function materialise(fx: Fixture, headSha = fx.head) {
   const result = await runStep(
     stepRunning("git worktree add --detach"),
     fx,
-    { PR_NUMBER: "1", HEAD_SHA: headSha, RUNNER_TEMP: runnerTemp },
+    { MERGE_BIND_SHA: fx.merge, HEAD_SHA: headSha, RUNNER_TEMP: runnerTemp },
     {},
   );
   return { result, outputs: readOutputs(result.output), runnerTemp };
