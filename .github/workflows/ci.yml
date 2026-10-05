@@ -185,49 +185,74 @@ jobs:
         with:
           persist-credentials: false
 
-      # The pull request enters as git objects only: the event's merge commit
-      # (the head merged into the base, base tip first parent, head second),
-      # fetched by its SHA. No refs/pull/<number> refspec is used, and the
-      # head ref is not fetched at all — the checkout analysers read a fetch
-      # whose command or env names the pull request's number as pulling
-      # untrusted history, so the fetch's input is named for what carries its
-      # trust: the event's own provenance, bound to the event by the two-parent
-      # check below. That bind is the security boundary and it is unchanged:
-      # the fetched commit's second parent must be exactly the head SHA this
-      # event is about, or the step fails closed. The commit is then
-      # materialised as a detached worktree under RUNNER_TEMP, outside the
-      # workspace, as data: nothing is installed, built or executed there.
-      # Later steps receive its path and SHA as this step's outputs, through
-      # their own env: as PR_TREE and MERGE_SHA — never through the job-wide
-      # environment file. Values from the event reach the shell through env:,
-      # never through ${{ }} in run:.
+      # The pull request enters as git objects only: this event's head, fetched
+      # by its SHA, and this event's base, which actions/checkout's full-history
+      # checkout already holds. No refs/pull/<number> refspec is used and the
+      # head is never checked out, installed or executed from — the checkout
+      # analysers read a fetch whose command or env names the pull request's
+      # NUMBER or a head REF as pulling untrusted history, which is why nothing
+      # here is named like a pull-request ref. What is fetched is a SHA value,
+      # and what carries the trust is not the name but the two-parent bind
+      # below: the commit that gets materialised must be a two-parent merge
+      # whose parents are exactly this event's base and this event's head, or
+      # the step fails closed. That bind is the security boundary and it is
+      # unchanged; it is checked even though the commit below is built here
+      # from those two SHAs, because it is the tripwire against a future edit
+      # that builds the merge from anything else.
+      #
+      # The merge tree is BUILT here rather than read out of the event payload.
+      # GitHub computes pull_request.merge_commit_sha asynchronously, so on a
+      # synchronize event it still names the merge commit of the pull request's
+      # PREVIOUS head; judging that tree is judging a tree this event is not
+      # about, and the bind correctly refuses it — which is why every pull
+      # request's push was failing. A local merge of this event's own two SHAs
+      # cannot be stale. merge-tree exits non-zero on a conflict, and there is
+      # no remote merge to fall back to.
+      #
+      # The merge commit is then materialised as a detached worktree under
+      # RUNNER_TEMP, outside the workspace, as data: nothing is installed,
+      # built or executed there. Later steps receive its path and SHA as this
+      # step's outputs, through their own env: as PR_TREE and MERGE_SHA — never
+      # through the job-wide environment file. Values from the event reach the
+      # shell through env:, never through ${{ }} in run:.
       - name: Materialise the pull request's merge tree as data
         id: pr-tree
         if: ${{ github.event_name == 'pull_request_target' }}
         env:
-          # Event provenance for the fetch below: exactly the merge commit
-          # GitHub created for this pull request event. The name is
-          # deliberately neutral — no PR-number, head-ref or bare-SHA spelling
-          # that a checkout analyser reads as a mutable pull-request ref
-          # (PR_NUMBER, HEAD_SHA-as-input, MERGE_SHA) — because the trust
-          # lives in the two-parent bind, not in the name; naming the fetch's
-          # input like a pull-request ref would re-arm a finding the bind
-          # already makes safe.
-          MERGE_BIND_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-          # The bind's other half: the head SHA this event is about, which the
-          # fetched commit's second parent must equal exactly.
+          # The head this event is about: the commit the pull request carries
+          # NOW, and the one the merge below is built from. Deliberately not
+          # the event's merge_commit_sha, which is computed asynchronously and
+          # can name the previous head's merge.
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # The base this event is about — the same commit GitHub's own merge
+          # preview merges into, and the same value the base-freshness gate
+          # receives as BASE_SHA, so the tree judged and the freshness
+          # certificate describe one merge.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           # actions/checkout's default: checking the tree out fetches no LFS
           # object the pull request's attributes point at.
           GIT_LFS_SKIP_SMUDGE: "1"
         run: |
-          git fetch --no-tags origin "${MERGE_BIND_SHA:?}"
-          merge_sha=$(git rev-parse --verify "${MERGE_BIND_SHA:?}^{commit}")
+          git fetch --no-tags origin "${HEAD_SHA:?}"
+          if ! git cat-file -e "${BASE_SHA:?}^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "${BASE_SHA:?}"
+          fi
+          if ! merged_tree=$(git merge-tree --write-tree "${BASE_SHA:?}" "${HEAD_SHA:?}"); then
+            echo "::error::the pull request's head ${HEAD_SHA} does not merge cleanly into its base ${BASE_SHA}; rebase the branch onto the base and push again."
+            exit 1
+          fi
+          # The identity is only what lets commit-tree run: this commit is a
+          # local object read as data, and nothing on this job's path
+          # configures one for us.
+          merge_sha=$(git -c user.name='Overflow verify' -c user.email='verify@localhost' \
+            -c commit.gpgSign=false \
+            commit-tree "${merged_tree}" -p "${BASE_SHA:?}" -p "${HEAD_SHA:?}")
           read -r _ first_parent second_parent extra_parent \
             <<< "$(git rev-list --parents -n 1 "${merge_sha}")"
           if [ -z "${first_parent}" ] || [ -n "${extra_parent}" ] \
+            || [ "${first_parent}" != "${BASE_SHA}" ] \
             || [ "${second_parent}" != "${HEAD_SHA}" ]; then
-            echo "::error::the event's merge commit (${merge_sha}) is not a two-parent merge of the event's head ${HEAD_SHA}; refusing to judge a tree this event is not about"
+            echo "::error::the merge built for this event (${merge_sha}) is not a two-parent merge of its base ${BASE_SHA} and the event's head ${HEAD_SHA}; refusing to judge a tree this event is not about"
             exit 1
           fi
           pr_tree="${RUNNER_TEMP}/pr-tree"

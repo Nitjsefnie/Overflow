@@ -12,10 +12,10 @@ import { parse } from "yaml";
  * untrusted history, whatever the job later proves about the commit it lands.
  * ci.yml's verify job materialises the pull request's merge tree as data, so
  * the pattern it must not carry is a `refs/pull/<number>` refspec or a
- * PR-number env name on any step that fetches: the merge commit is named by
- * its event provenance instead, and the two-parent bind against the event's
- * head SHA stays the step's trust boundary — the check that fails closed
- * unless the fetched commit is exactly the merge this event is about.
+ * PR-number env name on any step that fetches: the tree is built from this
+ * event's own head and base SHA values instead, and the two-parent bind
+ * against them stays the step's trust boundary — the check that fails closed
+ * unless what is materialised is exactly the merge this event is about.
  *
  * The analyser reads the workflow text, so these pins read it too: a
  * re-armed refspec or env name goes red here rather than in the next
@@ -80,25 +80,27 @@ describe("the verify job's git fetches", () => {
     ).toEqual([]);
   });
 
-  it("materialise the merge tree by fetching exactly the event's merge commit", () => {
+  it("materialise the merge tree by fetching the event's own head and base SHA values", () => {
     const materialise = steps.filter((step) =>
       (step.run ?? "").includes("git worktree add --detach"),
     );
     expect(materialise, "exactly one step materialises the merge tree").toHaveLength(1);
     const step = materialise[0]!;
 
-    // The merge commit by its event provenance, under a name no analyser
-    // reads as a mutable pull-request ref (not PR_NUMBER, not *_HEAD_SHA for
-    // the fetch's own input): the name is deliberately neutral because the
-    // trust lives in the bind below, not in the spelling.
-    expect(step.env?.MERGE_BIND_SHA).toBe("${{ github.event.pull_request.merge_commit_sha }}");
+    // Both ends of the merge, as SHA values under no pull-request-ref name —
+    // not PR_NUMBER, not a head REF: the trust lives in the bind below, not
+    // in the spelling. Nothing is named merge_commit_sha either, because that
+    // field is computed asynchronously and can name the previous head's merge.
     expect(step.env?.HEAD_SHA).toBe("${{ github.event.pull_request.head.sha }}");
-    expect(step.run).toContain('git fetch --no-tags origin "${MERGE_BIND_SHA:?}"');
+    expect(step.env?.BASE_SHA).toBe("${{ github.event.pull_request.base.sha }}");
+    expect(step.run).toContain('git fetch --no-tags origin "${HEAD_SHA:?}"');
+    expect(step.run).not.toContain("merge_commit_sha");
     expect(step.run).not.toContain("PR_NUMBER");
 
-    // The trust boundary is untouched: the fetched commit must be a
-    // two-parent merge whose second parent is exactly the event's head SHA,
-    // or the step fails closed.
+    // The trust boundary is untouched: what is materialised must be a
+    // two-parent merge of exactly this event's base and head, or the step
+    // fails closed.
+    expect(step.run).toContain('git merge-tree --write-tree "${BASE_SHA:?}" "${HEAD_SHA:?}"');
     expect(step.run).toContain('[ "${second_parent}" != "${HEAD_SHA}" ]');
     expect(step.run).toContain("exit 1");
   });
