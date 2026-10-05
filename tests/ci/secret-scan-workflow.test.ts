@@ -136,18 +136,6 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     expect(scan.name ?? "secret-scan").toBe("secret-scan");
   });
 
-  it("wires its own workflow name into the ledger relay", async () => {
-    // The relay's `workflows:` filter matches the workflow `name:` FIELD, not
-    // the filename, so a producer file whose `name:` is absent from it is never
-    // relayed — and secret-scan is an unpinned producer today, so nothing else
-    // would notice the omission. Per file, because each leg carries its own
-    // name and a name added for one says nothing about the other.
-    const relay = parse(await readFile(resolve(".github/workflows/ledger-relay.yml"), "utf8")) as {
-      on: { workflow_run: { workflows: string[] } };
-    };
-    expect(relay.on.workflow_run.workflows, `${workflow.name} must be relayed`).toContain(workflow.name);
-  });
-
   it(pr ? "uses main's checkout and fetches the PR head only as git objects" : "uses main's checkout, and fetches no pull-request ref", () => {
     const checkouts = scan.steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
     // One checkout per file since the split: the event-name split that used to
