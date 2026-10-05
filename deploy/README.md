@@ -756,10 +756,12 @@ re-push is refused by branch protection. A dispatched `ci` run measures the
 change against the supplied base, including each commit in the interval; a
 dispatch without a base always measures coverage.
 
-Each required check is resolved to the job of the workflow file
-`.github/required-checks.json` pins it to, and a same-named check-run from
-any other producer holds the deploy as pending, so it is refused at the
-deadline and never passed.
+Each required check is resolved to the jobs of the workflow files
+`.github/required-checks.json` pins it to — a pin may be one file or a list of
+them, and since issue 1090's split every pinned context names both a
+repository-level file and a pull-request-only file — and a same-named
+check-run from any other producer holds the deploy as pending, so it is
+refused at the deadline and never passed.
 
 The required checks are pinned, in branch protection, to the Overflow Ledger
 App (app id 5118623), and the gate's producer rule follows that pin: the gate
@@ -930,7 +932,9 @@ only confirms review in the deploy script and does not add a manual gate.
 
 The manual required-checks gate trusts check-run names; it does not use
 `.github/required-checks.json` to attribute each name to its producing
-workflow. It does not wait for CI: an absent, non-completed or unsuccessful
+workflow (a name may be pinned to several since issue 1090's split, and the
+gate keeps trusting the check-run name alone). It does not wait for CI: an
+absent, non-completed or unsuccessful
 required check refuses the deploy. Once CI completes, rerun the gates part of
 the block. The script's `OVERFLOW_DEPLOY_CI_GATE=skip` setting has no manual
 equivalent.

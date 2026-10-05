@@ -190,8 +190,9 @@ describe("GitHub Actions release gates", () => {
     const workflow = await readWorkflow("ratchet-guard-pr.yml");
     // pull_request_target keeps the gate alive when a pull request disables a
     // workflow's own pull_request run: the workflow definition, the checkout
-    // and the script that executes all come from main — ci.yml's PR leg fires
-    // pull_request_target since issue 822, so the ci run can no longer be
+    // and the script that executes all come from main — the ci pull-request
+    // leg has fired pull_request_target since issue 822, and since issue 1090
+    // that leg is ci-pr.yml's own trigger, so the ci run can no longer be
     // silenced that way. `branches: [main]` keeps a PR retargeted to main
     // (an edited event, which gets no new run) from carrying its stale green
     // over.
@@ -209,7 +210,7 @@ describe("GitHub Actions release gates", () => {
     // Actions minutes stop scaling with the number of open pull requests;
     // GitHub keeps one PENDING run per group and cancels the superseded one.
     // cancel-in-progress is the literal false because that group is shared by
-    // every pull request and this job is a required context — see ci.yml's
+    // every pull request and this job is a required context — see ci-pr.yml's
     // concurrency block for the full argument.
     expect(workflow.concurrency).toEqual({
       group: "ratchet-guard-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",

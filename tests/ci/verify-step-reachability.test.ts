@@ -952,11 +952,12 @@ describe("the expression evaluator", () => {
     expect(evaluateExpression("true || 'b'")).toBe(true);
   });
 
-  it("binds && tighter than ||, which is why ci.yml's group parenthesises", () => {
-    // The exact shape of ci.yml's concurrency group, on both legs of its
-    // event-class split. If the precedence were reversed, `a && b || c` would
-    // read as `a && (b || c)` and the pull-request arm would swallow the
-    // fallback.
+  it("binds && tighter than ||, which is why ci-pr.yml's group parenthesises", () => {
+    // The precedence shape the repo-wide groups arm on —
+    // `(event test && 'repo-wide') || github.sha`, written with the push arm
+    // here; ci.yml's own group is plain per-SHA and needs no parentheses.
+    // If the precedence were reversed, `a && b || c` would read as
+    // `a && (b || c)` and the repo-wide arm would swallow the fallback.
     const group = "(github.event_name == 'push' && 'repo-wide') || github.sha";
     expect(evaluateExpression(group, push)).toBe("repo-wide");
     expect(evaluateExpression(group, pullRequest)).toBe(BASE_SHA);

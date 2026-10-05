@@ -8,7 +8,7 @@ name: pr suite
 # credential, and produces no required context — its job is deliberately not
 # named after one.
 #
-# Its outcome is read as DATA by ci.yml's verify job, which runs under
+# Its outcome is read as DATA by ci-pr.yml's verify job, which runs under
 # pull_request_target from the base branch's definition: the base copy of
 # scripts/await-pr-suite.ts accepts only a completed, successful
 # pull_request run of exactly this file at exactly the event's head SHA, and

@@ -13,7 +13,8 @@ import { parse } from "yaml";
  * from an outage. Issue 985 asks for a retry that fires on the second and only
  * on the second, so this suite pins the decision by running the SHIPPED run
  * script against a scripted advisory endpoint — the same shape
- * tests/ci/docs-only-step.test.ts uses for ci.yml's docs-only step. Nothing
+ * tests/ci/docs-only-step.test.ts uses for the docs-only steps of ci.yml and
+ * ci-pr.yml. Nothing
  * here touches a network or a registry: `pnpm` is a stub first on PATH that
  * replays outputs captured from pnpm 10.33.0, and the suite asserts on the
  * exit status and on how many times the stub was called.

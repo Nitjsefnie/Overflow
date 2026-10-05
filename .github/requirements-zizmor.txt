@@ -1,4 +1,5 @@
-# Hash-pinned zizmor install for .github/workflows/actionlint.yml:
+# Hash-pinned zizmor install for both halves of the split workflow,
+# .github/workflows/actionlint.yml and actionlint-pr.yml (issue 1090):
 #   pip install --require-hashes -r .github/requirements-zizmor.txt
 #
 # zizmor==1.29.0 has no transitive dependencies on PyPI, so the file is the
