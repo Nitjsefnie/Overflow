@@ -1356,6 +1356,59 @@ export function untrustedExecutions(run: string): string[] {
   return reasons;
 }
 
+/**
+ * Every write a run block makes outside the places a pull_request_target step
+ * may write: its own GITHUB_OUTPUT, stderr, and a directory it names through a
+ * variable assigned from RUNNER_TEMP in the same block. File-moving commands
+ * are refused outright; none belongs in this leg.
+ */
+export function untrustedWrites(run: string): string[] {
+  const reasons: string[] = [];
+  const tempVariables = new Set(
+    [...run.matchAll(/^\s*(\w+)="\$\{RUNNER_TEMP\}\/[\w-]+"$/gm)].map((match) => match[1]),
+  );
+  // Single-quoted text is literal (a regular expression, say), never a
+  // redirection, so it is blanked before the scan.
+  const unquotedRun = run.replace(/'[^']*'/g, "''");
+  for (const redirect of unquotedRun.matchAll(/(?<![<>&\d])>>?\s*([^\s;|&]+)/g)) {
+    const target = redirect[1] ?? "";
+    if (target !== '"$GITHUB_OUTPUT"' && target !== "&2") {
+      reasons.push(`redirects output into ${target}`);
+    }
+  }
+  for (const command of run.matchAll(/(?<![\w./-])(cp|mv|tee|touch|ln|install|rm|rsync|tar|unzip)(?![\w.-])/g)) {
+    reasons.push(`runs \`${command[1]}\``);
+  }
+  for (const made of run.matchAll(/(?<![\w./-])mkdir\s+(?:-\S+\s+)*"?\$\{?(\w+)\}?"?/g)) {
+    if (!tempVariables.has(made[1]!)) reasons.push(`creates a directory from ${made[1]}`);
+  }
+  for (const made of run.matchAll(/(?<![\w./-])mkdir\s+(?:-\S*\s+)*(?!-|"?\$)(\S+)/g)) {
+    reasons.push(`creates the directory ${made[1]}`);
+  }
+  return reasons;
+}
+
+describe("the untrusted-write detector the boundary assertions rely on", () => {
+  it("accepts step outputs, stderr and a fresh RUNNER_TEMP directory", () => {
+    expect(untrustedWrites('echo "x=1" >> "$GITHUB_OUTPUT"')).toEqual([]);
+    expect(untrustedWrites('echo "::error::no" >&2')).toEqual([]);
+    expect(untrustedWrites('dir="${RUNNER_TEMP}/suite-coverage"\nmkdir -- "${dir}"')).toEqual([]);
+    expect(untrustedWrites('if [ "$found" -gt 1 ]; then exit 1; fi')).toEqual([]);
+    expect(untrustedWrites("git grep -nI -E '^(<{7}( |$)|>{7}( |$)|={7}$)' -- .")).toEqual([]);
+  });
+
+  it("refuses writes into either tree and file-moving commands", () => {
+    expect(untrustedWrites('echo x > "$PR_TREE/coverage/coverage-summary.json"')).not.toEqual([]);
+    expect(untrustedWrites('echo x >> "$GITHUB_WORKSPACE/scripts/x.ts"')).not.toEqual([]);
+    expect(untrustedWrites("echo PR_TREE=x >> \"$GITHUB_ENV\"")).not.toEqual([]);
+    expect(untrustedWrites('mkdir -p "${PR_TREE}/coverage"')).not.toEqual([]);
+    expect(untrustedWrites("mkdir coverage")).not.toEqual([]);
+    expect(untrustedWrites("mkdir -- coverage")).not.toEqual([]);
+    expect(untrustedWrites('cp "$a" "$GITHUB_WORKSPACE/scripts/"')).not.toEqual([]);
+    expect(untrustedWrites('tar -xf a.tar -C "$PR_TREE"')).not.toEqual([]);
+  });
+});
+
 describe("the untrusted-execution detector the boundary assertions rely on", () => {
   it("accepts a base-checkout script invocation and plain git", () => {
     expect(untrustedExecutions('node "$GITHUB_WORKSPACE/scripts/check-migration-edits.ts" a b')).toEqual([]);
@@ -1451,6 +1504,9 @@ for (const scenario of PRT_SCENARIOS) {
       expect((step as { env?: Record<string, string> }).env).toEqual({
         PR_NUMBER: "${{ github.event.pull_request.number }}",
         HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+        // actions/checkout's default: the worktree checkout fetches no LFS
+        // object the pull request's attributes point at.
+        GIT_LFS_SKIP_SMUDGE: "1",
       });
       // Materialised before any gate reads it.
       expect(steps.indexOf(step)).toBeLessThan(
@@ -1473,23 +1529,78 @@ for (const scenario of PRT_SCENARIOS) {
 
     it(
       scenario.floor
-        ? "downloads the awaited run's coverage summary into the pull request tree, failing when absent"
+        ? "downloads the awaited run's coverage summary into a fresh directory outside both trees"
         : "downloads nothing for a docs-only change",
       () => {
-        const downloads = selected().filter((step) =>
+        const steps = selected();
+        const downloads = steps.filter((step) =>
           (step.uses ?? "").startsWith("actions/download-artifact@"),
         );
         expect(downloads).toHaveLength(scenario.floor ? 1 : 0);
         if (!scenario.floor) return;
-        const awaiter = runsContaining(selected(), AWAIT_SUITE_COMMAND)[0]!;
-        expect(downloads[0]?.with).toEqual({
+        const awaiter = runsContaining(steps, AWAIT_SUITE_COMMAND)[0]!;
+        const download = downloads[0]!;
+        const destination = /^\$\{\{ steps\.([\w-]+)\.outputs\.dir \}\}$/.exec(
+          String(download.with?.path ?? ""),
+        );
+        expect(
+          destination,
+          "the download destination must be exactly the `dir` output of the step that created it " +
+            "fresh — never a path under the pull request tree or the workspace",
+        ).not.toBeNull();
+        expect(download.with).toEqual({
           name: "coverage-summary",
-          path: "${{ steps.pr-tree.outputs.path }}/coverage",
+          path: `\${{ steps.${destination![1]}.outputs.dir }}`,
           "run-id": `\${{ steps.${awaiter.id}.outputs.run_id }}`,
           "github-token": "${{ github.token }}",
         });
-        expect(downloads[0]?.["continue-on-error"]).toBeFalsy();
+        expect(download["continue-on-error"]).toBeFalsy();
+
+        const creator = steps.filter((step) => step.id === destination![1]);
+        expect(creator, "the destination's creating step must run in this scenario").toHaveLength(1);
+        expect(steps.indexOf(creator[0]!)).toBeLessThan(steps.indexOf(download));
+        const run = creator[0]!.run ?? "";
+        expect(run, "the destination must sit under RUNNER_TEMP").toMatch(
+          /^dir="\$\{RUNNER_TEMP\}\/[\w-]+"$/m,
+        );
+        expect(run, "an existing destination, a symlink included, must be refused").toContain(
+          'if [ -e "${dir}" ] || [ -L "${dir}" ]; then',
+        );
+        expect(run, "the directory is created by mkdir without -p, which refuses an existing one").toMatch(
+          /^mkdir -- "\$\{dir\}"$/m,
+        );
+
+        // The floor reads exactly the downloaded file, by the creator's output.
+        const floor = runsContaining(steps, COVERAGE_FLOOR_COMMAND);
+        expect(floor).toHaveLength(1);
+        expect(floor[0]!.run).toContain('--summary "${SUMMARY_DIR:?}/coverage-summary.json"');
+        expect((floor[0] as { env?: Record<string, string> }).env?.SUMMARY_DIR).toBe(
+          `\${{ steps.${destination![1]}.outputs.dir }}`,
+        );
       },
     );
+
+    it("writes nothing into the pull request tree or the workspace", () => {
+      const offences: string[] = [];
+      for (const step of selected()) {
+        for (const value of [step.with?.path, (step.with as Record<string, unknown> | undefined)?.["working-directory"]]) {
+          if (value === undefined) continue;
+          const text = String(value);
+          if (
+            text.includes("steps.pr-tree.outputs.path") ||
+            /github\.workspace|GITHUB_WORKSPACE/.test(text) ||
+            !text.startsWith("${{ steps.")
+          ) {
+            offences.push(`${label(step)}: writes to ${text}`);
+          }
+        }
+        offences.push(...untrustedWrites(step.run ?? "").map((reason) => `${label(step)}: ${reason}`));
+      }
+      expect(
+        offences,
+        "under pull_request_target the only places a step may write are its own outputs and a " +
+          "fresh directory it created under RUNNER_TEMP",
+      ).toEqual([]);
+    });
   });
 }
