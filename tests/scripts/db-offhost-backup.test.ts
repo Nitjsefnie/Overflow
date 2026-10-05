@@ -1,9 +1,12 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  closeSync,
   existsSync,
+  fstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -467,11 +470,18 @@ describe("db-offhost-backup.sh reduced dump", () => {
     expect(run.status).toBe(0);
     expect(run.xzArgv).toEqual(["-9e"]);
     expect(run.ageArgv).toEqual(["-r", recipient]);
-    const installed = statSync(run.backupPath);
-    expect(installed.isFile()).toBe(true);
-    expect(readFileSync(run.backupPath, "utf8").startsWith("age|xz|")).toBe(true);
-    // The mode is the script's business: this file is what leaves the host.
-    expect(installed.mode & 0o777).toBe(0o600);
+    // One open for mode and content alike: a stat-then-read by path would
+    // re-resolve the name between the two and read whatever replaced it.
+    const fd = openSync(run.backupPath, "r");
+    try {
+      const installed = fstatSync(fd);
+      expect(installed.isFile()).toBe(true);
+      expect(readFileSync(fd, "utf8").startsWith("age|xz|")).toBe(true);
+      // The mode is the script's business: this file is what leaves the host.
+      expect(installed.mode & 0o777).toBe(0o600);
+    } finally {
+      closeSync(fd);
+    }
   });
 
   it("installs the encrypted file under its own name into a 0700 directory", () => {
