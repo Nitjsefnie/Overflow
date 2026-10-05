@@ -1401,6 +1401,10 @@ const ZIZMOR_PIN_RUN_TEXT = [
   "entry_type=\"\"",
   "entry_blob=\"\"",
   "while IFS=$'\\t' read -r meta _path; do",
+  "  # An empty ls-tree output still feeds the here-string ONE empty",
+  "  # line; skipping it is what keeps the count truthful — a deleted",
+  "  # manifest must read as zero entries, never as one.",
+  "  [ -n \"${meta}\" ] || continue",
   "  count=$((count + 1))",
   "  entry_mode=${meta%% *}",
   "  rest=${meta#* }",
@@ -1463,9 +1467,9 @@ const ZIZMOR_PIN_RUN_TEXT = [
 function isSanctionedZizmorPinStep(step: WorkflowStep): boolean {
   return (step.run ?? "") === ZIZMOR_PIN_RUN_TEXT;
 }
-/** A run block that invokes pip at all — the one-step allowance is judged over this set. */
+/** A run block that invokes pip or pip3 at all — the one-step allowance is judged over this set. */
 function runsPip(step: WorkflowStep): boolean {
-  return /(?<![\w./-])pip(?![\w-])/.test(step.run ?? "");
+  return /(?<![\w./-])pip3?(?![\w-])/.test(step.run ?? "");
 }
 
 /** Commands that run a package manager, which would install or execute the
@@ -1656,8 +1660,8 @@ for (const scenario of PRT_SCENARIOS) {
       const pipSteps = selected().filter(runsPip);
       expect(
         pipSteps.map(label),
-        "the issue-1099 zizmor gate is the one step on this leg allowed to invoke pip; a second " +
-          "package-manager step must fail here, sanctioned or not",
+        "the issue-1099 zizmor gate is the one step on this leg allowed to invoke pip or pip3; a " +
+          "second package-manager step must fail here, sanctioned or not",
       ).toEqual([ZIZMOR_PIN_STEP_NAME]);
       expect(
         isSanctionedZizmorPinStep(pipSteps[0]!),

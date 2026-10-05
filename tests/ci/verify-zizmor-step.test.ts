@@ -335,10 +335,13 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   it("refuses a tree with no manifest at all", async () => {
     // A pull request that simply deletes the pin gets its own case: zero
     // entries is the ls-tree refusal, not a pip run against a stale copy.
+    // The refusal states the count TRUTHFULLY — an empty ls-tree output must
+    // read as zero, never as one.
     const fx = await fixture({ kind: "absent" });
     const result = await runStep(fx);
     expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
     expect(`${result.stdout}${result.stderr}`).toContain("::error::");
+    expect(`${result.stdout}${result.stderr}`).toContain("found 0 matching entries");
     expect(await pipInvocations(result.log)).toEqual([]);
   });
 
