@@ -577,10 +577,40 @@ describe("the ledger relay's producer filter", () => {
   //
   //  - PINNED: every workflow the pin map names (every path of every pin).
   //  - FORWARD_WIRED: named here, explicitly, with the reason it is relayed at
-  //    all. A fourth unpinned producer has to be ADDED to this list, which is
-  //    the point — making it deliberate rather than an omission the sweep
-  //    silently fails to notice. It self-heals the day that context is pinned:
-  //    the name then arrives through PINNED and the entry becomes redundant.
+  //    all. A forward-wired producer is one nothing waits on today; the relay
+  //    runs for it so that the day its context IS pinned nothing else has to
+  //    change. The entry self-heals then — the name arrives through PINNED and
+  //    the declaration becomes redundant rather than wrong.
+  //
+  // BOTH DIRECTIONS ARE ASSERTED, and the second is inverted on purpose. The
+  // obvious form — "every declaration ships, and the filter names every
+  // declaration" — leaves the control removable by one coherent edit. So the
+  // second direction asserts over the FILTER as the enumerated surface: every
+  // name the relay lists that is not a PINNED producer must be DECLARED here.
+  // That is what makes the list a control rather than a record of what was once
+  // true — a new producer added to the filter with no declaration fails, which
+  // is the quiet direction, and the one that was open.
+  //
+  // WHAT THIS STILL DOES NOT CATCH, stated rather than implied. Dropping a
+  // declaration AND its filter line together still passes, leaving a workflow
+  // that is shipped, unpinned, undeclared and unforwarded. No in-file assertion
+  // closes that, because "is this workflow meant to be a producer?" has no
+  // source in the repository except the declaration itself: once the two move
+  // together, the observable state is identical to "this was never a
+  // producer". The tempting alternative — every shipped non-pinned workflow must
+  // be declared — is not weaker but WRONG: 11 of the 16 shipped workflows are
+  // unpinned and 9 of those are deliberately NOT relayed (claim, pr-suite,
+  // pr-gate, scorecard, code-scanning, coverage-comment, dependency-audit,
+  // event-policy, ledger-relay), so declaring them would demand a filter entry
+  // for each. Closing it would take a hard-coded pin of the filter's contents,
+  // trading away the derivation above and reinstating the hand-maintained list
+  // this sweep replaced — a judgement for whoever owns the relay, not a silent
+  // change made here.
+  //
+  // The residual is unchanged from what this sweep replaced, and it is not the
+  // silent direction: removing a line from a tracked workflow is a reviewable
+  // diff, whereas adding a producer to the filter with no declaration was the
+  // quiet case, and that one now dies.
   const FORWARD_WIRED: Record<string, string> = {
     "secret scan": "the secret-scan workflow is not a required context, so nothing in " +
       ".github/required-checks.json names it; the relay still forwards its completions so the " +
@@ -596,27 +626,45 @@ describe("the ledger relay's producer filter", () => {
     return relay.on.workflow_run.workflows;
   };
 
-  it("names every PINNED and every FORWARD-WIRED producer's workflow name", async () => {
+  /** Every workflow the pin map names, by the `name:` field the relay matches on. */
+  const pinnedNames = async (): Promise<Set<string>> => {
     const pins = JSON.parse(await readFile(resolve(".github/required-checks.json"), "utf8")) as unknown;
     const paths = Object.values(pins as Record<string, unknown>)
       .flatMap((value) => (typeof value === "string" ? [value] : Array.isArray(value) ? value : []))
       .filter((value): value is string => typeof value === "string");
-    const producerNames = new Set<string>();
+    const names = new Set<string>();
     for (const file of files) {
       if (!paths.some((path) => path === `.github/workflows/${file}`)) continue;
       const name = workflows.get(file)?.name;
       expect(name, `${file} is pinned as a required-check producer and must carry a readable name`).toBeTruthy();
-      producerNames.add(name!);
+      names.add(name!);
     }
+    return names;
+  };
+
+  it("declares at least one forward-wired producer, so the control cannot be emptied unnoticed", () => {
+    // Without this, emptying FORWARD_WIRED leaves the union non-empty from
+    // PINNED alone, every other assertion passes, and the one edit that removes
+    // the control is invisible. The anti-vacuity assertion below checks the
+    // UNION; this checks the half of it that has no other source.
+    expect(
+      Object.keys(FORWARD_WIRED),
+      "FORWARD_WIRED is empty, so nothing declares a forward-wired producer and every unpinned " +
+        "name in the relay filter is unchecked. That list IS the control, and an empty one " +
+        "removes it without failing a single other assertion here.",
+    ).not.toEqual([]);
+  });
+
+  it("names every PINNED and every FORWARD-WIRED producer's workflow name", async () => {
+    const producerNames = new Set(await pinnedNames());
     for (const name of Object.keys(FORWARD_WIRED)) producerNames.add(name);
-    // The anti-vacuity control: a producer set derived from a pin map that
-    // resolved to nothing, plus an empty forward-wired list, would satisfy the
-    // containment assertion below without having checked a name.
+    // The anti-vacuity control over the union: a pin map that resolved to
+    // nothing, plus an empty forward-wired list, would satisfy the containment
+    // assertion below without having checked a name.
     expect(
       [...producerNames].sort(),
       "no producer this suite derived is non-empty, so the relay filter sweep below is checking " +
-        "an empty set. Either .github/required-checks.json pins no workflow this suite read, or " +
-        "FORWARD_WIRED is empty.",
+        "an empty set.",
     ).not.toEqual([]);
     const relayed = await relayNames();
     expect(
@@ -627,6 +675,21 @@ describe("the ledger relay's producer filter", () => {
         "forwarded, and nothing waits on that today — which is exactly why it needs a control. " +
         "The filter matches the workflow `name:` field, not the filename. Add the name; do not " +
         "delete the producer.",
+    ).toEqual([]);
+  });
+
+  it("declares every name the relay filter relays that is not a PINNED producer", async () => {
+    const pinned = await pinnedNames();
+    const declared = new Set(Object.keys(FORWARD_WIRED));
+    const undeclared = (await relayNames()).filter((name) => !pinned.has(name) && !declared.has(name));
+    expect(
+      undeclared,
+      "the relay filter relays these names, and they are neither PINNED producers nor declared " +
+        "here — so nothing in this file checks that anyone meant to relay them. Declare each in " +
+        "FORWARD_WIRED with the reason it is forwarded at all, or remove the name from the filter. " +
+        "This is the assertion that makes the declaration list a control rather than a record of " +
+        "what was once true: a producer added to the relay without a declaration is invisible to " +
+        "every other assertion here.",
     ).toEqual([]);
   });
 
