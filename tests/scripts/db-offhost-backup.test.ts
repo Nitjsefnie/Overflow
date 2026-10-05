@@ -99,8 +99,12 @@ const ageShim = [
  */
 const mbFake = [
   "#!/bin/sh",
-  `printf '%s\\n' "$@" >> "$OFFHOST_TEST_MB_LOG"`,
-  `printf -- '---\\n' >> "$OFFHOST_TEST_MB_LOG"`,
+  // ONE printf invocation per call, separator as the last argument: the
+  // connector runs concurrently with the probes that follow it, so two
+  // separate appends (args, then separator) can interleave and the log
+  // parser would read two calls as one. A single buffered write is atomic
+  // under O_APPEND.
+  `printf '%s\\n' "$@" '---' >> "$OFFHOST_TEST_MB_LOG"`,
   `case "\${1:-}" in`,
   "  list-agents)",
   `    if [ "\${OFFHOST_TEST_MB_LIST_RC:-0}" -ne 0 ]; then`,
@@ -134,7 +138,10 @@ const mbFake = [
   `    if [ "\${OFFHOST_TEST_MB_DELETE_RC:-0}" -ne 0 ]; then exit "$OFFHOST_TEST_MB_DELETE_RC"; fi`,
   "    exit 0 ;;",
   "esac",
-  "exit 0",
+  // An unrecognized subcommand must not read as success: the fake answers
+  // only what the script is contracted to call, and anything else is a run
+  // drifting out from under the suite.
+  "exit 64",
   "",
 ].join("\n");
 
@@ -533,9 +540,19 @@ describe("db-offhost-backup.sh local retention", () => {
         ".overflow-reduced-20260901T000000Z.sql.xz.age.incomplete",
         2,
       );
-      const freshPartial = seedFile(
+      const stalePlain = seedFile(
         backupDirectory,
-        ".overflow-reduced-20260930T000000Z.sql.xz.age.incomplete",
+        ".overflow-reduced-20260901T000000Z.sql.incomplete",
+        2,
+      );
+      const staleDeflated = seedFile(
+        backupDirectory,
+        ".overflow-reduced-20260901T000000Z.sql.xz.incomplete",
+        2,
+      );
+      const freshPlain = seedFile(
+        backupDirectory,
+        ".overflow-reduced-20260930T000000Z.sql.incomplete",
         1 / 24,
       );
 
@@ -543,7 +560,11 @@ describe("db-offhost-backup.sh local retention", () => {
 
       expect(run.status).toBe(0);
       expect(existsSync(stalePartial), "a partial past 24 hours is swept").toBe(false);
-      expect(existsSync(freshPartial), "a fresh partial stays").toBe(true);
+      // The staged intermediates of a SIGKILLed run are reclaimed too: they
+      // are plaintext of the reduced dump and must not outlive the run.
+      expect(existsSync(stalePlain), "a stale plain-stage intermediate is swept").toBe(false);
+      expect(existsSync(staleDeflated), "a stale compressed intermediate is swept").toBe(false);
+      expect(existsSync(freshPlain), "a fresh partial stays").toBe(true);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -648,5 +669,62 @@ describe("db-offhost-backup.sh discord posting", () => {
 
     expect(run.status).not.toBe(0);
     expect(deleteCalls(run), "the deletion was attempted").toHaveLength(1);
+  });
+
+  it("probes liveness with the deployed timeouts: 10s once, then 2s inside the bring-up loop", () => {
+    const single = runBackup();
+
+    expect(single.status).toBe(0);
+    expect(
+      single.mbCalls.filter((argv) => argv[0] === "list-agents"),
+      "a running connector costs exactly one 10-second probe",
+    ).toEqual([["list-agents", "osc", "--timeout", "10"]]);
+
+    const brought = runBackup({ listRc: 1 });
+
+    expect(brought.status).toBe(0);
+    const probes = brought.mbCalls.filter((argv) => argv[0] === "list-agents");
+    expect(probes[0], "the liveness probe is the 10-second one").toEqual([
+      "list-agents",
+      "osc",
+      "--timeout",
+      "10",
+    ]);
+    for (const probe of probes.slice(1)) {
+      expect(probe, "every bring-up probe is the short one").toEqual([
+        "list-agents",
+        "osc",
+        "--timeout",
+        "2",
+      ]);
+    }
+    expect(probes.length, "the bring-up loop probed at least once").toBeGreaterThan(1);
+
+    // A bring-up that never comes up burns its whole budget on the short
+    // probe, and nothing else.
+    const exhausted = runBackup({ listRc: 1, connectorMute: true });
+
+    expect(exhausted.status).not.toBe(0);
+    const exhaustProbes = exhausted.mbCalls.filter((argv) => argv[0] === "list-agents");
+    expect(exhaustProbes[0]).toEqual(["list-agents", "osc", "--timeout", "10"]);
+    expect(exhaustProbes.slice(1)).toEqual(
+      exhaustProbes.slice(1).map(() => ["list-agents", "osc", "--timeout", "2"]),
+    );
+    expect(exhaustProbes).toHaveLength(3);
+  });
+
+  it("keeps a message whose stamp will not parse, rather than deleting on a guess", () => {
+    const run = runBackup({
+      conversationJson: JSON.stringify([
+        { msg_id: "1111111111111111111", from: "osc", created: "not-a-timestamp" },
+        { msg_id: "2222222222222222222", from: "osc" },
+        { msg_id: "3333333333333333333", from: "osc", created: createdDaysAgo(30) },
+      ]),
+    });
+
+    expect(run.status).toBe(0);
+    expect(deleteCalls(run)).toEqual([
+      ["message", "osc", "delete", "3333333333333333333", "--channel", channel],
+    ]);
   });
 });
