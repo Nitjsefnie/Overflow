@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { encode } from "next-auth/jwt";
+import { AUTH_ERROR_LOG_LINE_MAX } from "@/lib/auth/bounded-logger";
 
 /**
  * The undecryptable-session log line, end to end against the installed
@@ -42,12 +43,6 @@ const appUrl = "http://overflow.test";
 const sessionCookieName = "authjs.session-token";
 const authSecret = "undecryptable-session-logging-test-secret-not-for-production";
 const wrongSecret = "undecryptable-session-logging-test-wrong-secret-not-for-production";
-/**
- * Mirrors AUTH_ERROR_LOG_LINE_MAX (src/lib/auth/bounded-logger.ts), whose
- * behaviour the unit suite pins. Kept literal so this file still loads and
- * fails for its behavioural reason while that module does not exist.
- */
-const LOG_LINE_MAX = 512;
 
 const originalAuthUrl = process.env.AUTH_URL;
 const originalNextAuthUrl = process.env.NEXTAUTH_URL;
@@ -138,8 +133,8 @@ function assertSingleBoundedLine(errors: string[][], forbidden: string[]): strin
   ).toBe(1);
   const line = errors[0]!.map(String).join(" ");
   expect(
-    line.length <= LOG_LINE_MAX,
-    `the line is ${line.length} code units, the cap is ${LOG_LINE_MAX}: ${JSON.stringify(line)}`,
+    line.length <= AUTH_ERROR_LOG_LINE_MAX,
+    `the line is ${line.length} code units, the cap is ${AUTH_ERROR_LOG_LINE_MAX}: ${JSON.stringify(line)}`,
   ).toBe(true);
   const offender = [...line].find((character) => {
     const unit = character.codePointAt(0)!;
@@ -155,9 +150,20 @@ function assertSingleBoundedLine(errors: string[][], forbidden: string[]): strin
       `the line carries forbidden text ${JSON.stringify(fragment)}: ${JSON.stringify(line)}`,
     ).toBe(false);
   }
-  const stackText = /\s at \s/.test(line) || /node_modules|\.ts:|\.js:/.test(line);
+  const stackText = stackFrame(line) || /node_modules|\.ts:|\.js:/.test(line);
   expect(stackText, `the line carries stack-trace text: ${JSON.stringify(line)}`).toBe(false);
   return line;
+}
+
+/**
+ * A V8 stack frame, joined inline into a single line: ` at fn (file:1:2)` or
+ * ` at file:1:2`. Tighter than a bare " at " probe, which a future legitimate
+ * message like "failed at step (3)" would false-positive on: a frame needs a
+ * location with `:line:column` inside or after its shape to match.
+ */
+function stackFrame(text: string): boolean {
+  return /\s+at\s+[^\s(]+\s*\([^)]*:\d+:\d+\s*\)/.test(text)
+    || /\s+at\s+[^()\s]+:\d+:\d+/.test(text);
 }
 
 /** Drives the real route handler with the session cookie's value, as a browser would send it. */
