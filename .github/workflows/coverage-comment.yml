@@ -1,17 +1,17 @@
 name: coverage comment
 
 # Issue 592 mechanism 3: the patch coverage report, commented onto the pull
-# request. The ci workflow measures but holds no PR-writing token; this
-# workflow_run job holds one and therefore touches nothing from the pull
-# request:
+# request. The pr suite workflow (pr-suite.yml) measures it — that is where a
+# pull request's own code runs, under `pull_request` — but holds no
+# PR-writing token; this workflow_run job holds one and therefore touches
+# nothing from the pull request:
 #
 #   - it checks out NOTHING — the workspace stays empty, run blocks reference
 #     env names only, and the artifact is parsed as data only;
-#   - only a ci run triggered by pull_request or pull_request_target can have
-#     a destination: ci triggers on the latter (issue 822), and the former is
-#     kept accepted, while a push or workflow_dispatch run — even one at a
-#     pull request's head SHA — measured a diff that pull request does not
-#     own, so it exits silently;
+#   - only a run triggered by pull_request or pull_request_target can have a
+#     destination: the pr suite triggers on the former, and the latter is
+#     kept accepted, while any other event's run measured no diff a pull
+#     request owns, so it exits silently;
 #   - the destination pull request is resolved from the triggering event
 #     only — its head repository, head branch and head SHA (issue 656): a
 #     candidate from another repository, or whose head has moved past the
@@ -39,7 +39,7 @@ name: coverage comment
 #     (either body variant), failure on any loud failure.
 on:
   workflow_run:  # zizmor: ignore[dangerous-triggers] — checks out nothing, executes nothing from the artifact, binds the destination PR to the event's head repository, branch and SHA, and posts a fork's report only as validated integer totals; the pinning and behavior suites hold that shape
-    workflows: [ci]
+    workflows: [pr suite]
     types: [completed]
 
 # pull-requests: write to upsert the comment, checks: write to publish the
@@ -89,12 +89,12 @@ jobs:
           RUN_EVENT: ${{ github.event.workflow_run.event }}
         run: |
           set -euo pipefail
-          # ci also runs on push and workflow_dispatch; neither measured a pull
-          # request's own diff, so neither has a destination: silent exit.
-          # pull_request_target is the event ci actually runs on (issue 822).
-          # A same-repository pull request's run carries this repository as
-          # its head repository and the pull request's own head SHA, so the
-          # binding below resolves that pull request unchanged. A fork's run
+          # Only a pull-request-triggered run measured a pull request's own
+          # diff; any other event has no destination: silent exit. The pr
+          # suite runs on pull_request. A same-repository pull request's run
+          # carries this repository as its head repository and the pull
+          # request's own head SHA, so the binding below resolves that pull
+          # request unchanged. A fork's run
           # reports the FORK, so the fork's own pull request is the candidate
           # that matches, and it is selected with same_repo false — the body
           # step then renders from the two validated totals and never posts
@@ -106,7 +106,7 @@ jobs:
           # (<fork owner>:<branch>) is not, so nothing would match and the
           # run would exit silently.
           if [[ "$RUN_EVENT" != "pull_request" && "$RUN_EVENT" != "pull_request_target" ]]; then
-            echo "the triggering ci run was a ${RUN_EVENT} run, not a pull_request or pull_request_target run; nothing to comment on"
+            echo "the triggering pr suite run was a ${RUN_EVENT} run, not a pull_request or pull_request_target run; nothing to comment on"
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -189,7 +189,7 @@ jobs:
           stale="a percentage carried over from an earlier run is stale, not current"
 
           if [[ "$CONCLUSION" != "success" ]]; then
-            printf '%s\n\nThe ci run concluded %s, so patch coverage was not measured for it; %s.\n' "$marker" "$CONCLUSION" "$stale" > "$body_file"
+            printf '%s\n\nThe pr suite run concluded %s, so patch coverage was not measured for it; %s.\n' "$marker" "$CONCLUSION" "$stale" > "$body_file"
           elif [[ ! -f patch-coverage/patch-coverage.json ]]; then
             printf '%s\n\nNo patch coverage report could be retrieved for this run, so patch coverage was not measured for it; %s.\n' "$marker" "$stale" > "$body_file"
           elif [[ "$(jq -r '.measured // false' patch-coverage/patch-coverage.json)" != "true" ]]; then

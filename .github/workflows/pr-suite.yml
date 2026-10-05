@@ -1,0 +1,154 @@
+name: pr suite
+
+# The pull request's own suite, run with no trust. This workflow runs under
+# `pull_request`, so its definition and every byte it executes are the pull
+# request's: the install, the migrations, the tests, lint, typecheck, the
+# production build and the page geometry check. It therefore holds a
+# read-only token, references no secret, uses no environment, persists no
+# credential, and produces no required context — its job is deliberately not
+# named after one.
+#
+# Its outcome is read as DATA by ci.yml's verify job, which runs under
+# pull_request_target from the base branch's definition: the base copy of
+# scripts/await-pr-suite.ts accepts only a completed, successful
+# pull_request run of exactly this file at exactly the event's head SHA, and
+# the base copy of scripts/check-coverage-floor.ts judges the coverage
+# summary this run uploads. The integrity gates (migration immutability,
+# legal revisions, commit scopes, module size, the coverage floor, base
+# freshness) are verify's, never this workflow's. The ledger relay never
+# posts a required context from a run of this workflow.
+#
+# The patch-coverage artifact uploaded here is what coverage-comment.yml
+# reads when this workflow completes.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+# One group per pull request: a newer push to the same pull request
+# supersedes its older suite run, and nothing else can. verify awaits the run
+# at the event's own head SHA, so a superseded run is one no verify is
+# waiting on to succeed.
+concurrency:
+  group: pr-suite-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_USER: overflow
+          POSTGRES_PASSWORD: overflow
+          POSTGRES_DB: overflow_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U overflow -d overflow_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # Placeholders satisfy configuration validation without carrying production
+    # credentials or granting access to an external system.
+    env:
+      DATABASE_URL: postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci
+      AUTH_SECRET: ci-placeholder-auth-secret-not-for-production
+      AUTH_GITHUB_ID: ci-placeholder-github-client-id
+      AUTH_GITHUB_SECRET: ci-placeholder-github-client-secret
+      TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      APP_URL: https://overflow.invalid
+      GITHUB_WEBHOOK_URL: https://overflow.invalid/api/github/webhooks
+      MODERATOR_GITHUB_USER_IDS: "1"
+      # At job scope so every `pnpm` step inherits both pins.
+      COREPACK_ENABLE_PROJECT_SPEC: "0"
+      npm_config_registry: "https://registry.npmjs.org/"
+
+    steps:
+      # The default pull_request checkout is the merge commit GitHub built for
+      # this event: base tip first parent, head second. Depth 2 carries the
+      # first parent, which the docs-only detection and the patch coverage
+      # report diff against.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.17.0"
+
+      - name: Enable the pinned package manager
+        run: |
+          corepack enable
+          corepack install --global pnpm@10.33.0
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply PostgreSQL migrations
+        run: pnpm db:migrate
+
+      # Decides only whether THIS run measures coverage. verify makes its own
+      # docs-only decision with the base copy of the script, and requires this
+      # run's coverage summary whenever that decision says code.
+      - name: Detect docs-only change
+        id: detect-docs
+        run: |
+          changed=$(node scripts/docs-only.ts HEAD^1)
+          echo "docs_only=${changed}" >> "$GITHUB_OUTPUT"
+
+      - name: Test suite
+        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        run: pnpm test --run --coverage --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=cobertura --coverage.include='src/**'
+
+      - name: Test suite (docs-only)
+        if: ${{ steps.detect-docs.outputs.docs_only == 'true' }}
+        run: pnpm test --run
+
+      # Informational, never a gate. HEAD^1..HEAD is exactly the change the
+      # pull request carries: GitHub merges the head into the base, so the
+      # base tip is the merge commit's first parent.
+      - name: Patch coverage report
+        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        run: git diff HEAD^1 HEAD | node scripts/patch-coverage.ts coverage/cobertura-coverage.xml
+
+      - name: Upload patch coverage report
+        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: patch-coverage
+          path: coverage/patch-coverage.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload coverage summary
+        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-summary
+          path: coverage/coverage-summary.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Production build
+        run: pnpm build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+      - name: Page geometry check
+        run: node scripts/check-page-geometry.mjs

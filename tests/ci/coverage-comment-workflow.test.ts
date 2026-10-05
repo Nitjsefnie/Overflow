@@ -68,9 +68,9 @@ describe("the coverage comment workflow", () => {
     steps = workflow.jobs?.comment?.steps ?? [];
   });
 
-  it("triggers only on completed runs of the ci workflow", () => {
+  it("triggers only on completed runs of the pr suite workflow, which uploads the report", () => {
     expect(workflow.on).toEqual({
-      workflow_run: { workflows: ["ci"], types: ["completed"] },
+      workflow_run: { workflows: ["pr suite"], types: ["completed"] },
     });
   });
 
