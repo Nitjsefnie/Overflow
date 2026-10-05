@@ -30,9 +30,11 @@ import { afterEach, describe, expect, it } from "vitest";
  * - `xz` and `age` are pass-through recording stubs that each prefix their
  *   input, so the installed file's bytes (`age|xz|<plain>`) prove the data
  *   flowed through both stages, and the argv records prove with what flags.
- * - `find`, `date`, `ln`, `sleep` and `python3` are real: the sweep, the
+ * - `find`, `date`, `sleep` and `python3` are real: the sweep, the
  *   install, the prune and the 14-day message sweep run their real logic
  *   against fixture files whose mtimes and message timestamps the test set.
+ * - `ln` is a recording wrapper that execs the real link(2), so a run's
+ *   install is observable as the partial path it linked from.
  *
  * The safety properties under test are the ones the backup contract rests on:
  * nothing is posted unencrypted (the recipient is validated before anything
@@ -87,6 +89,20 @@ const ageShim = [
   "#!/bin/sh",
   `printf '%s\\n' "$@" > "$OFFHOST_TEST_AGE_ARGV"`,
   "{ printf 'age|'; cat; }",
+  "",
+].join("\n");
+
+/**
+ * The install is a `ln` from the staged partial onto the series name, so a
+ * recording wrapper around the real ln captures the exact partial path a run
+ * linked from — the name the script's stem decision is visible in. The
+ * wrapper records its own parent pid beside the operand: the shim runs as a
+ * child of the script's shell, so that pid IS the `$$` the script stems with.
+ */
+const lnShim = [
+  "#!/bin/sh",
+  `printf '%s\\n' "$PPID" "$1" '---' >> "$OFFHOST_TEST_LN_LOG"`,
+  "exec /bin/ln \"$@\"",
   "",
 ].join("\n");
 
@@ -151,6 +167,8 @@ interface BackupRun {
   stderr: string;
   /** Every mailbox CLI invocation in call order, each as its argv. */
   mbCalls: string[][];
+  /** Every install invocation, as `[ppid-of-script-shell, partial-path]`. */
+  lnCalls: string[][];
   dumpArgv: string[] | null;
   xzArgv: string[] | null;
   ageArgv: string[] | null;
@@ -237,6 +255,7 @@ function runBackup(
     shim("pg_dump", dumpShim);
     shim("xz", xzShim);
     shim("age", ageShim);
+    shim("ln", lnShim);
     const mbPath = join(directory, "mb-fake");
     writeFileSync(mbPath, mbFake);
     chmodSync(mbPath, 0o755);
@@ -244,6 +263,7 @@ function runBackup(
     const dumpArgvPath = join(directory, "dump-argv");
     const xzArgvPath = join(directory, "xz-argv");
     const ageArgvPath = join(directory, "age-argv");
+    const lnLogPath = join(directory, "ln-log");
     const mbLogPath = join(directory, "mb-log");
     const conversationPath = join(directory, "conversation.json");
     if (options.conversationJson !== undefined) {
@@ -266,6 +286,7 @@ function runBackup(
       OFFHOST_TEST_DUMP_FAILPARTIAL: options.dumpFailPartial ? "1" : "",
       OFFHOST_TEST_XZ_ARGV: xzArgvPath,
       OFFHOST_TEST_AGE_ARGV: ageArgvPath,
+      OFFHOST_TEST_LN_LOG: lnLogPath,
       OFFHOST_TEST_MB_LOG: mbLogPath,
       OFFHOST_TEST_CONNECTOR_LIVE: join(directory, "connector-live"),
       OFFHOST_TEST_CONNECTOR_PID: connectorPidPath,
@@ -288,16 +309,9 @@ function runBackup(
     expect(result.signal, `killed by ${result.signal}: ${result.stderr}`).toBeNull();
 
     const mbLog = existsSync(mbLogPath) ? readFileSync(mbLogPath, "utf8") : "";
-    const mbCalls: string[][] = [];
-    let current: string[] = [];
-    for (const line of mbLog.split("\n")) {
-      if (line === "---") {
-        mbCalls.push(current);
-        current = [];
-        continue;
-      }
-      if (line.length > 0) current.push(line);
-    }
+    const mbCalls = recordedCalls(mbLog);
+    const lnLog = existsSync(lnLogPath) ? readFileSync(lnLogPath, "utf8") : "";
+    const lnCalls = recordedCalls(lnLog);
 
     const readArgv = (path: string): string[] | null =>
       existsSync(path) ? readFileSync(path, "utf8").split("\n").slice(0, -1) : null;
@@ -312,6 +326,7 @@ function runBackup(
       stdout: result.stdout,
       stderr: result.stderr,
       mbCalls,
+      lnCalls,
       dumpArgv: readArgv(dumpArgvPath),
       xzArgv: readArgv(xzArgvPath),
       ageArgv: readArgv(ageArgvPath),
@@ -320,6 +335,21 @@ function runBackup(
       backupDirectory,
     };
   }
+}
+
+/** The recorded calls in a shim log: one call per `---` separator line. */
+function recordedCalls(log: string): string[][] {
+  const calls: string[][] = [];
+  let current: string[] = [];
+  for (const line of log.split("\n")) {
+    if (line === "---") {
+      calls.push(current);
+      current = [];
+      continue;
+    }
+    if (line.length > 0) current.push(line);
+  }
+  return calls;
 }
 
 /** The recorded `send` invocations, which a safe run has at most one of. */
@@ -568,6 +598,27 @@ describe("db-offhost-backup.sh local retention", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("db-offhost-backup.sh scratch naming", () => {
+  it("stems the staged partial with the run's own pid, inside the sweep grammar", () => {
+    const run = runBackup();
+
+    expect(run.status).toBe(0);
+    expect(run.lnCalls, "one install per run").toHaveLength(1);
+    const [ppid, partial] = run.lnCalls[0]!;
+    // The ln shim runs as a child of the script's own shell, so the parent
+    // pid it recorded IS the $$ the script stems its staged names with.
+    expect(ppid, "the stem is a pid").toMatch(/^\d+$/);
+    expect(
+      basename(partial),
+      "the partial the install linked from carries the run's pid stem",
+    ).toBe(`.overflow-reduced-${ppid}.sql.xz.age.incomplete`);
+    expect(
+      basename(partial),
+      "the pid-stemmed name stays inside what the leftover sweep matches",
+    ).toMatch(/^\.overflow-reduced-.+\.incomplete$/);
   });
 });
 

@@ -74,7 +74,8 @@ step in the phase named here, or a named decision not to dispose:
 | journald entries for the deployment's units | aged out or vacuumed, by decision | [phase 8](#8-remaining-stores) |
 | `/var/lib/overflow-bounce` — bounce-watcher state | destroyed | [phase 8](#8-remaining-stores) |
 | `/run/overflow-alert`, `/run/overflow-canary` — runtime directories | destroyed | [phase 8](#8-remaining-stores) |
-| Off-host: dump copies, alert and canary mailboxes, Discord webhook | disposed off the host | [phase 7](#7-secrets-and-configuration-disposal) |
+| Off-host: the backups channel's posted copies | deleted from the channel | [phase 6](#6-backup-disposal) |
+| Off-host: operator-held dump copies, alert and canary mailboxes, Discord webhook | disposed off the host | [phase 7](#7-secrets-and-configuration-disposal) |
 | GitHub-side stores: issues, pull requests, labels, comments, checks, Actions artifacts | not disposed — retention is GitHub's | [phase 4](#4-github-app-deletion-and-webhook-sweep) |
 | Member browser cookies — the NextAuth JWT session cookie | not disposed — nothing on-host to dispose | [phase 7](#7-secrets-and-configuration-disposal) |
 | Node runtime (README section 3) | retained — shared host infrastructure | [phase 8](#8-remaining-stores) |
@@ -99,9 +100,11 @@ Preconditions:
   this deployment configured one) and the **OAuth application** member sign-in
   uses, to delete both in phase 4.
 - Control of the off-host destinations: the alert and canary mailboxes and
-  the Discord channel the canary's failure reports go to. The host-side files
-  die in phase 7; the destinations themselves are closed off the host, by
-  whoever holds them.
+  the Discord channel the canary's failure reports go to — and, on a
+  deployment that ran the off-host copy, the backups channel those copies
+  were posted to, through the `osc` identity from a machine that runs the
+  fleet's mailbox CLI. The host-side files die in phase 7; the destinations
+  themselves are closed off the host, by whoever holds them.
 - A way to remove the webhooks of phase 4: an administrator of each member
   repository still carrying an Overflow webhook. On a deployment whose
   registrations live in the sponsors' own repositories, that is the sponsors,
@@ -167,6 +170,11 @@ ls -la /etc/overflow /etc/overflow/github-app
 printf '%s\n' 'alert mailbox:'; cat /etc/overflow/alert-recipient
 printf '%s\n' 'canary mailbox:'; cat /etc/overflow/canary-recipient
 
+# The backups channel the off-host copies were posted to, which phase 6's
+# disposal reads out of the environment file (an identifier, not a secret).
+# On a deployment that never ran the off-host copy this line answers nothing.
+grep OVERFLOW_BACKUP_DISCORD_CHANNEL /etc/overflow/backup.env
+
 # Journal footprint, for the phase 8 journald decision.
 journalctl --disk-usage
 ```
@@ -201,7 +209,8 @@ The alert template is never enabled: `OnFailure=` is its only trigger, and
 removing the watched units removes the trigger.
 
 ```sh
-systemctl disable --now overflow-backup.timer overflow-bounce.timer overflow-canary.timer
+systemctl disable --now overflow-backup.timer overflow-bounce.timer overflow-canary.timer \
+  overflow-offhost-backup.timer
 systemctl stop overflow.service
 systemctl disable overflow.service
 systemctl stop 'overflow-alert@*.service'
@@ -209,6 +218,7 @@ systemctl stop 'overflow-alert@*.service'
 rm /etc/systemd/system/overflow.service \
    /etc/systemd/system/overflow-alert@.service \
    /etc/systemd/system/overflow-backup.service /etc/systemd/system/overflow-backup.timer \
+   /etc/systemd/system/overflow-offhost-backup.service /etc/systemd/system/overflow-offhost-backup.timer \
    /etc/systemd/system/overflow-bounce.service /etc/systemd/system/overflow-bounce.timer \
    /etc/systemd/system/overflow-canary.service /etc/systemd/system/overflow-canary.timer
 systemctl daemon-reload
@@ -393,6 +403,63 @@ disposing of them is too — a decommission that leaves last quarter's
 off-host dump in a drawer has not decommissioned. The preflight record names
 where the off-host copies were held and where their disposal is recorded.
 
+The posted copies the off-host job leaves in Discord are the one off-host
+store this runbook disposes of itself: their sweeper — the job deletes its
+own posted messages once they pass 14 days — died with the timer in phase 3,
+so whatever the backups channel still holds is stranded past the backup
+lifetime the privacy notice promises. Delete the remaining backup messages
+from the channel as the `osc` identity, through the mailbox CLI the job
+itself used; the messages go and the channel stays, which is the disposal
+phase 7 already performs for the canary's webhook in an operator-held
+channel. A deletion failure is recorded, not retried forever, like phase 4's
+webhook sweep:
+
+```sh
+# The channel id and the osc identity's token come from the environment file
+# the nightly unit read; this phase runs before phase 7 destroys it.
+set -a
+. /etc/overflow/backup.env
+set +a
+
+# The disposal needs the osc identity's connector, as the nightly job's was.
+python3 ~/.agent-bundle/scripts/discord_mb.py connector osc &
+connector_pid=$!
+
+# One page of 100 per pass, then strictly backwards with --before, so the
+# sweep terminates even when a deletion fails — 14 daily posts are the
+# channel's whole legal backlog, so this is a page or two at most.
+before_args=
+while :; do
+    if ! page=$(python3 ~/.agent-bundle/scripts/discord_mb.py conversation osc 100 \
+            --channel "$OVERFLOW_BACKUP_DISCORD_CHANNEL" --json $before_args); then
+        printf 'FAILED to read the backups channel — clear any remaining backup messages by hand and record it\n' >&2
+        break
+    fi
+    ids=$(printf '%s' "$page" | python3 -c '
+import json, sys
+for message in json.load(sys.stdin):
+    if message.get("from") != "osc" or not message.get("msg_id"):
+        continue
+    print(message["msg_id"])')
+    oldest=$(printf '%s' "$page" | python3 -c '
+import json, sys
+messages = json.load(sys.stdin)
+print(messages[-1].get("msg_id", "") if messages else "")')
+    [ -n "$oldest" ] || break
+    for id in $ids; do
+        if python3 ~/.agent-bundle/scripts/discord_mb.py message osc delete "$id" \
+                --channel "$OVERFLOW_BACKUP_DISCORD_CHANNEL"; then
+            printf 'deleted backup message %s\n' "$id"
+        else
+            printf 'FAILED backup message %s — delete it by hand and record it\n' "$id" >&2
+        fi
+    done
+    before_args="--before $oldest"
+done
+
+kill "$connector_pid" 2>/dev/null || :
+```
+
 ## 7. Secrets and configuration disposal
 
 ```sh
@@ -415,7 +482,10 @@ account so the ledger app's key stays readable — and the files within it are
   still disposed of here, and `AUTH_SECRET` is what the members' outstanding
   session cookies are signed with.
 - `backup.env` — the backup role's `DATABASE_URL` and password
-  ([backup-restore.md](backup-restore.md#b-the-least-privilege-backup-role)).
+  ([backup-restore.md](backup-restore.md#b-the-least-privilege-backup-role)),
+  plus, on a deployment running the off-host copy, the age recipient public
+  key, the backups channel id and the `osc` identity's `DISCORD_TOKEN`
+  ([backup-restore.md](backup-restore.md#i-the-encrypted-off-host-copy)).
 - `alert-recipient`, `canary-recipient` — the two mail addresses alerts and
   canary probes are sent to, off this host.
 - `canary-discord-webhook` — the Discord webhook URL the canary reports
@@ -452,7 +522,11 @@ canary mailboxes — a mailbox left open receives nothing and proves nothing,
 while one left under the operator's control is a live address tied to the
 retired deployment's history — and delete the Discord webhook from its
 channel's integration settings, which invalidates the URL whose local copy
-was destroyed above. Record both closures in the preflight record.
+was destroyed above. Record both closures in the preflight record. The
+backups channel's posted copies were disposed of in
+[phase 6](#6-backup-disposal), which had to run first: that disposal reads
+the channel id and the `osc` token out of the `backup.env` this phase
+destroys.
 
 ## 8. Remaining stores
 
@@ -606,6 +680,20 @@ The applications are gone: neither the GitHub App nor the OAuth application
 appears in GitHub's developer settings, and the App's page answers 404. The
 off-host destinations are closed: the mailboxes receive nothing, and the
 Discord channel carries no Overflow webhook in its integration settings.
+The backups channel carries no remaining backup messages:
+
+```sh
+# Read-only. The osc identity's connector serves the call, as in phase 6.
+python3 ~/.agent-bundle/scripts/discord_mb.py connector osc &
+connector_pid=$!
+python3 ~/.agent-bundle/scripts/discord_mb.py conversation osc 100 \
+    --channel "<the backups channel's id, from the preflight record>" --json
+kill "$connector_pid" 2>/dev/null || :
+```
+
+```text
+[]
+```
 
 File the completed checklist with the preflight record. The deployment is
 decommissioned.
