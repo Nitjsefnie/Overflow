@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { commitFiles, git, scratchGitEnv } from "../support/scratch-git";
+import { commitFiles, git, hasCommit, scratchGitEnv } from "../support/scratch-git";
 
 /**
  * The verify job's pull_request_target leg, EXECUTED rather than read.
@@ -74,6 +75,14 @@ const MODULE_SIZE_DOC = `${JSON.stringify(
 
 const NEUTERED = "process.exit(0);\n";
 
+/**
+ * A SHA the origin cannot serve: correctly formed, and not a commit anywhere in
+ * the fixture's history — the shape an event's head takes when the pull
+ * request's head commit is not held by the base repository. Deliberately not a
+ * real revision's tail: the case is that NO such commit exists.
+ */
+const UNFETCHABLE_HEAD = "0123456789abcdef0123456789abcdef01234567";
+
 type Fixture = { origin: string; workspace: string; merge: string; head: string; base: string };
 
 type FixtureOptions = {
@@ -85,6 +94,14 @@ type FixtureOptions = {
   afterPublish?: Record<string, string>;
   /** Whether GitHub published a merge ref at all. It publishes none for a head that does not merge cleanly. */
   publishMerge?: boolean;
+  /**
+   * The branch the workspace is cloned from, single-branch. `main` is the
+   * default and is what a full-history checkout of the base holds; naming a
+   * branch that does not reach the base commit gives a workspace that does NOT
+   * hold the event's base SHA, which is the case the step's base fetch exists
+   * for.
+   */
+  workspaceBranch?: string;
 };
 
 /**
@@ -119,6 +136,7 @@ async function fixture(
     },
     "root",
   );
+  const rootSha = git(origin, "rev-parse", "HEAD");
   git(origin, "checkout", "--quiet", "-b", "feature");
   let head = await commitFiles(origin, files, message);
   git(origin, "checkout", "--quiet", "main");
@@ -137,9 +155,27 @@ async function fixture(
     git(origin, "update-ref", "refs/pull/1/head", head);
   }
   git(origin, "checkout", "--quiet", "main");
+  // A branch that stops before the base advance, so a workspace cloned from it
+  // single-branch holds the root commit and nothing after it — the case where
+  // the checkout does not carry the event's base SHA.
+  git(origin, "branch", "--quiet", "before-base", rootSha);
 
   const workspace = join(root, `workspace-${counter}`);
-  git(root, "clone", "--quiet", "--no-local", `file://${origin}`, workspace);
+  if (options.workspaceBranch) {
+    git(
+      root,
+      "clone",
+      "--quiet",
+      "--no-local",
+      "--single-branch",
+      "--branch",
+      options.workspaceBranch,
+      `file://${origin}`,
+      workspace,
+    );
+  } else {
+    git(root, "clone", "--quiet", "--no-local", `file://${origin}`, workspace);
+  }
   return { origin, workspace, merge, head, base };
 }
 
@@ -289,21 +325,35 @@ describe("the pull request tree the pull_request_target leg judges", () => {
     expect(await readFile(join(outputs.path!, "src/b.ts"), "utf8")).toBe("export const b = 2;\n");
   });
 
-  it("refuses, with no outputs, when the head does not merge cleanly into the base", async () => {
-    // Both sides add CHANGELOG.md with different content, so the head does
-    // not merge cleanly and GitHub publishes no merge commit for it: the
-    // payload carries none.
+  it("merges into the event's base even when the checkout does not hold it", async () => {
+    // The workspace here is a single-branch clone of a branch that stops
+    // before the base advance, so the base commit is not in it — what a
+    // checkout sees when the base branch was rewritten between the event and
+    // the checkout. The step has to fetch the base itself and still bind the
+    // merge to it.
     const fx = await fixture(
-      { "CHANGELOG.md": "# pulled request\n" },
-      "conflicting change",
-      { publishMerge: false },
+      { "src/c.ts": "export const c = 3;\n" },
+      "pull request change",
+      { workspaceBranch: "before-base" },
     );
+    expect(hasCommit(fx.base, fx.workspace), "the workspace must NOT already hold the base").toBe(false);
+
     const { result, outputs } = await materialise(fx);
+
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(parents(outputs.path!, "HEAD")).toEqual([fx.base, fx.head]);
+  });
+
+  it("refuses an unfetchable head with an annotation, and writes nothing", async () => {
+    const fx = await fixture({ "src/a.ts": "export const a = 7;\n" });
+    const { result, outputs, runnerTemp } = await materialise(fx, {
+      env: { HEAD_SHA: UNFETCHABLE_HEAD },
+    });
 
     expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
     expect(result.stdout + result.stderr).toContain("::error::");
-    expect(result.stdout + result.stderr).toContain("does not merge cleanly");
     expect(outputs).toEqual({});
+    expect(existsSync(join(runnerTemp, "pr-tree")), "nothing may be materialised").toBe(false);
   });
 
   it("is refused by the two-parent bind when the merge is built from a head other than the event's", async () => {
@@ -336,6 +386,49 @@ describe("the pull request tree the pull_request_target leg judges", () => {
     expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
     expect(result.stdout + result.stderr).toContain("::error::");
     expect(outputs).toEqual({});
+  });
+});
+
+/**
+ * The cause of a refusal, pinned by the PAIR rather than by the wording of the
+ * annotation. "Did not exit 0 and wrote no outputs" is what every refusal
+ * looks like — a fetch that failed, a base that is missing, anything — so the
+ * two cases here differ in exactly one thing, what the head commits, and they
+ * land on opposite sides of the same boundary. That is what says the refusal
+ * above is the conflict and not the next thing that would also have failed.
+ */
+describe("a head that does not merge cleanly into its base", () => {
+  /** Both fixtures are built with `publishMerge: false`; only the files differ. */
+  const SHAPE = { publishMerge: false } as const;
+
+  it("is refused, and materialises nothing", async () => {
+    const fx = await fixture(
+      { "CHANGELOG.md": "# pulled request\n" },
+      "conflicting change",
+      SHAPE,
+    );
+    const { result, outputs, runnerTemp } = await materialise(fx);
+
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+    // A workflow command, not prose: the annotation is what the runner
+    // surfaces on the run, and its presence is structural.
+    expect(result.stdout + result.stderr).toContain("::error::");
+    expect(outputs).toEqual({});
+    expect(existsSync(join(runnerTemp, "pr-tree")), "no worktree may be materialised").toBe(false);
+  });
+
+  it("is the conflict that refuses it — the same shape with a mergeable head succeeds", async () => {
+    const fx = await fixture(
+      { "src/d.ts": "export const d = 4;\n" },
+      "mergeable change",
+      SHAPE,
+    );
+    const { result, outputs, runnerTemp } = await materialise(fx);
+
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(outputs.path).toBeDefined();
+    expect(outputs.path?.startsWith(`${runnerTemp}/`)).toBe(true);
+    expect(parents(outputs.path!, "HEAD")).toEqual([fx.base, fx.head]);
   });
 });
 
