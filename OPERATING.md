@@ -91,7 +91,7 @@ The prune runs on the reconciliation sweep tick — once at startup and then eve
 
 ## Failure alerts and off-host copies
 
-Two parts of an instance's data survival belong to the maintainer rather than to the software: keeping an off-host copy of the backups, and learning when a backup or the service itself fails. The on-host dump in `/var/backups/overflow` sits on the same disk as the database it protects, so it is not the only copy of the data that cannot be rebuilt from GitHub — accounts, encrypted credentials, moderation history, audits, corrections, API tokens and credit adjustments. Copying dumps off the host and owning the alert delivery below are the maintainer's responsibilities.
+The off-host copy of the backups is the software's job now, and the alerts remain the maintainer's. `overflow-offhost-backup.timer` runs a nightly job that dumps a reduced set of the database, compresses it, encrypts it with `age` to a public key, and posts the encrypted file to a private Discord channel, where both the posted message and the host's local copy are kept for 14 days — [deploy/backup-restore.md section (i)](deploy/backup-restore.md#i-the-encrypted-off-host-copy) documents the copy and stands up the units. The on-host dump in `/var/backups/overflow` sits on the same disk as the database it protects, so the off-host copy is what a lost disk no longer takes with it; the data that cannot be rebuilt from GitHub — accounts, encrypted credentials, moderation history, audits, corrections, API tokens and credit adjustments — is what the copy carries off it. What remains the maintainer's responsibility is owning the alert delivery below, and the age key custody: the private half of the key lives once, in the fleet's Discord #credentials store — never on the host, never in the backups channel — and without it the off-host copies are unreadable.
 
 When `overflow.service` or `overflow-backup.service` fails, systemd's `OnFailure=` starts `overflow-alert@<failed unit>.service`, which mails the failed unit's journal tail to the address in `/etc/overflow/alert-recipient` — host configuration, root-only, never committed — through the host's exim4 smarthost. The route works by design only while the host's mail route works; that dependence is a property of the design, not a defect of it, and the alert unit's own journal shows a submission that could not go out. Alerts are throttled to one message per failed unit per 30 minutes: the first failure mails immediately, sustained failures re-mail every 30 minutes, bounded far below the mail account's daily limit, and suppressed repeats land in the alert unit's journal. A bounce watcher —
 `overflow-bounce.timer`, running `overflow-bounce.service` every 15 minutes —
@@ -314,6 +314,9 @@ dump is pruned once it is more than 14 days old — in practice about 15 days.
 Pruning runs only after a later backup succeeds, so dumps taken before a
 deletion can be kept longer while backups are failing; see
 [backup retention](deploy/backup-restore.md#d-backup-location-and-retention).
+A nightly encrypted copy of the backups also carries pre-deletion data off the
+host to a private Discord channel for 14 days; see
+[the encrypted off-host copy](deploy/backup-restore.md#i-the-encrypted-off-host-copy).
 
 ## Continuous integration
 

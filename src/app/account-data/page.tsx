@@ -322,6 +322,13 @@ export function AccountDataNotice() {
             processes that content. The journal excerpts may carry personal data (for example
             repository names or logins)
           </li>
+          <li>
+            Discord — Discord is operated by Discord Inc. (US): the nightly encrypted backup copy
+            described under How long it is kept is posted to a private Discord channel, so Discord
+            stores that encrypted file for as long as the copy is kept there. The file is unreadable
+            without the private half of the encryption key, which is not stored on Overflow&apos;s
+            host and never travels with the copy; Discord receives no key.
+          </li>
         </ul>
         <p>
           Using this site from outside the US therefore means data is transferred to these
@@ -376,6 +383,13 @@ export function AccountDataNotice() {
             Daily database backups taken before a deletion keep pre-deletion data on the same host as the
             database. Each backup is pruned once it is more than 14 days old — in practice about 15 days —
             and pruning happens only after a later backup succeeds, so failing backups keep them longer.
+          </li>
+          <li>
+            In addition to those backups, a nightly automated copy of an encrypted, reduced backup set
+            leaves the host for a private Discord channel. It holds every table&apos;s structure and the
+            data of every table except seven tables whose rows Overflow rebuilds from GitHub or GitLab
+            or that hold only background work state. The copy is encrypted with the age tool to a key
+            whose private half is not on Overflow&apos;s host, and it is deleted there after 14 days.
           </li>
         </ul>
       </section>
