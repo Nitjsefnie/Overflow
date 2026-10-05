@@ -627,7 +627,12 @@ describe("the pull request suite workflow", () => {
     // Strictly stronger than the line rule it replaces, which accepted ANY
     // `--anything` on any continuation line — including a second `--require-
     // hashes` argument and any `--hash=` — so restoring that rule as well would
-    // be restoring a weaker duplicate. Nothing it admitted does this refuse.
+    // be restoring a weaker duplicate. It is not, on its own, a proof that the
+    // line rule admitted nothing this refuses: round 4's re-review found a
+    // spelling this comparison ALSO admitted and the shell does not deliver
+    // (`--dest "…hash\-check"` — `\` inside double quotes is an escape in POSIX
+    // for five characters, not for any). That is fixed above, in `shellWords`,
+    // and pinned by its table.
     //
     // The words are compared with quoting and escaping already resolved
     // (`shellWords`), so `--dest x` and `--dest "x"` are the same invocation
