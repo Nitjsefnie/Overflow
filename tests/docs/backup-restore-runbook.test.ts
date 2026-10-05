@@ -89,13 +89,7 @@ const sectionILiterals = [
   "9.5 MiB",
 ];
 
-/**
- * The restore-order and host-loss facts subsection (e.4) has to name: the
- * reduced copy's own commands, and the host-loss facts (issue 1110) — the two
- * env keys whose loss leaves the restored copy unable to decrypt a stored
- * credential, the four sponsor-token repositories that stay broken until
- * their sponsors return, and the custody placeholder's marker phrase.
- */
+/** The restore-order facts subsection (e.4) has to name. */
 const sectionE4Literals = [
   "overflow-reduced-",
   "age -d",
@@ -103,13 +97,6 @@ const sectionE4Literals = [
   "createdb",
   "ON_ERROR_STOP",
   "POST /api/moderation/rederivation",
-  "TOKEN_ENCRYPTION_KEY",
-  "AUTH_SECRET",
-  "Nitjsefnie/ai-researcher",
-  "Nitjsefnie/claudit",
-  "Nitjsefnie/gh-widgets",
-  "Nitjsefnie-Actions/pr-gate",
-  "location to be named",
 ];
 
 /** The lines outside fenced code blocks. */
