@@ -238,7 +238,10 @@ jobs:
             exit 1
           fi
           if ! git cat-file -e "${BASE_SHA:?}^{commit}" 2>/dev/null; then
-            git fetch --no-tags origin "${BASE_SHA:?}"
+            if ! git fetch --no-tags origin "${BASE_SHA:?}"; then
+              echo "::error::could not fetch the pull request's base ${BASE_SHA} from origin; refusing to judge a tree this event is not about"
+              exit 1
+            fi
           fi
           if ! merged_tree=$(git merge-tree --write-tree "${BASE_SHA:?}" "${HEAD_SHA:?}"); then
             echo "::error::the pull request's head ${HEAD_SHA} does not merge cleanly into its base ${BASE_SHA}; rebase the branch onto the base and push again."

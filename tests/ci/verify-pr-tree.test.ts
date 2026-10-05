@@ -76,12 +76,14 @@ const MODULE_SIZE_DOC = `${JSON.stringify(
 const NEUTERED = "process.exit(0);\n";
 
 /**
- * A SHA the origin cannot serve: correctly formed, and not a commit anywhere in
- * the fixture's history — the shape an event's head takes when the pull
- * request's head commit is not held by the base repository. Deliberately not a
- * real revision's tail: the case is that NO such commit exists.
+ * SHAs the origin cannot serve: correctly formed, and not a commit anywhere in
+ * the fixture's history — the shape an event's head or base takes when the
+ * repository does not hold it. Deliberately not a real revision's tail: the
+ * case is that NO such commit exists. Every case that uses one proves that
+ * with `hasCommit`, so the value is never the thing under test.
  */
 const UNFETCHABLE_HEAD = "0123456789abcdef0123456789abcdef01234567";
+const UNFETCHABLE_BASE = "fedcba9876543210fedcba9876543210fedcba98";
 
 type Fixture = { origin: string; workspace: string; merge: string; head: string; base: string };
 
@@ -258,6 +260,29 @@ function parents(repo: string, sha: string): string[] {
 }
 
 /**
+ * The step's workflow-command annotations, one entry per line, in the order it
+ * emitted them. Two refusals that produce DIFFERENT lists are distinguishable
+ * to whoever reads the run, without any case having to know what either of
+ * them says.
+ */
+function annotations(result: StepResult): string[] {
+  return `${result.stdout}\n${result.stderr}`
+    .split("\n")
+    .filter((line) => line.includes("::error::"));
+}
+
+/**
+ * The same annotations with every SHA they name masked out, so two refusals
+ * can be compared on WHAT THEY SAY rather than on which commits they name.
+ * Without the mask this comparison is vacuous: two cases in two fixtures have
+ * different SHAs, so even a message shared verbatim would render differently
+ * and look distinct.
+ */
+function maskedAnnotations(result: StepResult): string[] {
+  return annotations(result).map((line) => line.replace(/[0-9a-f]{40}/g, "<sha>"));
+}
+
+/**
  * Materialises the merge tree from the event's head and base; returns the
  * outputs later steps read.
  *
@@ -346,14 +371,60 @@ describe("the pull request tree the pull_request_target leg judges", () => {
 
   it("refuses an unfetchable head with an annotation, and writes nothing", async () => {
     const fx = await fixture({ "src/a.ts": "export const a = 7;\n" });
+    // The premise, established rather than assumed: this value is a
+    // well-formed SHA that neither the origin nor the workspace holds, so what
+    // the step meets is a fetch that cannot succeed — not a case that would
+    // have materialised the merge anyway.
+    expect(hasCommit(UNFETCHABLE_HEAD, fx.origin), "the origin must NOT hold this head").toBe(false);
+    expect(hasCommit(UNFETCHABLE_HEAD, fx.workspace), "the workspace must NOT hold this head").toBe(false);
+
     const { result, outputs, runnerTemp } = await materialise(fx, {
       env: { HEAD_SHA: UNFETCHABLE_HEAD },
     });
 
     expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(result.stdout + result.stderr).toContain("::error::");
+    expect(annotations(result)).toHaveLength(1);
     expect(outputs).toEqual({});
     expect(existsSync(join(runnerTemp, "pr-tree")), "nothing may be materialised").toBe(false);
+  });
+
+  it("refuses a base the origin cannot serve, and names the BASE fetch as the cause", async () => {
+    const fx = await fixture(
+      { "src/e.ts": "export const e = 5;\n" },
+      "pull request change",
+      { workspaceBranch: "before-base" },
+    );
+    // Same premise as above, for the other end of the merge, and the same
+    // precondition the step's own guard has: the base is not already in the
+    // checkout, so it must be fetched, and there is nothing to fetch.
+    expect(hasCommit(UNFETCHABLE_BASE, fx.origin), "the origin must NOT hold this base").toBe(false);
+    expect(hasCommit(fx.base, fx.workspace), "the workspace must NOT already hold the base").toBe(false);
+
+    const { result, outputs, runnerTemp } = await materialise(fx, {
+      env: { BASE_SHA: UNFETCHABLE_BASE },
+    });
+
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+    expect(annotations(result)).toHaveLength(1);
+    expect(outputs).toEqual({});
+    expect(existsSync(join(runnerTemp, "pr-tree")), "nothing may be materialised").toBe(false);
+
+    // Message fidelity, pinned by the DIFFERENCE and not by the wording: a
+    // reader of the annotation during an incident has to be told which of the
+    // two fetches failed, because the step's other refusal — a head that does
+    // not merge cleanly — is a completely different incident. An annotation
+    // shared between them would send that reader to the wrong cause, so the
+    // two are compared against each other instead of against a phrase.
+    const conflicting = await fixture(
+      { "CHANGELOG.md": "# pulled request\n" },
+      "conflicting change",
+      { publishMerge: false },
+    );
+    const { result: conflicted } = await materialise(conflicting);
+    expect(
+      maskedAnnotations(result),
+      "the base-fetch refusal must not be the annotation a conflicting head produces",
+    ).not.toEqual(maskedAnnotations(conflicted));
   });
 
   it("is refused by the two-parent bind when the merge is built from a head other than the event's", async () => {
