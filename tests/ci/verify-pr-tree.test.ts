@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -254,6 +255,80 @@ function readOutputs(text: string): Record<string, string> {
   return entries;
 }
 
+/**
+ * How long `runStepOnOpenStdin` waits before calling a step blocked. It only
+ * elapses when the step is wrong; a step that finishes does so in well under a
+ * second here, so this is generous rather than tight.
+ */
+const OPEN_STDIN_BUDGET_MS = 20_000;
+
+/**
+ * Runs one step's `run:` block with a stdin that is OPEN and never written to,
+ * which is what a runner that leaves a step's stdin inherited hands it. A step
+ * that reads stdin blocks on this pipe forever — the failure this exists to
+ * catch — so the wait is bounded and the child is killed rather than left
+ * behind: `runStep` above cannot express this at all, because `spawnSync`
+ * closes stdin by default, and both ubuntu-latest and vitest do exactly that.
+ * Two environments agreeing to hide a hang is not a property of the step.
+ */
+async function runStepOnOpenStdin(
+  step: Step,
+  fx: Fixture,
+): Promise<{ status: number | null; stdout: string; stderr: string; blocked: boolean }> {
+  counter += 1;
+  const script = join(root, `open-stdin-${counter}.sh`);
+  const output = join(root, `open-stdin-output-${counter}`);
+  const runnerTemp = join(root, `open-stdin-temp-${counter}`);
+  await mkdir(runnerTemp);
+  await writeFile(script, step.run ?? "exit 99\n");
+  await writeFile(output, "");
+  const child = spawn("bash", ["--noprofile", "--norc", "-eo", "pipefail", script], {
+    cwd: fx.workspace,
+    env: {
+      ...scratchGitEnv,
+      ...stepEnv(step, {}, {
+        BASE_SHA: fx.base,
+        HEAD_SHA: fx.head,
+        MERGE_BIND_SHA: fx.merge,
+        RUNNER_TEMP: runnerTemp,
+      }, {}),
+      GITHUB_WORKSPACE: fx.workspace,
+      GITHUB_EVENT_NAME: "pull_request_target",
+      GITHUB_OUTPUT: output,
+      PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  // Never written to and never ended before the step has finished reading.
+  child.stdin.on("error", () => {});
+  const collected: { stdout: string; stderr: string } = { stdout: "", stderr: "" };
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    collected.stdout += chunk;
+  });
+  child.stderr.on("data", (chunk: string) => {
+    collected.stderr += chunk;
+  });
+
+  const closed = once(child, "close").then(([code]) => code as number | null);
+  const budget = new Promise<"still running">((resolve) => {
+    setTimeout(() => resolve("still running"), OPEN_STDIN_BUDGET_MS);
+  });
+  const outcome = await Promise.race([closed.then((code) => ({ code })), budget]);
+  let blocked = false;
+  let status: number | null;
+  if (outcome === "still running") {
+    blocked = true;
+    child.kill("SIGKILL");
+    status = await closed;
+  } else {
+    status = outcome.code;
+  }
+  child.stdin.destroy();
+  return { status, stdout: collected.stdout, stderr: collected.stderr, blocked };
+}
+
 /** The two parents of `sha` in `repo`, first and second, as git lists them. */
 function parents(repo: string, sha: string): string[] {
   return git(repo, "rev-list", "--parents", "-n", "1", sha).split(" ").slice(1);
@@ -457,6 +532,73 @@ describe("the pull request tree the pull_request_target leg judges", () => {
     expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
     expect(result.stdout + result.stderr).toContain("::error::");
     expect(outputs).toEqual({});
+  });
+
+  it("is refused by the two-parent bind when the merge commit is bound to a base other than the event's", async () => {
+    const fx = await fixture({ "src/a.ts": "export const a = 3;\n" });
+    const step = stepRunning("git worktree add --detach");
+    // The mirror of the case above. The TREE is still merged from the right two
+    // commits and the second parent is still the event's head, so the head leg
+    // of the bind passes and nothing about the commit is malformed: only the
+    // base leg can refuse it. Without that leg the step would materialise a
+    // commit whose first parent is not the base this event is about — which is
+    // why deleting the base leg leaves the whole suite green unless a case
+    // exercises exactly this.
+    const mutant: Step = {
+      ...step,
+      run: (step.run ?? "").replace(
+        '-p "${BASE_SHA:?}" -p "${HEAD_SHA:?}"',
+        '-p "${BASE_SHA:?}^" -p "${HEAD_SHA:?}"',
+      ),
+    };
+    expect(mutant.run, "the mutant must have replaced the base the merge commit is bound to").not.toBe(step.run);
+
+    const { result, outputs } = await materialise(fx, { step: mutant });
+
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+    expect(annotations(result)).toHaveLength(1);
+    expect(outputs).toEqual({});
+  });
+
+  it("does not read the runner's stdin to write the merge commit's message", async () => {
+    const fx = await fixture({ "src/a.ts": "export const a = 8;\n" });
+    const result = await runStepOnOpenStdin(stepRunning("git worktree add --detach"), fx);
+
+    expect(result.blocked, `the step waited on an open stdin: ${result.stdout}${result.stderr}`).toBe(false);
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  });
+
+  it("reports a git that cannot write a merge tree as a tool failure, not as a conflict", async () => {
+    const fx = await fixture({ "src/a.ts": "export const a = 9;\n" });
+    const step = stepRunning("git worktree add --detach");
+    // An old git has no --write-tree and answers the option with a usage
+    // error, which is a different failure from the exit 1 that means
+    // "conflicts". The mutation produces that answer from a git that does
+    // support it, which is the same thing the step has to tell apart.
+    const mutant: Step = { ...step, run: (step.run ?? "").replace("--write-tree", "--write-tree-unsupported") };
+    expect(mutant.run, "the mutant must have made merge-tree reject its option").not.toBe(step.run);
+
+    const { result, outputs, runnerTemp } = await materialise(fx, { step: mutant });
+
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+    expect(annotations(result)).toHaveLength(1);
+    expect(outputs).toEqual({});
+    expect(existsSync(join(runnerTemp, "pr-tree")), "nothing may be materialised").toBe(false);
+
+    // The two failures are different incidents and must not read alike: a
+    // reader told to rebase over a git that cannot write a merge tree loses
+    // the run. Compared by difference, SHAs masked, so nothing here knows
+    // what either annotation says.
+    const conflicting = await fixture(
+      { "CHANGELOG.md": "# pulled request\n" },
+      "conflicting change",
+      { publishMerge: false },
+    );
+    const { result: conflicted } = await materialise(conflicting);
+    expect(
+      maskedAnnotations(result),
+      "a merge-tree failure must not be reported with the conflicting head's annotation",
+    ).not.toEqual(maskedAnnotations(conflicted));
   });
 });
 
