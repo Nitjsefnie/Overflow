@@ -1,29 +1,32 @@
 name: ratchet guard
 
-# pull_request_target so the gate survives a malicious PR that disables the
-# pull_request workflow: the workflow definition, the checkout and the script
-# that executes all come from main, never from the pull request. The head is
-# fetched only as git objects (refs/pull/<N>/head) and read as data with
-# `git show` inside scripts/check-ratchets.ts — no head code is checked out,
-# installed, built or executed. The `push` trigger covers the same story for
-# commits main itself lands: this repo merges with --rebase, so a merged SHA
-# is a brand-new commit that no pull_request run covered, and every push to
-# main must carry a ratchet-guard run for the check to be required and for
-# the deploy gate (scripts/deploy-revision.sh) to pass on the tip it lands —
-# the gate checks only the fetched tip of main. Under push the executed
-# script comes from the previous main tip (github.event.before) and the
-# pushed commit is read only as git objects. A dropped push event (issue 796)
-# can leave a main tip with no runs; workflow_dispatch recovers that tip by
-# comparing it against the last certified main tip, not HEAD^1 or a guessed
-# `before`. The dispatched SHA enters only as git objects. All executed code
-# comes from the checked-out, trusted main ancestor, never untrusted content.
+# THE PULL-REQUEST LEG IS NOT HERE (issue 1090). It is
+# .github/workflows/ratchet-guard-pr.yml, whose only trigger is
+# `pull_request_target`, because it fetches a pull request's head ref and a
+# privileged trigger would run that step with the default branch's privileges.
+# What is left here — push to main and workflow_dispatch — reads no
+# pull-request data at all: no `refs/pull` fetch, no `pull_request.*` value in
+# any step's `run` or `env`. tests/ci/pr-data-triggers.test.ts decides that
+# from the workflow text rather than from this comment.
+#
+# Both files produce the `ratchet-guard` job name, and
+# .github/required-checks.json pins that context to BOTH paths, so a
+# required-context conclusion arrives on a pull-request head and on a main
+# push alike.
+#
+# The `push` trigger covers the same story for commits main itself lands: this
+# repo merges with --rebase, so a merged SHA is a brand-new commit that no
+# pull_request run covered, and every push to main must carry a ratchet-guard
+# run for the check to be required and for the deploy gate
+# (scripts/deploy-revision.sh) to pass on the tip it lands — the gate checks
+# only the fetched tip of main. Under push the executed script comes from the
+# previous main tip (github.event.before) and the pushed commit is read only as
+# git objects. A dropped push event (issue 796) can leave a main tip with no
+# runs; workflow_dispatch recovers that tip by comparing it against the last
+# certified main tip, not HEAD^1 or a guessed `before`. The dispatched SHA
+# enters only as git objects. All executed code comes from the checked-out,
+# trusted main ancestor, never untrusted content.
 on:
-  pull_request_target:  # zizmor: ignore[dangerous-triggers]
-    # main only: a PR retargeted to main (an edited event) gets no new run,
-    # so without this filter its stale green would carry over — required
-    # contexts match by name on the head SHA
-    branches: [main]
-    types: [opened, synchronize, reopened]
   # No paths filter: every push to main must get its own run, or deploys of
   # the tip it lands wait out `ratchet-guard (absent)` and refuse.
   push:
@@ -43,25 +46,15 @@ concurrency:
   # run per concurrency group and cancels the older pending one even with
   # cancel-in-progress false, and a cancelled conclusion on a merged SHA
   # makes the deploy gate refuse immediately. Keying on the SHA gives each
-  # push its own group.
-  # Every pull request shares one repository-level group instead of one group
-  # each, so the repository's Actions minutes stop scaling with the number of
-  # open pull requests; GitHub keeps one PENDING run per group and cancels the
-  # superseded one, so `ratchet-guard-repo-wide` is a single slot. The
-  # parentheses are load-bearing: && binds tighter than || in a GitHub
-  # expression, and without them the pull_request arm falls through to
-  # github.sha and the bound is gone.
+  # push its own group. Dispatch keys on the SHA it was handed, so a dispatch
+  # never contends with the push that landed the same commit.
   #
-  # cancel-in-progress is false, so no in-flight run is destroyed — on a group
-  # shared by every pull request, a destroyed run can belong to a peer, and
-  # `ratchet-guard` is a required context in .github/required-checks.json that
-  # ledger-relay mirrors a run conclusion onto. It does NOT stop GitHub
-  # cancelling the PENDING run when a newer arrival claims the single pending
-  # slot: that run can be another pull request's current head with no
-  # replacement, which strands its author until they push again. Neither value of
-  # this flag removes that; `true` adds destroyed in-flight runs on top of it.
-  # See ci.yml's concurrency block for the full argument and the measured rates.
-  group: ratchet-guard-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
+  # There is no pull-request leg in this file to bound: the one
+  # repository-level group is ratchet-guard-pr-repo-wide, in the sibling.
+  #
+  # cancel-in-progress is false so no in-flight run is destroyed; on a per-SHA
+  # group the run it could destroy is this SHA's own earlier attempt.
+  group: ratchet-guard-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -73,7 +66,7 @@ jobs:
       # produce a green job that ran only setup-node.
       - name: Refuse unhandled events
         run: |
-          if [[ "$GITHUB_EVENT_NAME" != "pull_request_target" && "$GITHUB_EVENT_NAME" != "push" && "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" != "push" && "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
             echo "::error::Unhandled ratchet-guard event: $GITHUB_EVENT_NAME"
             exit 1
           fi
@@ -94,24 +87,8 @@ jobs:
             exit 1
           fi
 
-      # Under pull_request_target no ref input at all: GitHub points
-      # GITHUB_REF at the default branch and GITHUB_SHA at its last commit,
-      # so the default checkout is the trusted base, never the merge ref,
-      # and actions/checkout's fork guard exempts exactly that. main
-      # provides scripts/check-ratchets.ts under all three events; untrusted
-      # content contributes no byte of the executed code.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: ${{ github.event_name == 'pull_request_target' }}
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-
       # Under push the ref is github.event.before, the previous main tip,
-      # whose copy of scripts/check-ratchets.ts executes. The event-name
-      # gate splits the checkout in two: the pull_request_target step above
-      # has no ref input at all, so it is visibly the default checkout
-      # (main's tip, exempt from checkout's fork guard) without evaluating
-      # an expression, and this step visibly pins the previous main tip.
+      # whose copy of scripts/check-ratchets.ts executes.
       # On a push GitHub always sets `before` to a 40-hex SHA.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ github.event_name == 'push' }}
@@ -157,33 +134,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.17.0"
-
-      # Head content enters only as git objects in refs/remotes/pr/head.
-      # Values from the event reach the shell through env:, never through
-      # ${{ }} interpolation in the script.
-      - name: Fetch the pull request head
-        if: ${{ github.event_name == 'pull_request_target' }}
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
-
-      # The base of the comparison is the checked-out commit itself — under
-      # pull_request_target that is main's tip when the event fired (GITHUB_SHA) — never
-      # the event's base.sha: that value is recorded when the pull request
-      # opens and can trail main, and once the branch has rebased onto a
-      # newer main the merge base of the stale base and the head sits below
-      # the real fork point, so the guard would compare against the looser
-      # document at that older base and pass a real relaxation. Checking
-      # against main's latest commit cannot have that failure: a newer base
-      # only moves the merge base forward. The head SHA is the commit the
-      # event is about (passed through env, never ${{ }} in run:); if it was
-      # force-pushed away and is unreachable, the script exits 2 and the
-      # concurrency group has already cancelled the superseded run.
-      - name: Ratchet documents
-        if: ${{ github.event_name == 'pull_request_target' }}
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/check-ratchets.ts HEAD "$HEAD_SHA"
 
       # Push: the pushed commit enters only as git objects, fetched onto
       # FETCH_HEAD; the event value reaches the shell through env:, never

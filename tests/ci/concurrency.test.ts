@@ -117,12 +117,22 @@ const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = 
     group: "ci-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
   },
-  "actionlint.yml": {
-    group: "actionlint-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+  // Issue 1090 split each of actionlint and ratchet-guard into a file per leg
+  // so no job reading pull-request data could be started by a privileged
+  // trigger. These are the pull-request legs, and the bound they carry is the
+  // one the bound is FOR: a group shared by every pull request, so the
+  // repository's Actions minutes stop scaling with the number of open pull
+  // requests. Their push/dispatch siblings (actionlint.yml,
+  // ratchet-guard.yml) take no pull-request event at all and are in
+  // UNBOUNDED_BY_CHOICE with that reason; a workflow with no pull-request
+  // trigger cannot be in BOUNDED at all, which the reachability assertion
+  // below enforces in the other direction.
+  "actionlint-pr.yml": {
+    group: "actionlint-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
   },
-  "ratchet-guard.yml": {
-    group: "ratchet-guard-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+  "ratchet-guard-pr.yml": {
+    group: "ratchet-guard-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
   },
   "code-scanning.yml": {
@@ -301,11 +311,41 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     },
   ],
   [
+    "secret-scan-pr.yml",
+    {
+      reason:
+        "Every pull request must be scanned, so the group is keyed on the pull request: a newer run can supersede only that same PR's pending scan and never another PR's, and the push that superseded it scheduled the replacement. Bounding it repository-wide would cap the scan at one run no matter how many pull requests are open, so the open-pull-request count would again decide how fast a leaked secret in a pull request is found — the aggregate-spend problem the bound exists to fix. cancel-in-progress false preserves every in-flight full-history detection record, because a scan that is cancelled mid-walk leaves a half-read history and no report. Issue 1090 moved this leg out of secret-scan.yml so the file holding it could have pull_request_target as its only trigger; before the split the single file carried both this group and the per-SHA one.",
+      group: "secret-scan-pr-${{ github.event.pull_request.number }}",
+      "cancel-in-progress": false,
+      queue: undefined,
+    },
+  ],
+  [
     "secret-scan.yml",
     {
       reason:
-        "Every pull request must be scanned: per-PR groups let a newer run supersede only its own PR's pending scan, so another PR cannot cancel it. Push, workflow_dispatch and schedule runs group per SHA so different merged SHAs cannot cancel each other's pending scans. cancel-in-progress false preserves every in-flight full-history detection record.",
-      group: "secret-scan-${{ github.event.pull_request.number || github.sha }}",
+        "No pull-request trigger reaches this file since issue 1090 moved the pull-request leg to secret-scan-pr.yml, so neither arm that would make it unbounded is reachable: it never keys its group on one contributor's pull request, and it never receives the event that would make a repository-level group contend. Its group is per-SHA, which is exactly what its remaining legs want — push, workflow_dispatch and schedule runs group per SHA so different merged SHAs cannot cancel each other's pending scans. cancel-in-progress false preserves every in-flight full-history detection record.",
+      group: "secret-scan-${{ github.sha }}",
+      "cancel-in-progress": false,
+      queue: undefined,
+    },
+  ],
+  [
+    "actionlint.yml",
+    {
+      reason:
+        "No pull-request trigger reaches this file since issue 1090 moved the pull-request leg to actionlint-pr.yml, which is the bounded one. Its remaining legs are push to main and workflow_dispatch, and the group is per-SHA so no push to main shares a group with another push — a cancelled conclusion on a merged SHA makes the deploy gate refuse immediately (issue 474). A workflow with no pull_request and no pull_request_target event cannot be listed in BOUNDED at all, because the bound it would carry would be vacuous: the repository-level arm is dead code, so recording it would pin a promise no run exercises.",
+      group: "actionlint-${{ github.sha }}",
+      "cancel-in-progress": false,
+      queue: undefined,
+    },
+  ],
+  [
+    "ratchet-guard.yml",
+    {
+      reason:
+        "No pull-request trigger reaches this file since issue 1090 moved the pull-request leg to ratchet-guard-pr.yml, which is the bounded one. Its remaining legs are push to main and workflow_dispatch, and the group is per-SHA so no push to main shares a group with another push — a cancelled conclusion on a merged SHA makes the deploy gate refuse immediately (issue 474). A workflow with no pull_request and no pull_request_target event cannot be listed in BOUNDED at all, because the bound it would carry would be vacuous: the repository-level arm is dead code, so recording it would pin a promise no run exercises.",
+      group: "ratchet-guard-${{ github.sha }}",
       "cancel-in-progress": false,
       queue: undefined,
     },
@@ -458,6 +498,11 @@ const ALLOWED_TOP_LEVEL_KEYS = [
  * requires every file in `.github/workflows/` to have a row.
  */
 const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
+  // Issue 1090: each of these three carries the same job name in BOTH legs, so
+  // a required-context conclusion arrives on a pull-request head and on a main
+  // push alike. The name is deliberately NOT suffixed — the check-run name is
+  // what branch protection and .github/required-checks.json match.
+  "actionlint-pr.yml": ["actionlint"],
   "actionlint.yml": ["actionlint"],
   "ci.yml": ["calibrate", "verify"],
   "claim.yml": ["claim"],
@@ -468,8 +513,10 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   "ledger-relay.yml": ["relay-required-checks"],
   "pr-gate.yml": ["gate"],
   "pr-suite.yml": ["suite"],
+  "ratchet-guard-pr.yml": ["ratchet-guard"],
   "ratchet-guard.yml": ["ratchet-guard"],
   "scorecard.yml": ["analysis"],
+  "secret-scan-pr.yml": ["secret-scan"],
   "secret-scan.yml": ["secret-scan"],
 };
 
@@ -1060,27 +1107,58 @@ describe("the workflows left unbounded", () => {
 
   it("never covers a workflow that produces a required check", () => {
     // The mechanical half of the de-bounding guard, and the only one in the
-    // suite. Moving ci.yml, actionlint.yml or ratchet-guard.yml out of BOUNDED
-    // and reverting its group passes every other assertion here, because the
-    // table entry can move with the workflow — that escape needs a two-line
-    // diff and looks like housekeeping. Those three are exactly the workflows
-    // whose job names appear in .github/required-checks.json, and a required
-    // context is the one thing this repository cannot afford to have quietly
-    // unbounded, so it cannot be exempted from the bound at all. A workflow that
-    // legitimately needs its own group per unit of work (pr-gate.yml, keyed on
-    // the pull request number) is not a required context and is unaffected.
+    // suite. Moving a required-check workflow out of BOUNDED and reverting its
+    // group passes every other assertion here, because the table entry can move
+    // with the workflow — that escape needs a two-line diff and looks like
+    // housekeeping. The workflows whose job names appear in
+    // .github/required-checks.json are the ones this repository cannot afford
+    // to have quietly unbounded, so a pull-request-reachable one cannot be
+    // exempted from the bound at all. A workflow that legitimately needs its
+    // own group per unit of work (pr-gate.yml, keyed on the pull request
+    // number) is not a required context and is unaffected.
+    //
+    // Issue 1090 split actionlint, ratchet-guard and secret-scan into a file
+    // per leg, so a required context is now named by BOTH a push file and a
+    // pull_request_target file. The condition is therefore reachability, not
+    // membership of the pin map: the leg that RECEIVES a pull-request event is
+    // the one the bound is for, and it must be bounded. A leg that receives no
+    // pull-request event cannot be in BOUNDED at all — the bound's
+    // repository-level arm would be dead code there, and the reachability
+    // assertion above reds on it — so requiring it to be would make the two
+    // assertions contradict each other and force one of them to be deleted.
+    // Those files are still pinned exactly by the UNBOUNDED_BY_CHOICE
+    // assertion above, so nothing about their groups goes unasserted.
     const required = requiredCheckWorkflows();
     expect([...required].sort(), ".github/required-checks.json must name workflows this suite can read")
       .not.toEqual([]);
+    let reachableCount = 0;
     for (const name of required) {
+      const workflow = workflows.get(name);
+      expect(workflow, `${name} is a required-check workflow but is not in the directory`).toBeDefined();
+      if (!isPullRequestReachable(workflow!.on)) continue;
+      reachableCount += 1;
       expect(
         UNBOUNDED_BY_CHOICE.has(name),
-        `${name} produces a required check context, so it must stay in BOUNDED. Moving it here ` +
-          "and reverting its group passes every other assertion in this file, which is exactly why " +
-          "it needs a mechanical guard rather than a reviewer's memory.",
+        `${name} produces a required check context AND receives a pull-request event, so it must ` +
+          "stay in BOUNDED. Moving it here and reverting its group passes every other assertion in " +
+          "this file, which is exactly why it needs a mechanical guard rather than a reviewer's memory.",
       ).toBe(false);
-      expect(workflows.has(name), `${name} is a required-check workflow but is not in the directory`).toBe(true);
+      expect(
+        Object.hasOwn(BOUNDED, name),
+        `${name} is a pull-request-reachable required-check workflow, so it belongs in BOUNDED with ` +
+          "the repository-level group. An UNBOUNDED_BY_CHOICE entry records an exception carrying a " +
+          "written reason, and a required context is not an exception.",
+      ).toBe(true);
     }
+    // The guard above reads a filter, so an empty filter passes it vacuously.
+    // This is what says the filter is not empty: at least one pinned producer
+    // must actually receive a pull-request event, which after issue 1090's
+    // split is the `-pr.yml` leg of each split context.
+    expect(
+      reachableCount,
+      "no pinned required-check workflow receives a pull-request event, so the guard above " +
+        "iterated over nothing and the bound it enforces is unasserted for every context.",
+    ).toBeGreaterThan(0);
   });
 
   it("are never one of the bounded workflows", () => {

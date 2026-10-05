@@ -128,25 +128,37 @@ describe("the verify workflow's page-geometry step", () => {
 });
 
 /**
- * The verify job carries no ratchet-documents step. ratchet-guard.yml runs
- * main's copy of scripts/check-ratchets.ts on every pull request (and every
- * push to main) as its own required context, reading the head only as git
+ * The verify job carries no ratchet-documents step. The ratchet-guard
+ * workflows run main's copy of scripts/check-ratchets.ts on every pull request
+ * (and every push to main) as its own required context, reading the head only as git
  * objects, so a copy here would add no judge — and the copy that used to sit
  * here executed the pull request's own script.
  */
 describe("the verify workflow's ratchet documents", () => {
-  it("are judged by ratchet-guard.yml, not by a step of the verify job", async () => {
+  it("are judged by the ratchet-guard workflows, not by a step of the verify job", async () => {
     const source = await readFile(resolve(".github/workflows/ci.yml"), "utf8");
     const workflow = parse(source) as { jobs?: { verify?: { steps?: WorkflowStep[] } } };
     const steps = workflow.jobs?.verify?.steps ?? [];
     expect(steps.filter((step) => step.name === "Ratchet documents")).toEqual([]);
     expect(steps.filter((step) => (step.run ?? "").includes("check-ratchets.ts"))).toEqual([]);
 
-    const guard = parse(await readFile(resolve(".github/workflows/ratchet-guard.yml"), "utf8")) as {
+    // The pull-request leg moved into ratchet-guard-pr.yml under issue 1090,
+    // so this reads the ratchet step out of the file that actually holds it
+    // rather than out of the push leg, which no longer has one.
+    const guard = parse(await readFile(resolve(".github/workflows/ratchet-guard-pr.yml"), "utf8")) as {
+      on: Record<string, unknown>;
       jobs: Record<string, { steps: WorkflowStep[] }>;
     };
+    expect(
+      Object.keys(guard.on),
+      "the ratchet step on a pull request reads pull-request data, so the file holding it must be " +
+        "reachable by pull_request_target alone (issue 1090)",
+    ).toEqual(["pull_request_target"]);
     const ratchet = guard.jobs["ratchet-guard"]?.steps.find((step) => step.name === "Ratchet documents");
-    expect(ratchet?.if).toBe("${{ github.event_name == 'pull_request_target' }}");
+    expect(
+      ratchet?.if,
+      "the step carries no event gate: its file's closed trigger set is the gate",
+    ).toBeUndefined();
     expect(ratchet?.run).toBe('node scripts/check-ratchets.ts HEAD "$HEAD_SHA"');
   });
 });
@@ -394,25 +406,32 @@ describe("the verify workflow's concurrency group", () => {
 describe("the required workflows' base-freshness step", () => {
   let verifySteps: WorkflowStep[] = [];
   let actionlintSteps: WorkflowStep[] = [];
+  // Issue 1090 split actionlint into a file per leg. The freshness gate belongs
+  // to the pull-request leg, so it moved with it — reading it out of
+  // actionlint.yml after the split found nothing there, and every assertion
+  // below would have been a vacuous "the step I could not find is absent".
+  let actionlintPrTriggers: unknown;
 
   const freshness = (steps: WorkflowStep[]) =>
     steps.filter((step) => step.name === "Base freshness");
 
   beforeAll(async () => {
-    const [ci, actionlint] = await Promise.all([
+    const [ci, actionlintPr] = await Promise.all([
       readFile(resolve(".github/workflows/ci.yml"), "utf8"),
-      readFile(resolve(".github/workflows/actionlint.yml"), "utf8"),
+      readFile(resolve(".github/workflows/actionlint-pr.yml"), "utf8"),
     ]);
 
     const ciWorkflow = parse(ci) as {
       jobs?: { verify?: { steps?: WorkflowStep[] } };
     };
-    const actionlintWorkflow = parse(actionlint) as {
+    const actionlintWorkflow = parse(actionlintPr) as {
+      on: unknown;
       jobs?: { actionlint?: { steps?: WorkflowStep[] } };
     };
 
     verifySteps = ciWorkflow.jobs?.verify?.steps ?? [];
     actionlintSteps = actionlintWorkflow.jobs?.actionlint?.steps ?? [];
+    actionlintPrTriggers = actionlintWorkflow.on;
   });
 
   it("exists exactly once in each required job", () => {
@@ -422,8 +441,30 @@ describe("the required workflows' base-freshness step", () => {
     ).toHaveLength(1);
     expect(
       freshness(actionlintSteps),
-      "the actionlint job must keep its Base freshness step",
+      "the actionlint pull-request job must keep its Base freshness step",
     ).toHaveLength(1);
+  });
+
+  it("lives in a file whose only trigger is pull_request_target, so it needs no event gate", () => {
+    // The gate moved with the step. Where the step used to need
+    // `if: github.event_name == 'pull_request_target'` to keep it off the push
+    // leg, the split achieves that structurally: the file it now lives in is
+    // reachable by nothing else. Asserting the ungated step on its own would
+    // be an unbacked licence, so the trigger set is asserted beside it — and
+    // the pairing is what makes "ungated" safe rather than a regression.
+    const [step] = freshness(actionlintSteps);
+    expect(step, "the actionlint pull-request job must contain the Base freshness step").toBeDefined();
+    expect(
+      Object.keys((actionlintPrTriggers ?? {}) as Record<string, unknown>),
+      "the Base freshness step is ungated, which is only correct while this file receives nothing but " +
+        "pull_request_target. An added push or workflow_dispatch trigger here would make the step run " +
+        "on main's own pushes, where github.event.pull_request.* resolves to nothing.",
+    ).toEqual(["pull_request_target"]);
+    expect(
+      step.if,
+      "the step carries no event gate: its file's closed trigger set is the gate, and an expression " +
+        "naming a sibling event here would be either dead or would re-open the class the split removed",
+    ).toBeUndefined();
   });
 
   it("keeps freshness the last step of both required jobs", () => {
@@ -450,20 +491,16 @@ describe("the required workflows' base-freshness step", () => {
   });
 
   it("runs only when the event is a pull request", () => {
+    // ci.yml still serves several events from one job body (issue 1090 Task 3
+    // splits it), so its freshness step keeps the event gate. The actionlint
+    // half moved to the previous assertion, where the split made the gate
+    // structural — an assertion kept here would have been a duplicate reading
+    // an `if` that no longer exists.
     const [verifyStep] = freshness(verifySteps);
-    const [actionlintStep] = freshness(actionlintSteps);
 
     expect(verifyStep, "the verify job must contain the Base freshness step").toBeDefined();
     expect(
-      actionlintStep,
-      "the actionlint job must contain the Base freshness step",
-    ).toBeDefined();
-    expect(
       verifyStep.if,
-      "Base freshness must be gated by the exact expression ${{ github.event_name == 'pull_request_target' }} — the required contexts are produced from the pull_request_target leg (issue 822); an expression naming a sibling event would leave the gate silently unrun",
-    ).toBe("${{ github.event_name == 'pull_request_target' }}");
-    expect(
-      actionlintStep.if,
       "Base freshness must be gated by the exact expression ${{ github.event_name == 'pull_request_target' }} — the required contexts are produced from the pull_request_target leg (issue 822); an expression naming a sibling event would leave the gate silently unrun",
     ).toBe("${{ github.event_name == 'pull_request_target' }}");
   });

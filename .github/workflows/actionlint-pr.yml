@@ -1,0 +1,173 @@
+name: actionlint pull request
+
+# The pull-request leg of the actionlint gate, in a file of its own so that the
+# only trigger it can be started by is `pull_request_target` (issue 1090).
+#
+# WHY THE SPLIT. This job fetches a pull request's head ref. `push`,
+# `schedule` and `workflow_dispatch` all run a workflow from the default
+# branch with the default branch's privileges, so a step reading pull-request
+# content under one of them is untrusted content entering a privileged job —
+# exactly what CodeQL's `actions/cache-poisoning/poisonable-step` and
+# `actions/untrusted-checkout` alerts report. The `if:
+# github.event_name == 'pull_request_target'` gates that used to hold the
+# shapes apart made the paths safe, not structural: nothing stopped the next
+# privileged trigger from arriving. One file per leg is the structure.
+# tests/ci/pr-data-triggers.test.ts decides which jobs read pull-request data
+# from the workflow text and requires this file's whole `on:` set to be
+# {pull_request_target}.
+#
+# The other half — the push and dispatch legs, which lint main's own tree and
+# read no pull-request data — is .github/workflows/actionlint.yml. Both
+# workflows produce the `actionlint` job name, and .github/required-checks.json
+# pins that context to BOTH paths.
+#
+# pull_request_target so the definition, the checkout and the tools all come
+# from main: a pull request that edits its own workflow files cannot shape the
+# gate that judges them (issue 822). The PR head is data-only: it enters only
+# as git objects (refs/pull/<N>/head) and is extracted as data into
+# .github/workflows-pr/ with `git show` — never checked out, installed or
+# executed. The `# zizmor: ignore[dangerous-triggers]` annotation marks the
+# trigger for the same reason ratchet-guard.yml's header gives: it is dangerous
+# in general and safe here because no pull-request code runs and the job's
+# token is contents:read-only.
+on:
+  pull_request_target:  # zizmor: ignore[dangerous-triggers]
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group for every pull request, so the repository's Actions minutes stop
+  # scaling with the number of open pull requests. GitHub keeps one PENDING run
+  # per group and cancels the superseded one, so `actionlint-pr-repo-wide` is a
+  # single slot. The parentheses are load-bearing: && binds tighter than ||,
+  # and without them the pull_request arm falls through to github.sha and the
+  # bound is gone.
+  #
+  # cancel-in-progress is false, so no in-flight run is destroyed — on a group
+  # shared by every pull request, a destroyed run can belong to a peer, and
+  # `actionlint` is a required context in .github/required-checks.json that
+  # ledger-relay mirrors a run conclusion onto. It does NOT stop GitHub
+  # cancelling the PENDING run when a newer arrival claims the single pending
+  # slot: that run can be another pull request's current head with no
+  # replacement, which strands its author until they push again. Neither value
+  # of this flag removes that; `true` adds destroyed in-flight runs on top of
+  # it. See ci.yml's concurrency block for the full argument and the measured
+  # rates.
+  group: actionlint-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # actionlint from the Nitjsefnie-OSC fork, not from rhysd/actionlint.
+      # Upstream's newest release is still 1.7.12, and its workflow schema has no
+      # `queue` key under `concurrency` — the key claim.yml needs so a second
+      # /claim arriving mid-run is queued rather than dropped unanswered. Stock
+      # 1.7.12 fails that file as an unexpected key, which would leave the gate
+      # unable to lint the workflow it exists to lint.
+      #
+      # RETURN TO UPSTREAM as soon as an upstream release accepts `queue` under
+      # `concurrency`: set ACTIONLINT_REPO back to rhysd/actionlint, take the
+      # version and the sha256 from that release's own checksums file, and
+      # re-verify .github/workflows/ with the stock binary.
+      # tests/api/ci-workflows.test.ts pins all three values by exact equality, so
+      # it goes red until the same change bumps them there; the failure names
+      # the mismatched key. Until then the fork release is the same upstream code plus
+      # that one schema key. Keep these three in step with actionlint.yml, which
+      # installs the same gate on the push and dispatch legs.
+      ACTIONLINT_REPO: Nitjsefnie-OSC/actionlint
+      ACTIONLINT_VERSION: 1.7.12-queue.1
+      # sha256 of actionlint_1.7.12-queue.1_linux_amd64.tar.gz from the fork's
+      # checksums file. Bump the repository, version and checksum together.
+      ACTIONLINT_SHA256: dcc2c42a7caaa197dfe63584a3851f62ef260f80b2cf221baaf05479661e1521
+
+    steps:
+      # No ref input at all: GitHub points GITHUB_REF at the default branch and
+      # GITHUB_SHA at its last commit, so the default checkout is the trusted
+      # base — main's tip — never the merge ref, and actions/checkout's fork
+      # guard exempts exactly that. The PR's own .github/workflows/ is never
+      # the lint target; it is fetched below as git objects and extracted as
+      # data.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The head is fetched only as git objects. Values from the event reach the
+      # shell through env:, never through ${{ }} interpolation in run:.
+      - name: Fetch the pull request head
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install actionlint
+        run: |
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$tarball" \
+            "https://github.com/${ACTIONLINT_REPO}/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" actionlint
+          ./actionlint --version
+
+      - name: Install zizmor
+        id: install_zizmor
+        run: |
+          pip install --require-hashes -r .github/requirements-zizmor.txt
+
+      # The PR's tree is never checked out; its workflows are read out of the
+      # fetched head ref with `git show`, so the lint target is data on disk and
+      # nothing else. This file's sibling actionlint.yml copies the checked-out,
+      # trusted tree's own workflows instead.
+      - name: Collect the workflow files to lint
+        run: |
+          mkdir -p .github/workflows-pr
+          git ls-tree -z --name-only refs/remotes/pr/head:.github/workflows/ |
+            while IFS= read -r -d '' f; do
+              git show "refs/remotes/pr/head:.github/workflows/$f" > ".github/workflows-pr/$f"
+            done
+
+      - name: actionlint
+        id: actionlint
+        run: ./actionlint -color .github/workflows-pr/*.yml
+
+      - name: zizmor
+        # Still run when actionlint finds a schema issue so one invocation
+        # reports both classes of failure. Do not run if installation failed.
+        if: ${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor --no-progress .github/workflows-pr/*.yml
+
+      # A pull_request_target run tests refs/pull/N/merge — the head merged with
+      # the base as it stood at event time — and branch protection keeps strict
+      # up-to-date checking disabled, so a run that went green against an older
+      # main stays green after main advances: the tree GitHub actually lands
+      # (its rebase onto current main) was never tested by a required check
+      # (issue 441). LAST step, deliberately: the freshness certificate is
+      # issued as late as the workflow can issue it, because an earlier step
+      # re-opens the whole run duration as the stale-base window. The step runs
+      # scripts/ci-base-freshness.sh, which certifies when the base is
+      # unchanged OR advanced only disjointly from the files this pull request
+      # changes — an advance that touched none of them carried its own required
+      # checks, and only cross-file interaction goes unverified — and refuses
+      # on everything else: an overlapping advance, a failed or empty API
+      # response, an unrepresentative compare (issue 510; the first version
+      # demanded main frozen for the whole run, which no run could satisfy at
+      # the repository's merge cadence).
+      - name: Base freshness
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_SLUG: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/ci-base-freshness.sh
