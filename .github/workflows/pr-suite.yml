@@ -85,6 +85,53 @@ jobs:
         with:
           node-version: "24.17.0"
 
+      # The interpreter actionlint.yml installs zizmor with, pinned the same way:
+      # full commit SHA plus the release comment. A floating tag would let this
+      # workflow's own definition — the pull request's — choose the interpreter.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      # Binds .github/requirements-zizmor.txt's hashes to the version on its pin
+      # line, on the PULL REQUEST's own tree (issue 1094). `--require-hashes`
+      # makes pip resolve `zizmor==<version>` from the index and refuse any
+      # artifact whose sha256 is not in the file, so a manifest that kept the
+      # previous release's hashes under a bumped version fails here — before the
+      # merge, in the one workflow that checks out and runs the request's bytes.
+      #
+      # This had no home on a pull request: actionlint.yml is the only other
+      # place the flag is used, and its pull_request_target leg checks out main's
+      # tip with no `ref:` (actionlint.yml:80), so it installs MAIN's manifest
+      # and cannot see the request's. A Dependabot bump with stale hashes
+      # therefore merged green and reddened the required `actionlint` context on
+      # the push to main instead. Dependabot-core's own hash refresh does not
+      # fire on this file either — the manifest's header comment naming the old
+      # version is what its declaration scan matches first — so the arrival is
+      # reliably stale and this is the only pre-merge catcher.
+      #
+      # `pip download`, not an install: nothing is executed and no package is
+      # placed on the runner, only resolved and checksummed. `--no-deps` keeps it
+      # to the one pin. Unconditional on purpose — the manifest is not
+      # application code, and a docs-only detection must not be able to skip it.
+      # Reads no secret and needs no token: PyPI is anonymous, and the hash
+      # pinning is what makes the download trustworthy.
+      #
+      # SCOPE, stated rather than left to be assumed: pip resolves the artifact
+      # for THIS runner, so what is verified here is the platform's entry against
+      # the version — the case that actually occurs (a bump carrying the whole
+      # previous hash set, as PR 1007 does). It is not proof that all eleven
+      # entries belong to the version: a manifest stale in only some other
+      # platform's wheel would pass here and fail on that platform's runner. The
+      # test file's own hash assertions do not close that either, and are not
+      # asked to — see the dependabot pip lane's comment. Catching every entry
+      # would need a matrix over the platforms, which is more than this gap is
+      # worth; if that day comes it is a separate change.
+      - name: Verify the zizmor pin's hashes match its version
+        run: |
+          pip download --no-deps --require-hashes \
+            --dest "${RUNNER_TEMP}/zizmor-hash-check" \
+            -r .github/requirements-zizmor.txt
+
       - name: Enable the pinned package manager
         run: |
           corepack enable

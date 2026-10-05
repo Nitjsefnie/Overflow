@@ -199,6 +199,62 @@ describe("the pull request suite workflow", () => {
     }
   });
 
+  // The zizmor manifest's whole purpose is that `pip install --require-hashes`
+  // rejects content matching no allowed hash — but on a PULL REQUEST that check
+  // had no home. actionlint.yml is the only other place it runs, and that leg is
+  // pull_request_target with no `ref:`, so it installs MAIN's manifest, never
+  // the pull request's (issue 1094). A Dependabot bump carrying the previous
+  // release's hashes therefore passed every pull-request check and went red
+  // only on the push to main. This step is the pre-merge home, and it is here
+  // because pr-suite is the one workflow that runs the request's own tree.
+  it("binds the zizmor manifest's hashes to its version, on the pull request's own tree", () => {
+    const step = stepRunning("--require-hashes");
+    // The check is the download against PyPI, not an install: it resolves the
+    // named version and refuses any artifact whose sha256 is not allowed. A
+    // stale-hash manifest fails here without anything being installed.
+    expect(step.run).toContain("pip download");
+    expect(step.run).toContain("--no-deps");
+    expect(step.run).toContain("--require-hashes");
+    expect(step.run).toContain("-r .github/requirements-zizmor.txt");
+    // Unconditional. A docs-only pull request must not skip it: the manifest is
+    // not application code, and a stale-hash bump reaches this workflow on a
+    // change that `docs-only.ts` would call docs-only (the pin line lives in a
+    // header-carrying requirements file the docs detector never reads).
+    expect(step.if, "the hash binding must hold on every pull request").toBeUndefined();
+    // After the checkout, so it reads the request's tree rather than an empty
+    // workspace: this is the whole property actionlint.yml lacks.
+    const checkout = suite.steps.findIndex((s) => (s.uses ?? "").startsWith("actions/checkout@"));
+    expect(suite.steps.indexOf(step)).toBeGreaterThan(checkout);
+    // No secret and no environment: `pip download` against PyPI needs neither,
+    // and this workflow's read-only-token, no-secret property is what makes
+    // running the request's own bytes here acceptable at all.
+    expect(step.env, "the step must not need a token").toBeUndefined();
+  });
+
+  it("verifies the manifest with a Python pinned by commit SHA, never a floating tag", () => {
+    const setups = suite.steps.filter((s) => (s.uses ?? "").startsWith("actions/setup-python@"));
+    expect(setups).toHaveLength(1);
+    // Same pin actionlint.yml installs zizmor with, so the two legs cannot
+    // drift apart in what "the pinned python" means. Full SHA, never a floating
+    // tag: a tag would let the pull request's own definition choose the
+    // interpreter that judges it. The parsed `uses` carries no comment, so the
+    // version comment is asserted against the raw source — which is also what
+    // zizmor's ref-version-mismatch audit reads, and what this repository's own
+    // pin-annotation case requires.
+    expect(setups[0]!.uses).toBe(
+      "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+    );
+    expect(source).toContain(
+      "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0",
+    );
+    expect(setups[0]!.with?.["python-version"]).toBe("3.13");
+    // The hash-binding step must run on THIS interpreter, so the pinned python
+    // is installed before it.
+    expect(suite.steps.indexOf(setups[0]!)).toBeLessThan(
+      suite.steps.indexOf(stepRunning("--require-hashes")),
+    );
+  });
+
   it("is shipped: the deny-by-default ignore file names it back", () => {
     const result = spawnSync("git", ["check-ignore", "-q", PATH], { encoding: "utf8" });
     expect(result.status).toBe(1);
