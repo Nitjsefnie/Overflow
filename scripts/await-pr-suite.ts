@@ -11,26 +11,34 @@
 // optional SUITE_DEADLINE_SECONDS (default 2400) and SUITE_POLL_SECONDS
 // (default 30), optional GITHUB_OUTPUT.
 //
-// It polls the workflow-run listing at HEAD_SHA, keeps only runs of exactly
-// the suite workflow at exactly that SHA, and waits on the most recently
-// created one (ties: the highest id). Exit 0 only when that run completed with
+// It polls the suite workflow's run listing at HEAD_SHA, keeps only
+// pull_request runs of exactly the suite workflow at exactly that SHA, and
+// waits on the most recently created one (ties: the highest id). Exit 0 only when that run completed with
 // conclusion `success`, writing `run_id=<id>` to GITHUB_OUTPUT so the caller
 // can fetch the run's artifacts. Every other outcome fails closed with exit 1
 // and one `::error::` line naming why; malformed input exits 2. It imports
 // only Node built-ins, so nothing outside the base checkout's own file runs.
 
+import { realpathSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
+/** The suite workflow's file name, which names its per-workflow run listing. */
+const SUITE_WORKFLOW_FILE = "pr-suite.yml";
 /** The suite workflow whose run is awaited; matched exactly against each run's `path`. */
-export const SUITE_WORKFLOW_PATH = ".github/workflows/pr-suite.yml";
+export const SUITE_WORKFLOW_PATH = `.github/workflows/${SUITE_WORKFLOW_FILE}`;
+/** The only event whose runs are considered. */
+const SUITE_EVENT = "pull_request";
 
 const DEFAULT_DEADLINE_SECONDS = 2400;
 const DEFAULT_POLL_SECONDS = 30;
 const SHA_40 = /^[0-9a-f]{40}$/;
-// OWNER/REPO in GitHub's own name alphabet, so the value cannot reshape the
-// request URL it is interpolated into.
-const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+// OWNER/REPO in GitHub's name alphabet with no segment starting with a dot,
+// so the value is exactly two literal, non-dot path segments of the request
+// URL: no separator, query, fragment, escape or dot segment can reach it.
+// Which repository it names is the caller's to guarantee.
+const SEGMENT = "[A-Za-z0-9_-][A-Za-z0-9_.-]*";
+const REPOSITORY = new RegExp(`^${SEGMENT}/${SEGMENT}$`);
 const POSITIVE_INTEGER = /^[1-9]\d*$/;
 const API_ROOT = "https://api.github.com";
 // The media type GitHub's REST documentation names and the api-version
@@ -43,6 +51,8 @@ const API_HEADERS = {
 // plausibly transient failures retry — a network error, a 5xx, a 429; any
 // other 4xx fails immediately, because it will not heal within the wait.
 const BACKOFF_MS = [1_000, 2_000];
+// Every request is bounded; a timeout is retried as a network error.
+const REQUEST_TIMEOUT_MS = 30_000;
 const LOG = "[await-pr-suite]";
 
 export interface AwaitDeps {
@@ -51,12 +61,17 @@ export interface AwaitDeps {
   sleepFn: (ms: number) => Promise<void>;
   /** Milliseconds since the epoch; the deadline is measured against it. */
   nowFn: () => number;
+  /**
+   * Receives each log line the moment it is produced, so a wait killed from
+   * outside still leaves its progress in the job log.
+   */
+  logFn?: (line: string) => void;
 }
 
 export interface AwaitOutcome {
   /** 0: the suite run succeeded; 1: any other outcome; 2: malformed input. */
   exitCode: 0 | 1 | 2;
-  /** Log lines for stdout, in order; a failure ends with exactly one `::error::` line. */
+  /** Every line given to logFn, in order; a failure ends with exactly one `::error::` line. */
   lines: string[];
   /** The successful run's id; set only when exitCode is 0. */
   runId?: number;
@@ -84,16 +99,20 @@ interface SuiteRun {
  */
 export async function awaitPrSuite(deps: AwaitDeps): Promise<AwaitOutcome> {
   const lines: string[] = [];
+  const log = (line: string): void => {
+    lines.push(line);
+    deps.logFn?.(line);
+  };
   let config: AwaitConfig;
   try {
     config = parseConfig(deps.env);
   } catch (error) {
-    lines.push(errorLine(messageOf(error)));
+    log(errorLine(messageOf(error)));
     return { exitCode: 2, lines };
   }
 
   try {
-    const run = await waitForCompletedRun(deps, config, lines);
+    const run = await waitForCompletedRun(deps, config, log);
     if (run.conclusion !== "success") {
       throw new Error(
         `the suite run ${run.id} concluded ${run.conclusion ?? "with no conclusion"}, not success`,
@@ -102,10 +121,10 @@ export async function awaitPrSuite(deps: AwaitDeps): Promise<AwaitOutcome> {
     if (config.outputPath !== undefined) {
       await appendFile(config.outputPath, `run_id=${run.id}\n`, "utf8");
     }
-    lines.push(`${LOG} the suite run ${run.id} concluded success`);
+    log(`${LOG} the suite run ${run.id} concluded success`);
     return { exitCode: 0, lines, runId: run.id };
   } catch (error) {
-    lines.push(errorLine(messageOf(error)));
+    log(errorLine(messageOf(error)));
     return { exitCode: 1, lines };
   }
 }
@@ -118,7 +137,7 @@ export async function awaitPrSuite(deps: AwaitDeps): Promise<AwaitOutcome> {
 async function waitForCompletedRun(
   deps: AwaitDeps,
   config: AwaitConfig,
-  lines: string[],
+  log: (line: string) => void,
 ): Promise<SuiteRun> {
   const deadline = deps.nowFn() + config.deadlineMs;
   for (;;) {
@@ -133,7 +152,7 @@ async function waitForCompletedRun(
           : `the deadline was reached while the suite run ${run.id} was still ${run.status}`,
       );
     }
-    lines.push(
+    log(
       run === null
         ? `${LOG} no suite run for ${config.headSha} yet; waiting`
         : `${LOG} the suite run ${run.id} is ${JSON.stringify(run.status)}; waiting`,
@@ -143,10 +162,12 @@ async function waitForCompletedRun(
 }
 
 /**
- * The most recently created run of exactly the suite workflow at exactly the
- * head SHA, ties broken by the highest id; null when there is none. A matching
- * entry without a usable id or creation time fails closed rather than being
- * skipped, because skipping it could select an older run in its place.
+ * The most recently created pull_request run of exactly the suite workflow at
+ * exactly the head SHA, ties broken by the highest id; null when there is
+ * none. A matching entry without a usable id, creation time or status fails
+ * closed rather than being skipped or defaulted, because skipping it could
+ * select an older run in its place and defaulting its status could read an
+ * unfinished run as finished.
  */
 function newestSuiteRun(entries: unknown[], headSha: string): SuiteRun | null {
   let newest: SuiteRun | null = null;
@@ -154,13 +175,20 @@ function newestSuiteRun(entries: unknown[], headSha: string): SuiteRun | null {
     if (typeof entry !== "object" || entry === null) continue;
     const raw = entry as Record<string, unknown>;
     if (raw.path !== SUITE_WORKFLOW_PATH || raw.head_sha !== headSha) continue;
+    if (raw.event !== SUITE_EVENT) continue;
     const createdMs = typeof raw.created_at === "string" ? Date.parse(raw.created_at) : NaN;
-    if (typeof raw.id !== "number" || !Number.isSafeInteger(raw.id) || Number.isNaN(createdMs)) {
-      throw new Error("the listing holds a suite run without a usable id or created_at");
+    if (
+      typeof raw.id !== "number" ||
+      !Number.isSafeInteger(raw.id) ||
+      Number.isNaN(createdMs) ||
+      typeof raw.status !== "string" ||
+      raw.status === ""
+    ) {
+      throw new Error("the listing holds a suite run without a usable id, created_at or status");
     }
     const run: SuiteRun = {
       id: raw.id,
-      status: typeof raw.status === "string" ? raw.status : "",
+      status: raw.status,
       conclusion: typeof raw.conclusion === "string" ? raw.conclusion : null,
       createdMs,
     };
@@ -175,25 +203,41 @@ function newestSuiteRun(entries: unknown[], headSha: string): SuiteRun | null {
   return newest;
 }
 
-/** One poll of the workflow-run listing at the head SHA, with the bounded retry. */
+/**
+ * One poll of the suite workflow's run listing at the head SHA, with the
+ * bounded retry. One page is read; a total_count beyond the runs returned
+ * fails closed, since an unread page could hold the newest run.
+ */
 async function listRuns(deps: AwaitDeps, config: AwaitConfig): Promise<unknown[]> {
   const url =
-    `${API_ROOT}/repos/${config.repo}/actions/runs` +
-    `?head_sha=${config.headSha}&event=pull_request&per_page=100`;
+    `${API_ROOT}/repos/${config.repo}/actions/workflows/${SUITE_WORKFLOW_FILE}/runs` +
+    `?head_sha=${config.headSha}&event=${SUITE_EVENT}&per_page=100`;
   const body = await apiGet(deps, url, config.token);
-  const runs =
-    typeof body === "object" && body !== null
-      ? (body as { workflow_runs?: unknown }).workflow_runs
-      : undefined;
+  const listing = (typeof body === "object" && body !== null ? body : {}) as {
+    workflow_runs?: unknown;
+    total_count?: unknown;
+  };
+  const runs = listing.workflow_runs;
   if (!Array.isArray(runs)) {
     throw new Error("the workflow-run listing returned no workflow_runs array");
+  }
+  const total = listing.total_count;
+  if (typeof total !== "number" || !Number.isSafeInteger(total)) {
+    throw new Error("the workflow-run listing returned no total_count");
+  }
+  if (total > runs.length) {
+    throw new Error(
+      `the workflow-run listing reports ${total} runs but returned ${runs.length}; ` +
+        "the newest run may be on an unread page",
+    );
   }
   return runs;
 }
 
 /**
- * One GitHub API GET with the bounded retry. A network error, a 5xx or a 429
- * retries through the backoff; any other non-2xx fails at once. The failure
+ * One GitHub API GET with the bounded retry. A network error (a request
+ * timeout included), a 5xx or a 429 retries through the backoff; any other
+ * non-2xx fails at once. The failure
  * carries the status and GitHub's message — never a header, so the token
  * cannot reach the log.
  */
@@ -208,6 +252,7 @@ async function apiGet(deps: AwaitDeps, url: string, token: string): Promise<unkn
       response = await deps.fetchFn(url, {
         method: "GET",
         headers: { ...API_HEADERS, authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (error) {
       lastMessage = messageOf(error);
@@ -281,20 +326,39 @@ function truncate(text: string): string {
   return trimmed.length <= 300 ? trimmed : `${trimmed.slice(0, 300)}…`;
 }
 
+/**
+ * The CLI. The process exit code is set to 1 before anything runs and only a
+ * settled outcome replaces it, so a wait that never settles, or any path that
+ * ends without reaching the outcome, exits as a failure rather than a pass.
+ */
 function main(): void {
+  process.exitCode = 1;
   void awaitPrSuite({
     env: process.env,
     fetchFn: fetch,
     sleepFn: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     nowFn: () => Date.now(),
+    logFn: (line) => console.log(line),
   }).then((outcome) => {
-    for (const line of outcome.lines) {
-      console.log(line);
-    }
     process.exitCode = outcome.exitCode;
   });
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+/**
+ * Whether this module is the process entry. Both sides are compared as real
+ * paths: Node resolves symlinks in the entry module's URL but leaves argv as
+ * invoked, so a plain comparison would skip main() for a symlinked path.
+ */
+function isEntry(): boolean {
+  const invoked = process.argv[1];
+  if (invoked === undefined) return false;
+  try {
+    return realpathSync(invoked) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isEntry()) {
   main();
 }
