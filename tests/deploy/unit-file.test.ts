@@ -562,9 +562,31 @@ describe("Overflow off-host backup units", () => {
     expect(rootTouching, "/root is reachable only through the single bound file").toEqual([
       "BindReadOnlyPaths",
     ]);
-    expect(only("Service", "Environment").words, "the PATH carries no /root component").toEqual([
-      "PATH=/usr/local/bin:/usr/bin:/bin",
-    ]);
+    const environment = entries().filter(
+      (entry) => entry.section === "Service" && entry.key === "Environment",
+    );
+    expect(environment, "PATH and HOME, one Environment= line each").toHaveLength(2);
+    expect(
+      environment.flatMap((entry) => entry.words).filter((word) => word.startsWith("PATH=")),
+      "the PATH carries no /root component",
+    ).toEqual(["PATH=/usr/local/bin:/usr/bin:/bin"]);
+  });
+
+  it("gives the connector a writable HOME on the private /tmp the unit already owns", () => {
+    // The mailbox library derives its connector lock root from the home
+    // directory with no override, and ProtectHome=tmpfs mounts /root as an
+    // empty READ-ONLY tmpfs, so the stock HOME=/root is where connectors go
+    // to die ([Errno 30] Read-only file system, measured on the first manual
+    // run). HOME=/tmp moves the lock root into the private /tmp the sandbox
+    // already provides; nothing under /root becomes writable, and the osc
+    // token is not home-based, so no secret follows the move.
+    const homes = entries()
+      .filter((entry) => entry.section === "Service" && entry.key === "Environment")
+      .flatMap((entry) => entry.words)
+      .filter((word) => word.startsWith("HOME="));
+
+    expect(homes, "exactly one HOME assignment").toHaveLength(1);
+    expect(homes[0]).toBe("HOME=/tmp");
   });
 
   it("fires the timer at 02:10 UTC, persistently, at the off-host unit", () => {

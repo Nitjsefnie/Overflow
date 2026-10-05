@@ -249,7 +249,15 @@ identity=osc
 if "$mb" list-agents "$identity" --timeout 10 >/dev/null 2>&1; then
     :
 else
-    "$mb" connector "$identity" --claude-pid "$$" >/dev/null 2>&1 &
+    # The connector's stdout stays suppressed - it carries event-stream
+    # lines, not diagnostics - but its stderr reaches this script's stderr,
+    # and the unit's journal with it: a bring-up death must name its cause
+    # ("cannot establish connector lock root ...", the first manual run) in
+    # the journal rather than leave it with the final failure line alone.
+    # That stderr carries identity names and connection ids only; the osc
+    # token travels to the CLI through the environment and never through
+    # stderr, so the redirect carries no secret.
+    "$mb" connector "$identity" --claude-pid "$$" >/dev/null &
     connector_pid=$!
     started_connector=1
     live=0

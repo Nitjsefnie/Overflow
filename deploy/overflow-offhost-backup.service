@@ -36,6 +36,16 @@ Type=oneshot
 EnvironmentFile=/etc/overflow/backup.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 
+# The mailbox library derives its connector lock root from the home directory
+# with no override, and tmpfs mounts /root as an empty READ-ONLY tmpfs, so the
+# stock HOME=/root is where the connector dies: the first manual run failed
+# with "cannot establish connector lock root /root/.discord-mailbox-log-locks:
+# [Errno 30] Read-only file system". HOME=/tmp moves that lock root into the
+# private /tmp the unit already owns; nothing under /root becomes writable,
+# and the token is not home-based (see LoadCredential below), so no secret
+# follows the move.
+Environment=HOME=/tmp
+
 ExecStart=/bin/sh /srv/overflow/scripts/db-offhost-backup.sh
 
 # Backup files are created 0600 inside the 0700 backup directory.
