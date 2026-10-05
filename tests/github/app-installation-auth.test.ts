@@ -112,6 +112,25 @@ describe("readGitHubAppAuthConfig", () => {
       },
     )).toThrow("EACCES: permission denied, open '/keys/missing.pem'");
   });
+
+  it("throws when the key file is readable but does not contain a parseable private key", () => {
+    let thrown: unknown = null;
+    try {
+      readGitHubAppAuthConfig(
+        { GITHUB_APP_ID: appId, GITHUB_APP_PRIVATE_KEY_PATH: "/keys/garbage.pem" },
+        () => "not a pem key",
+      );
+    } catch (error: unknown) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    // The message names the variable an operator must fix, never the file's
+    // contents — a key file's text must not reach a log through this error.
+    expect(message).toContain("GITHUB_APP_PRIVATE_KEY_PATH");
+    expect(message).not.toContain("not a pem key");
+  });
 });
 
 describe("createAppInstallationTokenResolver", () => {
