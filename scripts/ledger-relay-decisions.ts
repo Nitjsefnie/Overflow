@@ -49,10 +49,15 @@ const EVENTS_TRUSTED_ON_BASE_BRANCH = new Set(["push", "workflow_dispatch", "sch
  * An allowlist, so an event GitHub adds later, or one a producer gains by
  * mistake, is refused until it is reasoned about here:
  *
- * - `pull_request_target` runs the base branch's definition whatever the
- *   pull request's head branch is, and every pinned producer restricts that
- *   trigger to `branches: [main]`. The head branch names the pull request's
- *   branch and says nothing about the definition, so it is not consulted.
+ * - `pull_request_target` runs the definition on the pull request's TARGET
+ *   branch, not its head, so the head branch says nothing about the
+ *   definition and is not consulted. On main, every pinned producer restricts
+ *   that trigger to `branches: [main]`. A definition on any other target — a
+ *   different branch, or a tag — exists only because someone with write
+ *   access created it, which is the same trust class as a push or a dispatch
+ *   on a branch. The run record does not carry the target branch in a form
+ *   the relay can read for a run from a fork, so the relay does not check it
+ *   and trusts this event on that basis.
  * - `push`, `workflow_dispatch` and `schedule` run the definition at the ref
  *   they name — the pushed branch, the dispatched ref, the default branch. That
  *   definition is the base branch's only when the ref is exactly `main`.
