@@ -39,12 +39,13 @@ const BASE_BRANCH = "main";
 const EVENTS_TRUSTED_ON_BASE_BRANCH = new Set(["push", "workflow_dispatch", "schedule"]);
 
 /**
- * Whether a producer run may attest a required context: true exactly when the
- * workflow definition the run EXECUTED is the base branch's. A required
- * context is evidence about the job that judged the commit, so it is only
- * worth relaying when that job's definition is one a pull request cannot
- * shape. The pin map binds a context to a workflow path; this binds it to the
- * definition at that path being main's.
+ * Whether a producer run may attest a required context: trusted when the
+ * workflow definition the run EXECUTED is the base branch's, within the
+ * write-access assumptions the bullets below state. A required context is
+ * evidence about the job that judged the commit, so it is only worth relaying
+ * when that job's definition is one a pull request cannot shape. The pin map
+ * binds a context to a workflow path; this binds it to the definition at that
+ * path being main's.
  *
  * An allowlist, so an event GitHub adds later, or one a producer gains by
  * mistake, is refused until it is reasoned about here:
@@ -52,15 +53,18 @@ const EVENTS_TRUSTED_ON_BASE_BRANCH = new Set(["push", "workflow_dispatch", "sch
  * - `pull_request_target` runs the definition on the pull request's TARGET
  *   branch, not its head, so the head branch says nothing about the
  *   definition and is not consulted. On main, every pinned producer restricts
- *   that trigger to `branches: [main]`. A definition on any other target — a
- *   different branch, or a tag — exists only because someone with write
- *   access created it, which is the same trust class as a push or a dispatch
- *   on a branch. The run record does not carry the target branch in a form
- *   the relay can read for a run from a fork, so the relay does not check it
- *   and trusts this event on that basis.
+ *   that trigger to `branches: [main]`. A definition on any other target
+ *   branch exists only because someone with write access created it, which
+ *   is the same trust class as a push or a dispatch on a branch. The run
+ *   record does not carry the target branch in a form the relay can read for
+ *   a run from a fork, so the relay does not check it and trusts this event
+ *   on that basis.
  * - `push`, `workflow_dispatch` and `schedule` run the definition at the ref
  *   they name — the pushed branch, the dispatched ref, the default branch. That
- *   definition is the base branch's only when the ref is exactly `main`.
+ *   definition is the base branch's only when the ref is exactly `main`. The
+ *   check compares the ref's short name, so a non-branch ref — a tag — named
+ *   `main` passes it too; such a ref exists only through write access, the
+ *   same accepted trust class as the target-branch case above.
  * - Every other event is refused — `pull_request` (which executes the
  *   definition the pull request carries), the comment and review events,
  *   `merge_group`, `workflow_run`, an empty event and any unknown value.
