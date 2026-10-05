@@ -315,6 +315,7 @@ public/*
 scripts/*
 !scripts/deploy-revision.sh
 !scripts/db-backup.sh
+!scripts/db-offhost-backup.sh
 !scripts/db-restore.sh
 !scripts/container-build.sh
 !scripts/ci-base-freshness.sh

@@ -320,7 +320,8 @@ describe("Overflow production unit", () => {
         "decommission.md, dpia-screening.md, incident-response.md, " +
         "overflow-alert@.service, " +
         "overflow-backup.service, overflow-backup.timer, overflow-bounce.service, " +
-        "overflow-bounce.timer, overflow-canary.service, overflow-canary.timer " +
+        "overflow-bounce.timer, overflow-canary.service, overflow-canary.timer, " +
+        "overflow-offhost-backup.service, overflow-offhost-backup.timer " +
         "and overflow.service; " +
         "review additions alongside the install procedure",
     ).toEqual([
@@ -337,6 +338,8 @@ describe("Overflow production unit", () => {
       "overflow-bounce.timer",
       "overflow-canary.service",
       "overflow-canary.timer",
+      "overflow-offhost-backup.service",
+      "overflow-offhost-backup.timer",
       "overflow.service",
     ]);
     expect(files.filter((file) => !file.isFile()).map((file) => file.name),

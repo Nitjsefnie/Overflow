@@ -1,0 +1,23 @@
+# Daily timer for the Overflow database off-host encrypted backup
+# (overflow-offhost-backup.service).
+#
+# Install as /etc/systemd/system/overflow-offhost-backup.timer.
+# deploy/backup-restore.md carries the install and verification steps.
+#
+# 02:10 UTC: forty minutes after the 01:30 UTC full backup, so the reduced
+# copy always reflects a completed full dump and the two jobs never contend
+# for the database or the backup directory.
+
+[Unit]
+Description=Daily Overflow database off-host encrypted backup
+
+[Timer]
+# Fixed wall-clock schedule in UTC, stated explicitly so a host timezone
+# change cannot move the backup window. Persistent= catches up a backup missed
+# while the host was down, on the next boot.
+OnCalendar=*-*-* 02:10:00 UTC
+Persistent=true
+Unit=overflow-offhost-backup.service
+
+[Install]
+WantedBy=timers.target
