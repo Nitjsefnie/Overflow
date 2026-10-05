@@ -1,6 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -24,14 +26,15 @@ const SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
 const TOKEN = "test-token";
 const LISTING_URL =
-  `https://api.github.com/repos/${REPO}/actions/runs` +
+  `https://api.github.com/repos/${REPO}/actions/workflows/pr-suite.yml/runs` +
   `?head_sha=${SHA}&event=pull_request&per_page=100`;
 
 interface FakeRun {
   id: number;
   path: string;
   head_sha: string;
-  status: string;
+  event: string;
+  status?: string;
   conclusion: string | null;
   created_at: string;
 }
@@ -41,6 +44,7 @@ function suiteRun(over: Partial<FakeRun> = {}): FakeRun {
     id: 100,
     path: SUITE_WORKFLOW_PATH,
     head_sha: SHA,
+    event: "pull_request",
     status: "completed",
     conclusion: "success",
     created_at: "2026-10-05T10:00:00Z",
@@ -52,8 +56,10 @@ type Reply = FakeRun[] | { status: number; body?: string } | Error;
 
 interface Harness {
   deps: AwaitDeps;
-  calls: { url: string; headers: Record<string, string> }[];
+  calls: { url: string; headers: Record<string, string>; signal: unknown }[];
   sleeps: number[];
+  /** Every logged line and every sleep, in the order they happened. */
+  events: string[];
 }
 
 /**
@@ -64,10 +70,15 @@ interface Harness {
 function harness(replies: Reply[], env: Record<string, string | undefined> = {}): Harness {
   const calls: Harness["calls"] = [];
   const sleeps: number[] = [];
+  const events: string[] = [];
   let clock = 1_000_000;
   let index = 0;
   const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
-    calls.push({ url: String(input), headers: (init?.headers ?? {}) as Record<string, string> });
+    calls.push({
+      url: String(input),
+      headers: (init?.headers ?? {}) as Record<string, string>,
+      signal: init?.signal,
+    });
     const reply = replies[Math.min(index, replies.length - 1)];
     index += 1;
     if (reply instanceof Error) throw reply;
@@ -81,6 +92,7 @@ function harness(replies: Reply[], env: Record<string, string | undefined> = {})
   return {
     calls,
     sleeps,
+    events,
     deps: {
       env: {
         GITHUB_REPOSITORY: REPO,
@@ -93,9 +105,13 @@ function harness(replies: Reply[], env: Record<string, string | undefined> = {})
       fetchFn,
       sleepFn: async (ms: number) => {
         sleeps.push(ms);
+        events.push(`sleep ${ms}`);
         clock += ms;
       },
       nowFn: () => clock,
+      logFn: (line: string) => {
+        events.push(`log ${line}`);
+      },
     },
   };
 }
@@ -119,6 +135,22 @@ describe("awaitPrSuite — success", () => {
     expect(outcome.lines.some((line) => line.includes("100"))).toBe(true);
     expect(h.calls).toHaveLength(4);
     expect(h.sleeps).toEqual([30_000, 30_000, 30_000]);
+  });
+
+  it("logs each progress line as it happens, before the sleep that follows it", async () => {
+    const h = harness([[], [suiteRun({ status: "queued", conclusion: null })], [suiteRun()]]);
+    const outcome = await awaitPrSuite(h.deps);
+    expect(outcome.exitCode).toBe(0);
+    expect(h.events.map((event) => event.replace(/^(log|sleep) .*$/, "$1"))).toEqual([
+      "log",
+      "sleep",
+      "log",
+      "sleep",
+      "log",
+    ]);
+    expect(h.events.filter((event) => event.startsWith("log ")).map((e) => e.slice(4))).toEqual(
+      outcome.lines,
+    );
   });
 
   it("queries the documented listing with the API headers and the bearer token", async () => {
@@ -188,6 +220,16 @@ describe("awaitPrSuite — run selection", () => {
     expect(outcome.runId).toBeUndefined();
   });
 
+  it("ignores a run of another event, even a successful one", async () => {
+    const h = harness([[suiteRun({ event: "pull_request_target" })]], {
+      SUITE_DEADLINE_SECONDS: "60",
+    });
+    const outcome = await awaitPrSuite(h.deps);
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.runId).toBeUndefined();
+    expect(errorLines(outcome.lines).join("\n")).toMatch(/no .*run/i);
+  });
+
   it("selects the most recently created run when several exist", async () => {
     const h = harness([
       [
@@ -229,6 +271,36 @@ describe("awaitPrSuite — run selection", () => {
     const outcome = await awaitPrSuite(h.deps);
     expect(outcome.exitCode).toBe(1);
     expect(errorLines(outcome.lines).join("\n")).toContain("cancelled");
+  });
+
+  it("fails closed at once when a matching run carries no status", async () => {
+    const run = suiteRun();
+    delete run.status;
+    const h = harness([[run]]);
+    const outcome = await awaitPrSuite(h.deps);
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.runId).toBeUndefined();
+    expect(h.calls).toHaveLength(1);
+    expect(errorLines(outcome.lines)).toHaveLength(1);
+  });
+
+  it("keeps waiting on a run reporting success before it is completed", async () => {
+    const h = harness(
+      [[suiteRun({ status: "in_progress" })], [suiteRun({ status: "in_progress" })], [suiteRun()]],
+    );
+    const outcome = await awaitPrSuite(h.deps);
+    expect(outcome.exitCode).toBe(0);
+    expect(h.calls).toHaveLength(3);
+  });
+
+  it("fails at the deadline on a run reporting success that never completes", async () => {
+    const h = harness([[suiteRun({ id: 31, status: "in_progress" })]], {
+      SUITE_DEADLINE_SECONDS: "60",
+    });
+    const outcome = await awaitPrSuite(h.deps);
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.runId).toBeUndefined();
+    expect(errorLines(outcome.lines).join("\n")).toContain("in_progress");
   });
 
   it("fails closed when a matching run carries no usable id or creation time", async () => {
@@ -324,13 +396,41 @@ describe("awaitPrSuite — API failures", () => {
     expect(errorLines(outcome.lines).join("\n")).toContain("500");
   });
 
-  it("fails on a listing that is not JSON or has no workflow_runs array", async () => {
-    for (const body of ["<html>", '{"total_count":0}']) {
+  it("fails on a listing that is not JSON, has no workflow_runs array or no total_count", async () => {
+    for (const body of ["<html>", '{"total_count":0}', '{"workflow_runs":[]}', "null"]) {
       const h = harness([{ status: 200, body }]);
       const outcome = await awaitPrSuite(h.deps);
       expect(outcome.exitCode).toBe(1);
       expect(errorLines(outcome.lines)).toHaveLength(1);
     }
+  });
+
+  it("fails closed when total_count says the listing holds more runs than it returned", async () => {
+    const body = JSON.stringify({ total_count: 101, workflow_runs: [suiteRun()] });
+    const h = harness([{ status: 200, body }]);
+    const outcome = await awaitPrSuite(h.deps);
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.runId).toBeUndefined();
+    expect(errorLines(outcome.lines).join("\n")).toContain("101");
+  });
+
+  it("gives every request an abort signal that has not fired", async () => {
+    const h = harness([[], [suiteRun()]]);
+    await awaitPrSuite(h.deps);
+    expect(h.calls).toHaveLength(2);
+    for (const call of h.calls) {
+      expect(call.signal).toBeInstanceOf(AbortSignal);
+      expect((call.signal as AbortSignal).aborted).toBe(false);
+    }
+  });
+
+  it("retries a request that timed out", async () => {
+    const timeout = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    const h = harness([timeout, [suiteRun()]]);
+    const outcome = await awaitPrSuite(h.deps);
+    expect(outcome.exitCode).toBe(0);
+    expect(h.calls).toHaveLength(2);
+    expect(h.sleeps).toEqual([1_000]);
   });
 
   it("never prints the token", async () => {
@@ -346,6 +446,10 @@ describe("awaitPrSuite — input validation", () => {
     ["GITHUB_REPOSITORY without an owner", { GITHUB_REPOSITORY: "Overflow" }],
     ["GITHUB_REPOSITORY with extra segments", { GITHUB_REPOSITORY: "a/b/c" }],
     ["GITHUB_REPOSITORY with a query", { GITHUB_REPOSITORY: "a/b?x=1" }],
+    ["GITHUB_REPOSITORY with a dot-dot repo", { GITHUB_REPOSITORY: "a/.." }],
+    ["GITHUB_REPOSITORY with a dot repo", { GITHUB_REPOSITORY: "a/." }],
+    ["GITHUB_REPOSITORY with a dot-dot owner", { GITHUB_REPOSITORY: "../b" }],
+    ["GITHUB_REPOSITORY with a leading-dot repo", { GITHUB_REPOSITORY: "a/.b" }],
     ["missing GH_TOKEN", { GH_TOKEN: undefined }],
     ["empty GH_TOKEN", { GH_TOKEN: "" }],
     ["missing HEAD_SHA", { HEAD_SHA: undefined }],
@@ -372,5 +476,115 @@ describe("awaitPrSuite — the error line cannot be split", () => {
     expect(outcome.exitCode).toBe(1);
     expect(outcome.lines.every((line) => !line.includes("\n") && !line.includes("\r"))).toBe(true);
     expect(errorLines(outcome.lines)[0]).toContain("first%0Asecond%0D%0Athird 100%25");
+  });
+});
+
+describe("the CLI, as a spawned process", () => {
+  const SCRIPT = new URL("../../scripts/await-pr-suite.ts", import.meta.url);
+  // A preload that replaces the global fetch, so the real entry runs end to
+  // end with no network: AWAIT_STUB_MODE picks the listing it answers with.
+  const STUB = `
+    const mode = process.env.AWAIT_STUB_MODE;
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls += 1;
+      if (mode === "empty-then-hang" && calls > 1) return new Promise(() => {});
+      const runs = mode === "empty-then-hang" ? [] : [{
+        id: 555,
+        path: ".github/workflows/pr-suite.yml",
+        head_sha: process.env.HEAD_SHA,
+        event: "pull_request",
+        status: "completed",
+        conclusion: mode === "failure" ? "failure" : "success",
+        created_at: "2026-10-05T10:00:00Z",
+      }];
+      return new Response(JSON.stringify({ total_count: runs.length, workflow_runs: runs }));
+    };
+  `;
+
+  function run(
+    scriptPath: string,
+    env: Record<string, string>,
+    stubPath?: string,
+  ): { status: number | null; stdout: string } {
+    const args = stubPath === undefined ? [] : ["--import", pathToFileURL(stubPath).href];
+    // Only what the script reads: no inherited GITHUB_OUTPUT or token.
+    const childEnv: Record<string, string> = { PATH: process.env.PATH ?? "", ...env };
+    const result = spawnSync(process.execPath, [...args, scriptPath], {
+      env: childEnv as NodeJS.ProcessEnv,
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    if (result.error) throw result.error;
+    expect(result.signal).toBeNull();
+    return { status: result.status, stdout: result.stdout };
+  }
+
+  function withDir(body: (dir: string) => void): void {
+    const dir = mkdtempSync(join(tmpdir(), "await-pr-suite-cli-"));
+    try {
+      body(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  const GOOD_ENV = { GITHUB_REPOSITORY: REPO, GH_TOKEN: TOKEN, HEAD_SHA: SHA };
+
+  it("exits 2 with one ::error:: line on a malformed environment", () => {
+    const result = run(SCRIPT.pathname, { HEAD_SHA: "abc" });
+    expect(result.status).toBe(2);
+    expect(errorLines(result.stdout.split("\n"))).toHaveLength(1);
+  });
+
+  it("still runs when invoked through a symlink to the script", () => {
+    withDir((dir) => {
+      const link = join(dir, "await-pr-suite.ts");
+      symlinkSync(SCRIPT.pathname, link);
+      const result = run(link, { HEAD_SHA: "abc" });
+      expect(result.status).toBe(2);
+      expect(errorLines(result.stdout.split("\n"))).toHaveLength(1);
+    });
+  });
+
+  it("exits 0 and writes run_id on a successful suite run", () => {
+    withDir((dir) => {
+      const stub = join(dir, "stub.mjs");
+      writeFileSync(stub, STUB);
+      const output = join(dir, "output");
+      writeFileSync(output, "");
+      const result = run(
+        SCRIPT.pathname,
+        { ...GOOD_ENV, AWAIT_STUB_MODE: "success", GITHUB_OUTPUT: output },
+        stub,
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("555");
+      expect(readFileSync(output, "utf8")).toBe("run_id=555\n");
+    });
+  });
+
+  it("exits 1 on a failed suite run", () => {
+    withDir((dir) => {
+      const stub = join(dir, "stub.mjs");
+      writeFileSync(stub, STUB);
+      const result = run(SCRIPT.pathname, { ...GOOD_ENV, AWAIT_STUB_MODE: "failure" }, stub);
+      expect(result.status).toBe(1);
+      expect(errorLines(result.stdout.split("\n")).join("\n")).toContain("failure");
+    });
+  });
+
+  it("exits 1, not 0, when the wait never settles, and has already printed its progress", () => {
+    withDir((dir) => {
+      const stub = join(dir, "stub.mjs");
+      writeFileSync(stub, STUB);
+      const result = run(
+        SCRIPT.pathname,
+        { ...GOOD_ENV, AWAIT_STUB_MODE: "empty-then-hang", SUITE_POLL_SECONDS: "1" },
+        stub,
+      );
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("waiting");
+    });
   });
 });
