@@ -601,7 +601,7 @@ repositories to request comes from the restored database itself:
 
 ```bash
 sudo -u postgres psql -d overflow_from_offhost \
-  -c "select id, owner, name from registered_repositories order by name"
+  -c "select id, owner_name from registered_repositories order by owner_name"
 ```
 
 Compare per-table counts as in (e.1), production against the restore —
@@ -718,8 +718,9 @@ connector up for itself and stopping it afterwards when none was running.
 Retention is 14 days on both copies: the job deletes its own posted messages
 older than 14 days from that channel — one generous page per run, and a
 message the page misses is swept on a later run — and prunes local
-`overflow-reduced-*.sql.xz.age` files older than 14 days, each prune only
-after a successful run, on the same only-after-success shape (d) documents.
+`overflow-reduced-*.sql.xz.age` files older than 14 days after a dump has
+installed and cleared the size guard, before it posts — earlier in the run
+than (d)'s prune, so a run whose post fails has already pruned.
 
 The size guard comes before anything is posted: an encrypted file at or over
 `OVERFLOW_BACKUP_MAX_BYTES` (default 9961472 bytes — 9.5 MiB, under Discord's

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -162,6 +162,37 @@ function sectionBody(heading: string, lines: string[] = runbookLines): string {
   return (end === -1 ? rest : rest.slice(0, end)).join("\n");
 }
 
+/**
+ * The columns the schema carries on `registered_repositories`, read from
+ * `db/migrations/*.sql`: the `create table` block's column lines, plus every
+ * `add column` any later `alter table registered_repositories` statement
+ * makes. The alter scan reads only the FIRST `add column` per statement, so a
+ * statement adding several columns contributes one — enough for what this
+ * pins (a select naming a column the schema never had), not a complete
+ * schema mirror.
+ */
+function registeredRepositoryColumns(): Set<string> {
+  const columns = new Set<string>();
+  const migrationsDir = resolve(repositoryRoot, "db/migrations");
+  for (const file of readdirSync(migrationsDir).sort()) {
+    if (!file.endsWith(".sql")) continue;
+    const sql = readFileSync(resolve(migrationsDir, file), "utf8");
+    const create = sql.match(/create table registered_repositories\s*\(([\s\S]*?)\n\);/);
+    if (create !== null) {
+      for (const line of create[1]!.split("\n")) {
+        const column = line.match(/^\s*(\w+)\s/);
+        if (column !== null) columns.add(column[1]!);
+      }
+    }
+    for (const alter of sql.matchAll(
+      /alter table registered_repositories[^;]*?add column if not exists (\w+)|alter table registered_repositories[^;]*?add column (\w+)/gi,
+    )) {
+      columns.add(alter[1] ?? alter[2]!);
+    }
+  }
+  return columns;
+}
+
 describe("backup-restore runbook", () => {
   it("exists", () => {
     expect(runbookExists, `${document} does not exist`).toBe(true);
@@ -259,5 +290,42 @@ describe("backup-restore runbook", () => {
         expect(body, `subsection (e.4) in ${document} does not name ${literal}`).toContain(literal);
       });
     }
+
+    it("selects only columns the schema carries on registered_repositories", () => {
+      const columns = registeredRepositoryColumns();
+      expect(
+        columns.size,
+        "the migrations carry no registered_repositories columns; the pin below would pin nothing",
+      ).toBeGreaterThan(0);
+      expect(columns.has("id"), "registered_repositories carries no id column").toBe(true);
+      expect(
+        columns.has("owner_name"),
+        "registered_repositories carries no owner_name column",
+      ).toBe(true);
+      expect(columns.has("owner"), "the column set wrongly contains owner").toBe(false);
+      expect(columns.has("name"), "the column set wrongly contains name").toBe(false);
+
+      const body = sectionBody("### (e.4) Restoring the encrypted off-host copy");
+      const selects = [...body.matchAll(/select\s+([^"]*?)\s+from\s+registered_repositories/g)];
+      expect(
+        selects.length,
+        `subsection (e.4) in ${document} carries no select against registered_repositories`,
+      ).toBeGreaterThan(0);
+
+      const unknown: string[] = [];
+      for (const match of selects) {
+        for (const piece of match[1]!.split(",")) {
+          const column = piece.trim();
+          if (column !== "" && !columns.has(column)) unknown.push(column);
+        }
+      }
+      for (const order of body.matchAll(/order by\s+(\w+)/g)) {
+        if (!columns.has(order[1]!)) unknown.push(`order by ${order[1]}`);
+      }
+      expect(
+        unknown,
+        `subsection (e.4) in ${document} names columns the schema does not carry: ${unknown.join(", ")}`,
+      ).toStrictEqual([]);
+    });
   });
 });
