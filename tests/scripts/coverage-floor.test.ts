@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   floorViolation,
   round2,
+  summaryProblems,
   type CoverageFloorDoc,
   type CoverageSummary,
 } from "../../scripts/check-coverage-floor.ts";
@@ -67,6 +68,55 @@ describe("coverage floor", () => {
         doc(74.0, 73.0),
       ),
     ).toMatch(/missing or not a finite number/);
+  });
+});
+
+describe("summary validation on the --summary path", () => {
+  it("returns no problem for the minimal valid shape and the real reporter shape", () => {
+    expect(summaryProblems({ total: { lines: { pct: 73 } } })).toEqual([]);
+    expect(
+      summaryProblems({
+        total: {
+          lines: { total: 100, covered: 73, skipped: 0, pct: 73 },
+          statements: { total: 1, covered: 1, skipped: 0, pct: 100 },
+        },
+        "src/a.ts": { lines: { total: 10, covered: 7, skipped: 0, pct: 70 } },
+      }),
+    ).toEqual([]);
+  });
+
+  it("accepts the range boundaries 0 and 100", () => {
+    expect(summaryProblems({ total: { lines: { pct: 0 } } })).toEqual([]);
+    expect(summaryProblems({ total: { lines: { pct: 100 } } })).toEqual([]);
+  });
+
+  it("names the field when the path the floor reads is missing or mistyped", () => {
+    expect(summaryProblems(null)).toEqual(["the summary is not a JSON object (got null)"]);
+    expect(summaryProblems([73])).toEqual(["the summary is not a JSON object (got array)"]);
+    expect(summaryProblems({})).toEqual(["total is missing"]);
+    expect(summaryProblems({ total: 5 })).toEqual(["total is not an object (got 5)"]);
+    expect(summaryProblems({ total: { lines: "x" } })).toEqual([
+      'total.lines is not an object (got "x")',
+    ]);
+    expect(summaryProblems({ total: { lines: {} } })).toEqual(["total.lines.pct is missing"]);
+    expect(summaryProblems({ total: { lines: { pct: "73" } } })).toEqual([
+      'total.lines.pct must be a finite number (got "73")',
+    ]);
+    expect(summaryProblems({ total: { lines: { pct: null } } })).toEqual([
+      "total.lines.pct must be a finite number (got null)",
+    ]);
+    expect(summaryProblems({ total: { lines: { pct: NaN } } })).toEqual([
+      "total.lines.pct must be a finite number (got NaN)",
+    ]);
+  });
+
+  it("names the field when the percentage is out of range", () => {
+    expect(summaryProblems({ total: { lines: { pct: -1 } } })).toEqual([
+      "total.lines.pct -1 is outside 0-100",
+    ]);
+    expect(summaryProblems({ total: { lines: { pct: 100.01 } } })).toEqual([
+      "total.lines.pct 100.01 is outside 0-100",
+    ]);
   });
 });
 
@@ -208,6 +258,81 @@ describe("coverage floor CLI --summary", () => {
     const result = run("--summary", join(elsewhere, "absent.json"));
     expect(result.status).toBe(2);
     expect(result.stderr).toContain(join(elsewhere, "absent.json"));
+  });
+
+  /**
+   * A summary this run did not produce — the --summary path — is validated
+   * before the floor logic reads any of it: the exact field the floor applies
+   * to must carry a finite number in 0-100, and anything else fails closed
+   * naming that field instead of being measured.
+   */
+  const writeRaw = (json: string) => {
+    mkdirSync(elsewhere, { recursive: true });
+    writeFileSync(join(elsewhere, "coverage-summary.json"), `${json}\n`);
+  };
+  const runNamed = () => run("--summary", join(elsewhere, "coverage-summary.json"));
+
+  it("exits 2 naming the field when the percentage is missing", () => {
+    writeRaw('{"total":{"lines":{}}}');
+    const result = runNamed();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("total.lines.pct");
+  });
+
+  it("exits 2 naming the field when the percentage is not a number", () => {
+    writeRaw('{"total":{"lines":{"pct":"73"}}}');
+    const result = runNamed();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("total.lines.pct");
+  });
+
+  it("exits 2 naming the field when the percentage is above 100", () => {
+    writeRaw('{"total":{"lines":{"pct":500}}}');
+    const result = runNamed();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("total.lines.pct");
+    expect(result.stderr).toContain("100");
+  });
+
+  it("exits 2 naming the field when the percentage is negative", () => {
+    writeRaw('{"total":{"lines":{"pct":-1}}}');
+    const result = runNamed();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("total.lines.pct");
+  });
+
+  it("exits 2 when the document is not JSON at all", () => {
+    writeRaw("not json");
+    expect(runNamed().status).toBe(2);
+  });
+
+  it("accepts 0 and 100 and the real reporter shape's extra keys", () => {
+    // vitest's json-summary carries total.lines.{total,covered,skipped,pct},
+    // sibling measurements beside lines, and a per-file entry per file; the
+    // validation reads the field the floor applies to and tolerates the rest.
+    writeRaw(
+      JSON.stringify({
+        total: {
+          lines: { total: 100, covered: 100, skipped: 0, pct: 100 },
+          statements: { total: 1, covered: 1, skipped: 0, pct: 100 },
+          functions: { total: 1, covered: 1, skipped: 0, pct: 100 },
+          branches: { total: 1, covered: 1, skipped: 0, pct: 100 },
+        },
+        "src/a.ts": { lines: { total: 100, covered: 100, skipped: 0, pct: 100 } },
+      }),
+    );
+    const passing = runNamed();
+    expect(passing.status).toBe(0);
+    expect(passing.stdout).toContain("100% against the 73% floor");
+
+    writeRaw(
+      JSON.stringify({
+        total: { lines: { total: 100, covered: 0, skipped: 100, pct: 0 } },
+      }),
+    );
+    const failing = runNamed();
+    expect(failing.status).toBe(1);
+    expect(failing.stdout).toContain("below the 73% floor");
   });
 
   it("exits 2 on --summary without a path or on an unknown argument", () => {

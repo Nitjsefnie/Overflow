@@ -9,8 +9,10 @@
 // floor document at scripts/coverage.json. --summary lets a caller keep the
 // measurement outside the tree being judged. Exit 0 when
 // total.lines.pct is at or above the floor, 1 when it is below it, 2 when
-// either file is missing or unreadable. The floor itself is only ever moved
-// by scripts/calibrate-coverage.ts, which raises it — never by hand.
+// either file is missing, unreadable, or — on the --summary path, whose file
+// another run produced — not a summary of the declared shape and range. The
+// floor itself is only ever moved by scripts/calibrate-coverage.ts, which
+// raises it — never by hand.
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -77,6 +79,48 @@ export function readSummary(root: string, summaryPath = join(root, SUMMARY_PATH)
 }
 
 /**
+ * Schema and range problems in a summary document, each naming the exact
+ * field at fault. A summary this run did not produce may name any document
+ * its producer likes, so the --summary path trusts only the declared shape:
+ * the objects on the path the floor reads (total.lines) must be objects, and
+ * total.lines.pct must be a finite number in 0-100. Keys the floor logic
+ * does not read — the reporter's own counts and the per-file entries — are
+ * not validated and not rejected.
+ */
+export function summaryProblems(summary: unknown): string[] {
+  if (summary === null || typeof summary !== "object" || Array.isArray(summary)) {
+    return [`the summary is not a JSON object (got ${shown(summary)})`];
+  }
+  const total: unknown = (summary as Record<string, unknown>).total;
+  if (total === undefined) return ["total is missing"];
+  if (total === null || typeof total !== "object" || Array.isArray(total)) {
+    return [`total is not an object (got ${shown(total)})`];
+  }
+  const lines: unknown = (total as Record<string, unknown>).lines;
+  if (lines === undefined) return ["total.lines is missing"];
+  if (lines === null || typeof lines !== "object" || Array.isArray(lines)) {
+    return [`total.lines is not an object (got ${shown(lines)})`];
+  }
+  const pct: unknown = (lines as Record<string, unknown>).pct;
+  if (pct === undefined) return ["total.lines.pct is missing"];
+  if (typeof pct !== "number" || !Number.isFinite(pct)) {
+    return [`total.lines.pct must be a finite number (got ${shown(pct)})`];
+  }
+  if (pct < 0 || pct > 100) {
+    return [`total.lines.pct ${pct} is outside 0-100`];
+  }
+  return [];
+}
+
+/** A value as the message shows it: quoted when a string, named when a
+ *  non-JSON object, plain otherwise. */
+function shown(value: unknown): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (Array.isArray(value)) return "array";
+  return String(value);
+}
+
+/**
  * The summary location the command line names, or the default under `root`.
  * Returns null on a malformed command line: an unknown argument or a
  * --summary with no path is refused rather than read as the default.
@@ -102,11 +146,18 @@ export function repoRoot(): string {
 
 function main(): void {
   const root = repoRoot();
-  const summaryPath = summaryPathFrom(process.argv.slice(2), root);
+  const args = process.argv.slice(2);
+  const summaryPath = summaryPathFrom(args, root);
   if (summaryPath === null) {
     console.error("usage: node scripts/check-coverage-floor.ts [--summary <path>]");
     process.exit(2);
   }
+  // A summary this run did not produce — the --summary path, which the verify
+  // job reads the awaited suite run's artifact through — is validated against
+  // the declared shape and the 0-100 range before the floor logic reads any
+  // of it; the default path keeps reading this run's own measurement as the
+  // reporter wrote it.
+  const externalSummary = args.length > 0;
   let doc: CoverageFloorDoc;
   let summary: CoverageSummary;
   try {
@@ -117,6 +168,16 @@ function main(): void {
       `coverage floor check: cannot read ${DOC_PATH} or ${summaryPath}: ${error}`,
     );
     process.exit(2);
+  }
+  if (externalSummary) {
+    const problems = summaryProblems(summary);
+    if (problems.length > 0) {
+      console.error(
+        `coverage floor check: ${summaryPath} is not a coverage summary ` +
+          `this check can apply: ${problems.join("; ")}`,
+      );
+      process.exit(2);
+    }
   }
   const violation = floorViolation(summary, doc);
   if (violation !== null) {
