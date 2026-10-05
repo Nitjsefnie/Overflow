@@ -8,7 +8,7 @@
 # every reader who consults the baseline to decide what was deliberately
 # allowed, and it will never be found by the scan it belongs to.
 #
-# Full-depth workflow checkouts can prove ancestry; the depth-1 verify job
+# Full-depth workflow checkouts can prove ancestry; a shallow checkout
 # cannot distinguish an orphan from a commit it never fetched. On a PR run,
 # main's copy of this script checks HEAD and the fetched PR head as roots.
 # Reading that additional root uses only git objects, never the PR's code.
