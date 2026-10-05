@@ -1351,7 +1351,7 @@ exit 1
 
   // zizmor's ref-version-mismatch audit is the mechanism that catches a pin's
   // version comment going stale after a bump — but only once the comment is
-  // THERE. Measured against zizmor 1.29.0 at the gate's own invocation: a pin
+  // THERE. Measured against zizmor 1.30.1 at the gate's own invocation: a pin
   // with no version comment is reported at `help` severity, which falls below
   // the `regular` persona floor the gate runs under and exits 0; the same pin
   // carrying a STALE comment is reported at `warning` and exits 13. So the
@@ -1495,7 +1495,7 @@ exit 1
     //        demands a `vN.N.N` comment: GitHub documents
     //        `{owner}/{repo}/.github/workflows/{filename}@{ref}`, and a SHA ref
     //        matches here. Whether a reusable-workflow call should carry a
-    //        version comment is a policy this case never stated; zizmor 1.29.0
+    //        version comment is a policy this case never stated; zizmor 1.30.1
     //        at `--persona=pedantic` reports no finding on such a line even with
     //        a deliberately wrong version, so nothing else settles it. If one
     //        appears here without a comment, this case will red it and no gate
@@ -1534,7 +1534,24 @@ exit 1
     expect(hashes.size).toBeGreaterThanOrEqual(2);
     const zizmor = requirements.find((line) => line.startsWith("zizmor=="));
     expect(zizmor).toBeDefined();
-    expect(zizmor).toContain("zizmor==1.29.0");
+    // A version FLOOR, not the exact version (issue 1091). An exact literal
+    // made this test the reason Dependabot's own zizmor bump could not pass:
+    // every arrival reds here until a human rewrites the string, so the lane
+    // that keeps the pin fresh is also the lane that blocks it. The floor is
+    // 1.30.0, the release that added the self-repository audit — below it the
+    // gate runs an audit set that no longer matches the pinned tool.
+    //
+    // Compared as three NUMBERS, never as strings: "1.9.0" sorts above
+    // "1.30.0" lexically, so a string compare would admit a pin the floor
+    // exists to reject. Encoded as major*1e6 + minor*1e3 + patch, which orders
+    // correctly for any version pip can resolve here (no prerelease tags).
+    const pinned = /^zizmor==(\d+)\.(\d+)\.(\d+)\b/.exec(zizmor!);
+    expect(pinned, `no major.minor.patch zizmor pin in ${zizmor}`).not.toBeNull();
+    const [major, minor, patch] = pinned!.slice(1, 4).map(Number);
+    expect(
+      major * 1_000_000 + minor * 1_000 + patch,
+      `the zizmor pin is ${major}.${minor}.${patch}, below the 1.30.0 floor`,
+    ).toBeGreaterThanOrEqual(1_000_000 + 30 * 1_000);
     // Tracked: the deny-by-default policy must name this exact file back,
     // while other .github/*.txt (the junk counterexamples) stay ignored.
     expect(checkIgnore(".github/requirements-zizmor.txt")).toBe(1);
