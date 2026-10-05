@@ -35,6 +35,23 @@ const jwtLifetimeSeconds = 120;
 const tokenRefreshMarginMs = 300_000;
 
 /**
+ * The permissions every minted installation token carries: exactly the reads
+ * reconciliation makes, and nothing more. The fold reads repository metadata
+ * (`GET /repositories/:id` and every GraphQL `repository(...)` traversal),
+ * issues with labels, timelines and their REST event/comment manifests, and
+ * pull requests (closing references, reviews, dismissals, the raw diff). A
+ * token leak can therefore read those surfaces and nothing else — no write,
+ * no administration. Omitting `permissions` from the mint request would grant
+ * the token the App's FULL permission set instead; these three name the floor
+ * reconciliation actually stands on. Tokens are short-lived on top.
+ */
+const installationTokenPermissions = {
+  metadata: "read",
+  issues: "read",
+  pull_requests: "read",
+} as const;
+
+/**
  * The two environment variables this module reads, spelled structurally so
  * `process.env`, any subset of it, and bare test literals are all assignable.
  * `Pick`ing the keys off `NodeJS.ProcessEnv` would make both required, Next's
@@ -121,6 +138,7 @@ export function createAppInstallationTokenResolver(options: {
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/installation`,
       "GET",
       jwt,
+      undefined,
     );
     if (status === 404) {
       return null;
@@ -143,6 +161,9 @@ export function createAppInstallationTokenResolver(options: {
       `/app/installations/${installationId}/access_tokens`,
       "POST",
       jwt,
+      // An omitted body would mint the token with the App's FULL permission
+      // grant; reconciliation only reads, so it names the read set instead.
+      JSON.stringify({ permissions: installationTokenPermissions }),
     );
     if (status !== 201) {
       throw classifiedError(status, headers, body);
@@ -160,6 +181,7 @@ export function createAppInstallationTokenResolver(options: {
     path: string,
     method: "GET" | "POST",
     jwt: string,
+    requestBody: string | undefined,
   ): Promise<{ status: number; headers: Headers; body: string | null }> {
     let response: Response;
     try {
@@ -171,7 +193,7 @@ export function createAppInstallationTokenResolver(options: {
           "X-GitHub-Api-Version": githubApiVersion,
           ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
         },
-        ...(method === "POST" ? { body: "{}" } : {}),
+        ...(method === "POST" ? { body: requestBody } : {}),
       });
     } catch (cause) {
       throw new Error(`GitHub App request failed: ${path}`, { cause });
