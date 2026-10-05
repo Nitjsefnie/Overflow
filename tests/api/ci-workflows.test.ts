@@ -186,7 +186,7 @@ describe("GitHub Actions release gates", () => {
     });
   });
 
-it("judges the pull request head only as git data, executed entirely from main", async () => {
+  it("judges the pull request head only as git data, executed entirely from main", async () => {
     const workflow = await readWorkflow("ratchet-guard-pr.yml");
     // pull_request_target keeps the gate alive when a pull request disables a
     // workflow's own pull_request run: the workflow definition, the checkout
@@ -564,7 +564,7 @@ fi
     }));
   });
 
-it("parses a catalogue-style workflow gate with explicit least privilege and pinned actions", async () => {
+  it("parses a catalogue-style workflow gate with explicit least privilege and pinned actions", async () => {
     // Both legs of the gate (issue 1090 split this workflow in two), asserted
     // per file. The pin is per-leg rather than shared, because the two legs
     // genuinely differ — the pull-request leg extracts the head ref's workflows
@@ -1240,30 +1240,30 @@ exit 1
     // other installing from wherever it liked — a hash-free `pip install
     // zizmor` in the leg nobody read.
     for (const file of ["actionlint-pr.yml", "actionlint.yml"]) {
-    const workflow = await readWorkflow(file);
-    const steps = workflow.jobs.actionlint!.steps;
+      const workflow = await readWorkflow(file);
+      const steps = workflow.jobs.actionlint!.steps;
 
-    const install = steps.find((step) => step.id === "install_zizmor");
-    expect(install).toBeDefined();
-    expect(install!.name).toBe("Install zizmor");
-    // The hashed requirements file is the only install path: no bare
-    // `pip install zizmor` and no pip upgrade step — upgrading pip itself is
-    // exactly the unhashed supply-chain lane this gate closes.
-    expect(install!.run?.trim()).toBe(
-      "pip install --require-hashes -r .github/requirements-zizmor.txt",
-    );
-    expect(install!.run).not.toContain("upgrade pip");
-    expect(install!.run).not.toContain("pip install zizmor");
-    // The id is load-bearing: the zizmor step's condition skips the scan only
-    // when the install failed. The scan targets the extracted PR copies as
-    // explicit globbed FILE inputs (.github/workflows-pr/*.yml) — zizmor's
-    // directory input only collects a repo root or a path ending in
-    // .github/workflows, so the bare directory exits 3 "no inputs collected"
-    // (fix round 2, finding C) — and never the checked-out tree's own
-    // workflows.
-    const zizmor = steps.find((step) => step.run === "zizmor --no-progress .github/workflows-pr/*.yml");
-    expect(zizmor, `${file} must run zizmor over the extracted workflow copies`).toBeDefined();
-    expect(zizmor!.if).toBe("${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}");
+      const install = steps.find((step) => step.id === "install_zizmor");
+      expect(install).toBeDefined();
+      expect(install!.name).toBe("Install zizmor");
+      // The hashed requirements file is the only install path: no bare
+      // `pip install zizmor` and no pip upgrade step — upgrading pip itself is
+      // exactly the unhashed supply-chain lane this gate closes.
+      expect(install!.run?.trim()).toBe(
+        "pip install --require-hashes -r .github/requirements-zizmor.txt",
+      );
+      expect(install!.run).not.toContain("upgrade pip");
+      expect(install!.run).not.toContain("pip install zizmor");
+      // The id is load-bearing: the zizmor step's condition skips the scan only
+      // when the install failed. The scan targets the extracted PR copies as
+      // explicit globbed FILE inputs (.github/workflows-pr/*.yml) — zizmor's
+      // directory input only collects a repo root or a path ending in
+      // .github/workflows, so the bare directory exits 3 "no inputs collected"
+      // (fix round 2, finding C) — and never the checked-out tree's own
+      // workflows.
+      const zizmor = steps.find((step) => step.run === "zizmor --no-progress .github/workflows-pr/*.yml");
+      expect(zizmor, `${file} must run zizmor over the extracted workflow copies`).toBeDefined();
+      expect(zizmor!.if).toBe("${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}");
     }
   });
 
