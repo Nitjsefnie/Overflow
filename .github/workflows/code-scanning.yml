@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  # Same event-class shape as ci.yml: every pull request shares one
+  # Same event-class shape as ci-pr.yml: every pull request shares one
   # repository-level group, so the repository's Actions minutes stop scaling
   # with the number of open pull requests, and GitHub keeps one PENDING run per
   # group so `code-scanning-repo-wide` is a single slot. A push to main keys on
@@ -36,7 +36,7 @@ concurrency:
   # blocks nobody, which is the whole argument for letting it cancel. It also
   # does not stop GitHub cancelling the PENDING run when a newer arrival claims
   # the single pending slot; the flag only decides whether the RUNNING job dies
-  # too. See ci.yml's concurrency block for what that residual means for a
+  # too. See ci-pr.yml's concurrency block for what that residual means for a
   # required context; here it means only a lost scan, and this workflow's
   # pull_request carries no types filter, so an edit re-fires it.
   #

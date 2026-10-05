@@ -12,8 +12,8 @@ import { parse } from "yaml";
  * pins each required name to the workflow file, or files, whose job is trusted
  * to produce it, and scripts/deploy-revision.sh resolves each required check
  * through that pin. This suite holds the committed workflows to the pin: every
- * pinned name has exactly one producing job across all workflow files, and it
- * lives in one of the pinned files.
+ * pinned name has exactly one producing job in every pinned file, and no
+ * producing job in any unpinned file.
  *
  * A pin may be a list because issue 1090 splits a workflow that reads
  * pull-request data out of its privileged triggers, leaving one required

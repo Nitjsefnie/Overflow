@@ -9,7 +9,7 @@ import { parse } from "yaml";
  * migrations, its tests, lint, typecheck, build and page geometry. It runs
  * under `pull_request`, so the definition is the pull request's own and the
  * token is the read-only one GitHub gives an untrusted run. Nothing about it
- * is trusted: ci.yml's verify job reads its outcome as data through the base
+ * is trusted: ci-pr.yml's verify job reads its outcome as data through the base
  * branch's scripts/await-pr-suite.ts, and it produces no required context.
  *
  * These pins hold the properties that make running untrusted code there

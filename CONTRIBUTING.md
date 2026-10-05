@@ -158,20 +158,26 @@ corrected.
 
 ## The checks
 
-CI is defined by `.github/workflows/ci.yml`: `verify` runs on pushes to `main`,
-pull requests targeting `main`, and manual dispatch, and a separate `calibrate`
-job handles eligible `main` pushes and the manual refusal self-test. On a push
-or dispatch `verify` starts PostgreSQL 17, installs the pinned toolchain,
-applies migrations, and runs tests, lint, module-size, typecheck, build and
-page-geometry checks, with coverage. On a pull request that suite runs in
-`.github/workflows/pr-suite.yml` (`pr suite`), on the pull request's own
-code with no trust, and `verify` runs main's copies of the integrity gates —
-conflict markers, docs-only detection, module size, migration immutability,
-legal revisions, commit scopes, the coverage floor and base freshness — over
-the pull request's merge tree as data, and requires the `pr suite` run for
-the head commit to have succeeded. Ratchet documents are judged by
-`ratchet-guard`. Docs-only changes run the test suite without coverage; other
-changes also measure coverage and check the floor. Run this local baseline in the same order:
+CI is defined by a workflow pair: `.github/workflows/ci.yml` and
+`.github/workflows/ci-pr.yml`, both producing the required `verify` context.
+`ci.yml` is the push-and-dispatch leg — `verify` runs on pushes to `main` and
+manual dispatch, and a separate `calibrate` job handles eligible `main` pushes
+and the manual refusal self-test. On a push or dispatch `verify` starts
+PostgreSQL 17, installs the pinned toolchain, applies migrations, and runs
+tests, lint, module-size, typecheck, build and page-geometry checks, with
+coverage. `ci-pr.yml` is the pull-request leg, and `pull_request_target` is
+its only trigger: its `verify` checks out `main`, runs main's copies of the
+integrity gates — conflict markers, docs-only detection, module size,
+migration immutability, legal revisions, commit scopes, the coverage floor and
+base freshness — over the pull request's merge tree as data, and requires the
+`pr suite` run for the head commit to have succeeded. The pull request's own
+code — its install, migrations, tests, lint, typecheck, build and page
+geometry — runs only in `.github/workflows/pr-suite.yml` (`pr suite`), on the
+pull request's own code with no trust. Ratchet documents are judged by the
+`ratchet guard` pair, `.github/workflows/ratchet-guard.yml` and
+`.github/workflows/ratchet-guard-pr.yml`. Docs-only changes run the test
+suite without coverage; other changes also measure coverage and check the
+floor. Run this local baseline in the same order:
 
 ```bash
 pnpm db:migrate
@@ -243,11 +249,12 @@ cannot notice. If you changed anything under `db/`, `src/lib/db/`,
 `src/lib/fold/` or `src/lib/moderation/` and your run says skipped, you have
 not tested it.
 
-A second workflow, `.github/workflows/actionlint.yml`, checks the workflows
-themselves: actionlint for schema, expression and shell correctness, and zizmor
-for workflow security and supply-chain posture, both over
-`.github/workflows/*.yml`. It exists because a broken workflow does not go red,
-it silently stops running.
+A second workflow pair, `.github/workflows/actionlint.yml` and
+`.github/workflows/actionlint-pr.yml`, checks the workflows themselves:
+actionlint for schema, expression and shell correctness, and zizmor for
+workflow security and supply-chain posture, both over
+`.github/workflows/*.yml`. The pair exists because a broken workflow does not
+go red, it silently stops running.
 
 If you edit a workflow, note that `tests/api/ci-workflows.test.ts` asserts its
 contents — the triggers, the `permissions` block, the concurrency group, the

@@ -137,7 +137,7 @@ concurrency:
   # head, and the push that superseded it scheduled the replacement. Cancelling
   # it costs nothing: an audit is reproducible from the next push, and this
   # workflow produces no required check, so a cancelled run blocks no merge.
-  # (Not ci.yml's shape, which is one repository-level group for every pull
+  # (Not ci-pr.yml's shape, which is one repository-level group for every pull
   # request: bounding this one there would cap the audit at a single run no
   # matter how many pull requests are open. tests/ci/concurrency.test.ts holds
   # the entry and the reasoning.)

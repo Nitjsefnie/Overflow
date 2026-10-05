@@ -53,8 +53,8 @@ concurrency:
   # slot: that run can be another pull request's current head with no
   # replacement, which strands its author until they push again. Neither value
   # of this flag removes that; `true` adds destroyed in-flight runs on top of
-  # it. See ci.yml's concurrency block for the full argument and the measured
-  # rates.
+  # it. See ci-pr.yml's concurrency block for the full argument and the
+  # measured rates.
   group: ratchet-guard-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
   cancel-in-progress: false
 

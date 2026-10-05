@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Base freshness gate — the LAST step of both required CI jobs (ci.yml verify,
-# actionlint.yml actionlint), guarded by `if: pull_request_target`.
+# Base freshness gate — the LAST step of both pull-request gate legs (ci-pr.yml
+# verify, actionlint-pr.yml actionlint), each a `pull_request_target`-only
+# workflow file. Issue 1090's split moved the legs out of ci.yml and
+# actionlint.yml into files no other trigger can start, so the privilege
+# boundary the first version of this header described as a per-step
+# `if: pull_request_target` guard is now structural: the guard itself is gone,
+# and the closed trigger set of the file that runs this script is the gate.
 #
 # What issue 441 needed: the tree that LANDS on main must be covered by a
 # required check. A pull_request_target run tests refs/pull/N/merge — the head merged
