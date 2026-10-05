@@ -165,18 +165,21 @@ describe("the pull request suite workflow", () => {
     ]);
   });
 
+  // Seven days, not one: verify downloads coverage-summary from this run
+  // cross-run, and a verify re-run or a relay heal can come days after the
+  // suite finished; an expired artifact would fail that download.
   it("uploads both coverage artifacts under the names and retention their readers expect", () => {
     const uploads = suite.steps.filter((step) => (step.uses ?? "").startsWith("actions/upload-artifact@"));
     expect(uploads.map((step) => [step.if, step.uses, step.with])).toEqual([
       [
         "${{ steps.detect-docs.outputs.docs_only != 'true' }}",
         "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-        { name: "patch-coverage", path: "coverage/patch-coverage.json", "if-no-files-found": "error", "retention-days": 1 },
+        { name: "patch-coverage", path: "coverage/patch-coverage.json", "if-no-files-found": "error", "retention-days": 7 },
       ],
       [
         "${{ steps.detect-docs.outputs.docs_only != 'true' }}",
         "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-        { name: "coverage-summary", path: "coverage/coverage-summary.json", "if-no-files-found": "error", "retention-days": 1 },
+        { name: "coverage-summary", path: "coverage/coverage-summary.json", "if-no-files-found": "error", "retention-days": 7 },
       ],
     ]);
   });
