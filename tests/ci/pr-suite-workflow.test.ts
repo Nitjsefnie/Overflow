@@ -536,7 +536,18 @@ describe("the pull request suite workflow", () => {
     // the defect. `timeout-minutes` stays: a timed-out step FAILS the job, so
     // it cannot green-wash (verified — `timeout-minutes: 0.0001` fails, which is
     // the point of allow-listing it).
-    const inert = new Set(["name", "run", "id", "working-directory", "timeout-minutes", "env"]);
+    //
+    // `working-directory` is NOT allow-listed either, and its absence is pinned
+    // by name below. It sat in this set as inert, and the claim was false: the
+    // step's `-r` path is relative, so the key decides WHICH requirements file
+    // pip reads. Pointed at a directory carrying a committed, self-consistent
+    // shadow `.github/requirements-zizmor.txt`, the step resolves and checksums
+    // bytes the pull request authored while the tree's pinned manifest is never
+    // read — every property this case pins stays green against it (measured at
+    // review: the key planted alone passed this file 51/51) and the check
+    // reports success without having bound anything. Dependabot cannot emit
+    // the key, but the guard is not written against one sender.
+    const inert = new Set(["name", "run", "id", "timeout-minutes", "env"]);
     expect(
       Object.keys(step).filter((key) => !inert.has(key)),
       "the hash-binding step carries a key that can suppress or skip it; if that key is " +
@@ -546,6 +557,12 @@ describe("the pull request suite workflow", () => {
     expect(
       (step as { "continue-on-error"?: unknown })["continue-on-error"],
       "continue-on-error turns a hash mismatch into a green run",
+    ).toBeUndefined();
+    expect(
+      (step as { "working-directory"?: unknown })["working-directory"],
+      "the -r path is relative, so working-directory chooses which requirements " +
+        "file pip reads; a shadow manifest under it greens this step without the " +
+        "pinned manifest ever being read",
     ).toBeUndefined();
     // Unconditional. A docs-only pull request must not skip it: the manifest is
     // not application code, and a stale-hash bump reaches this workflow on a
