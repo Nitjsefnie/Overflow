@@ -18,82 +18,137 @@ type WorkflowStep = {
 /**
  * The verify job's "Detect docs-only change" step picks the diff base and
  * hands it to scripts/docs-only.ts (issue 646): the merge commit's first
- * parent on pull_request_target runs, the push's `before` SHA on push runs,
- * and an optional validated base on workflow_dispatch runs. A dispatch
- * without a base and every undecidable push must end in docs_only=false.
- * Under pull_request_target the script that runs is the BASE checkout's copy,
- * with the materialised merge tree (PR_TREE) as its working directory.
+ * parent on a pull request, the push's `before` SHA on a push, and an optional
+ * validated base on workflow_dispatch. A dispatch without a base and every
+ * undecidable push must end in docs_only=false.
  *
- * The wiring is pinned on the parsed YAML, and the step's own run script is
+ * Issue 1090 split ci.yml, and the step with it, into two legs that both
+ * produce `steps.detect-docs.outputs.docs_only` for their own file's gated
+ * steps. The pull-request leg (ci-pr.yml, reachable only by
+ * `pull_request_target`) runs the BASE checkout's copy with the materialised
+ * merge tree (PR_TREE) as its working directory and nothing else. The
+ * push/dispatch leg (ci.yml) keeps the `before`-SHA and validated-dispatch-base
+ * branches. Neither carries an event gate any more: each file's closed trigger
+ * set is the gate, which is why the pull-request run block has no
+ * `if [ "${EVENT_NAME}" = ... ]` arm to select it.
+ *
+ * The wiring is pinned on the parsed YAML, and each leg's own run script is
  * then executed with bash -e (GitHub's default shell) inside scratch
  * repositories that reproduce the runner's shallow checkout, so the base rule
  * is covered by what the script does rather than by what it says.
  */
 describe("the verify workflow's docs-only detection step", () => {
-  let step: WorkflowStep | undefined;
   let detectSteps: WorkflowStep[] = [];
+  let prStep: WorkflowStep | undefined;
+  let pushStep: WorkflowStep | undefined;
+  const detectStepsPerFile: { file: string; steps: WorkflowStep[] }[] = [];
 
   beforeAll(async () => {
-    const source = await readFile(resolve(".github/workflows/ci.yml"), "utf8");
-    const workflow = parse(source) as {
-      jobs?: { verify?: { steps?: WorkflowStep[] } };
+    const gate = async (file: string) => {
+      const source = await readFile(resolve(file), "utf8");
+      const workflow = parse(source) as { jobs?: { verify?: { steps?: WorkflowStep[] } } };
+      const found = (workflow.jobs?.verify?.steps ?? []).filter(
+        (candidate) => candidate.name === "Detect docs-only change",
+      );
+      detectStepsPerFile.push({ file, steps: found });
+      return found[0];
     };
-    detectSteps = (workflow.jobs?.verify?.steps ?? []).filter(
-      (candidate) => candidate.name === "Detect docs-only change",
-    );
-    step = detectSteps[0];
+    prStep = await gate(".github/workflows/ci-pr.yml");
+    pushStep = await gate(".github/workflows/ci.yml");
+    detectSteps = detectStepsPerFile.flatMap((entry) => entry.steps);
   });
 
-  it("exists exactly once, under the id the gated steps read", () => {
-    expect(detectSteps).toHaveLength(1);
-    expect(step?.id).toBe("detect-docs");
-    expect(step?.if).toBeUndefined();
-    expect(Boolean(step?.["continue-on-error"])).toBe(false);
+  it("exists exactly once in each leg, under the id that leg's gated steps read", () => {
+    expect(
+      detectStepsPerFile.map((entry) => `${entry.file}:${entry.steps.length}`),
+      "each of the two legs must carry exactly one Detect docs-only change step; a file carrying " +
+        "none leaves the steps gated on its output reading an output nothing writes, and a file " +
+        "carrying two makes that output ambiguous",
+    ).toEqual([".github/workflows/ci-pr.yml:1", ".github/workflows/ci.yml:1"]);
+    expect(detectSteps).toHaveLength(2);
+    for (const found of detectSteps) {
+      expect(
+        found.id,
+        "both steps must carry the id `detect-docs` — the test and coverage steps in each file " +
+          "read its output by that id",
+      ).toBe("detect-docs");
+      expect(
+        found.if,
+        "neither step may carry a condition: each file's closed trigger set is the gate, and a " +
+          "condition on the producer means the output its own file's steps read may never be " +
+          "written at all",
+      ).toBeUndefined();
+      expect(Boolean(found["continue-on-error"])).toBe(false);
+    }
   });
 
-  it("takes the event name and the push base through env, never interpolated into run", () => {
-    expect(step?.env).toEqual({
+  it("takes each leg's inputs through env, never interpolated into run", () => {
+    // The push leg measures the checked-out commit against a base that comes
+    // from the event or the dispatch input; the pull-request leg measures the
+    // materialised merge tree against its first parent, so it names no event
+    // value at all.
+    expect(pushStep?.env).toEqual({
       EVENT_NAME: "${{ github.event_name }}",
       PUSH_BEFORE: "${{ github.event.before }}",
       DISPATCH_BASE: "${{ inputs.base }}",
-      PR_TREE: "${{ steps.pr-tree.outputs.path }}",
     });
-    expect(step?.run).toBeDefined();
-    expect(step?.run?.includes("${{")).toBe(false);
+    expect(prStep?.env).toEqual({ PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
+    for (const found of detectSteps) {
+      expect(found.run).toBeDefined();
+      expect(found.run?.includes("${{")).toBe(false);
+    }
   });
 
-  it("runs the base copy over the materialised merge tree on the PR branch", () => {
-    const run = step?.run ?? "";
+  it("runs the base copy over the materialised merge tree in the pull-request leg", () => {
+    const run = prStep?.run ?? "";
 
-    // Under pull_request_target the workspace is the base checkout and the
-    // pull request's merge commit is the detached worktree at PR_TREE. The
-    // base copy of the script judges it against its first parent; nothing is
-    // fetched or deepened here, and the branch exits before the push and
-    // dispatch logic.
-    expect(
-      run.startsWith(
-        'if [ "${EVENT_NAME}" = pull_request_target ]; then\n' +
-          '  cd "${PR_TREE:?the pull request tree was not materialised}"\n' +
-          '  changed=$(node "${GITHUB_WORKSPACE}/scripts/docs-only.ts" HEAD^1)\n' +
-          '  echo "docs_only=${changed}" >> "$GITHUB_OUTPUT"\n' +
-          "  exit 0\n" +
-          "fi\n",
-      ),
-    ).toBe(true);
+    // The workspace is the base checkout and the pull request's merge commit
+    // is the detached worktree at PR_TREE. The base copy of the script judges
+    // it against its first parent; nothing is fetched or deepened here, and
+    // there is no event arm to select, because the file receives nothing but
+    // pull_request_target.
+    expect(run).toBe(
+      'cd "${PR_TREE:?the pull request tree was not materialised}"\n' +
+        'changed=$(node "${GITHUB_WORKSPACE}/scripts/docs-only.ts" HEAD^1)\n' +
+        'echo "docs_only=${changed}" >> "$GITHUB_OUTPUT"\n',
+    );
+    // The push and dispatch logic moved to the other file; this leg must not
+    // carry a copy of it, because a second copy is a second thing to keep in
+    // step and neither file's runner can reach it.
+    expect(run).not.toContain("EVENT_NAME");
+    expect(run).not.toContain("refs/pull");
+  });
+
+  it("keeps the push and dispatch bases in the other leg, deepening GITHUB_SHA twice", () => {
+    const run = pushStep?.run ?? "";
+
     // The push and workflow_dispatch branches keep their deepening of
     // GITHUB_SHA (the checked-out commit on those events): a leading depth-2
-    // fetch right after the pull request branch, then two --unshallow lines.
-    expect(run).toContain('fi\ngit fetch --depth=2 origin "${GITHUB_SHA}"\nbase=""\n');
+    // fetch first, then two --unshallow lines.
+    expect(run.startsWith('git fetch --depth=2 origin "${GITHUB_SHA}"\nbase=""\n')).toBe(true);
     expect(run.match(/git fetch --no-tags --unshallow origin "\$\{GITHUB_SHA\}"/g)).toHaveLength(2);
     expect(run).toContain('if [ "${EVENT_NAME}" = push ]; then');
     expect(run).toContain(
       'elif [ "${EVENT_NAME}" = workflow_dispatch ] && [ -n "${DISPATCH_BASE}" ]; then',
     );
+    // And this leg must not carry the pull-request branch: it has no
+    // materialise step, so PR_TREE would be an unset variable.
+    expect(run).not.toContain("PR_TREE");
+    expect(run).not.toContain("pull_request_target");
   });
 
   it("hands the base to the docs-only CLI instead of piping a diff into it", () => {
-    expect(step?.run).toMatch(/node "\$\{GITHUB_WORKSPACE\}\/scripts\/docs-only\.ts" "\$\{?\w+\}?"/);
-    expect(step?.run).not.toMatch(/\|\s*node /);
+    // One of exactly two base spellings, so the CLI is handed a base rather
+    // than a diff on stdin: `${base}` on the push/dispatch leg, and the merge
+    // tree's own first parent on the pull-request leg, which has no event
+    // value to derive a base from.
+    for (const [found, invocation] of [
+      [prStep, 'node "${GITHUB_WORKSPACE}/scripts/docs-only.ts" HEAD^1'],
+      [pushStep, 'node "${GITHUB_WORKSPACE}/scripts/docs-only.ts" "${base}"'],
+    ] as const) {
+      expect(found?.run, "the CLI must be handed the base as an argument").toContain(invocation);
+      expect(found?.run, "no diff may be piped into the CLI").not.toMatch(/\|\s*node /);
+    }
   });
 
   describe("run in a shallow checkout", () => {
@@ -130,11 +185,12 @@ describe("the verify workflow's docs-only detection step", () => {
     }
 
     /**
-     * Runs the step's run script the way the runner would: a depth-1 checkout
-     * of `sha` fetched from the origin, bash -e, and a GITHUB_OUTPUT file.
-     * `options.githubSha` overrides the runner's GITHUB_SHA for events where
-     * it differs from the checked-out commit (pull_request_target points it
-     * at the base tip while the checkout is the merge ref).
+     * Runs the run script of the leg that would receive `env.EVENT_NAME`, the
+     * way the runner would: a depth-1 checkout of `sha` fetched from the
+     * origin, bash -e, and a GITHUB_OUTPUT file. `options.githubSha` overrides
+     * the runner's GITHUB_SHA for events where it differs from the checked-out
+     * commit (pull_request_target points it at the base tip while the checkout
+     * is the merge ref).
      */
     async function runStep(
       origin: string,
@@ -147,6 +203,10 @@ describe("the verify workflow's docs-only detection step", () => {
       await mkdir(checkout);
       git(checkout, "init", "--quiet");
       git(checkout, "remote", "add", "origin", `file://${origin}`);
+      // The event picks the file, and therefore the run block: after issue
+      // 1090's split the pull-request leg lives in ci-pr.yml and the push and
+      // dispatch legs in ci.yml, and no single step answers both any more.
+      const leg = env.EVENT_NAME === "pull_request_target" ? prStep : pushStep;
       let prTree: Record<string, string> = {};
       if (env.EVENT_NAME === "pull_request_target") {
         // The runner state the materialise step leaves: a full-history
@@ -165,7 +225,7 @@ describe("the verify workflow's docs-only detection step", () => {
 
       const scriptPath = join(root, `step-${counter}.sh`);
       const outputPath = join(root, `output-${counter}`);
-      await writeFile(scriptPath, step?.run ?? "exit 99\n");
+      await writeFile(scriptPath, leg?.run ?? "exit 99\n");
       await writeFile(outputPath, "");
       const result = spawnSync("bash", ["-e", scriptPath], {
         cwd: checkout,

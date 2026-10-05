@@ -113,17 +113,17 @@ type Workflow = {
  * cancelled.
  */
 const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = {
-  "ci.yml": {
-    group: "ci-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+  "ci-pr.yml": {
+    group: "ci-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
   },
-  // Issue 1090 split each of actionlint and ratchet-guard into a file per leg
-  // so no job reading pull-request data could be started by a privileged
-  // trigger. These are the pull-request legs, and the bound they carry is the
-  // one the bound is FOR: a group shared by every pull request, so the
-  // repository's Actions minutes stop scaling with the number of open pull
-  // requests. Their push/dispatch siblings (actionlint.yml,
-  // ratchet-guard.yml) take no pull-request event at all and are in
+  // Issue 1090 split actionlint, ratchet-guard, secret-scan and ci into a file
+  // per leg so no job reading pull-request data could be started by a
+  // privileged trigger. These are the pull-request legs, and the bound they
+  // carry is the one the bound is FOR: a group shared by every pull request, so
+  // the repository's Actions minutes stop scaling with the number of open pull
+  // requests. Their push/dispatch siblings (actionlint.yml, ratchet-guard.yml,
+  // secret-scan.yml, ci.yml) take no pull-request event at all and are in
   // UNBOUNDED_BY_CHOICE with that reason; a workflow with no pull-request
   // trigger cannot be in BOUNDED at all, which the reachability assertion
   // below enforces in the other direction.
@@ -351,6 +351,16 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     },
   ],
   [
+    "ci.yml",
+    {
+      reason:
+        "No pull-request trigger reaches this file since issue 1090 moved the pull-request leg to ci-pr.yml, which is the bounded one. Its remaining legs are push to main and workflow_dispatch — the latter being the deploy-recovery dispatch — and the group is per-SHA so no push to main shares a group with another push: a cancelled conclusion on a merged SHA makes the deploy gate refuse immediately (issue 474). A workflow with no pull_request and no pull_request_target event cannot be listed in BOUNDED at all, because the bound it would carry would be vacuous: the repository-level arm is dead code, so recording it would pin a promise no run exercises.",
+      group: "ci-${{ github.sha }}",
+      "cancel-in-progress": false,
+      queue: undefined,
+    },
+  ],
+  [
     "dependency-audit.yml",
     {
       reason:
@@ -365,7 +375,7 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     "pr-suite.yml",
     {
       reason:
-        "This is where a pull request's own code runs, under pull_request with a read-only token, and its outcome is read by ci.yml's verify job for the event's exact head SHA. Its group is scoped to ONE pull request, so a run it cancels is always that same pull request's superseded head, never a peer's, and the push that superseded it scheduled the replacement run verify then awaits. Bounding it repository-wide would make every open pull request's verify wait behind every other's suite. It triggers on pull_request alone, so the literal true is the pull-request event expression with no other leg to cancel, and it names no required context: verify, not this workflow, carries the required check.",
+        "This is where a pull request's own code runs, under pull_request with a read-only token, and its outcome is read by ci-pr.yml's verify job for the event's exact head SHA. Its group is scoped to ONE pull request, so a run it cancels is always that same pull request's superseded head, never a peer's, and the push that superseded it scheduled the replacement run verify then awaits. Bounding it repository-wide would make every open pull request's verify wait behind every other's suite. It triggers on pull_request alone, so the literal true is the pull-request event expression with no other leg to cancel, and it names no required context: verify, not this workflow, carries the required check.",
       group: "pr-suite-${{ github.event.pull_request.number }}",
       "cancel-in-progress": true,
       queue: undefined,
@@ -498,12 +508,14 @@ const ALLOWED_TOP_LEVEL_KEYS = [
  * requires every file in `.github/workflows/` to have a row.
  */
 const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
-  // Issue 1090: each of these three carries the same job name in BOTH legs, so
-  // a required-context conclusion arrives on a pull-request head and on a main
-  // push alike. The name is deliberately NOT suffixed — the check-run name is
-  // what branch protection and .github/required-checks.json match.
+  // Issue 1090: each of these four pairs carries the same job name in BOTH
+  // legs, so a required-context conclusion arrives on a pull-request head and
+  // on a main push alike. The name is deliberately NOT suffixed — the
+  // check-run name is what branch protection and .github/required-checks.json
+  // match.
   "actionlint-pr.yml": ["actionlint"],
   "actionlint.yml": ["actionlint"],
+  "ci-pr.yml": ["verify"],
   "ci.yml": ["calibrate", "verify"],
   "claim.yml": ["claim"],
   "code-scanning.yml": ["analyze"],

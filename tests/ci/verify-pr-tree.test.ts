@@ -40,7 +40,13 @@ let root = "";
 let counter = 0;
 
 beforeAll(async () => {
-  const workflow = parse(await readFile(resolve(".github/workflows/ci.yml"), "utf8")) as {
+  // ci-pr.yml, not ci.yml: issue 1090 split the pull-request leg of the verify
+  // job into a file whose only trigger is `pull_request_target`, and every step
+  // this suite executes — the materialise step and the tree gates that read its
+  // outputs — is in that leg. Reading ci.yml after the split found none of them,
+  // and every case below would have been a vacuous "the step I could not find is
+  // absent".
+  const workflow = parse(await readFile(resolve(".github/workflows/ci-pr.yml"), "utf8")) as {
     jobs: { verify: { steps: Step[] } };
   };
   steps = workflow.jobs.verify.steps;
