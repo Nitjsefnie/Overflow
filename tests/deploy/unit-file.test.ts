@@ -487,3 +487,99 @@ describe("Overflow production unit", () => {
     ]);
   });
 });
+
+describe("Overflow off-host backup units", () => {
+  /**
+   * The off-host job speaks to the Discord API through the mailbox CLI, a
+   * python3 script under /root that the full-backup unit never touches. On
+   * this host's systemd 257.13 the obvious pairing is inoperative:
+   * ProtectHome=yes voids BindReadOnlyPaths destinations under the protected
+   * directories, so the shipped `ProtectHome=yes` + bind pairing cannot read
+   * the CLI at all — probed on this host with a transient service carrying
+   * the unit's full sandbox set (CONTROL-NOT-READABLE). The man page's
+   * sanctioned pairing, proven readable by the same probe (TMPFS-READABLE),
+   * is what this file pins: ProtectHome=tmpfs mounts /root empty and the bind
+   * then mounts the one file back in.
+   */
+  let offhostUnits: Buffer = Buffer.alloc(0);
+  let offhostTimerSource: Buffer = Buffer.alloc(0);
+
+  beforeAll(async () => {
+    offhostUnits = await readFile(resolve("deploy/overflow-offhost-backup.service"));
+    offhostTimerSource = await readFile(resolve("deploy/overflow-offhost-backup.timer"));
+  });
+
+  const entries = (): UnitEntry[] => parseUnitFile(offhostUnits);
+  const only = (section: UnitSection, key: string): UnitEntry => {
+    const assignments = entries().filter((entry) => entry.section === section && entry.key === key);
+
+    expect(assignments, `${section} ${key} appears at most once`).toHaveLength(1);
+    return assignments[0]!;
+  };
+
+  it("parses under systemd's grammar with no shape the guard has to guess at", () => {
+    // The service unit only; the shared parser is closed to [Timer] by
+    // design, and the timer is pinned by exact lines in its own test below.
+    expect(() => parseUnitFile(offhostUnits)).not.toThrow();
+  });
+
+  it("runs the off-host script under /bin/sh, oneshot, off the backup env file", () => {
+    expect(only("Service", "Type").value).toBe("oneshot");
+    expect(only("Service", "ExecStart").words).toEqual([
+      "/bin/sh",
+      "/srv/overflow/scripts/db-offhost-backup.sh",
+    ]);
+    expect(only("Service", "EnvironmentFile").value).toBe("/etc/overflow/backup.env");
+    expect(only("Unit", "OnFailure").value).toBe("overflow-alert@%n.service");
+  });
+
+  it("reaches the mailbox CLI through the tmpfs ProtectHome with exactly one bound file", () => {
+    // The shipped mechanism, as probed on this host. ProtectHome=yes would
+    // void the bind destination under /root (see the describe comment); the
+    // tmpfs spelling is the pairing systemd.exec(5) sanctions and the probe
+    // proved readable.
+    expect(only("Service", "ProtectHome").value).toBe("tmpfs");
+    const binds = entries().filter((entry) => entry.key === "BindReadOnlyPaths");
+
+    expect(binds, "exactly the mailbox CLI file is bound back in").toHaveLength(1);
+    expect(binds[0]!.value).toBe("/root/.agent-bundle/scripts/discord_mb.py");
+  });
+
+  it("keeps the rest of the full-backup sandbox, with /root reachable only through the one bind", () => {
+    expect(only("Service", "ProtectSystem").value).toBe("strict");
+    expect(only("Service", "PrivateTmp").value).toBe("yes");
+    expect(only("Service", "ReadWritePaths").value).toBe("/var/backups/overflow");
+    expect(only("Service", "UMask").value).toBe("0077");
+    expect(TRUE_SPELLINGS).toContain(only("Service", "NoNewPrivileges").value.toLowerCase());
+    expect(only("Service", "CapabilityBoundingSet").value).toBe("");
+
+    // tmpfs makes /root an empty mount; the single bound CLI file is the only
+    // /root path any directive may name.
+    const rootTouching = entries()
+      .filter((entry) => pathCandidates(entry).some(isUnderRoot))
+      .map((entry) => entry.key);
+
+    expect(rootTouching, "/root is reachable only through the single bound file").toEqual([
+      "BindReadOnlyPaths",
+    ]);
+    expect(only("Service", "Environment").words, "the PATH carries no /root component").toEqual([
+      "PATH=/usr/local/bin:/usr/bin:/bin",
+    ]);
+  });
+
+  it("fires the timer at 02:10 UTC, persistently, at the off-host unit", () => {
+    // The shared parser is deliberately closed to the three sections the
+    // reviewed unit uses; a [Timer] section is refused by design, so the
+    // timer is pinned by exact directive lines instead of by parseUnitFile.
+    const timerLines = offhostTimerSource.toString("utf8").split("\n");
+
+    for (const line of [
+      "OnCalendar=*-*-* 02:10:00 UTC",
+      "Persistent=true",
+      "Unit=overflow-offhost-backup.service",
+      "WantedBy=timers.target",
+    ]) {
+      expect(timerLines, `${line} must appear verbatim in the timer`).toContain(line);
+    }
+  });
+});

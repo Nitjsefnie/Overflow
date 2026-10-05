@@ -54,13 +54,19 @@
 # output directory under umask 077 and are removed before the encrypted file
 # is called a backup.
 #
-# A run killed before its file is installed leaves its
-# .overflow-reduced-<stamp>.sql.xz.age.incomplete partial behind. Every run
-# begins by sweeping leftover partials older than 24 hours (-mtime +0) out of
-# the output directory; real backups matching overflow-reduced-*.sql.xz.age
-# are never touched by the sweep. Retention prunes reduced backups older than
-# 14 days (-mtime +13) after a successful guard, and only files matching that
-# name shape are ours to delete.
+# A run killed before its file is installed leaves its partial behind. Every
+# stage's scratch file is .overflow-reduced-<pid>...incomplete, stemmed with
+# the pid rather than the stamp for the same reason db-backup.sh stems its
+# partial: two runs landing in one UTC second would otherwise share one
+# partial, and the second run's redirect would truncate the bytes the first
+# is about to install. Every run begins by sweeping leftover partials older
+# than 24 hours (-mtime +0) out of the output directory, ANY shape matching
+# .overflow-reduced-*.incomplete — a SIGKILL or a power cut lands wherever it
+# lands, and the plaintext intermediates must not outlive the run. Real
+# backups matching overflow-reduced-*.sql.xz.age are never touched by the
+# sweep. Retention prunes reduced backups older than 14 days (-mtime +13)
+# after a successful guard, and only files matching that name shape are ours
+# to delete.
 set -eu
 
 # The dump carries the database's schema and the backup's own messages name
@@ -124,19 +130,24 @@ fi
 # A crash killed before the install leaves its partial behind. Reclaim
 # leftovers older than a day (-mtime +0), print then delete like the retention
 # prune below. The name is anchored to the leading dot and the .incomplete
-# suffix, so a real backup can never match.
-leftovers=$(find "$output_dir" -maxdepth 1 -type f -name '.overflow-reduced-*.sql.xz.age.incomplete' -mtime +0)
+# suffix, and matches EVERY stage's scratch shape, so a real backup can never
+# match.
+leftovers=$(find "$output_dir" -maxdepth 1 -type f -name '.overflow-reduced-*.incomplete' -mtime +0)
 if [ -n "$leftovers" ]; then
     printf '%s\n' "$leftovers"
-    find "$output_dir" -maxdepth 1 -type f -name '.overflow-reduced-*.sql.xz.age.incomplete' -mtime +0 -delete
+    find "$output_dir" -maxdepth 1 -type f -name '.overflow-reduced-*.incomplete' -mtime +0 -delete
 fi
 
 pg_dump_cmd=${OVERFLOW_PG_DUMP:-pg_dump}
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
-partial="$output_dir/.overflow-reduced-$stamp.sql.xz.age.incomplete"
-plain="$output_dir/.overflow-reduced-$stamp.sql.incomplete"
-deflated="$output_dir/.overflow-reduced-$stamp.sql.xz.incomplete"
+# The scratch names carry this run's pid: two runs sharing one second would
+# otherwise share one partial, and the second run's redirect would truncate
+# the bytes the first is about to install. The pid keeps each run's partial
+# its own and inside what the sweep matches.
+partial="$output_dir/.overflow-reduced-$$.sql.xz.age.incomplete"
+plain="$output_dir/.overflow-reduced-$$.sql.incomplete"
+deflated="$output_dir/.overflow-reduced-$$.sql.xz.incomplete"
 connector_pid=
 started_connector=0
 

@@ -28,10 +28,11 @@ Type=oneshot
 # sandbox below is what a root oneshot can afford while still reading the
 # environment file, sh, the client tools and the backup directory - and, one
 # thing the full backup never does, speaking to the Discord API through the
-# mailbox CLI: a python3 script under /root, which ProtectHome=yes keeps out
-# of reach. The BindReadOnlyPaths below admits exactly that one file, and
-# nothing else under /root; the osc token reaches the mailbox CLI through
-# DISCORD_TOKEN in the environment file, so no token file under /root is read.
+# mailbox CLI: a python3 script under /root, reached through the single
+# BindReadOnlyPaths below (see the sandbox comment at the file for why
+# ProtectHome is spelled tmpfs and not yes). Nothing else under /root is
+# reachable; the osc token reaches the mailbox CLI through DISCORD_TOKEN in
+# the environment file, so no token file under /root is read.
 EnvironmentFile=/etc/overflow/backup.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 
@@ -50,12 +51,20 @@ LockPersonality=yes
 RestrictRealtime=yes
 RestrictNamespaces=yes
 
-# The whole filesystem is read-only except the backup directory; home
-# directories are unreachable except for the single mailbox CLI file above,
-# and /tmp and /dev are private. The mailbox CLI's per-run state lives under
-# /tmp/discord-mailbox, so a fresh /tmp per run is correct, not a handicap.
+# The whole filesystem is read-only except the backup directory, /tmp and
+# /dev are private, and /root is mounted EMPTY (tmpfs) with exactly one file
+# mounted back in: the mailbox CLI. ProtectHome=yes is NOT an alternative
+# here, and this is measured, not stylistic: on this host's systemd 257.13 a
+# transient service carrying the unit's full sandbox set with
+# ProtectHome=yes + BindReadOnlyPaths=... cannot read the bound file at all
+# (systemd.exec(5): bind destinations under protected directories are not
+# possible with ProtectHome=yes; the probed run printed
+# CONTROL-NOT-READABLE), while the tmpfs pairing reads it (probed:
+# TMPFS-READABLE, file content read back through the bind). The mailbox
+# CLI's per-run state lives under /tmp/discord-mailbox, so a fresh /tmp per
+# run is correct, not a handicap.
 ProtectSystem=strict
-ProtectHome=yes
+ProtectHome=tmpfs
 BindReadOnlyPaths=/root/.agent-bundle/scripts/discord_mb.py
 PrivateTmp=yes
 PrivateDevices=yes
