@@ -401,6 +401,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
           from users
           where id = ${repository.sponsorId}
             and enforcement_state::text = any(${this.sql.array([...participationEligibleEnforcementStates])})
+            and deleted_at is null
           for update
         ),
         inserted as (
@@ -484,8 +485,17 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
         from inserted
       `;
       if (row === undefined) {
-        const enforcementState = await this.getEnforcementState(repository.sponsorId);
-        if (enforcementState === null || !isParticipationEligible(enforcementState)) {
+        // The CTE rejects the write three ways: absent, deleted or ineligible
+        // sponsor — all three refuse with the enforcement error (register.ts
+        // maps it to FORBIDDEN with webhook compensation); only a living,
+        // eligible sponsor's miss stays the already-registered CONFLICT.
+        const [sponsor] = await this.sql<{ enforcement_state: EnforcementState; deleted_at: Date | null }[]>`
+          select enforcement_state, deleted_at
+          from users
+          where id = ${repository.sponsorId}
+          limit 1
+        `;
+        if (sponsor === undefined || sponsor.deleted_at !== null || !isParticipationEligible(sponsor.enforcement_state)) {
           throw new RepositoryRegistrationEnforcementError();
         }
         return null;

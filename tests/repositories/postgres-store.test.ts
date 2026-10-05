@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import type { Sql } from "postgres";
+import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -24,6 +24,7 @@ vi.hoisted(() => { vi.resetModules(); });
 afterAll(() => { vi.resetModules(); });
 
 let container: StartedTestContainer | undefined;
+let databaseUrl: string;
 let sql: Sql;
 let store: PostgresRepositoryStore;
 let externalId = 8_600_000;
@@ -39,6 +40,7 @@ describe("registering a repository against the real registered_repositories cons
       password: "registration",
     });
     container = started.container;
+    databaseUrl = started.databaseUrl;
     process.env.DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
@@ -342,6 +344,96 @@ describe("registering a repository against the real registered_repositories cons
 
     await expect(store.createRepository(submission)).rejects.toThrow(RepositoryRegistrationEnforcementError);
     await expect(countOf(submission.githubRepositoryId)).resolves.toBe(0);
+  });
+
+  it("refuses a deleted sponsor whose enforcement state is still eligible", async () => {
+    const sponsorId = await sponsor();
+    await sql`update users set deleted_at = now() where id = ${sponsorId}`;
+    const submission = newRepository({ sponsorId });
+
+    await expect(store.createRepository(submission)).rejects.toThrow(RepositoryRegistrationEnforcementError);
+    await expect(countOf(submission.githubRepositoryId)).resolves.toBe(0);
+  });
+
+  it("refuses a deleted sponsor reactivating a held unregistered row", async () => {
+    // The on-conflict re-activation leg draws from the same sponsor CTE, so
+    // the deleted_at filter gates it too: a deleted account must not bring a
+    // held row back, and the held row must stay unregistered.
+    const submission = newRepository({ sponsorId: await sponsor() });
+    await expect(store.createRepository(submission)).resolves.toMatchObject({
+      githubRepositoryId: submission.githubRepositoryId,
+    });
+    await expect(store.unregisterRepository({
+      ownerName: submission.ownerName,
+      sponsorId: submission.sponsorId,
+      provider: "github",
+    })).resolves.toMatchObject({ kind: "UNREGISTERED" });
+    await sql`update users set deleted_at = now() where id = ${submission.sponsorId}`;
+
+    await expect(store.createRepository(submission)).rejects.toThrow(RepositoryRegistrationEnforcementError);
+    const [held] = await sql<{ active: boolean; unregistered_at: Date | null }[]>`
+      select active, unregistered_at
+      from registered_repositories
+      where github_repository_id = ${submission.githubRepositoryId}
+    `;
+    expect(held!.active).toBe(false);
+    expect(held!.unregistered_at).not.toBeNull();
+  });
+
+  it("refuses a registration whose sponsor is deleted while the registration waits on the sponsor lock", async () => {
+    // The deterministic half of the issue's interleaving: the deletion's
+    // transaction is PROVEN to hold the users row lock before the
+    // registration starts, so the registration's sponsor CTE necessarily
+    // queues behind it and its `for update` re-check reads the row
+    // post-commit. A filter without the lock — or a lock without the filter —
+    // would let the registration complete here.
+    const sponsorId = await sponsor();
+    const submission = newRepository({ sponsorId });
+    const deleter = postgres(databaseUrl, { max: 1, onnotice: () => undefined });
+    try {
+      let lockProven: () => void = () => {};
+      const lockHeld = new Promise<void>((resolve) => { lockProven = resolve; });
+      let releaseDeletion: () => void = () => {};
+      const released = new Promise<void>((resolve) => { releaseDeletion = resolve; });
+      const deletion = (async () => deleter.begin(async (tx) => {
+        await tx`select id from users where id = ${sponsorId} for update`;
+        lockProven();
+        await released;
+        await tx`update users set deleted_at = now() where id = ${sponsorId}`;
+      }))();
+      await lockHeld;
+
+      const registration = store.createRepository(submission);
+      releaseDeletion();
+      await deletion;
+
+      await expect(registration).rejects.toThrow(RepositoryRegistrationEnforcementError);
+      await expect(countOf(submission.githubRepositoryId)).resolves.toBe(0);
+    } finally {
+      await deleter.end({ timeout: 0 });
+    }
+  });
+
+  it("locks the sponsor row and filters deleted sponsors inside the sponsor CTE itself", async () => {
+    // Guard-shape pin: the deleted_at filter and the `for update` are one
+    // guard — deleteAccount serializes on the same users row lock, so the
+    // CTE's re-check reads whichever transaction committed second. Either
+    // half alone closes only one arrival order (the lock-less mutant can
+    // survive the two-client case on arrival order), so the pin holds them
+    // together on the source the way the identity list query pins its token
+    // containment.
+    const { readFile } = await import("node:fs/promises");
+    const { fileURLToPath } = await import("node:url");
+    const storeSource = await readFile(
+      fileURLToPath(new URL("../../src/lib/repositories/postgres-store.ts", import.meta.url)),
+      "utf8",
+    );
+    const sponsorCte = storeSource.slice(
+      storeSource.indexOf("eligible_sponsor as ("),
+      storeSource.indexOf("inserted as ("),
+    );
+    expect(sponsorCte).toContain("deleted_at is null");
+    expect(sponsorCte).toContain("for update");
   });
 
   it("seeds the registered catalog as the repository's first version row", async () => {

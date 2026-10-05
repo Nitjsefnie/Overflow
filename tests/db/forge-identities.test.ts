@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Sql } from "postgres";
+import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import { closeSql, getSql } from "@/lib/db/client";
+import { DELETED_ACCOUNT_LOGIN } from "@/lib/accounts/deletion";
 import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-store";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { upgradeRepositoryWebhooks, type WebhookUpgradeDependencies } from "@/lib/repositories/upgrade-webhooks";
@@ -15,11 +16,13 @@ let sql: Sql;
 // 32 raw bytes, base64url: a real key for the real cipher round-trips these tests exercise.
 const TEST_ENCRYPTION_KEY = Buffer.from("0123456789abcdef0123456789abcdef").toString("base64url");
 let container: StartedTestContainer;
+let databaseUrl: string;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
 beforeAll(async () => {
   const started = await startPostgresContainer({ database: "forge", user: "forge", password: "forge" });
   container = started.container;
+  databaseUrl = started.databaseUrl;
   process.env.DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
@@ -314,6 +317,116 @@ describe("migration 038: forge identities and provider columns", () => {
     );
     expect(listSelect).toContain("select id, provider, instance_url, forge_login, verified_at");
     expect(listSelect).not.toContain("encrypted_token");
+  });
+
+  it("refuses a deleted account's identity link and leaves the scrubbed row scrubbed", async () => {
+    const store = new PostgresForgeIdentityStore(sql, TEST_ENCRYPTION_KEY);
+    const [user] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login) values (930010, 'scrub-owner') returning id
+    `;
+    const link = {
+      provider: "gitlab",
+      instanceUrl: "https://scrub-test.example.com",
+      forgeUserId: 7015,
+    };
+    const linked = await store.upsertIdentity({
+      userId: user!.id, forgeLogin: "scrubbed", encryptedToken: "v1.envelope", ...link,
+    });
+    expect(linked).not.toBeNull();
+    // Stand in for the deletion scrub: token dropped, tombstone login, failure stamp.
+    await sql`
+      update user_forge_identities
+      set encrypted_token = null, forge_login = ${DELETED_ACCOUNT_LOGIN}, token_failed_at = now()
+      where id = ${linked!.id}
+    `;
+    await sql`update users set deleted_at = now() where id = ${user!.id}`;
+
+    // The re-link must write nothing — no fresh insert and no conflict
+    // re-store over the scrub — so the scrubbed row stays scrubbed.
+    await expect(store.upsertIdentity({
+      userId: user!.id, forgeLogin: "came-back", encryptedToken: "v1.fresh.envelope", ...link,
+    })).resolves.toBeNull();
+    const [row] = await sql<{ encrypted_token: Buffer | null; forge_login: string }[]>`
+      select encrypted_token, forge_login from user_forge_identities where id = ${linked!.id}
+    `;
+    expect(row!.encrypted_token).toBeNull();
+    expect(row!.forge_login).toBe(DELETED_ACCOUNT_LOGIN);
+  });
+
+  it("refuses an identity link whose account is deleted while the link waits on the account lock", async () => {
+    // The deterministic interleaving: the deletion's transaction is PROVEN to
+    // hold the users row lock before the link starts, so the link's
+    // `eligible_account` CTE queues behind it and its `for update` re-check
+    // reads the row post-commit. The link must answer null and the scrubbed
+    // row must stay scrubbed.
+    const store = new PostgresForgeIdentityStore(sql, TEST_ENCRYPTION_KEY);
+    const [user] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login) values (930011, 'race-owner') returning id
+    `;
+    const link = {
+      provider: "gitlab",
+      instanceUrl: "https://race-scrub.example.com",
+      forgeUserId: 7016,
+    };
+    const linked = await store.upsertIdentity({
+      userId: user!.id, forgeLogin: "racer", encryptedToken: "v1.envelope", ...link,
+    });
+    expect(linked).not.toBeNull();
+    await sql`
+      update user_forge_identities
+      set encrypted_token = null, forge_login = ${DELETED_ACCOUNT_LOGIN}, token_failed_at = now()
+      where id = ${linked!.id}
+    `;
+
+    const deleter = postgres(databaseUrl, { max: 1, onnotice: () => undefined });
+    try {
+      let lockProven: () => void = () => {};
+      const lockHeld = new Promise<void>((resolve) => { lockProven = resolve; });
+      let releaseDeletion: () => void = () => {};
+      const released = new Promise<void>((resolve) => { releaseDeletion = resolve; });
+      const deletion = (async () => deleter.begin(async (tx) => {
+        await tx`select id from users where id = ${user!.id} for update`;
+        lockProven();
+        await released;
+        await tx`update users set deleted_at = now() where id = ${user!.id}`;
+      }))();
+      await lockHeld;
+
+      const relink = store.upsertIdentity({
+        userId: user!.id, forgeLogin: "came-back", encryptedToken: "v1.fresh.envelope", ...link,
+      });
+      releaseDeletion();
+      await deletion;
+
+      await expect(relink).resolves.toBeNull();
+      const [row] = await sql<{ encrypted_token: Buffer | null; forge_login: string }[]>`
+        select encrypted_token, forge_login from user_forge_identities where id = ${linked!.id}
+      `;
+      expect(row!.encrypted_token).toBeNull();
+      expect(row!.forge_login).toBe(DELETED_ACCOUNT_LOGIN);
+    } finally {
+      await deleter.end({ timeout: 0 });
+    }
+  });
+
+  it("gates the identity write on a live account under the account lock in one statement", async () => {
+    // Guard-shape pin, matching the repository store's sponsor-CTE pin: the
+    // deleted_at filter and the `for update` are one guard — either half
+    // alone closes only one arrival order, and the lock-less mutant can
+    // survive the two-client case on arrival order. The pin holds both
+    // halves of the single gating statement on the source.
+    const { readFile } = await import("node:fs/promises");
+    const { fileURLToPath } = await import("node:url");
+    const storeSource = await readFile(
+      fileURLToPath(new URL("../../src/lib/forge/postgres-identities-store.ts", import.meta.url)),
+      "utf8",
+    );
+    const gatingStatement = storeSource.slice(
+      storeSource.indexOf("eligible_account as ("),
+      storeSource.indexOf("returning id, provider, instance_url, forge_login, verified_at, token_failed_at"),
+    );
+    expect(gatingStatement).toContain("deleted_at is null");
+    expect(gatingStatement).toContain("for update");
   });
 });
 
