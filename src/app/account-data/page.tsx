@@ -327,7 +327,7 @@ export function AccountDataNotice() {
             described under How long it is kept is posted to a private Discord channel, so Discord
             stores that encrypted file for as long as the copy is kept there. The file is unreadable
             without the private half of the encryption key, which is not stored on Overflow&apos;s
-            host and never travels with the copy; Discord receives no key.
+            host and never travels with the copy; Discord receives no key
           </li>
         </ul>
         <p>
