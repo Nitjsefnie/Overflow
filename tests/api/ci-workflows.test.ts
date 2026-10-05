@@ -1544,14 +1544,31 @@ exit 1
     // Compared as three NUMBERS, never as strings: "1.9.0" sorts above
     // "1.30.0" lexically, so a string compare would admit a pin the floor
     // exists to reject. Encoded as major*1e6 + minor*1e3 + patch, which orders
-    // correctly for any version pip can resolve here (no prerelease tags).
+    // correctly while minor and patch are each below 1000 — the bound this
+    // encoding needs, stated rather than implied. No prerelease tag resolves
+    // through the regex below at all (see the parse-failure message), so the
+    // only way past 1000 is a release nobody has cut; a version that large
+    // would misorder silently, and the floor is a policy number here, not a
+    // general semver comparator. Tightening the claim, not the code: the
+    // alternative is a lexicographic compare of zero-padded parts, which buys a
+    // total order no release on PyPI needs.
     // Report the version the manifest actually names, not `${zizmor}`: the pin
     // line carries every hash on one line, so interpolating it would dump ~700
     // characters of `--hash=sha256:` into a failure message whose reader needs
     // one fact — which version failed to parse.
     const named = /^zizmor==(\S+)/.exec(zizmor!)?.[1] ?? "(no zizmor== pin)";
     const pinned = /^zizmor==(\d+)\.(\d+)\.(\d+)\b/.exec(zizmor!);
-    expect(pinned, `no major.minor.patch zizmor pin: the manifest pins ${named}`).not.toBeNull();
+    // A prerelease or any other non-plain pin is a POLICY statement, not a
+    // parse accident: this manifest pins a release, and `--require-hashes`
+    // installs resolve releases, so say that rather than reporting a null
+    // capture the reader has to interpret.
+    expect(
+      pinned,
+      `the zizmor pin must be a plain release, major.minor.patch: the manifest pins ${named}. ` +
+        `This manifest exists to install one hash-pinned release for the actionlint gate, ` +
+        `and the hashes beside it are that release's — a prerelease or a range would ` +
+        `desynchronise the two. See the header's regeneration recipe.`,
+    ).not.toBeNull();
     const [major, minor, patch] = pinned!.slice(1, 4).map(Number);
     expect(
       major * 1_000_000 + minor * 1_000 + patch,
