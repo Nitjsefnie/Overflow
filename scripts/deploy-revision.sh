@@ -99,7 +99,7 @@ is_operational_ignored() {
 # just after a merge, a legitimate job's check-run can be listed before its
 # run is.
 required_checks_gate() {
-  local remote_url repo required pins check unmapped check_runs runs run_id run_path run_jobs jobs
+  local remote_url repo required pins check check_pins unmapped check_runs runs run_id run_path run_jobs jobs
   local job_line job_run job_path job_id job_name job_attempt job_status job_conclusion
   local cr_id cr_name cr_app cr_status cr_conclusion producer_ids status conclusion
   local decided_run decided_attempt pending timeout deadline ledger_app_id ledger_id
@@ -193,9 +193,16 @@ required_checks_gate() {
       # any run and attempt. The newest run decides, and within it the latest
       # attempt. On equal keys (two same-named jobs in one attempt) a
       # non-success replaces a success, so a tie can only hold the deploy back.
+      #
+      # The pins are read ONCE per check, before the job loop: a check's pin
+      # set does not vary by row, and resolving it per row cost a command
+      # substitution per row — 40x the loop's time at 9000 rows, charged
+      # against OVERFLOW_DEPLOY_CI_TIMEOUT in full because the deadline is only
+      # checked after this loop (issue 1090 review, finding 2).
+      check_pins=$(pins_for "$check")
       producer_ids=$'\n' decided_run=0 decided_attempt=0 status='' conclusion=''
       while IFS=$'\t' read -r job_run job_path job_id job_name job_attempt job_status job_conclusion; do
-        is_pinned_path_of "$check" "$job_path" && [ "$job_name" = "$check" ] || continue
+        is_pinned_one_of "$check_pins" "$job_path" && [ "$job_name" = "$check" ] || continue
         producer_ids+="$job_id"$'\n'
         if [ "$job_run" -gt "$decided_run" ] \
           || { [ "$job_run" -eq "$decided_run" ] && [ "$job_attempt" -gt "$decided_attempt" ]; } \
@@ -260,15 +267,25 @@ pins_for() {
   done <<<"$pins"
 }
 
-# Whether a workflow path is one of the pins of a check.
-is_pinned_path_of() {
+# Whether a workflow path is one of a check's pins, given the check's pins as
+# the newline-separated list pins_for printed. The list is a PARAMETER so the
+# caller can resolve a check's pins once and test every row against them: taking
+# the check instead would re-read the pin map on every call, and this runs once
+# per job row.
+is_pinned_one_of() {
   local pin
   while IFS= read -r pin; do
     if [ -n "$pin" ] && [ "$pin" = "$2" ]; then
       return 0
     fi
-  done <<<"$(pins_for "$1")"
+  done <<<"$1"
   return 1
+}
+
+# is_pinned_one_of against a check whose pins have not been read yet. Callers in
+# a per-row loop use the hoisted form above instead.
+is_pinned_path_of() {
+  is_pinned_one_of "$(pins_for "$1")" "$2"
 }
 
 # Whether a workflow path is a pin of some required check.

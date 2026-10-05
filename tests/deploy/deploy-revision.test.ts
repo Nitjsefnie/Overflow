@@ -516,6 +516,44 @@ describe("scripts/deploy-revision.sh", () => {
     expect(source).toContain("git rev-parse --verify 'FETCH_HEAD^{commit}'");
   });
 
+  it("resolves a check's pins once per check, never once per job row", async () => {
+    // Structural, and deliberately not a timing assertion: the rules forbid a
+    // wall-clock margin, and the cost this guards is a command substitution per
+    // row. A check's pin set does not vary by row, so reading it inside the row
+    // loop is a pure waste — measured at ~40x the loop's time over 9000 rows,
+    // charged against OVERFLOW_DEPLOY_CI_TIMEOUT in full because the deadline is
+    // only checked after the loop.
+    //
+    // So the assertion is on the SHAPE of the loop: the row loop reads a
+    // variable, and the line that fills that variable sits above the loop. Both
+    // halves matter — dropping the hoist alone would fail on the undefined
+    // variable, and moving the read back inside would fail here.
+    const source = await readFile(script, "utf8");
+    const lines = source.split("\n");
+    const rowLoopStart = lines.findIndex((line) =>
+      /^ {6}while IFS=\$'\\t' read -r job_run job_path/.test(line),
+    );
+    expect(rowLoopStart, "the producer row loop is gone from required_checks_gate").toBeGreaterThan(-1);
+    const rowLoopEnd = lines.findIndex(
+      (line, index) => index > rowLoopStart && line === "      done <<<\"$jobs\"",
+    );
+    expect(rowLoopEnd, "the producer row loop is unterminated").toBeGreaterThan(rowLoopStart);
+
+    const rowLoop = lines.slice(rowLoopStart, rowLoopEnd).join("\n");
+    expect(
+      rowLoop,
+      "the row loop must test the hoisted $check_pins, not re-read the pin map: a pins_for or " +
+        "is_pinned_path_of call here costs a command substitution on every job row of every poll",
+    ).not.toMatch(/pins_for|is_pinned_path_of/);
+
+    const hoistLine = lines.findIndex((line) => line.trim() === 'check_pins=$(pins_for "$check")');
+    expect(
+      hoistLine,
+      "a check's pins must be read before its row loop and kept in a variable",
+    ).toBeGreaterThan(-1);
+    expect(hoistLine).toBeLessThan(rowLoopStart);
+  });
+
   it("refuses before install when a required check's latest run failed", async () => {
     const fixture = await makeFixture();
     const failed = await writeCheckRuns(fixture, "gate-failed", [
