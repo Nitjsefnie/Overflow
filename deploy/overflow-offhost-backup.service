@@ -1,0 +1,83 @@
+# Overflow database off-host encrypted backup.
+#
+# Started once per day by overflow-offhost-backup.timer, after the 01:30 UTC
+# full backup. Install as
+# /etc/systemd/system/overflow-offhost-backup.service. deploy/backup-restore.md
+# is the procedure: it stands up the least-privilege backup role, the
+# /etc/overflow/backup.env environment file this unit reads (with the osc
+# identity's DISCORD_TOKEN and the age recipient and channel additions), the
+# backup directory and the restore and drill steps.
+
+[Unit]
+Description=Overflow database off-host encrypted backup
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+# When this unit fails, start the alert template with this unit's name as its
+# instance: overflow-alert@overflow-offhost-backup.service mails the tail of
+# the journal to the address in /etc/overflow/alert-recipient (host config,
+# outside the repository). The size guard and every post failure arrive here.
+OnFailure=overflow-alert@%n.service
+
+[Service]
+Type=oneshot
+
+# Runs as root, like the full-backup unit: the backup directory is root-only
+# and the environment file is read by systemd as PID 1, before any drop. The
+# sandbox below is what a root oneshot can afford while still reading the
+# environment file, sh, the client tools and the backup directory - and, one
+# thing the full backup never does, speaking to the Discord API through the
+# mailbox CLI: a python3 script under /root, which ProtectHome=yes keeps out
+# of reach. The BindReadOnlyPaths below admits exactly that one file, and
+# nothing else under /root; the osc token reaches the mailbox CLI through
+# DISCORD_TOKEN in the environment file, so no token file under /root is read.
+EnvironmentFile=/etc/overflow/backup.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+ExecStart=/bin/sh /srv/overflow/scripts/db-offhost-backup.sh
+
+# Backup files are created 0600 inside the 0700 backup directory.
+UMask=0077
+
+# No privilege elevation, no capabilities: the unit writes one directory and
+# speaks to Postgres and the Discord API, and nothing else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+
+# The whole filesystem is read-only except the backup directory; home
+# directories are unreachable except for the single mailbox CLI file above,
+# and /tmp and /dev are private. The mailbox CLI's per-run state lives under
+# /tmp/discord-mailbox, so a fresh /tmp per run is correct, not a handicap.
+ProtectSystem=strict
+ProtectHome=yes
+BindReadOnlyPaths=/root/.agent-bundle/scripts/discord_mb.py
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/var/backups/overflow
+
+# The host itself is off limits, as in overflow.service.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+
+# May speak IP and local sockets, on this architecture only, with the same
+# EPERM-instead-of-kill seccomp posture as the web service.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=overflow-offhost-backup
