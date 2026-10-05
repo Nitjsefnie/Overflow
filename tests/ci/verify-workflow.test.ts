@@ -802,8 +802,13 @@ describe("the verify workflows' untrusted-code boundary", () => {
     ).toBeUndefined();
     expect(
       pushCheckout?.with,
-      "the plain checkout must carry persist-credentials: false and no ref input",
-    ).toEqual({ "persist-credentials": false });
+      "the push/dispatch checkout must carry persist-credentials: false, no ref input, " +
+        "and FULL history: the suite this job runs includes the secret-scan baseline's " +
+        "provenance check, which skips wherever the checkout is shallower than the " +
+        "baseline's entries and, at the old default depth of 1, ran in no CI context at " +
+        "all (issue 1098). Main's own history carries no pull-request data — this file " +
+        "has no pull_request trigger and names no pull_request.* value",
+    ).toEqual({ "persist-credentials": false, "fetch-depth": 0 });
   });
 
   it("confines each job's permissions: override to what its steps actually need", () => {

@@ -111,10 +111,17 @@ jobs:
     steps:
       # No ref input: the default checkout takes the event's own commit — the
       # pushed main tip on a push, the dispatched ref's commit on a
-      # workflow_dispatch.
+      # workflow_dispatch. Full history (issue 1098): the suite this job runs
+      # includes the secret-scan baseline's provenance check, which skips
+      # wherever the checkout is shallower than the baseline's entries, and at
+      # the previous default depth of 1 it ran in no CI context at all. This
+      # is MAIN's own history — no refs/pull fetch and no pull_request.* value
+      # anywhere in this file — so the depth carries no pull-request data into
+      # a privileged job.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       # Issue 988 ports this mechanical check: in the claim repository,
       # claim#56 shipped a conflict marker through three review rounds.
