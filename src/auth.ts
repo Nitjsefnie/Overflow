@@ -25,6 +25,7 @@ import {
   parseGrantedScopes,
 } from "@/lib/auth/github-oauth-scopes";
 import { authTrustHost } from "@/lib/auth/trusted-host";
+import { boundedAuthErrorLine } from "@/lib/auth/bounded-logger";
 
 export { GITHUB_CONTRIBUTOR_SCOPE, GITHUB_REPOSITORY_REGISTRATION_SCOPE };
 
@@ -39,6 +40,21 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
   // environment signs in; an operator-set AUTH_URL or AUTH_TRUST_HOST keeps
   // the precedence it has under @auth/core's own derivation.
   trustHost: authTrustHost(),
+  // The service journal is size-bounded and shared with the privileged-action
+  // audit lines, and a request whose session cookie cannot be decrypted used
+  // to cost it a multi-line, ANSI-coloured error block per request: the
+  // @auth/core default logger prints the error, then the cause's stack, then
+  // the cause's details. The `logger` option is the single lever for every
+  // @auth/core error path, so the error member emits exactly one bounded
+  // line (src/lib/auth/bounded-logger.ts): the class name and the cause's
+  // message, control-escaped and capped, no stack, no details, and never any
+  // cookie material. No error path is silenced — every error still logs,
+  // bounded; `warn` and `debug` keep @auth/core's defaults.
+  logger: {
+    error(error: unknown) {
+      console.error(boundedAuthErrorLine(error));
+    },
+  },
   providers: [
     GitHub({
       // The least-privilege default (issue 599): public identity only, so any
