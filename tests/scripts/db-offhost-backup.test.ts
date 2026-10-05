@@ -110,6 +110,14 @@ const lnShim = [
 ].join("\n");
 
 /**
+ * The one line the connector fake writes to its own stderr before it execs its
+ * body. What the test asserts on is the script's redirect decision: a canary
+ * the bring-up suppresses means stderr is discarded, and a bring-up death is
+ * invisible in the journal.
+ */
+const connectorStderrCanary = "OFFHOST_TEST_CONNECTOR_STDERR canary from the connector fake";
+
+/**
  * The mailbox CLI fake. Every invocation is recorded to the log as its argv,
  * one argument per line, calls separated by a `---` line; behaviour follows
  * the OFFHOST_TEST_MB_* knobs. The connector fake stays alive under its own
@@ -124,6 +132,10 @@ const mbFake = [
   // parser would read two calls as one. A single buffered write is atomic
   // under O_APPEND.
   `printf '%s\\n' "$@" '---' >> "$OFFHOST_TEST_MB_LOG"`,
+  // The DISCORD_TOKEN the invocation's environment carried, recorded on every
+  // call so a test can assert what the CLI observed (last write stands; every
+  // call in one run sees the same environment).
+  `printf '%s' "\${DISCORD_TOKEN:-}" > "\${OFFHOST_TEST_MB_TOKEN_SEEN:-/dev/null}"`,
   `case "\${1:-}" in`,
   "  list-agents)",
   `    if [ "\${OFFHOST_TEST_MB_LIST_RC:-0}" -ne 0 ]; then`,
@@ -135,6 +147,10 @@ const mbFake = [
   "    exit 0 ;;",
   "  connector)",
   `    printf '%s\\n' "$$" > "\${OFFHOST_TEST_CONNECTOR_PID:-/dev/null}"`,
+  // The canary rides the connector fake's stderr, written BEFORE the exec:
+  // whether the bring-up succeeds or dies, the line reaches the job's stderr
+  // unless the script's bring-up line discarded stderr.
+  `    printf '%s\\n' "${connectorStderrCanary}" >&2`,
   `    if [ -z "\${OFFHOST_TEST_MB_CONNECTOR_MUTE:-}" ]; then`,
   `      : > "\${OFFHOST_TEST_CONNECTOR_LIVE:-/dev/null}" 2>/dev/null || :`,
   "    fi",
@@ -687,6 +703,18 @@ describe("db-offhost-backup.sh discord posting", () => {
     expect(sendCalls(run), "no post through a connector that is not up").toEqual([]);
     expect(run.connectorPid).not.toBeNull();
     expectProcessGone(run.connectorPid!);
+  });
+
+  it("lets the connector's stderr reach the journal, so a bring-up death names its cause", () => {
+    // The incident shape (#1106): a connector that starts and never comes
+    // up. Its own stderr carries the reason; discarding it is what left the
+    // journal with only the final failure line and not the cause.
+    const run = runBackup({ listRc: 1, connectorMute: true });
+
+    expect(run.status).not.toBe(0);
+    expect(run.stderr, "the connector's own stderr survives the bring-up redirect").toContain(
+      connectorStderrCanary,
+    );
   });
 
   it("propagates a failed send as a nonzero exit", () => {
