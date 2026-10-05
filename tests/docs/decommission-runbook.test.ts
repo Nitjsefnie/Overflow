@@ -286,6 +286,33 @@ describe("decommissioning runbook", () => {
     ).toStrictEqual([]);
   });
 
+  it("lists no osc token among phase 7's backup.env contents", () => {
+    // The off-host unit loads the token from the fleet's canonical file at
+    // each start (backup-restore.md section (i)), so the environment file
+    // carries no token line for this inventory row to list.
+    const lines = sectionBody("## 7. Secrets and configuration disposal").split("\n");
+    const start = lines.findIndex(
+      (line) => line.trimStart().startsWith("-") && line.includes("`backup.env`"),
+    );
+    expect(start, "phase 7 carries no backup.env inventory bullet").not.toBe(-1);
+
+    // The bullet runs to the next bullet or a blank line: its continuation
+    // lines belong to the same inventory row, and a stale token claim hides
+    // exactly there. The index is asserted before any slicing, so a missing
+    // bullet fails the guard above instead of pinning nothing.
+    let bullet = lines[start]!;
+    for (let index = start + 1; index < lines.length; index += 1) {
+      const line = lines[index]!;
+      if (line.trim() === "" || line.trimStart().startsWith("-")) break;
+      bullet += `\n${line}`;
+    }
+
+    expect(
+      bullet,
+      "the backup.env inventory still lists DISCORD_TOKEN, which the environment file no longer carries",
+    ).not.toContain("DISCORD_TOKEN");
+  });
+
   describe("each phase", () => {
     for (const phase of phases) {
       describe(phase.heading, () => {
