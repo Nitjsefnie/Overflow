@@ -49,7 +49,8 @@ import { parse } from "yaml";
  * again. `false` is strictly better than `true`, never a cure.
  *
  * The rates. Of the 483 `ci` runs in the 6.13 days ending 2026-09-30, only
- * the 370 pull-request arrivals ever enter `ci-repo-wide`; the 106 `push` and 7
+ * the 370 pull-request arrivals ever enter `ci-pr-repo-wide` (ci-pr.yml's group since
+ * issue 1090's split; it was `ci-repo-wide` while the leg shared ci.yml); the 106 `push` and 7
  * `workflow_dispatch` runs key their own `github.sha` and cannot contend with
  * anything, so counting them inflated both the arrival rate and rho. Load is
  * also not steady — per-day all-event arrivals were 5, 0, 215, 122, 78, 17, 46.
@@ -928,7 +929,7 @@ describe("the workflows left unbounded", () => {
     // Two workflows sharing a group cancel each other's PENDING runs whatever
     // each one's own reason says, so a collision is a correctness change and not
     // a cosmetic one — but nothing in this suite used to pin an exception's
-    // group, so pointing pr-gate's at `ci-repo-wide` left the whole file green
+    // group, so pointing pr-gate's at `ci-pr-repo-wide` left the whole file green
     // and only an older suite's whole-block pin noticed. This is that pin.
     //
     // The whole block, not three keys read one at a time: a `queue` that appears
