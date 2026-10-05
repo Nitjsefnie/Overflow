@@ -9,16 +9,36 @@ import { parse } from "yaml";
  * Branch protection names each required check only by its check-run name, and
  * every workflow here posts through the same GitHub Actions app, so a job with
  * a required name in ANY workflow satisfies it. `.github/required-checks.json`
- * pins each required name to the one workflow file whose job is trusted to
- * produce it, and scripts/deploy-revision.sh resolves each required check
+ * pins each required name to the workflow file, or files, whose job is trusted
+ * to produce it, and scripts/deploy-revision.sh resolves each required check
  * through that pin. This suite holds the committed workflows to the pin: every
  * pinned name has exactly one producing job across all workflow files, and it
- * lives in the pinned file.
+ * lives in one of the pinned files.
+ *
+ * A pin may be a list because issue 1090 splits a workflow that reads
+ * pull-request data out of its privileged triggers, leaving one required
+ * context produced by a `pull_request_target` file and a push file. Every
+ * committed entry is still a string; this suite reads both forms so the split
+ * does not arrive with a reader that silently drops half of a pin.
  */
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const workflowsDir = resolve(root, ".github/workflows");
 const PIN_SHAPE = /^\.github\/workflows\/[^/]+\.ya?ml$/;
+
+/**
+ * The paths one pin names, whichever form it is written in. Throws on a shape
+ * the map must never hold, so a malformed pin surfaces here as a readable
+ * failure rather than as an empty list every assertion below would pass
+ * vacuously against.
+ */
+function pinsOf(pin: unknown): string[] {
+  const paths = typeof pin === "string" ? [pin] : pin;
+  if (!Array.isArray(paths) || paths.length === 0 || !paths.every((path) => typeof path === "string")) {
+    throw new Error(`a pin is neither a workflow path nor a non-empty list of them: ${JSON.stringify(pin)}`);
+  }
+  return paths as string[];
+}
 
 type Job = { name?: unknown; strategy?: { matrix?: unknown } };
 type Producer = { file: string; job: string };
@@ -66,17 +86,26 @@ describe(".github/required-checks.json", () => {
   });
 
   it("points every pin at an existing workflow file", () => {
+    const known = workflowFiles.map((file) => `.github/workflows/${file}`);
     for (const [check, pin] of Object.entries(pins)) {
-      expect(typeof pin, check).toBe("string");
-      expect(pin, check).toMatch(PIN_SHAPE);
-      expect(workflowFiles.map((file) => `.github/workflows/${file}`), check).toContain(pin);
+      for (const path of pinsOf(pin)) {
+        expect(path, check).toMatch(PIN_SHAPE);
+        expect(known, `${check} pins ${path}`).toContain(path);
+      }
     }
   });
 
-  it("has exactly one producing job per pinned check, in the pinned workflow file", () => {
+  it("has exactly one producing job per pinned check, in every pinned file and nowhere else", () => {
     for (const [check, pin] of Object.entries(pins)) {
+      const pinnedFiles = new Set(pinsOf(pin));
       const producers = producersByName.get(check) ?? [];
-      expect(producers, check).toEqual([{ file: pin, job: expect.any(String) }]);
+      // The producer set is the pin set: a producer in an UNPINNED workflow is
+      // what this guard exists to refuse, and a repeated path inside one pin
+      // must not buy a second count for a file that produces nothing.
+      expect([...new Set(producers.map((producer) => producer.file))].sort(), check).toEqual(
+        [...pinnedFiles].sort(),
+      );
+      expect(producers, check).toHaveLength(pinnedFiles.size);
     }
   });
 
