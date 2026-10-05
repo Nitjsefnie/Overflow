@@ -31,9 +31,10 @@ on:
       # file so the only trigger it can be started by is `pull_request_target`.
       # This filter matches the workflow `name:` FIELD, not the filename, so a
       # new producer file whose `name:` is absent here is never relayed — these
-      # three are the pull-request legs of the pinned contexts above.
+      # four are the pull-request legs of the pinned contexts above.
       - "actionlint pull request"
       - "ratchet guard pull request"
+      - "ci pull request"
       # Forward wiring: unpinned workflows no-op in scripts/ledger-relay.ts.
       - "secret scan"
       - "secret scan pull request"
