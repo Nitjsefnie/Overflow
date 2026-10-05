@@ -386,6 +386,10 @@ jobs:
           entry_type=""
           entry_blob=""
           while IFS=$'\t' read -r meta _path; do
+            # An empty ls-tree output still feeds the here-string ONE empty
+            # line; skipping it is what keeps the count truthful — a deleted
+            # manifest must read as zero entries, never as one.
+            [ -n "${meta}" ] || continue
             count=$((count + 1))
             entry_mode=${meta%% *}
             rest=${meta#* }
