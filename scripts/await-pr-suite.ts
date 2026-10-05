@@ -13,11 +13,12 @@
 //
 // It polls the suite workflow's run listing at HEAD_SHA, keeps only
 // pull_request runs of exactly the suite workflow at exactly that SHA, and
-// waits on the most recently created one (ties: the highest id). Exit 0 only when that run completed with
-// conclusion `success`, writing `run_id=<id>` to GITHUB_OUTPUT so the caller
-// can fetch the run's artifacts. Every other outcome fails closed with exit 1
-// and one `::error::` line naming why; malformed input exits 2. It imports
-// only Node built-ins, so nothing outside the base checkout's own file runs.
+// waits on the most recently created one (ties: the highest id). Exit 0 only
+// when that run completed with conclusion `success`, writing `run_id=<id>` to
+// GITHUB_OUTPUT so the caller can fetch the run's artifacts. Every other
+// outcome fails closed with exit 1 and one `::error::` line naming why;
+// malformed input exits 2. It imports only Node built-ins, so nothing outside
+// the base checkout's own file runs.
 
 import { realpathSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
@@ -237,9 +238,8 @@ async function listRuns(deps: AwaitDeps, config: AwaitConfig): Promise<unknown[]
 /**
  * One GitHub API GET with the bounded retry. A network error (a request
  * timeout included), a 5xx or a 429 retries through the backoff; any other
- * non-2xx fails at once. The failure
- * carries the status and GitHub's message — never a header, so the token
- * cannot reach the log.
+ * non-2xx fails at once. The failure carries the status and GitHub's message
+ * — never a header, so the token cannot reach the log.
  */
 async function apiGet(deps: AwaitDeps, url: string, token: string): Promise<unknown> {
   let lastMessage = "";

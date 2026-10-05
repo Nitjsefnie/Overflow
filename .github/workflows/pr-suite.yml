@@ -128,8 +128,10 @@ jobs:
           name: patch-coverage
           path: coverage/patch-coverage.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
+      # Seven days: verify downloads this artifact cross-run, and a verify
+      # re-run or relay heal can come well after the suite finished.
       - name: Upload coverage summary
         if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -137,7 +139,7 @@ jobs:
           name: coverage-summary
           path: coverage/coverage-summary.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
       - name: Lint
         run: pnpm lint
