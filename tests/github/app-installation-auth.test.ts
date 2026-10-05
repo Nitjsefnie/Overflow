@@ -115,7 +115,7 @@ describe("readGitHubAppAuthConfig", () => {
 });
 
 describe("createAppInstallationTokenResolver", () => {
-  it("mints a verifiable RS256 JWT, sends it as Bearer on both calls, and returns the installation token", async () => {
+  it("mints a verifiable RS256 JWT, requests only reconciliation's read permissions, and returns the installation token", async () => {
     const { fetch, requests } = recordingFetch({
       lookup: () => Response.json({ id: 166057493 }, { status: 200 }),
       mint: () => Response.json(
@@ -139,7 +139,9 @@ describe("createAppInstallationTokenResolver", () => {
       expect(request?.apiVersion).toBe("2022-11-28");
     }
     expect(mint?.contentType).toBe("application/json");
-    expect(mint?.body).toBe("{}");
+    expect(JSON.parse(mint?.body ?? "null")).toEqual({
+      permissions: { metadata: "read", issues: "read", pull_requests: "read" },
+    });
 
     expect(decodeJwtSegment(lookup!.authorization!.slice("Bearer ".length), 0)).toEqual({ alg: "RS256", typ: "JWT" });
     const issuedAtSeconds = Math.floor(fixedClockMs / 1000);
