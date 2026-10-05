@@ -981,6 +981,50 @@ describe("runRelay", () => {
       expect(fetchStub.requests).toHaveLength(0);
     });
 
+    it("reads an absent GITHUB_WORKFLOW_RUN_EVENT as no event, so the pinned run is refused", async () => {
+      // An event the relay was not told is not evidence of any event: the
+      // missing value must read as the empty string, which no rule trusts.
+      const env = relayEnv({ GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main" });
+      delete env.GITHUB_WORKFLOW_RUN_EVENT;
+      const fetchStub = makeFetch([token(), ...acceptingOutcomes()]);
+      const error = await caughtError(
+        runRelay({
+          env,
+          fetchFn: fetchStub.fn,
+          delayFn: makeDelay().fn,
+          readPinMap: async () => PIN_MAP,
+        }),
+      );
+      expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
+      expect(error?.message).toContain('event ""');
+      expect(error?.message).toContain("no required context was relayed");
+      expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
+      expect(fetchStub.requests).toHaveLength(0);
+    });
+
+    it("reads a fetched run with no event field as no event, so the pinned run is refused", async () => {
+      const body = fetchedRunBody();
+      delete body.event;
+      const fetchStub = makeFetch([
+        token(),
+        { status: 200, body },
+        ...acceptingOutcomes(),
+      ]);
+      const error = await caughtError(
+        runRelay({
+          env: dispatchEnv(),
+          fetchFn: fetchStub.fn,
+          delayFn: makeDelay().fn,
+          readPinMap: async () => PIN_MAP,
+        }),
+      );
+      expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
+      expect(error?.message).toContain('event ""');
+      expect(error?.message).toContain("no required context was relayed");
+      expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL]);
+    });
+
     it.each([
       ["pull_request", "main"],
       ["issue_comment", "feature/some-branch"],
