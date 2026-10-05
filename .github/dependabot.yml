@@ -113,14 +113,28 @@ updates:
   # This lane covers .github/requirements-zizmor.txt, the hash-pinned zizmor
   # install for the actionlint workflow. The pip ecosystem picks up the file
   # because its name contains "requirements" within this configured directory.
+  #
+  # A Dependabot PR here arrives STALE-HASH broken, which is the whole of the
+  # handler's job on that branch. Measured on PR 1007 (the 1.29.0 -> 1.30.1
+  # bump, against this exact base): it rewrites the version string and leaves
+  # every `--hash=sha256:` at the old release's values, so
+  # `pip install --require-hashes -r .github/requirements-zizmor.txt` exits 1
+  # with "THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE".
   # dependabot-core's python requirement_file_updater passes new_hash_version to
-  # RequirementReplacer, which fetches the new version's full --hash set from
-  # the package index. A Dependabot PR is not stale-hash broken, but it lands
-  # red on arrival by design: tests/api/ci-workflows.test.ts pins
-  # `zizmor==1.29.0`. The handler completes the second edit on that branch
-  # before merging: regenerate this file using its header's pip-tools procedure,
-  # update that test's version literal and the header's printf example version.
-  # This is the same two-edit regime as the SHA-pinned actions lane above.
+  # RequirementReplacer, which is supposed to fetch the new version's full
+  # --hash set from the package index; on this file it does not. Take the
+  # hashes from the index directly instead — one GET, no pip-tools install:
+  #   https://pypi.org/pypi/zizmor/<version>/json  ->  urls[].digests.sha256
+  # (the file header's pip-compile recipe reaches the same set; the JSON API is
+  # just the cheaper route for a single-pin file).
+  #
+  # No second edit is needed. tests/api/ci-workflows.test.ts asserts a version
+  # FLOOR (>= 1.30.0), not an exact literal, precisely so a Dependabot bump is
+  # not red on arrival for the pin reason (issue 1091); the hash-pinning
+  # assertions in that test are what a stale-hash PR still trips, correctly.
+  # This is the same "handler completes the coordinated edit before merging"
+  # regime as the two lanes above, with one file to regenerate instead of a
+  # workflow and its test constant.
   # No groups or ignore entries: one pinned package gives a group nothing to
   # collect, and zizmor bumps are wanted. Thursday 05:07 Etc/UTC is the fourth
   # lane slot, off Monday and clear of the scheduled workflow times; no
