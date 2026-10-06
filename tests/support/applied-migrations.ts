@@ -64,4 +64,5 @@ export const appliedMigrationNames: readonly string[] = [
   "056_board_read_indexes.sql",
   "057_fold_evidence_facts.sql",
   "058_api_token_delivery_window.sql",
+  "059_session_epoch.sql",
 ];

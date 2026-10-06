@@ -1,0 +1,25 @@
+-- The per-account session revocation counter (issue 1043).
+--
+-- A session here is a signed JWT cookie. Nothing about it is stored, so
+-- ending one account's sessions meant replacing AUTH_SECRET, which ends every
+-- account's sessions — the only pre-epoch way to end a copied cookie was one
+-- that punishes every member. The issue's reproduction shows the other half:
+-- every use of the cookie re-issued it with a fresh 30-day `exp`, so a cookie
+-- used once a month never expired at all.
+--
+-- `users.session_epoch` is the counter that fixes both. It is the account's
+-- current session generation: a cookie minted at sign-in carries the epoch it
+-- was minted under, and the jwt refresh — the single choke point every
+-- session-user resolution site already passes — compares the claim against
+-- the row. A mismatch ends the session at that refresh. Bumping the epoch
+-- therefore ends every session the account holds, at their next refresh,
+-- without touching any other account.
+--
+-- The column starts at 0 and never resets: a re-registration (deletion and a
+-- later sign-in) keeps counting, so an old cookie minted before a deletion
+-- cannot ride a restored account. Nothing reads the column except the jwt
+-- refresh (src/auth.ts) through src/lib/auth/session-guard.ts; the sign-out
+-- handler and the operator one-liner in deploy/incident-response.md are the
+-- two bumpers.
+
+alter table users add column if not exists session_epoch integer not null default 0;
