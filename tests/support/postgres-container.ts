@@ -240,6 +240,30 @@ export async function assertNoSharedProvisionSurvivors(): Promise<void> {
 }
 
 /**
+ * Pins the container's published postgres port to the IPv4 loopback interface
+ * (issue 1070): a test postgres reachable on every host interface hands
+ * Postgres superuser to anyone who finds the port for the length of the run.
+ * testcontainers 12.2.0 cannot express a HostIp through its public builder —
+ * PortWithBinding.host is a plain number (build/utils/port.d.ts) and
+ * withExposedPorts writes PortBindings entries with HostIp unset
+ * (build/generic-container/generic-container.js) — so the binding is
+ * overwritten on the HostConfig the builder already passes to docker create.
+ * That HostConfig lives in the instance's `hostConfig` field, declared
+ * `protected` in the d.ts; the cast is the 12.2.0 API gap, and this comment is
+ * its citation. Must run AFTER withExposedPorts, which writes the entry this
+ * replaces.
+ */
+export function publishPostgresOnLoopback(container: GenericContainer, hostPort: string): void {
+  const hostConfig = (container as unknown as {
+    hostConfig: { PortBindings?: Record<string, { HostIp?: string; HostPort?: string }[] | undefined> | undefined };
+  }).hostConfig;
+  hostConfig.PortBindings = {
+    ...hostConfig.PortBindings,
+    [`${CONTAINER_POSTGRES_PORT}/tcp`]: [{ HostIp: "127.0.0.1", HostPort: hostPort }],
+  };
+}
+
+/**
  * Pinned by digest (issue 461) so every DB suite runs the same postgres bytes.
  * The tag stays for readability; the digest is what Docker actually pulls.
  */
@@ -267,12 +291,18 @@ export async function startPostgresContainer(options: PostgresContainerOptions):
   return startOnSharedServer({ database, user, password });
 }
 
-/** Docker preserves explicit host port bindings when the same container restarts. */
+/**
+ * Reserves a host port by binding it, so the container's later explicit
+ * binding of the same port collides loudly with anything else that holds it.
+ * The reservation binds 127.0.0.1, the interface the container publishes on
+ * (issue 1070): a reservation on 0.0.0.0 would keep out other all-interface
+ * binds while the container it reserves for publishes loopback-only.
+ */
 async function pickPrivateHostPort(): Promise<number> {
   return new Promise<number>((resolve, reject) => {
     const server = createServer();
     server.once("error", reject);
-    server.listen(0, "0.0.0.0", () => {
+    server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       if (address === null || typeof address === "string") {
         server.close();
@@ -326,6 +356,7 @@ async function startPrivatePostgres(options: PostgresContainerOptions): Promise<
       })
       .withExposedPorts({ container: 5432, host: hostPort })
       .withWaitStrategy(postgresWaitStrategy({ database, user }));
+    publishPostgresOnLoopback(container, String(hostPort));
 
     for (const { name: scriptName, content } of initScripts) {
       container = container.withCopyContentToContainer([

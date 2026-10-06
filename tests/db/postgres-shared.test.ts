@@ -156,6 +156,18 @@ describe("suites share one postgres server through startPostgresContainer", () =
     expect(await client(third.databaseUrl)`select 1 as after_stop_third`).toEqual([{ after_stop_third: 1 }]);
   });
 
+  it("publishes the shared server's 5432 on the loopback interface only", async () => {
+    const facts = resolveSharedPostgresFacts(inject("sharedPostgres"));
+    const { getContainerRuntimeClient } = await import("testcontainers");
+    const client = await getContainerRuntimeClient();
+    const inspected = await client.container.inspect(client.container.getById(facts.containerId));
+    const bindings = inspected.NetworkSettings.Ports?.["5432/tcp"] ?? [];
+    expect(bindings.length).toBeGreaterThan(0);
+    for (const binding of bindings) {
+      expect(binding.HostIp).toBe("127.0.0.1");
+    }
+  });
+
   it("throws the parked error verbatim when global setup parked a failure", () => {
     // The decision is pinned at the exported resolver: the vi.mock inject
     // override this test once used stopped working when vitest.setup.ts

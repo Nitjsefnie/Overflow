@@ -73,6 +73,16 @@ describe("the shared postgres container is reachable over TCP the instant it res
 
   // Either limb alone gets this fixture past the three assertions above, so the behavioural test
   // cannot tell whether both are still there. This pins the pair itself.
+  it("publishes 5432 on the loopback interface only", async () => {
+    const client = await getContainerRuntimeClient();
+    const inspected = await client.container.inspect(client.container.getById(container!.getId()));
+    const bindings = inspected.NetworkSettings.Ports?.["5432/tcp"] ?? [];
+    expect(bindings.length).toBeGreaterThan(0);
+    for (const binding of bindings) {
+      expect(binding.HostIp).toBe("127.0.0.1");
+    }
+  });
+
   it("waits on a listening port and on a pg_isready handshake forced over TCP", () => {
     const limbs = limbsOf(postgresWaitStrategy({ database, user: database }));
 
