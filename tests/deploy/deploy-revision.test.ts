@@ -480,12 +480,26 @@ describe("scripts/deploy-revision.sh", () => {
     expect(source).toContain('mkdir -p "$release/cache"');
   });
 
-  it("only removes the temporary listing outside release:prune", async () => {
+  it("only removes the temporary captures outside release:prune", async () => {
     const source = await readFile(script, "utf8");
-    const cleanup = '  rm -f "$ignored_listing"';
-    const lines = source.split("\n");
-    expect(lines.filter((line) => line === cleanup)).toEqual([cleanup]);
-    const remainingSource = lines.filter((line) => line !== cleanup).join("\n");
+    // The mktemp captures' own cleanups and nothing else: the ignored-files
+    // gate's listing (one cleanup) and the parser-skew fallback's copy of the
+    // target SHA's parser (two: the failed-read path and the post-parse
+    // path). No other rm anywhere, and no -delete; release deletion happens
+    // only through release:prune.
+    const cleanups: Array<[string, number]> = [
+      ['rm -f "$ignored_listing"', 1],
+      ['rm -f "$fallback_parser"', 2],
+    ];
+    const lines = source.split("\n").map((line) => line.trim());
+    for (const [cleanup, count] of cleanups) {
+      const found = lines.filter((line) => line === cleanup);
+      expect(found, cleanup).toHaveLength(count);
+      expect(new Set(found), cleanup).toEqual(new Set([cleanup]));
+    }
+    const remainingSource = lines
+      .filter((line) => !cleanups.some(([cleanup]) => cleanup === line))
+      .join("\n");
     expect(remainingSource).not.toMatch(/(^|[^\w])rm([^\w]|$)/);
     expect(source).not.toContain("-delete");
     expect(source).toContain("release:prune");
@@ -510,6 +524,7 @@ describe("scripts/deploy-revision.sh", () => {
     // map-shape change cannot deadlock a tree whose parser predates it.
     expect(source).toContain("scripts/required-checks-parse.jq");
     expect(source).toContain('jq -rs -f "$tree/scripts/required-checks-parse.jq"');
+    expect(source).toContain('git show "$full_sha:scripts/required-checks-parse.jq"');
     expect(source).toContain('"repos/$repo/commits/$full_sha/check-runs?filter=all&per_page=100"');
     expect(source).toContain('"repos/$repo/actions/runs?head_sha=$full_sha&per_page=100"');
     expect(source).toContain('"repos/$repo/actions/runs/$run_id/jobs?filter=all&per_page=100"');
@@ -953,10 +968,90 @@ describe("scripts/deploy-revision.sh", () => {
       // as empty or as the wrong keys would reach: no required check is named.
       for (const check of Object.keys(FIXTURE_PINS)) expect(result.stderr, label).not.toContain(check);
       const entries = await readLog(fixture.shimLog);
-      expect(gateLog(entries), label).toEqual(gateReads(FIXTURE_HASH).slice(0, 2));
+      // The gate's reads through the refusal: a map git cannot show refuses
+      // before any parser read; a map that read but did not parse attempts
+      // the fallback's parser read at the target SHA even when it finds
+      // nothing there, and only then refuses.
+      const expectedGateLog = [...gateReads(FIXTURE_HASH).slice(0, 2)];
+      if (env.GIT_SHIM_SHOW_RC === undefined) {
+        expectedGateLog.push(`git show ${FIXTURE_HASH}:scripts/required-checks-parse.jq`);
+      }
+      expect(gateLog(entries), label).toEqual(expectedGateLog);
       expectGateRefused(entries, label);
       await rm(fixture.dir, { recursive: true, force: true });
     }
+  });
+
+  /**
+   * The parser-skew shape (issue 1104): the tree's parser copy predates the
+   * map's shape, so the tree's parse fails and only the target SHA's own copy
+   * of scripts/required-checks-parse.jq can read the map. The strict parser
+   * below rejects EVERY map, standing in for a copy one shape behind.
+   */
+  const strictParser = 'error("strict parser: every map is too new")\n';
+
+  function treeParser(fixture: Fixture): string {
+    return path.join(fixture.tree, "scripts", "required-checks-parse.jq");
+  }
+
+  function parserRead(sha: string): string {
+    return `git show ${sha}:scripts/required-checks-parse.jq`;
+  }
+
+  it("parses the map with the target SHA's own parser when the tree's copy predates its shape, and deploys", async () => {
+    const fixture = await makeFixture();
+    await writeFile(treeParser(fixture), strictParser);
+    // The real parser as the target SHA's copy: with the strict tree copy the
+    // fallback is the only path through the gate.
+    const result = await runDeploy(fixture, { GIT_SHIM_PARSER: parser });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.stderr).toContain(
+      `the map at ${FIXTURE_HASH} parsed with the target SHA's own scripts/required-checks-parse.jq; the tree's copy predates it`,
+    );
+    const entries = await readLog(fixture.shimLog);
+    const reads = gateReads(FIXTURE_HASH);
+    expect(gateLog(entries)).toEqual([
+      ...reads.slice(0, 2),
+      parserRead(FIXTURE_HASH),
+      ...reads.slice(2),
+    ]);
+    expect(entries.some((entry) => entry.args[0] === "release:switch")).toBe(true);
+  });
+
+  it("refuses, naming the fallback, when the map fails the tree's parser and the target SHA carries no parser", async () => {
+    const fixture = await makeFixture();
+    await writeFile(treeParser(fixture), strictParser);
+    const result = await runDeploy(fixture, { GIT_SHIM_PARSER_RC: "128" });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(`Could not read a valid .github/required-checks.json at ${FIXTURE_HASH}`);
+    expect(result.stderr).toContain("the tree's scripts/required-checks-parse.jq exited");
+    expect(result.stderr).toContain("the target SHA carries no copy of that file to fall back to (git show exited 128)");
+    const entries = await readLog(fixture.shimLog);
+    expect(gateLog(entries)).toEqual([
+      ...gateReads(FIXTURE_HASH).slice(0, 2),
+      parserRead(FIXTURE_HASH),
+    ]);
+    expectGateRefused(entries);
+  });
+
+  it("refuses when the target SHA's own parser also fails on the map", async () => {
+    const fixture = await makeFixture();
+    await writeFile(treeParser(fixture), strictParser);
+    const broken = path.join(fixture.dir, "broken-parser.jq");
+    await writeFile(broken, "this is not a jq program\n");
+    const result = await runDeploy(fixture, { GIT_SHIM_PARSER: broken });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(`Could not read a valid .github/required-checks.json at ${FIXTURE_HASH}`);
+    expect(result.stderr).toContain("the target SHA's own copy exited");
+    const entries = await readLog(fixture.shimLog);
+    expect(gateLog(entries)).toEqual([
+      ...gateReads(FIXTURE_HASH).slice(0, 2),
+      parserRead(FIXTURE_HASH),
+    ]);
+    expectGateRefused(entries);
   });
 
   it("refuses, naming the map and the SHA, when jq is not installed", async () => {
