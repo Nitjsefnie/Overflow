@@ -238,10 +238,17 @@ export class PostgresModerationStore implements ModerationStore {
         where id = ${audit.id}
       `;
       if (newState === "RECALIBRATING" || newState === "BANNED") {
+        // active = true is the flip guard: only rows actually deactivated are
+        // stamped, so already-inactive rows (sponsor-unregistered, or
+        // deactivated before migration 060 existed) keep whatever their
+        // history gives them and do not get re-stamped. active and the flag
+        // move in one statement so the invariant — the flag is non-null
+        // exactly while the row is sanction-deactivated — holds in every
+        // committed state.
         await transaction`
           update registered_repositories
-          set active = false, updated_at = now()
-          where sponsor_id = ${target.id}
+          set active = false, sanction_deactivated_at = now(), updated_at = now()
+          where sponsor_id = ${target.id} and active = true
         `;
       }
       const cohort = toCohortSnapshot(audit);
@@ -304,9 +311,12 @@ export class PostgresModerationStore implements ModerationStore {
         set enforcement_state = ${"ACTIVE"}, updated_at = now()
         where id = ${target.id}
       `;
+      // Clearing the flag here keeps the invariant two-sided: a row the
+      // closure reactivates leaves with no sanction flag, so a later ban
+      // reversal (issue 1072) re-stamps it fresh at the next deactivation.
       const reactivatedRepositories = await transaction<{ id: string }[]>`
         update registered_repositories
-        set active = true, updated_at = now()
+        set active = true, sanction_deactivated_at = null, updated_at = now()
         where sponsor_id = ${target.id} and active = false and unregistered_at is null
         returning id
       `;

@@ -1,0 +1,36 @@
+-- Issue 1072: record which repositories a sanction deactivated, so a
+-- reversal can reactivate exactly those rows — and no others.
+--
+-- Until now nothing recorded why a registered repository was inactive. The
+-- substantiate path flipped `active` to false for the sponsor's whole set of
+-- repositories with no filter at all, and reactivation filtered on
+-- `active = false and unregistered_at is null`. That filter excludes the
+-- sponsor's own departures (unregistered_at non-null is excluded), so on
+-- today's schema the rows it matches are exactly the rows moderation
+-- deactivated — but only by accident of that exclusion. Nothing distinguishes
+-- a row moderation deactivated from a row left inactive by anything else with
+-- unregistered_at null, which is precisely the gap a ban reversal runs into:
+-- issue 1072's reversal must reactivate exactly the repositories the sanction
+-- deactivated, and every inactive, never-unregistered row looks identical to
+-- it.
+--
+-- `registered_repositories.sanction_deactivated_at` is the instant a
+-- moderation deactivation flipped the row. It is stamped only on rows the
+-- statement actually flips (the statement now guards `active = true`), and it
+-- is cleared when a recalibration closure reactivates the row, so the flag
+-- holds exactly while the row is sanction-deactivated. The sponsor's
+-- unregistration never touches it (migration 034's ownership split stands:
+-- unregistered_at owns the sponsor's departure, `active` is owned by
+-- moderation), so a row sanctioned while registered keeps its flag through a
+-- later unregistration — and stays excluded from any reactivation by the same
+-- unregistered_at filter the closure already uses.
+--
+-- The column is nullable with no default, and it is NOT backfilled: rows
+-- deactivated before this migration cannot be attributed — the schema kept no
+-- reason, so a backfill would invent one. A reversal therefore reactivates
+-- only flagged rows, and pre-change deactivated rows are not reactivated by a
+-- reversal. That limitation is documented with the reversal route (Task 2);
+-- this migration only starts the record going forward.
+
+alter table registered_repositories
+  add column sanction_deactivated_at timestamp with time zone;

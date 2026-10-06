@@ -508,6 +508,117 @@ describe("PostgreSQL account moderation transitions", () => {
     expect(toIso(row.unregistered_at)).toBe(unregisteredAt);
   });
 
+  // Issue 1072: the reversal route must reactivate exactly the repositories a
+  // sanction deactivated, so the deactivation records which rows it flipped.
+  // The flag lands only on rows the statement actually flipped: already-inactive
+  // rows keep whatever their history gives them — null when moderation never
+  // deactivated them, their original instant when sanctioned before, kept
+  // through a later sponsor unregistration (unregistered_at owns the sponsor's
+  // departure; the flag owns the sanction). Closing a recalibration clears the
+  // flag on the rows it reactivates.
+  it("stamps the sanction-deactivation flag only on rows the deactivation flips, keeps unregistration's hands off it, and clears it when the recalibration closes", async () => {
+    const moderatorId = await insertUser("MODERATOR");
+    const targetId = await insertUser("MEMBER");
+    const recalibrationRepositoryId = await insertRepository(targetId);
+    const unregisteredAfterStampRepositoryId = await insertRepository(targetId);
+    const unregisteredBeforehandRepositoryId = await insertRepository(targetId);
+    const preChangeInactiveRepositoryId = await insertRepository(targetId);
+    // A pre-change row deactivated for no recorded reason (migration 060 does not
+    // backfill: such a row cannot be attributed) starts inactive with a null flag.
+    await sql`
+      update registered_repositories
+      set active = false
+      where id = ${preChangeInactiveRepositoryId}
+    `;
+    // The sponsor's departure before any moderation goes through the registration
+    // store; the sanction must never stamp a row the sponsor already left.
+    const unregisterStore = new PostgresRepositoryStore(sql);
+    await expect(unregisterStore.unregisterRepository({
+      ownerName: `example/repository-${await githubRepositoryIdFor(unregisteredBeforehandRepositoryId)}`,
+      sponsorId: targetId,
+      provider: "github",
+    })).resolves.toMatchObject({ kind: "UNREGISTERED" });
+
+    const pairs = await insertCalibrationPairs({ targetId, repositoryId: recalibrationRepositoryId, count: 10 });
+    const store = new PostgresModerationStore(sql);
+    const input = auditInput({
+      actorId: moderatorId,
+      targetAccountId: targetId,
+      repositoryId: recalibrationRepositoryId,
+      sampleStartedAt: "2020-01-01T00:00:00.000Z",
+      sampleEndedAt: "2030-01-01T00:00:00.000Z",
+      ...pairs,
+    });
+    for (const count of [1, 2]) {
+      const audit = await openAudit(store, input);
+      await expect(store.substantiateAccountAudit({
+        actorId: moderatorId,
+        auditId: audit.id,
+        reason: `Independent review confirms pattern ${count}.`,
+        credential: null,
+      })).resolves.toMatchObject({ kind: "ok", value: { confirmedPatternCount: count } });
+    }
+    // The second substantiation is the transition whose deactivation this test pins.
+    expect(await targetState(targetId)).toEqual({ state: "RECALIBRATING", confirmedCount: 2 });
+    expect(await repositoryStates(targetId)).toEqual(expectedRepositoryStates([
+      { id: recalibrationRepositoryId, active: false },
+      { id: unregisteredAfterStampRepositoryId, active: false },
+      { id: unregisteredBeforehandRepositoryId, active: false },
+      { id: preChangeInactiveRepositoryId, active: false },
+    ]));
+    expect(await sanctionDeactivationFlags(targetId)).toEqual(expectedRepositoryStates([
+      { id: recalibrationRepositoryId, active: false, sanctionDeactivated: true },
+      { id: unregisteredAfterStampRepositoryId, active: false, sanctionDeactivated: true },
+      { id: unregisteredBeforehandRepositoryId, active: false, sanctionDeactivated: false },
+      { id: preChangeInactiveRepositoryId, active: false, sanctionDeactivated: false },
+    ]));
+
+    // The sponsor unregisters one sanctioned row: unregistered_at moves, the flag keeps
+    // the instant the sanction stamped, and the BANNED deactivation below must not
+    // re-stamp it — the active-only guard leaves inactive rows alone.
+    const stampedFlagInstant = await sanctionDeactivatedAt(unregisteredAfterStampRepositoryId);
+    await expect(unregisterStore.unregisterRepository({
+      ownerName: `example/repository-${await githubRepositoryIdFor(unregisteredAfterStampRepositoryId)}`,
+      sponsorId: targetId,
+      provider: "github",
+    })).resolves.toMatchObject({ kind: "UNREGISTERED" });
+
+    await expect(store.closeRecalibration({
+      actorId: moderatorId,
+      targetAccountId: targetId,
+      plan: "The account completed the authorized recalibration plan.",
+      credential: null,
+    })).resolves.toMatchObject({
+      kind: "ok",
+      value: { targetState: "ACTIVE", confirmedPatternCount: 2, reactivatedRepositoryCount: 2 },
+    });
+    expect(await sanctionDeactivationFlags(targetId)).toEqual(expectedRepositoryStates([
+      { id: recalibrationRepositoryId, active: true, sanctionDeactivated: false },
+      { id: unregisteredAfterStampRepositoryId, active: false, sanctionDeactivated: true },
+      { id: unregisteredBeforehandRepositoryId, active: false, sanctionDeactivated: false },
+      { id: preChangeInactiveRepositoryId, active: true, sanctionDeactivated: false },
+    ]));
+    // The unregistered row's flag is the same instant the sanction stamped: the
+    // unregistration and the closed recalibration left it alone.
+    expect(await sanctionDeactivatedAt(unregisteredAfterStampRepositoryId)).toBe(stampedFlagInstant);
+
+    const bannedAudit = await openAudit(store, input);
+    await expect(store.substantiateAccountAudit({
+      actorId: moderatorId,
+      auditId: bannedAudit.id,
+      reason: "The third confirmed account-level pattern requires a ban.",
+      credential: null,
+    })).resolves.toMatchObject({ kind: "ok", value: { targetState: "BANNED", confirmedPatternCount: 3 } });
+    expect(await sanctionDeactivationFlags(targetId)).toEqual(expectedRepositoryStates([
+      { id: recalibrationRepositoryId, active: false, sanctionDeactivated: true },
+      { id: unregisteredAfterStampRepositoryId, active: false, sanctionDeactivated: true },
+      { id: unregisteredBeforehandRepositoryId, active: false, sanctionDeactivated: false },
+      { id: preChangeInactiveRepositoryId, active: false, sanctionDeactivated: true },
+    ]));
+    // The BANNED deactivation did not re-stamp the inactive unregistered row.
+    expect(await sanctionDeactivatedAt(unregisteredAfterStampRepositoryId)).toBe(stampedFlagInstant);
+  });
+
   it("uses immutable merge time for identical account-wide and repository-scoped cohorts across rebuild timestamps", async () => {
     const targetId = await insertUser("MEMBER");
     const primaryRepositoryId = await insertRepository(targetId);
@@ -990,8 +1101,33 @@ async function repositoryStates(targetId: string): Promise<Array<{ id: string; a
   `;
 }
 
-function expectedRepositoryStates(states: Array<{ id: string; active: boolean }>) {
+function expectedRepositoryStates<T extends { id: string; active: boolean }>(states: readonly T[]): T[] {
   return [...states].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+async function sanctionDeactivationFlags(
+  targetId: string,
+): Promise<Array<{ id: string; active: boolean; sanctionDeactivated: boolean }>> {
+  const rows = await sql<{ id: string; active: boolean; sanction_deactivated: boolean }[]>`
+    select id, active, (sanction_deactivated_at is not null) as sanction_deactivated
+    from registered_repositories
+    where sponsor_id = ${targetId}
+    order by id
+  `;
+  return rows.map((row) => ({
+    id: row.id,
+    active: row.active,
+    sanctionDeactivated: row.sanction_deactivated,
+  }));
+}
+
+async function sanctionDeactivatedAt(repositoryId: string): Promise<string | null> {
+  const [row] = await sql<{ sanction_deactivated_at: Date | null }[]>`
+    select sanction_deactivated_at from registered_repositories where id = ${repositoryId}
+  `;
+  return row === undefined || row.sanction_deactivated_at === null
+    ? null
+    : toIso(row.sanction_deactivated_at);
 }
 
 function sortCalibrationPairs(pairs: readonly CalibrationPair[]): CalibrationPair[] {
