@@ -250,7 +250,7 @@ describe("legal revision markers", () => {
     // bump and the pin it trips arrive in the same diff.
     expect(TERMS_REVISION.version).toBe("1.2");
     expect(ACCOUNT_DATA_REVISION.version).toBe("1.5");
-    expect(RULES_REVISION.version).toBe("1.1");
+    expect(RULES_REVISION.version).toBe("1.2");
   });
 });
 

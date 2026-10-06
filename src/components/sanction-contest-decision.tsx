@@ -14,6 +14,8 @@ type SanctionContestDecisionControlProps = {
 
 type DecisionResponse = {
   error?: { message?: string };
+  sanctionLifted?: boolean;
+  sanctionAlreadyGone?: boolean;
 };
 
 /**
@@ -21,7 +23,8 @@ type DecisionResponse = {
  * the reason and the two outcomes. The not-the-imposing-moderator rule is not
  * this control's to police — the store refuses the imposer where another
  * moderator exists, and the route carries that refusal back as the 403 this
- * control renders.
+ * control renders. A granted contest lifts the contested sanction; where the
+ * sanction had already gone, the response says so and this control says so.
  */
 export function SanctionContestDecisionControl({
   requestId,
@@ -57,9 +60,15 @@ export function SanctionContestDecisionControl({
         });
         return;
       }
+      const outcome =
+        decision === "DENIED"
+          ? ""
+          : body?.sanctionAlreadyGone === true
+            ? " The sanction had already been lifted."
+            : " The sanction is lifted.";
       setFeedback({
         kind: "success",
-        message: `Contest for ${accountLogin} was ${decision === "GRANTED" ? "granted" : "denied"}.`,
+        message: `Contest for ${accountLogin} was ${decision === "GRANTED" ? "granted" : "denied"}.${outcome}`,
       });
       router.refresh();
     } catch {
@@ -76,7 +85,7 @@ export function SanctionContestDecisionControl({
     <section className="moderation-controls" aria-label={`Contest decision for ${accountLogin}`}>
       <p className="mono-meta">
         Filed against the account’s {sanctionState} sanction — the filing and this decision are both moderation
-        events; recording a decision does not itself change the sanction.
+        events, and a granted contest lifts the sanction it contested.
       </p>
       <label className="field" htmlFor={`sanction-contest-decision-${requestId}`}>
         <span>Reason for the contest decision</span>

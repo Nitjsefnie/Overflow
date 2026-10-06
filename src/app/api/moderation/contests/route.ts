@@ -47,6 +47,10 @@ export type SanctionContestModerationRouteDependencies = {
  * The moderator's decision route for the disputes framework's sanction case
  * (issue 1125): a moderator records GRANTED or DENIED — with a reason — on an
  * OPEN contest request, and reads the OPEN queue the moderation page renders.
+ * A grant lifts the contested sanction in the same transaction the decision
+ * commits in; where the sanction was already gone the response says so
+ * (sanctionAlreadyGone) and the journal line says so
+ * (sanction.contest.decide.already_gone).
  *
  * The not-the-imposing-moderator rule is NOT this route's: it is enforced in
  * the store's transaction, against the database, where the imposer and the
@@ -79,14 +83,24 @@ export function createSanctionContestDecisionPostHandler(
     try {
       const service = await dependencies.createService();
       const decided = await service.decideContest({ id: session.user.id }, input);
+      // A grant over a sanction that had already gone is its own journal
+      // line: the decision was recorded but nothing was lifted, and the
+      // journal is what tells the two apart afterwards.
       logPrivilegedAction({
-        action: "sanction.contest.decide",
+        action:
+          decided.effect === "already_gone"
+            ? "sanction.contest.decide.already_gone"
+            : "sanction.contest.decide",
         actorId: session.user.id,
         credential: session.credential,
         clientAddress: readClientAddress(request),
-        subject: { requestId: input.requestId, accountId: decided.accountId },
+        subject: { requestId: input.requestId, accountId: decided.request.accountId },
       });
-      return Response.json({ request: decided });
+      return Response.json({
+        request: decided.request,
+        sanctionLifted: decided.effect === "lifted",
+        sanctionAlreadyGone: decided.effect === "already_gone",
+      });
     } catch (error) {
       return sanctionContestErrorResponse(error);
     }

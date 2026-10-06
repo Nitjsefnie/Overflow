@@ -212,6 +212,26 @@ describe("rules page", () => {
     expect(sanctionItems).toEqual([...SANCTION_CONTEST_RULES]);
   });
 
+  it.each(MOUNT_POINTS)("carries the grant-lift rule as the sanction list's fourth item, in the %s", (_label, element) => {
+    // Pinned against the constant, never page prose: the Disputes list above
+    // is already compared element-for-element against SANCTION_CONTEST_RULES,
+    // so this pin names WHERE in the shared source the grant's effect sits —
+    // the fourth item, between the one-open rule and the events rule — and
+    // what that item says. The pages render the list they are given, so a
+    // reordering is a difference here first, and a rewording is one edit to
+    // the constant.
+    expect(SANCTION_CONTEST_RULES).toHaveLength(5);
+    expect(SANCTION_CONTEST_RULES[3]).toBe("A granted contest lifts the sanction it contested.");
+    render(element);
+    const main = document.querySelector<HTMLElement>("main.page-content");
+    expect(main, "the rules view supplies its own main.page-content").not.toBeNull();
+    const region = within(main!).getByRole("region", { name: "Disputes" });
+    const lists = [...region.querySelectorAll("ul")];
+    const sanctionItems = [...lists[1]!.querySelectorAll("li")].map((item) => item.textContent);
+    expect(sanctionItems).toHaveLength(SANCTION_CONTEST_RULES.length);
+    expect(sanctionItems[3]).toBe(SANCTION_CONTEST_RULES[3]);
+  });
+
   it.each(MOUNT_POINTS)("names the sanction case in its own heading and points the ask at the filing page, in the %s", (_label, element) => {
     render(element);
 

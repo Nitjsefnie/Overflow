@@ -110,16 +110,23 @@ export const DISPUTE_CONTESTABLE_CASE = "a settlement";
  *   - one open request per sanction: the partial unique index
  *     sanction_contest_requests_one_open_per_sanction (migration 061), the
  *     same shape the settlement case's one-open rule uses (migration 009).
+ *   - a granted contest lifts the sanction it contested: the store's decision
+ *     transaction (src/lib/moderation/sanction-contest-store.ts) runs the
+ *     shared reversal core (src/lib/moderation/sanction-lift.ts) under the
+ *     user-row lock on a grant over the live sanction, and answers
+ *     already_gone where the sanction moved on while the request sat open.
  *   - the filing and the decision are moderation events: the filing writes its
  *     event through moderation_events' contest_request_id column (migration
  *     061) with the sanction's state on both sides, so the fold's
  *     participation-eligibility history is unchanged by it; the decision
- *     writes its event through the same column.
+ *     writes its event through the same column, and the lift it runs writes
+ *     the reversal event beside it.
  */
 export const SANCTION_CONTEST_RULES = [
   "The sanctioned account can ask for a sanction to be contested; a moderator decides.",
   "Where another moderator exists, the deciding moderator is not the one who imposed the sanction; with exactly one live moderator, that moderator decides and the record says so.",
   "One open request per sanction at a time.",
+  "A granted contest lifts the sanction it contested.",
   "The filing and the decision are each recorded as a moderation event.",
 ] as const;
 
