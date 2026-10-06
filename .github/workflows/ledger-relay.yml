@@ -43,8 +43,16 @@ on:
     inputs:
       run_id:
         description: "Id of the completed producer run whose relay posting died and must be re-posted"
-        required: true
+        required: false
+        default: ""
         type: string
+  # Issue 1116: the sweep must not depend on a producer run arriving — a
+  # pending App check-run the sweep posts (a placeholder, not attestation) is
+  # completed only by a LATER sweep, and a relay start that refuses its
+  # triggering run never sweeps. Every ten minutes, then, a start whose sole
+  # duty is the sweep.
+  schedule:
+    - cron: "*/10 * * * *"
 
 permissions:
   # actions: write exists only for the rerun-heal (issue 861): when a producer
@@ -58,7 +66,14 @@ permissions:
   actions: write
 
 concurrency:
-  group: ledger-relay
+  # Issue 1116 splits the group by event: a scheduled start, or a
+  # workflow_dispatch without a run_id, is SWEEP-ONLY — it heals nothing, so it
+  # must never displace a PENDING workflow_run relay, the exact cancellation
+  # whose orphaned victim the sweep exists to heal (issue 885). It groups as
+  # ledger-relay-sweep; a dispatch WITH a run_id heals exactly as before in
+  # ledger-relay. The same predicate is the step's LEDGER_SWEEP_ONLY env, so
+  # the group and the script's mode cannot drift.
+  group: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_id == '')) && 'ledger-relay-sweep' || 'ledger-relay' }}
   # `false` keeps this workflow's RUNNING instance alive when a newer arrival
   # joins the group. It does NOT keep a PENDING one: GitHub keeps at most one
   # pending run per concurrency group and cancels the previous pending run
@@ -109,4 +124,9 @@ jobs:
           GITHUB_WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           RELAY_RERUN_TOKEN: ${{ github.token }}
           LEDGER_DISPATCH_RUN_ID: ${{ inputs.run_id }}
+          # Issue 1116: the same predicate that keys the concurrency group,
+          # carried so the script can fail closed on any ambiguity between the
+          # mode and a named run: schedule, or a dispatch whose run_id is
+          # empty, is sweep-only (no mirror, no heal).
+          LEDGER_SWEEP_ONLY: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_id == '') }}
         run: node scripts/ledger-relay.ts
