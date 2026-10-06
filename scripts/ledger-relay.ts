@@ -29,15 +29,12 @@
 // workflow definition it executed is the base branch's
 // (isTrustedProducerRun); any other pinned run is refused without posting,
 // whichever of its context's paths the run came from. The refusal keeps the
-// byte-identical throw unless the run's head is provably dead — no open pull
-// request at its head SHA — in which case it prints the refusal plus one
-// fixed reason line and exits 0 (issue 1115): GitHub finalizing a stale
-// pull_request run of a closed pull request weeks late must not turn main
-// red over a context nothing is waiting on, while a live head, a fork head
-// or any liveness-read failure still throws. The App key
-// arrives only through the LEDGER_APP_KEY secret and is never logged; every
-// failure exits nonzero so a dead relay is visible as a red job, never as
-// silence.
+// byte-identical throw unless the head is provably dead, and must never read
+// a live fork head as dead (the head commit resolves in this repository
+// through its pull ref), so the head repository is decided first — an unknown
+// name is learned by fetching the run body — and a live head, a fork head, a
+// name still missing, or any read failure still throws (issue 1115). The App
+// key
 
 import { createSign } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -82,13 +79,13 @@ export interface TriggeringRun {
   runAttempt: number;
   /**
    * The full name ("OWNER/REPO") of the repository the run's head commit
-   * lives in, as the run body's `head_repository.full_name` reports it; empty
-   * when the run body was not fetched (the workflow_run path passes the run's
-   * fields through env, which carries no repository name). The refusal gate
-   * compares it against this repository's slug (issue 1115): a KNOWN mismatch
-   * keeps the byte-identical throw before any listing is consulted, because
-   * whether commits/{sha}/pulls lists an open fork pull request at its head is
-   * unverified and a miss there is the exact silent wait issue 1083 forbids.
+   * lives in, per the run body's `head_repository.full_name`; empty when the
+   * run's fields carry none (the workflow_run path's env carries none). The
+   * refusal gate compares it against this repository's slug (issue 1115): a
+   * known mismatch throws before any listing is consulted. Empty does NOT
+   * mean "same repository" — a fork head's commit resolves in the base
+   * repository through its pull ref — so the gate fetches the run body to
+   * learn the name, and a name still missing keeps the throw.
    */
   headRepository: string;
 }
@@ -274,11 +271,9 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     }
   }
 
-  // The trust gate, on both paths, after the mint (issue 1115): an untrusted
-  // producer run is thrown out byte-identically unless its head is provably
-  // dead — no open pull request at the run's head SHA — in which case the
-  // refusal downgrades to the visible exit-0 no-op instead of turning main
-  // red over a run whose context nothing is waiting on.
+  // The trust gate, both paths, after the mint (issue 1115): an untrusted run
+  // is thrown out byte-identically unless its head is provably dead (then the
+  // refusal exits 0 visibly).
   if (!isTrustedProducerRun(run.event, run.headBranch)) {
     return await refuseUntrustedProducer(deps, repo, run, auth);
   }
@@ -657,20 +652,12 @@ function headRepositoryFullNameOf(body: Record<string, unknown>): string {
 /**
  * The relay's refusal of a pinned run whose executed workflow definition was
  * not the base branch's, resolved against the head's liveness (issue 1115):
- * a live head — an open pull request whose tip is the run's head SHA — keeps
- * the byte-identical throw, because a required context that is still waited
- * for must fail visibly (issue 1083). A DEAD head downgrades the refusal to
- * the visible exit-0 no-op: the returned result carries the same message, and
- * the renderer prints it with one fixed reason line. A fork head — the head
- * repository's full name known and different from this repository — keeps the
- * throw BEFORE any listing is consulted, because whether
- * commits/{sha}/pulls lists an open fork pull request at its head is
- * unverified and a miss there is the exact silent wait issue 1083 forbids;
- * on the workflow_run path the body is not fetched, so the name is unknown
- * there and the liveness read itself is the fork backstop (a fork head's SHA
- * is not in this repository, and the read fails closed through its own
- * error). Any liveness-read error or non-array listing propagates: the gate
- * fails closed, never exiting 0 on an ambiguity.
+ * a live head keeps the byte-identical throw (issue 1083's visibility); a
+ * DEAD head downgrades the refusal to the visible exit-0 no-op. The head's
+ * repository is decided FIRST, because a fork head's commit resolves in the
+ * base repository through its pull ref and the listing answers 200 with
+ * count 0 for it: an unknown name is learned by fetching the run body, and
+ * a fork name, a live head, or any read failure throws.
  */
 async function refuseUntrustedProducer(
   deps: RelayDeps,
@@ -678,7 +665,20 @@ async function refuseUntrustedProducer(
   run: TriggeringRun,
   auth: Record<string, string>,
 ): Promise<RelayResult> {
-  if (run.headRepository !== "" && run.headRepository !== repo) {
+  let headRepository = run.headRepository;
+  if (headRepository === "") {
+    const fetched = await apiCall<Record<string, unknown>>(
+      deps,
+      {
+        url: `${API_ROOT}/repos/${repo}/actions/runs/${run.runId}`,
+        method: "GET",
+        headers: { ...API_HEADERS, ...auth },
+      },
+      `the workflow run ${run.runId}`,
+    );
+    headRepository = headRepositoryFullNameOf(fetched);
+  }
+  if (headRepository === "" || headRepository !== repo) {
     throw new Error(untrustedProducerMessage(run));
   }
   const pr = await findOpenPullRequestAtHead(deps, repo, run.headSha, auth);
@@ -695,8 +695,7 @@ async function refuseUntrustedProducer(
 }
 
 /**
- * The refusal message, byte-identical to the one the gate has always thrown,
- * shared by the throw and the exit-0 print so the two cannot drift.
+ * The refusal message, byte-identical across the throw and the exit-0 print.
  */
 function untrustedProducerMessage(run: TriggeringRun): string {
   return (
