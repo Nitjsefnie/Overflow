@@ -18,6 +18,12 @@ type ModerationResponse = {
   error?: { message?: string };
 };
 
+/** The ban reversal's 200 body, whose reactivated ids the feedback repeats as a count. */
+type BanReversalResponse = {
+  reversal?: { reactivatedRepositories?: readonly string[] };
+  error?: { message?: string };
+};
+
 export function ModerationControls({ auditId, targetLogin }: ModerationControlsProps) {
   const router = useRouter();
   const [reason, setReason] = useState("");
@@ -203,7 +209,7 @@ export function BanReversalControl({
         credentials: "same-origin",
         body: JSON.stringify({ targetAccountId, reason: trimmedReason }),
       });
-      const body = (await response.json().catch(() => null)) as ModerationResponse | null;
+      const body = (await response.json().catch(() => null)) as BanReversalResponse | null;
       if (!response.ok) {
         setFeedback({
           kind: "error",
@@ -211,7 +217,19 @@ export function BanReversalControl({
         });
         return;
       }
-      setFeedback({ kind: "success", message: `${targetLogin} was reactivated with the recorded reversal reason.` });
+      // The closure payload names exactly which repositories came back; the
+      // feedback repeats its count — an explicit zero included — so a reversal
+      // that brought nothing back does not read like one that brought the
+      // whole sponsorship with it. A body without the array says nothing
+      // rather than claiming a count it does not know.
+      const reactivated = body?.reversal?.reactivatedRepositories;
+      const count = reactivated === undefined ? null : reactivated.length;
+      setFeedback({
+        kind: "success",
+        message:
+          `${targetLogin} was reactivated with the recorded reversal reason.` +
+          (count === null ? "" : ` ${count} ${plural(count, "repository", "repositories")} reactivated.`),
+      });
       router.refresh();
     } catch {
       setFeedback({ kind: "error", message: "The reversal control could not reach Overflow. Try again." });
