@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import ModerationPage from "@/app/moderation/page";
 import { UnwritableClosureQueue } from "@/components/unwritable-closure-queue";
 import type { UnwritableClosureProjection } from "@/lib/dashboard/queries";
+import { formatInstant } from "@/lib/format-instant";
 
 // Rebind cached consumers to this file's mocks when workers are shared.
 vi.hoisted(() => { vi.resetModules(); });
@@ -224,7 +225,7 @@ describe("unwritable closure queue", () => {
     const entry = within(screen.getByRole("listitem"));
     expect(screen.getByRole("list").tagName).toBe("OL");
     expect(entry.getByText("co-op/harbour").tagName).toBe("STRONG");
-    expect(entry.getByText(/recorded 2026-09-05T10:00:00.000Z/)).toBeVisible();
+    expect(entry.getByText(/recorded 2026-09-05 10:00 UTC/)).toBeVisible();
     expect(entry.getByRole("link", { name: "#" + "17 Repair the tide gate" })).toHaveAttribute("href", "https://github.com/co-op/harbour/issues/17");
     expect(entry.getByRole("link", { name: "#" + "18 Repair the gate" })).toHaveAttribute("href", "https://github.com/co-op/harbour/pull/18");
     expect(entry.getByText("The settled label was applied after the evidence window.")).toHaveClass("override-reason");
@@ -275,7 +276,7 @@ describe("unwritable closure queue", () => {
     const pullRequestParagraph = pullRequest.closest("p")!;
     const correctionPathParagraph = correctionPath!.closest("p")!;
     expect(repositoryParagraph.textContent).toBe(
-      `${uncorrected.repositoryName} · recorded ${uncorrected.recordedAt}`,
+      `${uncorrected.repositoryName} · recorded ${formatInstant(uncorrected.recordedAt)}`,
     );
     expect(issueParagraph.textContent).toBe(`#${uncorrected.issueNumber} ${uncorrected.issueTitle}`);
     expect(pullRequestParagraph.textContent).toBe(
@@ -289,7 +290,7 @@ describe("unwritable closure queue", () => {
     expect(paragraphChildNodes(repositoryParagraph)).toEqual([
       { nodeType: Node.ELEMENT_NODE, tag: "STRONG", text: uncorrected.repositoryName },
       { nodeType: Node.TEXT_NODE, text: " · recorded " },
-      { nodeType: Node.TEXT_NODE, text: uncorrected.recordedAt },
+      { nodeType: Node.TEXT_NODE, text: formatInstant(uncorrected.recordedAt) },
     ]);
     expect(paragraphChildNodes(issueParagraph)).toEqual([
       { nodeType: Node.ELEMENT_NODE, tag: "A", text: `#${uncorrected.issueNumber} ${uncorrected.issueTitle}` },

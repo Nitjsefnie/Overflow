@@ -2,6 +2,7 @@ import { AppShell } from "@/components/app-shell";
 import { SanctionContestRequestForm } from "@/components/sanction-contest-request";
 import { SANCTION_CONTESTABLE_CASE, SANCTION_CONTEST_RULES } from "@/lib/disputes";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
+import { formatInstant } from "@/lib/format-instant";
 import { PostgresSanctionContestStore } from "@/lib/moderation/sanction-contest-store";
 import type {
   FileableSanction,
@@ -94,10 +95,10 @@ export function SanctionContestsContent({
             {requests.map((request) => (
               <li key={request.id}>
                 <p className="override-state">{request.state === "OPEN" ? "Open — still with a moderator" : `Decided — ${request.decision}`}</p>
-                <p>Filed {request.createdAt}: “{request.requestReason}”</p>
+                <p>Filed {formatInstant(request.createdAt)}: “{request.requestReason}”</p>
                 {request.decidedReason === null ? null : (
                   <p className="mono-meta">
-                    Decided {request.decidedAt ?? "at an unknown time"}: “{request.decidedReason}”
+                    Decided {request.decidedAt != null ? formatInstant(request.decidedAt) : "at an unknown time"}: “{request.decidedReason}”
                     {request.decidedBySoleModerator ? " — by the only live moderator" : ""}
                   </p>
                 )}

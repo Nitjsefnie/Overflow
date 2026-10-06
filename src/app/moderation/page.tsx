@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import type { GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
+import { formatInstant } from "@/lib/format-instant";
 import { plural } from "@/lib/plural";
 import type { BannedAccountProjection } from "@/lib/moderation/banned-accounts";
 import type { OpenContestRequestProjection } from "@/lib/moderation/sanction-contest-service";
@@ -227,7 +228,7 @@ export default async function ModerationPage() {
             {openContests.map((contest) => (
               <li key={contest.requestId}>
                 <p>
-                  <strong>{contest.accountLogin}</strong> · {contest.sanctionState} · filed {contest.filedAt}
+                  <strong>{contest.accountLogin}</strong> · {contest.sanctionState} · filed {formatInstant(contest.filedAt)}
                 </p>
                 <p>“{contest.requestReason}”</p>
                 <SanctionContestDecisionControl
@@ -272,7 +273,7 @@ export default async function ModerationPage() {
           <ol>
             {history.map((event) => (
               <li key={event.id}>
-                {event.createdAt} · {event.targetLogin}: {event.priorState} → {event.newState} · {event.reason}
+                {formatInstant(event.createdAt)} · {event.targetLogin}: {event.priorState} → {event.newState} · {event.reason}
                 {event.recalibrationPlan === null ? null : <pre>{JSON.stringify(event.recalibrationPlan, null, 2)}</pre>}
               </li>
             ))}

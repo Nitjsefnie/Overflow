@@ -16,7 +16,7 @@ export function UnwritableClosureQueue({ closures }: UnwritableClosureQueueProps
       {closures.map((closure) => (
         <li key={closure.id}>
           <p>
-            <strong>{closure.repositoryName}</strong> · recorded {closure.recordedAt}
+            <strong>{closure.repositoryName}</strong> · recorded {formatInstant(closure.recordedAt)}
           </p>
           <p>
             <a href={closure.issueUrl}>
