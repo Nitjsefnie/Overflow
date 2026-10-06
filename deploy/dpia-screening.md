@@ -75,8 +75,8 @@ participation gate that reads the state is `isParticipationEligibleAt` in
 
 ## The human-review routes
 
-None of these activities ends in an irreversible automated sanction. Three
-routes put a person between the scoring and its consequences, and all three
+None of these activities ends in an irreversible automated sanction. Four
+routes put a person between the scoring and its consequences, and all four
 are disclosed in the `/account-data` notice.
 
 **Sanctions are applied by moderators.** Enforcement transitions — moving an
@@ -90,6 +90,19 @@ inside the product persisting in the database
 `src/lib/moderation/transitions.ts` and
 `src/lib/moderation/postgres-store.ts`; the fold reads the resulting states,
 it does not set them.
+
+**Ban and recalibration reversal.** A moderator can reverse a recalibration
+or a ban inside the product: `closeRecalibration` and `reverseBan` in
+`src/lib/moderation/postgres-store.ts` return the account to ACTIVE,
+reactivate the sanctioned account's still-registered inactive repositories
+(the `sanction_deactivated_at` flag migration 060 records the rows a sanction
+deactivates with), and write the moderation event; the ban route is
+`src/app/api/moderation/reversal/route.ts`, which journals the action as
+`ban.reverse` in the privileged-action log. The route is disclosed in the
+`/account-data` notice's "Scoring and sanctions" section, with the sanction's
+effects on the account's repositories. (Route recorded 2026-10-06, with the
+change that shipped it; the three routes above stand as screened on
+2026-09-30.)
 
 **Correction and override requests.** A member may request a correction to a
 priced settlement or calibration, and a moderator grants or declines it
@@ -130,7 +143,8 @@ arithmetic.
 conclusion can be re-derived and challenged:
 
 - The enforcement ladder passes through a human moderator: transitions are
-  applied by moderators, priced settlements can be contested through
+  applied by moderators, a recalibration or a ban can be reversed by a
+  moderator inside the product, priced settlements can be contested through
   correction requests decided by a moderator, and balances can be adjusted by
   hand. The one fully automated lever is the credit-limit withdrawal — an
   account's issues leave the board on balance alone once its balance reaches
@@ -173,8 +187,9 @@ dated conclusion, not by editing this one in place.
 
 The `/account-data` notice is the transparency surface for everything this
 record screens: its "Scoring and sanctions" section describes the automated
-pricing, the credit limit and the enforcement states, and its rights sections
-describe export, rectification and correction. The operating model — who
+pricing, the credit limit, the enforcement states, and what a sanction does
+to the account's repositories, and its rights sections describe export,
+rectification and correction. The operating model — who
 decides what, and what stops when the maintainer is unavailable — is
 [OPERATING.md](../OPERATING.md), section "Governance: single-maintainer
 operation". Incident handling for this processing lives in
