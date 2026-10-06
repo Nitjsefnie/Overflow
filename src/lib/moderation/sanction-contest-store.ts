@@ -182,8 +182,11 @@ export class PostgresSanctionContestStore implements SanctionContestStore {
       if (request === undefined) {
         return { kind: "not_found" };
       }
+      // Its own answer, not the filing path's invalid_state: an
+      // already-decided request reads to a moderator as "decided, too late",
+      // not as the filer's "cannot be contested right now".
       if (request.state !== "OPEN") {
-        return { kind: "invalid_state" };
+        return { kind: "already_decided" };
       }
 
       // The imposer is the actor on the sanction event. A plain read, not a

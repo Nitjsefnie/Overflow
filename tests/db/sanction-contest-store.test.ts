@@ -587,7 +587,20 @@ describe("sanction contest decision path", () => {
     expect(first).toMatchObject({ kind: "ok" });
 
     const second = await decide(requestId, imposerId, "GRANTED", "Too late to change it.");
-    expect(second).toEqual({ kind: "invalid_state" });
+    // Its own answer, not the filing path's shared invalid_state: the
+    // decision route carries this cause out with the already-decided message,
+    // not the cannot-contest one a filer sees.
+    expect(second).toEqual({ kind: "already_decided" });
+    await expect(
+      new SanctionContestService(store()).decideContest(
+        { id: imposerId },
+        { requestId, decision: "DENIED", reason: "Too late to change it." },
+      ),
+    ).rejects.toMatchObject({
+      name: "SanctionContestError",
+      code: "CONFLICT",
+      message: "This contest request has already been decided.",
+    });
   }, 60_000);
 
   it("answers not_found for an unknown request", async () => {
