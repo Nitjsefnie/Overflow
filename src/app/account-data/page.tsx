@@ -215,9 +215,13 @@ export function AccountDataNotice() {
             Once the repository can be read again, the re-reads resume.
           </li>
           <li>
-            The change log is append-only: Overflow itself never deletes the logins and titles it recorded,
-            including those of removed issues and pull requests. The operator has a cleanup script, run by hand,
-            that removes only entries recording no actual change.
+            The change log is append-only while a reconciliation run is open. An automated
+            retention prune running inside the application deletes the entries of every
+            completed or failed reconciliation run once that run finished more than 90 days
+            ago, together with those runs — the logins and titles an entry recorded, including
+            those of removed issues and pull requests, leave the database with it. The operator
+            has a cleanup script, run by hand, that removes only entries recording no actual
+            change.
           </li>
           <li>
             Unregistering a repository deletes none of this — the logins, numeric ids, titles, change-log
