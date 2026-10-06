@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { POSTGRES_IMAGE, postgresWaitStrategy, publishPostgresOnLoopback, startedPostgresEndpoint, type ParkedSharedPostgresFailure, type SharedPostgresFacts } from "./postgres-container";
 
@@ -19,7 +20,6 @@ import { POSTGRES_IMAGE, postgresWaitStrategy, publishPostgresOnLoopback, starte
 const SHARED = {
   database: "overflow_shared",
   user: "overflow_shared",
-  password: "overflow_shared",
 };
 
 /**
@@ -33,11 +33,14 @@ interface GlobalSetupVitest {
 let container: StartedTestContainer | undefined;
 
 export async function setup(vitest: GlobalSetupVitest): Promise<void> {
+  // No committed password (issue 1070): a fresh one per run; the facts carry
+  // it to every suite that provisions on the server.
+  const adminPassword = randomBytes(24).toString("hex");
   try {
     const built = new GenericContainer(POSTGRES_IMAGE)
       .withEnvironment({
         POSTGRES_DB: SHARED.database,
-        POSTGRES_PASSWORD: SHARED.password,
+        POSTGRES_PASSWORD: adminPassword,
         POSTGRES_USER: SHARED.user,
       })
       .withExposedPorts(5432)
@@ -51,7 +54,7 @@ export async function setup(vitest: GlobalSetupVitest): Promise<void> {
       host: endpoint.host,
       port: endpoint.port,
       adminUser: SHARED.user,
-      adminPassword: SHARED.password,
+      adminPassword,
       containerId: started.getId(),
     });
   } catch (error) {

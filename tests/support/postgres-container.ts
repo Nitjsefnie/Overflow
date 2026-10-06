@@ -8,7 +8,14 @@ import postgres from "postgres";
 export interface PostgresContainerOptions {
   database: string;
   user: string;
-  password: string;
+  /**
+   * Optional since issue 1070: no test password is a secret worth committing,
+   * so when omitted the helper generates a fresh random hex password for this
+   * call — the per-suite role's password on the shared server, POSTGRES_PASSWORD
+   * of a private container. Call sites that pass an explicit literal keep
+   * working unchanged.
+   */
+  password?: string;
   /** Optional shell scripts copied into /docker-entrypoint-initdb.d/ before start. Test fixtures only. */
   initScripts?: ReadonlyArray<{ name: string; content: string }>;
 }
@@ -283,10 +290,11 @@ export function postgresWaitStrategy({ database, user }: Pick<PostgresContainerO
 }
 
 export async function startPostgresContainer(options: PostgresContainerOptions): Promise<StartedPostgres> {
-  const { database, user, password, initScripts = [] } = options;
+  const { database, user, initScripts = [] } = options;
+  const password = options.password ?? randomBytes(24).toString("hex");
 
   if (initScripts.length > 0) {
-    return startPrivatePostgres(options);
+    return startPrivatePostgres({ database, user, password, initScripts });
   }
   return startOnSharedServer({ database, user, password });
 }
@@ -341,8 +349,12 @@ async function removeFailedPrivateContainers(attemptId: string): Promise<void> {
  * these suites get a container of their own, exactly as every suite did
  * before the shared server existed (issue 626 left them unchanged).
  */
-async function startPrivatePostgres(options: PostgresContainerOptions): Promise<StartedPostgres> {
-  const { database, user, password, initScripts = [] } = options;
+async function startPrivatePostgres({ database, user, password, initScripts = [] }: {
+  database: string;
+  user: string;
+  password: string;
+  initScripts?: ReadonlyArray<{ name: string; content: string }>;
+}): Promise<StartedPostgres> {
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const hostPort = await pickPrivateHostPort();
@@ -390,8 +402,11 @@ async function startPrivatePostgres(options: PostgresContainerOptions): Promise<
  * drop scratch databases. (The CREATE EXTENSION in 001_initial.sql does not
  * need it: pgcrypto is TRUSTED since PG13 and installs without superuser.)
  */
-async function startOnSharedServer(options: Pick<PostgresContainerOptions, "database" | "user" | "password">): Promise<StartedPostgres> {
-  const { database, user, password } = options;
+async function startOnSharedServer({ database, user, password }: {
+  database: string;
+  user: string;
+  password: string;
+}): Promise<StartedPostgres> {
   const shared = sharedPostgresFacts();
   const suffix = randomBytes(4).toString("hex");
   const role = `${user}_${suffix}`;
