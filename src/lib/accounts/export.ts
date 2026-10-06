@@ -85,6 +85,13 @@ export type AccountExport = {
   moderationCreditAdjustmentLines: AccountExportRow[];
 };
 
+/**
+ * The document shape a reader of the export pins itself against. Moving the
+ * version means breaking the shape: a removed or renamed key, or a key whose
+ * type changed. A new top-level section is an additive key under an unchanged
+ * version — consumers read it as a present-or-absent key — so the sections
+ * this document gains do not bump it.
+ */
 export const ACCOUNT_EXPORT_FORMAT_VERSION = 1 as const;
 
 /** The shared representation used by the operator CLI and member download. */

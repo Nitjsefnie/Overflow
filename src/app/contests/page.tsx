@@ -11,7 +11,7 @@ import type {
 type SanctionContestsContentProps = {
   memberName: string;
   isModerator: boolean;
-  sanctions: readonly FileableSanction[];
+  sanctions: readonly FileableSanction[] | null;
   requests: readonly SanctionContestRequest[] | null;
 };
 
@@ -36,8 +36,8 @@ export function SanctionContestsContent({
       .filter((request) => request.state === "OPEN")
       .map((request) => request.sanctionEventId),
   );
-  const availableSanctions = sanctions.filter((sanction) => !contestedSanctionIds.has(sanction.id));
-  const formAvailable = availableSanctions.length > 0;
+  const availableSanctions = (sanctions ?? []).filter((sanction) => !contestedSanctionIds.has(sanction.id));
+  const formAvailable = sanctions !== null && availableSanctions.length > 0;
 
   return (
     <AppShell memberName={memberName} isModerator={isModerator}>
@@ -62,7 +62,13 @@ export function SanctionContestsContent({
 
       <section className="surface" aria-labelledby="sanction-contest-form-heading">
         <h2 id="sanction-contest-form-heading">Request a contest</h2>
-        {sanctions.length === 0 ? (
+        {sanctions === null ? (
+          // A failed read is not a clean bill of health: claiming "no live
+          // sanction" on the recourse page for sanctioned accounts would read
+          // as a substantive denial, so the failed state names the load
+          // instead, exactly as the history section below does.
+          <p className="mono-meta">Your live sanctions could not be loaded.</p>
+        ) : sanctions.length === 0 ? (
           <p className="mono-meta">
             There is no live sanction on this account — nothing to contest. A contest targets the sanction
             you are under now, not one a reversal already lifted.
@@ -107,13 +113,21 @@ export function SanctionContestsContent({
 export default async function SanctionContestsPage() {
   const session = await requireMemberPageSession();
   const store = new PostgresSanctionContestStore();
-  let sanctions: FileableSanction[] = [];
+  // Each read tracks its own failure: a failed read leaves its value null and
+  // the page answers for it honestly — a failed sanctions read must never
+  // wear the "no live sanction" verdict, which is a substantive claim on this
+  // page, and a failed history read must never wear silence either.
+  let sanctions: FileableSanction[] | null = null;
   let requests: SanctionContestRequest[] | null = null;
   try {
     sanctions = await store.listFileableSanctions(session.user.id);
+  } catch {
+    // sanctions stays null; the form region names the failed load.
+  }
+  try {
     requests = await store.listRequestsForAccount(session.user.id);
   } catch {
-    requests = null;
+    // requests stays null; the history section names the failed load.
   }
   return (
     <SanctionContestsContent

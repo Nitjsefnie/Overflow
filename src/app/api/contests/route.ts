@@ -1,9 +1,9 @@
 import { z } from "zod";
 import type { UserRole } from "@/lib/db/types";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
+import { sanctionContestErrorResponse } from "@/lib/moderation/sanction-contest-route";
 import {
   SanctionContestService,
-  SanctionContestError,
   type SanctionContestRequest,
 } from "@/lib/moderation/sanction-contest-service";
 import { PostgresSanctionContestStore } from "@/lib/moderation/sanction-contest-store";
@@ -32,6 +32,7 @@ export const sanctionContestSchema = z
     reason: reasonText(),
   })
   .strict();
+
 
 export type SanctionContestRouteDependencies = {
   getSession: () => Promise<MemberRouteSession | null>;
@@ -99,25 +100,6 @@ export function createSanctionContestListGetHandler(dependencies: SanctionContes
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to load your sanction contest requests.");
     }
   };
-}
-
-export function sanctionContestErrorResponse(error: unknown): Response {
-  if (!(error instanceof SanctionContestError)) {
-    return errorResponse(502, "UPSTREAM_FAILURE", "Unable to complete the sanction contest request.");
-  }
-  switch (error.code) {
-    case "NOT_FOUND":
-      return errorResponse(404, error.code, error.message);
-    case "CONFLICT":
-      return errorResponse(409, error.code, error.message);
-    case "FORBIDDEN":
-      // The deciding-moderator rule: the imposer may not decide while another
-      // moderator can. Same status the moderator gate refuses a non-moderator
-      // with, different message — the rule it names is the disputes rule.
-      return errorResponse(403, error.code, error.message);
-    default:
-      return errorResponse(422, error.code, error.message);
-  }
 }
 
 /**

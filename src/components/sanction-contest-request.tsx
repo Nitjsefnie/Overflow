@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FileableSanction } from "@/lib/moderation/sanction-contest-service";
 import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 
@@ -30,6 +30,16 @@ export function SanctionContestRequestForm({ sanctions }: SanctionContestRequest
   const [reason, setReason] = useState("");
   const [pending, setPending] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
+
+  // The server owns the fileable list: the refresh after a filing, a decision
+  // or a reversal can swap the props under this form. A selection the new
+  // list no longer carries would submit a stale event id (or sit blank), so
+  // the selection follows the list whenever the entry it holds leaves it.
+  useEffect(() => {
+    if (!sanctions.some((sanction) => sanction.id === sanctionEventId)) {
+      setSanctionEventId(sanctions[0]?.id ?? "");
+    }
+  }, [sanctions, sanctionEventId]);
 
   async function fileContest() {
     const trimmedReason = reason.trim();
