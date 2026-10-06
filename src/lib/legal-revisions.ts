@@ -69,7 +69,7 @@ export const TERMS_REVISION: LegalRevision = {
 
 export const ACCOUNT_DATA_REVISION: LegalRevision = {
   document: "account-data",
-  version: "1.1",
+  version: "1.2",
   effectiveDate: "2026-10-06",
 };
 

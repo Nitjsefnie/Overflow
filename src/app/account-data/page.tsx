@@ -260,7 +260,10 @@ export function AccountDataNotice() {
           adjustment, requesting a repository rederivation, granting or declining a settlement override. Each line
           records the acting account, a reference to the credential it was performed with (never the credential
           itself), the client&apos;s IP address, and what was acted on. Those lines go to the same host system
-          journal with the same retention, and no other Overflow log line records an IP address. Overflow&apos;s
+          journal with the same retention, and no other Overflow log line records an IP address. On the
+          operator&apos;s 2026-10-05 decision, the privileged-action entries — the security log lines that
+          carry a client IP address — are also kept for 90 days in a root-only export on the host, outside
+          the size-bound journal. Overflow&apos;s
           other log lines can include a repository&apos;s owner and name, which may be a person&apos;s username,
           and error details; a database or forge error can quote part of the record being written or read, such as
           an issue description or comment text.
@@ -321,7 +324,8 @@ export function AccountDataNotice() {
             entries to the operator&apos;s mailbox. The mail is submitted through the host&apos;s
             mail relay and forwarded by Google&apos;s smtp.gmail.com relay, so Google LLC (US)
             processes that content. The journal excerpts may carry personal data (for example
-            repository names or logins)
+            repository names or logins), and they may include privileged-action audit lines,
+            which record the acting account&apos;s client IP address
           </li>
           <li>
             Discord — Discord is operated by Discord Inc. (US): the nightly encrypted backup copy
@@ -384,6 +388,11 @@ export function AccountDataNotice() {
             Daily database backups taken before a deletion keep pre-deletion data on the same host as the
             database. Each backup is pruned once it is more than 14 days old — in practice about 15 days —
             and pruning happens only after a later backup succeeds, so failing backups keep them longer.
+          </li>
+          <li>
+            The privileged-action journal lines that record a client IP address are also kept for 90 days
+            in a root-only export on the host, outside the size-bound system journal, on the operator&apos;s
+            2026-10-05 decision.
           </li>
           <li>
             In addition to those backups, a nightly automated copy of an encrypted, reduced backup set
@@ -574,6 +583,13 @@ export function AccountDataNotice() {
           <li>
             every ledger record, including their copies of your public GitHub login, which later
             reconciliations keep refreshing from GitHub
+          </li>
+          <li>
+            free text other people wrote about you: a moderation event&apos;s reason and recalibration
+            plan, a calibration audit&apos;s rationale and decision, a settlement override request&apos;s
+            reason and decision reason, and a credit adjustment&apos;s reason — records of sanctions,
+            audits and corrections written by moderators and members that name your account, and deletion
+            leaves every referencing row untouched
           </li>
         </ul>
         <p>What happens afterwards:</p>
