@@ -198,4 +198,24 @@ describe("GET /api/issues", () => {
       { repository: undefined, openingLabel: undefined, claimState: "OPEN", page: 2.5, pageSize: undefined },
     );
   });
+
+  it.each([
+    ["1e17", 1e17],
+    ["1e308", 1e308],
+    ["9007199254740991", Number.MAX_SAFE_INTEGER],
+  ] as const)(
+    "passes a huge page written %s through for the query module to bound, answering 200",
+    async (raw, parsed) => {
+      const dependencies = issueDependencies();
+
+      const response = await createIssuesGetHandler(dependencies)(issuesRequest(`?page=${raw}`));
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual([]);
+      expect(dependencies.listEligibleIssues).toHaveBeenCalledExactlyOnceWith(
+        memberId,
+        { repository: undefined, openingLabel: undefined, claimState: "OPEN", page: parsed, pageSize: undefined },
+      );
+    },
+  );
 });

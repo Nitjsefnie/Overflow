@@ -188,4 +188,24 @@ describe("issues board page", () => {
     expect(screen.getByRole("link", { name: "Previous page" })).toHaveAttribute("href", "/issues");
     expect(screen.queryByRole("link", { name: "Next page" })).not.toBeInTheDocument();
   });
+
+  it("serves a huge page as the board's empty state with an offset the query can run", async () => {
+    // alert 1066: the page once computed an offset the server cannot receive
+    // exactly (2e19 at page 1e17), the query failed, and the reader saw the
+    // load-failure state. The bound page reads as an empty page with a pager
+    // that pages back through the largest servable page.
+    respondWith({ issues: [] });
+    render(await IssuesPage({ searchParams: Promise.resolve({ page: "1e17" }) }));
+
+    const values = unsafe.mock.lastCall![1] as unknown[];
+    const [limit, offset] = values.slice(-2);
+    expect(limit).toBe(200);
+    expect(offset).toBe(9_007_199_254_740_800);
+    expect(screen.getByRole("heading", { name: "No eligible issues are open." })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Previous page" })).toHaveAttribute(
+      "href",
+      "/issues?page=45035996273704",
+    );
+    expect(screen.queryByRole("link", { name: "Next page" })).not.toBeInTheDocument();
+  });
 });

@@ -961,6 +961,30 @@ describe("dashboard projections", () => {
     expect(captures[0]?.values?.slice(-2)).toEqual([1, 0]);
   });
 
+  it("bounds a huge page's offset to the largest page cut the statement can receive exactly", async () => {
+    // At the default size the largest servable page is
+    // floor(MAX_SAFE_INTEGER / 200) + 1 = 45035996273705, whose offset
+    // 9007199254740800 is the largest safe-integer page cut. A page past the
+    // board's end reads as an empty page, never as a query the server rejects
+    // (alert 1066's 502 UPSTREAM_FAILURE).
+    const { sql, captures } = sqlHarness([[]]);
+
+    await listEligibleIssues("member-1", { page: 1e17 }, { sql });
+
+    expect(captures[0]?.values?.slice(-2)).toEqual([200, 9_007_199_254_740_800]);
+  });
+
+  it.each([1e308, Number.MAX_SAFE_INTEGER])(
+    "bounds the offset for a page of %s to the same largest page cut",
+    async (page) => {
+      const { sql, captures } = sqlHarness([[]]);
+
+      await listEligibleIssues("member-1", { page }, { sql });
+
+      expect(captures[0]?.values?.slice(-2)).toEqual([200, 9_007_199_254_740_800]);
+    },
+  );
+
   it("applies repository, offered-label, and claim-state filters server side and projects operational context", async () => {
     const { sql, captures } = sqlHarness([
       [
