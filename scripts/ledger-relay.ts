@@ -27,8 +27,14 @@
 // required context produced by a pull_request_target file and a push file),
 // and every path it names relays. A pinned run is relayed only when the
 // workflow definition it executed is the base branch's
-// (isTrustedProducerRun); any other pinned run fails the relay without
-// posting, whichever of its context's paths the run came from. The App key
+// (isTrustedProducerRun); any other pinned run is refused without posting,
+// whichever of its context's paths the run came from. The refusal keeps the
+// byte-identical throw unless the run's head is provably dead — no open pull
+// request at its head SHA — in which case it prints the refusal plus one
+// fixed reason line and exits 0 (issue 1115): GitHub finalizing a stale
+// pull_request run of a closed pull request weeks late must not turn main
+// red over a context nothing is waiting on, while a live head, a fork head
+// or any liveness-read failure still throws. The App key
 // arrives only through the LEDGER_APP_KEY secret and is never logged; every
 // failure exits nonzero so a dead relay is visible as a red job, never as
 // silence.
@@ -74,6 +80,17 @@ export interface TriggeringRun {
   headBranch: string;
   /** The triggering run's attempt number; 1 when the environment or the API did not name one. */
   runAttempt: number;
+  /**
+   * The full name ("OWNER/REPO") of the repository the run's head commit
+   * lives in, as the run body's `head_repository.full_name` reports it; empty
+   * when the run body was not fetched (the workflow_run path passes the run's
+   * fields through env, which carries no repository name). The refusal gate
+   * compares it against this repository's slug (issue 1115): a KNOWN mismatch
+   * keeps the byte-identical throw before any listing is consulted, because
+   * whether commits/{sha}/pulls lists an open fork pull request at its head is
+   * unverified and a miss there is the exact silent wait issue 1083 forbids.
+   */
+  headRepository: string;
 }
 
 const SHA_40 = /^[0-9a-f]{40}$/;
@@ -177,6 +194,13 @@ export interface RelayResult {
   rerunDispatched: boolean;
   /** What the orphan sweep found and healed (issue 885). */
   sweep: SweepOutcome;
+  /**
+   * Issue 1115: the refusal an untrusted run's DEAD head downgraded to the
+   * visible exit-0 no-op, carried as the byte-identical refusal message the
+   * renderer prints with the fixed reason line. Undefined on every other
+   * path.
+   */
+  refusedDeadHead?: string;
 }
 
 /**
@@ -213,10 +237,6 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     // check-run to orphan either, so the sweep has no part in this path.
     return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
   }
-  if (trigger.kind === "workflow_run") {
-    // Refused before the token mint: an untrusted run gets no credential at all.
-    assertTrustedProducer(trigger.run);
-  }
 
   const jwt = mintAppJwt(appId, appKey, Date.now());
   const tokenBody = await apiCall<{ token?: unknown }>(
@@ -252,7 +272,15 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     if (contextsFor(pinMap, run.path).length === 0) {
       return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
     }
-    assertTrustedProducer(run);
+  }
+
+  // The trust gate, on both paths, after the mint (issue 1115): an untrusted
+  // producer run is thrown out byte-identically unless its head is provably
+  // dead — no open pull request at the run's head SHA — in which case the
+  // refusal downgrades to the visible exit-0 no-op instead of turning main
+  // red over a run whose context nothing is waiting on.
+  if (!isTrustedProducerRun(run.event, run.headBranch)) {
+    return await refuseUntrustedProducer(deps, repo, run, auth);
   }
 
   const jobsBody = await apiCall<Record<string, unknown>>(
@@ -551,6 +579,7 @@ function parseTrigger(env: Record<string, string | undefined>): Trigger {
         event: env.GITHUB_WORKFLOW_RUN_EVENT ?? "",
         headBranch: env.GITHUB_WORKFLOW_RUN_HEAD_BRANCH ?? "",
         runAttempt: normalizedAttempt(env.GITHUB_WORKFLOW_RUN_ATTEMPT),
+        headRepository: "",
       },
     };
   }
@@ -608,21 +637,72 @@ function triggeringRunFromApi(body: Record<string, unknown>): TriggeringRun {
         ? body.run_attempt
         : undefined,
     ),
+    headRepository: headRepositoryFullNameOf(body),
   };
 }
 
 /**
- * The relay's refusal of a pinned run whose executed workflow definition was
- * not the base branch's. It throws rather than returning an empty result, so
- * the relay job goes red: a required context that was expected and is not
- * coming has to be visible, never a quiet no-op.
+ * The run body's `head_repository.full_name`, or the empty string when the
+ * body carries no readable repository name. Never a guess: the empty value
+ * means unknown, which the refusal gate treats as "the liveness read decides".
  */
-function assertTrustedProducer(run: TriggeringRun): void {
-  if (isTrustedProducerRun(run.event, run.headBranch)) return;
-  throw new Error(
+function headRepositoryFullNameOf(body: Record<string, unknown>): string {
+  const headRepository =
+    typeof body.head_repository === "object" && body.head_repository !== null
+      ? (body.head_repository as { full_name?: unknown })
+      : undefined;
+  return typeof headRepository?.full_name === "string" ? headRepository.full_name : "";
+}
+
+/**
+ * The relay's refusal of a pinned run whose executed workflow definition was
+ * not the base branch's, resolved against the head's liveness (issue 1115):
+ * a live head — an open pull request whose tip is the run's head SHA — keeps
+ * the byte-identical throw, because a required context that is still waited
+ * for must fail visibly (issue 1083). A DEAD head downgrades the refusal to
+ * the visible exit-0 no-op: the returned result carries the same message, and
+ * the renderer prints it with one fixed reason line. A fork head — the head
+ * repository's full name known and different from this repository — keeps the
+ * throw BEFORE any listing is consulted, because whether
+ * commits/{sha}/pulls lists an open fork pull request at its head is
+ * unverified and a miss there is the exact silent wait issue 1083 forbids;
+ * on the workflow_run path the body is not fetched, so the name is unknown
+ * there and the liveness read itself is the fork backstop (a fork head's SHA
+ * is not in this repository, and the read fails closed through its own
+ * error). Any liveness-read error or non-array listing propagates: the gate
+ * fails closed, never exiting 0 on an ambiguity.
+ */
+async function refuseUntrustedProducer(
+  deps: RelayDeps,
+  repo: string,
+  run: TriggeringRun,
+  auth: Record<string, string>,
+): Promise<RelayResult> {
+  if (run.headRepository !== "" && run.headRepository !== repo) {
+    throw new Error(untrustedProducerMessage(run));
+  }
+  const pr = await findOpenPullRequestAtHead(deps, repo, run.headSha, auth);
+  if (pr !== null) {
+    throw new Error(untrustedProducerMessage(run));
+  }
+  return {
+    decisions: [],
+    posted: [],
+    rerunDispatched: false,
+    sweep: NO_SWEEP,
+    refusedDeadHead: untrustedProducerMessage(run),
+  };
+}
+
+/**
+ * The refusal message, byte-identical to the one the gate has always thrown,
+ * shared by the throw and the exit-0 print so the two cannot drift.
+ */
+function untrustedProducerMessage(run: TriggeringRun): string {
+  return (
     `run ${run.runId} (event ${JSON.stringify(run.event)}, head branch ` +
       `${JSON.stringify(run.headBranch)}) did not execute the base branch's workflow ` +
-      "definition; no required context was relayed",
+      "definition; no required context was relayed"
   );
 }
 
@@ -635,7 +715,7 @@ function assertTrustedProducer(run: TriggeringRun): void {
  * returns without posting anything and without failing.
  *
  * This decides WHICH runs relay; it decides nothing about which runs MAY
- * (assertTrustedProducer). The two are deliberately separate: widening this
+ * (refuseUntrustedProducer). The two are deliberately separate: widening this
  * cannot widen that, and the narrowness of the predicate is pinned against a
  * second path in tests/scripts/ledger-relay.test.ts.
  */
@@ -673,6 +753,12 @@ function assertShape(value: string, shape: RegExp, message: string): void {
  * living undrivable in main().
  */
 export function renderRelayResult(result: RelayResult): string[] {
+  if (result.refusedDeadHead !== undefined) {
+    return [
+      `[ledger-relay] ${result.refusedDeadHead}`,
+      "[ledger-relay] no open pull request is waiting at this head",
+    ];
+  }
   if (result.posted.length === 0) {
     return [
       "[ledger-relay] nothing to relay: no required context is pinned to the triggering run's workflow",
