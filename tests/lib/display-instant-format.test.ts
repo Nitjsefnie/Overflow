@@ -67,7 +67,7 @@ const BANNED: Array<{ pattern: RegExp; name: string; mustMatch: string; mustNotM
 const INSTANT_FIELD_NAMES = [
   "createdAt", "recordedAt", "filedAt", "requestedAt", "decidedAt", "mergedAt",
   "updatedAt", "occurredAt", "resetAt", "observedAt", "openedAt", "settledAt",
-  "verifiedAt", "expiredAt", "failedAt", "confirmedAt", "deletedAt",
+  "verifiedAt", "expiresAt", "failedAt", "confirmedAt", "deletedAt",
   "resolvedAt", "appliedAt", "lastUsedAt",
 ];
 
