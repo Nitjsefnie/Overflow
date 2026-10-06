@@ -12,7 +12,7 @@ import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import { readBodyWithinLimit } from "@/lib/http/request-body";
 import { reasonText } from "@/lib/validation/reason";
-import { sanctionContestErrorResponse } from "@/app/api/contests/route";
+import { sanctionContestErrorResponse } from "@/lib/moderation/sanction-contest-route";
 
 /**
  * The decision body is one request id, the outcome and a reason reasonText()

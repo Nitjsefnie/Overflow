@@ -57,7 +57,10 @@ function recalibrating(): FileableSanction {
   };
 }
 
-function renderContent(sanctions: readonly FileableSanction[], requests: readonly SanctionContestRequest[] | null) {
+function renderContent(
+  sanctions: readonly FileableSanction[] | null,
+  requests: readonly SanctionContestRequest[] | null,
+) {
   return render(
     <SanctionContestsContent memberName="Ada" isModerator={false} sanctions={sanctions} requests={requests} />,
   );
@@ -130,6 +133,42 @@ describe("sanction contests page", () => {
 
     expect(screen.queryByRole("button", { name: "Request the contest" })).not.toBeInTheDocument();
     expect(screen.getByText(/no live sanction/)).toBeInTheDocument();
+  });
+
+  it("names the unreadable sanctions read instead of claiming there is no live sanction", () => {
+    renderContent(null, []);
+
+    // A failed read is not a clean bill of health: on the recourse page for
+    // sanctioned accounts, the no-sanction sentence reads as a substantive
+    // denial, so the failed state must name the load and never that claim.
+    expect(screen.queryByText(/no live sanction/)).not.toBeInTheDocument();
+    expect(screen.getByText(/could not be loaded/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Request the contest" })).not.toBeInTheDocument();
+  });
+
+  it("resyncs the form's selection when the fileable list changes under it", () => {
+    const secondSanction: FileableSanction = {
+      id: "00000000-0000-4000-8000-000000000009",
+      newState: "BANNED",
+      reason: "The fifth confirmed account-level pattern requires a ban.",
+      occurredAt: "2026-09-20T09:00:00.000Z",
+    };
+    const view = renderContent([recalibrating()], []);
+    const selectBefore = screen.getByLabelText("Which sanction?");
+    expect((selectBefore as HTMLSelectElement).value).toBe(recalibrating().id);
+
+    // The server owns the list: after a refresh the filed sanction can drop
+    // out of the fileable set, and a stale selection would resubmit it blind.
+    view.rerender(
+      <SanctionContestsContent
+        memberName="Ada"
+        isModerator={false}
+        sanctions={[secondSanction]}
+        requests={[]}
+      />,
+    );
+    const selectAfter = screen.getByLabelText("Which sanction?");
+    expect((selectAfter as HTMLSelectElement).value).toBe(secondSanction.id);
   });
 
   it("lists the request history with each outcome", () => {
