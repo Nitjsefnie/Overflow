@@ -93,16 +93,17 @@ it does not set them.
 
 **Ban and recalibration reversal.** A moderator can reverse a recalibration
 or a ban inside the product: `closeRecalibration` and `reverseBan` in
-`src/lib/moderation/postgres-store.ts` return the account to ACTIVE,
-reactivate the sanctioned account's still-registered inactive repositories
-(the `sanction_deactivated_at` flag migration 060 records the rows a sanction
-deactivates with), and write the moderation event; the ban route is
-`src/app/api/moderation/reversal/route.ts`, which journals the action as
-`ban.reverse` in the privileged-action log. The route is disclosed in the
-`/account-data` notice's "Scoring and sanctions" section, with the sanction's
-effects on the account's repositories. (Route recorded 2026-10-06, with the
-change that shipped it; the three routes above stand as screened on
-2026-09-30.)
+`src/lib/moderation/postgres-store.ts` return the account to ACTIVE and
+write the moderation event, and both lift the deactivation the sanction
+applied — the closure reactivates the account's whole still-registered
+inactive set, the ban reversal only the rows migration 060's
+`sanction_deactivated_at` flag records as sanction-deactivated. The ban
+route is `src/app/api/moderation/reversal/route.ts`, which journals the
+action as `ban.reverse` in the privileged-action log. The route is
+disclosed in the `/account-data` notice's "Scoring and sanctions" section,
+with the sanction's effects on the account's repositories. (Route recorded
+2026-10-06, with the change that shipped it; the three routes above stand
+as screened on 2026-09-30.)
 
 **Correction and override requests.** A member may request a correction to a
 priced settlement or calibration, and a moderator grants or declines it
