@@ -28,7 +28,7 @@ export type EligibleIssueFilters = {
   repository?: string;
   openingLabel?: string;
   claimState?: "OPEN" | "CLAIMED" | "ALL";
-  /** 1-based board page. Undefined, non-finite and non-positive values read as the first page. */
+  /** 1-based board page. Undefined, non-finite and non-positive values read as the first page; a page past the bound reads as the largest servable, and therefore empty, page. */
   page?: number;
   /** Rows per board page. Undefined and non-finite values read as the default; out-of-range values clamp to 1..500. */
   pageSize?: number;
@@ -60,7 +60,14 @@ export function resolveIssuesBoardPage(
       : Math.min(ISSUES_BOARD_MAX_PAGE_SIZE, Math.max(1, Math.floor(pageSize)));
   const resolvedPage =
     page === undefined || !Number.isFinite(page) ? 1 : Math.max(1, Math.floor(page));
-  return { page: resolvedPage, pageSize: resolvedPageSize };
+  // A page past the board's end reads as an empty page, never as a query the
+  // server rejects: (page - 1) * pageSize is the SQL offset, and an unbounded
+  // huge page drove it past the largest integer the statement binds exactly
+  // (a 1e17 page once answered 502 UPSTREAM_FAILURE). The bound is a page, not
+  // an offset, so the offset stays page-aligned and every reader — the
+  // /issues pager included — resolves the same clamped window.
+  const largestPage = Math.floor(Number.MAX_SAFE_INTEGER / resolvedPageSize) + 1;
+  return { page: Math.min(resolvedPage, largestPage), pageSize: resolvedPageSize };
 }
 
 /**
