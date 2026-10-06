@@ -167,6 +167,8 @@ a {
 
 .page-content {
   padding: clamp(2.25rem, 6vw, 5rem) 0;
+  /* Issue 1067: unbroken runs never force the page wider than the viewport. */
+  overflow-wrap: anywhere;
 }
 
 .site-footer {
@@ -755,9 +757,8 @@ button:disabled {
 }
 
 /* The landing and session-recovery routes wrap main.landing-page in the public
-   shell, which already carries the shared width and centering above; without
-   this the nested main insets itself a second time and its content no longer
-   aligns with the header and footer edges. */
+   shell, which already carries the shared width and centering; without this
+   the nested main insets itself twice and content misaligns with the shell. */
 .app-shell .landing-page {
   width: 100%;
   margin: 0;
@@ -770,7 +771,7 @@ button:disabled {
 
 .landing-hero h1 {
   max-width: 13ch;
-  font-size: clamp(3.5rem, 12vw, 6rem);
+  font-size: clamp(2.5rem, 12vw, 6rem);
 }
 
 .landing-lede {
@@ -781,8 +782,7 @@ button:disabled {
   font-size: clamp(1.25rem, 2.7vw, 1.75rem);
 }
 
-/* The two landing sign-ins (issue 599) sit below the contributor action the
-   fold contract measures; nothing here touches the stack above it. */
+/* The two landing sign-ins (issue 599) sit below the action the fold contract measures; nothing here touches the stack above. */
 .landing-action-note {
   max-width: 52ch;
   margin-top: 1.5rem;

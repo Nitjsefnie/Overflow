@@ -234,10 +234,14 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["h1", "min-height", "atMost", 302.4, 176.4],
   ["h1", "font-size", "atMost", 96, 56],
   ["h1", "line-height", "atMost", 100.8, 58.8],
-  ["h1", "letter-spacing", "atMost", -4.32, -2.52],
+  // The 390px values were re-measured after the issue-1067 clamp floor
+  // change: the floor no longer holds the 390px font at 56px (12vw = 46.8px
+  // there), and the button sat at 569px against the 600px fold when measured
+  // in a browser at 390x600 — higher than before, never lower.
+  ["h1", "letter-spacing", "atMost", -4.32, -2.106],
   ["h1", "text-transform", "atMost", 0, 0],
   ["h1", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
-  ["h1", "max-width", "atLeast", 624, 364],
+  ["h1", "max-width", "atLeast", 624, 304.2],
   // The lede: two lines at 1440, four at 390.
   ["lede", "margin-top", "atMost", 0, 0],
   ["lede", "margin-bottom", "atMost", 28.8, 28.8],
