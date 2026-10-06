@@ -345,15 +345,7 @@ export function mintSessionCookieValue({ secret, userId, role, now = Date.now() 
   ).toString("base64url");
 
   const payload = JSON.stringify({
-    sub: userId,
-    userId,
-    role,
-    // The claims the session guard checks at refresh (issue 1043): the
-    // sign-in instant the absolute lifetime bounds, stamped at the mint, and
-    // the account epoch the freshly seeded fixture rows sit on (0 — the
-    // default the column starts at, never bumped).
-    authenticatedAt: issuedAtSeconds,
-    sessionEpoch: 0,
+    sub: userId, userId, role, authenticatedAt: issuedAtSeconds, sessionEpoch: 0,
     iat: issuedAtSeconds,
     exp: issuedAtSeconds + SESSION_TOKEN_MAX_AGE_SECONDS,
     jti: randomUUID(),
