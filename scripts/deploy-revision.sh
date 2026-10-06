@@ -67,7 +67,12 @@ is_operational_ignored() {
 # read from the deployed SHA itself, pins each one to the workflow file whose
 # job produces it, and a context with no pin refuses at once. The map is
 # parsed with the tree's own scripts/required-checks-parse.jq, the tracked
-# file beside this script that defines the shapes the map may hold. Per
+# file beside this script that defines the shapes the map may hold. When
+# that copy fails on the map (and jq itself is present) the gate re-parses
+# with the target SHA's own copy of the same file, which travels with every
+# commit exactly as the map does, so a manifest-shape change cannot deadlock
+# a tree whose parser predates it (issue 1104); neither copy reading the map
+# refuses fail-closed. Per
 # context, a
 # check-run posted by the ledger App (OVERFLOW_DEPLOY_LEDGER_APP_ID, default
 # 5118623) attributes the context, and the NEWEST App check-run for it
@@ -103,7 +108,7 @@ is_operational_ignored() {
 # run is.
 required_checks_gate() {
   local remote_url repo required pins check check_pins unmapped check_runs runs run_id run_path run_jobs jobs
-  local map map_status jq_status
+  local map map_status tree_parse_status fallback_parser fallback_read_status fallback_parse_status
   local job_line job_run job_path job_id job_name job_attempt job_status job_conclusion
   local cr_id cr_name cr_app cr_status cr_conclusion producer_ids status conclusion
   local decided_run decided_attempt pending timeout deadline ledger_app_id ledger_id
@@ -136,13 +141,42 @@ required_checks_gate() {
   # the working tree's copy.
   map_status=0
   map=$(git show "$full_sha:.github/required-checks.json") || map_status=$?
-  jq_status=0
-  if [ "$map_status" -eq 0 ]; then
-    pins=$(jq -rs -f "$tree/scripts/required-checks-parse.jq" <<<"$map") || jq_status=$?
-  fi
-  if [ "$map_status" -ne 0 ] || [ "$jq_status" -ne 0 ]; then
+  if [ "$map_status" -ne 0 ]; then
     printf 'Could not read a valid .github/required-checks.json at %s (a JSON object mapping each required check to a .github/workflows/*.yml path or a non-empty list of them); refusing to deploy.\n' "$full_sha" >&2
     exit 1
+  fi
+  # The parse itself (jq present but the shape rejected, the file unreadable)
+  # is recoverable in a way a missing binary is not: the tree's copy predates
+  # the map's shape exactly until the fast-forward this gate otherwise refuses
+  # (issue 1104's deadlock), and the target SHA carries its own copy of the
+  # same tracked file, so re-parse with that one before giving up. A read of
+  # the MAP that fails is not recoverable this way — there is nothing to
+  # re-parse — and refuses above without any fallback read. jq exiting 127
+  # means jq itself is missing, not that a shape was rejected, so it refuses
+  # at once too: a missing binary would fail the fallback identically.
+  tree_parse_status=0
+  pins=$(jq -rs -f "$tree/scripts/required-checks-parse.jq" <<<"$map") || tree_parse_status=$?
+  if [ "$tree_parse_status" -eq 127 ]; then
+    printf 'Could not read a valid .github/required-checks.json at %s (a JSON object mapping each required check to a .github/workflows/*.yml path or a non-empty list of them); jq is not installed; refusing to deploy.\n' "$full_sha" >&2
+    exit 1
+  fi
+  if [ "$tree_parse_status" -ne 0 ]; then
+    fallback_parser=$(mktemp)
+    fallback_read_status=0
+    git show "$full_sha:scripts/required-checks-parse.jq" > "$fallback_parser" || fallback_read_status=$?
+    if [ "$fallback_read_status" -ne 0 ]; then
+      rm -f "$fallback_parser"
+      printf 'Could not read a valid .github/required-checks.json at %s (a JSON object mapping each required check to a .github/workflows/*.yml path or a non-empty list of them); the tree'"'"'s scripts/required-checks-parse.jq exited %s parsing it and the target SHA carries no copy of that file to fall back to (git show exited %s); refusing to deploy.\n' "$full_sha" "$tree_parse_status" "$fallback_read_status" >&2
+      exit 1
+    fi
+    fallback_parse_status=0
+    pins=$(jq -rs -f "$fallback_parser" <<<"$map") || fallback_parse_status=$?
+    rm -f "$fallback_parser"
+    if [ "$fallback_parse_status" -ne 0 ]; then
+      printf 'Could not read a valid .github/required-checks.json at %s (a JSON object mapping each required check to a .github/workflows/*.yml path or a non-empty list of them); the tree'"'"'s scripts/required-checks-parse.jq exited %s parsing it and the target SHA'"'"'s own copy exited %s too; refusing to deploy.\n' "$full_sha" "$tree_parse_status" "$fallback_parse_status" >&2
+      exit 1
+    fi
+    printf 'the map at %s parsed with the target SHA'"'"'s own scripts/required-checks-parse.jq; the tree'"'"'s copy predates it\n' "$full_sha" >&2
   fi
   unmapped=
   while IFS= read -r check; do

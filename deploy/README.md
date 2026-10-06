@@ -707,7 +707,11 @@ was withheld. The manual path keeps a human as the guard through the
 confirm-first rule below; the script's guard is additional automation, and the
 manual rule is what still applies when pruning by hand.
 
-The script deploys only a SHA that main's required checks have blessed. Right
+The script deploys only a SHA that main's required checks have blessed. The
+gate parses `.github/required-checks.json` at the deployed SHA with the tree's
+`scripts/required-checks-parse.jq`, and when that parse fails it re-parses with
+the target SHA's own copy of the same file, so a map-shape change cannot
+deadlock a tree whose parser predates it. Right
 after the fetch it resolves the exact SHA being deployed and, once the
 tree-cleanliness gate passes, reads main's required checks from the branch
 protection; every required check's latest run on that SHA must conclude

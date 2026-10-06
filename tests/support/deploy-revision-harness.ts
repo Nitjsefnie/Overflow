@@ -380,7 +380,7 @@ export async function makeFixture(options: {
  */
 export const SHIM_DISPATCH: Record<string, { envKeys: string[]; dispatch: string }> = {
   git: {
-    envKeys: [],
+    envKeys: ["GIT_SHIM_PARSER", "GIT_SHIM_PARSER_RC"],
     dispatch: `
 if [ "$1" = fetch ]; then
   if [ -n "\${GIT_SHIM_FETCH_REPOINT:-}" ]; then
@@ -410,6 +410,17 @@ if [ "$1" = rev-parse ]; then
   exit 0
 fi
 if [ "$1" = show ]; then
+  case "\${2-}" in
+    *:scripts/required-checks-parse.jq)
+      # The parser-skew fallback's read at the target SHA: the test names the
+      # file to serve as that copy, or an exit status for the read to fail
+      # with. With neither set the target SHA carries no parser, the shape a
+      # pre-parser target commit has, so the read fails and the gate refuses.
+      if [ -n "\${GIT_SHIM_PARSER_RC:-}" ]; then exit "\$GIT_SHIM_PARSER_RC"; fi
+      if [ -n "\${GIT_SHIM_PARSER:-}" ]; then cat "\$GIT_SHIM_PARSER"; exit 0; fi
+      exit 128
+      ;;
+  esac
   if [ -n "\${GIT_SHIM_SHOW_RC:-}" ]; then exit "\$GIT_SHIM_SHOW_RC"; fi
   cat "\${GIT_SHIM_REQUIRED_CHECKS:?}"
   exit 0
