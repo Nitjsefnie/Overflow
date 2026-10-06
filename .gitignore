@@ -75,6 +75,9 @@ src/app/api/auth/[[]...nextauth[]]/*
 !src/app/api/calibration/
 src/app/api/calibration/*
 !src/app/api/calibration/*.ts
+!src/app/api/contests/
+src/app/api/contests/*
+!src/app/api/contests/*.ts
 !src/app/api/dashboard/
 src/app/api/dashboard/*
 !src/app/api/forge-identities/
@@ -162,6 +165,9 @@ src/app/api/tokens/*
 !src/app/account-data/
 src/app/account-data/*
 !src/app/account-data/*.tsx
+!src/app/contests/
+src/app/contests/*
+!src/app/contests/*.tsx
 !src/app/dashboard/
 src/app/dashboard/*
 !src/app/dashboard/*.tsx

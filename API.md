@@ -770,6 +770,43 @@ error envelope:
 | 422 | `INVALID_INPUT` | The message names the rule. | A blank reason, a missing identifier, or settled points outside 1 through 10. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to complete the settlement correction request.` | The service behind the route failed; retry when it recovers. |
 
+## Sanction contests
+
+The sanction case of the disputes framework: a sanctioned account asks for
+the sanction it is living under to be contested, and a moderator decides.
+Over HTTP the sanctioned side is `POST /api/contests` and
+`GET /api/contests` — the account's own requests only, both open and
+decided. A contest targets the account's LIVE sanction: the named moderation
+event must be the account's own, its state must be `RECALIBRATING` or
+`BANNED`, and it must be the enforcement state the account is still in. The
+filing is itself a moderation event, and one OPEN request per sanction is
+held by a partial unique index, the same shape the settlement-correction
+section describes.
+
+`POST /api/contests` takes `{ "sanctionEventId": <uuid>, "reason": … }` —
+the reason trimmed, nonblank, and capped at 2000 characters — with any
+member credential (session or token, the rules the other member sections
+state). Success is HTTP `200` with
+`{ "request": <the recorded contest request> }`.
+
+`GET /api/contests` takes no arguments and reads only the credential's own
+account. Success is HTTP `200` with a JSON array of that account's contest
+requests, newest first, each carrying its `state` and — on a decided
+request — its `decision`, `decidedBy`, `decidedBySoleModerator`,
+`decidedReason` and `decidedAt`.
+
+The POST body is read under `32 KiB`: a body past the limit answers `413`
+`PAYLOAD_TOO_LARGE`, and an unparsable or schema-invalid one answers `422`
+`INVALID_REQUEST` — `Invalid sanction contest request.` Service refusals
+pass the service's own message through the error envelope:
+
+| HTTP | Code | Exact message | Meaning / next step |
+| --- | --- | --- | --- |
+| 404 | `NOT_FOUND` | `No such account or sanction event.` | Check the event id. |
+| 409 | `CONFLICT` | `This sanction cannot be contested right now.` | The event is not the account's live sanction, another request is already open on it, or the sanction has been lifted. |
+| 422 | `INVALID_INPUT` | The message names the rule. | A blank reason or a missing event id. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to complete the sanction contest request.` | The service behind the route failed; retry when it recovers. |
+
 ## Readiness probe
 
 `GET /api/readiness` answers whether the deployment is ready to serve. It
