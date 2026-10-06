@@ -8,6 +8,7 @@ const loaders = vi.hoisted(() => ({
   history: vi.fn(async () => []),
   recalibrating: vi.fn(async () => []),
   banned: vi.fn(async () => []),
+  openContests: vi.fn(async () => []),
   moderators: vi.fn<() => Promise<{ accountId: string; githubLogin: string; isConfigured: boolean }[]>>(async () => []),
   candidates: vi.fn(async () => []),
   repositories: vi.fn(async () => []),
@@ -35,6 +36,9 @@ vi.mock("@/lib/dashboard/queries", () => ({
   listUnwritableClosures: loaders.closures,
 }));
 vi.mock("@/lib/moderation/banned-accounts", () => ({ listBannedAccounts: loaders.banned }));
+vi.mock("@/lib/moderation/sanction-contest-store", () => ({
+  PostgresSanctionContestStore: class { listOpenContestRequests = loaders.openContests; },
+}));
 vi.mock("@/lib/moderation/postgres-store", () => ({
   PostgresModerationStore: class { listModerators = loaders.moderators; },
 }));
@@ -86,7 +90,8 @@ describe("moderation budget integration", () => {
     expect(Array.from(container.querySelectorAll("section"), node => node.getAttribute("aria-labelledby"))).toEqual([
       "moderation-title", "open-audit-heading", "no-audits-heading",
       "settlement-corrections-heading", "unwritable-closures-heading",
-      "recalibrating-heading", "banned-heading", "moderators-heading",
+      "recalibrating-heading", "banned-heading", "sanction-contests-heading",
+      "moderators-heading",
       "unwritable-closure-history-heading", "enforcement-history-heading", "github-budget-heading",
     ]);
     expect(screen.queryByTestId("github-budget-panel")).toBeNull();
