@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NextAuthConfig, Profile } from "next-auth";
 import { refreshSessionToken, type SessionAccountSnapshot } from "@/lib/auth/account-store";
+import type { SessionGuardSnapshot } from "@/lib/auth/session-guard";
 import type { PersistedGitHubUser } from "@/lib/auth/sign-in-decision";
 
 // Dynamic auth imports retain this file's mocks until the graph is cleared.
@@ -18,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   upsertGitHubAccount: vi.fn<(...args: unknown[]) => Promise<PersistedGitHubUser>>(),
   findGitHubAccount: vi.fn<(githubUserId: number) => Promise<PersistedGitHubUser | null>>(),
   findSessionAccountState: vi.fn<(id: string) => Promise<SessionAccountSnapshot>>(),
+  readSessionGuardState: vi.fn<(id: string) => Promise<SessionGuardSnapshot>>(),
+  revokeAccountSessions: vi.fn<(id: string) => Promise<number>>(),
 }));
 
 vi.mock("next-auth", () => ({ default: mocks.nextAuth }));
@@ -38,6 +41,19 @@ vi.mock("@/lib/auth/account-store", async (importOriginal) => {
     upsertGitHubAccount: mocks.upsertGitHubAccount,
     findGitHubAccount: mocks.findGitHubAccount,
     findSessionAccountState: mocks.findSessionAccountState,
+  };
+});
+// The refresh lookup reads the guard state (liveness, login and epoch) in one
+// query, and the sign-in branch stamps the epoch from the same read; the pure
+// gates stay real — they never reach getSql, so the actual instance another
+// file already loaded cannot leak a database client through them.
+vi.mock("@/lib/auth/session-guard", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth/session-guard")>();
+  return {
+    isSessionExpired: actual.isSessionExpired,
+    isEpochRejected: actual.isEpochRejected,
+    readSessionGuardState: mocks.readSessionGuardState,
+    revokeAccountSessions: mocks.revokeAccountSessions,
   };
 });
 
@@ -112,17 +128,26 @@ describe("jwt callback wiring", () => {
 
   it("ends the session of a deleted account: the refreshed token is null", async () => {
     const jwt = await jwtCallback();
-    mocks.findSessionAccountState.mockResolvedValue({ state: "DELETED", githubLogin: null });
-    const token = { userId: "u1", role: "MEMBER" };
+    mocks.readSessionGuardState.mockResolvedValue({ state: "DELETED", githubLogin: null, sessionEpoch: null });
+    const token = { userId: "u1", role: "MEMBER", authenticatedAt: signedInAtSeconds, sessionEpoch: 0 };
 
     await expect(jwt({ token } as never)).resolves.toBeNull();
-    expect(mocks.findSessionAccountState).toHaveBeenCalledExactlyOnceWith("u1");
+    // The refresh reads the guard state — the epoch ride-along — not the
+    // plain account state the refresh used before issue 1043.
+    expect(mocks.readSessionGuardState).toHaveBeenCalledExactlyOnceWith("u1");
+    expect(mocks.findSessionAccountState).not.toHaveBeenCalled();
   });
 
   it("keeps the token of a live account on a refresh call, named with the row's login", async () => {
     const jwt = await jwtCallback();
-    mocks.findSessionAccountState.mockResolvedValue({ state: "LIVE", githubLogin: "octocat-row" });
-    const token = { userId: "u1", role: "MEMBER", name: "Display Name" };
+    mocks.readSessionGuardState.mockResolvedValue({ state: "LIVE", githubLogin: "octocat-row", sessionEpoch: 0 });
+    const token = {
+      userId: "u1",
+      role: "MEMBER",
+      name: "Display Name",
+      authenticatedAt: signedInAtSeconds,
+      sessionEpoch: 0,
+    };
 
     // Issue 678's refresh leg: the display name a pre-fix token carries is
     // replaced by the row's login at the next refresh.
@@ -130,6 +155,8 @@ describe("jwt callback wiring", () => {
       userId: "u1",
       role: "MEMBER",
       name: "octocat-row",
+      authenticatedAt: signedInAtSeconds,
+      sessionEpoch: 0,
     });
   });
 
@@ -144,25 +171,38 @@ describe("jwt callback wiring", () => {
     // and fails the LIVE leg.
     const jwt = await jwtCallback();
     const recordedAt = signedInAtSeconds - 3600;
-    const token = { userId: "u1", role: "MEMBER", authenticatedAt: recordedAt };
+    const token = { userId: "u1", role: "MEMBER", authenticatedAt: recordedAt, sessionEpoch: 0 };
 
-    mocks.findSessionAccountState.mockResolvedValue({ state: "DELETED", githubLogin: null });
+    mocks.readSessionGuardState.mockResolvedValue({ state: "DELETED", githubLogin: null, sessionEpoch: null });
     await expect(jwt({ token } as never)).resolves.toBeNull();
 
-    mocks.findSessionAccountState.mockResolvedValue({ state: "LIVE", githubLogin: "octocat-row" });
+    mocks.readSessionGuardState.mockResolvedValue({ state: "LIVE", githubLogin: "octocat-row", sessionEpoch: 0 });
     await expect(jwt({ token } as never)).resolves.toEqual({
       userId: "u1",
       role: "MEMBER",
       authenticatedAt: recordedAt,
+      sessionEpoch: 0,
       name: "octocat-row",
     });
   });
 
-  it("resolves the account inline on the sign-in branch and never consults the session state", async () => {
+  it("ends a live-account token minted under an earlier epoch", async () => {
+    // The wiring pin for the epoch gate: the refresh captured the row's
+    // epoch, and a token minted under the previous generation dies after the
+    // refresh survived.
+    const jwt = await jwtCallback();
+    mocks.readSessionGuardState.mockResolvedValue({ state: "LIVE", githubLogin: "octocat-row", sessionEpoch: 1 });
+    const token = { userId: "u1", role: "MEMBER", authenticatedAt: signedInAtSeconds, sessionEpoch: 0 };
+
+    await expect(jwt({ token } as never)).resolves.toBeNull();
+  });
+
+  it("resolves the account inline on the sign-in branch and stamps the account's epoch", async () => {
     const jwt = await jwtCallback();
     // The mock's role differs from the token's input role, so a result still
     // carrying MEMBER proves the token took the account's role, not its own.
     mocks.findGitHubAccount.mockResolvedValue({ id: "user-uuid", role: "MODERATOR" });
+    mocks.readSessionGuardState.mockResolvedValue({ state: "LIVE", githubLogin: "octocat", sessionEpoch: 4 });
     const token = { userId: "u1", role: "MEMBER", name: "Stale Display Name", email: "stale@example.com" };
 
     await expect(jwt({
@@ -178,11 +218,28 @@ describe("jwt callback wiring", () => {
       canAdministerWebhooks: false,
       // Main's sign-in instant, recorded only on the OAuth callback.
       authenticatedAt: signedInAtSeconds,
+      // The epoch the account currently sits on, read at minting.
+      sessionEpoch: 4,
     });
     expect(mocks.findGitHubAccount).toHaveBeenCalledExactlyOnceWith(4242);
     // The jwt callback resolves the account read-only: persistence belongs to
     // the signIn callback, and the refresh lookup has no business here.
     expect(mocks.upsertGitHubAccount).not.toHaveBeenCalled();
     expect(mocks.findSessionAccountState).not.toHaveBeenCalled();
+    // The stamp reads the same row the refresh later compares against.
+    expect(mocks.readSessionGuardState).toHaveBeenCalledExactlyOnceWith("user-uuid");
+  });
+
+  it("errors the sign-in when the epoch stamp cannot be read (fail-closed at minting)", async () => {
+    const jwt = await jwtCallback();
+    mocks.findGitHubAccount.mockResolvedValue({ id: "user-uuid", role: "MEMBER" });
+    mocks.readSessionGuardState.mockRejectedValue(new Error("database unreachable"));
+    const token = { userId: "u1", role: "MEMBER" };
+
+    await expect(jwt({
+      token,
+      account: { provider: "github", providerAccountId: "4242", type: "oauth" },
+      profile: { id: 4242, login: "octocat" } as unknown as Profile,
+    } as never)).rejects.toThrow("database unreachable");
   });
 });

@@ -94,12 +94,15 @@ describe("session authentication time", () => {
     expect(token?.authenticatedAt).toBe(recorded);
   });
 
-  it("gives a JWT that predates the claim none on a later read", async () => {
+  it("ends a JWT that predates the claim at its next read (fail-closed on the missing instant)", async () => {
+    // The absolute lifetime (issue 1043): the refresh path refuses a token
+    // whose sign-in instant is missing — a pre-claim JWT is exactly the
+    // unbounded cookie the issue is about, so it no longer passes through.
     const { jwt } = await callbacks();
 
-    const token = await jwt!({ token: { userId: "user-uuid", role: "MEMBER" }, user: { id: "4242" } } as never);
-
-    expect(token).not.toHaveProperty("authenticatedAt");
+    await expect(
+      jwt!({ token: { userId: "user-uuid", role: "MEMBER" }, user: { id: "4242" } } as never),
+    ).resolves.toBeNull();
   });
 
   it("exposes the instant on the session user only when the JWT holds a finite number", async () => {

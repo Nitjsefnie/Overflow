@@ -14,10 +14,16 @@ import {
 import { requestGitHubPublicIdentity } from "@/lib/auth/github-userinfo";
 import {
   findGitHubAccount,
-  findSessionAccountState,
   refreshSessionToken,
   upsertGitHubAccount,
 } from "@/lib/auth/account-store";
+import {
+  isEpochRejected,
+  isSessionExpired,
+  readSessionGuardState,
+  revokeAccountSessions,
+  type SessionGuardSnapshot,
+} from "@/lib/auth/session-guard";
 import {
   GITHUB_CONTRIBUTOR_SCOPE,
   GITHUB_REPOSITORY_REGISTRATION_SCOPE,
@@ -75,6 +81,19 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
     }),
   ],
   session: { strategy: "jwt" },
+  events: {
+    // The per-account revocation act (issue 1043): for the JWT strategy
+    // @auth/core 0.41.3 decodes the cookie's JWT and fires this with it
+    // (actions/signout.js), catching handler errors and clearing the cookie
+    // regardless — so a database blip at sign-out still clears the cookie but
+    // does not revoke server-side, the refresh lookup's documented fail-open
+    // shape on a blip.
+    async signOut({ token }) {
+      if (typeof token?.userId === "string") {
+        await revokeAccountSessions(token.userId);
+      }
+    },
+  },
   callbacks: {
     async signIn({ account, profile }) {
       return decideGitHubSignIn({
@@ -107,14 +126,41 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
 
       const identity = readGitHubIdentity(profile);
       if (identity === null) {
+        // The absolute lifetime first (issue 1043): a token whose sign-in
+        // instant is at or past the 30-day maximum dies here, however often
+        // the cookie was used in between — the sliding `exp` the framework
+        // re-issues can no longer outrun the sign-in. A token with no usable
+        // instant dies too: fail-closed, because a pre-claim token is exactly
+        // the unbounded cookie the issue is about.
+        if (isSessionExpired(token.authenticatedAt, Math.floor(Date.now() / 1000))) {
+          return null;
+        }
         // Every non-sign-in call lands here. The token survives only while its
         // account row is not DELETED: a pseudonymised account's session ends
         // at the next jwt refresh, which is the single choke point covering
         // every session-user resolution site. (The intersection cast is the
-        // framework's `JWT` record meeting the store's token shape.)
-        return await refreshSessionToken(token as typeof token & { userId?: unknown }, (id) =>
-          findSessionAccountState(id),
-        );
+        // framework's `JWT` record meeting the store's token shape.) The
+        // lookup reads the guard state — liveness, login and epoch — in one
+        // query, and hands what it saw to the epoch gate below even when
+        // `refreshSessionToken` fails open on a lookup error, the store's
+        // documented database-blip rationale.
+        let captured: SessionGuardSnapshot | undefined;
+        const refreshed = await refreshSessionToken(token as typeof token & { userId?: unknown }, async (id) => {
+          const snapshot = await readSessionGuardState(id);
+          captured = snapshot;
+          return snapshot;
+        });
+        if (refreshed === null) {
+          return null;
+        }
+        // A LIVE row compares epochs: a token minted before this account's
+        // current session generation (a pre-fix token has no claim at all)
+        // ends here. A MISSING row keeps today's pass-through — no epoch to
+        // compare against is the stale-session route, not this gate's scope.
+        if (captured?.state === "LIVE" && typeof token.userId === "string" && isEpochRejected(token.sessionEpoch, captured.sessionEpoch)) {
+          return null;
+        }
+        return refreshed;
       }
 
       // The sign-in path names the token with the login from the profile —
@@ -132,6 +178,14 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
       } catch {
         delete token.userId;
         delete token.role;
+      }
+      if (typeof token.userId === "string") {
+        // Stamp the account's current session epoch (issue 1043): the claim
+        // the refresh compares against. Deliberately outside the try above —
+        // a failed read errors the sign-in (fail-closed at minting) rather
+        // than minting a cookie that dies at its first refresh.
+        const guard = await readSessionGuardState(token.userId);
+        token.sessionEpoch = guard.sessionEpoch;
       }
       return token;
     },
