@@ -306,12 +306,15 @@ describe("the session cookie the real sign-in handshake mints", () => {
   });
 });
 
-describe("a session cookie minted before the change, refreshed", () => {
+describe("a session cookie minted before the epoch existed, refreshed", () => {
   it("loses the display name and the e-mail at the next session read, and the stripped token is what persists", async () => {
-    // The pre-fix token, encoded the way the old handshake left it: the
-    // profile's display name as the name and the e-mail claim present. The
-    // sub is a UUID literal because that is what @auth/core puts there — a
-    // per-sign-in random UUID, never the numeric GitHub id.
+    // A token minted after the issue-678 projection but before the issue-1043
+    // epoch: the profile's display name as the name, the e-mail claim
+    // present, and the epoch claim stamped at its sign-in. (An epoch-less
+    // token dies at this refresh instead — tests/auth/session-revocation.test.ts
+    // pins that leg.) The sub is a UUID literal because that is what
+    // @auth/core puts there — a per-sign-in random UUID, never the numeric
+    // GitHub id.
     const preFixToken = {
       name: "Display Name",
       email: "member@example.com",
@@ -321,6 +324,7 @@ describe("a session cookie minted before the change, refreshed", () => {
       picture: avatarUrl,
       canAdministerWebhooks: true,
       authenticatedAt: nowSeconds - 3600,
+      sessionEpoch: 0,
     };
     const preFixCookieValue = await encode({ token: preFixToken, secret: authSecret, salt: sessionCookieSalt });
 
