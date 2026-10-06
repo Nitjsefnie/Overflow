@@ -131,6 +131,8 @@ export interface SeedResult {
     settlements: number;
   };
   memberUserId: string;
+  /** The bench member's `session_epoch` as the seed wrote it — what a minted cookie must carry. */
+  memberSessionEpoch: number;
   apiToken: string;
 }
 
@@ -250,12 +252,14 @@ export function benchSessionCookieName(): string {
 /**
  * Mints the session cookie the app decrypts with its own AUTH_SECRET. The
  * payload mirrors what the GitHub sign-in writes: the account id under both
- * `sub` and `userId`, the login as the name, the MEMBER role hint, and the
- * sign-in instant and account epoch the session guard checks. The page gate
- * re-reads the role from the database, so the cookie only has to carry a live
- * account.
+ * `sub` and `userId`, the login as the name, the MEMBER role hint, the
+ * sign-in instant, and the account's current session epoch — the two claims
+ * the session guard checks at refresh, so the minted cookie survives one.
+ * The epoch comes from the caller, who reads it from the users row the seed
+ * wrote; the page gate re-reads the role from the database, so the cookie
+ * only has to carry a live account.
  */
-export async function mintBenchSessionCookie(secret: string, userId: string): Promise<string> {
+export async function mintBenchSessionCookie(secret: string, userId: string, sessionEpoch: number): Promise<string> {
   const value = await encode({
     token: {
       sub: userId,
@@ -266,11 +270,9 @@ export async function mintBenchSessionCookie(secret: string, userId: string): Pr
       // The absolute lifetime (issue 1043) bounds every session to 30 days
       // from this instant, so the cookie records the mint time — the fixed
       // 2025-09-01 base the rest of the seed world is laid out on would be
-      // born expired. A session the benchmark mints without a `sessionEpoch`
-      // claim dies at its first refresh against a migrated database; when a
-      // benchmark needs a live session, stamp the row's epoch the way
-      // sign-in does.
+      // born expired.
       authenticatedAt: Math.floor(Date.now() / 1000),
+      sessionEpoch,
     },
     secret,
     salt: benchSessionCookieName(),
@@ -439,6 +441,7 @@ export async function seedBoardBenchmark(options: SeedOptions): Promise<SeedResu
   // The truncate-cascade NOTICEs are expected on every reseed; dropping them
   // keeps the stdout contract (seed line, member id, credentials) parseable.
   const sql = postgres(databaseUrl, { max: 4, onnotice: () => {} });
+  let memberSessionEpoch: number;
 
   try {
     await sql.begin(async (tx) => {
@@ -572,6 +575,17 @@ export async function seedBoardBenchmark(options: SeedOptions): Promise<SeedResu
         values (${world.memberUserId}, ${apiToken.tokenHash})
       `;
     });
+
+    // The epoch a minted cookie must carry is whatever the seed wrote, never
+    // an assumed default: the member row is read back after the transaction
+    // commits, so a future seed change that stamps epochs flows through here.
+    const [member] = await sql<{ session_epoch: number }[]>`
+      select session_epoch from users where id = ${world.memberUserId}
+    `;
+    if (member === undefined) {
+      throw new Error(`the seed wrote no users row for the bench member ${world.memberUserId}`);
+    }
+    memberSessionEpoch = member.session_epoch;
   } finally {
     await sql.end();
   }
@@ -585,6 +599,7 @@ export async function seedBoardBenchmark(options: SeedOptions): Promise<SeedResu
       settlements: world.settlements.length,
     },
     memberUserId: world.memberUserId,
+    memberSessionEpoch,
     apiToken: benchApiToken().token,
   };
 }
@@ -595,6 +610,27 @@ function requireDatabaseUrl(): string {
     throw new Error("DATABASE_URL must be set (or pass --database-url) before seeding the benchmark world.");
   }
   return databaseUrl;
+}
+
+/**
+ * The account's current session generation, read from the users row the mint
+ * will mirror. The standalone `--mint-session` path seeds nothing, so the
+ * row is whatever a previous seed (or operator action) left there; minting
+ * without it would print a pre-fix cookie the session guard refuses.
+ */
+async function readMemberSessionEpoch(databaseUrl: string, userId: string): Promise<number> {
+  const sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
+  try {
+    const [row] = await sql<{ session_epoch: number }[]>`
+      select session_epoch from users where id = ${userId}
+    `;
+    if (row === undefined) {
+      throw new Error(`no users row ${userId} — seed the benchmark world before minting its session cookie`);
+    }
+    return row.session_epoch;
+  } finally {
+    await sql.end();
+  }
 }
 
 function chunks<T>(rows: readonly T[], size: number): T[][] {
@@ -661,8 +697,10 @@ if (isDirectExecution()) {
       console.error("--mint-session needs AUTH_SECRET in the environment.");
       process.exit(2);
     }
-    const world = planSeedWorld(parseSeedArgs(process.argv.slice(2)));
-    console.log(await mintBenchSessionCookie(secret, world.memberUserId));
+    const options = parseSeedArgs(process.argv.slice(2));
+    const world = planSeedWorld(options);
+    const sessionEpoch = await readMemberSessionEpoch(options.databaseUrl ?? requireDatabaseUrl(), world.memberUserId);
+    console.log(await mintBenchSessionCookie(secret, world.memberUserId, sessionEpoch));
   } else {
     const result = await seedBoardBenchmark(parseSeedArgs(process.argv.slice(2)));
     console.log(
@@ -674,7 +712,7 @@ if (isDirectExecution()) {
     console.log(`api bearer token: ${result.apiToken}`);
     const secret = process.env.AUTH_SECRET;
     if (secret !== undefined && secret.length > 0) {
-      console.log(`session cookie: ${await mintBenchSessionCookie(secret, result.memberUserId)}`);
+      console.log(`session cookie: ${await mintBenchSessionCookie(secret, result.memberUserId, result.memberSessionEpoch)}`);
     } else {
       console.log("session cookie: (set AUTH_SECRET to mint one; see --mint-session)");
     }
