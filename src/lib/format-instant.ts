@@ -63,7 +63,7 @@ export function parseDateTimeLocalAsUtc(value: string): string | null {
   const second = match[6] === undefined ? 0 : Number(match[6]);
   const millisecond = match[7] === undefined ? 0 : Number(match[7].padEnd(3, "0"));
 
-  if (month < 1 || month > 12 || day > daysInMonth(year, month)) {
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month)) {
     return null;
   }
   if (hour > 23 || minute > 59 || second > 59) {
