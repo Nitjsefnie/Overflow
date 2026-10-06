@@ -646,6 +646,15 @@
         "targetState": "string"
       }
     },
+    "PATCH /api/moderation/reversal": {
+      "reversal": {
+        "confirmedPatternCount": "number",
+        "priorState": "string",
+        "reactivatedRepositories": "string",
+        "targetAccountId": "string",
+        "targetState": "string"
+      }
+    },
     "POST /api/moderation/recalibration/adjustment": {
       "adjustment": {
         "calibrationAuditId": "string",

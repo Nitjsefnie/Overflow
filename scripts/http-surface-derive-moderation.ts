@@ -12,6 +12,7 @@ import {
   createModeratorPostHandler,
 } from "../src/app/api/moderation/moderators/route.ts";
 import { createModerationAuditPatchHandler } from "../src/app/api/moderation/[id]/route.ts";
+import { createModerationReversalPatchHandler } from "../src/app/api/moderation/reversal/route.ts";
 import { createModerationAdjustmentPostHandler } from "../src/app/api/moderation/recalibration/adjustment/route.ts";
 import { createModerationReversalPostHandler } from "../src/app/api/moderation/adjustments/reversal/route.ts";
 import {
@@ -30,6 +31,7 @@ import {
   fixtureAdjustmentInput,
   fixtureAuditActionInput,
   fixtureAuditId,
+  fixtureBanReversalInput,
   fixtureCloseRecalibrationInput,
   fixtureModerationAuditsRouteDependencies,
   fixtureModerationCreditRouteDependencies,
@@ -147,6 +149,16 @@ export async function derivePatchModerationClose(): Promise<HttpShape> {
   );
 }
 
+export async function derivePatchModerationReversal(): Promise<HttpShape> {
+  return withAppUrl(async () =>
+    bodyShape(
+      await createModerationReversalPatchHandler(fixtureModerationRouteDependencies())(
+        mutationRequest("/api/moderation/reversal", "PATCH", fixtureBanReversalInput),
+      ),
+    ),
+  );
+}
+
 export async function derivePostModerationAdjustment(): Promise<HttpShape> {
   return withAppUrl(async () =>
     bodyShape(
@@ -227,6 +239,7 @@ export async function moderationSurfaceShapes(): Promise<Record<string, HttpShap
     "POST /api/moderation": await derivePostModeration(),
     "PATCH /api/moderation/<id>": await derivePatchModerationAudit(),
     "PATCH /api/moderation": await derivePatchModerationClose(),
+    "PATCH /api/moderation/reversal": await derivePatchModerationReversal(),
     "POST /api/moderation/recalibration/adjustment": await derivePostModerationAdjustment(),
     "POST /api/moderation/adjustments/reversal": await derivePostModerationReversal(),
     "POST /api/moderation/rederivation": await derivePostRederivation(),

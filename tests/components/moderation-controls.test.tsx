@@ -3,6 +3,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
+  BanReversalControl,
   ModerationControls,
   RecalibrationCreditAdjustmentControl,
   RecalibrationPlanControl,
@@ -219,7 +220,98 @@ describe("moderation audit controls", () => {
   });
 });
 
+describe("ban reversal control", () => {
+  it("caps the reversal reason at the length the API accepts", () => {
+    render(<BanReversalControl targetAccountId={reversalTargetId} targetLogin="mira" />);
+
+    expect(screen.getByLabelText("Reversal reason for mira")).toHaveProperty("maxLength", MAX_REASON_LENGTH);
+  });
+
+  it("requires a nonblank reason before a reversal is sent", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<BanReversalControl targetAccountId={reversalTargetId} targetLogin="mira" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reverse ban" }));
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends the reversal with the entered reason and refreshes once on success", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ reversal: { targetState: "ACTIVE" } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<BanReversalControl targetAccountId={reversalTargetId} targetLogin="mira" />);
+
+    fireEvent.change(screen.getByLabelText("Reversal reason for mira"), {
+      target: { value: "The flagged pattern was re-reviewed and does not hold." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reverse ban" }));
+
+    await waitFor(() => {
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+    expect(fetchMock).toHaveBeenCalledWith("/api/moderation/reversal", expect.objectContaining({
+      method: "PATCH",
+      body: JSON.stringify({
+        targetAccountId: reversalTargetId,
+        reason: "The flagged pattern was re-reviewed and does not hold.",
+      }),
+    }));
+    expect(screen.getByRole("status")).toBeInTheDocument();
+  });
+
+  it("keeps the reversal button disabled while the request is in flight", async () => {
+    let resolveResponse: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveResponse = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<BanReversalControl targetAccountId={reversalTargetId} targetLogin="mira" />);
+
+    fireEvent.change(screen.getByLabelText("Reversal reason for mira"), {
+      target: { value: "The flagged pattern was re-reviewed and does not hold." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reverse ban" }));
+
+    expect(screen.getByRole("button", { name: "Reverse ban" })).toBeDisabled();
+    expect(screen.getByRole("status")).toBeInTheDocument();
+
+    resolveResponse?.(new Response(JSON.stringify({ reversal: { targetState: "ACTIVE" } }), { status: 200 }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Reverse ban" })).toBeEnabled();
+    });
+  });
+
+  it("shows the structured API error and does not refresh when the reversal is refused", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: { code: "CONFLICT", message: "This account is not banned." } }),
+        { status: 409, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<BanReversalControl targetAccountId={reversalTargetId} targetLogin="mira" />);
+
+    fireEvent.change(screen.getByLabelText("Reversal reason for mira"), {
+      target: { value: "The flagged pattern was re-reviewed and does not hold." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reverse ban" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("This account is not banned.");
+    });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
 const accountId = "00000000-0000-4000-8000-000000000007";
+const reversalTargetId = "00000000-0000-4000-8000-000000000008";
 const previewUrl = `/api/moderation/recalibration?targetAccountId=${accountId}`;
 
 const actionablePreview = {

@@ -46,6 +46,7 @@ export type ModerationRouteService = Pick<
   | "dismissAccountAudit"
   | "substantiateAccountAudit"
   | "closeRecalibration"
+  | "reverseBan"
 >;
 
 export type ModerationRouteDependencies = {

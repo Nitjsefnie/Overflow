@@ -242,6 +242,18 @@ export type RecalibratingAccountProjection = {
 };
 
 /**
+ * One account whose enforcement state is BANNED — the moderation page's
+ * reversal section renders one reversal control per entry (issue 1072). The
+ * shape mirrors `RecalibratingAccountProjection`: the confirmed-pattern count
+ * is context for the moderator, never reset by a reversal.
+ */
+export type BannedAccountProjection = {
+  id: string;
+  githubLogin: string;
+  confirmedPatternCount: number;
+};
+
+/**
  * One account a moderator may open an audit against. The pair counts are unwindowed and unscoped, so
  * they are an upper bound on what any particular sample window yields; the audit preview is what tells
  * a moderator whether a specific window qualifies.
@@ -475,6 +487,12 @@ type EnforcementHistoryRow = {
 };
 
 type RecalibratingAccountRow = {
+  id: string;
+  github_login: string;
+  confirmed_miscalibration_count: number | string;
+};
+
+type BannedAccountRow = {
   id: string;
   github_login: string;
   confirmed_miscalibration_count: number | string;
@@ -1295,6 +1313,23 @@ export async function listRecalibratingAccounts(
   return rows.map((row) => ({
     id: readText(row.id, "Recalibrating account identifier"),
     githubLogin: readText(row.github_login, "Recalibrating account login"),
+    confirmedPatternCount: readNumber(row.confirmed_miscalibration_count, "Confirmed pattern count"),
+  }));
+}
+
+export async function listBannedAccounts(
+  dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
+): Promise<BannedAccountProjection[]> {
+  const sql = resolveSql(dependencies);
+  const rows = await sql<BannedAccountRow[]>`
+    select id, github_login, confirmed_miscalibration_count
+    from users
+    where enforcement_state = 'BANNED'
+    order by github_login, id
+  `;
+  return rows.map((row) => ({
+    id: readText(row.id, "Banned account identifier"),
+    githubLogin: readText(row.github_login, "Banned account login"),
     confirmedPatternCount: readNumber(row.confirmed_miscalibration_count, "Confirmed pattern count"),
   }));
 }

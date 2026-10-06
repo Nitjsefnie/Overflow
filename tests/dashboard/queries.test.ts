@@ -8,6 +8,7 @@ import {
   getSelfWorkCalibrationProof,
   getSettlementProof,
   listAuditCandidates,
+  listBannedAccounts,
   listEnforcementHistory,
   listModerationRepositories,
   listOpenAudits,
@@ -1236,12 +1237,20 @@ describe("dashboard projections", () => {
           confirmed_miscalibration_count: 2,
         },
       ],
+      [
+        {
+          id: "account-3",
+          github_login: "riley",
+          confirmed_miscalibration_count: 3,
+        },
+      ],
     ]);
 
-    const [audits, history, recalibrating] = await Promise.all([
+    const [audits, history, recalibrating, banned] = await Promise.all([
       listOpenAudits({ sql }),
       listEnforcementHistory({ sql }),
       listRecalibratingAccounts({ sql }),
+      listBannedAccounts({ sql }),
     ]);
 
     expect(audits[0]).toMatchObject({
@@ -1255,6 +1264,11 @@ describe("dashboard projections", () => {
       id: "account-2",
       githubLogin: "quinn",
       confirmedPatternCount: 2,
+    });
+    expect(banned[0]).toEqual({
+      id: "account-3",
+      githubLogin: "riley",
+      confirmedPatternCount: 3,
     });
     expect(captures.map((capture) => capture.text).join("\n").toLowerCase()).not.toMatch(
       /encrypted_oauth_token|access_token|webhook_secret|credential/,

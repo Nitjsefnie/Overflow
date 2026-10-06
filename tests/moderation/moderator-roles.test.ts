@@ -132,6 +132,7 @@ function createHarness(options: HarnessOptions = {}) {
     dismissAccountAudit: async () => ({ kind: "not_found" }),
     substantiateAccountAudit: async () => ({ kind: "not_found" }),
     closeRecalibration: async () => ({ kind: "not_found" }),
+    reverseBan: async () => ({ kind: "not_found" }),
     listModerators: async () => [],
     setModeratorRole: async (input) => {
       calls.push(input);
