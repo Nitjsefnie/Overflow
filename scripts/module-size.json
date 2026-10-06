@@ -7,7 +7,7 @@
     "migrations": 400
   },
   "module_size_baseline": {
-    "scripts/check-page-geometry.mjs": 1394,
+    "scripts/check-page-geometry.mjs": 1392,
     "src/app/globals.css": 1234,
     "src/components/repository-form.tsx": 836,
     "src/lib/dashboard/queries.ts": 1546,
