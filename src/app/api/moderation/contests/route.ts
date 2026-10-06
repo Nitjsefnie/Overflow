@@ -147,23 +147,21 @@ function errorResponse(status: number, code: string, message: string): Response 
   return Response.json({ error: { code, message } }, { status });
 }
 
-export const POST = createSanctionContestDecisionPostHandler({
+// One dependency set for both exports: the two handlers take the same shape,
+// and carrying two copies invited an edit to one that left the other behind
+// (a store or session wiring changed on POST but not on GET).
+const productionDependencies: SanctionContestModerationRouteDependencies = {
   getSession: getProductionSession,
   findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
   getCurrentRole: getCurrentUserRole,
   async createService() {
     return new SanctionContestService(new PostgresSanctionContestStore());
   },
-});
+};
 
-export const GET = createSanctionContestQueueGetHandler({
-  getSession: getProductionSession,
-  findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
-  getCurrentRole: getCurrentUserRole,
-  async createService() {
-    return new SanctionContestService(new PostgresSanctionContestStore());
-  },
-});
+export const POST = createSanctionContestDecisionPostHandler(productionDependencies);
+
+export const GET = createSanctionContestQueueGetHandler(productionDependencies);
 
 async function getProductionSession(): Promise<ModerationRouteSession | null> {
   const { auth } = await import("@/auth");
