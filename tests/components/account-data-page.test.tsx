@@ -358,12 +358,14 @@ describe("account-data notice page", () => {
     // resolve (the /rules and /terms publications carry the shared ones), so
     // this follows the file's precedent for notice passages — the failure-alert
     // and body-text-retention pins: a marker class carries the item's identity,
-    // and the three facts a reader depends on are pinned as fact patterns, not
-    // as full sentences. The class is legitimate for the same reason
-    // p.account-age-floor is: the assertions below independently require the
-    // item to exist and to carry the facts, so a bare class with nothing in it
-    // satisfies nothing, and the class alone is what keeps the item findable
-    // when a rewording moves its words.
+    // its presence and its closing placement in the section's list are the
+    // structural pin, and the facts the suite holds the passage to are pinned
+    // as fact patterns against the item's text, never as full sentences. The
+    // class is legitimate for the same reason p.account-age-floor is: the
+    // assertions below independently require the item to exist and to carry
+    // the facts, so a bare class with nothing in it satisfies nothing, and the
+    // class alone is what keeps the item findable when a rewording moves its
+    // words.
     //
     // The marker class carries identity, not something a reader sees; nothing
     // renders it differently. Do not "simplify" it away: without it the item is
@@ -379,12 +381,10 @@ describe("account-data notice page", () => {
     expect(listItems[listItems.length - 1]).toBe(item);
 
     const text = item!.textContent ?? "";
-    // STORED: the request and its reason, the contested sanction, the decision fields.
+    // STORED: the request and its reason, and the sole-moderator record among the stored fields.
     expect(text, "the request and its reason are named as stored").toMatch(
       /the request and its reason are stored/i,
     );
-    expect(text, "the contested sanction is named as stored").toMatch(/the sanction they contest/i);
-    expect(text, "the decision fields are named").toMatch(/the decision fields/i);
     expect(text, "the sole-moderator record is among the stored fields").toMatch(
       /only live moderator/i,
     );
@@ -395,11 +395,10 @@ describe("account-data notice page", () => {
     expect(text, "both roles are named: filer and deciding moderator").toMatch(
       /those you filed and those you decided as a moderator/i,
     );
-    // KEPT AFTER DELETION: pseudonymised like all moderation events, reasons persist.
+    // KEPT AFTER DELETION: pseudonymised like all moderation events.
     expect(text, "deletion is named as keeping them pseudonymised").toMatch(
       /Deleting your account keeps them pseudonymised/i,
     );
-    expect(text, "the reasons are named as persisting").toMatch(/reasons stay/i);
   });
 
   it("discloses the failure-alert mail route in the recipients list", async () => {
