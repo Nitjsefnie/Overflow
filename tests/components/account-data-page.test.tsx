@@ -11,6 +11,7 @@ vi.mock("@/auth", () => ({ signIn }));
 
 import { AppShell, PublicAppShell } from "@/components/app-shell";
 import { LandingPage } from "@/app/page";
+import { RUN_TERMINAL_RETENTION_DAYS } from "@/lib/retention/prune";
 import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
 
 async function renderAccountDataPage(): Promise<void> {
@@ -351,6 +352,40 @@ describe("account-data notice page", () => {
       retention,
       "the retention section lists the export among the retention periods",
     ).toMatch(/privileged.action[\s\S]*90 days[\s\S]*root-only[\s\S]*export/i);
+  });
+
+  it("states the change log's automated retention prune and pins its horizon to the constant", async () => {
+    await renderAccountDataPage();
+
+    const nonMember = sectionLabelledBy("account-data-non-member-heading");
+    const keptIntro = Array.from(nonMember.querySelectorAll("p")).find((candidate) =>
+      /^how long it is kept:?$/i.test((candidate.textContent ?? "").trim()),
+    );
+    expect(keptIntro, "the retention list is introduced by a paragraph").toBeDefined();
+    const keptList = keptIntro!.nextElementSibling;
+    expect(keptList?.tagName, "the retention list follows its introduction").toBe("UL");
+    const item = Array.from(keptList!.querySelectorAll("li")).find((candidate) =>
+      /change log/i.test(candidate.textContent ?? ""),
+    );
+    expect(item, "the retention list covers the change log").toBeDefined();
+
+    const text = item!.textContent ?? "";
+    expect(text, "the change log is append-only only while a run is open").toMatch(
+      /append-only while a reconciliation run is open/i,
+    );
+    expect(text, "an automated prune deletes the entries").toMatch(
+      /automated[\s\S]*retention prune/i,
+    );
+    expect(text, "the entries deleted are those of completed or failed runs").toMatch(
+      /completed or failed reconciliation runs?/i,
+    );
+    expect(
+      text,
+      "the stated horizon is the constant's value, so bumping the constant without following here fails this test",
+    ).toContain(String(RUN_TERMINAL_RETENTION_DAYS));
+    expect(text, "the hand-run cleanup script removes only no-change entries").toMatch(
+      /cleanup script[\s\S]*no actual change/i,
+    );
   });
 });
 
