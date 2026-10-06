@@ -107,7 +107,7 @@ describe("session cookie minting", () => {
     // sign-in instant, so the mint records the wall clock it ran at — a fixed
     // date would be born expired.
     const beforeSeconds = Math.floor(Date.now() / 1000);
-    const cookie = await mintBenchSessionCookie("bench-secret", "00000000-0000-0000-0000-1000000000c9");
+    const cookie = await mintBenchSessionCookie("bench-secret", "00000000-0000-0000-0000-1000000000c9", 0);
     const afterSeconds = Math.floor(Date.now() / 1000);
     const decoded = await decodeBenchCookie(cookie, "bench-secret");
     expect(decoded?.userId).toBe("00000000-0000-0000-0000-1000000000c9");
@@ -116,6 +116,15 @@ describe("session cookie minting", () => {
     expect(decoded?.role).toBe("MEMBER");
     expect(decoded?.authenticatedAt).toBeGreaterThanOrEqual(beforeSeconds);
     expect(decoded?.authenticatedAt).toBeLessThanOrEqual(afterSeconds);
+    // The epoch claim the session guard compares at refresh: whatever the
+    // caller read from the account's row is what the cookie must carry.
+    expect(decoded?.sessionEpoch).toBe(0);
+  });
+
+  it("stamps the session epoch it is handed, not a constant", async () => {
+    const cookie = await mintBenchSessionCookie("bench-secret", "00000000-0000-0000-0000-1000000000c9", 7);
+    const decoded = await decodeBenchCookie(cookie, "bench-secret");
+    expect(decoded?.sessionEpoch).toBe(7);
   });
 
   it("names the cookie the production session strategy reads", () => {
@@ -151,6 +160,22 @@ describe("seeding against PostgreSQL", () => {
     await container?.stop();
     if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = originalDatabaseUrl;
+  });
+
+  it("reports the bench member's session epoch from the row it wrote", async () => {
+    // The epoch a minted cookie must carry is whatever the seed wrote, never
+    // an assumed default: the seed reads the member row back and reports it,
+    // and a cookie minted with that epoch survives the session guard.
+    const result = await seedBoardBenchmark(SMALL_WORLD);
+
+    const [row] = await sql<{ session_epoch: number }[]>`
+      select session_epoch from users where id = ${result.memberUserId}
+    `;
+    expect(result.memberSessionEpoch).toBe(row!.session_epoch);
+
+    const cookie = await mintBenchSessionCookie("bench-secret", result.memberUserId, result.memberSessionEpoch);
+    const decoded = await decodeBenchCookie(cookie, "bench-secret");
+    expect(decoded?.sessionEpoch).toBe(row!.session_epoch);
   });
 
   it("inserts every row the plan names", async () => {
