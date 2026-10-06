@@ -1018,10 +1018,13 @@ describe("runRelay", () => {
     ])(
       "refuses a pinned %j run on head branch %j before anything is posted: no check-run, no sweep, no heal",
       async (event, headBranch) => {
-        // The liveness listing is served LIVE: a live head is exactly the case
-        // that keeps the byte-identical throw (issue 1115), and these pins
-        // hold for every untrusted event shape.
-        const fetchStub = makeFetch([token(), pullsListing([pullEntry()])]);
+        // The env carries no head repository, so the gate fetches the run
+        // body; the LIVE listing is the case that keeps the throw.
+        const fetchStub = makeFetch([
+          token(),
+          fetchedRun({ event, head_branch: headBranch }),
+          pullsListing([pullEntry()]),
+        ]);
         const error = await caughtError(
           runRelay({
             env: relayEnv({
@@ -1039,17 +1042,19 @@ describe("runRelay", () => {
         expect(error?.message).toContain(`event ${JSON.stringify(event)}`);
         expect(error?.message).toContain(`head branch ${JSON.stringify(headBranch)}`);
         expect(error?.message).toContain("no required context was relayed");
-        // The refusal reads the head's liveness before throwing: the mint and
-        // the pulls listing, nothing else.
-        expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, PULLS_URL]);
+        // Learn the head repository, then read liveness: three requests, nothing else.
+        expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
         expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
       },
     );
 
     it("refuses a cancelled pinned pull_request run without attempting the heal", async () => {
-      // The liveness listing is served LIVE so the throw survives; the heal is
-      // unreachable from a refused run.
-      const fetchStub = makeFetch([token(), pullsListing([pullEntry()])]);
+      // The listing is served LIVE so the throw survives; the heal is unreachable.
+      const fetchStub = makeFetch([
+        token(),
+        fetchedRun(),
+        pullsListing([pullEntry()]),
+      ]);
       const error = await caughtError(
         runRelay({
           env: cancelledPrEnv({ GITHUB_WORKFLOW_RUN_EVENT: "pull_request" }),
@@ -1060,13 +1065,13 @@ describe("runRelay", () => {
       );
       expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
       expect(error?.message).toContain("no required context was relayed");
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
     });
 
     it("reads an absent GITHUB_WORKFLOW_RUN_HEAD_BRANCH as no branch, so a push run is refused", async () => {
       const env = relayEnv();
       delete env.GITHUB_WORKFLOW_RUN_HEAD_BRANCH;
-      const fetchStub = makeFetch([token(), pullsListing([pullEntry()])]);
+      const fetchStub = makeFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
       const error = await caughtError(
         runRelay({
           env,
@@ -1078,7 +1083,7 @@ describe("runRelay", () => {
       expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
       expect(error?.message).toContain('head branch ""');
       expect(error?.message).toContain("no required context was relayed");
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
     });
 
     it("reads an absent GITHUB_WORKFLOW_RUN_EVENT as no event, so the pinned run is refused", async () => {
@@ -1086,7 +1091,7 @@ describe("runRelay", () => {
       // missing value must read as the empty string, which no rule trusts.
       const env = relayEnv({ GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main" });
       delete env.GITHUB_WORKFLOW_RUN_EVENT;
-      const fetchStub = makeFetch([token(), pullsListing([pullEntry()])]);
+      const fetchStub = makeFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
       const error = await caughtError(
         runRelay({
           env,
@@ -1099,7 +1104,7 @@ describe("runRelay", () => {
       expect(error?.message).toContain('event ""');
       expect(error?.message).toContain("no required context was relayed");
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
     });
 
     it("reads a fetched run with no event field as no event, so the pinned run is refused", async () => {
@@ -1132,8 +1137,7 @@ describe("runRelay", () => {
     ])(
       "refuses through the dispatch path when the fetched run is %j on head branch %j",
       async (event, headBranch) => {
-        // The liveness listing is served LIVE: a live head is the case that
-        // keeps the byte-identical throw (issue 1115).
+        // A LIVE listing is the case that keeps the throw (issue 1115).
         const fetchStub = makeFetch([
           token(),
           fetchedRun({ event, head_branch: headBranch }),
@@ -1307,9 +1311,8 @@ describe("runRelay", () => {
       // Now that the second path matches, the predicate is the only thing
       // between a run that executed a definition a pull request could shape
       // and an App-owned check-run branch protection would merge on.
-      // The liveness listing is served LIVE: a live head is the case that
-      // keeps the byte-identical throw (issue 1115).
-      const fetchStub = makeFetch([token(), pullsListing([pullEntry()])]);
+      // LIVE listing: a live head keeps the throw (issue 1115).
+      const fetchStub = makeFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
       const error = await caughtError(
         runRelay({
           env: relayEnv({
@@ -1330,8 +1333,8 @@ describe("runRelay", () => {
       expect(error?.message).toContain('event "pull_request"');
       expect(error?.message).toContain('head branch "feature/some-branch"');
       expect(error?.message).toContain("no required context was relayed");
-      // The refusal reads the head's liveness before throwing.
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, PULLS_URL]);
+      // Learn the head repository, then read liveness before throwing.
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
     });
 
@@ -1340,9 +1343,8 @@ describe("runRelay", () => {
       // context. A relay that grew to skip its trusted-producer check for a
       // run resolving "more than one" context would be skipped here, and this
       // repository has two contexts naming one path today.
-      // The liveness listing is served LIVE: a live head is the case that
-      // keeps the byte-identical throw (issue 1115).
-      const fetchStub = makeFetch([token(), pullsListing([pullEntry()])]);
+      // LIVE listing: a live head keeps the throw (issue 1115).
+      const fetchStub = makeFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
       const error = await caughtError(
         runRelay({
           env: relayEnv({
@@ -1361,7 +1363,7 @@ describe("runRelay", () => {
         "the trusted-producer check must precede any posting, however many contexts the path resolves",
       ).toHaveLength(0);
       expect(error?.message).toContain("no required context was relayed");
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
     });
 
     it("still relays nothing for a path neither pin names", async () => {
@@ -1893,25 +1895,27 @@ describe("runRelay", () => {
       });
     }
 
+    /** The refused run through this describe's one env and fetch shape. */
+    function relay(env: Record<string, string>, stub: ReturnType<typeof makeFetch>): ReturnType<typeof runRelay> {
+      return runRelay({ env, fetchFn: stub.fn, delayFn: makeDelay().fn, readPinMap: async () => PIN_MAP });
+    }
+
     it("exits 0 through the workflow_run path when the refused run's head is dead, relaying nothing", async () => {
-      // The incident: GitHub finalized a stale pull_request run of a closed
-      // same-repo pull request weeks late; the workflow_run trigger fired the
-      // relay on main, the run was refused, and the refusal turned main red
-      // although nothing was waiting at the head. A refusal whose liveness
-      // listing is definitively empty downgrades to the visible exit-0 no-op.
-      const fetchStub = makeFetch([token(), pullsListing([])]);
-      const result = await runRelay({
-        env: untrustedWorkflowRunEnv(),
-        fetchFn: fetchStub.fn,
-        delayFn: makeDelay().fn,
-        readPinMap: async () => PIN_MAP,
-      });
+      // The incident (issue 1115): a stale pull_request run of a closed
+      // same-repo PR, refused on the workflow_run path; a definitively empty
+      // liveness listing downgrades the refusal to the exit-0 no-op.
+      const fetchStub = makeFetch([
+        token(),
+        fetchedRun({ event: "pull_request", head_branch: "feature/some-branch" }),
+        pullsListing([]),
+      ]);
+      const result = await relay(untrustedWorkflowRunEnv(), fetchStub);
 
       expect(result.posted).toEqual([]);
       expect(result.decisions).toEqual([]);
       expect(result.rerunDispatched).toBe(false);
       expect(result.sweep.examined).toBe(0);
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
       expect(renderRelayResult(result)).toEqual([
         `[ledger-relay] ${REFUSAL}`,
@@ -1925,12 +1929,7 @@ describe("runRelay", () => {
         untrustedFetchedRun({ head_repository: { full_name: "Nitjsefnie/Overflow" } }),
         pullsListing([]),
       ]);
-      const result = await runRelay({
-        env: dispatchEnv(),
-        fetchFn: fetchStub.fn,
-        delayFn: makeDelay().fn,
-        readPinMap: async () => PIN_MAP,
-      });
+      const result = await relay(dispatchEnv(), fetchStub);
 
       expect(result.posted).toEqual([]);
       expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
@@ -1940,28 +1939,19 @@ describe("runRelay", () => {
       ]);
     });
 
-    it("exits 0 through the dispatch path when the fetched body names no head repository and the head is dead", async () => {
-      // The unknown-head-repository limb: a fetched body without
-      // head_repository gives no name to compare, so the liveness read decides
-      // — the same branch the workflow_run path always takes (its run body is
-      // never fetched).
+    it("keeps the byte-identical throw when the fetched body names no head repository, even with a dead listing", async () => {
+      // The unknown limb fails closed: no name to compare, so the gate
+      // re-fetches the run body; a name still missing keeps the throw.
       const body = fetchedRunBody({ event: "pull_request", head_branch: "feature/some-branch" });
       delete body.head_repository;
-      const fetchStub = makeFetch([token(), { status: 200, body }, pullsListing([])]);
-      const result = await runRelay({
-        env: dispatchEnv(),
-        fetchFn: fetchStub.fn,
-        delayFn: makeDelay().fn,
-        readPinMap: async () => PIN_MAP,
-      });
+      const fetchStub = makeFetch([token(), { status: 200, body }, { status: 200, body }, pullsListing([])]);
+      const error = await caughtError(relay(dispatchEnv(), fetchStub));
 
-      expect(result.posted).toEqual([]);
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
+      expect(error, "a nameless head must keep the refusal visible").toBeInstanceOf(Error);
+      expect(error?.message, "the message stays byte-identical").toBe(REFUSAL);
+      // Re-fetched, still no name: the listing was never consulted.
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, RUN_URL]);
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
-      expect(renderRelayResult(result)).toEqual([
-        `[ledger-relay] ${REFUSAL}`,
-        "[ledger-relay] no open pull request is waiting at this head",
-      ]);
     });
 
     it("keeps the byte-identical throw when the refused head is live at an open pull request", async () => {
@@ -1970,14 +1960,7 @@ describe("runRelay", () => {
         untrustedFetchedRun({ head_repository: { full_name: "Nitjsefnie/Overflow" } }),
         pullsListing([pullEntry()]),
       ]);
-      const error = await caughtError(
-        runRelay({
-          env: dispatchEnv(),
-          fetchFn: fetchStub.fn,
-          delayFn: makeDelay().fn,
-          readPinMap: async () => PIN_MAP,
-        }),
-      );
+      const error = await caughtError(relay(dispatchEnv(), fetchStub));
 
       expect(error, "a live head must keep the refusal visible").toBeInstanceOf(Error);
       expect(error?.message, "the message stays byte-identical").toBe(REFUSAL);
@@ -1986,28 +1969,41 @@ describe("runRelay", () => {
     });
 
     it("keeps the byte-identical throw for a fork head even when the liveness listing would say dead", async () => {
-      // Whether commits/{sha}/pulls lists an open fork pull request at its
-      // head is unverified; a miss there is the exact issue-1083 silent wait.
-      // The head repository is read from the run body, and a known mismatch
-      // throws before the listing is consulted at all.
+      // A known fork name throws before the listing is consulted: whether
+      // commits/{sha}/pulls surfaces a fork PR's head is unverified.
       const fetchStub = makeFetch([
         token(),
         untrustedFetchedRun({ head_repository: { full_name: "someone-else/fork" } }),
         pullsListing([]),
       ]);
-      const error = await caughtError(
-        runRelay({
-          env: dispatchEnv(),
-          fetchFn: fetchStub.fn,
-          delayFn: makeDelay().fn,
-          readPinMap: async () => PIN_MAP,
-        }),
-      );
+      const error = await caughtError(relay(dispatchEnv(), fetchStub));
 
       expect(error, "a fork head must keep the refusal visible").toBeInstanceOf(Error);
       expect(error?.message, "the message stays byte-identical").toBe(REFUSAL);
       // The listing was never consulted: the fork is decided from the run body.
       expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL]);
+    });
+
+    it("throws for a workflow_run fork head: the run body is fetched to learn the head repository, and the listing is never consulted", async () => {
+      // PM-measured: a fork head's commit resolves in this repository
+      // (the listing reads 200, count 0), so the gate fetches the run body
+      // to learn the head repository and a fork name keeps the throw.
+      const fetchStub = makeFetch([
+        token(),
+        fetchedRun({
+          event: "pull_request",
+          head_branch: "feature/some-branch",
+          head_repository: { full_name: "someone-else/fork" },
+        }),
+        pullsListing([]),
+      ]);
+      const error = await caughtError(relay(untrustedWorkflowRunEnv(), fetchStub));
+
+      expect(error, "a fork head must keep the refusal visible").toBeInstanceOf(Error);
+      expect(error?.message, "the message stays byte-identical").toBe(REFUSAL);
+      // Token mint and run fetch only: the listing was never consulted.
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL]);
+      expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
     });
 
     it.each([
@@ -2019,37 +2015,25 @@ describe("runRelay", () => {
         untrustedFetchedRun({ head_repository: { full_name: "Nitjsefnie/Overflow" } }),
         listing,
       ]);
-      const error = await caughtError(
-        runRelay({
-          env: dispatchEnv(),
-          fetchFn: fetchStub.fn,
-          delayFn: makeDelay().fn,
-          readPinMap: async () => PIN_MAP,
-        }),
-      );
+      const error = await caughtError(relay(dispatchEnv(), fetchStub));
 
       expect(error, "an ambiguous liveness read must fail closed").toBeInstanceOf(Error);
       expect(error?.message).toMatch(expected);
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
     });
 
-    it("throws when the workflow_run path's liveness read fails, so a fork head's 404 stays red", async () => {
-      // On the workflow_run path the run body is not fetched, so the head
-      // repository is unknown; the liveness read itself is the fork backstop —
-      // a fork head's SHA is not in this repository and the listing errors.
-      const fetchStub = makeFetch([token(), { status: 404, body: { message: "No Commit Found" } }]);
-      const error = await caughtError(
-        runRelay({
-          env: untrustedWorkflowRunEnv(),
-          fetchFn: fetchStub.fn,
-          delayFn: makeDelay().fn,
-          readPinMap: async () => PIN_MAP,
-        }),
-      );
+    it("throws when the workflow_run path's liveness read fails after a same-repo head is confirmed", async () => {
+      // Same-repo head confirmed from the fetched body; the listing decides.
+      const fetchStub = makeFetch([
+        token(),
+        fetchedRun({ event: "pull_request", head_branch: "feature/some-branch" }),
+        { status: 404, body: { message: "No Commit Found" } },
+      ]);
+      const error = await caughtError(relay(untrustedWorkflowRunEnv(), fetchStub));
 
       expect(error, "an unresolvable liveness read must fail closed").toBeInstanceOf(Error);
       expect(error?.message).toMatch(/pull requests associated with commit/);
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
     });
   });
 
