@@ -178,6 +178,30 @@ resolve compromised GitHub access; the latter is handled in [Account loss and
 account compromise](#account-loss-and-account-compromise). Do not restore a
 compromised auth secret as a recovery shortcut.
 
+### End one account's sessions
+
+Replacing `AUTH_SECRET` ends every member's sessions. Ending one account's
+sessions needs only the account's session epoch: every cookie carries the
+`session_epoch` it was minted under, and the session refresh — the jwt
+callback in `src/auth.ts` — compares that claim against `users.session_epoch`
+and refuses a mismatch. In the authorized `psql` session, replace the example
+id with the account's GitHub user id:
+
+```sql
+\set ON_ERROR_STOP on
+\set github_user_id 424242
+UPDATE users SET session_epoch = session_epoch + 1 WHERE github_user_id = :'github_user_id';
+```
+
+Expect `UPDATE 1`; zero means no account carries that id, and the sessions it
+was believed to hold were never anchored to an epoch this ends. The bump ends
+every session the account holds at its next refresh without touching any
+other account, and the account can sign in again immediately — a fresh
+sign-in stamps the new epoch, so the revoked cookies stay dead while the
+account recovers. Signing out through the product (`POST /api/auth/signout`)
+runs the same bump, so a member can end the sessions of a cookie they know
+has been copied.
+
 ## Scope
 
 ### Database history by actor, credential and time
