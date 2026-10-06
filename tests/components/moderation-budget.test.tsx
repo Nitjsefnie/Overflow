@@ -98,6 +98,17 @@ describe("moderation budget integration", () => {
     const indicator = container.querySelector('[aria-labelledby="github-budget-heading"] > p');
     expect(indicator).toBeVisible();
     expect((indicator?.textContent ?? "").trim()).not.toBe("");
+    // The sanction-contests section keeps its intro paragraph directly after
+    // its heading and ahead of the queue it introduces — the region's
+    // structure only, never the paragraph's wording: it is hand-written prose
+    // (it states what a granted contest does to the sanction, matching the
+    // decision control beside the queue), and this pin holds its place, not
+    // its sentence.
+    const contestsSection = container.querySelector('[aria-labelledby="sanction-contests-heading"]');
+    expect(contestsSection).not.toBeNull();
+    const contestsIntro = contestsSection!.querySelector("h2 + p");
+    expect(contestsIntro).not.toBeNull();
+    expect((contestsIntro?.textContent ?? "").trim()).not.toBe("");
     for (const loader of Object.values(loaders)) expect(loader).toHaveBeenCalledTimes(1);
   });
 

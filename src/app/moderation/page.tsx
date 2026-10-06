@@ -216,7 +216,7 @@ export default async function ModerationPage() {
         <p>
           A sanctioned account can ask for its sanction to be contested. The deciding moderator is not the one
           who imposed the sanction where any other moderator exists; with exactly one live moderator, that
-          moderator decides and the record says so. Recording a decision does not itself change the sanction.
+          moderator decides and the record says so. A granted contest lifts the sanction it contested.
         </p>
         {openContests === null ? (
           <p>The sanction contest queue could not be loaded.</p>
