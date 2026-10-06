@@ -350,7 +350,7 @@ describe("account-data notice page", () => {
     expect(
       retention,
       "the retention section lists the export among the retention periods",
-    ).toMatch(/90 days[\s\S]*root-only[\s\S]*export/i);
+    ).toMatch(/privileged.action[\s\S]*90 days[\s\S]*root-only[\s\S]*export/i);
   });
 });
 
