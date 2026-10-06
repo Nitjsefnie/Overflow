@@ -742,6 +742,35 @@ describe("PostgreSQL account moderation transitions", () => {
     expect(roster).toHaveLength(1);
     expect([aliceId, bobId]).toContain(roster[0]?.accountId);
   });
+
+  it("refuses to revoke the last LIVE moderator when a deleted row still carries MODERATOR", async () => {
+    const liveModeratorId = await insertUser("MODERATOR");
+    const deletedModeratorId = await insertUser("MODERATOR");
+    const store = new PostgresModerationStore(sql);
+
+    // The pre-fix deleted shape: the row keeps role MODERATOR across deletion.
+    // Planted directly, so this case holds for rows deleted before the fix
+    // shipped, not only for rows the fixed scrub writes.
+    await sql`update users set deleted_at = now() where id = ${deletedModeratorId}`;
+
+    // Earlier cases in this file leave live MODERATOR rows behind; the guard
+    // counts the users table, so demote everyone but the live moderator under
+    // test, as the mutual-revocation case above does.
+    await sql`update users set role = 'MEMBER' where role = 'MODERATOR' and id not in (${liveModeratorId}, ${deletedModeratorId})`;
+
+    // The deleted moderator must not count as a survivor: revoking the last
+    // live one is refused, not allowed through by the deleted row's role.
+    await expect(store.setModeratorRole({
+      actorId: liveModeratorId,
+      targetAccountId: liveModeratorId,
+      moderator: false,
+      credential: null,
+    })).resolves.toEqual({ kind: "invalid_state" });
+
+    await expect(sql<{ role: string }[]>`
+      select role from users where id = ${liveModeratorId}
+    `).resolves.toEqual([{ role: "MODERATOR" }]);
+  });
 });
 
 async function openAudit(store: PostgresModerationStore, input: OpenAccountAuditStoreInput) {

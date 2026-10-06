@@ -374,7 +374,8 @@ export class PostgresModerationStore implements ModerationStore {
       // pass twice while the other revocation is uncommitted.
       if (!input.moderator) {
         const [remaining] = await transaction<{ count: string }[]>`
-          select count(*)::text as count from users where role = 'MODERATOR' and id <> ${input.targetAccountId}
+          select count(*)::text as count from users
+          where role = 'MODERATOR' and deleted_at is null and id <> ${input.targetAccountId}
         `;
         if (toSafeInteger(remaining?.count ?? "0") === 0) {
           return { kind: "invalid_state" };
