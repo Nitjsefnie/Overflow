@@ -1,4 +1,5 @@
 import { SettlementOverrideRequestForm } from "@/components/settlement-override-request";
+import { formatInstant } from "@/lib/format-instant";
 import type { SettlementOverrideRequest, SettlementOverrideTarget } from "@/lib/overrides/service";
 import { plural } from "@/lib/plural";
 
@@ -58,10 +59,10 @@ export function SettlementCorrections({ target, requests }: SettlementCorrection
           {requests.map((request) => (
             <li key={request.id}>
               <p className="override-state">{stateSummary(request, target.kind)}</p>
-              <p>Reported {request.createdAt}: “{request.reason}”</p>
+              <p>Reported {formatInstant(request.createdAt)}: “{request.reason}”</p>
               {request.decisionReason === null ? null : (
                 <p className="mono-meta">
-                  Decided {request.decidedAt ?? "unknown"}: “{request.decisionReason}”
+                  Decided {request.decidedAt != null ? formatInstant(request.decidedAt) : "unknown"}: “{request.decisionReason}”
                 </p>
               )}
             </li>

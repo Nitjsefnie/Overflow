@@ -4,6 +4,7 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { UnwritableClosureHistory } from "@/components/unwritable-closure-history";
 import type { UnwritableClosureProjection } from "@/lib/dashboard/queries";
+import { formatInstant } from "@/lib/format-instant";
 
 const granted: UnwritableClosureProjection = {
   id: "closure-1",
@@ -90,7 +91,9 @@ describe("unwritable closure history", () => {
     ]);
     for (const time of entry.querySelectorAll("time")) {
       expect(time).toBeVisible();
-      expect(time).toHaveTextContent(time.dateTime);
+      // The attribute carries the machine instant; the text carries its UTC
+      // rendering — the same split the component pins by construction.
+      expect(time).toHaveTextContent(formatInstant(time.dateTime));
     }
     const outcome = entry.querySelector("data");
     expect(outcome).toBeVisible();

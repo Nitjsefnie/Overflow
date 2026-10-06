@@ -1,4 +1,5 @@
 import type { UnwritableClosureProjection } from "@/lib/dashboard/queries";
+import { formatInstant } from "@/lib/format-instant";
 
 type UnwritableClosureHistoryProps = {
   closures: readonly UnwritableClosureProjection[];
@@ -14,7 +15,7 @@ export function UnwritableClosureHistory({ closures }: UnwritableClosureHistoryP
       {closures.map((closure) => (
         <li key={closure.id}>
           <p>
-            <strong>{closure.repositoryName}</strong> · recorded <time dateTime={closure.recordedAt}>{closure.recordedAt}</time>
+            <strong>{closure.repositoryName}</strong> · recorded <time dateTime={closure.recordedAt}>{formatInstant(closure.recordedAt)}</time>
           </p>
           <p>
             <a href={closure.issueUrl}>
@@ -31,7 +32,7 @@ export function UnwritableClosureHistory({ closures }: UnwritableClosureHistoryP
           <p className="override-reason">{closure.reason}</p>
           {closure.latestCorrection === null ? null : (
             <p className="mono-meta">
-              Correction <data value={closure.latestCorrection.state}>{closure.latestCorrection.state.toLowerCase()}</data> · reported <time dateTime={closure.latestCorrection.requestedAt}>{closure.latestCorrection.requestedAt}</time>
+              Correction <data value={closure.latestCorrection.state}>{closure.latestCorrection.state.toLowerCase()}</data> · reported <time dateTime={closure.latestCorrection.requestedAt}>{formatInstant(closure.latestCorrection.requestedAt)}</time>
             </p>
           )}
         </li>

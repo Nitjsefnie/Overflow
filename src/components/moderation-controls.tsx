@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { formatSigned } from "@/lib/format-signed";
+import { formatInstant } from "@/lib/format-instant";
 import { plural } from "@/lib/plural";
 import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 
@@ -548,7 +549,7 @@ export function RecalibrationCreditAdjustmentControl({
           {appliedAdjustments.map((adjustment) => (
             <li key={adjustment.id}>
               <p>
-                {adjustment.totalAmount} {plural(adjustment.totalAmount, "point")} · {adjustment.createdAt} · {adjustment.reason}
+                {adjustment.totalAmount} {plural(adjustment.totalAmount, "point")} · {formatInstant(adjustment.createdAt)} · {adjustment.reason}
               </p>
               {reversedIds.has(adjustment.id) ? (
                 <p>Reversed</p>

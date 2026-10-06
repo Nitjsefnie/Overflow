@@ -2,6 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { SettlementCorrections } from "@/components/settlement-corrections";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
+import { formatInstant } from "@/lib/format-instant";
 import type { SettlementOverrideRequest } from "@/lib/overrides/service";
 import { UNLABELLED_POINTS } from "@/lib/overrides/unlabelled-points";
 import { stripNamePrefix } from "@/lib/strip-name-prefix";
@@ -75,7 +76,7 @@ export default async function CalibrationProofPage({ params }: CalibrationProofP
             </div>
             <div>
               <dt>Merged</dt>
-              <dd>{calibration.mergedAt ?? "Unavailable"}</dd>
+              <dd>{calibration.mergedAt != null ? formatInstant(calibration.mergedAt) : "Unavailable"}</dd>
             </div>
             <div>
               <dt>Merge commit</dt>

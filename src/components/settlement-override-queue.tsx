@@ -1,4 +1,5 @@
 import { SettlementOverrideDecision } from "@/components/settlement-override-decision";
+import { formatInstant } from "@/lib/format-instant";
 import type {
   OpenSettlementOverrideRequest,
   SelfWorkCalibrationOverrideEvidence,
@@ -30,7 +31,7 @@ export function SettlementOverrideQueue({ requests }: SettlementOverrideQueuePro
       {requests.map((request) => (
         <li key={request.id}>
           <p>
-            <strong>{request.requesterLogin}</strong> · {request.repositoryName} · reported {request.requestedAt}
+            <strong>{request.requesterLogin}</strong> · {request.repositoryName} · reported {formatInstant(request.requestedAt)}
           </p>
           <p>
             <a href={request.issueUrl}>

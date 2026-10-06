@@ -183,7 +183,7 @@ describe("sanction contests page", () => {
     expect(decidedItem!.textContent).toContain("DENIED");
     expect(decidedItem!.textContent).toContain("The pattern was confirmed by independent review.");
     expect(decidedItem!.textContent).toContain("the only live moderator");
-    expect(decidedItem!.textContent).toContain("2026-09-02");
+    expect(decidedItem!.textContent).toContain("2026-09-02 10:00 UTC");
 
     const openItem = items.find((item) => item.textContent?.includes("still with a moderator"));
     expect(openItem).toBeDefined();

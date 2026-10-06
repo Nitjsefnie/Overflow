@@ -470,7 +470,7 @@ describe("self-work calibration proof page", () => {
     );
     expect(proofValue("Offer band")).toBe("shoal · 7");
     expect(proofValue("Delivered band")).toBe("landed/4 · 4");
-    expect(proofValue("Merged")).toBe("2026-09-05T11:00:00.000Z");
+    expect(proofValue("Merged")).toBe("2026-09-05 11:00 UTC");
     expect(proofValue("Merge commit")).toBe("0123456789abcdef0123456789abcdef01234567");
     expect(within(screen.getByText(/GitHub closing-link proof/)).getByText(proof)).toBeVisible();
     expect(screen.getByText(/no credits moved/)).toBeVisible();
