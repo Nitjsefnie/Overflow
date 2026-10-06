@@ -210,6 +210,36 @@ describe("account-data notice page", () => {
     ).not.toBeNull();
   });
 
+  it("names the free text written by others that survives deletion, in the keeps list", async () => {
+    await renderAccountDataPage();
+
+    const deletion = sectionLabelledBy("account-data-deletion-heading");
+    const keepsIntro = Array.from(deletion.querySelectorAll("p")).find((candidate) =>
+      /deletion keeps/i.test(candidate.textContent ?? ""),
+    );
+    expect(keepsIntro, "the keeps list is introduced by a paragraph").toBeDefined();
+    const keepsList = keepsIntro!.nextElementSibling;
+    expect(keepsList?.tagName, "the keeps list follows its introduction").toBe("UL");
+    const text = keepsList!.textContent ?? "";
+
+    expect(text, "it names the free text of moderation events, including the recalibration plan").toMatch(
+      /moderation events?[\s\S]*recalibration plan/i,
+    );
+    expect(text, "it names the rationale and decision recorded on calibration audits").toMatch(
+      /calibration audits?[\s\S]*rationale[\s\S]*decision/i,
+    );
+    expect(text, "it names a settlement override request's reason and decision reason").toMatch(
+      /settlement override requests?[\s\S]*decision reason/i,
+    );
+    expect(text, "it names a credit adjustment's reason").toMatch(
+      /credit adjustments?[\s\S]*reason/i,
+    );
+    expect(
+      text,
+      "it says why they survive: they are other people's records that name you, and deletion leaves referencing rows untouched",
+    ).toMatch(/untouched/i);
+  });
+
   it("opens with the controller section, which carries both contact routes", async () => {
     await renderAccountDataPage();
 
@@ -301,6 +331,26 @@ describe("account-data notice page", () => {
       text,
       "the mailed journal excerpts may carry personal data, with repository names and logins as the examples",
     ).toMatch(/personal data[\s\S]*repository names[\s\S]*logins/i);
+    expect(
+      text,
+      "the excerpts may include privileged-action audit lines, which record the acting account's client IP address",
+    ).toMatch(/privileged.action[\s\S]*IP address/i);
+  });
+
+  it("states the 90-day root-only export of the privileged-action log lines", async () => {
+    await renderAccountDataPage();
+
+    const logs = sectionLabelledBy("account-data-logs-heading").textContent ?? "";
+    expect(
+      logs,
+      "the server-log section states the export: the IP-bearing privileged-action lines are kept 90 days outside the journal",
+    ).toMatch(/privileged.action[\s\S]*90 days[\s\S]*root-only[\s\S]*export/i);
+
+    const retention = sectionLabelledBy("account-data-retention-heading").textContent ?? "";
+    expect(
+      retention,
+      "the retention section lists the export among the retention periods",
+    ).toMatch(/90 days[\s\S]*root-only[\s\S]*export/i);
   });
 });
 
