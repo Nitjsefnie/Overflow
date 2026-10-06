@@ -3,7 +3,9 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { decode } from "next-auth/jwt";
 // @ts-expect-error -- untyped .mjs script module
-import { SESSION_COOKIE_NAME, authedLandingState, fixtureAuthSecret, loadRepoEnvFile, mintSessionCookieValue, seedFixtureUsers, setSessionCookie, spawnedServerEnv } from "../../scripts/check-page-geometry.mjs";
+import { SESSION_COOKIE_NAME, authedLandingState, fixtureAuthSecret, loadRepoEnvFile, mintSessionCookieValue, setSessionCookie, spawnedServerEnv } from "../../scripts/check-page-geometry.mjs";
+// @ts-expect-error -- untyped .mjs script module
+import { seedFixtureUsers } from "../../scripts/page-geometry-fixtures.mjs";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { startPostgresContainer } from "../support/postgres-container";
