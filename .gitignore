@@ -330,6 +330,7 @@ scripts/*
 !scripts/upgrade-webhooks.ts
 !scripts/measure-header-geometry.mjs
 !scripts/check-page-geometry.mjs
+!scripts/page-geometry-fixtures.mjs
 !scripts/module-size.json
 !scripts/mcp-surface-snapshot.json
 !scripts/http-surface-snapshot.json

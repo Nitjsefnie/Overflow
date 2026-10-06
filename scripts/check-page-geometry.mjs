@@ -41,7 +41,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import postgres from "postgres";
+import { seedBoardFixtureCard, seedFixtureUsers } from "./page-geometry-fixtures.mjs";
 
 const USAGE = `usage: node scripts/check-page-geometry.mjs [--base-url URL] [--help]
 
@@ -243,58 +243,10 @@ export const SESSION_COOKIE_NAME = "authjs.session-token";
 const SESSION_TOKEN_MAX_AGE_SECONDS = 3600;
 
 /**
- * The fixture users, by fixed IDs so repeated seeding is an upsert and later
- * runs find the same rows. The github ids/logins are namespaced to this
- * fixture; should a real user ever own them, the insert fails loudly on the
- * unique constraint rather than silently reusing that account.
- */
-const FIXTURE_USERS = [
-  { id: "00000000-0000-4000-8000-00000000453a", githubUserId: 945300453, login: "geometry-fixture-member", role: "MEMBER" },
-  { id: "00000000-0000-4000-8000-00000000453b", githubUserId: 945300454, login: "geometry-fixture-moderator", role: "MODERATOR" },
-];
-
-/**
  * The contract table's `authAs` values, total: an unknown value throws naming
  * the contract instead of silently signing in as one of the real roles.
  */
 const AUTH_AS_ROLES = { member: "MEMBER", moderator: "MODERATOR" };
-
-/**
- * Idempotently create the fixture users in whatever database `databaseUrl`
- * names — the gate's DATABASE_URL, a scratch container in CI or --base-url
- * mode alike. Never deletes or demotes anything else; the only columns the
- * conflict path rewrites are `role` (back to the fixture contract) and
- * `updated_at`. Every other NOT NULL column of `users` has a default
- * (db/migrations/001_initial.sql). Opens its own client and closes it.
- */
-export async function seedFixtureUsers({ databaseUrl }) {
-  const sql = postgres(databaseUrl, { max: 1 });
-  try {
-    const [member, moderator] = FIXTURE_USERS;
-    const seeded = await sql`
-      insert into users (id, github_user_id, github_login, role)
-      values
-        (${member.id}, ${member.githubUserId}, ${member.login}, ${member.role}),
-        (${moderator.id}, ${moderator.githubUserId}, ${moderator.login}, ${moderator.role})
-      on conflict (id) do update set role = excluded.role, updated_at = now()
-      returning id, role
-    `;
-
-    const roleById = new Map(seeded.map((row) => [row.id, row.role]));
-    for (const fixture of FIXTURE_USERS) {
-      if (roleById.get(fixture.id) !== fixture.role) {
-        throw new Error(
-          `geometry fixture user ${fixture.id} did not seed as ${fixture.role} ` +
-            `(row reads ${String(roleById.get(fixture.id))})`,
-        );
-      }
-    }
-
-    return { memberUserId: member.id, moderatorUserId: moderator.id };
-  } finally {
-    await sql.end({ timeout: 5 });
-  }
-}
 
 /**
  * The JWK thumbprint of the derived key, the `kid` jwt.js writes into the
@@ -484,12 +436,47 @@ const PAGE_CONTRACTS = [
       // environments disagree (see /dashboard's narrow rows) or headroom is
       // otherwise thin.
       [1280, 700],
+      // issue 1067 @320: RED ran with scrollWidth 330px vs 320 (the hero h1's
+      // clamp floor pushed .landing-hero's grid-item min-content past the
+      // viewport). Measured bottom 715.6px (this box); 820 pins ~104px.
+      [320, 820],
     ],
     primaryAction: ".landing-hero .action-button",
     styleProof: {
       property: "display",
       stylesheetValue: "inline-flex",
       defaultRead: "inline-block",
+    },
+  },
+
+  /*
+   * The account-data notice, a public page rendered through PublicAppShell —
+   * the page supplies its own <main id="main-content">, so the render root is
+   * the same anchor the authed contracts use. The primary action is the
+   * notice's primary contact route: the first anchor inside a .surface
+   * section, "github.com/Nitjsefnie/Overflow/issues"
+   * (src/app/account-data/page.tsx, Controller and contact). The style proof
+   * reads the element BASE styles: the global `a { color: inherit }` rule,
+   * which an unstyled <a> does not carry — its UA read is the link default.
+   * issue 1067 @320: the long GitHub link texts did not wrap (RED ran with
+   * scrollWidth 421px vs 320).
+   */
+  {
+    page: "/account-data",
+    renderRoot: "#main-content",
+    viewports: [
+      // Measured bottom 625.8px (this box); 730 pins ~104px.
+      [1440, 730],
+      // Measured bottom 622.6px (this box); 730 pins ~107px.
+      [1280, 730],
+      // Measured bottom 871.2px (this box); 975 pins ~104px.
+      [320, 975],
+    ],
+    primaryAction: ".surface a",
+    styleProof: {
+      property: "color",
+      stylesheetValue: "rgb(24, 23, 20)",
+      defaultRead: "rgb(0, 0, 238)",
     },
   },
 
@@ -579,6 +566,10 @@ const PAGE_CONTRACTS = [
       // Measured bottom 719.6px on both environments; 755 left ~35px, so
       // 820 pins ~100px.
       [520, 820],
+      // issue 1067 @320 with the board fixture's card seeded: RED ran with
+      // scrollWidth 3330px vs 320 (the 256-'a' title link did not wrap).
+      // Measured bottom 789.2px (this box); 890 pins ~101px.
+      [320, 890],
     ],
     primaryAction: ".surface .action-button",
     styleProof: {
@@ -1202,6 +1193,9 @@ async function main() {
       );
     }
     const fixtureUsers = await seedFixtureUsers({ databaseUrl });
+    // The board fixture (issue 1067): the one /issues card the new 320px
+    // contract rows measure their overflow against.
+    await seedBoardFixtureCard({ databaseUrl });
     // The run's first write, made visible at the moment it happens — host
     // and database name only, never the credentials in the URL.
     let seededInto;
