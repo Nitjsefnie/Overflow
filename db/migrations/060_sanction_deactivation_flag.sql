@@ -16,14 +16,15 @@
 --
 -- `registered_repositories.sanction_deactivated_at` is the instant a
 -- moderation deactivation flipped the row. It is stamped only on rows the
--- statement actually flips (the statement now guards `active = true`), and it
--- is cleared when a recalibration closure reactivates the row, so the flag
--- holds exactly while the row is sanction-deactivated. The sponsor's
--- unregistration never touches it (migration 034's ownership split stands:
--- unregistered_at owns the sponsor's departure, `active` is owned by
--- moderation), so a row sanctioned while registered keeps its flag through a
--- later unregistration — and stays excluded from any reactivation by the same
--- unregistered_at filter the closure already uses.
+-- statement actually flips (the statement now guards `active = true`), and
+-- every reactivation path clears it — the recalibration closure and the
+-- re-registration revival alike — so the flag is non-null exactly while the
+-- row sits sanction-deactivated. The sponsor's unregistration never touches
+-- it (migration 034's ownership split stands: unregistered_at owns the
+-- sponsor's departure, `active` is owned by moderation), so a row sanctioned
+-- while registered keeps its flag through a later unregistration, stays
+-- excluded from any closure reactivation by the unregistered_at filter, and
+-- loses the flag only when a resubmission revives the row.
 --
 -- The column is nullable with no default, and it is NOT backfilled: rows
 -- deactivated before this migration cannot be attributed — the schema kept no
