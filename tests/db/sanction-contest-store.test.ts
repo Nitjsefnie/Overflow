@@ -497,7 +497,16 @@ describe("sanction contest decision path", () => {
     await retireLiveModerators();
     const imposerId = await insertModerator();
     const otherModeratorId = await insertModerator();
-    expect(otherModeratorId).toBeDefined();
+    // The precondition the refusal rests on, asserted the way the store reads
+    // it: the live roster holds exactly the imposer and this second moderator,
+    // so the imposer decides while another live moderator exists. The sanity
+    // line this replaces — expect(otherModeratorId).toBeDefined() — could not
+    // fail: insertModerator returns a fresh id or the insert throws, so the
+    // assertion proved nothing the test was not already crashing on.
+    const roster = await sql<{ id: string }[]>`
+      select id from users where role = 'MODERATOR' and deleted_at is null
+    `;
+    expect(roster.map((row) => row.id).sort()).toEqual([imposerId, otherModeratorId].sort());
     const accountId = await insertUser("MEMBER");
     await sanctionAccount(accountId, "BANNED");
     const sanctionEvent = await sanctionEventBy(accountId, imposerId);
