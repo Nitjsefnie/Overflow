@@ -30,17 +30,18 @@ const SHARED = {
 /**
  * The surface the globalSetup receives in vitest 5.0.0: TestProject
  * (dist/chunks/index.B89dZ0-N.js, TestProject._initializeGlobalSetup calls
- * globalSetupFile.setup?.(this)), which expose()s provide() and the public
+ * globalSetupFile.setup?.(this)), which exposes provide() and the public
  * readonly `vitest` backref to the root instance (plugin.d.BbcoZhuj.d.ts
  * lines 1014-1045). provide() is typed through the ProvidedContext
  * augmentation in postgres-container.ts. filenamePattern is the root
- * instance's own internal field for the CLI filters, assigned in start()
- * before the specifications resolve and before global setups run
+ * instance's own internal field for the CLI filters: start() assigns it from
+ * those filters before specifications resolve and before global setups run
  * (dist/chunks/index.B89dZ0-N.js: "@internal" field, assigned in
- * start(filters) prior to runFiles -> initializeGlobalSetup); the filters it
- * holds have already been through globTestSpecifications once by the time
- * setup() sees them, so re-resolving them here cannot hit a filter shape
- * vitest itself has not accepted.
+ * start(filters) prior to runFiles -> initializeGlobalSetup), and
+ * getRelevantTestSpecifications is what resolves the file list. start()
+ * resolves these same filters on its way to running global setups — a
+ * resolution failure would throw there, before setup() — so re-resolving
+ * them here cannot hit a filter shape vitest itself has not accepted.
  */
 interface GlobalSetupVitest {
   provide(key: "sharedPostgres", value: SharedPostgresFacts | ParkedSharedPostgresFailure): void;
