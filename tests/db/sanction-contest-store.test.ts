@@ -856,6 +856,38 @@ describe("sanction contest grant lifts the sanction (issue 1134)", () => {
     ]);
   }, 60_000);
 
+  it("takes the already-gone path when the account moved into a different sanction while the request sat open", async () => {
+    await retireLiveModerators();
+    const imposerId = await insertModerator();
+    const deciderId = await insertModerator();
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "BANNED");
+    const flaggedId = await insertProbeRepository(accountId, "flagged");
+    const sanctionEvent = await sanctionEventBy(accountId, imposerId);
+    const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "The ban was not the sanction that stayed.");
+
+    // A second sanction moves the account from the contested BANNED into
+    // RECALIBRATING while the request sits open: the contested sanction is
+    // gone, and the live one is not the one this contest is about.
+    await sql`update users set enforcement_state = ${"RECALIBRATING"} where id = ${accountId}`;
+
+    const result = await decide(requestId, deciderId, "GRANTED", "Granted over the moved-on sanction.");
+    expect(result).toEqual({ kind: "already_gone", value: expect.objectContaining({ id: requestId }) });
+
+    // The grant lands and the decision event cites it; nothing is lifted —
+    // in particular the live RECALIBRATING sanction survives untouched, with
+    // its flagged repository still down.
+    expect(await readRequestRow(requestId)).toMatchObject({ state: "DECIDED", decision: "GRANTED" });
+    expect(await enforcementState(accountId)).toBe("RECALIBRATING");
+    expect(await probeRepositoryShapes(accountId)).toEqual([
+      { id: flaggedId, active: false, flag: expect.any(Date), unregistered: false },
+    ]);
+    const decisionEvents = await contestEvents(requestId, "BANNED", "BANNED", deciderId);
+    expect(decisionEvents).toHaveLength(1);
+    expect(await contestEvents(requestId, "BANNED", "ACTIVE")).toHaveLength(0);
+    expect(await contestEvents(requestId, "RECALIBRATING", "ACTIVE")).toHaveLength(0);
+  }, 60_000);
+
   it("denies a contest without touching the sanction", async () => {
     await retireLiveModerators();
     const imposerId = await insertModerator();
