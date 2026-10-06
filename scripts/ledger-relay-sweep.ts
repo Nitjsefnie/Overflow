@@ -248,6 +248,14 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
         .decide(deps.pinMap, candidate.path, candidate.conclusion, jobs)
         .filter((decision) => missing.has(decision.context));
       for (const decision of decisions) {
+        // A non-completed decision is a PLACEHOLDER, not attestation (issue
+        // 1116): the sweep used to post it as an in_progress check-run, which
+        // wedged merge evidence — only a later sweep could complete it, and
+        // relay starts in the stall window refused without sweeping. Dropped
+        // this round: no POST, not relayed, the candidate stays a candidate
+        // for the next sweep, which posts the concluded decision once. The
+        // mirror's pending behavior is unchanged (residual, PM-accepted).
+        if (decision.status !== "completed") continue;
         await deps.api.postCheckRun(
           checkRunBody(decision, candidate),
           `the swept check-run for ${decision.context} from run ${candidate.runId}`,

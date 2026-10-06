@@ -510,15 +510,17 @@ describe("sweepOrphans", () => {
     ]);
   });
 
-  it("still relays the real conclusion when the App holds only a PENDING check-run for that context", async () => {
+  it("posts nothing for a candidate whose jobs listing is unfinished, and the next sweep posts the conclusion once", async () => {
     // The defect this pins, end to end across two sweeps. A completed
     // producer run whose jobs listing reports an unfinished job is decided as
-    // PENDING, and the sweep posts that pending check-run. On the next relay
-    // start the same run is honestly completed, so the sweep must post the
-    // real conclusion — but if it counted its own pending placeholder as an
-    // attestation it would relay nothing, and branch protection would wait
-    // forever on a check nothing ever completes. That is the same failure this
-    // issue exists to prevent, reintroduced through the sweep's own output.
+    // PENDING, and the sweep used to POST that pending check-run — a
+    // placeholder, not attestation, which wedged merge evidence: only a later
+    // sweep could complete it (issue 1116). The non-completed decision is now
+    // DROPPED — no POST, not relayed this sweep, the candidate stays a
+    // candidate — and the next sweep, facing a concluded job, posts the real
+    // conclusion exactly once. The second half still pins issue 885's guard:
+    // the pending placeholder the mirror may hold is not read back as an
+    // attestation.
     const pending = { check_runs: [appCheckRun("actionlint", { status: "queued" })] };
     const jobsPending = {
       jobs: [{ name: "actionlint", run_attempt: 1, status: "queued", conclusion: null }],
@@ -527,22 +529,18 @@ describe("sweepOrphans", () => {
       jobs: [{ name: "actionlint", run_attempt: 1, status: "completed", conclusion: "success" }],
     };
 
-    // Sweep #1: nothing attested, the job has not finished. Posts pending.
+    // Sweep #1: nothing attested, the job has not finished. Posts NOTHING.
     const first = fakeApi({
       [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
       [checkRunsAt(HEAD_SHA)]: { check_runs: [] },
       [jobsUrl("9002")]: jobsPending,
     });
     const firstOutcome = await sweepOrphans(deps(first.api));
-    expect(firstOutcome.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
-    expect(first.requests.at(-1)?.body).toMatchObject({
-      name: "actionlint",
-      status: "queued",
-    });
-    expect(Object.hasOwn(first.requests.at(-1)?.body as object, "conclusion")).toBe(false);
+    expect(firstOutcome).toEqual({ examined: 1, relayed: [] });
+    expect(first.requests.filter((request) => request.method === "POST")).toEqual([]);
 
-    // Sweep #2: the App now holds only that pending placeholder, and the job
-    // has concluded. The placeholder must not be read as an attestation.
+    // Sweep #2: the job has concluded, and the App holds only the mirror's
+    // pending placeholder. It must not be read as an attestation.
     const second = fakeApi({
       [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
       [checkRunsAt(HEAD_SHA)]: pending,
