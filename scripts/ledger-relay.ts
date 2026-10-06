@@ -345,7 +345,8 @@ async function mintInstallationToken(
   installationId: string,
   repoName: string,
 ): Promise<string> {
-  const jwt = mintAppJwt(appId, appKey, Date.now());  const tokenBody = await apiCall<{ token?: unknown }>(
+  const jwt = mintAppJwt(appId, appKey, Date.now());
+  const tokenBody = await apiCall<{ token?: unknown }>(
     deps,
     {
       url: `${API_ROOT}/app/installations/${installationId}/access_tokens`,
