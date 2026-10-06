@@ -75,8 +75,8 @@ participation gate that reads the state is `isParticipationEligibleAt` in
 
 ## The human-review routes
 
-None of these activities ends in an irreversible automated sanction. Four
-routes put a person between the scoring and its consequences, and all four
+None of these activities ends in an irreversible automated sanction. Five
+routes put a person between the scoring and its consequences, and all five
 are disclosed in the `/account-data` notice.
 
 **Sanctions are applied by moderators.** Enforcement transitions — moving an
@@ -114,6 +114,20 @@ priced settlement or calibration, and a moderator grants or declines it
 held in the `settlement_override_requests` table, written by
 `src/lib/overrides/postgres-store.ts`). This lets a creditor or sponsor
 contest a settlement the fold priced automatically.
+
+**Sanction contest requests.** The account under a sanction can ask for the
+sanction to be contested, and a moderator decides the request. The filing
+route is `src/app/api/contests/route.ts`, gated to the sanctioned account's
+own session; the decision route is
+`src/app/api/moderation/contests/route.ts`, gated to a moderator session,
+which journals the decision as `sanction.contest.decide` in the
+privileged-action log. Requests are held in the `sanction_contest_requests`
+table (migration 061), and the store refuses a decision by the moderator who
+imposed the sanction while another live moderator exists
+(`decideSanctionContest` in `src/lib/moderation/sanction-contest-store.ts`);
+with exactly one live moderator, that moderator decides and the request
+records that it did. The filing and the decision are each written as
+moderation events, through `moderation_events.contest_request_id`.
 
 **Manual credit adjustments.** Moderators can adjust credit balances by hand
 through the recalibration adjustment route

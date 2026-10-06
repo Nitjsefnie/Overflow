@@ -53,9 +53,11 @@ export const DISPUTE_RULES = [
  * The other half of the pair is covered, for the record. Widening this constant
  * and DISPUTE_RULES while leaving the terms page's Disputes heading at
  * "Contesting a settlement" fails terms-page.test.tsx, which asserts the
- * heading carries this value; that heading is the only hand-written case name
- * left on either page, and it is deliberately a literal so that a test-side
- * literal is a third source beside these two constants. A complete widening
+ * heading carries this value; that heading is one of the two hand-written case
+ * names left on the pages — the rules page's sanction-contest heading is the
+ * other, resolving SANCTION_CONTESTABLE_CASE in rules.test.tsx by the same
+ * shape — and each is deliberately a literal so that a test-side literal is a
+ * third source beside these two constants. A complete widening
  * therefore edits, in one commit: both constants, the terms heading, the
  * literal the terms test resolves that heading by, and the DISPUTE_RULES
  * bullets that name the case — the first and the second today. The second is
@@ -85,11 +87,11 @@ export const DISPUTE_CONTESTABLE_CASE = "a settlement";
  * the case it serves.
  *
  * The wording is the text a reader is held to, so it moves the way a legal
- * document moves: through src/lib/legal-revisions.ts when a legal page comes
- * to render it, never as a quiet copy edit. Today it is rendered by the
- * /contests page, which is not one of the pages a revision record stamps; the
- * moment /rules or /terms carries it, the revision rule of this file's header
- * applies to it as well.
+ * document moves: through src/lib/legal-revisions.ts, never as a quiet copy
+ * edit. It is rendered by the /contests filing page — which no revision record
+ * stamps — and by the /rules page's Disputes section and the terms page's
+ * sanctions section, which the records do stamp, so an edit to these rules
+ * bumps the revision records of both pages in the same commit.
  *
  * Each rule is behavioural, with its basis in the code:
  *

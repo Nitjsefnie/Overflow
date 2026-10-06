@@ -450,6 +450,15 @@ export function AccountDataNotice() {
           {SANCTION_EFFECT_RULES.map((rule) => (
             <li key={rule}>{rule}</li>
           ))}
+          <li className="sanction-contest-data">
+            When a sanction is contested, the request and its reason are stored, with the sanction
+            they contest and the decision fields a moderator records on them: the outcome, the
+            deciding moderator, whether they were the only live moderator, the decision reason and
+            its time. Your account export contains your own contest requests — both those you filed
+            and those you decided as a moderator. Deleting your account keeps them pseudonymised
+            like the rest of the moderation record; the reasons stay, attached to the pseudonymised
+            account row.
+          </li>
         </ul>
       </section>
 

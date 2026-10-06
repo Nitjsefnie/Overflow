@@ -12,7 +12,12 @@ const currentRole = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/moderation/current-role", () => ({ getCurrentUserRole: currentRole }));
 
 import { PublicRulesContent, RulesContent } from "@/app/rules/page";
-import { DISPUTE_CONTESTABLE_CASE, DISPUTE_RULES } from "@/lib/disputes";
+import {
+  DISPUTE_CONTESTABLE_CASE,
+  DISPUTE_RULES,
+  SANCTION_CONTESTABLE_CASE,
+  SANCTION_CONTEST_RULES,
+} from "@/lib/disputes";
 import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
 
 async function renderRulesPage(): Promise<void> {
@@ -192,8 +197,48 @@ describe("rules page", () => {
     const main = document.querySelector<HTMLElement>("main.page-content");
     expect(main, "the rules view supplies its own main.page-content").not.toBeNull();
     const region = within(main!).getByRole("region", { name: "Disputes" });
-    const items = [...region.querySelectorAll("li")].map((item) => item.textContent);
-    expect(items).toEqual([...DISPUTE_RULES]);
+    // Two lists now: the settlement case's rules and the sanction case's, each
+    // compared against its own constant element for element. Scoping to the
+    // lists rather than to the region's whole li set is what keeps the two
+    // cases from standing in for each other — a sanction bullet pasted into the
+    // settlement list, or a settlement bullet dropped when the sanction part
+    // landed, misaligns one of the two comparisons rather than passing a
+    // document-wide count.
+    const lists = [...region.querySelectorAll("ul")];
+    expect(lists, "the Disputes section renders one list per contestable case").toHaveLength(2);
+    const settlementItems = [...lists[0]!.querySelectorAll("li")].map((item) => item.textContent);
+    expect(settlementItems).toEqual([...DISPUTE_RULES]);
+    const sanctionItems = [...lists[1]!.querySelectorAll("li")].map((item) => item.textContent);
+    expect(sanctionItems).toEqual([...SANCTION_CONTEST_RULES]);
+  });
+
+  it.each(MOUNT_POINTS)("names the sanction case in its own heading and points the ask at the filing page, in the %s", (_label, element) => {
+    render(element);
+
+    // The mirror of the terms-page heading pin: the section inside Disputes is
+    // found by the region's name — the kill-bearing lookup shape, since the
+    // accessible name is the outer heading's TEXT — and the sanction part's
+    // heading is then required to carry the shared source's case, never a
+    // hand-written copy of it. A hand-written heading that drifts from
+    // SANCTION_CONTESTABLE_CASE fails the containment read; a legitimate
+    // widening of the constant in src/lib/disputes.ts still passes, because
+    // the heading resolves the constant rather than a literal.
+    //
+    // The filing-page pointer is the other half: the rules the part states say
+    // the sanctioned account can ask, and the pointer is where the ask goes. A
+    // part that kept its rules and dropped the route would leave a reader told
+    // they may ask with nothing telling them where — so the presence of the
+    // link, not its sentence, is what is pinned.
+    const main = document.querySelector<HTMLElement>("main.page-content");
+    expect(main, "the rules view supplies its own main.page-content").not.toBeNull();
+    const region = within(main!).getByRole("region", { name: "Disputes" });
+    const heading = region.querySelector("h3");
+    expect(heading, "the sanction case has its own heading inside the Disputes section").not.toBeNull();
+    expect(heading!.textContent ?? "").toContain(SANCTION_CONTESTABLE_CASE);
+    expect(
+      region.querySelector('a[href="/contests"]'),
+      "the sanction part points the sanctioned account's ask at the filing page",
+    ).not.toBeNull();
   });
 
   it.each(MOUNT_POINTS)("names the contestable case the shared source names, in the %s revision paragraph", (_label, element) => {

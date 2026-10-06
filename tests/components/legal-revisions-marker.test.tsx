@@ -233,21 +233,24 @@ describe("legal revision markers", () => {
     expect(RULES_REVISION.document).toBe(RULES_DOCUMENT);
   });
 
-  it("pins the terms version to the literal a reader cites", () => {
+  it("pins each document's version to the literal a reader cites", () => {
     // The version is the one value in this registry no assertion above reaches.
     // expectStatesOnlyItsOwnRevision reads data-version from the page and
-    // compares it to TERMS_REVISION.version, and checks the rendered token
-    // against the same constant — so a revert of the constant to "1.0" left
-    // every one of them satisfied, and a reader citing "1.0" was handed the
-    // pre-1.1 text — the revision in which the terms page still promised a
-    // sanction could be contested while the rules it pointed at carried no
-    // such case. Checked against itself from both sides is not a pin.
+    // compares it to the constant, and checks the rendered token
+    // against the same constant — so a revert of a constant to its prior value
+    // left every one of them satisfied, and a reader citing the prior version
+    // was handed superseded text — the revision in which the terms page still
+    // promised a sanction could be contested while the rules it pointed at
+    // carried no such case. Checked against itself from both sides is not a
+    // pin.
     //
     // Literal here, from the same third source as the document identities, and
-    // for the same reason. Bumping TERMS_REVISION.version is a deliberate edit
+    // for the same reason. Bumping a REVISION constant is a deliberate edit
     // of this file's expectation — that is what makes the bump reviewable: the
     // bump and the pin it trips arrive in the same diff.
-    expect(TERMS_REVISION.version).toBe("1.1");
+    expect(TERMS_REVISION.version).toBe("1.2");
+    expect(ACCOUNT_DATA_REVISION.version).toBe("1.2");
+    expect(RULES_REVISION.version).toBe("1.1");
   });
 });
 

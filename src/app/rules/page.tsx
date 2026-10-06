@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { AppShell, PublicAppShell } from "@/components/app-shell";
-import { DISPUTE_CONTESTABLE_CASE, DISPUTE_RULES } from "@/lib/disputes";
+import { DISPUTE_CONTESTABLE_CASE, DISPUTE_RULES, SANCTION_CONTEST_RULES } from "@/lib/disputes";
 import { RULES_REVISION } from "@/lib/legal-revisions";
 import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
 
@@ -97,6 +97,15 @@ function RulesSections() {
             <li key={rule}>{rule}</li>
           ))}
         </ul>
+        <h3>Contesting a sanction</h3>
+        <ul className="rules-list">
+          {SANCTION_CONTEST_RULES.map((rule) => (
+            <li key={rule}>{rule}</li>
+          ))}
+        </ul>
+        <p>
+          The sanctioned account asks on the <Link href="/contests">contest page</Link>.
+        </p>
       </section>
 
       <section className="surface rules-card" aria-labelledby="rules-moderation-heading">

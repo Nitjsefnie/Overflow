@@ -194,6 +194,30 @@ describe("terms page", () => {
     expect(items).toEqual([...SANCTION_EFFECT_RULES]);
   });
 
+  it("names where a sanction may be contested, citing the rules page and the filing page, in the sanctions section", async () => {
+    await renderTermsPage();
+
+    // The one-source pattern the settlement section established: the terms
+    // page points at the rules page rather than restating the route, so the two
+    // pages cannot disagree about how a sanction is contested. The pointer
+    // lives in the sanctions section — the place a reader is told sanctions
+    // exist — and the filing page is named beside it, because that is where
+    // the reader who is told they may ask actually asks. Both links are pinned
+    // by href, not by their sentences: a reader depends on the routes
+    // resolving, and the one-source pattern is carried by where the pointer
+    // aims, never by the words around it. Scoped to the section, since the
+    // shell chrome carries /rules elsewhere on the page.
+    const section = screen.getByRole("region", { name: "How sanctions work" });
+    expect(
+      section.querySelector('p a[href="/rules"]'),
+      "the sanctions section cites the rules page for where a sanction may be contested",
+    ).not.toBeNull();
+    expect(
+      section.querySelector('a[href="/contests"]'),
+      "the sanctions section names the filing page where the reader is told they may ask",
+    ).not.toBeNull();
+  });
+
   it("names the contestable case the shared source names, in the revision paragraph", async () => {
     await renderTermsPage();
 
