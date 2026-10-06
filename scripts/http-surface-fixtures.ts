@@ -255,6 +255,7 @@ export function fixtureAccountDeleteRouteDependencies(): AccountDeleteRouteDepen
       deletedAt: new Date(fixtureNowMs).toISOString(),
       removedApiTokens: 1,
       scrubbedForgeIdentities: 1,
+      leftNoLiveModerator: false,
     }),
     endSession: async () => undefined,
     now: () => fixtureNowMs,

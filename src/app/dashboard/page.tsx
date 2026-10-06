@@ -1,11 +1,14 @@
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { BalanceCard } from "@/components/balance-card";
+import { findLiveModeratorStanding, isLastLiveModeratorStanding } from "@/lib/accounts/deletion";
 import { enforcementStateLabel, visibilityLabel } from "@/lib/dashboard/labels";
 import type { DashboardProjection, RegisteredRepositoryProjection } from "@/lib/dashboard/queries";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
+import { getSql } from "@/lib/db/client";
 import { plural } from "@/lib/plural";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
+import { normalizeModeratorGitHubUserIds } from "@/lib/moderation/roles";
 import { UnregisterRepositoryControl } from "@/components/unregister-repository-control";
 import { ForgeIdentitiesPanel } from "@/components/forge-identities-panel";
 import { AccountControlsPanel } from "@/components/account-controls-panel";
@@ -15,9 +18,28 @@ type DashboardContentProps = {
   memberName: string;
   isModerator: boolean;
   dashboard: DashboardProjection;
+  /**
+   * Whether the signed-in account is the instance's last live moderator. The
+   * page computes it through the deletion path's own read; the account
+   * controls panel turns it into the pre-confirm deletion warning. Nothing
+   * about the dashboard's behaviour depends on it.
+   */
+  isLastLiveModerator?: boolean;
+  /**
+   * Whether `MODERATOR_GITHUB_USER_IDS` names any GitHub user id. Passed
+   * through to the account controls panel so the warning can name an absent
+   * recovery path plainly.
+   */
+  moderatorFloorConfigured?: boolean;
 };
 
-export function DashboardContent({ memberName, isModerator, dashboard }: DashboardContentProps) {
+export function DashboardContent({
+  memberName,
+  isModerator,
+  dashboard,
+  isLastLiveModerator = false,
+  moderatorFloorConfigured = false,
+}: DashboardContentProps) {
   return (
     <AppShell memberName={memberName} isModerator={isModerator}>
       <section className="page-heading" aria-labelledby="dashboard-title">
@@ -164,7 +186,11 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
         )}
       </section>
       <ForgeIdentitiesPanel />
-      <AccountControlsPanel reauthenticateAction={confirmSignInForAccountDeletion} />
+      <AccountControlsPanel
+        reauthenticateAction={confirmSignInForAccountDeletion}
+        isLastLiveModerator={isLastLiveModerator}
+        moderatorFloorConfigured={moderatorFloorConfigured}
+      />
       {dashboard.openAudit ? (
         <section className="surface" aria-labelledby="account-audit-heading">
           <h2 id="account-audit-heading">Account audit</h2>
@@ -266,11 +292,20 @@ export default async function DashboardPage() {
   try {
     const { getDashboard } = await import("@/lib/dashboard/queries");
     const dashboard = await getDashboard(session.user.id);
+    // The pre-confirm warning's two booleans, read through the deletion path's
+    // own helper so the page and the deletion can never disagree about what a
+    // live moderator is. A failure here degrades exactly like a failed ledger
+    // read: to the error state below.
+    const standing = await findLiveModeratorStanding(getSql(), session.user.id);
+    const moderatorFloorConfigured =
+      normalizeModeratorGitHubUserIds(process.env.MODERATOR_GITHUB_USER_IDS).size > 0;
     return (
       <DashboardContent
         memberName={session.user.name}
         isModerator={isModeratorSession(session)}
         dashboard={dashboard}
+        isLastLiveModerator={isLastLiveModeratorStanding(standing)}
+        moderatorFloorConfigured={moderatorFloorConfigured}
       />
     );
   } catch {

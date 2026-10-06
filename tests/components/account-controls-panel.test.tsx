@@ -343,4 +343,74 @@ describe("account controls panel", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Download export" })).toBeEnabled();
   });
+
+  // The last-moderator warning (issue 1122): a plain warning above the confirm
+  // field, rendered only for the instance's last live moderator. It never
+  // blocks — the deletion proceeds exactly as without it.
+
+  it("warns above the confirm field when the account is the instance's last live moderator", () => {
+    // A never-resolving fetch keeps the click handlers' state machine quiescent.
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise<Response>(() => {})));
+    render(
+      <AccountControlsPanel
+        reauthenticateAction={vi.fn(async () => {})}
+        isLastLiveModerator
+        moderatorFloorConfigured
+      />,
+    );
+
+    const region = screen.getByRole("region", { name: "Your account data" });
+    const warning = within(region).getByRole("status");
+    expect(warning).toBeVisible();
+    // A plain warning, not an error alert: nothing has gone wrong yet.
+    expect(within(region).queryByRole("alert")).not.toBeInTheDocument();
+    expect(warning.textContent).toContain("no in-product moderator");
+    expect(warning.textContent).toContain("MODERATOR_GITHUB_USER_IDS");
+    expect(warning.textContent).toContain("next time it signs in");
+    // The floor is configured, so the absence sentence stays off.
+    expect(warning.textContent).not.toContain("No GitHub user id is configured");
+    // The warning sits above the confirm field.
+    const confirmation = within(region).getByLabelText("Type your GitHub login to confirm");
+    expect(warning.compareDocumentPosition(confirmation) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("names the absent floor plainly in the warning when no GitHub user id is configured", () => {
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise<Response>(() => {})));
+    render(
+      <AccountControlsPanel
+        reauthenticateAction={vi.fn(async () => {})}
+        isLastLiveModerator
+        moderatorFloorConfigured={false}
+      />,
+    );
+
+    const warning = screen.getByRole("status");
+    expect(warning.textContent).toContain("No GitHub user id is configured in MODERATOR_GITHUB_USER_IDS right now.");
+  });
+
+  it("renders no moderator warning for an ordinary account", () => {
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise<Response>(() => {})));
+    render(<AccountControlsPanel reauthenticateAction={vi.fn(async () => {})} />);
+
+    const region = screen.getByRole("region", { name: "Your account data" });
+    expect(within(region).queryByRole("status")).not.toBeInTheDocument();
+    expect(within(region).queryByText(/moderator/i)).not.toBeInTheDocument();
+  });
+
+  it("still deletes the last live moderator's account while the warning is showing", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(deletionSucceeded()));
+    render(
+      <AccountControlsPanel
+        reauthenticateAction={vi.fn(async () => {})}
+        isLastLiveModerator
+        moderatorFloorConfigured={false}
+      />,
+    );
+    typedConfirmation();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete account" }));
+
+    await vi.waitFor(() => expect(assign).toHaveBeenCalledExactlyOnceWith("/"));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 });

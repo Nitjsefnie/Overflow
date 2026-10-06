@@ -1105,7 +1105,55 @@ describe("member dashboard", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  // The pre-confirm warning's seam (issue 1122): the page computes the two
+  // booleans and passes them down; the controls panel renders the warning from
+  // them alone.
+
+  it("passes the last-live-moderator booleans through to the account controls' warning", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        isLastLiveModerator
+        moderatorFloorConfigured={false}
+        dashboard={emptyDashboard()}
+      />,
+    );
+
+    const warning = within(sectionFor("account-controls-heading")).getByRole("status");
+    expect(warning).toBeVisible();
+    expect(warning.textContent).toContain("MODERATOR_GITHUB_USER_IDS");
+    expect(warning.textContent).toContain("No GitHub user id is configured");
+  });
+
+  it("shows no moderator warning on the dashboard for an ordinary account", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={emptyDashboard()}
+      />,
+    );
+
+    expect(within(sectionFor("account-controls-heading")).queryByRole("status")).not.toBeInTheDocument();
+  });
 });
+
+function emptyDashboard(): Parameters<typeof DashboardContent>[0]["dashboard"] {
+  return {
+    settledBalance: 0,
+    earnedTotal: 0,
+    givenTotal: 0,
+    reservedPoints: 0,
+    availableHeadroom: 0,
+    recentSettlements: [],
+    openClaims: [],
+    registeredRepositories: [],
+    enforcementNotices: [],
+    openAudit: null,
+  };
+}
 
 function ledgerTotalTerms(): string[] {
   return Array.from(document.querySelectorAll("dl.ledger-totals dt")).map((dt) => dt.textContent);

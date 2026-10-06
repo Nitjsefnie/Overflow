@@ -30,7 +30,7 @@ useTrustedOrigin();
 const requests = guardedRequests("/api/account");
 const sql = {} as SqlClient;
 const now = Date.parse("2026-09-26T12:00:00Z");
-const deleted: AccountDeletionOutcome = { kind: "DELETED", githubUserId: 42, accountId: "internal-id", alreadyDeleted: false, deletedAt: "2026-09-26T12:00:00Z", removedApiTokens: 0, scrubbedForgeIdentities: 0 };
+const deleted: AccountDeletionOutcome = { kind: "DELETED", githubUserId: 42, accountId: "internal-id", alreadyDeleted: false, deletedAt: "2026-09-26T12:00:00Z", removedApiTokens: 0, scrubbedForgeIdentities: 0, leftNoLiveModerator: false };
 
 function dependencies() {
   return {
@@ -180,6 +180,36 @@ describe("DELETE /api/account", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ deleted: true });
     expect(deps.endSession).toHaveBeenCalledTimes(1);
+  });
+
+  // The operator journal (issue 1122): a deletion that leaves no live
+  // moderator writes exactly one fixed console.warn line — the gap and the
+  // operator's recovery path, never any personal data. The exact-match
+  // assertion pins the whole string, which is what keeps it personal-data-free.
+
+  it("journals the empty-moderator gap once when the deletion leaves no live moderator", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const deps = dependencies();
+    deps.deleteAccount.mockResolvedValueOnce({ ...deleted, leftNoLiveModerator: true });
+    const response = await createAccountDeleteHandler(deps)(requests.json({ confirmLogin: "Alice" }, "DELETE"));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ deleted: true });
+    expect(consoleWarn).toHaveBeenCalledExactlyOnceWith(
+      "Account deletion left no live moderator. Recovery: add a GitHub user id to MODERATOR_GITHUB_USER_IDS; the list promotes its holder at their next sign-in.",
+    );
+    expect(deps.endSession).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["a deletion that leaves a live moderator", (): AccountDeletionOutcome => deleted, 200],
+    ["a sponsor refusal", (): AccountDeletionOutcome => ({ kind: "SPONSOR_BLOCKED", githubUserId: 42, repositories: [{ ownerName: "owner/repo", provider: "github", instanceUrl: null }] }), 409],
+  ])("writes no journal line for %s", async (_label, outcomeOf, status) => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const deps = dependencies();
+    deps.deleteAccount.mockResolvedValueOnce(outcomeOf());
+    const response = await createAccountDeleteHandler(deps)(requests.json({ confirmLogin: "Alice" }, "DELETE"));
+    expect(response.status).toBe(status);
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
   it("reports successful deletion even when ending the browser session fails", async () => {

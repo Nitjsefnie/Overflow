@@ -215,6 +215,7 @@ describe("account deletion as pseudonymisation", () => {
       deletedAt: expect.any(String),
       removedApiTokens: 1,
       scrubbedForgeIdentities: 1,
+      leftNoLiveModerator: false,
     });
 
     // The users row survives under its keys; its identity fields do not.
@@ -343,6 +344,7 @@ describe("account deletion as pseudonymisation", () => {
       deletedAt: "2020-06-01T12:00:00.000Z",
       removedApiTokens: 0,
       scrubbedForgeIdentities: 1,
+      leftNoLiveModerator: false,
     });
     const [identity] = await sql<{ token_failed_at: Date }[]>`
       select token_failed_at from user_forge_identities where user_id = ${seed.contributor.id}
@@ -743,5 +745,66 @@ describe("account deletion as pseudonymisation", () => {
     `;
     expect(row!.deleted_at).not.toBeNull();
     expect(row!.role).toBe("MEMBER");
+  });
+
+  // The last-live-moderator flag (issue 1122): "live" is
+  // `role = 'MODERATOR' and deleted_at is null`, and the deleting account is
+  // the last one only when no OTHER live moderator exists. Each case cleans up
+  // after itself — every moderator it seeds ends the case deleted — so the
+  // shared file database carries no live moderator into the next case.
+
+  it("case 12: flags the deletion of the instance's last live moderator", async () => {
+    const moderator = await insertUser("sole-live-moderator");
+    await sql`update users set role = 'MODERATOR' where id = ${moderator.id}`;
+
+    const outcome = await deleteAccount(sql, moderator.githubUserId, { confirm: true });
+
+    expect(outcome).toStrictEqual({
+      kind: "DELETED",
+      githubUserId: moderator.githubUserId,
+      accountId: moderator.id,
+      alreadyDeleted: false,
+      deletedAt: expect.any(String),
+      removedApiTokens: 0,
+      scrubbedForgeIdentities: 0,
+      leftNoLiveModerator: true,
+    });
+  });
+
+  it("case 13: a second live moderator keeps the flag down, and is the last one once the first is gone", async () => {
+    const first = await insertUser("two-live-moderators-first");
+    const second = await insertUser("two-live-moderators-second");
+    await sql`update users set role = 'MODERATOR' where id in (${first.id}, ${second.id})`;
+
+    const firstOutcome = await deleteAccount(sql, first.githubUserId, { confirm: true });
+    expect(firstOutcome).toMatchObject({ kind: "DELETED", leftNoLiveModerator: false });
+
+    const secondOutcome = await deleteAccount(sql, second.githubUserId, { confirm: true });
+    expect(secondOutcome).toMatchObject({ kind: "DELETED", leftNoLiveModerator: true });
+  });
+
+  it("case 14: a deleted moderator row does not count as a survivor", async () => {
+    const survivorCandidate = await insertUser("deleted-moderator-survivor-candidate");
+    const gone = await insertUser("deleted-moderator-already-gone");
+    await sql`update users set role = 'MODERATOR' where id in (${survivorCandidate.id}, ${gone.id})`;
+
+    // The real deletion scrubs the row into the shape the schema demands of a
+    // deleted account, and leaves one live moderator behind (the candidate).
+    const goneOutcome = await deleteAccount(sql, gone.githubUserId, { confirm: true });
+    expect(goneOutcome).toMatchObject({ kind: "DELETED", leftNoLiveModerator: false });
+
+    // The candidate is the only LIVE moderator: the deleted row is no
+    // survivor, so this deletion still leaves no live moderator.
+    const outcome = await deleteAccount(sql, survivorCandidate.githubUserId, { confirm: true });
+    expect(outcome).toStrictEqual({
+      kind: "DELETED",
+      githubUserId: survivorCandidate.githubUserId,
+      accountId: survivorCandidate.id,
+      alreadyDeleted: false,
+      deletedAt: expect.any(String),
+      removedApiTokens: 0,
+      scrubbedForgeIdentities: 0,
+      leftNoLiveModerator: true,
+    });
   });
 });

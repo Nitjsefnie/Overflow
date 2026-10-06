@@ -150,6 +150,7 @@ const deletedOutcome: AccountDeletionOutcome = {
   deletedAt: "2026-09-26T12:00:00Z",
   removedApiTokens: 0,
   scrubbedForgeIdentities: 0,
+  leftNoLiveModerator: false,
 };
 
 function accountDependencies() {

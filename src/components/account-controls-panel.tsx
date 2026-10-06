@@ -30,6 +30,21 @@ type AccountControlsPanelProps = {
    * sign-in that requests no scope and returns to the dashboard.
    */
   reauthenticateAction: () => Promise<void>;
+  /**
+   * Whether the signed-in account is the instance's last live moderator
+   * (`role = 'MODERATOR' and deleted_at is null`, with no other live
+   * moderator). When true, the deletion section warns before the confirm
+   * field that no in-product moderator will remain. The deletion itself is
+   * never blocked: this shapes a warning, not a gate (issue 1122).
+   */
+  isLastLiveModerator?: boolean;
+  /**
+   * Whether `MODERATOR_GITHUB_USER_IDS` names any GitHub user id. Shapes the
+   * last-moderator warning's closing sentence: an absent floor is named
+   * plainly, because it is the operator's recovery path and there is none
+   * configured yet.
+   */
+  moderatorFloorConfigured?: boolean;
 };
 
 /**
@@ -38,7 +53,11 @@ type AccountControlsPanelProps = {
  * Both controls call the session-only API routes; nothing here opens a public
  * request.
  */
-export function AccountControlsPanel({ reauthenticateAction }: AccountControlsPanelProps) {
+export function AccountControlsPanel({
+  reauthenticateAction,
+  isLastLiveModerator = false,
+  moderatorFloorConfigured = false,
+}: AccountControlsPanelProps) {
   const [confirmLogin, setConfirmLogin] = useState("");
   const [exportError, setExportError] = useState<string | null>(null);
   const [deletionError, setDeletionError] = useState<string | null>(null);
@@ -131,6 +150,17 @@ export function AccountControlsPanel({ reauthenticateAction }: AccountControlsPa
         work by, and nothing that would let anyone act as you survives with it.{" "}
         <Link href="/account-data#account-data-deletion-heading">What deletion means</Link>
       </p>
+      {isLastLiveModerator ? (
+        <p className="feedback warning" role="status">
+          You are the only moderator left on this instance. Deleting your account leaves Overflow with
+          no in-product moderator. Recovery is manual: an operator adds a GitHub user id to
+          MODERATOR_GITHUB_USER_IDS and the account it names becomes a moderator the next time it
+          signs in — the list promotes on sign-in and never restores a role by itself.
+          {moderatorFloorConfigured
+            ? ""
+            : " No GitHub user id is configured in MODERATOR_GITHUB_USER_IDS right now."}
+        </p>
+      ) : null}
       <label className="field">
         <span>Type your GitHub login to confirm</span>
         <input
