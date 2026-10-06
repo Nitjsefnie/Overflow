@@ -88,7 +88,11 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
     // regardless — so a database blip at sign-out still clears the cookie but
     // does not revoke server-side, the refresh lookup's documented fail-open
     // shape on a blip.
-    async signOut({ token }) {
+    async signOut(message) {
+      // For the JWT strategy the message is the decoded token; the database
+      // strategy's `{ session }` arm never fires here, and narrowing by
+      // `"token" in message` keeps the union honest for both.
+      const token = "token" in message ? message.token : undefined;
       if (typeof token?.userId === "string") {
         await revokeAccountSessions(token.userId);
       }

@@ -100,7 +100,9 @@ afterEach(() => {
 
 async function sessionCookie(claims: Record<string, unknown>): Promise<string> {
   const value = await encode({
-    token: { sub: userId, userId, role: "MEMBER", ...claims },
+    // The epoch stamp sign-in writes (issue 1043): without it the cookie is a
+    // pre-fix token and dies at its first refresh against the live row.
+    token: { sub: userId, userId, role: "MEMBER", sessionEpoch: 0, ...claims },
     secret: authSecret,
     salt: sessionCookieName,
   });
@@ -125,11 +127,8 @@ async function storedTokenCount(): Promise<number> {
 }
 
 describe("POST /api/tokens with only a session cookie", () => {
-  it.each([
-    { label: "a GitHub sign-in older than ten minutes", claims: { authenticatedAt: nowSeconds - 10 * 60 - 1 } },
-    { label: "no recorded GitHub sign-in", claims: {} },
-  ])("refuses a cookie carrying $label and stores no token", async ({ claims }) => {
-    const response = await scriptedMint(await sessionCookie(claims));
+  it("refuses a cookie carrying a GitHub sign-in older than ten minutes and stores no token", async () => {
+    const response = await scriptedMint(await sessionCookie({ authenticatedAt: nowSeconds - 10 * 60 - 1 }));
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
@@ -137,6 +136,20 @@ describe("POST /api/tokens with only a session cookie", () => {
         code: "REAUTHENTICATION_REQUIRED",
         message: "Confirm your GitHub sign-in to issue an API token.",
       },
+    });
+    await expect(storedTokenCount()).resolves.toBe(0);
+  });
+
+  it("ends a cookie carrying no recorded GitHub sign-in at the refresh, and stores no token", async () => {
+    // The absolute lifetime (issue 1043) refuses a token with no sign-in
+    // instant at the refresh, so the session resolves to nothing and the mint
+    // sees an unauthenticated request (401) rather than the route's own
+    // re-authentication refusal (403). No token is stored either way.
+    const response = await scriptedMint(await sessionCookie({}));
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
     });
     await expect(storedTokenCount()).resolves.toBe(0);
   });

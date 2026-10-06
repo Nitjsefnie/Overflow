@@ -163,7 +163,12 @@ describe("GitHub OAuth scope", () => {
     it("keeps the recorded hint on a later refresh that carries no account", async () => {
       const { jwt } = await callbacks();
 
-      const token = await jwt!({ token: { canAdministerWebhooks: true }, user: { id: "4242" } });
+      // A sign-in instant inside the absolute lifetime (issue 1043): without
+      // one the refresh path refuses the token before the hint can ride.
+      const token = await jwt!({
+        token: { canAdministerWebhooks: true, authenticatedAt: Math.floor(Date.now() / 1000) },
+        user: { id: "4242" },
+      });
 
       expect(token?.canAdministerWebhooks).toBe(true);
     });
