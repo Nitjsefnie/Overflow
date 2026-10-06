@@ -26,15 +26,15 @@
 // (issue 1090 splits the workflows that read pull-request data, leaving one
 // required context produced by a pull_request_target file and a push file),
 // and every path it names relays. A pinned run is relayed only when the
-// workflow definition it executed is the base branch's
-// (isTrustedProducerRun); any other pinned run is refused without posting,
-// whichever of its context's paths the run came from. The refusal keeps the
-// byte-identical throw unless the head is provably dead, and must never read
-// a live fork head as dead (the head commit resolves in this repository
-// through its pull ref), so the head repository is decided first — an unknown
-// name is learned by fetching the run body — and a live head, a fork head, a
-// name still missing, or any read failure still throws (issue 1115). The App
-// key
+// workflow definition it executed is the base branch's (isTrustedProducerRun);
+// any other pinned run is refused without posting, whichever of its context's
+// paths the run came from. The refusal keeps the byte-identical throw unless
+// the head is provably dead; the head repository is decided first because a
+// fork head's commit resolves in this repository — an unknown name is learned
+// by fetching the run body — and a live head, a fork head, a missing name, or
+// any read failure throws (issue 1115). The App key arrives only through the
+// LEDGER_APP_KEY secret and is never logged; every failure exits nonzero so a
+// dead relay is visible as a red job, never as silence.
 
 import { createSign } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -638,8 +638,9 @@ function triggeringRunFromApi(body: Record<string, unknown>): TriggeringRun {
 
 /**
  * The run body's `head_repository.full_name`, or the empty string when the
- * body carries no readable repository name. Never a guess: the empty value
- * means unknown, which the refusal gate treats as "the liveness read decides".
+ * body carries no readable repository name. Never a guess: an empty value
+ * means unknown, and the gate learns the name by fetching the run body — a
+ * name still missing keeps the throw.
  */
 function headRepositoryFullNameOf(body: Record<string, unknown>): string {
   const headRepository =
