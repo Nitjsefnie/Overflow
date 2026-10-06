@@ -11,6 +11,7 @@ vi.mock("@/auth", () => ({ signIn }));
 
 import { AppShell, PublicAppShell } from "@/components/app-shell";
 import { LandingPage } from "@/app/page";
+import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
 
 async function renderAccountDataPage(): Promise<void> {
   const { default: AccountDataPage } = await import("@/app/account-data/page");
@@ -256,6 +257,24 @@ describe("account-data notice page", () => {
       (anchor) => anchor.getAttribute("href") ?? "",
     );
     expect(hrefs.filter((href) => href.startsWith("mailto:") || /emails/i.test(href))).toEqual([]);
+  });
+
+  it("renders the sanction effects from the shared source, in the Scoring and sanctions section", async () => {
+    await renderAccountDataPage();
+
+    // The sanction effects are shared legal text (src/lib/sanctions.ts), so the
+    // Scoring and sanctions list's tail is compared against the constant, element
+    // for element: the notice can neither drop a fact nor reword one away from
+    // the two legal pages that render the same list. The list's head is the
+    // section's four pre-existing items (automated pricing, the credit limit,
+    // the enforcement state, and the moderators who apply sanctions); they are
+    // left outside the comparison deliberately — wording is never asserted — and
+    // the tail comparison is what pins the shared facts' presence and order.
+    const scoring = sectionLabelledBy("account-data-scoring-heading");
+    const lists = [...scoring.querySelectorAll("ul")];
+    expect(lists, "the scoring section renders one list").toHaveLength(1);
+    const items = [...lists[0]!.querySelectorAll("li")].map((item) => item.textContent);
+    expect(items.slice(-SANCTION_EFFECT_RULES.length)).toEqual([...SANCTION_EFFECT_RULES]);
   });
 
   it("discloses the failure-alert mail route in the recipients list", async () => {

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { AppShell, PublicAppShell } from "@/components/app-shell";
 import { DISPUTE_CONTESTABLE_CASE, DISPUTE_RULES } from "@/lib/disputes";
 import { RULES_REVISION } from "@/lib/legal-revisions";
+import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
 
 type RulesContentProps = {
   memberName: string;
@@ -103,6 +104,9 @@ function RulesSections() {
         <p className="rules-formula">Audit → warn → recalibrate → ban</p>
         <ul className="rules-list">
           <li>Moderation applies to accounts, and every step requires supporting evidence.</li>
+          {SANCTION_EFFECT_RULES.map((rule) => (
+            <li key={rule}>{rule}</li>
+          ))}
         </ul>
       </section>
     </>

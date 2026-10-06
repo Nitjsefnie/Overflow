@@ -206,6 +206,7 @@ src/components/*
 !src/lib/
 src/lib/*
 !src/lib/disputes.ts
+!src/lib/sanctions.ts
 !src/lib/format-signed.ts
 !src/lib/legal-revisions.ts
 !src/lib/plural.ts

@@ -13,6 +13,7 @@ vi.mock("@/lib/moderation/current-role", () => ({ getCurrentUserRole: currentRol
 
 import { PublicRulesContent, RulesContent } from "@/app/rules/page";
 import { DISPUTE_CONTESTABLE_CASE, DISPUTE_RULES } from "@/lib/disputes";
+import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
 
 async function renderRulesPage(): Promise<void> {
   const { default: RulesPage } = await import("@/app/rules/page");
@@ -229,6 +230,26 @@ describe("rules page", () => {
     const marked = [...markers[0]!.querySelectorAll("[data-dispute-case]")];
     expect(marked, "the revision paragraph names the case from the shared source").toHaveLength(1);
     expect(marked[0]!.textContent).toBe(DISPUTE_CONTESTABLE_CASE);
+  });
+
+  it.each(MOUNT_POINTS)("renders the sanction effects from the shared source, in the %s Moderation section", (_label, element) => {
+    render(element);
+
+    // The sanction effects are shared legal text (src/lib/sanctions.ts), so the
+    // Moderation list's tail is compared against the constant, element for
+    // element, on BOTH mount points — the member view and the public view render
+    // the same section, and a pin on one alone would leave the other unchecked.
+    // The list's head is the section's pre-existing hand-written bullet; it is
+    // matched by shape (expect.any(String)) and not by words, because wording is
+    // never asserted — but its presence is: the tail comparison misaligns if the
+    // bullet is deleted, so the pin covers the list's whole length.
+    const main = document.querySelector<HTMLElement>("main.page-content");
+    expect(main, "the rules view supplies its own main.page-content").not.toBeNull();
+    const region = within(main!).getByRole("region", { name: "Moderation" });
+    const lists = [...region.querySelectorAll("ul")];
+    expect(lists, "the Moderation section renders one list").toHaveLength(1);
+    const items = [...lists[0]!.querySelectorAll("li")].map((item) => item.textContent);
+    expect(items).toEqual([expect.any(String), ...SANCTION_EFFECT_RULES]);
   });
 
   it("renders the member view for a session with no role claim when the ledger vouches", async () => {

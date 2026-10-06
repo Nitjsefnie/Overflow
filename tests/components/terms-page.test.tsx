@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { DISPUTE_CONTESTABLE_CASE, DISPUTE_RULES } from "@/lib/disputes";
+import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
 
 async function renderTermsPage(): Promise<void> {
   const { default: TermsPage } = await import("@/app/terms/page");
@@ -173,6 +174,24 @@ describe("terms page", () => {
     const paragraphs = [...region.querySelectorAll("p")];
     expect(paragraphs).toHaveLength(1);
     expect(paragraphs[0]!.querySelector('a[href="/rules"]')).not.toBeNull();
+  });
+
+  it("renders the sanction effects from the shared source, in the How sanctions work section", async () => {
+    await renderTermsPage();
+
+    // The sanction effects are shared legal text (src/lib/sanctions.ts), so the
+    // section's own list is compared against the constant, element for element:
+    // the page can neither drop a fact nor reword one away from the other two
+    // pages that render the same list. The section is resolved by its heading —
+    // the aria name is the heading's TEXT — so a heading renamed away from what
+    // the section carries fails here rather than silently skipping the pin.
+    // Exactly one list, so the facts cannot be stated twice in the section with
+    // one copy drifting.
+    const section = screen.getByRole("region", { name: "How sanctions work" });
+    const lists = [...section.querySelectorAll("ul")];
+    expect(lists, "the sanctions section renders one list of sanction effects").toHaveLength(1);
+    const items = [...lists[0]!.querySelectorAll("li")].map((item) => item.textContent);
+    expect(items).toEqual([...SANCTION_EFFECT_RULES]);
   });
 
   it("names the contestable case the shared source names, in the revision paragraph", async () => {
