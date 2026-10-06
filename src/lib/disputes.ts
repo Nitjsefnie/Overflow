@@ -69,3 +69,62 @@ export const DISPUTE_RULES = [
  * ("a settlement", not "settlement").
  */
 export const DISPUTE_CONTESTABLE_CASE = "a settlement";
+
+/**
+ * The rules for contesting a sanction, in one place.
+ *
+ * The disputes framework carries a second case beside the settlement one: a
+ * sanction can be contested too, and its rules are not the settlement rules
+ * reworded. A sanction has no creditor, so the settlement list's "the
+ * settlement's creditor or the sponsor can ask" is meaningless for it — the
+ * same incoherence this file's header describes — and the deciding half is
+ * stricter: the account under the sanction asks, a moderator decides, and the
+ * moderator who imposed the sanction does not decide its contest where any
+ * other moderator exists. So the sanction case carries its own list here
+ * instead of widening the settlement one, and each page renders the list of
+ * the case it serves.
+ *
+ * The wording is the text a reader is held to, so it moves the way a legal
+ * document moves: through src/lib/legal-revisions.ts when a legal page comes
+ * to render it, never as a quiet copy edit. Today it is rendered by the
+ * /contests page, which is not one of the pages a revision record stamps; the
+ * moment /rules or /terms carries it, the revision rule of this file's header
+ * applies to it as well.
+ *
+ * Each rule is behavioural, with its basis in the code:
+ *
+ *   - only the sanctioned account asks: the filing store refuses an account
+ *     that is not the sanctioned account on the event
+ *     (src/lib/moderation/sanction-contest-store.ts).
+ *   - the deciding-moderator half: the decision path refuses a decision by the
+ *     moderator who imposed the sanction while another moderator exists, and
+ *     with exactly one live moderator it records that fact on the request's
+ *     decided_by_sole_moderator column (migration 061).
+ *   - one open request per sanction: the partial unique index
+ *     sanction_contest_requests_one_open_per_sanction (migration 061), the
+ *     same shape the settlement case's one-open rule uses (migration 009).
+ *   - the filing and the decision are moderation events: the filing writes its
+ *     event through moderation_events' contest_request_id column (migration
+ *     061) with the sanction's state on both sides, so the fold's
+ *     participation-eligibility history is unchanged by it; the decision
+ *     writes its event through the same column.
+ */
+export const SANCTION_CONTEST_RULES = [
+  "The sanctioned account can ask for a sanction to be contested; a moderator decides.",
+  "Where another moderator exists, the deciding moderator is not the one who imposed the sanction; with exactly one live moderator, that moderator decides and the record says so.",
+  "One open request per sanction at a time.",
+  "The filing and the decision are each recorded as a moderation event.",
+] as const;
+
+/**
+ * The case a sanction contest is about, named the way a page names it
+ * mid-sentence, following DISPUTE_CONTESTABLE_CASE's pattern: the value
+ * carries its own article ("a sanction", not "sanction").
+ *
+ * It is the sanction half of the pair the settlement constant documents above:
+ * a page that says "contesting a sanction cites that date" interpolates this,
+ * and every assertion that reads it back resolves the constant, never a
+ * hand-written literal. MOVES WITH SANCTION_CONTEST_RULES — touch both in one
+ * edit, for the same reason the settlement pair moves in one edit.
+ */
+export const SANCTION_CONTESTABLE_CASE = "a sanction";

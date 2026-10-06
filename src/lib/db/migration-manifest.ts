@@ -81,6 +81,7 @@ export const bundledMigrationNames: readonly string[] = [
   "058_api_token_delivery_window.sql",
   "059_session_epoch.sql",
   "060_sanction_deactivation_flag.sql",
+  "061_sanction_contest_requests.sql",
 ];
 
 /**

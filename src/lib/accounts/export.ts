@@ -78,6 +78,7 @@ export type AccountExport = {
   selfWorkCalibrations: AccountExportRow[];
   moderatorRoleChanges: { asTarget: AccountExportRow[]; asActor: AccountExportRow[] };
   settlementOverrideRequests: { asRequester: AccountExportRow[]; asDecider: AccountExportRow[] };
+  sanctionContestRequests: { asAccount: AccountExportRow[]; asDecider: AccountExportRow[] };
   reconciliationRuns: { asRequester: AccountExportRow[]; asGraphqlCostSponsor: AccountExportRow[] };
   repositoryReconciliationUsage: AccountExportRow[];
   moderationCreditAdjustments: AccountExportRow[];
@@ -151,6 +152,8 @@ export const userForeignKeyExports: readonly UserForeignKeyExportEntry[] = [
   { table: "moderator_role_changes", column: "actor_id", path: "moderatorRoleChanges.asActor", kind: "jsonb", orderBy: ["created_at", "id"] },
   { table: "settlement_override_requests", column: "requester_id", path: "settlementOverrideRequests.asRequester", kind: "jsonb", orderBy: ["created_at", "id"] },
   { table: "settlement_override_requests", column: "decided_by_id", path: "settlementOverrideRequests.asDecider", kind: "jsonb", orderBy: ["created_at", "id"] },
+  { table: "sanction_contest_requests", column: "account_id", path: "sanctionContestRequests.asAccount", kind: "jsonb", orderBy: ["created_at", "id"] },
+  { table: "sanction_contest_requests", column: "decided_by", path: "sanctionContestRequests.asDecider", kind: "jsonb", orderBy: ["created_at", "id"] },
   { table: "reconciliation_runs", column: "requested_by_user_id", path: "reconciliationRuns.asRequester", kind: "jsonb", orderBy: ["started_at", "id"] },
   { table: "reconciliation_runs", column: "graphql_cost_sponsor_id", path: "reconciliationRuns.asGraphqlCostSponsor", kind: "jsonb", orderBy: ["started_at", "id"] },
   {
@@ -358,6 +361,7 @@ export async function exportAccount(
         selfWorkCalibrations: [],
         moderatorRoleChanges: { asTarget: [], asActor: [] },
         settlementOverrideRequests: { asRequester: [], asDecider: [] },
+        sanctionContestRequests: { asAccount: [], asDecider: [] },
         reconciliationRuns: { asRequester: [], asGraphqlCostSponsor: [] },
         repositoryReconciliationUsage: [],
         moderationCreditAdjustments: [],

@@ -641,6 +641,16 @@ describe("account deletion as pseudonymisation", () => {
               'declined by fixture', now())
     `;
     await sql`
+      insert into sanction_contest_requests (account_id, sanction_event_id, request_reason)
+      values (${exporter.id}, ${targetEvent!.id}, 'export fixture contest open')
+    `;
+    await sql`
+      insert into sanction_contest_requests (account_id, sanction_event_id, request_reason, state,
+                                             decision, decided_by, decided_reason, decided_at)
+      values (${other.id}, ${targetEvent!.id}, 'export fixture contest decided', 'DECIDED', 'DENIED',
+              ${exporter.id}, 'declined by fixture', now())
+    `;
+    await sql`
       insert into reconciliation_runs (requested_by_user_id, status, started_at)
       values (${exporter.id}, 'COMPLETED', '2026-09-01T00:00:00Z')
     `;
