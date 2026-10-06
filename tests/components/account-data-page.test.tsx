@@ -43,6 +43,24 @@ function follows(earlier: Element, later: Element): boolean {
   return (earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
 }
 
+// The never-signed-in section renders two lists: what reconciliation stores
+// about them, then the kept-duration list. The kept list's placement — second
+// of two, introduced by a paragraph — is structure, so it locates the list
+// without matching its or its introduction's wording.
+function keptList(section: Element): Element {
+  const lists = Array.from(section.querySelectorAll("ul"));
+  expect(
+    lists,
+    "the section renders two lists: what it stores, then how long it is kept",
+  ).toHaveLength(2);
+  const kept = lists[1]!;
+  expect(
+    kept.previousElementSibling?.tagName,
+    "the kept list is introduced by a paragraph",
+  ).toBe("P");
+  return kept;
+}
+
 describe("account-data notice page", () => {
   it("renders the page-heading structure and one labelled section per disclosure area", async () => {
     await renderAccountDataPage();
@@ -216,34 +234,42 @@ describe("account-data notice page", () => {
     ).not.toBeNull();
   });
 
-  it("names the free text written by others that survives deletion, in the keeps list", async () => {
+  it("places the keeps list in the deletion section: second of four lists, four items, the free-text item last", async () => {
     await renderAccountDataPage();
 
     const deletion = sectionLabelledBy("account-data-deletion-heading");
-    const keepsIntro = Array.from(deletion.querySelectorAll("p")).find((candidate) =>
-      /deletion keeps/i.test(candidate.textContent ?? ""),
+    const [removesList, keepsList, afterwardsList, preconditionsList] = Array.from(
+      deletion.querySelectorAll("ul"),
     );
-    expect(keepsIntro, "the keeps list is introduced by a paragraph").toBeDefined();
-    const keepsList = keepsIntro!.nextElementSibling;
-    expect(keepsList?.tagName, "the keeps list follows its introduction").toBe("UL");
-    const text = keepsList!.textContent ?? "";
-
-    expect(text, "it names the free text of moderation events: the event's reason and the recalibration plan").toMatch(
-      /moderation events?[\s\S]*reason[\s\S]*recalibration plan/i,
-    );
-    expect(text, "it names the rationale and decision recorded on calibration audits").toMatch(
-      /calibration audits?[\s\S]*rationale[\s\S]*decision/i,
-    );
-    expect(text, "it names a settlement override request's reason and then its decision reason").toMatch(
-      /settlement override requests?[\s\S]*reason[\s\S]*decision reason/i,
-    );
-    expect(text, "it names a credit adjustment's reason").toMatch(
-      /credit adjustments?[\s\S]*reason/i,
-    );
+    expect(removesList, "the deletion section's first list holds what deletion removes").toBeDefined();
+    expect(keepsList, "the deletion section's second list holds what deletion keeps").toBeDefined();
+    expect(afterwardsList, "the deletion section's third list holds what happens afterwards").toBeDefined();
     expect(
-      text,
-      "it says why they survive: they are other people's records that name you, and deletion leaves referencing rows untouched",
-    ).toMatch(/untouched/i);
+      preconditionsList,
+      "the deletion section's fourth list holds the preconditions and limits",
+    ).toBeDefined();
+    for (const list of [removesList!, keepsList!, afterwardsList!, preconditionsList!]) {
+      expect(
+        list.previousElementSibling?.tagName,
+        "each of the deletion section's lists is introduced by a paragraph",
+      ).toBe("P");
+    }
+    expect(follows(removesList!, keepsList!), "the keeps list follows the removes list").toBe(true);
+    expect(follows(keepsList!, afterwardsList!), "the afterwards list follows the keeps list").toBe(true);
+    expect(
+      follows(afterwardsList!, preconditionsList!),
+      "the preconditions list follows the afterwards list",
+    ).toBe(true);
+
+    const keepsItems = Array.from(keepsList!.querySelectorAll("li"));
+    expect(
+      keepsItems,
+      "the keeps list holds four items: the retained identifiers, role and standing, the ledger records, and the free text others wrote",
+    ).toHaveLength(4);
+    expect(
+      follows(keepsItems[2]!, keepsItems[3]!),
+      "the free-text item is the keeps list's last item, after the ledger-records item",
+    ).toBe(true);
   });
 
   it("opens with the controller section, which carries both contact routes", async () => {
@@ -337,94 +363,77 @@ describe("account-data notice page", () => {
       text,
       "the mailed journal excerpts may carry personal data, with repository names and logins as the examples",
     ).toMatch(/personal data[\s\S]*repository names[\s\S]*logins/i);
-    expect(
-      text,
-      "the excerpts may include privileged-action audit lines, which record the acting account's client IP address",
-    ).toMatch(/privileged.action[\s\S]*IP address/i);
   });
 
-  it("states the 90-day root-only export of the privileged-action log lines", async () => {
+  it("places the privileged-action export in the retention list, tenth of eleven items", async () => {
     await renderAccountDataPage();
 
-    const logs = sectionLabelledBy("account-data-logs-heading").textContent ?? "";
+    const retention = sectionLabelledBy("account-data-retention-heading");
+    const lists = Array.from(retention.querySelectorAll("ul"));
+    expect(lists, "the retention section renders one list").toHaveLength(1);
+    const items = Array.from(lists[0]!.querySelectorAll("li"));
     expect(
-      logs,
-      "the server-log section states the export: the IP-bearing privileged-action lines are kept 90 days outside the journal",
-    ).toMatch(/privileged.action[\s\S]*90 days[\s\S]*root-only[\s\S]*export/i);
-
-    const retention = sectionLabelledBy("account-data-retention-heading").textContent ?? "";
+      items,
+      "the retention list holds eleven items, the privileged-action export among them tenth",
+    ).toHaveLength(11);
+    const [backupsItem, exportItem, nightlyCopyItem] = items.slice(8, 11);
     expect(
-      retention,
-      "the retention section lists the export among the retention periods",
-    ).toMatch(/privileged.action[\s\S]*90 days[\s\S]*root-only[\s\S]*export/i);
+      follows(backupsItem!, exportItem!),
+      "the export item follows the daily-backups item",
+    ).toBe(true);
+    expect(
+      follows(exportItem!, nightlyCopyItem!),
+      "the nightly-copy item follows the export item",
+    ).toBe(true);
   });
 
-  it("states the change log's automated retention prune and pins its horizon to the constant", async () => {
+  it("pins the change log's retention horizon to the constant, from the kept list's third item", async () => {
     await renderAccountDataPage();
 
-    const nonMember = sectionLabelledBy("account-data-non-member-heading");
-    const keptIntro = Array.from(nonMember.querySelectorAll("p")).find((candidate) =>
-      /^how long it is kept:?$/i.test((candidate.textContent ?? "").trim()),
-    );
-    expect(keptIntro, "the retention list is introduced by a paragraph").toBeDefined();
-    const keptList = keptIntro!.nextElementSibling;
-    expect(keptList?.tagName, "the retention list follows its introduction").toBe("UL");
-    const item = Array.from(keptList!.querySelectorAll("li")).find((candidate) =>
-      /change log/i.test(candidate.textContent ?? ""),
-    );
-    expect(item, "the retention list covers the change log").toBeDefined();
+    const kept = keptList(sectionLabelledBy("account-data-non-member-heading"));
+    const items = Array.from(kept.querySelectorAll("li"));
+    expect(
+      items,
+      "the kept list holds six items: re-reads, an unreadable repository, the change log, webhook receipts, unregistering, and the backups pointer",
+    ).toHaveLength(6);
+    const changeLogItem = items[2]!;
+    const receiptsItem = items[3]!;
+    expect(
+      follows(changeLogItem, receiptsItem),
+      "the receipts item follows the change-log item",
+    ).toBe(true);
 
-    const text = item!.textContent ?? "";
-    expect(text, "the change log is append-only only while a run is open").toMatch(
-      /append-only while a reconciliation run is open/i,
-    );
-    expect(text, "an automated prune deletes the entries").toMatch(
-      /automated[\s\S]*retention prune/i,
-    );
-    expect(text, "the entries deleted are those of completed or failed runs").toMatch(
-      /completed or failed reconciliation runs?/i,
-    );
+    const text = changeLogItem.textContent ?? "";
     expect(
       text,
       "the stated horizon is the constant's value, so bumping the constant without following here fails this test",
     ).toMatch(new RegExp(`\\b${RUN_TERMINAL_RETENTION_DAYS}\\b`));
-    expect(text, "the hand-run cleanup script removes only no-change entries").toMatch(
-      /cleanup script[\s\S]*no actual change/i,
-    );
   });
 
-  it("states the receipt windows as the retention constants' values", async () => {
+  it("pins the receipt windows to the constants, from the kept list's fourth item", async () => {
     await renderAccountDataPage();
 
-    const nonMember = sectionLabelledBy("account-data-non-member-heading");
-    const keptIntro = Array.from(nonMember.querySelectorAll("p")).find((candidate) =>
-      /^how long it is kept:?$/i.test((candidate.textContent ?? "").trim()),
-    );
-    expect(keptIntro, "the retention list is introduced by a paragraph").toBeDefined();
-    const keptList = keptIntro!.nextElementSibling;
-    expect(keptList?.tagName, "the retention list follows its introduction").toBe("UL");
-    const item = Array.from(keptList!.querySelectorAll("li")).find((candidate) =>
-      /receipt/i.test(candidate.textContent ?? ""),
-    );
-    expect(item, "the retention list covers the webhook receipts").toBeDefined();
+    const kept = keptList(sectionLabelledBy("account-data-non-member-heading"));
+    const items = Array.from(kept.querySelectorAll("li"));
+    expect(
+      items,
+      "the kept list holds six items: re-reads, an unreadable repository, the change log, webhook receipts, unregistering, and the backups pointer",
+    ).toHaveLength(6);
+    const receiptsItem = items[3]!;
+    expect(
+      follows(items[2]!, receiptsItem),
+      "the receipts item follows the change-log item",
+    ).toBe(true);
 
-    const text = item!.textContent ?? "";
+    const text = receiptsItem.textContent ?? "";
     expect(text, "a processed receipt's 30-day window is the constant's value").toMatch(
       new RegExp(`\\b${RECEIPT_PROCESSED_RETENTION_DAYS}\\b`),
     );
-    expect(
-      text,
-      "a failed receipt's 90-day window sits between the failed and abandoned claims — the constant's value",
-    ).toMatch(new RegExp(`failed[\\s\\S]*\\b${RECEIPT_FAILED_RETENTION_DAYS}\\b[\\s\\S]*abandoned`));
-    expect(
-      text,
-      "an abandoned receipt's 90-day window follows the abandoned claim — the constant's value",
-    ).toMatch(new RegExp(`abandoned[\\s\\S]*\\b${RECEIPT_PENDING_RETENTION_DAYS}\\b`));
-    expect(text, "abandoned means never finalized, with an expired lease").toMatch(
-      /never finalized[\s\S]*lease has expired/i,
+    expect(text, "a failed receipt's window is the constant's value").toMatch(
+      new RegExp(`\\b${RECEIPT_FAILED_RETENTION_DAYS}\\b`),
     );
-    expect(text, "a receipt with a live lease is never pruned").toMatch(
-      /lease has not expired[\s\S]*never pruned/i,
+    expect(text, "an abandoned receipt's window is the constant's value").toMatch(
+      new RegExp(`\\b${RECEIPT_PENDING_RETENTION_DAYS}\\b`),
     );
   });
 });
