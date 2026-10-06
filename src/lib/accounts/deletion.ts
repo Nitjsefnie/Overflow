@@ -52,7 +52,9 @@ export type AccountDeletionOutcome =
  *
  * - the account row keeps its id and github_user_id but loses login, avatar
  *   and OAuth token, and gains a deleted_at stamp (kept original on re-run, so
- *   the statement is idempotent);
+ *   the statement is idempotent) — and its role resets to MEMBER, because
+ *   moderator authority does not survive deletion (the MODERATOR_GITHUB_USER_IDS
+ *   floor re-applies at next sign-in);
  * - its API token rows are removed — the hash stops authenticating at once;
  * - its forge identities keep their (provider, instance_url, forge_user_id)
  *   triple — GitLab authorship resolves through it — but lose the token, and
@@ -127,13 +129,17 @@ export async function deleteAccount(
       where user_id = ${account.id}
       returning id
     `;
-    // One statement clears avatar, token and sets the stamp together: the
-    // users_deleted_account_scrubbed_check admits no half-scrubbed state.
+    // One statement clears avatar, token, resets the role and sets the stamp
+    // together: the users_deleted_account_scrubbed_check admits no
+    // half-scrubbed state. The role resets to MEMBER — moderator authority
+    // does not survive deletion; the MODERATOR_GITHUB_USER_IDS floor
+    // re-applies at next sign-in.
     const [scrubbed] = await tx<{ deleted_at: Date }[]>`
       update users
       set github_login = ${DELETED_ACCOUNT_LOGIN},
           avatar_url = null,
           encrypted_oauth_token = null,
+          role = 'MEMBER',
           deleted_at = coalesce(deleted_at, now()),
           updated_at = now()
       where id = ${account.id}

@@ -141,4 +141,65 @@ describe("account re-registration after deletion", () => {
     `;
     expect(settlement!.creditor_id).toBe(creditorId);
   });
+
+  it("case 3: a deleted row still carrying MODERATOR re-signs in as MEMBER", async () => {
+    const seeded = await upsertGitHubAccount({
+      githubUserId: 9_900_002,
+      login: "deleted-moderator",
+      avatarUrl: "https://avatars.example/deleted-mod.png",
+      role: "MODERATOR",
+      encryptedAccessToken: Buffer.from("deleted-moderator-token-bytes", "utf8"),
+    }, sql);
+    const outcome = await deleteAccount(sql, 9_900_002, { confirm: true });
+    expect(outcome.kind).toBe("DELETED");
+
+    // The pre-fix shape: rows deleted before the reset shipped kept their
+    // MODERATOR role. Planted directly, so the case holds for them too.
+    await sql`update users set role = 'MODERATOR' where id = ${seeded.id}`;
+
+    const restored = await upsertGitHubAccount({
+      githubUserId: 9_900_002,
+      login: "octocat",
+      avatarUrl: "https://avatars.example/octocat.png",
+      role: "MEMBER",
+      encryptedAccessToken: reRegisteredToken,
+    }, sql);
+
+    expect(restored.id).toBe(seeded.id);
+    // The stored role of a deleted row is not a floor: re-sign-in after
+    // deletion comes back MEMBER unless the resolved sign-in role (the
+    // MODERATOR_GITHUB_USER_IDS floor) is MODERATOR.
+    expect(restored.role).toBe("MEMBER");
+    const [row] = await sql<{ role: string; deleted_at: Date | null }[]>`
+      select role, deleted_at from users where id = ${seeded.id}
+    `;
+    expect(row!.role).toBe("MEMBER");
+    expect(row!.deleted_at).toBeNull();
+  });
+
+  it("case 4: a configured-moderator id re-signs in after deletion as MODERATOR", async () => {
+    const seeded = await upsertGitHubAccount({
+      githubUserId: 9_900_003,
+      login: "configured-moderator",
+      avatarUrl: "https://avatars.example/configured-mod.png",
+      role: "MEMBER",
+      encryptedAccessToken: Buffer.from("configured-moderator-token-bytes", "utf8"),
+    }, sql);
+    const outcome = await deleteAccount(sql, 9_900_003, { confirm: true });
+    expect(outcome.kind).toBe("DELETED");
+
+    // The MODERATOR_GITHUB_USER_IDS floor re-applies at sign-in: this is the
+    // role upsertGitHubIdentity resolves for a configured id, regardless of
+    // the deleted row's stored role.
+    const restored = await upsertGitHubAccount({
+      githubUserId: 9_900_003,
+      login: "octocat",
+      avatarUrl: "https://avatars.example/octocat.png",
+      role: "MODERATOR",
+      encryptedAccessToken: reRegisteredToken,
+    }, sql);
+
+    expect(restored.id).toBe(seeded.id);
+    expect(restored.role).toBe("MODERATOR");
+  });
 });

@@ -730,4 +730,18 @@ describe("account deletion as pseudonymisation", () => {
     await sql`insert into api_tokens (user_id, token_hash) values (${user.id}, ${hash})`;
     await expect(store.findAccountByTokenHash(hash)).resolves.toBeNull();
   });
+
+  it("case 11: deleting a moderator resets the role, so authority does not survive deletion", async () => {
+    const moderator = await insertUser("deletion-role-reset");
+    await sql`update users set role = 'MODERATOR' where id = ${moderator.id}`;
+
+    const outcome = await deleteAccount(sql, moderator.githubUserId, { confirm: true });
+    expect(outcome.kind).toBe("DELETED");
+
+    const [row] = await sql<{ role: string; deleted_at: Date | null }[]>`
+      select role, deleted_at from users where id = ${moderator.id}
+    `;
+    expect(row!.deleted_at).not.toBeNull();
+    expect(row!.role).toBe("MEMBER");
+  });
 });
