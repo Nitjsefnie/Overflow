@@ -21,13 +21,37 @@ const srcRoot = fileURLToPath(new URL("../../src", import.meta.url));
 /** Machine-readable attribute expressions are exempt; only display text is scanned. */
 const DATETIME_ATTRIBUTE = /dateTime=\{[^}]*\}/g;
 
-const BANNED: Array<{ pattern: RegExp; name: string }> = [
-  { pattern: /toISOString\s*\(/, name: "toISOString(" },
-  { pattern: /\.slice\(0,\s*10\)/, name: ".slice(0, 10)" },
-  { pattern: /\btoLocale(Date|Time)?String\s*\(/, name: "toLocale*String(" },
-  { pattern: /Intl\.DateTimeFormat/, name: "Intl.DateTimeFormat" },
-  // No local helper reproducing the old token-panel output shape.
-  { pattern: /\bformatUtc\s*\(/, name: "formatUtc(" },
+const BANNED: Array<{ pattern: RegExp; name: string; mustMatch: string; mustNotMatch: string }> = [
+  {
+    pattern: /toISOString\s*\(/,
+    name: "toISOString(",
+    mustMatch: "createdAt.toISOString()",
+    mustNotMatch: "new Date(value).getTime()",
+  },
+  {
+    pattern: /\.slice\(0,\s*10\)/,
+    name: ".slice(0, 10)",
+    mustMatch: "settledAt.slice(0, 10)",
+    mustNotMatch: "labels.slice(0, 2)",
+  },
+  {
+    pattern: /\btoLocale(Date|Time)?String\s*\(/,
+    name: "toLocale*String(",
+    mustMatch: "occurredAt.toLocaleTimeString()",
+    mustNotMatch: "issue.toString()",
+  },
+  {
+    pattern: /Intl\.DateTimeFormat/,
+    name: "Intl.DateTimeFormat",
+    mustMatch: 'new Intl.DateTimeFormat("en-GB")',
+    mustNotMatch: "new Intl.NumberFormat()",
+  },
+  {
+    pattern: /\bformatUtc\s*\(/,
+    name: "formatUtc(",
+    mustMatch: "formatUtc(createdAt)",
+    mustNotMatch: "formatInstant(createdAt)",
+  },
 ];
 
 /**
@@ -117,5 +141,51 @@ describe("displayed instants render through formatInstant", () => {
 
   it("labels the formatter's output UTC", () => {
     expect(formatInstant("2026-09-07T15:00:00.000Z")).toContain("UTC");
+  });
+
+  // The scan above reads the real (clean) tree, so a weakened rule would go
+  // green silently. Each rule is pinned against fixed literals here — one
+  // string it must catch and one it must spare — so loosening a pattern,
+  // the attribute strip, or the interpolation ban fails this file even while
+  // the source tree stays clean.
+  it("catches each banned shape and spares the near misses beside it", () => {
+    for (const { pattern, name, mustMatch, mustNotMatch } of BANNED) {
+      expect(pattern.test(mustMatch), `${name} must catch ${mustMatch}`).toBe(true);
+      expect(pattern.test(mustNotMatch), `${name} must not catch ${mustNotMatch}`).toBe(false);
+    }
+  });
+
+  it("strips dateTime attributes and leaves the display text for the scan to see", () => {
+    const source =
+      '<time dateTime={reading.resetAt.toISOString()}>{reading.resetAt.toISOString()}</time>';
+    const stripped = source.replace(DATETIME_ATTRIBUTE, "");
+    expect(stripped).not.toContain("dateTime=");
+    expect(stripped).toContain("{reading.resetAt.toISOString()}");
+  });
+
+  it("flags a bare instant interpolation and spares the formatter call and non-display shapes", () => {
+    // A bare {x.recordedAt} is the raw ISO string on screen, and so is a
+    // fallback ternary around one; the formatter call is the rule being
+    // obeyed; a type literal has no member dot; an input value attribute is
+    // machine-readable, not display text.
+    const mustFlag = [
+      "recorded {closure.recordedAt}",
+      '{calibration.mergedAt ?? "Unavailable"}',
+    ];
+    const mustSpare = [
+      "reported {formatInstant(correction.requestedAt)}",
+      "type Preview = { audit: { id: string; decidedAt: string | null } };",
+      "<input value={sampleStartedAt} required />",
+    ];
+    const violationsOf = (line: string) =>
+      [...line.matchAll(BARE_INSTANT_INTERPOLATION)].filter((match) =>
+        !match[0].includes("formatInstant")
+      );
+    for (const line of mustFlag) {
+      expect(violationsOf(line), `${line} must be flagged`).not.toEqual([]);
+    }
+    for (const line of mustSpare) {
+      expect(violationsOf(line), `${line} must not be flagged`).toEqual([]);
+    }
   });
 });
