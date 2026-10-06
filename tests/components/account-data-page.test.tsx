@@ -11,7 +11,12 @@ vi.mock("@/auth", () => ({ signIn }));
 
 import { AppShell, PublicAppShell } from "@/components/app-shell";
 import { LandingPage } from "@/app/page";
-import { RUN_TERMINAL_RETENTION_DAYS } from "@/lib/retention/prune";
+import {
+  RECEIPT_FAILED_RETENTION_DAYS,
+  RECEIPT_PENDING_RETENTION_DAYS,
+  RECEIPT_PROCESSED_RETENTION_DAYS,
+  RUN_TERMINAL_RETENTION_DAYS,
+} from "@/lib/retention/prune";
 import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
 
 async function renderAccountDataPage(): Promise<void> {
@@ -382,9 +387,44 @@ describe("account-data notice page", () => {
     expect(
       text,
       "the stated horizon is the constant's value, so bumping the constant without following here fails this test",
-    ).toContain(String(RUN_TERMINAL_RETENTION_DAYS));
+    ).toMatch(new RegExp(`\\b${RUN_TERMINAL_RETENTION_DAYS}\\b`));
     expect(text, "the hand-run cleanup script removes only no-change entries").toMatch(
       /cleanup script[\s\S]*no actual change/i,
+    );
+  });
+
+  it("states the receipt windows as the retention constants' values", async () => {
+    await renderAccountDataPage();
+
+    const nonMember = sectionLabelledBy("account-data-non-member-heading");
+    const keptIntro = Array.from(nonMember.querySelectorAll("p")).find((candidate) =>
+      /^how long it is kept:?$/i.test((candidate.textContent ?? "").trim()),
+    );
+    expect(keptIntro, "the retention list is introduced by a paragraph").toBeDefined();
+    const keptList = keptIntro!.nextElementSibling;
+    expect(keptList?.tagName, "the retention list follows its introduction").toBe("UL");
+    const item = Array.from(keptList!.querySelectorAll("li")).find((candidate) =>
+      /receipt/i.test(candidate.textContent ?? ""),
+    );
+    expect(item, "the retention list covers the webhook receipts").toBeDefined();
+
+    const text = item!.textContent ?? "";
+    expect(text, "a processed receipt's 30-day window is the constant's value").toMatch(
+      new RegExp(`\\b${RECEIPT_PROCESSED_RETENTION_DAYS}\\b`),
+    );
+    expect(
+      text,
+      "a failed receipt's 90-day window sits between the failed and abandoned claims — the constant's value",
+    ).toMatch(new RegExp(`failed[\\s\\S]*\\b${RECEIPT_FAILED_RETENTION_DAYS}\\b[\\s\\S]*abandoned`));
+    expect(
+      text,
+      "an abandoned receipt's 90-day window follows the abandoned claim — the constant's value",
+    ).toMatch(new RegExp(`abandoned[\\s\\S]*\\b${RECEIPT_PENDING_RETENTION_DAYS}\\b`));
+    expect(text, "abandoned means never finalized, with an expired lease").toMatch(
+      /never finalized[\s\S]*lease has expired/i,
+    );
+    expect(text, "a receipt with a live lease is never pruned").toMatch(
+      /lease has not expired[\s\S]*never pruned/i,
     );
   });
 });
