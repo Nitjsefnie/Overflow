@@ -13,6 +13,7 @@ import {
   createModerationPostHandler,
 } from "@/app/api/moderation/route";
 import { createModerationAuditPatchHandler } from "@/app/api/moderation/[id]/route";
+import { createModerationReversalPatchHandler } from "@/app/api/moderation/reversal/route";
 import { createModerationAdjustmentPostHandler } from "@/app/api/moderation/recalibration/adjustment/route";
 import { createModerationReversalPostHandler } from "@/app/api/moderation/adjustments/reversal/route";
 import { createRederivationPostHandler } from "@/app/api/moderation/rederivation/route";
@@ -142,6 +143,23 @@ const routeCases: RouteCase[] = [
     failure: new ModerationServiceError("CONFLICT", "Not recalibrating."),
     subject: { targetAccountId },
     handler: createModerationClosePatchHandler,
+  },
+  {
+    action: "ban.reverse",
+    method: "PATCH",
+    path: "/api/moderation/reversal",
+    body: { targetAccountId, reason: "The flagged pattern was re-reviewed and does not hold." },
+    serviceMethod: "reverseBan",
+    result: {
+      targetAccountId,
+      priorState: "BANNED",
+      targetState: "ACTIVE",
+      confirmedPatternCount: 3,
+      reactivatedRepositories: [repositoryId],
+    },
+    failure: new ModerationServiceError("CONFLICT", "Not banned."),
+    subject: { targetAccountId },
+    handler: createModerationReversalPatchHandler,
   },
   {
     action: "credit-adjustment.create",
