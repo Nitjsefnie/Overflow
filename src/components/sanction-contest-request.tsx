@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { FileableSanction } from "@/lib/moderation/sanction-contest-service";
 import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
+import { formatInstant } from "@/lib/format-instant";
 
 type Feedback = { kind: "error" | "success"; message: string } | null;
 
@@ -95,7 +96,7 @@ export function SanctionContestRequestForm({ sanctions }: SanctionContestRequest
         >
           {sanctions.map((sanction) => (
             <option key={sanction.id} value={sanction.id}>
-              {sanction.newState} · {sanction.occurredAt.slice(0, 10)} · {sanction.reason}
+              {sanction.newState} · {formatInstant(sanction.occurredAt)} · {sanction.reason}
             </option>
           ))}
         </select>

@@ -5,6 +5,7 @@ import { useState } from "react";
 import { MINIMUM_CALIBRATION_SAMPLE_SIZE, type CalibrationSummary } from "@/lib/calibration/statistics";
 import type { AuditCandidateProjection, ModerationRepositoryProjection } from "@/lib/dashboard/queries";
 import { formatSigned } from "@/lib/format-signed";
+import { parseDateTimeLocalAsUtc } from "@/lib/format-instant";
 import { plural } from "@/lib/plural";
 import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 
@@ -19,7 +20,7 @@ type CohortSelection = {
   sampleEndedAt: string;
 };
 
-/** The sample window as unambiguous instants, resolved in the moderator's timezone. */
+/** The sample window as unambiguous instants, read as UTC. */
 type SampleWindow = {
   startedAt: string;
   endedAt: string;
@@ -70,9 +71,9 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
 
   const target = candidates.find((candidate) => candidate.id === targetAccountId) ?? null;
   const selection: CohortSelection = { targetAccountId, repositoryId, sampleStartedAt, sampleEndedAt };
-  // Both inputs are wall-clock strings with no offset. Reading them here resolves them in
-  // the moderator's timezone; sending them raw would let the server's timezone decide which
-  // merged pairs the window admits.
+  // The inputs are wall-clock strings with no offset. The parser reads them as
+  // UTC — the labels say so — so which merged pairs the window admits no
+  // longer depends on whoever's timezone the form happens to run in.
   const sampleWindow = readSampleWindow(selection.sampleStartedAt, selection.sampleEndedAt);
   const hasCohortSelection = target !== null && sampleWindow !== null;
   // A preview describes the selections it was fetched for, so it stops being an answer about
@@ -219,7 +220,7 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
           </select>
         </label>
         <label className="field" htmlFor="open-audit-sample-start">
-          <span>Sample window start</span>
+          <span>Sample window start (UTC)</span>
           <input
             id="open-audit-sample-start"
             name="sampleStartedAt"
@@ -231,7 +232,7 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
           />
         </label>
         <label className="field" htmlFor="open-audit-sample-end">
-          <span>Sample window end</span>
+          <span>Sample window end (UTC)</span>
           <input
             id="open-audit-sample-end"
             name="sampleEndedAt"
@@ -244,8 +245,8 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
         </label>
       </div>
       <p className="field-help">
-        The pair counts beside each account are lifetime totals, so preview the cohort to see what the chosen
-        window and repository actually hold.
+        Both sample window bounds are interpreted as UTC. The pair counts beside each account are lifetime totals, so
+        preview the cohort to see what the chosen window and repository actually hold.
       </p>
       <button className="quiet-button" type="button" disabled={pending !== null} onClick={() => void previewCohort()}>
         Preview cohort
@@ -319,12 +320,12 @@ function describeOpenAuditError(error: OpenAuditResponse["error"]): string {
 }
 
 function readSampleWindow(sampleStartedAt: string, sampleEndedAt: string): SampleWindow | null {
-  const startedAt = new Date(sampleStartedAt);
-  const endedAt = new Date(sampleEndedAt);
-  if (Number.isNaN(startedAt.getTime()) || Number.isNaN(endedAt.getTime())) {
+  const startedAt = parseDateTimeLocalAsUtc(sampleStartedAt);
+  const endedAt = parseDateTimeLocalAsUtc(sampleEndedAt);
+  if (startedAt === null || endedAt === null) {
     return null;
   }
-  return { startedAt: startedAt.toISOString(), endedAt: endedAt.toISOString() };
+  return { startedAt, endedAt };
 }
 
 function isSameSelection(left: CohortSelection, right: CohortSelection): boolean {

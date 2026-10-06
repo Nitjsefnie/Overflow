@@ -78,7 +78,7 @@ describe("settlement history page", () => {
     expect(first.getByText(/co-op\/harbour/)).toBeVisible();
     expect(first.getByText(/4 credits/)).toBeVisible();
     expect(first.getByText(/review deduction 3/)).toBeVisible();
-    expect(first.getByText(/2026-09-03/)).toBeVisible();
+    expect(first.getByText(/2026-09-03 00:00 UTC/)).toBeVisible();
     expect(first.getByRole("link", { name: "View proof for issue #9" })).toHaveAttribute(
       "href",
       "/settlements/settlement-9",

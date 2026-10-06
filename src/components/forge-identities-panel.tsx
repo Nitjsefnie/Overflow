@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { formatInstant } from "@/lib/format-instant";
 
 type ForgeIdentityRow = {
   id: string;
@@ -162,7 +163,7 @@ export function ForgeIdentitiesPanel() {
                 <div>
                   <dt>Verified</dt>
                   <dd>
-                    {identity.verifiedAt.slice(0, 10)}
+                    {formatInstant(identity.verifiedAt)}
                     {identity.tokenFailedAt != null ? (
                       <span data-testid="forge-identity-needs-re-verification">
                         {" "}

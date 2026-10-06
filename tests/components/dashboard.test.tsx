@@ -292,7 +292,7 @@ describe("member dashboard", () => {
     const heading = within(section!).getByRole("heading");
     expect(heading).toBeVisible();
     expect(heading).toHaveAttribute("id", "account-audit-heading");
-    expect(within(section!).getByText(/2026-09-04/)).toBeVisible();
+    expect(within(section!).getByText(/2026-09-04 00:00 UTC/)).toBeVisible();
     // The day only: the raw timestamp form must not reach the page.
     expect(within(section!).queryByText(/2026-09-04T/)).not.toBeInTheDocument();
   });
@@ -332,7 +332,7 @@ describe("member dashboard", () => {
     const heading = within(section!).getByRole("heading");
     expect(heading).toBeVisible();
     expect(heading).toHaveAttribute("id", "account-audit-heading");
-    expect(within(section!).getByText(/2026-09-05/)).toBeVisible();
+    expect(within(section!).getByText(/2026-09-05 00:00 UTC/)).toBeVisible();
     expect(within(section!).queryByText(/2026-09-05T/)).not.toBeInTheDocument();
   });
 
@@ -556,7 +556,7 @@ describe("member dashboard", () => {
 
     const repos = "registered-repositories-heading";
     expect(cellValue(repos, "co-op/harbour", "Reconciliation")).toBe(
-      "reconciliation is failing (last failed 2026-09-04); Overflow keeps retrying",
+      "reconciliation is failing (last failed 2026-09-04 11:00 UTC); Overflow keeps retrying",
     );
     expect(cellValue(repos, "co-op/lighthouse", "Reconciliation")).toBe(
       "retrying reconciliation after a failure",
@@ -603,7 +603,7 @@ describe("member dashboard", () => {
       "unavailable: not found on GitHub or no longer public",
     );
     expect(cellValue(repos, "co-op/harbour", "Reconciliation")).toBe(
-      "reconciliation is failing (last failed 2026-09-04); Overflow keeps retrying",
+      "reconciliation is failing (last failed 2026-09-04 11:00 UTC); Overflow keeps retrying",
     );
   });
 
@@ -682,10 +682,10 @@ describe("member dashboard", () => {
     const repos = "registered-repositories-heading";
     expect(cellValue(repos, "co-op/harbour", "Activity")).toBe("Inactive");
     expect(cellValue(repos, "co-op/harbour", "Reconciliation")).toBe(
-      "reconciliation is failing (last failed 2026-09-04); it will not be retried while the repository is inactive",
+      "reconciliation is failing (last failed 2026-09-04 11:00 UTC); it will not be retried while the repository is inactive",
     );
     expect(cellValue(repos, "co-op/lighthouse", "Reconciliation")).toBe(
-      "reconciliation is failing (last failed 2026-09-04); Overflow keeps retrying",
+      "reconciliation is failing (last failed 2026-09-04 11:00 UTC); Overflow keeps retrying",
     );
     expect(cellValue(repos, "co-op/breakwater", "Reconciliation")).toBe("reconciliation queued");
     expect(cellValue(repos, "co-op/seawall", "Reconciliation")).toBe(
@@ -759,7 +759,7 @@ describe("member dashboard", () => {
     expect(cellValue("registered-repositories-heading", "co-op/harbour", "Catalog")).toBe(
       "Offer band / Delivered band",
     );
-    expect(cellValue("enforcement-notices-heading", "2026-09-02", "Recorded")).toBe("2026-09-02");
+    expect(cellValue("enforcement-notices-heading", "2026-09-02", "Recorded")).toBe("2026-09-02 00:00 UTC");
     expect(cellValue("enforcement-notices-heading", "2026-09-02", "Transition")).toBe(
       "Active → Banned",
     );

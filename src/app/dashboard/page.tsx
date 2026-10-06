@@ -6,6 +6,7 @@ import { enforcementStateLabel, visibilityLabel } from "@/lib/dashboard/labels";
 import type { DashboardProjection, RegisteredRepositoryProjection } from "@/lib/dashboard/queries";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
 import { getSql } from "@/lib/db/client";
+import { formatInstant } from "@/lib/format-instant";
 import { plural } from "@/lib/plural";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 import { normalizeModeratorGitHubUserIds } from "@/lib/moderation/roles";
@@ -194,7 +195,7 @@ export function DashboardContent({
       {dashboard.openAudit ? (
         <section className="surface" aria-labelledby="account-audit-heading">
           <h2 id="account-audit-heading">Account audit</h2>
-          <p>{dashboard.openAudit.openedAt.slice(0, 10)} · an audit is open on this account</p>
+          <p>{formatInstant(dashboard.openAudit.openedAt)} · an audit is open on this account</p>
         </section>
       ) : null}
       <section className="surface" aria-labelledby="enforcement-notices-heading">
@@ -206,7 +207,7 @@ export function DashboardContent({
                 <dl className="issue-facts">
                   <div>
                     <dt>Recorded</dt>
-                    <dd>{notice.createdAt.slice(0, 10)}</dd>
+                    <dd>{formatInstant(notice.createdAt)}</dd>
                   </div>
                   <div>
                     <dt>Transition</dt>
@@ -273,7 +274,7 @@ function reconciliationPhrase(repository: RegisteredRepositoryProjection): strin
   switch (repository.reconciliationState) {
     case "FAILED": {
       // The schema admits a failed job with no recorded time; "last failed null" is worse than silence.
-      const when = failedAt === null ? "" : ` (last failed ${failedAt.toISOString().slice(0, 10)})`;
+      const when = failedAt === null ? "" : ` (last failed ${formatInstant(failedAt)})`;
       return repository.active
         ? `reconciliation is failing${when}; Overflow keeps retrying`
         : `reconciliation is failing${when}; it will not be retried while the repository is inactive`;

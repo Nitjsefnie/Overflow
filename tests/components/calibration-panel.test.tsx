@@ -693,6 +693,17 @@ const calibrated: SelfWorkCalibrationProjection = {
   mergedAt: "2026-09-01T11:00:00.000Z",
 };
 
+/** A merge time the fold never recorded; the row still lists. */
+const unmerged: SelfWorkCalibrationProjection = {
+  id: "calibration-3",
+  repositoryName: "co-op/breakwater",
+  issueNumber: 21,
+  issueTitle: "Chart the shallows",
+  openingComparisonPoints: 4,
+  actualPoints: 2,
+  mergedAt: null,
+};
+
 describe("self-work calibration list", () => {
   it("links each closure to its proof page in the order it was given", () => {
     render(<SelfWorkCalibrationList calibrations={[uncalibrated, calibrated]} />);
@@ -707,9 +718,17 @@ describe("self-work calibration list", () => {
       "href",
       "/calibration/calibration-2",
     );
-    expect(within(rows[0]).getByText("co-op/harbour · 2026-09-05")).toBeVisible();
+    expect(within(rows[0]).getByText("co-op/harbour · 2026-09-05 11:00 UTC")).toBeVisible();
     expect(within(rows[1]).getByText("Issue #" + "12: Dredge the channel")).toBeVisible();
     expect(within(rows[1]).getByText("Opening comparison 3 · actual 5")).toBeVisible();
+  });
+
+  it("names the merge date unavailable when the fold recorded none", () => {
+    render(<SelfWorkCalibrationList calibrations={[unmerged]} />);
+
+    const row = screen.getByRole("listitem");
+    expect(within(row).getByText("co-op/breakwater · merge date unavailable")).toBeVisible();
+    expect(within(row).queryByText(/UTC/)).not.toBeInTheDocument();
   });
 
   it("says an uncalibrated closure was rejected and can be corrected", () => {

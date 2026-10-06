@@ -103,7 +103,7 @@ describe("eligible issue card", () => {
     expect(lines).toHaveLength(4);
     // Lines are identified by fixture data, never by label wording, so a
     // product-neutral rewording cannot fail a structural test.
-    const markers = ["harbour-owner", "mira", "−3", "2026-09-01"];
+    const markers = ["harbour-owner", "mira", "−3", "2026-09-01 10:00 UTC"];
     const order = lines.map((line) =>
       markers.findIndex((marker) => line.textContent?.includes(marker)),
     );
@@ -135,7 +135,7 @@ describe("eligible issue card", () => {
     expect(facts.classList.contains("issue-facts")).toBe(true);
     const lines = Array.from(main.children).filter((child) => child.tagName === "P");
     expect(lines).toHaveLength(1);
-    expect(lines[0].textContent?.includes("2026-09-01")).toBe(true);
+    expect(lines[0].textContent?.includes("2026-09-01 10:00 UTC")).toBe(true);
   });
 
   it("strips the catalog name prefix from an opening label that carries it", () => {

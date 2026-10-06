@@ -40,10 +40,10 @@ describe("GitHub budget panel", () => {
     expect(screen.getByTestId("github-budget-reserve")).toBeVisible();
     const [reset, observed] = screen.getByTestId("github-budget-panel").querySelectorAll("dl > dd > time");
     expect(reset).toBeVisible();
-    expect(reset).toHaveTextContent("2026-09-07T15:00:00.000Z");
+    expect(reset).toHaveTextContent("2026-09-07 15:00 UTC");
     expect(reset).toHaveAttribute("datetime", "2026-09-07T15:00:00.000Z");
     expect(observed).toBeVisible();
-    expect(observed).toHaveTextContent("2026-09-07T14:15:00.000Z");
+    expect(observed).toHaveTextContent("2026-09-07 14:15 UTC");
     expect(observed).toHaveAttribute("datetime", "2026-09-07T14:15:00.000Z");
     expect(screen.queryByRole("status")).toBeNull();
   });
@@ -61,10 +61,10 @@ describe("GitHub budget panel", () => {
     expect(screen.getByTestId("github-budget-reserve")).toBeVisible();
     const [reset, observed] = screen.getByTestId("github-budget-panel").querySelectorAll("dl > dd > time");
     expect(reset).toBeVisible();
-    expect(reset).toHaveTextContent("2026-09-07T15:00:00.000Z");
+    expect(reset).toHaveTextContent("2026-09-07 15:00 UTC");
     expect(reset).toHaveAttribute("datetime", "2026-09-07T15:00:00.000Z");
     expect(observed).toBeVisible();
-    expect(observed).toHaveTextContent("2026-09-07T14:15:00.000Z");
+    expect(observed).toHaveTextContent("2026-09-07 14:15 UTC");
     expect(observed).toHaveAttribute("datetime", "2026-09-07T14:15:00.000Z");
     const indicator = screen.getByRole("status");
     expect(indicator).toBeVisible();
