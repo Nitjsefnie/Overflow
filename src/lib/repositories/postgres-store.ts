@@ -392,12 +392,9 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
       // the resubmission reactivates that same row, moving the stored catalog
       // and appending the submitted one as the next version (the versions
       // table's key is (github_repository_id, version_number), so a second
-      // version 1 would fail every re-registration). The revival clears the
-      // sanction-deactivation flag along with active and unregistered_at: it
-      // is a reactivation, and no closure could clear a stale flag later —
-      // both filter active = false. On a where-clause skip
-      // `inserted` is empty, so a still-registered resubmission seeds no
-      // version either.
+      // version 1 would fail every re-registration). The revival is a reactivation:
+      // it clears the sanction-deactivation flag too. On a where-clause skip
+      // `inserted` is empty, so a still-registered resubmission seeds no version either.
       const [row] = await this.sql<RepositoryRow[]>`
         with eligible_sponsor as (
           select id

@@ -75,9 +75,12 @@ describe(`upgrading across ${backfillMigration}`, () => {
       webhook_credential_id: null,
       encrypted_webhook_secret: null,
       webhook_configured_at: null,
+      // Migration 060 adds the nullable sanction-deactivation flag with no
+      // backfill, so every row leaves the upgrade with the column at null.
+      sanction_deactivated_at: null,
     });
     for (const untouched of [moderated, active, legacyUnregistered]) {
-      expect(after.get(untouched)).toEqual(before.get(untouched));
+      expect(after.get(untouched)).toEqual({ ...before.get(untouched), sanction_deactivated_at: null });
     }
     expect(before.get(moderated)!.webhook_credential_id).not.toBeNull();
     expect(before.get(active)!.webhook_credential_id).not.toBeNull();
