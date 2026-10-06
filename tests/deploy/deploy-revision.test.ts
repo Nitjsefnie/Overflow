@@ -177,6 +177,10 @@ describe("scripts/deploy-revision.sh", () => {
     const result = await runDeploy(fixture);
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    // The standard deploy parses the map with the tree's own parser; the
+    // parser-skew notice belongs to the fallback alone and must stay absent
+    // when no fallback ran.
+    expect(result.stderr).not.toContain("parsed with the target SHA's own scripts/required-checks-parse.jq");
     const entries = await readLog(fixture.shimLog);
     const servingCache = `${realpathSync(fixture.prevDir)}/cache`;
     const nodeEntry = entries.find(
