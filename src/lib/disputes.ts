@@ -88,10 +88,14 @@ export const DISPUTE_CONTESTABLE_CASE = "a settlement";
  *
  * The wording is the text a reader is held to, so it moves the way a legal
  * document moves: through src/lib/legal-revisions.ts, never as a quiet copy
- * edit. It is rendered by the /contests filing page — which no revision record
- * stamps — and by the /rules page's Disputes section and the terms page's
- * sanctions section, which the records do stamp, so an edit to these rules
- * bumps the revision records of both pages in the same commit.
+ * edit. The /rules page's Disputes section renders this list, and the /contests
+ * filing page renders it beside its form; neither carries a revision stamp for
+ * the list itself, so an edit to these rules bumps RULES_REVISION in the same
+ * commit. The terms page carries no copy — its sanctions section points at
+ * this one, the way its settlement section points at the Disputes section — so
+ * a rewording here moves no terms text, and TERMS_REVISION moves only when the
+ * pointer's own wording changes. The settlement list above renders on both
+ * pages, which is why its comment reads differently.
  *
  * Each rule is behavioural, with its basis in the code:
  *

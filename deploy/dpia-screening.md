@@ -163,8 +163,9 @@ conclusion can be re-derived and challenged:
 - The enforcement ladder passes through a human moderator: transitions are
   applied by moderators, a recalibration or a ban can be reversed by a
   moderator inside the product, priced settlements can be contested through
-  correction requests decided by a moderator, and balances can be adjusted by
-  hand. The one fully automated lever is the credit-limit withdrawal — an
+  correction requests decided by a moderator, a sanction can be contested
+  through a contest request decided by a moderator, and balances can be
+  adjusted by hand. The one fully automated lever is the credit-limit withdrawal — an
   account's issues leave the board on balance alone once its balance reaches
   minus the limit — and its review route is the correction-request and
   manual-adjustment surface above.
