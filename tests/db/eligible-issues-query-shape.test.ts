@@ -4,6 +4,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
+import { createIssuesGetHandler } from "@/app/api/issues/route";
 import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 import type { DashboardSql } from "@/lib/dashboard/queries";
 import type { EligibleIssueFilters, EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
@@ -168,6 +169,37 @@ describe("eligible issues query shape against PostgreSQL", () => {
       nodes.some((node) => /aggregate/i.test(node["Node Type"]) && subtreeScansRelation(node, "issues")),
       planJson(plan),
     ).toBe(true);
+  });
+
+  it("answers a page past the board's end with an empty page, not a rejected query", async () => {
+    // Every huge-page shape the alert names: the offsets they once produced
+    // (2e19, Infinity, a rounded 1.8e18) are values the server cannot receive
+    // exactly, and the query failed, which the API reported as 502
+    // UPSTREAM_FAILURE. The bound page reads as an empty page instead.
+    for (const page of [1e17, 1e308, Number.MAX_SAFE_INTEGER]) {
+      await expect(listEligibleIssues(seeded.viewerId, { page }), String(page)).resolves.toEqual([]);
+    }
+    // The largest page whose offset is still a safe integer was and stays a
+    // valid, empty page of this small fixture board.
+    await expect(listEligibleIssues(seeded.viewerId, { page: 45_035_996_273_705 })).resolves.toEqual([]);
+    // Control: the first page still carries the fixture's five open rows.
+    await expect(listEligibleIssues(seeded.viewerId, { page: 1 })).resolves.toHaveLength(5);
+  });
+
+  it("answers the issues API's huge-page request with 200 and an empty board, never the route's 502", async () => {
+    // The real route handler over the real query against real Postgres: the
+    // API contract a client sees for a past-end page.
+    const handler = createIssuesGetHandler({
+      getSession: async () => ({ user: { id: seeded.viewerId, role: "MEMBER" as const } }),
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER" as const,
+      listEligibleIssues,
+    });
+    for (const requested of ["100000000000000000", "1e308", "9007199254740991"]) {
+      const response = await handler(new Request(`https://overflow.example/api/issues?page=${requested}`));
+      expect(response.status, requested).toBe(200);
+      await expect(response.json(), requested).resolves.toEqual([]);
+    }
   });
 });
 

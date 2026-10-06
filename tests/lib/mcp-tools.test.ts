@@ -119,6 +119,18 @@ describe("defineMcpTools", () => {
       expect(new URL(request.url).searchParams.get("page")).toBe("3");
     });
 
+    it("issues_board forwards a huge page value verbatim for the wrapped route to bound", async () => {
+      // The MCP layer adds no page arithmetic of its own: a past-end page rides
+      // the query as its decimal form and the wrapped route's clamp answers it
+      // as an empty page (alert 1066).
+      const deps = dependencies();
+      const tools = defineMcpTools(deps, new Headers());
+      await toolNamed(tools, "issues_board").call({ page: 1e17 });
+
+      const [request] = calledOnce(deps.issuesBoard) as [Request];
+      expect(new URL(request.url).searchParams.get("page")).toBe("100000000000000000");
+    });
+
     it("settlements_list sends a plain GET to /api/settlements", async () => {
       const deps = dependencies();
       const tools = defineMcpTools(deps, new Headers());
