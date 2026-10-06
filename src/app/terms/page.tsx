@@ -77,6 +77,11 @@ export function TermsNotice() {
             <li key={rule}>{rule}</li>
           ))}
         </ul>
+        <p>
+          A sanction can be contested: the <Link href="/rules">Disputes section of the rules page</Link>{" "}
+          is the source of truth for how, and the sanctioned account asks on the{" "}
+          <Link href="/contests">contest page</Link>.
+        </p>
       </section>
 
       <section className="surface" aria-labelledby="terms-disputes-heading">

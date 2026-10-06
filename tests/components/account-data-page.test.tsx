@@ -332,11 +332,74 @@ describe("account-data notice page", () => {
     // the enforcement state, and the moderators who apply sanctions); they are
     // left outside the comparison deliberately — wording is never asserted — and
     // the tail comparison is what pins the shared facts' presence and order.
+    // The contest-request item that closes the list is pinned by shape, not by
+    // words: the whole list is the four hand-written head facts, the shared
+    // rules in order, and one closing item resolved in the contest-item test
+    // below. Comparing the full list keeps the shared tail exactly the shared
+    // rules even with the closing item after it.
     const scoring = sectionLabelledBy("account-data-scoring-heading");
     const lists = [...scoring.querySelectorAll("ul")];
     expect(lists, "the scoring section renders one list").toHaveLength(1);
     const items = [...lists[0]!.querySelectorAll("li")].map((item) => item.textContent);
-    expect(items.slice(-SANCTION_EFFECT_RULES.length)).toEqual([...SANCTION_EFFECT_RULES]);
+    expect(items).toEqual([
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      ...SANCTION_EFFECT_RULES,
+      expect.any(String),
+    ]);
+  });
+
+  it("discloses the sanction-contest request data facts in the scoring section", async () => {
+    await renderAccountDataPage();
+
+    // The notice passage for the contest-request data has no shared constant to
+    // resolve (the /rules and /terms publications carry the shared ones), so
+    // this follows the file's precedent for notice passages — the failure-alert
+    // and body-text-retention pins: a marker class carries the item's identity,
+    // and the three facts a reader depends on are pinned as fact patterns, not
+    // as full sentences. The class is legitimate for the same reason
+    // p.account-age-floor is: the assertions below independently require the
+    // item to exist and to carry the facts, so a bare class with nothing in it
+    // satisfies nothing, and the class alone is what keeps the item findable
+    // when a rewording moves its words.
+    //
+    // The marker class carries identity, not something a reader sees; nothing
+    // renders it differently. Do not "simplify" it away: without it the item is
+    // indistinguishable from the shared-rules items the test above pins, and a
+    // deleted passage would fail nowhere.
+    const scoring = sectionLabelledBy("account-data-scoring-heading");
+    const item = scoring.querySelector("li.sanction-contest-data");
+    expect(item, "the scoring section carries the contest-request data item").not.toBeNull();
+    // It is its own list item closing the section's list — after the shared
+    // sanction-effect rules, so the tail pin above keeps reading exactly them,
+    // and never wedged inside another item.
+    const listItems = [...scoring.querySelectorAll("li")];
+    expect(listItems[listItems.length - 1]).toBe(item);
+
+    const text = item!.textContent ?? "";
+    // STORED: the request and its reason, the contested sanction, the decision fields.
+    expect(text, "the request and its reason are named as stored").toMatch(
+      /the request and its reason are stored/i,
+    );
+    expect(text, "the contested sanction is named as stored").toMatch(/the sanction they contest/i);
+    expect(text, "the decision fields are named").toMatch(/the decision fields/i);
+    expect(text, "the sole-moderator record is among the stored fields").toMatch(
+      /only live moderator/i,
+    );
+    // EXPORTED: own requests both as requester and as deciding moderator.
+    expect(text, "the account export is named as carrying own contest requests").toMatch(
+      /account export[\s\S]*own contest requests/i,
+    );
+    expect(text, "both roles are named: filer and deciding moderator").toMatch(
+      /those you filed and those you decided as a moderator/i,
+    );
+    // KEPT AFTER DELETION: pseudonymised like all moderation events, reasons persist.
+    expect(text, "deletion is named as keeping them pseudonymised").toMatch(
+      /Deleting your account keeps them pseudonymised/i,
+    );
+    expect(text, "the reasons are named as persisting").toMatch(/reasons stay/i);
   });
 
   it("discloses the failure-alert mail route in the recipients list", async () => {
