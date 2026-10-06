@@ -438,8 +438,8 @@ const PAGE_CONTRACTS = [
       [1280, 700],
       // issue 1067 @320: RED ran with scrollWidth 330px vs 320 (the hero h1's
       // clamp floor pushed .landing-hero's grid-item min-content past the
-      // viewport). Measured bottom 715.6px (this box); 820 pins ~104px.
-      [320, 820],
+      // viewport). Post-fix bottom 547.6px (this box); 650 pins ~102px.
+      [320, 650],
     ],
     primaryAction: ".landing-hero .action-button",
     styleProof: {
@@ -469,8 +469,8 @@ const PAGE_CONTRACTS = [
       [1440, 730],
       // Measured bottom 622.6px (this box); 730 pins ~107px.
       [1280, 730],
-      // Measured bottom 871.2px (this box); 975 pins ~104px.
-      [320, 975],
+      // Post-fix bottom 895.2px (this box; RED-era 871.2px); 1000 pins ~105px.
+      [320, 1000],
     ],
     primaryAction: ".surface a",
     styleProof: {
@@ -563,8 +563,8 @@ const PAGE_CONTRACTS = [
       // fields stack at the 780px breakpoint); 725 left ~34px, so 795 pins
       // ~104px.
       [780, 795],
-      // Measured bottom 719.6px on both environments; 755 left ~35px, so
-      // 820 pins ~100px.
+      // Measured bottom 755.6px on this tree (the 719.6px recorded earlier
+      // predates it); 820 leaves ~64px, above the raise threshold.
       [520, 820],
       // issue 1067 @320 with the board fixture's card seeded: RED ran with
       // scrollWidth 3330px vs 320 (the 256-'a' title link did not wrap).
