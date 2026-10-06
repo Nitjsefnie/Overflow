@@ -250,9 +250,10 @@ export function benchSessionCookieName(): string {
 /**
  * Mints the session cookie the app decrypts with its own AUTH_SECRET. The
  * payload mirrors what the GitHub sign-in writes: the account id under both
- * `sub` and `userId`, the login as the name, the MEMBER role hint. The page
- * gate re-reads the role from the database, so the cookie only has to carry a
- * live account.
+ * `sub` and `userId`, the login as the name, the MEMBER role hint, and the
+ * sign-in instant and account epoch the session guard checks. The page gate
+ * re-reads the role from the database, so the cookie only has to carry a live
+ * account.
  */
 export async function mintBenchSessionCookie(secret: string, userId: string): Promise<string> {
   const value = await encode({
@@ -262,7 +263,14 @@ export async function mintBenchSessionCookie(secret: string, userId: string): Pr
       name: benchMemberLogin(),
       role: "MEMBER",
       canAdministerWebhooks: false,
-      authenticatedAt: Math.floor(ISSUE_CREATED_BASE_MS / 1000),
+      // The absolute lifetime (issue 1043) bounds every session to 30 days
+      // from this instant, so the cookie records the mint time — the fixed
+      // 2025-09-01 base the rest of the seed world is laid out on would be
+      // born expired. A session the benchmark mints without a `sessionEpoch`
+      // claim dies at its first refresh against a migrated database; when a
+      // benchmark needs a live session, stamp the row's epoch the way
+      // sign-in does.
+      authenticatedAt: Math.floor(Date.now() / 1000),
     },
     secret,
     salt: benchSessionCookieName(),

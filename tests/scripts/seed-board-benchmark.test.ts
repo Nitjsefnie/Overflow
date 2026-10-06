@@ -103,12 +103,19 @@ describe("seed argument parsing", () => {
 
 describe("session cookie minting", () => {
   it("mints the cookie value the app's AUTH_SECRET decrypts, naming the bench member", async () => {
+    // The absolute lifetime (issue 1043) bounds a session to 30 days from its
+    // sign-in instant, so the mint records the wall clock it ran at — a fixed
+    // date would be born expired.
+    const beforeSeconds = Math.floor(Date.now() / 1000);
     const cookie = await mintBenchSessionCookie("bench-secret", "00000000-0000-0000-0000-1000000000c9");
+    const afterSeconds = Math.floor(Date.now() / 1000);
     const decoded = await decodeBenchCookie(cookie, "bench-secret");
     expect(decoded?.userId).toBe("00000000-0000-0000-0000-1000000000c9");
     expect(decoded?.sub).toBe("00000000-0000-0000-0000-1000000000c9");
     expect(decoded?.name).toBe(benchMemberLogin());
     expect(decoded?.role).toBe("MEMBER");
+    expect(decoded?.authenticatedAt).toBeGreaterThanOrEqual(beforeSeconds);
+    expect(decoded?.authenticatedAt).toBeLessThanOrEqual(afterSeconds);
   });
 
   it("names the cookie the production session strategy reads", () => {
