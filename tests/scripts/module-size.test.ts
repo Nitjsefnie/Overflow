@@ -331,6 +331,9 @@ describe("module size families and exclusions", () => {
     ".github/scripts/label.ts",
     "db/seed.sql",
     "tools/build.py",
+    // The jq exclusion names only the tree root's own filters: a NESTED .jq
+    // path is nobody's admission.
+    "scripts/lib/required-checks-parse.jq",
   ])("classifies %s as neither measured nor excluded", (path) => {
     expect(classify(path)).toBeUndefined();
   });
