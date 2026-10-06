@@ -63,11 +63,13 @@ export async function upsertGitHubAccount(
       -- floors against sign-in demotion while the account is live: writing
       -- excluded.role unconditionally meant a moderator granted inside the
       -- product was demoted at their next sign-in, which is what made the role
-      -- ungrantable (see resolveSignInRole). A deleted row's stored role is not
-      -- a floor — deletion resets it (src/lib/accounts/deletion.ts) and
-      -- re-sign-in after deletion restores as MEMBER unless the resolved
-      -- sign-in role (the MODERATOR_GITHUB_USER_IDS floor, carried in
-      -- excluded.role) is MODERATOR.
+      -- ungrantable (the sign-in flow resolves the incoming role from
+      -- MODERATOR_GITHUB_USER_IDS alone, in src/auth.ts's upsertGitHubIdentity).
+      -- A deleted row's stored role is not a floor — deletion resets it
+      -- (src/lib/accounts/deletion.ts) and re-sign-in after deletion restores
+      -- as MEMBER unless the resolved sign-in role (the
+      -- MODERATOR_GITHUB_USER_IDS floor, carried in excluded.role) is
+      -- MODERATOR.
       role = case
         when excluded.role = 'MODERATOR' then 'MODERATOR'
         when users.role = 'MODERATOR' and users.deleted_at is null then 'MODERATOR'

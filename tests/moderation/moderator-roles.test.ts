@@ -108,6 +108,16 @@ describe("the configured moderator list is a floor, not an override", () => {
     expect(resolveSignInRole(null, false)).toBe("MEMBER");
     expect(resolveSignInRole(null, true)).toBe("MODERATOR");
   });
+
+  it("does not floor a deleted row's stored moderator: it resolves to member", () => {
+    expect(resolveSignInRole("MODERATOR", false, true)).toBe("MEMBER");
+  });
+
+  it("still promotes a configured account whose row is deleted", () => {
+    expect(resolveSignInRole("MODERATOR", true, true)).toBe("MODERATOR");
+    expect(resolveSignInRole("MEMBER", true, true)).toBe("MODERATOR");
+    expect(resolveSignInRole(null, true, true)).toBe("MODERATOR");
+  });
 });
 
 type HarnessOptions = {

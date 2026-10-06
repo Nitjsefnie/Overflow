@@ -10,16 +10,27 @@ import type { UserRole } from "@/lib/db/types";
  *
  * A configured account id is always promoted, so an operator editing the environment
  * can always recover access, including to an instance whose last moderator was
- * revoked. A stored moderator is never demoted by absence from that list.
- * Revoking someone who is still named in the environment therefore lasts only
- * until their next sign-in; the list is the bootstrap, and removing them from
- * it is part of revoking them for good.
+ * revoked. A stored moderator on a LIVE row is never demoted by absence from
+ * that list. Revoking someone who is still named in the environment therefore
+ * lasts only until their next sign-in; the list is the bootstrap, and removing
+ * them from it is part of revoking them for good.
+ *
+ * A deleted row's stored role is NOT a floor: deletion resets it (issue 1080;
+ * see the sign-in upsert's case in src/lib/auth/account-store.ts), so a
+ * deleted stored moderator resolves to MEMBER unless the configured floor
+ * grants.
  */
 export function resolveSignInRole(
   storedRole: UserRole | null,
   isConfiguredModerator: boolean,
+  isDeleted = false,
 ): UserRole {
-  if (isConfiguredModerator || storedRole === "MODERATOR") {
+  if (isConfiguredModerator) {
+    return "MODERATOR";
+  }
+  // The stored role floors against sign-in demotion for LIVE rows only,
+  // mirroring the sign-in upsert's case in src/lib/auth/account-store.ts.
+  if (!isDeleted && storedRole === "MODERATOR") {
     return "MODERATOR";
   }
   return "MEMBER";
