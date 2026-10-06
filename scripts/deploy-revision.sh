@@ -59,6 +59,12 @@ is_operational_ignored() {
   [[ "$1" =~ $operational_ignored_re ]]
 }
 
+# The map-refusal message's shared prefix, up to the clause each refusal
+# appends: every site below prints this with the SHA interpolated at its %s,
+# then its own clause. Hoisted so the four sites cannot drift apart in
+# wording; the clauses stay at their sites, where each refusal is decided.
+map_refusal_prefix='Could not read a valid .github/required-checks.json at %s (a JSON object mapping each required check to a .github/workflows/*.yml path or a non-empty list of them)'
+
 # The CI gate: refuse to ship a SHA that main's required checks have not
 # blessed. Runs against the fetched SHA before the fast-forward, so every
 # refusal below leaves HEAD, the index and the working tree untouched; only
@@ -72,8 +78,7 @@ is_operational_ignored() {
 # with the target SHA's own copy of the same file, which travels with every
 # commit exactly as the map does, so a manifest-shape change cannot deadlock
 # a tree whose parser predates it (issue 1104); neither copy reading the map
-# refuses fail-closed. Per
-# context, a
+# refuses fail-closed. Per context, a
 # check-run posted by the ledger App (OVERFLOW_DEPLOY_LEDGER_APP_ID, default
 # 5118623) attributes the context, and the NEWEST App check-run for it
 # (highest id) decides. When no App check-run exists, the pinned workflow's
@@ -142,7 +147,7 @@ required_checks_gate() {
   map_status=0
   map=$(git show "$full_sha:.github/required-checks.json") || map_status=$?
   if [ "$map_status" -ne 0 ]; then
-    printf 'Could not read a valid .github/required-checks.json at %s (a JSON object mapping each required check to a .github/workflows/*.yml path or a non-empty list of them); refusing to deploy.\n' "$full_sha" >&2
+    printf "${map_refusal_prefix}; refusing to deploy.\n" "$full_sha" >&2
     exit 1
   fi
   # The parse itself (jq present but the shape rejected, the file unreadable)
@@ -157,7 +162,7 @@ required_checks_gate() {
   tree_parse_status=0
   pins=$(jq -rs -f "$tree/scripts/required-checks-parse.jq" <<<"$map") || tree_parse_status=$?
   if [ "$tree_parse_status" -eq 127 ]; then
-    printf 'Could not read a valid .github/required-checks.json at %s (a JSON object mapping each required check to a .github/workflows/*.yml path or a non-empty list of them); jq is not installed; refusing to deploy.\n' "$full_sha" >&2
+    printf "${map_refusal_prefix}; jq is not installed; refusing to deploy.\n" "$full_sha" >&2
     exit 1
   fi
   if [ "$tree_parse_status" -ne 0 ]; then
@@ -166,14 +171,14 @@ required_checks_gate() {
     git show "$full_sha:scripts/required-checks-parse.jq" > "$fallback_parser" || fallback_read_status=$?
     if [ "$fallback_read_status" -ne 0 ]; then
       rm -f "$fallback_parser"
-      printf 'Could not read a valid .github/required-checks.json at %s (a JSON object mapping each required check to a .github/workflows/*.yml path or a non-empty list of them); the tree'"'"'s scripts/required-checks-parse.jq exited %s parsing it and the target SHA carries no copy of that file to fall back to (git show exited %s); refusing to deploy.\n' "$full_sha" "$tree_parse_status" "$fallback_read_status" >&2
+      printf "${map_refusal_prefix}; the tree's scripts/required-checks-parse.jq exited %s parsing it and the target SHA carries no copy of that file to fall back to (git show exited %s); refusing to deploy.\n" "$full_sha" "$tree_parse_status" "$fallback_read_status" >&2
       exit 1
     fi
     fallback_parse_status=0
     pins=$(jq -rs -f "$fallback_parser" <<<"$map") || fallback_parse_status=$?
     rm -f "$fallback_parser"
     if [ "$fallback_parse_status" -ne 0 ]; then
-      printf 'Could not read a valid .github/required-checks.json at %s (a JSON object mapping each required check to a .github/workflows/*.yml path or a non-empty list of them); the tree'"'"'s scripts/required-checks-parse.jq exited %s parsing it and the target SHA'"'"'s own copy exited %s too; refusing to deploy.\n' "$full_sha" "$tree_parse_status" "$fallback_parse_status" >&2
+      printf "${map_refusal_prefix}; the tree's scripts/required-checks-parse.jq exited %s parsing it and the target SHA's own copy exited %s too; refusing to deploy.\n" "$full_sha" "$tree_parse_status" "$fallback_parse_status" >&2
       exit 1
     fi
     printf 'the map at %s parsed with the target SHA'"'"'s own scripts/required-checks-parse.jq; the tree'"'"'s copy predates it\n' "$full_sha" >&2
