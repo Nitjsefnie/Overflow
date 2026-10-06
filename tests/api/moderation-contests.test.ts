@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import {
   expectNoDependencyCall,
   guardedRequests,
@@ -20,6 +21,7 @@ import {
 } from "@/app/api/moderation/contests/route";
 import {
   SanctionContestError,
+  type SanctionContestDecideEffect,
   type SanctionContestErrorCode,
   type SanctionContestRequest,
 } from "@/lib/moderation/sanction-contest-service";
@@ -43,6 +45,10 @@ const decided: SanctionContestRequest = {
   decidedAt: "2026-10-02T10:00:00.000Z",
 };
 
+function outcome(effect: SanctionContestDecideEffect, request: SanctionContestRequest = decided) {
+  return { request, effect };
+}
+
 const openContest = {
   requestId,
   accountId,
@@ -56,13 +62,25 @@ const { json: jsonRequest, foreignJson: foreignJsonRequest } = guardedRequests("
 
 useTrustedOrigin();
 
+let consoleInfo: MockInstance<typeof console.info>;
+
+afterEach(() => {
+  consoleInfo?.mockRestore();
+});
+
+function privilegedActions(): string[] {
+  return consoleInfo.mock.calls
+    .filter((call) => call[0] === "Privileged action")
+    .map((call) => (call[1] as { action: string }).action);
+}
+
 function dependencies(overrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
   return {
     getSession: vi.fn().mockResolvedValue({ user: { id: moderatorId } }),
     findAccountByTokenHash: vi.fn().mockResolvedValue({ id: moderatorId, tokenId: "token-1" }),
     getCurrentRole: vi.fn().mockResolvedValue("MODERATOR"),
     createService: vi.fn().mockResolvedValue({
-      decideContest: vi.fn().mockResolvedValue(decided),
+      decideContest: vi.fn().mockResolvedValue(outcome("lifted")),
       listOpenContests: vi.fn().mockResolvedValue([openContest]),
     }),
     ...overrides,
@@ -139,18 +157,65 @@ describe("POST /api/moderation/contests", () => {
   });
 
   it("records the decision for the signed-in moderator and returns the decided request", async () => {
-    const decideContest = vi.fn().mockResolvedValue(decided);
+    consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
+    const decideContest = vi.fn().mockResolvedValue(outcome("lifted"));
     const deps = dependencies({
       createService: vi.fn().mockResolvedValue({ decideContest }),
     });
     const response = await createSanctionContestDecisionPostHandler(deps)(jsonRequest(payload()));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ request: decided });
+    await expect(response.json()).resolves.toEqual({
+      request: decided,
+      sanctionLifted: true,
+      sanctionAlreadyGone: false,
+    });
+    expect(privilegedActions()).toEqual(["sanction.contest.decide"]);
     expect(decideContest).toHaveBeenCalledExactlyOnceWith(
       { id: moderatorId },
       { requestId, decision: "GRANTED", reason: payload().reason },
     );
+  });
+
+  it("journals the already-gone line and surfaces it when a grant records without lifting", async () => {
+    consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
+    const deps = dependencies({
+      createService: vi.fn().mockResolvedValue({
+        decideContest: vi.fn().mockResolvedValue(outcome("already_gone")),
+      }),
+    });
+    const response = await createSanctionContestDecisionPostHandler(deps)(jsonRequest(payload()));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      request: decided,
+      sanctionLifted: false,
+      sanctionAlreadyGone: true,
+    });
+    expect(privilegedActions()).toEqual(["sanction.contest.decide.already_gone"]);
+  });
+
+  it("journals the plain decide line for a denial and surfaces no sanction effect", async () => {
+    consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
+    const denied = { ...decided, decision: "DENIED" as const };
+    const deps = dependencies({
+      createService: vi.fn().mockResolvedValue({
+        decideContest: vi.fn().mockResolvedValue(outcome("recorded", denied)),
+      }),
+    });
+    const response = await createSanctionContestDecisionPostHandler(deps)(jsonRequest({
+      requestId,
+      decision: "DENIED",
+      reason: "The confirmed patterns persist.",
+    }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      request: denied,
+      sanctionLifted: false,
+      sanctionAlreadyGone: false,
+    });
+    expect(privilegedActions()).toEqual(["sanction.contest.decide"]);
   });
 
   it.each([

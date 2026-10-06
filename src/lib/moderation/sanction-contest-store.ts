@@ -1,5 +1,6 @@
 import { getSql } from "@/lib/db/client";
 import type { EnforcementState, SqlClient } from "@/lib/db/types";
+import { liftSanctionInTransaction } from "@/lib/moderation/sanction-lift";
 import type {
   FileableSanction,
   OpenContestRequestProjection,
@@ -40,8 +41,12 @@ type RequestRow = {
  * the imposer is the actor on the request's sanction event, and where another
  * live moderator exists that imposer is refused (forbidden_imposer); alone,
  * they decide and the row records decided_by_sole_moderator. A decision
- * records outcome and reason and writes its own moderation event — it does
- * not move enforcement_state; the reversals stay the paths that do.
+ * records outcome and reason and writes its own moderation event. A GRANTED
+ * decision also lifts the contested sanction in the same transaction — the
+ * shared reversal core (src/lib/moderation/sanction-lift.ts) under the
+ * user-row lock, an ACTIVE state and a reversal event citing the request's
+ * id — unless the account's state moved on while the request sat open, in
+ * which case the grant is recorded and the store answers already_gone.
  */
 export class PostgresSanctionContestStore implements SanctionContestStore {
   public constructor(private readonly sql: SqlClient = getSql()) {}
@@ -204,6 +209,12 @@ export class PostgresSanctionContestStore implements SanctionContestStore {
         // The foreign key guarantees existence; the guard narrows the type.
         return { kind: "not_found" };
       }
+      if (!isSanctionState(sanctionEvent.new_state)) {
+        // The filing validated the event as the account's live sanction and
+        // the migration 007 trigger holds its state immutable, so this reads
+        // only a corrupt row; the guard narrows the lift's prior state.
+        return { kind: "invalid_state" };
+      }
 
       // The roster's live-only semantics, read fresh in the same transaction:
       // a role change or deletion since the request was filed is honoured.
@@ -236,13 +247,11 @@ export class PostgresSanctionContestStore implements SanctionContestStore {
         throw new Error("Sanction contest decision update returned no row.");
       }
 
-      // The decision is moderation history, not an enforcement change:
-      // granting a contest is recorded, not executed — what a grant does to
-      // the sanction's enforcement state stays unspecified by the ruling, and
-      // the ban reversals remain the paths that move it. The sanction's state
-      // on both sides keeps the event a same-state no-op for every
-      // eligibility reader, and audit_id stays null: no calibration audit
-      // stands behind a contest decision.
+      // The decision is moderation history: the sanction's state on both
+      // sides keeps the decision event a same-state record for every
+      // eligibility reader, and audit_id stays null — no calibration audit
+      // stands behind a contest decision. What the grant DOES to the sanction
+      // is the branch below, in the same transaction.
       await transaction`
         insert into moderation_events (
           target_user_id,
@@ -263,6 +272,44 @@ export class PostgresSanctionContestStore implements SanctionContestStore {
           ${row.id}
         )
       `;
+
+      if (input.decision === "DENIED") {
+        return { kind: "ok", value: toRequest(row) };
+      }
+
+      // The grant's lift runs here, in the decision's own transaction, under
+      // the user-row lock: whatever a concurrent reversal or another grant
+      // commits before this transaction takes the lock is what this decision
+      // sees, so a sanction reversed while the request sat open is read
+      // already-gone instead of lifted twice, and a sanction lifted here
+      // refuses a later reverseBan on its state gate.
+      const [account] = await transaction<{ id: string; enforcement_state: EnforcementState }[]>`
+        select id, enforcement_state
+        from users
+        where id = ${row.account_id}
+        for update
+      `;
+      if (account === undefined) {
+        // The foreign key guarantees existence; the guard narrows the type.
+        return { kind: "not_found" };
+      }
+      if (account.enforcement_state !== sanctionEvent.new_state) {
+        // The contested sanction is no longer the account's live state — a
+        // reversal (or any other move) committed while the request sat open.
+        // The grant itself is recorded above; only the lift is skipped, and
+        // the distinct result kind tells the route to journal it that way.
+        return { kind: "already_gone", value: toRequest(row) };
+      }
+      await liftSanctionInTransaction(transaction, {
+        targetAccountId: account.id,
+        priorState: sanctionEvent.new_state,
+        reason: input.decidedReason,
+        actorId: input.moderatorAccountId,
+        auditId: null,
+        cohort: null,
+        credential: null,
+        contestRequestId: row.id,
+      });
 
       return { kind: "ok", value: toRequest(row) };
     });
@@ -341,7 +388,7 @@ export class PostgresSanctionContestStore implements SanctionContestStore {
   }
 }
 
-function isSanctionState(state: EnforcementState): boolean {
+function isSanctionState(state: EnforcementState): state is "RECALIBRATING" | "BANNED" {
   return state === "RECALIBRATING" || state === "BANNED";
 }
 

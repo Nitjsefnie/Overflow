@@ -16,6 +16,7 @@ import {
   type ModeratorSummary,
 } from "@/lib/moderation/service";
 import { normalizeModeratorGitHubUserIds } from "@/lib/moderation/roles";
+import { liftSanctionInTransaction } from "@/lib/moderation/sanction-lift";
 import { deriveSubstantiatedState } from "@/lib/moderation/transitions";
 import { credentialKind, credentialTokenId } from "@/lib/moderation/writer-credential";
 import type { RouteCredentialReference } from "@/lib/security/route-credential";
@@ -383,35 +384,21 @@ export class PostgresModerationStore implements ModerationStore {
         return { kind: "not_found" };
       }
 
-      await transaction`
-        update users
-        set enforcement_state = ${"ACTIVE"}, updated_at = now()
-        where id = ${target.id}
-      `;
-      // The scope is deliberately narrower than closeRecalibration's: only the
-      // rows the sanction flagged and flipped come back, so a row inactive for
-      // any other reason — and a row the sponsor left after the sanction —
-      // stays exactly as it was.
-      const reactivatedRepositories = await transaction<{ id: string }[]>`
-        update registered_repositories
-        set active = true, sanction_deactivated_at = null, updated_at = now()
-        where sponsor_id = ${target.id}
-          and sanction_deactivated_at is not null
-          and active = false
-          and unregistered_at is null
-        returning id
-      `;
-      const cohort = toCohortSnapshot(audit);
-      await insertModerationEvent(transaction, {
-        targetUserId: target.id,
+      // The lift itself is the shared reversal core (sanction-lift.ts): the
+      // state flip, the flag-scoped reactivation — only the rows the sanction
+      // flagged come back, so a row inactive for any other reason, and a row
+      // the sponsor left after the sanction, stay exactly as they were — and
+      // the BANNED → ACTIVE event. The grant path of a sanction contest
+      // (issue 1134) runs the same core inside its own decision transaction.
+      const reactivatedRepositories = await liftSanctionInTransaction(transaction, {
+        targetAccountId: target.id,
+        priorState: "BANNED",
+        reason: input.reason,
         actorId: input.actorId,
         auditId: audit.id,
-        priorState: "BANNED",
-        newState: "ACTIVE",
-        reason: input.reason,
-        cohort,
-        recalibrationPlan: null,
+        cohort: toCohortSnapshot(audit),
         credential: input.credential,
+        contestRequestId: null,
       });
       return {
         kind: "ok",
@@ -420,7 +407,7 @@ export class PostgresModerationStore implements ModerationStore {
           priorState: "BANNED",
           targetState: "ACTIVE",
           confirmedPatternCount: toSafeInteger(target.confirmed_miscalibration_count),
-          reactivatedRepositories: reactivatedRepositories.map((row) => row.id),
+          reactivatedRepositories,
         },
       };
     }) as Promise<ModerationStoreResult<BanReversal>>;

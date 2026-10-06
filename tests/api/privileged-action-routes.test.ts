@@ -228,7 +228,15 @@ const routeCases: RouteCase[] = [
     path: "/api/moderation/contests",
     body: { requestId: contestRequestId, decision: "GRANTED", reason: "The audit overcounted the review rounds." },
     serviceMethod: "decideContest",
-    result: { id: contestRequestId, accountId: targetAccountId, state: "DECIDED", decision: "GRANTED" },
+    result: {
+      request: {
+        id: contestRequestId,
+        accountId: targetAccountId,
+        state: "DECIDED",
+        decision: "GRANTED",
+      },
+      effect: "lifted",
+    },
     failure: new SanctionContestError("CONFLICT", "Already decided."),
     subject: { requestId: contestRequestId, accountId: targetAccountId },
     handler: createSanctionContestDecisionPostHandler,

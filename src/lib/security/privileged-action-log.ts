@@ -26,7 +26,8 @@ export type PrivilegedAction =
   | "repository.rederivation-request"
   | "settlement-override.grant"
   | "settlement-override.decline"
-  | "sanction.contest.decide";
+  | "sanction.contest.decide"
+  | "sanction.contest.decide.already_gone";
 
 export type PrivilegedActionEntry = {
   action: PrivilegedAction;

@@ -62,7 +62,7 @@ describe("sanction contest decision control", () => {
 
   it("sends the grant with the request id and the reason, then refreshes", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ request: { id: requestId, state: "DECIDED" } }), { status: 200 }),
+      new Response(JSON.stringify({ request: { id: requestId, state: "DECIDED" }, sanctionLifted: true, sanctionAlreadyGone: false }), { status: 200 }),
     );
     vi.stubGlobal("fetch", fetchMock);
     renderControl();
@@ -91,7 +91,10 @@ describe("sanction contest decision control", () => {
 
   it("sends DENIED on the denial button", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ request: { id: requestId, state: "DECIDED" } }), { status: 200 }),
+      new Response(
+        JSON.stringify({ request: { id: requestId, state: "DECIDED" }, sanctionLifted: false, sanctionAlreadyGone: false }),
+        { status: 200 },
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
     renderControl();
@@ -106,6 +109,36 @@ describe("sanction contest decision control", () => {
     });
     const call = fetchMock.mock.calls[0]?.[1] as { body: string } | undefined;
     expect(JSON.parse(call!.body)).toMatchObject({ requestId, decision: "DENIED" });
+  });
+
+  it("surfaces an already-gone grant distinctly from a lifting one", async () => {
+    async function grantFeedback(body: Record<string, unknown>): Promise<string | null | undefined> {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ request: { id: requestId, state: "DECIDED" }, ...body }), { status: 200 }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const rendered = renderControl();
+      fireEvent.change(screen.getByLabelText("Reason for the contest decision"), {
+        target: { value: "The audit overcounted the review rounds." },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Grant the contest" }));
+      await waitFor(() => {
+        expect(screen.getByRole("status")).toBeInTheDocument();
+      });
+      const feedback = rendered.container.querySelector(".feedback.success");
+      rendered.unmount();
+      return feedback?.textContent;
+    }
+
+    const lifted = await grantFeedback({ sanctionLifted: true, sanctionAlreadyGone: false });
+    const alreadyGone = await grantFeedback({ sanctionLifted: false, sanctionAlreadyGone: true });
+
+    // Structural, not prose: the two grant outcomes render DISTINCT success
+    // feedback, and the moderator can tell which one they are looking at
+    // without this test asserting either sentence's wording.
+    expect(alreadyGone).not.toEqual(lifted);
+    expect(lifted).not.toBeNull();
+    expect(alreadyGone).not.toBeNull();
   });
 
   it("surfaces the route's error message, including the imposer refusal", async () => {

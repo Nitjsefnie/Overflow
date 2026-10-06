@@ -13,10 +13,12 @@ import type { EnforcementState } from "@/lib/db/types";
  * The deciding half lives beside it here: the store enforces the
  * deciding-moderator rule server-side (the imposer decides only where no
  * other live moderator exists, and the row records a sole-moderator
- * decision), and a decision writes its own moderation event. A decision does
- * NOT move enforcement_state: granting a contest is recorded, not executed —
- * what a grant does to the sanction is unspecified by the ruling, and the
- * ban reversals remain the paths that change it.
+ * decision), and a decision writes its own moderation event. A GRANTED
+ * decision lifts the contested sanction in the same transaction, through the
+ * shared reversal core the 1072 ban reversal runs (src/lib/moderation/
+ * sanction-lift.ts); the outcome's effect tells the caller which of the three
+ * shapes landed — the sanction lifted, the grant recorded over a sanction
+ * already gone, or a denial recorded. A DENIED decision moves nothing.
  *
  * The one-open-per-sanction rule is the database's, not this service's: the
  * partial unique index sanction_contest_requests_one_open_per_sanction
@@ -62,11 +64,24 @@ export type FileableSanction = {
 
 export type SanctionContestStoreResult<T> =
   | { kind: "ok"; value: T }
+  | { kind: "already_gone"; value: T }
   | { kind: "not_found" }
   | { kind: "invalid_state" }
   | { kind: "already_decided" }
   | { kind: "forbidden_imposer" }
   | { kind: "invalid_input" };
+
+/**
+ * What a recorded decision did to the contested sanction: the grant lifted
+ * it, the grant was recorded over a sanction that had already gone, or a
+ * denial was recorded and nothing moved.
+ */
+export type SanctionContestDecideEffect = "lifted" | "already_gone" | "recorded";
+
+export type SanctionContestDecideOutcome = {
+  request: SanctionContestRequest;
+  effect: SanctionContestDecideEffect;
+};
 
 export type SanctionContestStore = {
   fileSanctionContest(input: {
@@ -138,26 +153,38 @@ export class SanctionContestService {
   /**
    * The deciding half: a moderator records GRANTED or DENIED with a nonblank
    * reason. The deciding-moderator rule is the store's, enforced against the
-   * database — the service carries the refusal out as FORBIDDEN.
+   * database — the service carries the refusal out as FORBIDDEN. The outcome's
+   * effect separates the three decision shapes a caller can distinguish: the
+   * grant lifted the sanction, the grant landed on a sanction that was
+   * already gone, or a denial was recorded.
    */
   public async decideContest(
     moderator: { id: string },
     input: { requestId: string; decision: SanctionContestDecision; reason: string },
-  ): Promise<SanctionContestRequest> {
+  ): Promise<SanctionContestDecideOutcome> {
     const requestId = normalizeIdentifier(input.requestId, "Contest request identifier");
     const decision = input.decision;
     if (decision !== "GRANTED" && decision !== "DENIED") {
       throw new SanctionContestError("INVALID_INPUT", "Decision must be GRANTED or DENIED.");
     }
     const reason = normalizeReason(input.reason);
-    return unwrap(
-      await this.store.decideSanctionContest({
-        moderatorAccountId: moderator.id,
-        requestId,
-        decision,
-        decidedReason: reason,
-      }),
-    );
+    const result = await this.store.decideSanctionContest({
+      moderatorAccountId: moderator.id,
+      requestId,
+      decision,
+      decidedReason: reason,
+    });
+    switch (result.kind) {
+      case "ok":
+        // ok carries the lift only for a grant — a denial records without an
+        // effect on the sanction, and the service maps that onto `recorded`
+        // from the decision it asked the store to write.
+        return { request: result.value, effect: decision === "GRANTED" ? "lifted" : "recorded" };
+      case "already_gone":
+        return { request: result.value, effect: "already_gone" };
+      default:
+        return throwForStoreRefusal(result);
+    }
   }
 
   /** The account's own requests, open and decided, newest first. */
@@ -205,9 +232,22 @@ function normalizeReason(value: unknown): string {
  * is barred by the disputes rule, not by the request's state.
  */
 function unwrap<T>(result: SanctionContestStoreResult<T>): T {
+  if (result.kind === "ok") {
+    return result.value;
+  }
+  throwForStoreRefusal(result);
+}
+
+/**
+ * The refusal half of unwrap, shared with decideContest — whose ok and
+ * already_gone kinds are successes the method maps onto its outcome before
+ * anything is thrown. The parameter reads unknown because already_gone
+ * carries the decided request like ok does; a caller reaching here with one
+ * of those two kinds has already mishandled the result, and the error says
+ * so.
+ */
+function throwForStoreRefusal(result: SanctionContestStoreResult<unknown>): never {
   switch (result.kind) {
-    case "ok":
-      return result.value;
     case "not_found":
       throw new SanctionContestError(
         "NOT_FOUND",
@@ -224,5 +264,8 @@ function unwrap<T>(result: SanctionContestStoreResult<T>): T {
       );
     case "invalid_input":
       throw new SanctionContestError("INVALID_INPUT", "A nonblank decision reason is required.");
+    case "ok":
+    case "already_gone":
+      throw new Error(`Not a store refusal: ${result.kind}.`);
   }
 }

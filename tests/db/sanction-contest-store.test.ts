@@ -5,6 +5,7 @@ import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 import { listEnforcementHistory } from "@/lib/dashboard/queries";
+import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import type { SanctionContestDecision } from "@/lib/moderation/sanction-contest-service";
 import { SanctionContestService } from "@/lib/moderation/sanction-contest-service";
 import { PostgresSanctionContestStore } from "@/lib/moderation/sanction-contest-store";
@@ -12,6 +13,7 @@ import { PostgresSanctionContestStore } from "@/lib/moderation/sanction-contest-
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 61_000;
+let probeExternalId = 700_000;
 
 beforeAll(async () => {
   const started = await startPostgresContainer({
@@ -635,7 +637,7 @@ describe("sanction contest decision path", () => {
     expect(row).toMatchObject({ state: "OPEN", decision: null });
   }, 60_000);
 
-  it("writes the decision event with the deciding moderator as actor and unchanged eligibility, and reads back exactly", async () => {
+  it("writes the decision event with the deciding moderator as actor and restores eligibility on a grant, and reads back exactly", async () => {
     await retireLiveModerators();
     const imposerId = await insertModerator();
     const accountId = await insertUser("MEMBER");
@@ -657,6 +659,8 @@ describe("sanction contest decision path", () => {
       from moderation_events
       where contest_request_id = ${requestId}
         and actor_id = ${imposerId}
+        and prior_state::text = ${"RECALIBRATING"}
+        and new_state::text = ${"RECALIBRATING"}
     `;
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -671,12 +675,14 @@ describe("sanction contest decision path", () => {
       credential_token_id: null,
     });
 
-    // The decision event is a same-state no-op for every eligibility reader:
-    // recording a grant does not itself lift the sanction.
+    // The grant lifted the live sanction in the decision's transaction: the
+    // reversal event moved the account RECALIBRATING → ACTIVE, so eligibility
+    // resumes with the already-decided test's shape — at the lift event, not
+    // at the same-state decision event.
     const afterNow = await eligibilityAt(accountId, new Date());
-    expect(afterNow).toBe(false);
+    expect(afterNow).toBe(true);
     const afterFuture = await eligibilityAt(accountId, new Date(Date.now() + 60_000));
-    expect(afterFuture).toBe(false);
+    expect(afterFuture).toBe(true);
 
     const listed = await store().listRequestsForAccount(accountId);
     expect(listed).toHaveLength(1);
@@ -723,6 +729,379 @@ describe("sanction contest decision path", () => {
     expect(open.map((entry) => entry.requestId)).not.toContain(decidedRequestId);
   }, 60_000);
 });
+
+describe("sanction contest grant lifts the sanction (issue 1134)", () => {
+  it("grants a contest on a live BANNED sanction: lifts to ACTIVE, reactivates the flagged scope, and journals both events", async () => {
+    await retireLiveModerators();
+    const imposerId = await insertModerator();
+    const deciderId = await insertModerator();
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "BANNED");
+    const flaggedId = await insertProbeRepository(accountId, "flagged");
+    const activeId = await insertProbeRepository(accountId, "active");
+    const otherReasonId = await insertProbeRepository(accountId, "inactive");
+    const unregisteredId = await insertProbeRepository(accountId, "unregistered");
+    const sanctionEvent = await sanctionEventBy(accountId, imposerId);
+    const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "The ban outran its evidence.");
+
+    const result = await decide(requestId, deciderId, "GRANTED", "The re-review cleared the pattern.");
+    expect(result).toMatchObject({ kind: "ok" });
+
+    // The account is ACTIVE and the reactivation is the reversal's own scope:
+    // the rows the sanction flagged come back, a row inactive for any other
+    // reason and a row the sponsor left stay exactly as they were.
+    expect(await enforcementState(accountId)).toBe("ACTIVE");
+    expect(await probeRepositoryShapes(accountId)).toEqual(expect.arrayContaining([
+      { id: flaggedId, active: true, flag: null, unregistered: false },
+      { id: activeId, active: true, flag: null, unregistered: false },
+      { id: otherReasonId, active: false, flag: null, unregistered: false },
+      { id: unregisteredId, active: false, flag: null, unregistered: true },
+    ]));
+
+    // Two events cite the request: the decision (same-state history) and the
+    // reversal (BANNED → ACTIVE), the latter through the 1072 path's shape —
+    // the deciding moderator as actor, the decided reason, the request's id.
+    const decisionEvents = await contestEvents(requestId, "BANNED", "BANNED", deciderId);
+    expect(decisionEvents).toHaveLength(1);
+    expect(decisionEvents[0]).toMatchObject({
+      target_user_id: accountId,
+      actor_id: deciderId,
+      audit_id: null,
+      reason: "The re-review cleared the pattern.",
+      credential_kind: null,
+      credential_token_id: null,
+      recalibration_plan: null,
+    });
+    const liftEvents = await contestEvents(requestId, "BANNED", "ACTIVE", deciderId);
+    expect(liftEvents).toHaveLength(1);
+    expect(liftEvents[0]).toMatchObject({
+      target_user_id: accountId,
+      actor_id: deciderId,
+      audit_id: null,
+      reason: "The re-review cleared the pattern.",
+      contest_request_id: requestId,
+      credential_kind: null,
+      credential_token_id: null,
+      recalibration_plan: null,
+    });
+
+    // Eligibility resumes with the lift event, not the same-state decision.
+    expect(await eligibilityAt(accountId, new Date())).toBe(true);
+  }, 60_000);
+
+  it("grants a contest on a live RECALIBRATING sanction through closeRecalibration's reactivation scope", async () => {
+    await retireLiveModerators();
+    const imposerId = await insertModerator();
+    const deciderId = await insertModerator();
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "RECALIBRATING");
+    const flaggedId = await insertProbeRepository(accountId, "flagged");
+    const activeId = await insertProbeRepository(accountId, "active");
+    const plainInactiveId = await insertProbeRepository(accountId, "inactive");
+    const unregisteredId = await insertProbeRepository(accountId, "unregistered");
+    const sanctionEvent = await sanctionEventBy(accountId, imposerId);
+    const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "The recalibration was miscounted.");
+
+    const result = await decide(requestId, deciderId, "GRANTED", "The cohort was not representative.");
+    expect(result).toMatchObject({ kind: "ok" });
+
+    // The closure's scope, not the reversal's: every inactive row that has not
+    // been unregistered comes back, flagged or not.
+    expect(await enforcementState(accountId)).toBe("ACTIVE");
+    expect(await probeRepositoryShapes(accountId)).toEqual(expect.arrayContaining([
+      { id: flaggedId, active: true, flag: null, unregistered: false },
+      { id: activeId, active: true, flag: null, unregistered: false },
+      { id: plainInactiveId, active: true, flag: null, unregistered: false },
+      { id: unregisteredId, active: false, flag: null, unregistered: true },
+    ]));
+
+    const liftEvents = await contestEvents(requestId, "RECALIBRATING", "ACTIVE");
+    expect(liftEvents).toHaveLength(1);
+    expect(liftEvents[0]).toMatchObject({
+      target_user_id: accountId,
+      actor_id: deciderId,
+      audit_id: null,
+      reason: "The cohort was not representative.",
+      contest_request_id: requestId,
+    });
+  }, 60_000);
+
+  it("records an already-gone grant: the grant lands, the lift is skipped, no lift event is written", async () => {
+    await retireLiveModerators();
+    const imposerId = await insertModerator();
+    const deciderId = await insertModerator();
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "BANNED");
+    const flaggedId = await insertProbeRepository(accountId, "flagged");
+    const sanctionEvent = await sanctionEventBy(accountId, imposerId);
+    const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "Too late — the reversal got there first.");
+
+    // A reversal commits between the filing and the decision, leaving the
+    // account ACTIVE: the contested sanction is gone when the grant lands.
+    await sql`update users set enforcement_state = ${"ACTIVE"} where id = ${accountId}`;
+
+    const result = await decide(requestId, deciderId, "GRANTED", "Granted after the fact.");
+    // Its own kind, not ok: the decision was recorded but nothing was lifted.
+    expect(result).toEqual({ kind: "already_gone", value: expect.objectContaining({ id: requestId }) });
+
+    // The request row says GRANTED and the decision event cites it, but no
+    // event moved the account and the repositories are untouched.
+    expect(await readRequestRow(requestId)).toMatchObject({ state: "DECIDED", decision: "GRANTED" });
+    const decisionEvents = await contestEvents(requestId, "BANNED", "BANNED", deciderId);
+    expect(decisionEvents).toHaveLength(1);
+    expect(await contestEvents(requestId, "BANNED", "ACTIVE")).toHaveLength(0);
+    expect(await enforcementState(accountId)).toBe("ACTIVE");
+    expect(await probeRepositoryShapes(accountId)).toEqual([
+      { id: flaggedId, active: false, flag: expect.any(Date), unregistered: false },
+    ]);
+  }, 60_000);
+
+  it("denies a contest without touching the sanction", async () => {
+    await retireLiveModerators();
+    const imposerId = await insertModerator();
+    const deciderId = await insertModerator();
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "BANNED");
+    const flaggedId = await insertProbeRepository(accountId, "flagged");
+    const sanctionEvent = await sanctionEventBy(accountId, imposerId);
+    const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "Please lift it anyway.");
+
+    const result = await decide(requestId, deciderId, "DENIED", "The confirmed patterns persist.");
+    expect(result).toMatchObject({ kind: "ok" });
+
+    expect(await enforcementState(accountId)).toBe("BANNED");
+    expect(await probeRepositoryShapes(accountId)).toEqual([
+      { id: flaggedId, active: false, flag: expect.any(Date), unregistered: false },
+    ]);
+    const decisionEvents = await contestEvents(requestId, "BANNED", "BANNED", deciderId);
+    expect(decisionEvents).toHaveLength(1);
+    expect(await contestEvents(requestId, "BANNED", "ACTIVE")).toHaveLength(0);
+  }, 60_000);
+
+  it("takes the already-gone path when a ban reversal commits before the grant", async () => {
+    await retireLiveModerators();
+    const imposerId = await insertModerator();
+    const deciderId = await insertModerator();
+    const moderatorId = await insertModerator();
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "BANNED");
+    await insertProbeRepository(accountId, "flagged");
+    await insertSubstantiatedAudit(accountId);
+    const sanctionEvent = await sanctionEventBy(accountId, imposerId);
+    const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "Filed before the reversal landed.");
+
+    // The 1072 reversal commits first, in its own transaction.
+    const moderationStore = new PostgresModerationStore(sql);
+    await expect(moderationStore.reverseBan({
+      actorId: moderatorId,
+      targetAccountId: accountId,
+      reason: "The reversal won the race.",
+      credential: null,
+    })).resolves.toMatchObject({ kind: "ok", value: { priorState: "BANNED", targetState: "ACTIVE" } });
+
+    // The grant then reads the moved-on state under the row lock and takes
+    // the already-gone path instead of lifting a sanction that is not there.
+    const result = await decide(requestId, deciderId, "GRANTED", "The grant arrived second.");
+    expect(result.kind).toBe("already_gone");
+    expect(await enforcementState(accountId)).toBe("ACTIVE");
+    expect(await contestEvents(requestId, "BANNED", "ACTIVE")).toHaveLength(0);
+    expect(await contestEvents(requestId, "BANNED", "BANNED", deciderId)).toHaveLength(1);
+  }, 60_000);
+
+  it("refuses a subsequent ban reversal once a grant has lifted the sanction", async () => {
+    await retireLiveModerators();
+    const imposerId = await insertModerator();
+    const deciderId = await insertModerator();
+    const moderatorId = await insertModerator();
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "BANNED");
+    await insertProbeRepository(accountId, "flagged");
+    await insertSubstantiatedAudit(accountId);
+    const sanctionEvent = await sanctionEventBy(accountId, imposerId);
+    const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "The grant won the race.");
+
+    const result = await decide(requestId, deciderId, "GRANTED", "The grant lifted it first.");
+    expect(result).toMatchObject({ kind: "ok" });
+    expect(await enforcementState(accountId)).toBe("ACTIVE");
+
+    // The same row lock that ran the lift makes the later reversal read the
+    // ACTIVE state and refuse on its own state gate.
+    const moderationStore = new PostgresModerationStore(sql);
+    await expect(moderationStore.reverseBan({
+      actorId: moderatorId,
+      targetAccountId: accountId,
+      reason: "Nothing left to reverse.",
+      credential: null,
+    })).resolves.toEqual({ kind: "invalid_state" });
+  }, 60_000);
+
+  it("leaves no granted-but-still-sanctioned account: the decision and the lift commit together", async () => {
+    await retireLiveModerators();
+    const imposerId = await insertModerator();
+    const deciderId = await insertModerator();
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "BANNED");
+    await insertProbeRepository(accountId, "flagged");
+    const sanctionEvent = await sanctionEventBy(accountId, imposerId);
+    const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "One transaction or none.");
+
+    // The store's result and the post-state are pinned together: an ok on a
+    // live sanction commits the lift in the same transaction, so there is no
+    // reachable state where the store says ok and the account is still
+    // sanctioned.
+    const result = await decide(requestId, deciderId, "GRANTED", "Granted and lifted at once.");
+    expect(result.kind).toBe("ok");
+    expect(await enforcementState(accountId)).toBe("ACTIVE");
+    expect(await contestEvents(requestId, "BANNED", "ACTIVE")).toHaveLength(1);
+  }, 60_000);
+
+  it("maps the grant's effects onto the service's decision outcome", async () => {
+    await retireLiveModerators();
+    const imposerId = await insertModerator();
+    const deciderId = await insertModerator();
+    const service = new SanctionContestService(store());
+
+    // A grant on a live sanction lifts it.
+    const liveId = await insertUser("MEMBER");
+    await sanctionAccount(liveId, "BANNED");
+    const liveEvent = await sanctionEventBy(liveId, imposerId);
+    const liveRequestId = await fileOpenRequest(liveId, liveEvent.id, "Live when granted.");
+    await expect(
+      service.decideContest({ id: deciderId }, { requestId: liveRequestId, decision: "GRANTED", reason: "Lifted now." }),
+    ).resolves.toMatchObject({ effect: "lifted", request: { id: liveRequestId, decision: "GRANTED" } });
+    expect(await enforcementState(liveId)).toBe("ACTIVE");
+
+    // A grant on an already-lifted sanction reports already-gone.
+    const goneId = await insertUser("MEMBER");
+    await sanctionAccount(goneId, "BANNED");
+    const goneEvent = await sanctionEventBy(goneId, imposerId);
+    const goneRequestId = await fileOpenRequest(goneId, goneEvent.id, "Gone when granted.");
+    await sql`update users set enforcement_state = ${"ACTIVE"} where id = ${goneId}`;
+    await expect(
+      service.decideContest({ id: deciderId }, { requestId: goneRequestId, decision: "GRANTED", reason: "Gone already." }),
+    ).resolves.toMatchObject({ effect: "already_gone", request: { id: goneRequestId, decision: "GRANTED" } });
+
+    // A denial records without an effect on the sanction.
+    const deniedId = await insertUser("MEMBER");
+    await sanctionAccount(deniedId, "BANNED");
+    const deniedEvent = await sanctionEventBy(deniedId, imposerId);
+    const deniedRequestId = await fileOpenRequest(deniedId, deniedEvent.id, "Denied.");
+    await expect(
+      service.decideContest({ id: deciderId }, { requestId: deniedRequestId, decision: "DENIED", reason: "It stands." }),
+    ).resolves.toMatchObject({ effect: "recorded", request: { id: deniedRequestId, decision: "DENIED" } });
+    expect(await enforcementState(deniedId)).toBe("BANNED");
+  }, 60_000);
+});
+
+/** Reads the account's enforcement state, the way the concurrency pins compare post-state. */
+async function enforcementState(accountId: string): Promise<string> {
+  const [row] = await sql<{ enforcement_state: string }[]>`
+    select enforcement_state::text from users where id = ${accountId}
+  `;
+  if (row === undefined) {
+    throw new Error("Expected the account to exist.");
+  }
+  return row.enforcement_state;
+}
+
+/** Reads the contest-cited events between the two named states by the named actor. */
+async function contestEvents(requestId: string, priorState: string, newState: string, actorId?: string) {
+  return sql<
+    {
+      target_user_id: string;
+      actor_id: string;
+      audit_id: string | null;
+      prior_state: string;
+      new_state: string;
+      reason: string;
+      contest_request_id: string | null;
+      credential_kind: string | null;
+      credential_token_id: string | null;
+      recalibration_plan: string | null;
+    }[]
+  >`
+    select target_user_id, actor_id, audit_id, prior_state::text, new_state::text,
+           reason, contest_request_id, credential_kind, credential_token_id, recalibration_plan
+    from moderation_events
+    where contest_request_id = ${requestId}
+      and prior_state::text = ${priorState}
+      and new_state::text = ${newState}
+      and (${actorId === undefined} or actor_id = ${actorId ?? requestId})
+  `;
+}
+
+/**
+ * Inserts a repository probe in one of the four shapes the reactivation scopes
+ * read: active, flagged (sanction-deactivated), inactive for another reason,
+ * and unregistered by the sponsor.
+ */
+async function insertProbeRepository(
+  sponsorId: string,
+  shape: "active" | "flagged" | "inactive" | "unregistered",
+): Promise<string> {
+  const githubRepositoryId = probeExternalId++;
+  const [row] = await sql<{ id: string }[]>`
+    insert into registered_repositories (
+      github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme,
+      active, unregistered_at, sanction_deactivated_at
+    )
+    values (
+      ${githubRepositoryId}, ${`example/probe-${githubRepositoryId}`}, ${sponsorId}, ${"PUBLIC"},
+      ${probeExternalId + 500_000}, ${sql.json(probeDifficultyScheme())},
+      ${shape === "active"},
+      ${shape === "unregistered" ? new Date() : null},
+      ${shape === "flagged" ? new Date() : null}
+    )
+    returning id
+  `;
+  return row!.id;
+}
+
+async function probeRepositoryShapes(accountId: string): Promise<Array<{ id: string; active: boolean; flag: Date | null; unregistered: boolean }>> {
+  const rows = await sql<{ id: string; active: boolean; flag: Date | null; unregistered: boolean }[]>`
+    select id, active, sanction_deactivated_at as flag, (unregistered_at is not null) as unregistered
+    from registered_repositories
+    where sponsor_id = ${accountId}
+    order by id
+  `;
+  return rows;
+}
+
+function probeDifficultyScheme() {
+  return {
+    openingName: "Scope",
+    actualName: "Delivered difficulty",
+    openingLabels: [{ label: "size/M", comparisonPoints: 4, reservePoints: 4 }],
+    actualLabels: Array.from({ length: 10 }, (_, index) => ({
+      label: `delivered/${index + 1}`,
+      points: index + 1,
+    })),
+  };
+}
+
+/**
+ * Seeds the SUBSTANTIATED audit a 1072 reversal anchors on: the concurrency
+ * pins drive the real reverseBan, which refuses a banned account with no
+ * audit to anchor its event.
+ */
+async function insertSubstantiatedAudit(accountId: string): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    insert into calibration_audits (
+      account_id, repository_id, reporter_id, moderator_id, state, rationale,
+      sample_started_at, sample_ended_at, settled_sample_size, prior_enforcement_state,
+      cohort_definition, cohort_statistics
+    )
+    values (
+      ${accountId}, null, ${accountId}, ${accountId}, ${"SUBSTANTIATED"},
+      ${"The audit behind the live ban."},
+      ${new Date("2020-01-01T00:00:00.000Z")}, ${new Date("2030-01-01T00:00:00.000Z")}, 10, ${"ACTIVE"},
+      ${sql.json({ sampleStartedAt: "2020-01-01T00:00:00.000Z", sampleEndedAt: "2030-01-01T00:00:00.000Z", selfWorkPairs: [], outsiderSettlementPairs: [] })},
+      ${sql.json({ selfWork: { count: 0, meanDelta: 0, medianDelta: 0 }, outsider: { count: 0, meanDelta: 0, medianDelta: 0 }, differenceBetweenMeans: 0 })}
+    )
+    returning id
+  `;
+  return row!.id;
+}
 
 async function eligibilityAt(accountId: string, at: Date): Promise<boolean> {
   const [row] = await sql<{ eligible: boolean }[]>`
