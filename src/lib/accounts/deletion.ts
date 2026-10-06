@@ -1,4 +1,4 @@
-import type { SqlClient } from "@/lib/db/types";
+import type { SqlClient, TransactionClient } from "@/lib/db/types";
 
 /**
  * The tombstone login a deleted account carries: display text only, never a
@@ -24,6 +24,58 @@ export type BlockingRegistrations = {
   instanceUrl: string | null;
 }[];
 
+/**
+ * One account's standing among the instance's live moderators: whether the
+ * account is one, and how many OTHER live moderators exist. A live moderator
+ * is `role = 'MODERATOR' and deleted_at is null` — the same reading the
+ * moderation roster's listModerators uses — so a deleted moderator row is
+ * never a survivor, and neither is an account whose row is already deleted.
+ */
+export type LiveModeratorStanding = {
+  isLiveModerator: boolean;
+  otherLiveModerators: number;
+};
+
+/**
+ * The last-live-moderator read shared by the deletion path and the dashboard's
+ * pre-confirm warning: one query, usable inside a transaction (the deletion)
+ * or on its own (the dashboard). The count deliberately excludes the account
+ * itself, so the scrub that follows inside the deletion cannot change the
+ * answer.
+ */
+export async function findLiveModeratorStanding(
+  sql: SqlClient | TransactionClient,
+  accountId: string,
+): Promise<LiveModeratorStanding> {
+  const [row] = await sql<{ is_live_moderator: boolean; other_live_moderators: number }[]>`
+    select
+      (role = 'MODERATOR' and deleted_at is null) as is_live_moderator,
+      (
+        select count(*)::int from users as other
+        where other.role = 'MODERATOR' and other.deleted_at is null
+          and other.id <> ${accountId}
+      ) as other_live_moderators
+    from users
+    where id = ${accountId}
+  `;
+  // An account row that is not there stands nowhere: the deletion path has
+  // already locked its row by this point, so this guards only the dashboard's
+  // read of an account that vanished mid-request.
+  return row === undefined
+    ? { isLiveModerator: false, otherLiveModerators: 0 }
+    : { isLiveModerator: row.is_live_moderator, otherLiveModerators: row.other_live_moderators };
+}
+
+/**
+ * Whether the account is the instance's LAST live moderator: it is a live
+ * moderator and no other live moderator exists. This is a fact about the
+ * warning and the journal, never a blocker — account deletion is the person's
+ * erasure right and proceeds regardless (issue 1122).
+ */
+export function isLastLiveModeratorStanding(standing: LiveModeratorStanding): boolean {
+  return standing.isLiveModerator && standing.otherLiveModerators === 0;
+}
+
 export type AccountDeletionOutcome =
   | { kind: "UNKNOWN_ACCOUNT"; githubUserId: number }
   | { kind: "SPONSOR_BLOCKED"; githubUserId: number; repositories: BlockingRegistrations }
@@ -44,6 +96,12 @@ export type AccountDeletionOutcome =
       deletedAt: string;
       removedApiTokens: number;
       scrubbedForgeIdentities: number;
+      /**
+       * Whether this deletion left the instance without a single live
+       * moderator. The deletion itself always succeeds; the flag only feeds
+       * the route's operator journal line and nothing else.
+       */
+      leftNoLiveModerator: boolean;
     };
 
 /**
@@ -118,6 +176,12 @@ export async function deleteAccount(
       };
     }
 
+    // Read inside the deletion's own transaction, BEFORE the scrub: the read
+    // includes the account's own row, whose role the scrub resets, so after it
+    // the answer would always be false. The other-moderator count excludes the
+    // account itself, so the scrub cannot change the rest of the answer.
+    const standing = await findLiveModeratorStanding(tx, account.id);
+
     const removedApiTokens = await tx<{ id: string }[]>`
       delete from api_tokens where user_id = ${account.id} returning id
     `;
@@ -146,6 +210,8 @@ export async function deleteAccount(
       returning deleted_at
     `;
 
+    // The journal flag rides on the outcome, so the route journals without a
+    // second query.
     return {
       kind: "DELETED",
       githubUserId,
@@ -154,6 +220,7 @@ export async function deleteAccount(
       deletedAt: scrubbed!.deleted_at.toISOString(),
       removedApiTokens: removedApiTokens.length,
       scrubbedForgeIdentities: scrubbedForgeIdentities.length,
+      leftNoLiveModerator: isLastLiveModeratorStanding(standing),
     };
   });
 }

@@ -12,6 +12,15 @@ import { rejectUntrustedRequest } from "@/lib/security/request-origin";
  */
 const ACCOUNT_DELETE_BODY_LIMIT_BYTES = 4 * 1024; // 4 KiB
 
+/**
+ * The one operator journal line a deletion writes when it leaves the instance
+ * without a live moderator. Fixed text on purpose: it names the gap and the
+ * operator's recovery path, and carries no personal data — no login, no
+ * account id, no GitHub user id, nothing about who deleted (issue 1122).
+ */
+const NO_LIVE_MODERATOR_JOURNAL =
+  "Account deletion left no live moderator. Recovery: add a GitHub user id to MODERATOR_GITHUB_USER_IDS; the list promotes its holder at their next sign-in.";
+
 type Session = { user: { id: string; authenticatedAt: number | null } };
 type Identity = NonNullable<Awaited<ReturnType<typeof findLiveAccountIdentity>>>;
 
@@ -92,6 +101,11 @@ export function createAccountDeleteHandler(dependencies: AccountDeleteRouteDepen
         console.error("Account delete outcome failed.", new Error("Unexpected planned account deletion outcome."));
         return upstreamFailure();
       case "DELETED":
+        // The deletion succeeded; the journal line records the coverage gap it
+        // left behind. It never blocks or fails the deletion.
+        if (outcome.leftNoLiveModerator) {
+          console.warn(NO_LIVE_MODERATOR_JOURNAL);
+        }
         try {
           await dependencies.endSession();
           return Response.json({ deleted: true });
