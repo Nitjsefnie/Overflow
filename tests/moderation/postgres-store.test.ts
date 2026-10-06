@@ -619,6 +619,151 @@ describe("PostgreSQL account moderation transitions", () => {
     expect(await sanctionDeactivatedAt(unregisteredAfterStampRepositoryId)).toBe(stampedFlagInstant);
   });
 
+  // Issue 1072: the moderator's ban reversal reactivates exactly the rows the
+  // sanction flagged — a row inactive for any other reason, and a row the
+  // sponsor left after the sanction, stay inactive — clears the flag on what
+  // it reactivates, records the BANNED → ACTIVE event with the moderator's
+  // stated reason, and leaves the confirmed-pattern count alone (a later
+  // substantiated audit re-bans on its own). Participation eligibility resumes
+  // at the reversal event the fold's timeline replays.
+  it("reverses a ban for a flagged repository scope only, records the event, and resumes eligibility at the event", async () => {
+    const moderatorId = await insertUser("MODERATOR");
+    const targetId = await insertUser("MEMBER");
+    const sanctionedRepositoryId = await insertRepository(targetId);
+    const unregisteredAfterStampRepositoryId = await insertRepository(targetId);
+    const otherReasonInactiveRepositoryId = await insertRepository(targetId);
+    // A row inactive for no recorded reason (deactivated before migration 060
+    // existed, or by any other hand) must survive a reversal untouched.
+    await sql`
+      update registered_repositories
+      set active = false
+      where id = ${otherReasonInactiveRepositoryId}
+    `;
+
+    const pairs = await insertCalibrationPairs({ targetId, repositoryId: sanctionedRepositoryId, count: 10 });
+    const store = new PostgresModerationStore(sql);
+    const input = auditInput({
+      actorId: moderatorId,
+      targetAccountId: targetId,
+      repositoryId: sanctionedRepositoryId,
+      sampleStartedAt: "2020-01-01T00:00:00.000Z",
+      sampleEndedAt: "2030-01-01T00:00:00.000Z",
+      ...pairs,
+    });
+
+    const reversalReason = "The flagged pattern was re-reviewed and does not hold.";
+    await expect(store.reverseBan({
+      actorId: moderatorId,
+      targetAccountId: targetId,
+      reason: reversalReason,
+      credential: null,
+    })).resolves.toEqual({ kind: "invalid_state" });
+    await expect(store.reverseBan({
+      actorId: moderatorId,
+      targetAccountId: crypto.randomUUID(),
+      reason: reversalReason,
+      credential: null,
+    })).resolves.toEqual({ kind: "not_found" });
+
+    // The ladder runs through the real transitions: the second substantiation
+    // deactivates and flags the registered rows, the third bans the account.
+    for (const count of [1, 2, 3]) {
+      const audit = await openAudit(store, input);
+      await expect(store.substantiateAccountAudit({
+        actorId: moderatorId,
+        auditId: audit.id,
+        reason: `Independent review confirms pattern ${count}.`,
+        credential: null,
+      })).resolves.toMatchObject({ kind: "ok", value: { confirmedPatternCount: count } });
+      if (count === 2) {
+        expect(await targetState(targetId)).toEqual({ state: "RECALIBRATING", confirmedCount: 2 });
+        // The sponsor leaves one sanctioned row after the sanction stamped it:
+        // the flag keeps the sanction's instant, the departure owns the
+        // inactivity, and the reversal below must not reactivate the row.
+        const unregisterStore = new PostgresRepositoryStore(sql);
+        await expect(unregisterStore.unregisterRepository({
+          ownerName: `example/repository-${await githubRepositoryIdFor(unregisteredAfterStampRepositoryId)}`,
+          sponsorId: targetId,
+          provider: "github",
+        })).resolves.toMatchObject({ kind: "UNREGISTERED" });
+      }
+    }
+    expect(await targetState(targetId)).toEqual({ state: "BANNED", confirmedCount: 3 });
+
+    await expect(store.reverseBan({
+      actorId: moderatorId,
+      targetAccountId: targetId,
+      reason: reversalReason,
+      credential: null,
+    })).resolves.toMatchObject({
+      kind: "ok",
+      value: {
+        targetAccountId: targetId,
+        priorState: "BANNED",
+        targetState: "ACTIVE",
+        confirmedPatternCount: 3,
+        reactivatedRepositories: [sanctionedRepositoryId],
+      },
+    });
+    // The count is untouched: the reversal is not a substantiation, and a
+    // later substantiated audit re-bans on the figure it carried in with.
+    expect(await targetState(targetId)).toEqual({ state: "ACTIVE", confirmedCount: 3 });
+    expect(await sanctionDeactivationFlags(targetId)).toEqual(expectedRepositoryStates([
+      { id: sanctionedRepositoryId, active: true, sanctionDeactivated: false },
+      { id: unregisteredAfterStampRepositoryId, active: false, sanctionDeactivated: true },
+      { id: otherReasonInactiveRepositoryId, active: false, sanctionDeactivated: false },
+    ]));
+
+    const [eligibility] = await sql<{ before_event: boolean; at_event: boolean }[]>`
+      with reversal as (
+        select created_at
+        from moderation_events
+        where target_user_id = ${targetId} and prior_state = ${"BANNED"} and new_state = ${"ACTIVE"}
+        order by created_at desc, id desc
+        limit 1
+      )
+      select
+        participation_eligible_at(${targetId}, reversal.created_at - interval '1 microsecond') as before_event,
+        participation_eligible_at(${targetId}, reversal.created_at) as at_event
+      from reversal
+    `;
+    expect(eligibility).toEqual({ before_event: false, at_event: true });
+
+    await expect(sql`
+      select actor_id, prior_state, new_state, reason, recalibration_plan
+      from moderation_events
+      where target_user_id = ${targetId} and prior_state = ${"BANNED"} and new_state = ${"ACTIVE"}
+    `).resolves.toEqual([
+      {
+        actor_id: moderatorId,
+        prior_state: "BANNED",
+        new_state: "ACTIVE",
+        reason: reversalReason,
+        recalibration_plan: null,
+      },
+    ]);
+
+    // A banned account with no substantiated audit to anchor the event is
+    // refused rather than written without its anchor.
+    const anchorlessId = await insertUser("MEMBER");
+    await sql`update users set enforcement_state = ${"BANNED"} where id = ${anchorlessId}`;
+    await expect(store.reverseBan({
+      actorId: moderatorId,
+      targetAccountId: anchorlessId,
+      reason: reversalReason,
+      credential: null,
+    })).resolves.toEqual({ kind: "not_found" });
+
+    // The reversal is one-shot: the account is active now, so a second
+    // reversal is refused on the state gate.
+    await expect(store.reverseBan({
+      actorId: moderatorId,
+      targetAccountId: targetId,
+      reason: reversalReason,
+      credential: null,
+    })).resolves.toEqual({ kind: "invalid_state" });
+  });
+
   it("uses immutable merge time for identical account-wide and repository-scoped cohorts across rebuild timestamps", async () => {
     const targetId = await insertUser("MEMBER");
     const primaryRepositoryId = await insertRepository(targetId);

@@ -5,6 +5,7 @@ import type { EnforcementState, SqlClient, TransactionClient } from "@/lib/db/ty
 import { isParticipationEligible } from "@/lib/db/types";
 import {
   type AccountAudit,
+  type BanReversal,
   type CalibrationCohortSnapshot,
   type LoadedCalibrationCohort,
   type ModerationStore,
@@ -343,6 +344,86 @@ export class PostgresModerationStore implements ModerationStore {
         },
       };
     }) as Promise<ModerationStoreResult<RecalibrationClosure>>;
+  }
+
+  public async reverseBan(input: {
+    actorId: string;
+    targetAccountId: string;
+    reason: string;
+    credential: RouteCredentialReference | null;
+  }): Promise<ModerationStoreResult<BanReversal>> {
+    return this.sql.begin(async (transaction) => {
+      const [target] = await transaction<UserRow[]>`
+        select id, enforcement_state, confirmed_miscalibration_count
+        from users
+        where id = ${input.targetAccountId}
+        for update
+      `;
+      if (target === undefined) {
+        return { kind: "not_found" };
+      }
+      if (target.enforcement_state !== "BANNED") {
+        return { kind: "invalid_state" };
+      }
+
+      // A BANNED account always has a SUBSTANTIATED audit — the ban requires a
+      // third substantiation — so the event anchors on the latest one, locked
+      // like closeRecalibration locks its closure's audit. Its absence is an
+      // impossible shape the store refuses rather than writes without an
+      // anchor.
+      const [audit] = await transaction<AuditRow[]>`
+        select id, account_id, repository_id, state, prior_enforcement_state, cohort_definition, cohort_statistics
+        from calibration_audits
+        where account_id = ${target.id} and state = ${"SUBSTANTIATED"}
+        order by decided_at desc nulls last, id desc
+        limit 1
+        for update
+      `;
+      if (audit === undefined) {
+        return { kind: "not_found" };
+      }
+
+      await transaction`
+        update users
+        set enforcement_state = ${"ACTIVE"}, updated_at = now()
+        where id = ${target.id}
+      `;
+      // The scope is deliberately narrower than closeRecalibration's: only the
+      // rows the sanction flagged and flipped come back, so a row inactive for
+      // any other reason — and a row the sponsor left after the sanction —
+      // stays exactly as it was.
+      const reactivatedRepositories = await transaction<{ id: string }[]>`
+        update registered_repositories
+        set active = true, sanction_deactivated_at = null, updated_at = now()
+        where sponsor_id = ${target.id}
+          and sanction_deactivated_at is not null
+          and active = false
+          and unregistered_at is null
+        returning id
+      `;
+      const cohort = toCohortSnapshot(audit);
+      await insertModerationEvent(transaction, {
+        targetUserId: target.id,
+        actorId: input.actorId,
+        auditId: audit.id,
+        priorState: "BANNED",
+        newState: "ACTIVE",
+        reason: input.reason,
+        cohort,
+        recalibrationPlan: null,
+        credential: input.credential,
+      });
+      return {
+        kind: "ok",
+        value: {
+          targetAccountId: target.id,
+          priorState: "BANNED",
+          targetState: "ACTIVE",
+          confirmedPatternCount: toSafeInteger(target.confirmed_miscalibration_count),
+          reactivatedRepositories: reactivatedRepositories.map((row) => row.id),
+        },
+      };
+    }) as Promise<ModerationStoreResult<BanReversal>>;
   }
 
   public async listModerators(): Promise<ModeratorSummary[]> {

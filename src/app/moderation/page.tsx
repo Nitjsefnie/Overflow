@@ -4,6 +4,7 @@ import type { GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budg
 import { plural } from "@/lib/plural";
 import type {
   AuditCandidateProjection,
+  BannedAccountProjection,
   EnforcementHistoryProjection,
   ModerationRepositoryProjection,
   OpenAuditProjection,
@@ -23,9 +24,8 @@ export default async function ModerationPage() {
     redirect("/dashboard");
   }
 
-  const { ModerationControls, RecalibrationPlanControl, RecalibrationCreditAdjustmentControl } = await import(
-    "@/components/moderation-controls"
-  );
+  const { ModerationControls, RecalibrationPlanControl, RecalibrationCreditAdjustmentControl, BanReversalControl } =
+    await import("@/components/moderation-controls");
   const { OpenAuditForm } = await import("@/components/open-audit-form");
   const { ModeratorRoster } = await import("@/components/moderator-roster");
   const { GitHubBudgetPanel } = await import("@/components/github-budget-panel");
@@ -38,6 +38,7 @@ export default async function ModerationPage() {
   let auditRepositories: ModerationRepositoryProjection[] | null;
   let history: EnforcementHistoryProjection[] | null = null;
   let recalibratingAccounts: RecalibratingAccountProjection[] | null = null;
+  let bannedAccounts: BannedAccountProjection[] | null = null;
   let moderators: { accountId: string; githubLogin: string; isConfigured: boolean }[] | null = null;
   let githubBudget: { owner: string; assessment: GitHubGraphqlBudgetAssessment }[] | null;
   try {
@@ -55,15 +56,17 @@ export default async function ModerationPage() {
   const unwritableClosures = await loadUnwritableClosures(session.user.id);
   try {
     const {
+      listBannedAccounts,
       listEnforcementHistory,
       listOpenAudits,
       listRecalibratingAccounts,
     } = await import("@/lib/dashboard/queries");
     const { PostgresModerationStore } = await import("@/lib/moderation/postgres-store");
-    [audits, history, recalibratingAccounts, moderators] = await Promise.all([
+    [audits, history, recalibratingAccounts, bannedAccounts, moderators] = await Promise.all([
       listOpenAudits(),
       listEnforcementHistory(),
       listRecalibratingAccounts(),
+      listBannedAccounts(),
       new PostgresModerationStore().listModerators(),
     ]);
   } catch {
@@ -180,6 +183,23 @@ export default async function ModerationPage() {
                 <p><strong>{account.githubLogin}</strong> · {account.confirmedPatternCount} confirmed patterns</p>
                 <RecalibrationPlanControl targetAccountId={account.id} targetLogin={account.githubLogin} />
                 <RecalibrationCreditAdjustmentControl targetAccountId={account.id} targetLogin={account.githubLogin} />
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
+      <section className="surface" aria-labelledby="banned-heading">
+        <h2 id="banned-heading">Banned accounts</h2>
+        {bannedAccounts === null ? (
+          <p>The banned accounts could not be loaded.</p>
+        ) : bannedAccounts.length === 0 ? (
+          <p>No accounts are banned.</p>
+        ) : (
+          <ol>
+            {bannedAccounts.map((account) => (
+              <li key={account.id}>
+                <p><strong>{account.githubLogin}</strong> · {account.confirmedPatternCount} confirmed patterns</p>
+                <BanReversalControl targetAccountId={account.id} targetLogin={account.githubLogin} />
               </li>
             ))}
           </ol>

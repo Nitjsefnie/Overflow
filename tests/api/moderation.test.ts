@@ -35,6 +35,7 @@ import {
 } from "@/app/api/moderation/recalibration/route";
 import { createModerationAdjustmentPostHandler } from "@/app/api/moderation/recalibration/adjustment/route";
 import { createModerationReversalPostHandler } from "@/app/api/moderation/adjustments/reversal/route";
+import { createModerationReversalPatchHandler } from "@/app/api/moderation/reversal/route";
 import { type RecalibrationCreditStore } from "@/lib/moderation/credit-adjustment-store";
 import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 import { hashApiToken } from "@/lib/security/api-token";
@@ -42,6 +43,7 @@ import {
   AccountModerationService,
   ModerationServiceError,
   type AccountAudit,
+  type BanReversal,
   type CalibrationCohortPreview,
   type ModerationStore,
   type ModeratorRoleChange,
@@ -268,6 +270,155 @@ describe("account moderation API", () => {
         reactivatedRepositoryCount: 2,
       },
     });
+  });
+});
+
+describe("ban reversal API", () => {
+  it("records a moderator's ban reversal with the closure payload", async () => {
+    const reverseBan = vi.fn(async () => banReversalFixture());
+    const handler = createModerationReversalPatchHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => serviceHarness({ reverse: reverseBan }),
+    });
+
+    const response = await handler(
+      jsonRequest({ targetAccountId, reason: "The flagged pattern was re-reviewed and does not hold." }, "PATCH"),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ reversal: banReversalFixture() });
+    expect(reverseBan).toHaveBeenCalledWith(
+      { id: moderatorSession.user.id, role: "MODERATOR" },
+      targetAccountId,
+      "The flagged pattern was re-reviewed and does not hold.",
+      { kind: "session" },
+    );
+  });
+
+  it("returns a structured 401 before parsing an unauthenticated reversal request", async () => {
+    const createService = vi.fn(async () => serviceHarness());
+    const handler = createModerationReversalPatchHandler({
+      getSession: async () => null,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService,
+    });
+
+    const response = await handler(jsonRequest({ targetAccountId, reason: "The pattern does not hold." }, "PATCH"));
+
+    expect(response.status).toBe(401);
+    expect(createService).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
+  });
+
+  it("returns a structured 403 for a non-moderator", async () => {
+    const createService = vi.fn(async () => serviceHarness());
+    const handler = createModerationReversalPatchHandler({
+      getSession: async () => memberSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
+      createService,
+    });
+
+    const response = await handler(jsonRequest({ targetAccountId, reason: "The pattern does not hold." }, "PATCH"));
+
+    expect(response.status).toBe(403);
+    expect(createService).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "Moderator authorization is required." },
+    });
+  });
+
+  it("refuses a foreign-origin reversal before any session or database work", async () => {
+    const dependencies = unusedDependencies();
+
+    const response = await createModerationReversalPatchHandler(dependencies)(
+      foreignTextRequest({ targetAccountId, reason: "The pattern does not hold." }, "PATCH"),
+    );
+
+    await expectRejection(response, ...foreignOriginRejection);
+    expectNoDependencyCall(dependencies);
+  });
+
+  it.each([
+    ["no target account", { targetAccountId: undefined }],
+    ["a target account that is not a uuid", { targetAccountId: "target-account" }],
+    ["no reason", { reason: undefined }],
+    ["an unexpected extra field", { correctedCredits: 99 }],
+  ] as const)("refuses a reversal request with %s before calling the service", async (_label, overrides) => {
+    const reverseBan = vi.fn(async () => banReversalFixture());
+    const handler = createModerationReversalPatchHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => serviceHarness({ reverse: reverseBan }),
+    });
+
+    const response = await handler(
+      jsonRequest({ targetAccountId, reason: "The pattern does not hold.", ...overrides }, "PATCH"),
+    );
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid moderation request." },
+    });
+    expect(reverseBan).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["NOT_FOUND", 404],
+    ["CONFLICT", 409],
+  ] as const)("maps a %s reversal outcome to structured HTTP %s", async (code, status) => {
+    const handler = createModerationReversalPatchHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () =>
+        serviceHarness({
+          reverse: async () => {
+            throw new ModerationServiceError(code, "internal detail must not change the route contract");
+          },
+        }),
+    });
+
+    const response = await handler(
+      jsonRequest({ targetAccountId, reason: "The pattern does not hold." }, "PATCH"),
+    );
+
+    expect(response.status).toBe(status);
+    await expect(response.json()).resolves.toEqual({
+      error: { code, message: "Unable to process moderation request." },
+    });
+  });
+
+  it("returns a sanitized 500 without database or upstream details", async () => {
+    const handler = createModerationReversalPatchHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () =>
+        serviceHarness({
+          reverse: async () => {
+            throw new Error("postgresql://moderator:password@db.example/overflow");
+          },
+        }),
+    });
+
+    const response = await handler(
+      jsonRequest({ targetAccountId, reason: "The pattern does not hold." }, "PATCH"),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({
+      error: { code: "INTERNAL_ERROR", message: "Unable to process moderation request." },
+    });
+    expect(JSON.stringify(body)).not.toContain("postgresql");
+    expect(JSON.stringify(body)).not.toContain("password");
   });
 });
 
@@ -1636,6 +1787,7 @@ function unreachableCohortStore() {
     dismissAccountAudit: unreachable("dismissAccountAudit"),
     substantiateAccountAudit: unreachable("substantiateAccountAudit"),
     closeRecalibration: unreachable("closeRecalibration"),
+    reverseBan: unreachable("reverseBan"),
     listModerators: unreachable("listModerators"),
     setModeratorRole: unreachable("setModeratorRole"),
   };
@@ -1647,6 +1799,12 @@ function serviceHarness(overrides: Partial<{
   dismiss: (actor: { id: string; role: "MEMBER" | "MODERATOR" }, id: string, reason: string) => Promise<AccountAudit>;
   substantiate: (actor: { id: string; role: "MEMBER" | "MODERATOR" }, id: string, reason: string) => Promise<AccountAudit>;
   close: (actor: { id: string; role: "MEMBER" | "MODERATOR" }, id: string, plan: string) => Promise<RecalibrationClosure>;
+  reverse: (
+    actor: { id: string; role: "MEMBER" | "MODERATOR" },
+    id: string,
+    reason: string,
+    credential: { kind: "session" } | { kind: "token"; tokenId: string } | null,
+  ) => Promise<BanReversal>;
   preview: (
     actor: { id: string; role: "MEMBER" | "MODERATOR" },
     input: ReturnType<typeof cohortQuery>,
@@ -1666,6 +1824,20 @@ function serviceHarness(overrides: Partial<{
         confirmedPatternCount: 2,
         reactivatedRepositoryCount: 2,
       })),
+    reverseBan:
+      overrides.reverse ??
+      (async () => banReversalFixture()),
+  };
+}
+
+function banReversalFixture(overrides: Partial<BanReversal> = {}): BanReversal {
+  return {
+    targetAccountId,
+    priorState: "BANNED",
+    targetState: "ACTIVE",
+    confirmedPatternCount: 3,
+    reactivatedRepositories: [repositoryScopeId],
+    ...overrides,
   };
 }
 

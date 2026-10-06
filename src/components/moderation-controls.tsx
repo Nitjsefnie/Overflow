@@ -169,6 +169,78 @@ export function RecalibrationPlanControl({
   );
 }
 
+/**
+ * The moderator's ban-reversal control (issue 1072): the reason is the
+ * moderator's stated justification, required nonblank before anything is
+ * sent, and the reversal reactivates exactly the repositories the sanction
+ * deactivated. It states nothing about contesting a ban — the page records
+ * the moderator's action, not an appeal route.
+ */
+export function BanReversalControl({
+  targetAccountId,
+  targetLogin,
+}: {
+  targetAccountId: string;
+  targetLogin: string;
+}) {
+  const router = useRouter();
+  const [reason, setReason] = useState("");
+  const [pending, setPending] = useState(false);
+  const [feedback, setFeedback] = useState<Feedback>(null);
+
+  async function reverse() {
+    const trimmedReason = reason.trim();
+    setFeedback(null);
+    if (trimmedReason.length === 0) {
+      setFeedback({ kind: "error", message: "Enter a nonblank reason before reversing a ban." });
+      return;
+    }
+    setPending(true);
+    try {
+      const response = await fetch("/api/moderation/reversal", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ targetAccountId, reason: trimmedReason }),
+      });
+      const body = (await response.json().catch(() => null)) as ModerationResponse | null;
+      if (!response.ok) {
+        setFeedback({
+          kind: "error",
+          message: body?.error?.message ?? "The ban could not be reversed. Check the account state and try again.",
+        });
+        return;
+      }
+      setFeedback({ kind: "success", message: `${targetLogin} was reactivated with the recorded reversal reason.` });
+      router.refresh();
+    } catch {
+      setFeedback({ kind: "error", message: "The reversal control could not reach Overflow. Try again." });
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <section className="moderation-controls" aria-label={`Ban reversal controls for ${targetLogin}`}>
+      <label className="field">
+        <span>Reversal reason for {targetLogin}</span>
+        <textarea
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          rows={3}
+          maxLength={MAX_REASON_LENGTH}
+        />
+      </label>
+      <button className="action-button" type="button" disabled={pending} onClick={() => void reverse()}>
+        Reverse ban
+      </button>
+      {pending ? <p className="feedback pending" role="status">Recording the reversal…</p> : null}
+      {feedback?.kind === "error" ? <p className="feedback error" role="alert">{feedback.message}</p> : null}
+      {feedback?.kind === "success" ? <p className="feedback success" role="status">{feedback.message}</p> : null}
+    </section>
+  );
+}
+
 /** One sampled pair's compensating line, keyed by settlement. */
 type CreditAdjustmentLine = {
   settlementId: string;

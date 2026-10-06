@@ -260,9 +260,88 @@ describe("account moderation service", () => {
     expect(store.lastCloseInput).toMatchObject({ credential: acting });
 
     await expect(
+      service.reverseBan(moderator(), "target-account", "The pattern does not hold.", acting),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "NOT_FOUND" });
+    expect(store.lastReverseInput).toMatchObject({ credential: acting });
+
+    await expect(
       service.setModeratorRole(moderator(), "target-account", true, acting),
     ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "NOT_FOUND" });
     expect(store.lastModeratorRoleInput).toMatchObject({ credential: acting });
+  });
+
+  it("dispatches a ban reversal to the store with the normalized reason and the actor's credential", async () => {
+    const acting = { kind: "token" as const, tokenId: "issuance-9" };
+    const store = new TestModerationStore({
+      selfWorkPairs: calibrationPairs(10, 10_000),
+      outsiderSettlementPairs: calibrationPairs(10, 20_000),
+      reverseResult: {
+        kind: "ok",
+        value: {
+          targetAccountId: "target-account",
+          priorState: "BANNED",
+          targetState: "ACTIVE",
+          confirmedPatternCount: 3,
+          reactivatedRepositories: ["repository-1", "repository-2"],
+        },
+      },
+    });
+    const service = new AccountModerationService(store);
+
+    const reversed = await service.reverseBan(moderator(), "  target-account  ", "  The pattern does not hold.  ", acting);
+
+    expect(reversed).toEqual({
+      targetAccountId: "target-account",
+      priorState: "BANNED",
+      targetState: "ACTIVE",
+      confirmedPatternCount: 3,
+      reactivatedRepositories: ["repository-1", "repository-2"],
+    });
+    expect(store.lastReverseInput).toEqual({
+      actorId: "moderator",
+      targetAccountId: "target-account",
+      reason: "The pattern does not hold.",
+      credential: acting,
+    });
+  });
+
+  it("requires a moderator before reversing a ban", async () => {
+    const store = new TestModerationStore({
+      selfWorkPairs: calibrationPairs(10, 10_000),
+      outsiderSettlementPairs: calibrationPairs(10, 20_000),
+    });
+    const service = new AccountModerationService(store);
+
+    await expect(
+      service.reverseBan({ id: "member", role: "MEMBER" }, "target-account", "The pattern does not hold.", null),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "FORBIDDEN" });
+    expect(store.lastReverseInput).toBeUndefined();
+  });
+
+  it("rejects a blank reversal reason before the store is reached", async () => {
+    const store = new TestModerationStore({
+      selfWorkPairs: calibrationPairs(10, 10_000),
+      outsiderSettlementPairs: calibrationPairs(10, 20_000),
+    });
+    const service = new AccountModerationService(store);
+
+    await expect(
+      service.reverseBan(moderator(), "target-account", "   ", null),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INVALID_INPUT" });
+    expect(store.lastReverseInput).toBeUndefined();
+  });
+
+  it("surfaces an invalid reversal state without changing a second account state", async () => {
+    const store = new TestModerationStore({
+      selfWorkPairs: calibrationPairs(10, 10_000),
+      outsiderSettlementPairs: calibrationPairs(10, 20_000),
+      reverseResult: { kind: "invalid_state" },
+    });
+    const service = new AccountModerationService(store);
+
+    await expect(
+      service.reverseBan(moderator(), "target-account", "The pattern does not hold.", null),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "CONFLICT" });
   });
 
   it("hands the acting credential to both credit store writes", async () => {
@@ -1082,6 +1161,7 @@ class TestModerationStore implements ModerationStore {
   public lastDismissInput: { actorId: string; auditId: string; reason: string; credential: RouteCredentialReference | null } | undefined;
   public lastSubstantiateInput: { actorId: string; auditId: string; reason: string; credential: RouteCredentialReference | null } | undefined;
   public lastCloseInput: { actorId: string; targetAccountId: string; plan: string; credential: RouteCredentialReference | null } | undefined;
+  public lastReverseInput: { actorId: string; targetAccountId: string; reason: string; credential: RouteCredentialReference | null } | undefined;
   public lastModeratorRoleInput: { actorId: string; targetAccountId: string; moderator: boolean; credential: RouteCredentialReference | null } | undefined;
   public lastCohortInput: LoadedCohortRequest | undefined;
 
@@ -1099,6 +1179,13 @@ class TestModerationStore implements ModerationStore {
         targetState: "ACTIVE";
         confirmedPatternCount: number;
         reactivatedRepositoryCount: number;
+      }>;
+      reverseResult?: ModerationStoreResult<{
+        targetAccountId: string;
+        priorState: "BANNED";
+        targetState: "ACTIVE";
+        confirmedPatternCount: number;
+        reactivatedRepositories: readonly string[];
       }>;
     },
   ) {}
@@ -1157,6 +1244,22 @@ class TestModerationStore implements ModerationStore {
   }>> {
     this.lastCloseInput = input;
     return this.options.closeResult ?? { kind: "not_found" };
+  }
+
+  public async reverseBan(input: {
+    actorId: string;
+    targetAccountId: string;
+    reason: string;
+    credential: RouteCredentialReference | null;
+  }): Promise<ModerationStoreResult<{
+    targetAccountId: string;
+    priorState: "BANNED";
+    targetState: "ACTIVE";
+    confirmedPatternCount: number;
+    reactivatedRepositories: readonly string[];
+  }>> {
+    this.lastReverseInput = input;
+    return this.options.reverseResult ?? { kind: "not_found" };
   }
 
   public async listModerators() {

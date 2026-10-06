@@ -49,6 +49,7 @@ import type {
 } from "../src/lib/moderation/rederivation-service.ts";
 import type {
   AccountAudit,
+  BanReversal,
   CalibrationCohortPreview,
   CalibrationCohortSnapshot,
   ModeratorRoleChange,
@@ -416,6 +417,19 @@ const fixtureRecalibrationClosure: RecalibrationClosure = {
   reactivatedRepositoryCount: 3,
 };
 
+/**
+ * The ban reversal's closure payload (issue 1072): the reactivated repositories
+ * as ids — the reversal's narrower scope is the point, so the caller sees
+ * exactly which repositories came back.
+ */
+const fixtureBanReversal: BanReversal = {
+  targetAccountId: fixtureTargetId,
+  priorState: "BANNED",
+  targetState: "ACTIVE",
+  confirmedPatternCount: 12,
+  reactivatedRepositories: [fixtureRepositoryRowId],
+};
+
 const fixtureCreditAdjustmentLines = [
   { settlementId: fixtureCreditLineSettlementId, creditorId: fixtureMemberId, amount: 17 },
 ];
@@ -607,6 +621,12 @@ export const fixtureCloseRecalibrationInput = {
   plan: "Return the account to active after the review.",
 };
 
+/** The PATCH /api/moderation/reversal body: the ban reverses (issue 1072). */
+export const fixtureBanReversalInput = {
+  targetAccountId: fixtureTargetId,
+  reason: "The flagged pattern was re-reviewed and does not hold.",
+};
+
 /** The POST /api/moderation/recalibration/adjustment body. */
 export const fixtureAdjustmentInput = {
   targetAccountId: fixtureTargetId,
@@ -664,6 +684,7 @@ export function fixtureModerationRouteDependencies(): ModerationRouteDependencie
       dismissAccountAudit: async () => ({ ...fixtureAccountAudit, state: "DISMISSED" }),
       substantiateAccountAudit: async () => ({ ...fixtureAccountAudit, state: "SUBSTANTIATED" }),
       closeRecalibration: async () => fixtureRecalibrationClosure,
+      reverseBan: async () => fixtureBanReversal,
     }),
   };
 }

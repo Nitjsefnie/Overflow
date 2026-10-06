@@ -668,12 +668,14 @@ moderation body, and a query parameter named more than once is refused.
 | `POST /api/moderation` | `{ "targetAccountId": <uuid>, "repositoryId": <uuid, optional>, "sampleStartedAt": <timestamp>, "sampleEndedAt": <timestamp>, "reason": <nonblank, ≤2000 characters> }`. The sample end must be after the sample start. | `201` `{ "audit": <the opened account audit> }`. |
 | `PATCH /api/moderation/<id>` | `{ "action": "dismiss" \| "substantiate", "reason": <nonblank, ≤2000 characters> }`. | `200` `{ "audit": <the decided audit> }`. |
 | `PATCH /api/moderation` | `{ "targetAccountId": <uuid>, "plan": <nonblank, ≤2000 characters> }`. | `200` `{ "recalibration": <the closed recalibration> }`. |
+| `PATCH /api/moderation/reversal` | `{ "targetAccountId": <uuid>, "reason": <nonblank, ≤2000 characters> }`. | `200` `{ "reversal": <the reversed ban> }` — the account returns to ACTIVE and exactly the repositories the sanction flagged are reactivated with their flag cleared; the confirmed-pattern count is untouched, so a later substantiated audit re-bans on its own figures. |
 | `POST /api/moderation/recalibration/adjustment` | `{ "targetAccountId": <uuid>, "reason": <trimmed, may be blank, ≤2000 characters> }`. | `201` `{ "adjustment": <the applied credit adjustment> }` — the compensating adjustment the latest substantiated audit's snapshot supports. |
 | `POST /api/moderation/adjustments/reversal` | `{ "adjustmentId": <uuid>, "reason": <nonblank, ≤2000 characters> }`. | `201` `{ "reversal": <the mirroring adjustment> }` — negative lines and its own moderation event; the original adjustment row is untouched. |
 | `POST /api/moderation/rederivation` | `{ "repositoryId": <uuid> }`. | `200` `{ "request": <the queued re-derivation request> }`. |
 
 Body limits: `32 KiB` on every moderation route except
-`PATCH /api/moderation/<id>`, whose single-reason body is read under `8 KiB`.
+`PATCH /api/moderation/<id>` and `PATCH /api/moderation/reversal`, whose
+single-reason bodies are read under `8 KiB`.
 The moderator role POST uses the `32 KiB` limit and the shared moderator
 credential guard above: a live moderator session or its Overflow API token is
 required. Its two body fields are required and extra fields are rejected.

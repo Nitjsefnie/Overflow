@@ -20,6 +20,7 @@ export type PrivilegedAction =
   | "audit.dismiss"
   | "audit.substantiate"
   | "recalibration.close"
+  | "ban.reverse"
   | "credit-adjustment.create"
   | "credit-adjustment.reverse"
   | "repository.rederivation-request"

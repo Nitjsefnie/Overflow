@@ -63,6 +63,23 @@ export type RecalibrationClosure = {
   reactivatedRepositoryCount: number;
 };
 
+/**
+ * The result of a moderator reversing a ban (issue 1072). The closure payload
+ * mirrors `RecalibrationClosure` with two deliberate differences: the prior
+ * state is BANNED, and the reactivated repositories are returned as the ids
+ * themselves rather than a count — the reversal's scope is narrower (only rows
+ * the sanction flagged), so the caller sees exactly which repositories came
+ * back. `confirmedPatternCount` is reported, never reset: a later substantiated
+ * audit re-bans on its own figures.
+ */
+export type BanReversal = {
+  targetAccountId: string;
+  priorState: "BANNED";
+  targetState: "ACTIVE";
+  confirmedPatternCount: number;
+  reactivatedRepositories: readonly string[];
+};
+
 export type OpenAccountAuditInput = {
   targetAccountId: string;
   repositoryId?: string;
@@ -159,6 +176,12 @@ export type ModerationStore = {
     plan: string;
     credential: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<RecalibrationClosure>>;
+  reverseBan(input: {
+    actorId: string;
+    targetAccountId: string;
+    reason: string;
+    credential: RouteCredentialReference | null;
+  }): Promise<ModerationStoreResult<BanReversal>>;
   listModerators(): Promise<ModeratorSummary[]>;
   setModeratorRole(input: {
     actorId: string;
@@ -341,6 +364,31 @@ export class AccountModerationService {
         actorId: actor.id,
         targetAccountId: normalizeIdentifier(targetAccountId, "Target account identifier"),
         plan: normalizedPlan,
+        credential,
+      }),
+    );
+  }
+
+  /**
+   * Reverses a ban (issue 1072). The reason is the moderator's stated
+   * justification and is normalized like every moderation reason; the store
+   * scopes the reactivation to rows the sanction flagged and anchors the
+   * BANNED → ACTIVE event on the latest SUBSTANTIATED audit. The confirmed
+   * pattern count is deliberately untouched — a later substantiated audit
+   * re-bans on its own figures.
+   */
+  public async reverseBan(
+    actor: ModerationActor,
+    targetAccountId: string,
+    reason: string,
+    credential: RouteCredentialReference | null,
+  ): Promise<BanReversal> {
+    requireModerator(actor);
+    return unwrapStoreResult(
+      await this.store.reverseBan({
+        actorId: actor.id,
+        targetAccountId: normalizeIdentifier(targetAccountId, "Target account identifier"),
+        reason: normalizeReason(reason),
         credential,
       }),
     );
