@@ -21,7 +21,12 @@ import { parse } from "yaml";
  */
 type WorkflowStep = { name?: string; env?: Record<string, string | undefined> };
 type ParsedWorkflow = {
+  on?: {
+    schedule?: string[];
+    workflow_dispatch?: { inputs?: Record<string, Record<string, unknown>> };
+  };
   permissions?: Record<string, string>;
+  concurrency?: { group?: string };
   jobs?: Record<string, { steps?: WorkflowStep[] }>;
 };
 
@@ -90,6 +95,48 @@ describe("the ledger relay workflow's pinned App identity", () => {
         "the head branch the relay's trusted-producer check reads for push, " +
         "workflow_dispatch and schedule runs",
     ).toEqual(["${{ github.event.workflow_run.head_branch }}"]);
+  });
+
+  it("triggers on a schedule carrying exactly the ten-minute cron", () => {
+    expect(
+      workflow.on?.schedule,
+      "the relay must trigger on a schedule — the sweep-only start exists so a " +
+        "pending placeholder the sweep once posted is completed without waiting " +
+        "for a producer run to arrive (issue 1116) — and the cron is pinned exactly",
+    ).toEqual([{ cron: "*/10 * * * *" }]);
+  });
+
+  it("keeps the dispatch's run_id optional with an empty default", () => {
+    const runId = workflow.on?.workflow_dispatch?.inputs?.run_id;
+    // The two load-bearing fields; the description is prose and unpinned.
+    expect(
+      runId,
+      "run_id must stay optional with an empty default: a dispatch WITH a run_id " +
+        "heals exactly as today, and an empty-run_id dispatch is sweep-only — a " +
+        "required input would make the sweep-only dispatch inexpressible",
+    ).toMatchObject({ required: false, default: "" });
+  });
+
+  it("keys the concurrency group with the same predicate the sweep-only env carries", () => {
+    // The predicate is read from the workflow's OWN env value, not restated:
+    // the drift this catches is one copy edited and its literal pin updated to
+    // match, which leaves every restated pin green while the group and the env
+    // diverge.
+    const envExpression = String(envValues("LEDGER_SWEEP_ONLY")[0] ?? "");
+    const predicate = envExpression.replace(/^\$\{\{/, "").replace(/\}\}$/, "").trim();
+    const group = String(workflow.concurrency?.group ?? "").replace(/^\$\{\{/, "").replace(/\}\}$/, "").trim();
+    expect(predicate, "the premise: the step carries a sweep-only predicate").not.toBe("");
+    // Containment alone is too weak to be the witness: the group legitimately
+    // holds each arm of the predicate, so a SHRUNKEN env copy would still be
+    // contained. The relation pinned is the design's exact pairing — the group
+    // is the env predicate, parenthesized, between the two group names.
+    expect(
+      group,
+      "the concurrency group must decide the sweep-only case from the SAME " +
+        "predicate the LEDGER_SWEEP_ONLY env carries: one copy changed without " +
+        "the other puts a sweep-only start in the relay group (it displaces a " +
+        "PENDING workflow_run relay) or a healing dispatch in the sweep group",
+    ).toEqual(`(${predicate}) && 'ledger-relay-sweep' || 'ledger-relay'`);
   });
 
   it("passes the sweep-only predicate as LEDGER_SWEEP_ONLY exactly once, as the pinned expression", () => {

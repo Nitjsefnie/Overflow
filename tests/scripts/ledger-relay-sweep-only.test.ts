@@ -202,11 +202,19 @@ describe("sweep-only relay runs (issue 1116)", () => {
     expect(fetchStub.requests).toHaveLength(0);
   });
 
-  it("refuses a LEDGER_SWEEP_ONLY value that is neither true nor false", async () => {
+  it.each([
+    ["an arbitrary word", "yes"],
+    // The rows below pin the EXACT-STRING discipline: a case-insensitive or
+    // trimming read would admit "True" and " true" as sweep-only, and a
+    // numeric read would admit 1.
+    ["mixed case", "True"],
+    ["leading whitespace", " true"],
+    ["a digit", "1"],
+  ])("refuses a LEDGER_SWEEP_ONLY value that is neither true nor false: %j (%s)", async (_name, value) => {
     const fetchStub = makeFetch([]);
     const error = await caughtError(
       runRelay({
-        env: sweepOnlyEnv({ LEDGER_SWEEP_ONLY: "yes" }),
+        env: sweepOnlyEnv({ LEDGER_SWEEP_ONLY: value }),
         fetchFn: fetchStub.fn,
         delayFn: makeDelay().fn,
         readPinMap: async () => PIN_MAP,
