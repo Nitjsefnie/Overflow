@@ -363,10 +363,14 @@ export class PostgresModerationStore implements ModerationStore {
       // surfaced as a 502), and the survivor count below is evaluated against a
       // settled predecessor rather than an uncommitted one.
       await transaction`select pg_advisory_xact_lock(hashtext('overflow:moderator-role-changes'))`;
-      const [target] = await transaction<{ id: string; github_login: string; role: "MEMBER" | "MODERATOR" }[]>`
-        select id, github_login, role from users where id = ${input.targetAccountId} for update
+      const [target] = await transaction<{ id: string; github_login: string; role: "MEMBER" | "MODERATOR"; deleted_at: Date | null }[]>`
+        select id, github_login, role, deleted_at from users where id = ${input.targetAccountId} for update
       `;
-      if (target === undefined) {
+      // A deleted account answers not_found on both paths: a grant onto its
+      // row would re-create the retired shape (a deleted row carrying
+      // MODERATOR, invisible in the roster), and a revoke would only rewrite
+      // a row no live session or token can act through.
+      if (target === undefined || target.deleted_at !== null) {
         return { kind: "not_found" };
       }
 

@@ -789,6 +789,36 @@ describe("PostgreSQL account moderation transitions", () => {
       select role from users where id = ${liveModeratorId}
     `).resolves.toEqual([{ role: "MODERATOR" }]);
   });
+
+  it("refuses both grant and revoke onto a deleted account", async () => {
+    const actorId = await insertUser("MEMBER");
+    const deletedTargetId = await insertUser("MODERATOR");
+    await sql`update users set deleted_at = now() where id = ${deletedTargetId}`;
+    const store = new PostgresModerationStore(sql);
+
+    // A deleted account is not a grantable target: a grant would re-create the
+    // retired shape — a deleted row carrying MODERATOR, invisible in the
+    // roster. The store answers the same not_found an unknown id gets.
+    await expect(store.setModeratorRole({
+      actorId,
+      targetAccountId: deletedTargetId,
+      moderator: true,
+      credential: null,
+    })).resolves.toEqual({ kind: "not_found" });
+
+    // The revoke path reads the same lookup, so it is refused the same way.
+    await expect(store.setModeratorRole({
+      actorId,
+      targetAccountId: deletedTargetId,
+      moderator: false,
+      credential: null,
+    })).resolves.toEqual({ kind: "not_found" });
+
+    // Both refusals leave the row exactly as planted.
+    await expect(sql<{ role: string; deleted_at: Date | null }[]>`
+      select role, deleted_at from users where id = ${deletedTargetId}
+    `).resolves.toEqual([{ role: "MODERATOR", deleted_at: expect.any(Date) }]);
+  });
 });
 
 async function openAudit(store: PostgresModerationStore, input: OpenAccountAuditStoreInput) {
