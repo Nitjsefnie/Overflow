@@ -18,8 +18,9 @@
 -- The column starts at 0 and never resets: a re-registration (deletion and a
 -- later sign-in) keeps counting, so an old cookie minted before a deletion
 -- cannot ride a restored account. Nothing reads the column except the jwt
--- refresh (src/auth.ts) through src/lib/auth/session-guard.ts; the sign-out
--- handler and the operator one-liner in deploy/incident-response.md are the
--- two bumpers.
+-- refresh (src/auth.ts) through src/lib/auth/session-guard.ts and the seed
+-- tooling (scripts/seed-board-benchmark.ts, which stamps what it read into
+-- the cookie it mints); the sign-out handler and the operator one-liner in
+-- deploy/incident-response.md are the two bumpers.
 
 alter table users add column if not exists session_epoch integer not null default 0;
