@@ -1940,6 +1940,30 @@ describe("runRelay", () => {
       ]);
     });
 
+    it("exits 0 through the dispatch path when the fetched body names no head repository and the head is dead", async () => {
+      // The unknown-head-repository limb: a fetched body without
+      // head_repository gives no name to compare, so the liveness read decides
+      // — the same branch the workflow_run path always takes (its run body is
+      // never fetched).
+      const body = fetchedRunBody({ event: "pull_request", head_branch: "feature/some-branch" });
+      delete body.head_repository;
+      const fetchStub = makeFetch([token(), { status: 200, body }, pullsListing([])]);
+      const result = await runRelay({
+        env: dispatchEnv(),
+        fetchFn: fetchStub.fn,
+        delayFn: makeDelay().fn,
+        readPinMap: async () => PIN_MAP,
+      });
+
+      expect(result.posted).toEqual([]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
+      expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
+      expect(renderRelayResult(result)).toEqual([
+        `[ledger-relay] ${REFUSAL}`,
+        "[ledger-relay] no open pull request is waiting at this head",
+      ]);
+    });
+
     it("keeps the byte-identical throw when the refused head is live at an open pull request", async () => {
       const fetchStub = makeFetch([
         token(),
