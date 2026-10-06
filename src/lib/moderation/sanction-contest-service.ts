@@ -64,6 +64,7 @@ export type SanctionContestStoreResult<T> =
   | { kind: "ok"; value: T }
   | { kind: "not_found" }
   | { kind: "invalid_state" }
+  | { kind: "already_decided" }
   | { kind: "forbidden_imposer" }
   | { kind: "invalid_input" };
 
@@ -196,8 +197,9 @@ function normalizeReason(value: unknown): string {
  * returns — a request against a sanction that is not the account's live one,
  * and a second open request on a sanction that is — because from the filing
  * side they read the same: this sanction cannot be contested right now. The
- * decision path reads the same invalid_state as an already-decided request
- * and carries it out as the same CONFLICT.
+ * decision path's own state refusal is its own cause: an already-decided
+ * request carries the already-decided message, which is what a moderator
+ * double-deciding needs to read.
  *
  * forbidden_imposer is its own answer, not a conflict: the deciding moderator
  * is barred by the disputes rule, not by the request's state.
@@ -213,6 +215,8 @@ function unwrap<T>(result: SanctionContestStoreResult<T>): T {
       );
     case "invalid_state":
       throw new SanctionContestError("CONFLICT", "This sanction cannot be contested right now.");
+    case "already_decided":
+      throw new SanctionContestError("CONFLICT", "This contest request has already been decided.");
     case "forbidden_imposer":
       throw new SanctionContestError(
         "FORBIDDEN",
