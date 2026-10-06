@@ -294,8 +294,9 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     "ledger-relay.yml",
     {
       reason:
-        "The relay posts the check-runs branch protection requires. A cancelled relay posts none, and a missing check-run blocks every open pull request.",
-      group: "ledger-relay",
+        "The relay posts the check-runs branch protection requires. A cancelled relay posts none, and a missing check-run blocks every open pull request. Issue 1116 splits the group by event: a scheduled start (or a workflow_dispatch without a run_id) is sweep-only — it heals nothing and must never displace a PENDING workflow_run relay, the exact cancellation whose orphaned victim the sweep exists to heal (issue 885) — so it groups separately as ledger-relay-sweep, while a dispatch WITH a run_id heals exactly as before in ledger-relay.",
+      group:
+        "${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_id == '')) && 'ledger-relay-sweep' || 'ledger-relay' }}",
       "cancel-in-progress": false,
       queue: undefined,
     },

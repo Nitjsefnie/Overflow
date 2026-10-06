@@ -91,4 +91,16 @@ describe("the ledger relay workflow's pinned App identity", () => {
         "workflow_dispatch and schedule runs",
     ).toEqual(["${{ github.event.workflow_run.head_branch }}"]);
   });
+
+  it("passes the sweep-only predicate as LEDGER_SWEEP_ONLY exactly once, as the pinned expression", () => {
+    expect(
+      envValues("LEDGER_SWEEP_ONLY"),
+      "the relay step must carry LEDGER_SWEEP_ONLY exactly once — the event " +
+        "predicate that makes a scheduled start (or a workflow_dispatch without " +
+        "a run_id) sweep-only, which the script fails closed on: the same " +
+        "predicate keys the concurrency group, so the two cannot drift",
+    ).toEqual([
+      "${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_id == '') }}",
+    ]);
+  });
 });
