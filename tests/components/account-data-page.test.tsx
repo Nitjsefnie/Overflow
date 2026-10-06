@@ -222,14 +222,14 @@ describe("account-data notice page", () => {
     expect(keepsList?.tagName, "the keeps list follows its introduction").toBe("UL");
     const text = keepsList!.textContent ?? "";
 
-    expect(text, "it names the free text of moderation events, including the recalibration plan").toMatch(
-      /moderation events?[\s\S]*recalibration plan/i,
+    expect(text, "it names the free text of moderation events: the event's reason and the recalibration plan").toMatch(
+      /moderation events?[\s\S]*reason[\s\S]*recalibration plan/i,
     );
     expect(text, "it names the rationale and decision recorded on calibration audits").toMatch(
       /calibration audits?[\s\S]*rationale[\s\S]*decision/i,
     );
-    expect(text, "it names a settlement override request's reason and decision reason").toMatch(
-      /settlement override requests?[\s\S]*decision reason/i,
+    expect(text, "it names a settlement override request's reason and then its decision reason").toMatch(
+      /settlement override requests?[\s\S]*reason[\s\S]*decision reason/i,
     );
     expect(text, "it names a credit adjustment's reason").toMatch(
       /credit adjustments?[\s\S]*reason/i,
