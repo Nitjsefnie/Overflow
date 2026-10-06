@@ -672,6 +672,8 @@ moderation body, and a query parameter named more than once is refused.
 | `POST /api/moderation/recalibration/adjustment` | `{ "targetAccountId": <uuid>, "reason": <trimmed, may be blank, ≤2000 characters> }`. | `201` `{ "adjustment": <the applied credit adjustment> }` — the compensating adjustment the latest substantiated audit's snapshot supports. |
 | `POST /api/moderation/adjustments/reversal` | `{ "adjustmentId": <uuid>, "reason": <nonblank, ≤2000 characters> }`. | `201` `{ "reversal": <the mirroring adjustment> }` — negative lines and its own moderation event; the original adjustment row is untouched. |
 | `POST /api/moderation/rederivation` | `{ "repositoryId": <uuid> }`. | `200` `{ "request": <the queued re-derivation request> }`. |
+| `GET /api/moderation/contests` | None. | `200`: the array of OPEN sanction contest requests the moderation page renders — account login, the sanction's state, the filed reason, the filed date, oldest first. |
+| `POST /api/moderation/contests` | `{ "requestId": <uuid>, "decision": "GRANTED" \| "DENIED", "reason": <nonblank, ≤2000 characters> }`. | `200` `{ "request": <the decided contest request> }`. The deciding-moderator rule is enforced server-side: where the deciding moderator imposed the sanction and another live moderator exists, `403` `FORBIDDEN` carries the rule in the message; a sole-moderator decision is recorded on the request's `decidedBySoleModerator`. Recording a decision does not itself change the sanction's enforcement state. |
 
 Body limits: `32 KiB` on every moderation route except
 `PATCH /api/moderation/<id>` and `PATCH /api/moderation/reversal`, whose
@@ -685,8 +687,9 @@ required. Its two body fields are required and extra fields are rejected.
 A body that is missing, unparsable, or schema-invalid answers `422`
 `INVALID_REQUEST`: message `Invalid moderation request.` on the moderation
 routes, `Invalid re-derivation request.` on
-`POST /api/moderation/rederivation`, and `Invalid moderator role request.`
-on `POST /api/moderation/moderators`. A service refusal keeps the same
+`POST /api/moderation/rederivation`, `Invalid moderator role request.`
+on `POST /api/moderation/moderators`, and `Invalid sanction contest decision.`
+on `POST /api/moderation/contests`. A service refusal keeps the same
 envelope with a fixed message, `Unable to process moderation request.`, and
 the code tells the causes apart:
 
@@ -707,7 +710,13 @@ answers a failed read with `502` `UPSTREAM_FAILURE` and message
 service's own message instead of the fixed one — `403`/`404`/`409` keep the
 code and name the cause in the message, any other service code answers
 `422` — and an outage behind it is `502` `UPSTREAM_FAILURE` with `Unable to
-complete the moderator request.`
+complete the moderator request.` The sanction contest routes pass the service's
+message through the same way: `POST /api/moderation/contests` answers
+`403`/`404`/`409`/`422` with the service's code and message — the `403`
+`FORBIDDEN` being the disputes rule's imposer refusal — and an outage behind
+either contests route is `502` `UPSTREAM_FAILURE`, `Unable to complete the
+sanction contest request.` on the POST and `Unable to load the sanction
+contest queue.` on the GET.
 
 `POST /api/moderation/moderators` also has these request-level error rows;
 the shared credential table and the roster service-error rules above apply:

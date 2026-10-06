@@ -25,7 +25,8 @@ export type PrivilegedAction =
   | "credit-adjustment.reverse"
   | "repository.rederivation-request"
   | "settlement-override.grant"
-  | "settlement-override.decline";
+  | "settlement-override.decline"
+  | "sanction.contest.decide";
 
 export type PrivilegedActionEntry = {
   action: PrivilegedAction;

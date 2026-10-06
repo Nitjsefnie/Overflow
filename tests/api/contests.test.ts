@@ -18,7 +18,11 @@ import {
   createSanctionContestListGetHandler,
   createSanctionContestPostHandler,
 } from "@/app/api/contests/route";
-import { SanctionContestError, type SanctionContestRequest } from "@/lib/moderation/sanction-contest-service";
+import {
+  SanctionContestError,
+  type SanctionContestErrorCode,
+  type SanctionContestRequest,
+} from "@/lib/moderation/sanction-contest-service";
 
 const memberId = "00000000-0000-4000-8000-000000000001";
 const eventId = "00000000-0000-4000-8000-000000000003";
@@ -136,21 +140,24 @@ describe("POST /api/contests", () => {
     ["a duplicate open request", "CONFLICT", 409],
     ["a missing sanction", "NOT_FOUND", 404],
     ["a service-normalized refusal", "INVALID_INPUT", 422],
-  ])("maps %s onto %s", async (_label, code, status) => {
-    const deps = postDependencies({
-      createService: vi.fn().mockResolvedValue({
-        fileSanctionContest: vi.fn().mockRejectedValue(
-          new SanctionContestError(code as never, "The message names the rule."),
-        ),
-      }),
-    });
-    const response = await createSanctionContestPostHandler(deps)(jsonRequest(payload()));
+  ] as const satisfies readonly (readonly [string, SanctionContestErrorCode, number])[])(
+    "maps %s onto %s",
+    async (_label, code, status) => {
+      const deps = postDependencies({
+        createService: vi.fn().mockResolvedValue({
+          fileSanctionContest: vi.fn().mockRejectedValue(
+            new SanctionContestError(code, "The message names the rule."),
+          ),
+        }),
+      });
+      const response = await createSanctionContestPostHandler(deps)(jsonRequest(payload()));
 
-    expect(response.status).toBe(status);
-    await expect(response.json()).resolves.toEqual({
-      error: { code, message: "The message names the rule." },
-    });
-  });
+      expect(response.status).toBe(status);
+      await expect(response.json()).resolves.toEqual({
+        error: { code, message: "The message names the rule." },
+      });
+    },
+  );
 
   it("answers 502 when the service itself fails", async () => {
     const deps = postDependencies({

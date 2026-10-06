@@ -28,11 +28,16 @@ export function SanctionContestsContent({
   sanctions,
   requests,
 }: SanctionContestsContentProps) {
-  const openRequest = requests?.find(
-    (request) =>
-      request.state === "OPEN" && sanctions.some((sanction) => sanction.id === request.sanctionEventId),
+  // The one-open rule is per sanction, so the withholding is per sanction too:
+  // a live sanction whose request is still open is taken out of the form's
+  // choices, and an uncontested sanction stays failable beside it.
+  const contestedSanctionIds = new Set(
+    (requests ?? [])
+      .filter((request) => request.state === "OPEN")
+      .map((request) => request.sanctionEventId),
   );
-  const formAvailable = sanctions.length > 0 && openRequest === undefined;
+  const availableSanctions = sanctions.filter((sanction) => !contestedSanctionIds.has(sanction.id));
+  const formAvailable = availableSanctions.length > 0;
 
   return (
     <AppShell memberName={memberName} isModerator={isModerator}>
@@ -63,7 +68,7 @@ export function SanctionContestsContent({
             you are under now, not one a reversal already lifted.
           </p>
         ) : formAvailable ? (
-          <SanctionContestRequestForm sanctions={sanctions} />
+          <SanctionContestRequestForm sanctions={availableSanctions} />
         ) : (
           <p className="mono-meta">
             One open request at a time; this one is still with a moderator. A decided request allows a

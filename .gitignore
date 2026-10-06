@@ -111,6 +111,9 @@ src/app/api/moderation/adjustments/*
 !src/app/api/moderation/adjustments/reversal/
 src/app/api/moderation/adjustments/reversal/*
 !src/app/api/moderation/adjustments/reversal/*.ts
+!src/app/api/moderation/contests/
+src/app/api/moderation/contests/*
+!src/app/api/moderation/contests/*.ts
 !src/app/api/moderation/audits/
 src/app/api/moderation/audits/*
 !src/app/api/moderation/audits/*.ts

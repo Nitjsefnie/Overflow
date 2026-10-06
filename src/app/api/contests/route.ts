@@ -110,6 +110,11 @@ export function sanctionContestErrorResponse(error: unknown): Response {
       return errorResponse(404, error.code, error.message);
     case "CONFLICT":
       return errorResponse(409, error.code, error.message);
+    case "FORBIDDEN":
+      // The deciding-moderator rule: the imposer may not decide while another
+      // moderator can. Same status the moderator gate refuses a non-moderator
+      // with, different message — the rule it names is the disputes rule.
+      return errorResponse(403, error.code, error.message);
     default:
       return errorResponse(422, error.code, error.message);
   }

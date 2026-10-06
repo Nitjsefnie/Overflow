@@ -2,6 +2,7 @@ import { getSql } from "@/lib/db/client";
 import type { EnforcementState, SqlClient } from "@/lib/db/types";
 import type {
   FileableSanction,
+  OpenContestRequestProjection,
   SanctionContestDecision,
   SanctionContestRequest,
   SanctionContestState,
@@ -34,6 +35,13 @@ type RequestRow = {
  * the same invalid_state every other non-live-sanction refusal carries, the
  * way the settlement override store maps its index's violation onto a
  * conflict.
+ *
+ * The decision transaction enforces the deciding-moderator rule server-side:
+ * the imposer is the actor on the request's sanction event, and where another
+ * live moderator exists that imposer is refused (forbidden_imposer); alone,
+ * they decide and the row records decided_by_sole_moderator. A decision
+ * records outcome and reason and writes its own moderation event — it does
+ * not move enforcement_state; the reversals stay the paths that do.
  */
 export class PostgresSanctionContestStore implements SanctionContestStore {
   public constructor(private readonly sql: SqlClient = getSql()) {}
@@ -139,6 +147,124 @@ export class PostgresSanctionContestStore implements SanctionContestStore {
     });
   }
 
+  /**
+   * Decides an OPEN contest request: records the outcome, the deciding
+   * moderator, the reason and the sole-moderator record, and writes the
+   * decision's moderation event.
+   *
+   * The deciding-moderator rule is enforced here, against the database, not
+   * in the route: the request row is locked FOR UPDATE, the imposer is read
+   * off the sanction event's actor_id, and the live moderator set is read
+   * with the roster's own semantics (role MODERATOR, deleted_at is null).
+   * Where the imposer decides with any other live moderator present the
+   * result is forbidden_imposer and nothing is written; alone, they may
+   * decide, and the row says the decision came from the only live moderator.
+   */
+  public async decideSanctionContest(input: {
+    requestId: string;
+    moderatorAccountId: string;
+    decision: SanctionContestDecision;
+    decidedReason: string;
+  }): Promise<SanctionContestStoreResult<SanctionContestRequest>> {
+    if (input.decidedReason.trim().length === 0) {
+      return { kind: "invalid_input" };
+    }
+    return this.sql.begin(async (transaction): Promise<SanctionContestStoreResult<SanctionContestRequest>> => {
+      const [request] = await transaction<RequestRow[]>`
+        select
+          id, account_id, sanction_event_id, request_reason, state::text as state,
+          decision::text as decision, decided_by, decided_by_sole_moderator,
+          decided_reason, decided_at, created_at
+        from sanction_contest_requests
+        where id = ${input.requestId}
+        for update
+      `;
+      if (request === undefined) {
+        return { kind: "not_found" };
+      }
+      if (request.state !== "OPEN") {
+        return { kind: "invalid_state" };
+      }
+
+      // The imposer is the actor on the sanction event. A plain read, not a
+      // lock: actor_id and new_state are immutable (the migration 007
+      // trigger), so they cannot move under this decision, and taking the
+      // event's row lock would invert the filing path's lock order
+      // (account, then event) against this one (request, then event read)
+      // and open a deadlock window between a filing and a decision.
+      const [sanctionEvent] = await transaction<{ actor_id: string; new_state: EnforcementState }[]>`
+        select actor_id, new_state::text as new_state
+        from moderation_events
+        where id = ${request.sanction_event_id}
+      `;
+      if (sanctionEvent === undefined) {
+        // The foreign key guarantees existence; the guard narrows the type.
+        return { kind: "not_found" };
+      }
+
+      // The roster's live-only semantics, read fresh in the same transaction:
+      // a role change or deletion since the request was filed is honoured.
+      const liveModerators = await transaction<{ id: string }[]>`
+        select id from users
+        where role = 'MODERATOR' and deleted_at is null
+        order by id
+      `;
+      const decidingModeratorIsImposer = sanctionEvent.actor_id === input.moderatorAccountId;
+      const soleModerator = liveModerators.length === 1 && liveModerators[0]!.id === input.moderatorAccountId;
+      if (decidingModeratorIsImposer && liveModerators.length > 1) {
+        return { kind: "forbidden_imposer" };
+      }
+
+      const [row] = await transaction<RequestRow[]>`
+        update sanction_contest_requests
+        set state = 'DECIDED',
+            decision = ${input.decision},
+            decided_by = ${input.moderatorAccountId},
+            decided_by_sole_moderator = ${soleModerator},
+            decided_reason = ${input.decidedReason},
+            decided_at = now()
+        where id = ${input.requestId}
+        returning
+          id, account_id, sanction_event_id, request_reason, state::text as state,
+          decision::text as decision, decided_by, decided_by_sole_moderator,
+          decided_reason, decided_at, created_at
+      `;
+      if (row === undefined) {
+        throw new Error("Sanction contest decision update returned no row.");
+      }
+
+      // The decision is moderation history, not an enforcement change:
+      // granting a contest is recorded, not executed — what a grant does to
+      // the sanction's enforcement state stays unspecified by the ruling, and
+      // the ban reversals remain the paths that move it. The sanction's state
+      // on both sides keeps the event a same-state no-op for every
+      // eligibility reader, and audit_id stays null: no calibration audit
+      // stands behind a contest decision.
+      await transaction`
+        insert into moderation_events (
+          target_user_id,
+          actor_id,
+          audit_id,
+          prior_state,
+          new_state,
+          reason,
+          contest_request_id
+        )
+        values (
+          ${row.account_id},
+          ${input.moderatorAccountId},
+          null,
+          ${sanctionEvent.new_state},
+          ${sanctionEvent.new_state},
+          ${input.decidedReason},
+          ${row.id}
+        )
+      `;
+
+      return { kind: "ok", value: toRequest(row) };
+    });
+  }
+
   public async listRequestsForAccount(accountId: string): Promise<SanctionContestRequest[]> {
     const rows = await this.sql<RequestRow[]>`
       select
@@ -169,6 +295,45 @@ export class PostgresSanctionContestStore implements SanctionContestStore {
       newState: row.new_state,
       reason: row.reason,
       occurredAt: toTimestamp(row.created_at),
+    }));
+  }
+
+  /**
+   * The moderation queue's read: every OPEN contest request with the account
+   * name, the sanction's state, the filed reason and the filed date, oldest
+   * first so the queue drains in filing order.
+   */
+  public async listOpenContestRequests(): Promise<OpenContestRequestProjection[]> {
+    const rows = await this.sql<
+      {
+        request_id: string;
+        account_id: string;
+        github_login: string;
+        sanction_state: EnforcementState;
+        request_reason: string;
+        created_at: string | Date;
+      }[]
+    >`
+      select
+        requests.id as request_id,
+        requests.account_id,
+        users.github_login,
+        events.new_state::text as sanction_state,
+        requests.request_reason,
+        requests.created_at
+      from sanction_contest_requests as requests
+      join users on users.id = requests.account_id
+      join moderation_events as events on events.id = requests.sanction_event_id
+      where requests.state = 'OPEN'
+      order by requests.created_at asc, requests.id asc
+    `;
+    return rows.map((row) => ({
+      requestId: row.request_id,
+      accountId: row.account_id,
+      accountLogin: row.github_login,
+      sanctionState: row.sanction_state,
+      requestReason: row.request_reason,
+      filedAt: toTimestamp(row.created_at),
     }));
   }
 }
