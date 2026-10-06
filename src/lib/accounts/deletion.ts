@@ -180,6 +180,9 @@ export async function deleteAccount(
     // includes the account's own row, whose role the scrub resets, so after it
     // the answer would always be false. The other-moderator count excludes the
     // account itself, so the scrub cannot change the rest of the answer.
+    // Accepted race: two moderators deleting concurrently can each still see
+    // the other as live, so both deletions succeed while the journal line is
+    // skipped on both sides — the outcomes stay correct either way.
     const standing = await findLiveModeratorStanding(tx, account.id);
 
     const removedApiTokens = await tx<{ id: string }[]>`

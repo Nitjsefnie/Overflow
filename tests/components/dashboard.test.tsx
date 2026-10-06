@@ -3,6 +3,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { DashboardContent } from "@/app/dashboard/page";
+import { emptyDashboard } from "../support/empty-dashboard";
 import { pinnedRule, rem } from "../support/stylesheet-rules";
 import type { RegisteredRepositoryProjection } from "@/lib/dashboard/queries";
 import { AppShell } from "@/components/app-shell";
@@ -1139,21 +1140,6 @@ describe("member dashboard", () => {
     expect(within(sectionFor("account-controls-heading")).queryByRole("status")).not.toBeInTheDocument();
   });
 });
-
-function emptyDashboard(): Parameters<typeof DashboardContent>[0]["dashboard"] {
-  return {
-    settledBalance: 0,
-    earnedTotal: 0,
-    givenTotal: 0,
-    reservedPoints: 0,
-    availableHeadroom: 0,
-    recentSettlements: [],
-    openClaims: [],
-    registeredRepositories: [],
-    enforcementNotices: [],
-    openAudit: null,
-  };
-}
 
 function ledgerTotalTerms(): string[] {
   return Array.from(document.querySelectorAll("dl.ledger-totals dt")).map((dt) => dt.textContent);
