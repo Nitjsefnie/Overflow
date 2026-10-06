@@ -224,6 +224,16 @@ export function AccountDataNotice() {
             change.
           </li>
           <li>
+            When a forge delivers a webhook notification about a registered repository,
+            Overflow records the delivery — a receipt holding the delivery&apos;s identifier,
+            the event name, whether it was processed, and any error — so the same delivery is
+            not processed twice. An automated retention prune deletes those receipts on three
+            windows: a processed receipt 30 days after its processing ended, a failed one 90
+            days after, and an abandoned one — a delivery never finalized whose processing
+            lease has expired — 90 days after it was received. A pending receipt whose lease
+            has not expired is never pruned, because a redelivery can still resume it.
+          </li>
+          <li>
             Unregistering a repository deletes none of this — the logins, numeric ids, titles, change-log
             entries, and closing-PR diffs and reviews all stay — and it stops the re-reads. Its free text is
             the exception: the stored body and comment text are removed, unless a settlement from the last few
