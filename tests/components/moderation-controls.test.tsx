@@ -288,6 +288,34 @@ describe("ban reversal control", () => {
     });
   });
 
+  it.each([
+    ["two repositories reactivated for the account", ["r-1", "r-2"], "2 repositories reactivated"],
+    ["one repository reactivated for the account", ["r-1"], "1 repository reactivated"],
+    ["no repository came back for the account", [], "0 repositories reactivated"],
+  ] as const)("states the reactivated repository count in the success feedback when %s", async (
+    _label,
+    reactivated,
+    expectedCount,
+  ) => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ reversal: { targetState: "ACTIVE", reactivatedRepositories: reactivated } }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<BanReversalControl targetAccountId={reversalTargetId} targetLogin="mira" />);
+
+    fireEvent.change(screen.getByLabelText("Reversal reason for mira"), {
+      target: { value: "The flagged pattern was re-reviewed and does not hold." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reverse ban" }));
+
+    await waitFor(() => {
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByRole("status")).toHaveTextContent(expectedCount);
+  });
+
   it("shows the structured API error and does not refresh when the reversal is refused", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
