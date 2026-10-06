@@ -137,6 +137,37 @@ describe("registering a repository against the real registered_repositories cons
     expect(await store.findWebhookCredential(second.id, "github")).toMatchObject({ secret: second.secret });
   });
 
+  // A sanction-deactivated row the sponsor then unregistered carries the flag
+  // (issue 1072). The revival is a reactivation: the row comes back active,
+  // and no closure can clear a flag on an active row (both closures filter
+  // active = false), so the revival itself must clear it — a stale flag on a
+  // live row would make a later reversal reactivate a row the sanction never
+  // held.
+  it("clears a stale sanction-deactivation flag when a resubmission revives the row", async () => {
+    const submission = newRepository({ sponsorId: await sponsor() });
+    const created = (await store.createRepository(submission))!;
+    // The sanction's stamp and the sponsor's departure, exactly as the two
+    // owners leave them: moderation owns active and the flag, unregistration
+    // owns unregistered_at.
+    await sql`
+      update registered_repositories
+      set active = false, sanction_deactivated_at = now(), unregistered_at = now()
+      where id = ${created.id}
+    `;
+    const [stamped] = await sql<{ sanction_deactivated_at: Date | null }[]>`
+      select sanction_deactivated_at from registered_repositories where id = ${created.id}
+    `;
+    expect(stamped.sanction_deactivated_at).not.toBeNull();
+
+    const revived = (await store.createRepository(submission))!;
+    expect(revived.id).toBe(created.id);
+    expect(await store.findActiveRepositoryById(created.id)).toEqual(revived);
+    const [revivedRow] = await sql<{ sanction_deactivated_at: Date | null }[]>`
+      select sanction_deactivated_at from registered_repositories where id = ${created.id}
+    `;
+    expect(revivedRow.sanction_deactivated_at).toBeNull();
+  });
+
   it("fails closed when scoped ciphertext or the encryption key is unusable", async () => {
     const credential = { id: randomUUID(), secret: "synthetic-secret" };
     const created = (await store.createRepository(newRepository({ sponsorId: await sponsor(), webhookCredential: credential })))!;
