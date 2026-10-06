@@ -107,6 +107,49 @@ describe("seedBoardFixtureCard (issue 1067)", () => {
     expect(row.title).toBe(EXPECTED_TITLE);
   });
 
+  it("repairs a repository whose availability and scheme drifted, on the next seed", async () => {
+    // Every leg the conflict path restores, drifted at once: an inactive
+    // repository with an availability pair and a foreign opening name. Any
+    // leg left unrepaired keeps the card off the /issues board — the 320px
+    // row would then pass vacuously against an empty board.
+    await sql`
+      update registered_repositories
+      set active = false, unavailable_reason = 'NOT_FOUND', unavailable_since = now(),
+        difficulty_scheme = jsonb_set(difficulty_scheme, '{openingName}', '"Other"')
+      where id = ${REPOSITORY_FIXTURE_ID}
+    `;
+
+    await seedBoardFixtureCard({ databaseUrl });
+
+    const [row] = await sql<{
+      active: boolean;
+      unavailableReason: string | null;
+      unavailableSince: Date | null;
+      openingName: string;
+    }[]>`
+      select active, unavailable_reason as "unavailableReason", unavailable_since as "unavailableSince",
+        difficulty_scheme ->> 'openingName' as "openingName"
+      from registered_repositories where id = ${REPOSITORY_FIXTURE_ID}
+    `;
+    expect(row).toEqual({
+      active: true,
+      unavailableReason: null,
+      unavailableSince: null,
+      openingName: "Offered",
+    });
+  });
+
+  it("repairs an issue whose state drifted to CLOSED, on the next seed", async () => {
+    await sql`update issues set state = 'CLOSED' where id = ${ISSUE_FIXTURE_ID}`;
+
+    await seedBoardFixtureCard({ databaseUrl });
+
+    const [row] = await sql<{ state: string }[]>`
+      select state::text as state from issues where id = ${ISSUE_FIXTURE_ID}
+    `;
+    expect(row.state).toBe("OPEN");
+  });
+
   it("repairs a sponsor whose enforcement state drifted off ACTIVE", async () => {
     await sql`update users set enforcement_state = 'BANNED' where id = ${SPONSOR_FIXTURE_USER_ID}`;
 

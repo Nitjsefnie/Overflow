@@ -119,7 +119,7 @@ describe("landing page", () => {
 // viewport once its chrome and a taskbar are subtracted.
 //
 // The 96px hero ceiling is a design decision, not a layout constraint. The wrap
-// stays at three lines all the way down to the 56px floor, because the h1's
+// stays at three lines all the way down to the 2.5rem floor, because the h1's
 // measure is 13ch and scales with the type wherever the ceiling binds (at 800px
 // wide and up; below that the container binds instead). A 4rem ceiling measures
 // a 472px clearing height. 96px buys the hero its presence.

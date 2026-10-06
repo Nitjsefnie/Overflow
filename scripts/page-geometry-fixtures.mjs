@@ -18,6 +18,9 @@
  * own client, and never delete or demote anything else; should a real row
  * ever own a fixture's namespaced github ids or login, the insert fails
  * loudly on the unique constraint rather than silently reusing that row.
+ * The gate runs BOTH before measuring, so whatever DATABASE_URL names — a
+ * --base-url target included — gains the two fixture users and one priced
+ * board card.
  */
 
 import postgres from "postgres";
