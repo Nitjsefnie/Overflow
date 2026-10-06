@@ -6,6 +6,7 @@ import type {
 } from "@/lib/calibration/statistics";
 import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
 import { formatSigned } from "@/lib/format-signed";
+import { formatInstant } from "@/lib/format-instant";
 import { plural } from "@/lib/plural";
 
 type CalibrationPanelProps = {
@@ -178,7 +179,7 @@ export function SelfWorkCalibrationList({ calibrations }: SelfWorkCalibrationLis
             <article className="settlement-history-row">
               <p className="settlement-history-status">
                 <span className="mono-meta">
-                  {calibration.repositoryName} · {calibration.mergedAt?.slice(0, 10) ?? "merge date unavailable"}
+                  {calibration.repositoryName} · {calibration.mergedAt === null ? "merge date unavailable" : formatInstant(calibration.mergedAt)}
                 </span>
               </p>
               <p className="settlement-history-links">

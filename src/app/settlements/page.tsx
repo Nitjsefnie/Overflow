@@ -2,6 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { SETTLEMENT_HISTORY_LIMIT, type SettlementHistoryProjection, type SettlementStatus } from "@/lib/dashboard/queries";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
+import { formatInstant } from "@/lib/format-instant";
 import { formatSigned } from "@/lib/format-signed";
 import { plural } from "@/lib/plural";
 
@@ -40,7 +41,7 @@ export function SettlementHistoryContent({ memberName, isModerator, settlements 
                   <p className="settlement-history-status">
                     <span className={statusClassName(settlement.status)}>{statusLabel(settlement.status)}</span>
                     <span className="mono-meta">
-                      {settlement.repositoryName} · {settlement.settledAt.slice(0, 10)}
+                      {settlement.repositoryName} · {formatInstant(settlement.settledAt)}
                     </span>
                   </p>
                   <p className="settlement-history-links">

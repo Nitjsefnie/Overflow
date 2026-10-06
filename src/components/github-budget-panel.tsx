@@ -1,5 +1,6 @@
 import type { JSX } from "react";
 import type { GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
+import { formatInstant } from "@/lib/format-instant";
 
 export type GitHubBudgetPanelProps = { owner: string; label?: string; assessment: GitHubGraphqlBudgetAssessment };
 
@@ -32,9 +33,9 @@ export function GitHubBudgetPanel({ owner, label, assessment }: GitHubBudgetPane
         {reading !== null ? (
           <>
             <dt>Resets at (UTC)</dt>
-            <dd><time dateTime={reading.resetAt.toISOString()}>{reading.resetAt.toISOString()}</time></dd>
+            <dd><time dateTime={reading.resetAt.toISOString()}>{formatInstant(reading.resetAt)}</time></dd>
             <dt>Observed at (UTC)</dt>
-            <dd><time dateTime={reading.observedAt.toISOString()}>{reading.observedAt.toISOString()}</time></dd>
+            <dd><time dateTime={reading.observedAt.toISOString()}>{formatInstant(reading.observedAt)}</time></dd>
           </>
         ) : null}
       </dl>

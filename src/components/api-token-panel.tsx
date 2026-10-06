@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
+import { formatInstant } from "@/lib/format-instant";
 import { API_TOKEN_DELIVERY_WINDOW_MINUTES, API_TOKEN_LIFETIME_DAYS } from "@/lib/tokens/lifetime";
 // Type-only, so erased at build time: the store's database client never
 // reaches this client bundle.
@@ -148,9 +149,9 @@ export function ApiTokenPanel({ summary, reauthenticateAction }: ApiTokenPanelPr
       {currentSummary ? (
         <>
           <p>
-            Generated <time dateTime={currentSummary.createdAt}>{formatUtc(currentSummary.createdAt)}</time>.
+            Generated <time dateTime={currentSummary.createdAt}>{formatInstant(currentSummary.createdAt)}</time>.
             {" "}{expired ? "Expired" : "Expires"} <time dateTime={currentSummary.expiresAt}>
-              {formatUtc(currentSummary.expiresAt)}
+              {formatInstant(currentSummary.expiresAt)}
             </time>.
           </p>
           {/* The observable half of the state: present exactly when the token has been
@@ -160,7 +161,7 @@ export function ApiTokenPanel({ summary, reauthenticateAction }: ApiTokenPanelPr
             <p id="api-token-first-use">
               First used{" "}
               <time id="api-token-first-use-at" dateTime={currentSummary.confirmedAt}>
-                {formatUtc(currentSummary.confirmedAt)}
+                {formatInstant(currentSummary.confirmedAt)}
               </time>.
             </p>
           )}
@@ -197,8 +198,4 @@ export function ApiTokenPanel({ summary, reauthenticateAction }: ApiTokenPanelPr
       ) : null}
     </section>
   );
-}
-
-function formatUtc(instant: string): string {
-  return instant.replace("T", " ").replace(/\.\d{3}Z$/, " UTC");
 }

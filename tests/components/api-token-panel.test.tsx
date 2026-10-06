@@ -132,7 +132,7 @@ describe("API token panel", () => {
     render(<ApiTokenPanel summary={confirmed} />);
 
     expect(screen.getByRole("button", { name: "Regenerate token" })).toBeEnabled();
-    expect(screen.getByText("2026-09-05 10:30:00 UTC")).toHaveAttribute("dateTime", createdAt);
+    expect(screen.getByText("2026-09-05 10:30 UTC")).toHaveAttribute("dateTime", createdAt);
     expect(screen.getByText(/existing token stops working immediately/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Generate token" })).not.toBeInTheDocument();
   });
@@ -140,7 +140,7 @@ describe("API token panel", () => {
   it("shows the expiry as a time element and no expired state for a live token", () => {
     render(<ApiTokenPanel summary={confirmed} />);
 
-    expect(screen.getByText("2026-12-04 10:30:00 UTC")).toHaveAttribute("dateTime", expiresAt);
+    expect(screen.getByText("2026-12-04 10:30 UTC")).toHaveAttribute("dateTime", expiresAt);
     expect(document.getElementById("api-token-expired")).toBeNull();
     expect(describedBy(screen.getByRole("button", { name: "Regenerate token" }))).toEqual(["api-token-revocation"]);
   });
@@ -148,7 +148,7 @@ describe("API token panel", () => {
   it("marks an expired token and ties the expired state to regeneration", () => {
     render(<ApiTokenPanel summary={expiredSummary} />);
 
-    const expiry = screen.getByText("2026-07-30 08:00:00 UTC");
+    const expiry = screen.getByText("2026-07-30 08:00 UTC");
     expect(expiry).toHaveAttribute("dateTime", expiredSummary.expiresAt);
     const button = screen.getByRole("button", { name: "Regenerate token" });
     expect(button).toBeEnabled();
@@ -316,7 +316,7 @@ describe("API token panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Regenerate token" }));
 
     expect(await screen.findByText(token)).toBeVisible();
-    expect(screen.getByText("2026-12-04 10:30:00 UTC")).toHaveAttribute("dateTime", expiresAt);
+    expect(screen.getByText("2026-12-04 10:30 UTC")).toHaveAttribute("dateTime", expiresAt);
     expect(document.getElementById("api-token-expired")).toBeNull();
   });
 
@@ -331,7 +331,7 @@ describe("API token panel", () => {
     expect(screen.getByText(token)).toHaveStyle({ display: "block", userSelect: "all", overflowWrap: "anywhere" });
     expect(screen.getByRole("status")).toHaveTextContent(/will not be shown again/i);
     expect(screen.getByRole("button", { name: "Regenerate token" })).toBeEnabled();
-    expect(screen.getByText("2026-09-05 10:30:00 UTC")).toBeVisible();
+    expect(screen.getByText("2026-09-05 10:30 UTC")).toBeVisible();
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith("/api/tokens", {
       method: "POST", credentials: "same-origin",
     });
@@ -376,7 +376,7 @@ describe("API token panel", () => {
 
     expect(await screen.findByText(replacementToken)).toBeVisible();
     expect(screen.queryByText(token)).not.toBeInTheDocument();
-    expect(screen.getByText("2026-09-06 12:00:00 UTC")).toBeVisible();
+    expect(screen.getByText("2026-09-06 12:00 UTC")).toBeVisible();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -460,7 +460,7 @@ describe("API token panel", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Unable to issue an API token.");
     expect(screen.getAllByText(token)).toEqual([displayedToken]);
     expect(displayedToken).toBeVisible();
-    expect(screen.getByText("2026-09-05 10:30:00 UTC")).toBeVisible();
+    expect(screen.getByText("2026-09-05 10:30 UTC")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Regenerate token" }));
     expect(await screen.findByText(replacementToken)).toBeVisible();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -604,8 +604,8 @@ describe("repository registration page token panel", () => {
     expect(getTokenSummary).toHaveBeenCalledExactlyOnceWith(memberId);
     expect(screen.getByRole("button", { name: summary ? "Regenerate token" : "Generate token" })).toBeEnabled();
     if (summary) {
-      expect(screen.getByText("2026-09-05 10:30:00 UTC")).toHaveAttribute("dateTime", createdAt);
-      expect(screen.getByText("2026-12-04 10:30:00 UTC")).toHaveAttribute("dateTime", expiresAt);
+      expect(screen.getByText("2026-09-05 10:30 UTC")).toHaveAttribute("dateTime", createdAt);
+      expect(screen.getByText("2026-12-04 10:30 UTC")).toHaveAttribute("dateTime", expiresAt);
       // The store's verdict, not the page's or the browser's clock.
       expect(document.getElementById("api-token-expired") !== null).toBe(summary.expired);
     }

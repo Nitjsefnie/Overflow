@@ -237,7 +237,7 @@ describe("unwritable closure queue", () => {
     expect(status?.textContent).toBe(correction.state.toLowerCase());
     expect(time).toBeVisible();
     expect(time).toHaveAttribute("dateTime", correction.requestedAt);
-    expect(time?.textContent).toBe(correction.requestedAt);
+    expect(time?.textContent).toBe("2026-09-05 12:00 UTC");
   });
 
   it("offers the settlement correction path when no correction has been requested", () => {
@@ -426,7 +426,7 @@ describe("self-worked closure in the queue", () => {
     expect(status?.textContent).toBe(correction.state.toLowerCase());
     expect(time).toBeVisible();
     expect(time).toHaveAttribute("dateTime", correction.requestedAt);
-    expect(time?.textContent).toBe(correction.requestedAt);
+    expect(time?.textContent).toBe("2026-09-05 12:00 UTC");
   });
 });
 

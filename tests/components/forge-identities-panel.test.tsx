@@ -368,7 +368,7 @@ describe("Forge identities panel", () => {
     expect(within(healthy as HTMLElement).queryByTestId("forge-identity-needs-re-verification")).not.toBeInTheDocument();
     // A failed identity keeps its last successful verification date: the
     // marker is beside it, not a replacement for it.
-    expect(within(failed as HTMLElement).getByText("2026-09-10")).toBeInTheDocument();
+    expect(within(failed as HTMLElement).getByText("2026-09-10 00:00 UTC")).toBeInTheDocument();
     await act(async () => {});
   });
 

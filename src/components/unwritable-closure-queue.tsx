@@ -1,4 +1,5 @@
 import type { UnwritableClosureProjection } from "@/lib/dashboard/queries";
+import { formatInstant } from "@/lib/format-instant";
 
 type UnwritableClosureQueueProps = {
   closures: readonly UnwritableClosureProjection[];
@@ -75,7 +76,7 @@ function LatestCorrection({ correction }: { correction: UnwritableClosureProject
   }
   return (
     <p className="mono-meta">
-      Correction <data value={correction.state}>{correction.state.toLowerCase()}</data> · reported <time dateTime={correction.requestedAt}>{correction.requestedAt}</time>
+      Correction <data value={correction.state}>{correction.state.toLowerCase()}</data> · reported <time dateTime={correction.requestedAt}>{formatInstant(correction.requestedAt)}</time>
     </p>
   );
 }

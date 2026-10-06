@@ -1,4 +1,5 @@
 import type { EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
+import { formatInstant } from "@/lib/format-instant";
 import { formatSigned } from "@/lib/format-signed";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 import { stripNamePrefix } from "@/lib/strip-name-prefix";
@@ -22,7 +23,7 @@ export function IssueCard({ issue }: IssueCardProps) {
         {issue.sponsorLogin !== undefined ? <p>Sponsor: {issue.sponsorLogin}</p> : null}
         {issue.claimState !== undefined ? <p>Claim: {claimPhrase(issue.claimState, issue.assigneeGitHubLogin)}</p> : null}
         {issue.availableHeadroom !== undefined ? <p>Headroom: {formatSigned(issue.availableHeadroom)}</p> : null}
-        <p className="mono-meta">Opened {issue.createdAt.slice(0, 10)}</p>
+        <p className="mono-meta">Opened {formatInstant(issue.createdAt)}</p>
       </div>
       <dl className="issue-facts">
         <div>

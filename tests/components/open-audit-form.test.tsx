@@ -51,11 +51,11 @@ const repositories: ModerationRepositoryProjection[] = [{ id: repositoryId, owne
 
 const startedAt = "2026-01-01T00:00";
 const endedAt = "2026-02-01T00:00";
-// The inputs are wall-clock strings with no offset, so the instant they mean depends on
-// the reader's timezone. These derive the expected instant in the machine running the
-// test, exactly as the browser would in the moderator's zone.
-const startedAtInstant = new Date(startedAt).toISOString();
-const endedAtInstant = new Date(endedAt).toISOString();
+// The inputs are read as UTC (their labels say so), so the instant the form sends is the
+// typed wall-clock value read at UTC — pinned as a literal, never derived from the zone
+// of the machine running the test.
+const startedAtInstant = "2026-01-01T00:00:00.000Z";
+const endedAtInstant = "2026-02-01T00:00:00.000Z";
 
 function comparison() {
   return {
@@ -90,8 +90,8 @@ async function previewAccountWideCohort() {
 }
 
 function chooseWindow() {
-  fireEvent.change(screen.getByLabelText("Sample window start"), { target: { value: startedAt } });
-  fireEvent.change(screen.getByLabelText("Sample window end"), { target: { value: endedAt } });
+  fireEvent.change(screen.getByLabelText("Sample window start (UTC)"), { target: { value: startedAt } });
+  fireEvent.change(screen.getByLabelText("Sample window end (UTC)"), { target: { value: endedAt } });
 }
 
 function chooseTarget(accountId: string) {
@@ -151,7 +151,7 @@ describe("open audit form", () => {
     expect(fetchMock).not.toHaveBeenCalled();
 
     chooseTarget(miraId);
-    fireEvent.change(screen.getByLabelText("Sample window end"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Sample window end (UTC)"), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Open audit" }));
 
     expect(screen.getByRole("alert")).toHaveTextContent("Choose an audit target and both sample window bounds.");
@@ -379,7 +379,7 @@ describe("open audit form", () => {
     render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
 
     await previewAccountWideCohort();
-    fireEvent.change(screen.getByLabelText("Sample window start"), { target: { value: "2026-01-15T00:00" } });
+    fireEvent.change(screen.getByLabelText("Sample window start (UTC)"), { target: { value: "2026-01-15T00:00" } });
 
     expect(screen.queryByRole("region", { name: "Cohort preview" })).toBeNull();
     expect(screen.queryByText("Self-work sample · 12 pairs · mean delta +2")).toBeNull();
@@ -390,7 +390,7 @@ describe("open audit form", () => {
     render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
 
     await previewAccountWideCohort();
-    fireEvent.change(screen.getByLabelText("Sample window end"), { target: { value: "2026-03-01T00:00" } });
+    fireEvent.change(screen.getByLabelText("Sample window end (UTC)"), { target: { value: "2026-03-01T00:00" } });
 
     expect(screen.queryByRole("region", { name: "Cohort preview" })).toBeNull();
     expect(screen.queryByText("Self-work sample · 12 pairs · mean delta +2")).toBeNull();
@@ -402,10 +402,10 @@ describe("open audit form", () => {
     render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
 
     await previewAccountWideCohort();
-    fireEvent.change(screen.getByLabelText("Sample window end"), { target: { value: "2026-03-01T00:00" } });
+    fireEvent.change(screen.getByLabelText("Sample window end (UTC)"), { target: { value: "2026-03-01T00:00" } });
     expect(screen.queryByRole("region", { name: "Cohort preview" })).toBeNull();
 
-    fireEvent.change(screen.getByLabelText("Sample window end"), { target: { value: endedAt } });
+    fireEvent.change(screen.getByLabelText("Sample window end (UTC)"), { target: { value: endedAt } });
     fireEvent.click(screen.getByRole("button", { name: "Preview cohort" }));
 
     await waitFor(() => {
@@ -423,7 +423,7 @@ describe("open audit form", () => {
 
     chooseTarget(miraId);
     chooseWindow();
-    const controls = ["Audit target", "Repository scope", "Sample window start", "Sample window end"]
+    const controls = ["Audit target", "Repository scope", "Sample window start (UTC)", "Sample window end (UTC)"]
       .map((label) => screen.getByLabelText(label));
     for (const control of controls) {
       expect(control).toBeEnabled();
