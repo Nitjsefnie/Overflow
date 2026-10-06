@@ -318,6 +318,7 @@ describe("module size families and exclusions", () => {
     ["Dockerfile", "deployment units"],
     ["docker-compose.yml", "deployment units"],
     ["public/mark.svg", "static assets"],
+    ["scripts/required-checks-parse.jq", "declarative jq filters"],
   ])("records %s as excluded under %s", (path, name) => {
     expect(classify(path)).toEqual({ kind: "excluded", name });
   });

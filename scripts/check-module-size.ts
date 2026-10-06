@@ -115,6 +115,10 @@ export const EXCLUSIONS: readonly PathClass[] = [
   },
   // Static assets served as-is.
   { name: "static assets", matches: (p) => /^public\/.+\.svg$/s.test(p) },
+  // Tracked jq programs: a jq filter the deploy gate runs as data against an
+  // input document, not app code; its measured length would pin a
+  // prose-like artifact whose shape is jq's, not ours.
+  { name: "declarative jq filters", matches: (p) => /^scripts\/[^/]+\.jq$/s.test(p) },
 ];
 
 const FAMILY_NAMES = new Set(MEASURED_FAMILIES.map((f) => f.name));
