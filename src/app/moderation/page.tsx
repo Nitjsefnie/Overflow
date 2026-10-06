@@ -3,6 +3,7 @@ import { AppShell } from "@/components/app-shell";
 import type { GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import { plural } from "@/lib/plural";
 import type { BannedAccountProjection } from "@/lib/moderation/banned-accounts";
+import type { OpenContestRequestProjection } from "@/lib/moderation/sanction-contest-service";
 import type {
   AuditCandidateProjection,
   EnforcementHistoryProjection,
@@ -26,6 +27,7 @@ export default async function ModerationPage() {
 
   const { ModerationControls, RecalibrationPlanControl, RecalibrationCreditAdjustmentControl, BanReversalControl } =
     await import("@/components/moderation-controls");
+  const { SanctionContestDecisionControl } = await import("@/components/sanction-contest-decision");
   const { OpenAuditForm } = await import("@/components/open-audit-form");
   const { ModeratorRoster } = await import("@/components/moderator-roster");
   const { GitHubBudgetPanel } = await import("@/components/github-budget-panel");
@@ -39,6 +41,7 @@ export default async function ModerationPage() {
   let history: EnforcementHistoryProjection[] | null = null;
   let recalibratingAccounts: RecalibratingAccountProjection[] | null = null;
   let bannedAccounts: BannedAccountProjection[] | null = null;
+  let openContests: OpenContestRequestProjection[] | null = null;
   let moderators: { accountId: string; githubLogin: string; isConfigured: boolean }[] | null = null;
   let githubBudget: { owner: string; assessment: GitHubGraphqlBudgetAssessment }[] | null;
   try {
@@ -62,11 +65,13 @@ export default async function ModerationPage() {
     } = await import("@/lib/dashboard/queries");
     const { listBannedAccounts } = await import("@/lib/moderation/banned-accounts");
     const { PostgresModerationStore } = await import("@/lib/moderation/postgres-store");
-    [audits, history, recalibratingAccounts, bannedAccounts, moderators] = await Promise.all([
+    const { PostgresSanctionContestStore } = await import("@/lib/moderation/sanction-contest-store");
+    [audits, history, recalibratingAccounts, bannedAccounts, openContests, moderators] = await Promise.all([
       listOpenAudits(),
       listEnforcementHistory(),
       listRecalibratingAccounts(),
       listBannedAccounts(),
+      new PostgresSanctionContestStore().listOpenContestRequests(),
       new PostgresModerationStore().listModerators(),
     ]);
   } catch {
@@ -200,6 +205,36 @@ export default async function ModerationPage() {
               <li key={account.id}>
                 <p><strong>{account.githubLogin}</strong> · {account.confirmedPatternCount} confirmed patterns</p>
                 <BanReversalControl targetAccountId={account.id} targetLogin={account.githubLogin} />
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
+      <section className="surface" aria-labelledby="sanction-contests-heading">
+        <p className="eyebrow">Sanction disputes</p>
+        <h2 id="sanction-contests-heading">Sanction contest requests</h2>
+        <p>
+          A sanctioned account can ask for its sanction to be contested. The deciding moderator is not the one
+          who imposed the sanction where any other moderator exists; with exactly one live moderator, that
+          moderator decides and the record says so. Recording a decision does not itself change the sanction.
+        </p>
+        {openContests === null ? (
+          <p>The sanction contest queue could not be loaded.</p>
+        ) : openContests.length === 0 ? (
+          <p>No sanction contest requests are open.</p>
+        ) : (
+          <ol>
+            {openContests.map((contest) => (
+              <li key={contest.requestId}>
+                <p>
+                  <strong>{contest.accountLogin}</strong> · {contest.sanctionState} · filed {contest.filedAt}
+                </p>
+                <p>“{contest.requestReason}”</p>
+                <SanctionContestDecisionControl
+                  requestId={contest.requestId}
+                  accountLogin={contest.accountLogin}
+                  sanctionState={contest.sanctionState}
+                />
               </li>
             ))}
           </ol>

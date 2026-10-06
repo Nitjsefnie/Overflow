@@ -100,6 +100,24 @@ describe("sanction contests page", () => {
     expect(within(formRegion).getByText(/still with a moderator/)).toBeInTheDocument();
   });
 
+  it("withholds only the contested sanction and keeps the form for an uncontested one", () => {
+    const secondSanction: FileableSanction = {
+      id: "00000000-0000-4000-8000-000000000009",
+      newState: "BANNED",
+      reason: "The fifth confirmed account-level pattern requires a ban.",
+      occurredAt: "2026-09-20T09:00:00.000Z",
+    };
+    renderContent([recalibrating(), secondSanction], [openRequest()]);
+
+    // The open request covers the RECALIBRATING sanction only, so the form
+    // survives with exactly the other sanction as its choice.
+    const select = within(screen.getByRole("region", { name: "Request a contest" })).getByLabelText("Which sanction?");
+    const options = within(select).getAllByRole("option");
+    expect(options).toHaveLength(1);
+    expect((options[0] as HTMLOptionElement).value).toBe(secondSanction.id);
+    expect(within(screen.getByRole("region", { name: "Request a contest" })).queryByText(/still with a moderator/)).not.toBeInTheDocument();
+  });
+
   it("keeps the form available when the history could not be read", () => {
     renderContent([recalibrating()], null);
 

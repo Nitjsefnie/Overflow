@@ -17,8 +17,10 @@ import { createModerationReversalPatchHandler } from "@/app/api/moderation/rever
 import { createModerationAdjustmentPostHandler } from "@/app/api/moderation/recalibration/adjustment/route";
 import { createModerationReversalPostHandler } from "@/app/api/moderation/adjustments/reversal/route";
 import { createRederivationPostHandler } from "@/app/api/moderation/rederivation/route";
+import { createSanctionContestDecisionPostHandler } from "@/app/api/moderation/contests/route";
 import { createSettlementOverridePatchHandler } from "@/app/api/overrides/[id]/route";
 import { ModerationServiceError } from "@/lib/moderation/service";
+import { SanctionContestError } from "@/lib/moderation/sanction-contest-service";
 import { SettlementOverrideError } from "@/lib/overrides/service";
 import type { PrivilegedAction } from "@/lib/security/privileged-action-log";
 
@@ -37,6 +39,7 @@ const reversalId = "00000000-0000-4000-8000-0000000000a4";
 const repositoryId = "00000000-0000-4000-8000-0000000000a5";
 const overrideRequestId = "00000000-0000-4000-8000-0000000000a6";
 const issueId = "00000000-0000-4000-8000-0000000000a7";
+const contestRequestId = "00000000-0000-4000-8000-0000000000a8";
 const clientAddress = "203.0.113.7";
 
 // Distinctive values that must never reach a journal line. The digest is the
@@ -218,6 +221,17 @@ const routeCases: RouteCase[] = [
     failure: new SettlementOverrideError("NOT_FOUND", "No such request."),
     subject: { overrideRequestId, issueId },
     handler: createSettlementOverridePatchHandler,
+  },
+  {
+    action: "sanction.contest.decide",
+    method: "POST",
+    path: "/api/moderation/contests",
+    body: { requestId: contestRequestId, decision: "GRANTED", reason: "The audit overcounted the review rounds." },
+    serviceMethod: "decideContest",
+    result: { id: contestRequestId, accountId: targetAccountId, state: "DECIDED", decision: "GRANTED" },
+    failure: new SanctionContestError("CONFLICT", "Already decided."),
+    subject: { requestId: contestRequestId, accountId: targetAccountId },
+    handler: createSanctionContestDecisionPostHandler,
   },
 ];
 

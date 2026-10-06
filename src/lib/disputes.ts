@@ -96,10 +96,11 @@ export const DISPUTE_CONTESTABLE_CASE = "a settlement";
  *   - only the sanctioned account asks: the filing store refuses an account
  *     that is not the sanctioned account on the event
  *     (src/lib/moderation/sanction-contest-store.ts).
- *   - the deciding-moderator half: the decision path refuses a decision by the
- *     moderator who imposed the sanction while another moderator exists, and
- *     with exactly one live moderator it records that fact on the request's
- *     decided_by_sole_moderator column (migration 061).
+ *   - the deciding-moderator half: the store's decideSanctionContest
+ *     (src/lib/moderation/sanction-contest-store.ts) refuses a decision by the
+ *     moderator who imposed the sanction while another live moderator exists,
+ *     and with exactly one live moderator it records that fact on the
+ *     request's decided_by_sole_moderator column (migration 061).
  *   - one open request per sanction: the partial unique index
  *     sanction_contest_requests_one_open_per_sanction (migration 061), the
  *     same shape the settlement case's one-open rule uses (migration 009).

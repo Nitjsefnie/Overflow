@@ -5,6 +5,7 @@ import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 import { listEnforcementHistory } from "@/lib/dashboard/queries";
+import type { SanctionContestDecision } from "@/lib/moderation/sanction-contest-service";
 import { SanctionContestService } from "@/lib/moderation/sanction-contest-service";
 import { PostgresSanctionContestStore } from "@/lib/moderation/sanction-contest-store";
 
@@ -461,6 +462,246 @@ function store(): PostgresSanctionContestStore {
   return new PostgresSanctionContestStore(sql);
 }
 
+async function fileOpenRequest(accountId: string, sanctionEventId: string, reason: string): Promise<string> {
+  const result = await store().fileSanctionContest({ accountId, sanctionEventId, reason });
+  if (result.kind !== "ok") {
+    throw new Error(`Expected the filing to succeed, got ${result.kind}.`);
+  }
+  return result.value.id;
+}
+
+async function decide(
+  requestId: string,
+  moderatorAccountId: string,
+  decision: SanctionContestDecision,
+  decidedReason: string,
+): Promise<Awaited<ReturnType<PostgresSanctionContestStore["decideSanctionContest"]>>> {
+  return store().decideSanctionContest({ requestId, moderatorAccountId, decision, decidedReason });
+}
+
+async function readRequestRow(requestId: string) {
+  const [row] = await sql<
+    { state: string; decision: string | null; decided_by: string | null; decided_by_sole_moderator: boolean; decided_reason: string | null }[]
+  >`
+    select state::text, decision::text, decided_by, decided_by_sole_moderator, decided_reason
+    from sanction_contest_requests where id = ${requestId}
+  `;
+  if (row === undefined) {
+    throw new Error("Expected the request row to exist.");
+  }
+  return row;
+}
+
+describe("sanction contest decision path", () => {
+  it("refuses the imposer while another live moderator exists, writing no decision", async () => {
+    await retireLiveModerators();
+    const imposerId = await insertModerator();
+    const otherModeratorId = await insertModerator();
+    expect(otherModeratorId).toBeDefined();
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "BANNED");
+    const sanctionEvent = await sanctionEventBy(accountId, imposerId);
+    const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "The imposer's read was the only one.");
+
+    const result = await decide(requestId, imposerId, "DENIED", "The sanction stands.");
+    expect(result).toEqual({ kind: "forbidden_imposer" });
+
+    const row = await readRequestRow(requestId);
+    expect(row).toMatchObject({ state: "OPEN", decision: null, decided_by: null, decided_reason: null });
+  }, 60_000);
+
+  it("allows the imposer as the sole live moderator and records that on the request", async () => {
+    await retireLiveModerators();
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "BANNED");
+    // With every other moderator retired, the fresh sanction's actor is the
+    // only live moderator left.
+    const sanctionEvent = await liveSanctionEvent(accountId);
+    const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "One moderator, both hats.");
+
+    const result = await decide(requestId, sanctionEvent.imposerId, "GRANTED", "The pattern does not hold.");
+    expect(result).toMatchObject({ kind: "ok" });
+    if (result.kind !== "ok") {
+      throw new Error("Expected the sole-moderator decision to succeed.");
+    }
+    expect(result.value.decidedBySoleModerator).toBe(true);
+    expect(result.value.decidedBy).toBe(sanctionEvent.imposerId);
+
+    const row = await readRequestRow(requestId);
+    expect(row).toMatchObject({
+      state: "DECIDED",
+      decision: "GRANTED",
+      decided_by: sanctionEvent.imposerId,
+      decided_by_sole_moderator: true,
+      decided_reason: "The pattern does not hold.",
+    });
+  }, 60_000);
+
+  it("lets a non-imposing moderator decide freely with the flag false", async () => {
+    await retireLiveModerators();
+    const imposerId = await insertModerator();
+    const deciderId = await insertModerator();
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "BANNED");
+    const sanctionEvent = await sanctionEventBy(accountId, imposerId);
+
+    const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "A second moderator can review it.");
+    const result = await decide(requestId, deciderId, "DENIED", "The confirmed patterns persist.");
+    expect(result).toMatchObject({ kind: "ok" });
+    if (result.kind !== "ok") {
+      throw new Error("Expected the non-imposer decision to succeed.");
+    }
+    expect(result.value.decidedBySoleModerator).toBe(false);
+    expect(result.value.decidedBy).toBe(deciderId);
+  }, 60_000);
+
+  it("records the sole-moderator flag when the only live moderator is not the imposer", async () => {
+    await retireLiveModerators();
+    const imposerId = await insertModerator();
+    const soleDeciderId = await insertModerator();
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "BANNED");
+    const sanctionEvent = await sanctionEventBy(accountId, imposerId);
+    // Retire the imposer too, leaving the fresh decider as the only live
+    // moderator: a sole non-imposer decides freely, and the record says the
+    // decision came from the only live moderator.
+    await sql`update users set deleted_at = now() where id = ${imposerId}`;
+
+    const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "The remaining moderator reviews it.");
+    const result = await decide(requestId, soleDeciderId, "GRANTED", "The recalibration was miscounted.");
+    expect(result).toMatchObject({ kind: "ok" });
+    if (result.kind !== "ok") {
+      throw new Error("Expected the sole non-imposer decision to succeed.");
+    }
+    expect(result.value.decidedBySoleModerator).toBe(true);
+  }, 60_000);
+
+  it("refuses a second decision on an already decided request", async () => {
+    await retireLiveModerators();
+    const imposerId = await insertModerator();
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "BANNED");
+    const sanctionEvent = await sanctionEventBy(accountId, imposerId);
+    const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "First decision takes it.");
+    const first = await decide(requestId, imposerId, "DENIED", "The sanction stands.");
+    expect(first).toMatchObject({ kind: "ok" });
+
+    const second = await decide(requestId, imposerId, "GRANTED", "Too late to change it.");
+    expect(second).toEqual({ kind: "invalid_state" });
+  }, 60_000);
+
+  it("answers not_found for an unknown request", async () => {
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "BANNED");
+    await liveSanctionEvent(accountId);
+
+    await expect(
+      decide("00000000-0000-4000-8000-ffffffffffff", await insertModerator(), "DENIED", "No such request."),
+    ).resolves.toEqual({ kind: "not_found" });
+  }, 60_000);
+
+  it("refuses a blank decided reason before touching the request", async () => {
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "BANNED");
+    const sanctionEvent = await liveSanctionEvent(accountId);
+    const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "A decision carries its reason.");
+
+    const result = await decide(requestId, await insertModerator(), "DENIED", "   ");
+    expect(result).toEqual({ kind: "invalid_input" });
+
+    const row = await readRequestRow(requestId);
+    expect(row).toMatchObject({ state: "OPEN", decision: null });
+  }, 60_000);
+
+  it("writes the decision event with the deciding moderator as actor and unchanged eligibility, and reads back exactly", async () => {
+    await retireLiveModerators();
+    const imposerId = await insertModerator();
+    const accountId = await insertUser("MEMBER");
+    await sanctionAccount(accountId, "RECALIBRATING");
+    const sanctionEvent = await sanctionEventBy(accountId, imposerId);
+    const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "The cohort was not representative.");
+
+    const beforeNow = await eligibilityAt(accountId, new Date());
+    expect(beforeNow).toBe(false);
+
+    const result = await decide(requestId, imposerId, "GRANTED", "The audit overcounted.");
+    expect(result).toMatchObject({ kind: "ok" });
+
+    const events = await sql<
+      { target_user_id: string; actor_id: string; audit_id: string | null; prior_state: string; new_state: string; reason: string; contest_request_id: string | null; credential_kind: string | null; credential_token_id: string | null }[]
+    >`
+      select target_user_id, actor_id, audit_id, prior_state::text, new_state::text,
+             reason, contest_request_id, credential_kind, credential_token_id
+      from moderation_events
+      where contest_request_id = ${requestId}
+        and actor_id = ${imposerId}
+    `;
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      target_user_id: accountId,
+      actor_id: imposerId,
+      audit_id: null,
+      prior_state: "RECALIBRATING",
+      new_state: "RECALIBRATING",
+      reason: "The audit overcounted.",
+      contest_request_id: requestId,
+      credential_kind: null,
+      credential_token_id: null,
+    });
+
+    // The decision event is a same-state no-op for every eligibility reader:
+    // recording a grant does not itself lift the sanction.
+    const afterNow = await eligibilityAt(accountId, new Date());
+    expect(afterNow).toBe(false);
+    const afterFuture = await eligibilityAt(accountId, new Date(Date.now() + 60_000));
+    expect(afterFuture).toBe(false);
+
+    const listed = await store().listRequestsForAccount(accountId);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({
+      id: requestId,
+      state: "DECIDED",
+      decision: "GRANTED",
+      decidedBy: imposerId,
+      // The imposer here is the file's only live moderator (retireLiveModerators
+      // ran above), so the record says a sole moderator decided.
+      decidedBySoleModerator: true,
+      decidedReason: "The audit overcounted.",
+    });
+    expect(listed[0]?.decidedAt).toEqual(expect.any(String));
+  }, 60_000);
+
+  it("lists open requests for the moderation queue with account, sanction state, reason and filed date", async () => {
+    await retireLiveModerators();
+    const imposerId = await insertModerator();
+    const deciderId = await insertModerator();
+    const sanctionedId = await insertUser("MEMBER");
+    await sanctionAccount(sanctionedId, "BANNED");
+    const openEvent = await sanctionEventBy(sanctionedId, imposerId);
+    const openRequestId = await fileOpenRequest(sanctionedId, openEvent.id, "Still waiting for a moderator.");
+
+    const decidedId = await insertUser("MEMBER");
+    await sanctionAccount(decidedId, "BANNED");
+    const decidedEvent = await sanctionEventBy(decidedId, imposerId);
+    const decidedRequestId = await fileOpenRequest(decidedId, decidedEvent.id, "Decided while the queue is watched.");
+    const decidedResult = await decide(decidedRequestId, deciderId, "DENIED", "The patterns persist.");
+    expect(decidedResult).toMatchObject({ kind: "ok" });
+
+    const open = await store().listOpenContestRequests();
+    const mine = open.find((entry) => entry.requestId === openRequestId);
+    expect(mine).toMatchObject({
+      requestId: openRequestId,
+      accountId: sanctionedId,
+      sanctionState: "BANNED",
+      requestReason: "Still waiting for a moderator.",
+    });
+    expect(mine?.accountLogin).toEqual(expect.any(String));
+    expect(mine?.filedAt).toEqual(expect.any(String));
+    // The decided request has left the queue.
+    expect(open.map((entry) => entry.requestId)).not.toContain(decidedRequestId);
+  }, 60_000);
+});
+
 async function eligibilityAt(accountId: string, at: Date): Promise<boolean> {
   const [row] = await sql<{ eligible: boolean }[]>`
     select participation_eligible_at(${accountId}, ${at}) as eligible
@@ -492,9 +733,46 @@ async function sanctionAccount(accountId: string, state: "RECALIBRATING" | "BANN
 
 /**
  * Writes the sanction's own moderation event, the way a substantiation would,
- * anchored on the account's stamped enforcement state.
+ * anchored on the account's stamped enforcement state. The event's actor is a
+ * fresh moderator — the imposer a decision path resolves.
  */
-async function liveSanctionEvent(accountId: string): Promise<{ id: string; reason: string }> {
+async function liveSanctionEvent(accountId: string): Promise<{ id: string; reason: string; imposerId: string }> {
+  const [current] = await sql<{ enforcement_state: string }[]>`
+    select enforcement_state::text from users where id = ${accountId}
+  `;
+  if (current === undefined) {
+    throw new Error("Expected the sanctioned account to exist.");
+  }
+  const [row] = await sql<{ id: string; reason: string; actor_id: string }[]>`
+    insert into moderation_events (target_user_id, actor_id, prior_state, new_state, reason)
+    values (
+      ${accountId},
+      ${await insertModerator()},
+      ${"WARNED"},
+      ${current.enforcement_state},
+      ${`Sanction event ${externalId++} — the third confirmed pattern.`}
+    )
+    returning id, reason, actor_id
+  `;
+  const rowValue = row!;
+  return { id: rowValue.id, reason: rowValue.reason, imposerId: rowValue.actor_id };
+}
+
+/**
+ * Retires every live moderator so a test can pin the sole-moderator rule
+ * against a known roster: role changes and deletions leave the live set to
+ * whatever the file's earlier tests-insertions left behind otherwise.
+ */
+async function retireLiveModerators(): Promise<void> {
+  await sql`update users set deleted_at = now() where role = ${"MODERATOR"} and deleted_at is null`;
+}
+
+/**
+ * Writes the sanction event with an explicit imposer, the way a decision-path
+ * test needs: the imposer is who the event's actor names, and the immutability
+ * trigger forbids rewriting it afterwards.
+ */
+async function sanctionEventBy(accountId: string, imposerId: string): Promise<{ id: string; reason: string }> {
   const [current] = await sql<{ enforcement_state: string }[]>`
     select enforcement_state::text from users where id = ${accountId}
   `;
@@ -505,7 +783,7 @@ async function liveSanctionEvent(accountId: string): Promise<{ id: string; reaso
     insert into moderation_events (target_user_id, actor_id, prior_state, new_state, reason)
     values (
       ${accountId},
-      ${await insertModerator()},
+      ${imposerId},
       ${"WARNED"},
       ${current.enforcement_state},
       ${`Sanction event ${externalId++} — the third confirmed pattern.`}
