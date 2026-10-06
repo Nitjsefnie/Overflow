@@ -1,5 +1,5 @@
 import { GenericContainer, type StartedTestContainer } from "testcontainers";
-import { POSTGRES_IMAGE, postgresWaitStrategy, startedPostgresEndpoint, type ParkedSharedPostgresFailure, type SharedPostgresFacts } from "./postgres-container";
+import { POSTGRES_IMAGE, postgresWaitStrategy, publishPostgresOnLoopback, startedPostgresEndpoint, type ParkedSharedPostgresFailure, type SharedPostgresFacts } from "./postgres-container";
 
 /**
  * Vitest globalSetup for the ONE postgres container every DB suite in a run
@@ -34,15 +34,16 @@ let container: StartedTestContainer | undefined;
 
 export async function setup(vitest: GlobalSetupVitest): Promise<void> {
   try {
-    const started = await new GenericContainer(POSTGRES_IMAGE)
+    const built = new GenericContainer(POSTGRES_IMAGE)
       .withEnvironment({
         POSTGRES_DB: SHARED.database,
         POSTGRES_PASSWORD: SHARED.password,
         POSTGRES_USER: SHARED.user,
       })
       .withExposedPorts(5432)
-      .withWaitStrategy(postgresWaitStrategy({ database: SHARED.database, user: SHARED.user }))
-      .start();
+      .withWaitStrategy(postgresWaitStrategy({ database: SHARED.database, user: SHARED.user }));
+    publishPostgresOnLoopback(built, "0");
+    const started = await built.start();
 
     container = started;
     const endpoint = await startedPostgresEndpoint(started);
