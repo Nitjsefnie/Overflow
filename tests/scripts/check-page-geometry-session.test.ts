@@ -47,6 +47,10 @@ describe("mintSessionCookieValue — the @auth/core interop pin (issue 453)", ()
     expect(payload?.role).toBe("MEMBER");
     expect(payload?.iat).toBe(Math.floor(now.getTime() / 1000));
     expect(payload?.exp).toBe(Math.floor(now.getTime() / 1000) + 3600);
+    // The session-guard claims (issue 1043): the mint stamps the sign-in
+    // instant it bounds, and the epoch the seeded fixture rows carry.
+    expect(payload?.authenticatedAt).toBe(Math.floor(now.getTime() / 1000));
+    expect(payload?.sessionEpoch).toBe(0);
   });
 
   it("produces a token the decoder refuses once its hour has passed", async () => {
