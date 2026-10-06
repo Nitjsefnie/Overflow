@@ -2,9 +2,9 @@ import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import type { GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import { plural } from "@/lib/plural";
+import type { BannedAccountProjection } from "@/lib/moderation/banned-accounts";
 import type {
   AuditCandidateProjection,
-  BannedAccountProjection,
   EnforcementHistoryProjection,
   ModerationRepositoryProjection,
   OpenAuditProjection,
@@ -56,11 +56,11 @@ export default async function ModerationPage() {
   const unwritableClosures = await loadUnwritableClosures(session.user.id);
   try {
     const {
-      listBannedAccounts,
       listEnforcementHistory,
       listOpenAudits,
       listRecalibratingAccounts,
     } = await import("@/lib/dashboard/queries");
+    const { listBannedAccounts } = await import("@/lib/moderation/banned-accounts");
     const { PostgresModerationStore } = await import("@/lib/moderation/postgres-store");
     [audits, history, recalibratingAccounts, bannedAccounts, moderators] = await Promise.all([
       listOpenAudits(),

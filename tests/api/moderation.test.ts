@@ -348,6 +348,7 @@ describe("ban reversal API", () => {
     ["no target account", { targetAccountId: undefined }],
     ["a target account that is not a uuid", { targetAccountId: "target-account" }],
     ["no reason", { reason: undefined }],
+    ["a blank reason", { reason: "   " }],
     ["an unexpected extra field", { correctedCredits: 99 }],
   ] as const)("refuses a reversal request with %s before calling the service", async (_label, overrides) => {
     const reverseBan = vi.fn(async () => banReversalFixture());

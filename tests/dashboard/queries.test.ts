@@ -8,7 +8,6 @@ import {
   getSelfWorkCalibrationProof,
   getSettlementProof,
   listAuditCandidates,
-  listBannedAccounts,
   listEnforcementHistory,
   listModerationRepositories,
   listOpenAudits,
@@ -22,6 +21,7 @@ import {
   type DashboardBegin,
   type DashboardSql,
 } from "@/lib/dashboard/queries";
+import { listBannedAccounts } from "@/lib/moderation/banned-accounts";
 import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 
