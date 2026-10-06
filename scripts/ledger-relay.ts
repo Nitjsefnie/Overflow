@@ -65,33 +65,20 @@ import {
 export { decideContexts, isTrustedProducerRun, PIN_SHAPE, pinsFor, validatePinMap };
 export type { ContextDecision, PinMap, RelayJob };
 
-/** The triggering run's identifying fields, validated on entry. */
-export interface TriggeringRun {
-  runId: string;
-  headSha: string;
-  path: string;
-  conclusion: string | null;
-  htmlUrl: string;
-  event: string;
-  /** The triggering run's head branch; empty when the environment or the API did not name one. */
-  headBranch: string;
-  /** The triggering run's attempt number; 1 when the environment or the API did not name one. */
-  runAttempt: number;
-  /**
-   * The full name ("OWNER/REPO") of the repository the run's head commit
-   * lives in, per the run body's `head_repository.full_name`; empty when the
-   * run's fields carry none (the workflow_run path's env carries none). The
-   * refusal gate compares it against this repository's slug (issue 1115): a
-   * known mismatch throws before any listing is consulted. Empty does NOT
-   * mean "same repository" — a fork head's commit resolves in the base
-   * repository through its pull ref — so the gate fetches the run body to
-   * learn the name, and a name still missing keeps the throw.
-   */
-  headRepository: string;
-}
+// The trigger's identifying fields and the env rules that decide what kind of
+// relay a start is; their own module holds the ceiling headroom this entry
+// needed (issue 1116's sweep-only mode) without thinning any comment here.
+import {
+  assertShape,
+  DIGITS,
+  normalizedAttempt,
+  parseTrigger,
+  SHA_40,
+  type TriggeringRun,
+} from "./ledger-relay-trigger.ts";
 
-const SHA_40 = /^[0-9a-f]{40}$/;
-const DIGITS = /^\d+$/;
+export type { TriggeringRun };
+
 const API_ROOT = "https://api.github.com";
 // On every call: the media type GitHub's REST documentation names and the
 // api-version header, so a response-shape change fails loudly instead of
@@ -198,6 +185,12 @@ export interface RelayResult {
    * path.
    */
   refusedDeadHead?: string;
+  /**
+   * Issue 1116: the start was sweep-only — no triggering run, so the mirror
+   * and the rerun-heal were skipped and the sweep's own summary lines are the
+   * whole output. Undefined on every other path.
+   */
+  sweepOnly?: boolean;
 }
 
 /**
@@ -228,6 +221,23 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
 
   const trigger = parseTrigger(env);
   const [, repoName] = repo.split("/");
+  if (trigger.kind === "sweep-only") {
+    // Sweep-only (issue 1116): the scheduled start exists to sweep — there is
+    // no triggering run, so the mirror is skipped and the rerun-heal has
+    // nothing to heal. A thrown sweep exits nonzero (red), the unchanged
+    // direction, and the renderer prints the sweep's own summary lines.
+    const token = await mintInstallationToken(deps, appId, appKey, installationId, repoName);
+    const sweep = await sweepOrphans({
+      api: sweepApi(deps, repo, { authorization: `Bearer ${token}` }),
+      decide: decideContexts,
+      pinMap,
+      apiRoot: API_ROOT,
+      repo,
+      appId,
+      triggerRunId: "",
+    });
+    return { decisions: [], posted: [], rerunDispatched: false, sweep, sweepOnly: true };
+  }
   if (trigger.kind === "workflow_run" && contextsFor(pinMap, trigger.run.path).length === 0) {
     // Nothing is pinned to this run's workflow; there is nothing to relay and
     // no reason to mint a token. A run nothing is pinned to never had a
@@ -235,21 +245,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
   }
 
-  const jwt = mintAppJwt(appId, appKey, Date.now());
-  const tokenBody = await apiCall<{ token?: unknown }>(
-    deps,
-    {
-      url: `${API_ROOT}/app/installations/${installationId}/access_tokens`,
-      method: "POST",
-      headers: { ...API_HEADERS, authorization: `Bearer ${jwt}` },
-      body: JSON.stringify({ repositories: [repoName] }),
-    },
-    "the installation-token mint",
-  );
-  const token = tokenBody.token;
-  if (typeof token !== "string" || token === "") {
-    throw new Error("the installation-token mint returned no token");
-  }
+  const token = await mintInstallationToken(deps, appId, appKey, installationId, repoName);
   const auth = { authorization: `Bearer ${token}` };
 
   let run: TriggeringRun;
@@ -334,6 +330,36 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   if (sweepError !== undefined) throw sweepError;
 
   return { decisions, posted, rerunDispatched, sweep };
+}
+
+/**
+ * The App installation token both relay duties run under: a JWT minted from
+ * the App key is exchanged for a repo-scoped installation token, whose failure
+ * is the red job the failure direction demands. One helper because the
+ * sweep-only start (issue 1116) mints the same credential for the same reason.
+ */
+async function mintInstallationToken(
+  deps: RelayDeps,
+  appId: string,
+  appKey: string,
+  installationId: string,
+  repoName: string,
+): Promise<string> {
+  const jwt = mintAppJwt(appId, appKey, Date.now());  const tokenBody = await apiCall<{ token?: unknown }>(
+    deps,
+    {
+      url: `${API_ROOT}/app/installations/${installationId}/access_tokens`,
+      method: "POST",
+      headers: { ...API_HEADERS, authorization: `Bearer ${jwt}` },
+      body: JSON.stringify({ repositories: [repoName] }),
+    },
+    "the installation-token mint",
+  );
+  const token = tokenBody.token;
+  if (typeof token !== "string" || token === "") {
+    throw new Error("the installation-token mint returned no token");
+  }
+  return token;
 }
 
 /**
@@ -541,75 +567,6 @@ function truncate(text: string): string {
   return trimmed.length <= 300 ? trimmed : `${trimmed.slice(0, 300)}…`;
 }
 
-type Trigger =
-  | { kind: "workflow_run"; run: TriggeringRun }
-  | { kind: "dispatch"; runId: string };
-
-/**
- * The workflow passes the triggering run's fields explicitly so the entry has
- * no event payload to parse. An absent GITHUB_WORKFLOW_RUN_ID means a
- * workflow_dispatch recovery: LEDGER_DISPATCH_RUN_ID names the run to
- * re-read from the API.
- */
-function parseTrigger(env: Record<string, string | undefined>): Trigger {
-  const runId = env.GITHUB_WORKFLOW_RUN_ID ?? "";
-  if (runId !== "") {
-    assertShape(runId, DIGITS, "GITHUB_WORKFLOW_RUN_ID must be a workflow-run id");
-    const headSha = env.GITHUB_WORKFLOW_RUN_HEAD_SHA ?? "";
-    assertShape(headSha, SHA_40, "GITHUB_WORKFLOW_RUN_HEAD_SHA must be a 40-hex SHA");
-    const path = env.GITHUB_WORKFLOW_RUN_PATH ?? "";
-    assertShape(path, PIN_SHAPE, "GITHUB_WORKFLOW_RUN_PATH must be a workflow path");
-    const htmlUrl = env.GITHUB_WORKFLOW_RUN_HTML_URL ?? "";
-    if (htmlUrl === "") {
-      throw new Error("GITHUB_WORKFLOW_RUN_HTML_URL is required for the check-run's details_url");
-    }
-    return {
-      kind: "workflow_run",
-      run: {
-        runId,
-        headSha,
-        path,
-        conclusion: normalizedConclusion(env.GITHUB_WORKFLOW_RUN_CONCLUSION),
-        htmlUrl,
-        event: env.GITHUB_WORKFLOW_RUN_EVENT ?? "",
-        headBranch: env.GITHUB_WORKFLOW_RUN_HEAD_BRANCH ?? "",
-        runAttempt: normalizedAttempt(env.GITHUB_WORKFLOW_RUN_ATTEMPT),
-        headRepository: "",
-      },
-    };
-  }
-  const dispatchRunId = env.LEDGER_DISPATCH_RUN_ID ?? "";
-  if (dispatchRunId === "") {
-    throw new Error(
-      "no triggering run in the environment: expected GITHUB_WORKFLOW_RUN_* (workflow_run) " +
-        "or LEDGER_DISPATCH_RUN_ID (workflow_dispatch recovery)",
-    );
-  }
-  assertShape(dispatchRunId, DIGITS, "LEDGER_DISPATCH_RUN_ID must be a workflow-run id");
-  return { kind: "dispatch", runId: dispatchRunId };
-}
-
-function normalizedConclusion(value: string | undefined): string | null {
-  const trimmed = (value ?? "").trim();
-  return trimmed === "" ? null : trimmed;
-}
-
-/**
- * A missing or invalid attempt reads as 1 (issue 861): the heal's cap
- * compares against the run's own attempt number, which both trigger paths
- * carry — GITHUB_WORKFLOW_RUN_ATTEMPT on the workflow_run path, run_attempt in
- * the fetched body on the dispatch path.
- */
-function normalizedAttempt(value: string | number | undefined): number {
-  if (typeof value === "number") {
-    return Number.isInteger(value) && value >= 1 ? value : 1;
-  }
-  const trimmed = (value ?? "").trim();
-  if (!DIGITS.test(trimmed)) return 1;
-  const parsed = Number(trimmed);
-  return parsed >= 1 ? parsed : 1;
-}
-
 function triggeringRunFromApi(body: Record<string, unknown>): TriggeringRun {
   const headSha = typeof body.head_sha === "string" ? body.head_sha : "";
   assertShape(headSha, SHA_40, "the fetched run's head_sha must be a 40-hex SHA");
@@ -739,12 +696,6 @@ function required(env: Record<string, string | undefined>, name: string): string
   return value;
 }
 
-function assertShape(value: string, shape: RegExp, message: string): void {
-  if (!shape.test(value)) {
-    throw new Error(`${message} (got ${JSON.stringify(value)})`);
-  }
-}
-
 /**
  * The relay's human-visible success signal, one log line at a time. Pure, so a
  * synthetic result can drive it: the rerun-heal line is the only signal that a
@@ -753,6 +704,11 @@ function assertShape(value: string, shape: RegExp, message: string): void {
  * living undrivable in main().
  */
 export function renderRelayResult(result: RelayResult): string[] {
+  if (result.sweepOnly === true) {
+    // Issue 1116: the sweep's summary is the whole output; there is no
+    // triggering run to name and no mirror to report.
+    return renderSweepLines(result.sweep);
+  }
   if (result.refusedDeadHead !== undefined) {
     return [
       `[ledger-relay] ${result.refusedDeadHead}`,
