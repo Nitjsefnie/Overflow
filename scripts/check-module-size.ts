@@ -81,6 +81,12 @@ export const MEASURED_FAMILIES: readonly PathClass[] = [
 ];
 
 // Recorded exclusions: tracked files deliberately left unmeasured.
+//
+// Landing order (issue 1113): ci-pr.yml's pull_request_target checkout runs
+// base main's copy of this classifier against the materialised merge tree, so
+// an admission for a brand-new tracked file shape must land on main in its
+// own PR before the PR adding the admitted file; a same-PR admission cannot
+// take effect.
 export const EXCLUSIONS: readonly PathClass[] = [
   // Prose, reviewed as documents; a long reference page is not a long module.
   { name: "documentation", matches: (p) => /\.md$/s.test(p) || p === "LICENSE" },
