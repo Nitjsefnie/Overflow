@@ -607,6 +607,24 @@ describe("PostgreSQL account moderation transitions", () => {
     }
   });
 
+  it("does not list a deleted row still carrying MODERATOR", async () => {
+    const liveModeratorId = await insertUser("MODERATOR");
+    const deletedModeratorId = await insertUser("MODERATOR");
+
+    // The pre-fix deleted shape: the row keeps role MODERATOR across deletion.
+    // Planted directly, so this case holds for rows deleted before the fix
+    // shipped, not only for rows the fixed scrub writes.
+    await sql`update users set deleted_at = now() where id = ${deletedModeratorId}`;
+
+    // Earlier cases in this file leave live MODERATOR rows behind; the roster
+    // lists the users table, so demote everyone but the live moderator under
+    // test, as the guard and mutual-revocation cases above do.
+    await sql`update users set role = 'MEMBER' where role = 'MODERATOR' and id not in (${liveModeratorId}, ${deletedModeratorId})`;
+
+    const roster = await new PostgresModerationStore(sql).listModerators();
+    expect(roster.map((entry) => entry.accountId)).toEqual([liveModeratorId]);
+  });
+
   it.each([
     { storedRole: "MODERATOR", configured: false },
     { storedRole: "MEMBER", configured: true },
