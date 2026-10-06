@@ -64,13 +64,13 @@ export interface LegalRevision {
 export const TERMS_REVISION: LegalRevision = {
   document: "terms",
   version: "1.1",
-  effectiveDate: "2026-10-02",
+  effectiveDate: "2026-10-06",
 };
 
 export const ACCOUNT_DATA_REVISION: LegalRevision = {
   document: "account-data",
   version: "1.1",
-  effectiveDate: "2026-10-05",
+  effectiveDate: "2026-10-06",
 };
 
 // The rules page is a legal document too, and a stronger one for disputes: the
@@ -80,5 +80,5 @@ export const ACCOUNT_DATA_REVISION: LegalRevision = {
 export const RULES_REVISION: LegalRevision = {
   document: "rules",
   version: "1.0",
-  effectiveDate: "2026-10-02",
+  effectiveDate: "2026-10-06",
 };

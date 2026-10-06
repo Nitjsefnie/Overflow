@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { PublicAppShell } from "@/components/app-shell";
 import { ACCOUNT_DATA_REVISION } from "@/lib/legal-revisions";
+import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
 
 export function AccountDataNotice() {
   return (
@@ -423,6 +424,9 @@ export function AccountDataNotice() {
             recalibrating, and banned as its confirmed miscalibrations accumulate, and they can
             adjust credit balances by hand.
           </li>
+          {SANCTION_EFFECT_RULES.map((rule) => (
+            <li key={rule}>{rule}</li>
+          ))}
         </ul>
       </section>
 

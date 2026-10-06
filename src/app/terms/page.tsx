@@ -2,6 +2,7 @@ import Link from "next/link";
 import { PublicAppShell } from "@/components/app-shell";
 import { DISPUTE_CONTESTABLE_CASE, DISPUTE_RULES } from "@/lib/disputes";
 import { TERMS_REVISION } from "@/lib/legal-revisions";
+import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
 
 export function TermsNotice() {
   return (
@@ -71,6 +72,11 @@ export function TermsNotice() {
           </a>
           .
         </p>
+        <ul className="rules-list">
+          {SANCTION_EFFECT_RULES.map((rule) => (
+            <li key={rule}>{rule}</li>
+          ))}
+        </ul>
       </section>
 
       <section className="surface" aria-labelledby="terms-disputes-heading">
