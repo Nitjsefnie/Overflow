@@ -99,7 +99,10 @@ applied — the closure reactivates the account's whole still-registered
 inactive set, the ban reversal only the rows migration 060's
 `sanction_deactivated_at` flag records as sanction-deactivated. The ban
 route is `src/app/api/moderation/reversal/route.ts`, which journals the
-action as `ban.reverse` in the privileged-action log. The route is
+action as `ban.reverse` in the privileged-action log. The recalibration
+closure is reached through the moderation route's POST action
+(`src/app/api/moderation/route.ts`, which dispatches `closeRecalibration`
+around line 137 and journals `recalibration.close`). The route is
 disclosed in the `/account-data` notice's "Scoring and sanctions" section,
 with the sanction's effects on the account's repositories. (Route recorded
 2026-10-06, with the change that shipped it; the three routes above stand
