@@ -4,6 +4,7 @@ import * as database from "@/lib/db/client";
 import type { SqlClient } from "@/lib/db/types";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createGitLabWebhookPostHandler, POST } from "@/app/api/gitlab/webhooks/route";
+import { errorLogToken, logField } from "@/lib/webhooks/log-field";
 import {
   WEBHOOK_RATE_LIMIT_CAPACITY,
   WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE,
@@ -350,10 +351,39 @@ describe("GitLab webhook route", () => {
       expect(message).toContain("delivery \"key\\u001b[1mz\" (");
       expect(message).toContain("(execution \"uuid\\u001b[2Kz\",");
       expect(message).toContain(`repository "gitlab-org\\u000a\\u001b[2J${"a".repeat(241)}"… (+4759 more),`);
-      // A fixed template over the identifiers: the error rides only as the
-      // second argument and is never flattened into the message.
+      // A fixed template over the identifiers: the error rides as the encoded
+      // token and is never flattened into the message.
       expect(message).not.toContain(rootCause.message);
-      expect(loggedError).toBe(rootCause);
+      expect(loggedError).toBe(errorLogToken(rootCause));
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  // The error a failed delivery carries is the instance's own text — its
+  // message can hold the hostile payload — so the sink argument is the encoded
+  // token: one line, no raw escape, the forged block present only escaped.
+  it("encodes a hostile error message at the failure line", async () => {
+    const hostile = "probe\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[2J\u001b[31mspoofed";
+    const rootCause = new Error(hostile);
+    const route = createGitLabWebhookPostHandler({
+      checkRateLimit: () => true,
+      lookupCredential: async () => webhookCredential("gitlab", secret),
+      processWebhook: vi.fn().mockRejectedValue(rootCause),
+    });
+    const calls: unknown[][] = [];
+    const logged = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { calls.push(args); });
+    try {
+      const response = await route(request(issuePayload, gitlabHeaders({ "Idempotency-Key": "stable-message" })));
+
+      expect(response.status).toBe(503);
+      expect(logged).toHaveBeenCalledTimes(1);
+      const [message, loggedError] = calls[0] ?? [];
+      expect(message).toEqual(expect.stringContaining("stable-message"));
+      const rendered = String(loggedError);
+      expect(rendered).not.toContain("\n");
+      expect(rendered).not.toContain("\u001b");
+      expect(rendered).toBe(`${logField("Error")}: ${logField(hostile)}`);
     } finally {
       logged.mockRestore();
     }

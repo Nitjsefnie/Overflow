@@ -1,4 +1,5 @@
 import { callGuarded } from "@/lib/fold/guarded-callback";
+import { errorLogToken } from "@/lib/webhooks/log-field";
 
 export type ReconciliationSweepDependencies = {
   listActiveRepositoryIds(): Promise<string[]>;
@@ -198,7 +199,7 @@ function reportRepositoryFailure(
 function logRepositoryFailure(repositoryId: string, error: unknown): void {
   const message = "Reconciliation failed for repository";
   try {
-    console.error(message, repositoryId, error);
+    console.error(message, repositoryId, errorLogToken(error));
   } catch {
     console.error(message, repositoryId);
   }
@@ -319,7 +320,7 @@ function reportSweepFailure(schedule: ReconciliationSweepSchedule, error: unknow
 function logSweepFailure(error: unknown): void {
   const message = "Reconciliation sweep aborted before it finished";
   try {
-    console.error(message, error);
+    console.error(message, errorLogToken(error));
   } catch {
     console.error(message);
   }

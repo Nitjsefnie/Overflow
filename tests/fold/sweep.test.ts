@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { errorLogToken, logField } from "@/lib/webhooks/log-field";
 import {
   RECONCILIATION_SWEEP_INTERVAL_MS,
   shouldStartReconciliationBackground,
@@ -367,7 +368,7 @@ describe("scheduled reconciliation sweep", () => {
       await timer.settle();
 
       expect(reported).toHaveBeenCalledTimes(1);
-      expect(reported.mock.calls[0]).toContain(unreachable);
+      expect(reported.mock.calls[0]).toContain(errorLogToken(unreachable));
     } finally {
       reported.mockRestore();
     }
@@ -449,7 +450,7 @@ describe("scheduled reconciliation sweep", () => {
       // The hook failed, so the sweep failure falls back to the console instead
       // of being lost.
       expect(logged).toHaveBeenCalledTimes(1);
-      expect(logged.mock.calls[0]).toContain(unreachable);
+      expect(logged.mock.calls[0]).toContain(errorLogToken(unreachable));
 
       // The running flag is cleared even when the hook threw.
       await timer.tick();
@@ -493,7 +494,7 @@ describe("scheduled reconciliation sweep", () => {
       expect(sweeps).toBe(1);
       expect(reports).toBe(1);
       expect(logged).toHaveBeenCalledTimes(1);
-      expect(logged.mock.calls[0]).toContain(unreachable);
+      expect(logged.mock.calls[0]).toContain(errorLogToken(unreachable));
 
       await timer.tick();
       expect(sweeps).toBe(2);
@@ -525,7 +526,7 @@ describe("scheduled reconciliation sweep", () => {
       await timer.settle();
 
       expect(logged).toHaveBeenCalledTimes(1);
-      expect(logged.mock.calls[0]).toContain(unreachable);
+      expect(logged.mock.calls[0]).toContain(errorLogToken(unreachable));
     } finally {
       logged.mockRestore();
     }
@@ -556,7 +557,7 @@ describe("scheduled reconciliation sweep", () => {
       await timer.settle();
 
       expect(calls).toHaveLength(2);
-      expect(calls[0]).toEqual([message, unreachable]);
+      expect(calls[0]).toEqual([message, errorLogToken(unreachable)]);
       // The reason is what could not be printed, so the line survives without it.
       expect(calls[1]).toEqual([message]);
     } finally {
@@ -618,7 +619,7 @@ describe("scheduled reconciliation sweep", () => {
       expect(unhandled).toEqual([]);
       expect(sweeps).toBe(1);
       expect(logged).toHaveBeenCalledTimes(1);
-      expect(logged.mock.calls[0]).toContain(unreachable);
+      expect(logged.mock.calls[0]).toContain(errorLogToken(unreachable));
 
       await timer.tick();
       expect(sweeps).toBe(2);
@@ -765,7 +766,7 @@ describe("scheduled reconciliation sweep", () => {
       await drain();
       expect(unhandled).toEqual([]);
       expect(logged.mock.calls).toEqual([
-        ["Reconciliation failed for repository", "repo-a", unqueued],
+        ["Reconciliation failed for repository", "repo-a", errorLogToken(unqueued)],
       ]);
     } finally {
       logged.mockRestore();
@@ -798,7 +799,7 @@ describe("scheduled reconciliation sweep", () => {
       // its place in the queue.
       expect(enqueued).toEqual(["repo-a", "repo-b", "repo-c"]);
       expect(logged.mock.calls).toEqual([
-        ["Reconciliation failed for repository", "broken", unqueued],
+        ["Reconciliation failed for repository", "broken", errorLogToken(unqueued)],
       ]);
     } finally {
       logged.mockRestore();
@@ -891,7 +892,7 @@ describe("scheduled reconciliation sweep", () => {
         attempted: 1, enqueued: 0, failed: 1,
       });
       expect(logged.mock.calls).toEqual([
-        ["Reconciliation failed for repository", "repo-a", unqueued],
+        ["Reconciliation failed for repository", "repo-a", errorLogToken(unqueued)],
       ]);
     } finally {
       logged.mockRestore();
@@ -974,7 +975,7 @@ describe("scheduled reconciliation sweep", () => {
         attempted: 1, enqueued: 0, failed: 1,
       });
       expect(logged.mock.calls).toEqual([
-        ["Reconciliation failed for repository", "repo-a", unqueued],
+        ["Reconciliation failed for repository", "repo-a", errorLogToken(unqueued)],
       ]);
     } finally {
       logged.mockRestore();
@@ -1006,7 +1007,7 @@ describe("scheduled reconciliation sweep", () => {
       ).resolves.toEqual({ attempted: 1, enqueued: 0, failed: 1 });
 
       // The reason is what could not be printed, so the line survives without it.
-      expect(calls).toEqual([[message, "repo-a", unqueued], [message, "repo-a"]]);
+      expect(calls).toEqual([[message, "repo-a", errorLogToken(unqueued)], [message, "repo-a"]]);
     } finally {
       logged.mockRestore();
     }
@@ -1862,3 +1863,34 @@ function createTimer() {
     },
   };
 }
+
+// The fallback that prints when the reporter cannot even be read renders the
+// enqueue failure raw — the error's message can carry the hostile payload —
+// so the fallback argument is the encoded token, one line, no raw escape
+// (issue 1042).
+describe("fallback log encoding (issue 1042)", () => {
+  it("renders a hostile enqueue failure as one encoded token when the reporter cannot be read", async () => {
+    const hostile = "enqueue\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[2J\u001b[31mspoofed";
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const dependencies = {
+      listActiveRepositoryIds: async () => ["repo-a"],
+      enqueue: async () => {
+        throw new Error(hostile);
+      },
+      get onFailure(): (repositoryId: string, error: unknown) => void {
+        throw new Error("The reporter is not wired up yet");
+      },
+    };
+
+    try {
+      await expect(sweepReconciliations(dependencies)).resolves.toEqual({
+        attempted: 1, enqueued: 0, failed: 1,
+      });
+      expect(logged.mock.calls).toEqual([
+        ["Reconciliation failed for repository", "repo-a", `${logField("Error")}: ${logField(hostile)}`],
+      ]);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+});

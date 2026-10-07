@@ -6,7 +6,7 @@ import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { webhookSelector, type WebhookCredentialLookup } from "@/lib/webhooks/credentials";
-import { logField } from "@/lib/webhooks/log-field";
+import { errorLogToken, logField } from "@/lib/webhooks/log-field";
 import { readBodyWithinLimit } from "@/lib/http/request-body";
 import {
   WEBHOOK_RATE_LIMIT_CAPACITY,
@@ -112,14 +112,15 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
       // only an empty 503 and the store persists the sanitized constant, so
       // this console line is the operators' one view of why a delivery failed.
       // The message is a fixed template over the delivery's identifiers, and
-      // the error object itself rides as the second argument — Node renders
-      // its type, stack and Error.cause chain natively. The request-derived
-      // identifiers (receipt key, execution UUID, and the project's
-      // path_with_namespace, which the parser accepts with internal control
-      // characters and at any length) each go through logField, so each is
-      // one quoted token with its controls escaped and its length bounded;
-      // the event is the parser's constant and the forge id a number. The
-      // delivery id is the receipt key, often the Idempotency-Key; the
+      // the error rides as the second argument encoded into one bounded
+      // single-line token (issue 1042) — the console sink renders a raw error
+      // object through its stack, whose first line carries the message raw.
+      // The request-derived identifiers (receipt key, execution UUID, and the
+      // project's path_with_namespace, which the parser accepts with internal
+      // control characters and at any length) each go through logField, so
+      // each is one quoted token with its controls escaped and its length
+      // bounded; the event is the parser's constant and the forge id a number.
+      // The delivery id is the receipt key, often the Idempotency-Key; the
       // execution is the X-Gitlab-Webhook-UUID an operator finds in GitLab's
       // delivery log.
       console.error(
@@ -127,7 +128,7 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
           + ` (execution ${logField(delivery.executionId)},`
           + ` event ${delivery.event}, repository ${logField(delivery.repositoryFullName)},`
           + ` forge id ${delivery.repositoryGitHubId}).`,
-        error,
+        errorLogToken(error),
       );
       return new Response(null, { status: 503 });
     }

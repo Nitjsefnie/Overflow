@@ -1,4 +1,5 @@
 import { callGuarded } from "@/lib/fold/guarded-callback";
+import { errorLogToken } from "@/lib/webhooks/log-field";
 import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 import { FailureLogger } from "@/lib/worker/failure-logger";
 
@@ -729,7 +730,7 @@ function reportJobFailure(
 function logJobFailure(repositoryId: string, error: unknown): void {
   const message = "Reconciliation failed for repository";
   try {
-    console.error(message, repositoryId, error);
+    console.error(message, repositoryId, errorLogToken(error));
   } catch {
     console.error(message, repositoryId);
   }
@@ -767,7 +768,7 @@ function reportDrainFailure(schedule: ReconciliationWorkerSchedule, error: unkno
 function logDrainFailure(error: unknown): void {
   const message = "Reconciliation worker could not drain the job queue";
   try {
-    console.error(message, error);
+    console.error(message, errorLogToken(error));
   } catch {
     console.error(message);
   }

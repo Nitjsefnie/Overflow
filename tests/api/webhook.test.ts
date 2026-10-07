@@ -12,6 +12,7 @@ import {
   WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE,
   createTokenBucket,
 } from "@/lib/webhooks/rate-limit";
+import { errorLogToken, logField } from "@/lib/webhooks/log-field";
 import { processWebhook, type WebhookProcessorDependencies } from "@/lib/webhooks/processor";
 
 // The route and the spies must share the same persistence module instances.
@@ -402,10 +403,43 @@ describe("GitHub webhook route", () => {
       expect(message).toContain("pull_request");
       expect(message).toContain("octo/example");
       expect(message).toContain("GitHub id 42");
-      // The error object itself is the second argument, never a stringified
-      // copy: Node renders its type, stack and Error.cause chain natively, so
-      // flattening it into the message line would erase the diagnostic.
-      expect(loggedError).toBe(rootCause);
+      // The error rides as the encoded token (issue 1042): one bounded line,
+      // so no text it picked up can forge journal lines or drive the terminal.
+      expect(loggedError).toBe(errorLogToken(rootCause));
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  // A GitLab-style hostile payload can ride the error a processing failure
+  // carries: the error's message is the instance's own text, and the console
+  // sink renders it raw through the stack unless the argument is encoded.
+  it("encodes a hostile error message at the failure line", async () => {
+    const hostile = "probe\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[2J\u001b[31mspoofed";
+    const rootCause = new Error(hostile);
+    const processWebhookMock = vi.fn().mockRejectedValue(rootCause);
+    const calls: unknown[][] = [];
+    const logged = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      calls.push(args);
+    });
+    try {
+      const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+
+      const response = await route(
+        request(rawPayload, {
+          "x-github-event": "pull_request",
+          "x-github-delivery": "delivery-hostile-error",
+        }),
+      );
+
+      expect(response.status).toBe(503);
+      expect(logged).toHaveBeenCalledTimes(1);
+      const [message, loggedError] = calls[0];
+      expect(message).toContain("delivery-hostile-error");
+      const rendered = String(loggedError);
+      expect(rendered).not.toContain("\n");
+      expect(rendered).not.toContain("\u001b");
+      expect(rendered).toBe(`${logField("Error")}: ${logField(hostile)}`);
     } finally {
       logged.mockRestore();
     }
@@ -440,9 +474,9 @@ describe("GitHub webhook route", () => {
       expect(message).toContain("delivery \"delivery\\u001b[1mz\" (");
       expect(message).toContain(`repository "octo\\u000a\\u001b[2J${"a".repeat(247)}"… (+4753 more),`);
       // A fixed template over the identifiers: the error rides only as the
-      // second argument and is never flattened into the message.
+      // encoded token and is never flattened into the message.
       expect(message).not.toContain(rootCause.message);
-      expect(loggedError).toBe(rootCause);
+      expect(loggedError).toBe(errorLogToken(rootCause));
     } finally {
       logged.mockRestore();
     }
@@ -508,11 +542,12 @@ describe("GitHub webhook route", () => {
       expect(logged).toHaveBeenCalledTimes(1);
       const [message, loggedError] = calls[0];
       expect(message).toContain("delivery-cause-chain");
-      expect(loggedError).toBeInstanceOf(Error);
-      expect((loggedError as Error).message).toBe("Webhook processing failed.");
-      // The processor's rethrow reaches the log with its cause still attached,
-      // so a composed failure names the layer that actually broke.
-      expect((loggedError as Error).cause).toBe(rootCause);
+      // The processor's rethrow reaches the log as the encoded token with the
+      // cause chain flattened onto the same line, so a composed failure still
+      // names the layer that actually broke (issue 1042).
+      expect(loggedError).toBe(
+        `${logField("Error")}: ${logField("Webhook processing failed.")}; ${logField("Error")}: ${logField("probe enqueue root cause")}`,
+      );
     } finally {
       logged.mockRestore();
     }
