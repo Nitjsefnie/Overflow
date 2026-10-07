@@ -2774,7 +2774,7 @@ the moderation page, say) and the journal:
 journalctl -u overflow.service --no-pager -e | grep "Privileged action"
 ```
 
-The newest line must carry `"clientAddressVerified": true` beside the address
+The newest line must carry `clientAddressVerified: true` beside the address
 nginx recorded. A later vhost edit that drops the header, or a value changed
 on one side only, shows up the same way: entries keep arriving, marked
 unverified.
