@@ -487,7 +487,17 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     const fx = await fixture(PACKAGE_JSON(config), PACKAGE_JSON(config));
     const target = await writeBlobNow(fx.workspace, `../../evil-workspace.yaml ${MARKER}`);
     const g = (args: string[]): string => {
-      const result = spawnSync("git", args, { cwd: fx.workspace, encoding: "utf8" });
+      const result = spawnSync("git", args, {
+        cwd: fx.workspace,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "scratch repository",
+          GIT_AUTHOR_EMAIL: "scratch@example.invalid",
+          GIT_COMMITTER_NAME: "scratch repository",
+          GIT_COMMITTER_EMAIL: "scratch@example.invalid",
+        },
+      });
       if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
       return result.stdout.trim();
     };
@@ -578,7 +588,17 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     const fx = await fixture(PACKAGE_JSON(config), PACKAGE_JSON(config));
     const target = await writeBlobNow(fx.workspace, `../../evil-npmrc ${MARKER}`);
     const g = (args: string[]): string => {
-      const result = spawnSync("git", args, { cwd: fx.workspace, encoding: "utf8" });
+      const result = spawnSync("git", args, {
+        cwd: fx.workspace,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "scratch repository",
+          GIT_AUTHOR_EMAIL: "scratch@example.invalid",
+          GIT_COMMITTER_NAME: "scratch repository",
+          GIT_COMMITTER_EMAIL: "scratch@example.invalid",
+        },
+      });
       if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
       return result.stdout.trim();
     };
