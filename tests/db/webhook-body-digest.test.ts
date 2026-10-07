@@ -344,8 +344,9 @@ describe("webhook body-digest replay dedup", () => {
       expect(await store.markProcessed(other.receiptId, other.leaseToken)).toBe(true);
 
       // The digest is what dedups the first registration's own fresh-key
-      // redelivery — the delivery keys differ, so only the digest can.
-      await expect(store.claimDelivery(storeDelivery("gh-scope-3", projectId), {
+      // redelivery — the delivery keys differ, so only the digest can. The
+      // probe rides the event the route-processed receipt was written under.
+      await expect(store.claimDelivery({ ...storeDelivery("gh-scope-3", projectId), event: "pull_request" }, {
         provider: "github", registrationId: a.repositoryId, bodyDigest: digest,
       })).resolves.toEqual({ status: "DUPLICATE" });
     });
@@ -369,6 +370,29 @@ describe("webhook body-digest replay dedup", () => {
       await expect(store.claimDelivery(storeDelivery("gh-nulldigest-1", projectId), {
         provider: "github", registrationId: fixture.repositoryId,
       })).resolves.toEqual({ status: "DUPLICATE" });
+    });
+
+    it("scopes the digest to one event, never concealing one event behind another", async () => {
+      // Distinct forge events may share body bytes — the GitHub upgrade suite
+      // delivers an issue and a comment envelope over identical bodies — and
+      // each accepted delivery must write its own effects. The replay key is
+      // therefore (event, digest), not the digest alone.
+      const fixture = await materializeRepositoryFixture(sql);
+      const store = new PostgresFoldStore(sql);
+      const projectId = await projectIdOf(fixture);
+      const digest = sha256("one body, two events");
+      const scope = { provider: "github" as const, registrationId: fixture.repositoryId, bodyDigest: digest };
+      const issue = await store.claimDelivery({ ...storeDelivery("gh-event-1", projectId), event: "issues" }, scope);
+      expect(issue.status).toBe("CLAIMED");
+      if (issue.status !== "CLAIMED") throw new Error("Expected the issue delivery to claim its receipt");
+      expect(await store.markProcessed(issue.receiptId, issue.leaseToken)).toBe(true);
+
+      // The same body under another event name is another replay key.
+      await expect(store.claimDelivery({ ...storeDelivery("gh-event-2", projectId), event: "pull_request" }, scope))
+        .resolves.toMatchObject({ status: "CLAIMED" });
+      // ...while the same event over the same body still dedups.
+      await expect(store.claimDelivery({ ...storeDelivery("gh-event-3", projectId), event: "issues" }, scope))
+        .resolves.toEqual({ status: "DUPLICATE" });
     });
   });
 });

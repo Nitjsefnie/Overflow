@@ -14,14 +14,18 @@ type WebhookDeliveryClaimRow = {
  * the same statement as the upsert so no second read can race it. CLAIMED when
  * the receipt was new, FAILED or held by a lapsed lease; DUPLICATE when the
  * scoped receipt is PROCESSED — by delivery key, or by the signed body's
- * digest whatever the delivery id; IN_PROGRESS otherwise — a live lease, or a
- * conflicting row committed after this statement's snapshot, which it cannot
- * see. Legacy receipts carry no registration and never match the lookup.
+ * digest under the same event whatever the delivery id; IN_PROGRESS otherwise
+ * — a live lease, or a conflicting row committed after this statement's
+ * snapshot, which it cannot see. Legacy receipts carry no registration and
+ * never match the lookup.
  *
  * The digest is the mixed-version safe leg of that rule: the previous release
  * keeps writing digest-less receipts during the switch, so the lookup can only
  * match rows this release wrote, and a claim whose digest is absent matches
  * nothing at all and falls back to the delivery-id-only rule (issue 1041).
+ * The event name rides the key because distinct forge events may share body
+ * bytes and each accepted delivery must write its own effects — the digest
+ * alone never conceals one event behind another.
  */
 export async function claimDelivery(
   sql: SqlClient,
@@ -35,6 +39,7 @@ export async function claimDelivery(
           select 1 from webhook_deliveries
           where provider = ${scope.provider}
             and registration_id = ${scope.registrationId}
+            and event_name = ${delivery.event}
             and body_digest = ${scope.bodyDigest ?? null}
             and processing_state = ${"PROCESSED"}
         ) as hit
