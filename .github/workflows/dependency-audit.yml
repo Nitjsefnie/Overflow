@@ -232,6 +232,21 @@ jobs:
       # the key counts as divergence), and every refusal is a fixed constant
       # carrying no pull-request bytes. Measured with the repository's other
       # gates: identical lists exit 0 silently.
+      #
+      # WHY PACKAGE.JSON ONLY. The suppression list has exactly one home on
+      # pnpm 10.33.0, the version the Enable the pinned package manager step
+      # pins: `pnpm audit` does NOT read auditConfig from pnpm-workspace.yaml.
+      # Measured with this repository's lockfile against a local registry
+      # answering one advisory: with the identical ignoreGhsas entry present
+      # only in pnpm-workspace.yaml (and removed from package.json), the
+      # advisory was reported UNSUPPRESSED, while the same run suppressed it
+      # from package.json. So a pull request cannot move the list to a file
+      # this comparison never opens, and guarding package.json is guarding the
+      # whole list. THE OBLIGATION THIS MEASUREMENT CARRIES: re-measure on any
+      # bump of the pnpm pin above. A version whose audit starts reading
+      # auditConfig from pnpm-workspace.yaml would let a pull request silence
+      # the audit from a file neither guard reads, and nothing would go red —
+      # the re-measurement belongs in the upgrade checklist beside that pin.
       - name: Refuse a pull request that changes the audit suppression list
         if: github.event_name == 'pull_request'
         env:
