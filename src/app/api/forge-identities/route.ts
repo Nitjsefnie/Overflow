@@ -47,7 +47,7 @@ const linkSchema = z
   })
   .strict();
 
-const unlinkSchema = z.object({ id: z.string() }).strict();
+const unlinkSchema = z.object({ id: z.string().uuid() }).strict();
 
 export function createForgeIdentitiesRouteDependencies(): ForgeIdentitiesRouteDependencies {
   return {
