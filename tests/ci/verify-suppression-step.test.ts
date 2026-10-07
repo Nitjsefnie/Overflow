@@ -946,11 +946,15 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     const site = argv[targetIndex + 1]!;
     const imported = spawnSync(
       "python3",
-      ["-c", "import yaml, sys; sys.stdout.write(yaml.__version__)"],
+      ["-c", "import yaml, sys; sys.stdout.write(yaml.__file__)"],
       { encoding: "utf8", env: { ...process.env, PYTHONPATH: site } },
     );
     expect(imported.status, imported.stderr).toBe(0);
-    expect(imported.stdout, "the installed module reports its version").toMatch(/^\d+\.\d+/);
+    expect(
+      imported.stdout,
+      "the module the parse imports must be the one this run installed — a system-wide yaml " +
+        "resolving first would hide a broken install exactly the way the runner failure hid it",
+    ).toMatch(new RegExp("^" + site.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
 
   /** Writes `content` as a loose blob in `repo`; returns its object id. */
