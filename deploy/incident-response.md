@@ -202,6 +202,59 @@ account recovers. Signing out through the product (`POST /api/auth/signout`)
 runs the same bump, so a member can end the sessions of a cookie they know
 has been copied.
 
+### Request flood
+
+A flood of webhook deliveries reaches the receivers' decline signal before it
+reaches anything else: each receiver answers a declined delivery with 429 and
+journals the burst's start — once per burst, never per request — with a fixed
+template an operator can grep for. Read the signal over the preserved window
+([Journal retention and immediate
+preservation](#journal-retention-and-immediate-preservation) is the export
+procedure):
+
+```bash
+journalctl -u overflow --utc --no-pager -o short-iso-precise \
+  --grep 'Webhook rate limit engaged'
+```
+
+The line names the receiver and the running decline count, in this exact
+shape (issue 1053):
+
+```text
+Webhook rate limit engaged for the github receiver: 12 declines since process start.
+Webhook rate limit engaged for the gitlab receiver: 3 declines since process start.
+```
+
+Identify the flooded entry point and source from the nginx access log, whose
+shape, sharing and retention are described in [Journal and request
+correlation](#journal-and-request-correlation): correlate the burst's time
+window with the access log and read the request path and source address off
+the 429 answers. The path names the flooded receiver
+(`/api/github/webhooks` or `/api/gitlab/webhooks`); the addresses say whether
+the source is one origin — which a direct block can stop — or many, which
+only a limit can.
+
+Tightening has two speeds. The receivers' limits are code:
+`WEBHOOK_RATE_LIMIT_CAPACITY` and `WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE` in
+[src/lib/webhooks/rate-limit.ts](../src/lib/webhooks/rate-limit.ts) bound each
+receiver's burst and refill, and lowering them is an ordinary reviewed change
+through [README.md](README.md)'s deployment procedure — that is the fix for a
+sustained flood that should persist. For immediate relief at the origin, the
+deployment carries no request-rate limit today, so one is applied on the host
+for the incident: scope a temporary nginx `limit_req` — or a `deny` of a
+single abusive source — to the flooded location in the affected vhost, then
+validate and load it with `nginx -t && systemctl reload nginx`, the same
+mechanics [README.md](README.md) section 13 uses for the privileged-proxy
+include. Stop the service instead ([Contain](#contain)) when even that is too
+slow or the flood carries other traffic with it.
+
+Lift the temporary host-side limit afterwards, once the burst's grep above
+stays quiet and the access log's 429 answers have stopped: record the exact
+lines in the incident record first, so the lift restores precisely what stood
+before, then remove the temporary configuration and reload with `nginx -t &&
+systemctl reload nginx` again. A code-level limit change is not lifted; it is
+a reviewed correction that stays.
+
 ## Scope
 
 ### Database history by actor, credential and time

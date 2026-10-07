@@ -97,6 +97,25 @@ export function errorLogToken(value: unknown): string {
   return segments.join("; ");
 }
 
+/**
+ * The thrown value's class name only, for lines that must never carry a
+ * message (issue 1057): a decrypt failure's message names material, so the
+ * credential-lookup journal line renders this instead of errorLogToken. The
+ * name is class-controlled in practice but is an own property any
+ * constructor can set to arbitrary text, so it is meant to go through
+ * logField at the call site — nothing in a log token is raw.
+ */
+export function errorClassName(value: unknown): string {
+  try {
+    if (value instanceof Error) {
+      return typeof value.name === "string" && value.name !== "" ? value.name : "Error";
+    }
+    return "non-error thrown";
+  } catch {
+    return "<unrenderable>";
+  }
+}
+
 function errorSegment(value: unknown): string {
   try {
     if (value instanceof Error) {
