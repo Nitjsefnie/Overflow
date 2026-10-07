@@ -371,6 +371,11 @@ for (const line of [
   'gh workflow run ci.yml --ref main -f base="$base"',
   "gh workflow run actionlint.yml --ref main",
   'gh workflow run ratchet-guard.yml --ref main -f base="$base"',
+  // Section 13's client-address verification steps (issue 1044): the secret
+  // generation, the nginx validation, and the journal check.
+  "openssl rand -hex 32",
+  "nginx -t && systemctl reload nginx",
+  'journalctl -u overflow.service --no-pager -e | grep "Privileged action"',
 ]) otherShellLines.add(line);
 
 function mentionsPnpm(text: string) {
