@@ -69,7 +69,7 @@ export function createModerationReversalPatchHandler(dependencies: ModerationRou
         action: "ban.reverse",
         actorId: session.user.id,
         credential: session.credential,
-        clientAddress: readClientAddress(request),
+        ...readClientAddress(request),
         subject: { targetAccountId: input.targetAccountId },
       });
       return Response.json({ reversal });

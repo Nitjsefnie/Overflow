@@ -334,6 +334,7 @@ describe.each(routeCases)("privileged action journal: $action", (routeCase) => {
           actorId: moderatorId,
           credential: reference,
           clientAddress,
+          clientAddressVerified: false,
           subject: routeCase.subject,
         },
       ],
@@ -399,6 +400,155 @@ describe.each(routeCases)("privileged action journal: $action", (routeCase) => {
           }
         }
       }
+    },
+  );
+});
+
+describe("privileged client-address verification: POST /api/moderation/moderators", () => {
+  // The journal's client address comes from X-Real-IP, which the app listens
+  // behind nginx for — but the listener is loopback, so any local process can
+  // reach it and set the header. Verification therefore needs the shared
+  // proxy secret only nginx (and the operator) hold; without it the address
+  // is still recorded, marked unverified.
+  const moderatorGrant = routeCases.find(
+    (routeCase): routeCase is RouteCase => routeCase.action === "moderator-role.grant",
+  )!;
+
+  const proxySecret = "overflow-1044-proxy-secret";
+  const spoofedAddress = "203.0.113.77";
+  const secretHeaderName = "x-privileged-proxy-secret";
+
+  let savedSecret: string | undefined;
+  let hadSecret = false;
+
+  function setProxySecret(value: string | undefined): void {
+    if (!hadSecret) {
+      hadSecret = "PRIVILEGED_PROXY_SECRET" in process.env;
+      savedSecret = process.env.PRIVILEGED_PROXY_SECRET;
+    }
+    if (value === undefined) {
+      delete process.env.PRIVILEGED_PROXY_SECRET;
+    } else {
+      process.env.PRIVILEGED_PROXY_SECRET = value;
+    }
+  }
+
+  afterEach(() => {
+    if (hadSecret) {
+      process.env.PRIVILEGED_PROXY_SECRET = savedSecret;
+    } else {
+      delete process.env.PRIVILEGED_PROXY_SECRET;
+    }
+    hadSecret = false;
+    savedSecret = undefined;
+  });
+
+  async function grantWith(extraHeaders: Record<string, string>, realIp: string | null): Promise<void> {
+    const { dependencies } = routeDependencies(moderatorGrant);
+    const response = await drive(moderatorGrant, dependencies, routeRequest(moderatorGrant, "bearer token", extraHeaders, realIp));
+    expect(response.status).toBeLessThan(300);
+  }
+
+  it("records a spoofed X-Real-IP unverified when no secret header is sent and no secret is configured", async () => {
+    setProxySecret(undefined);
+
+    await grantWith({}, spoofedAddress);
+
+    expect(privilegedLines()).toEqual([
+      [
+        "Privileged action",
+        {
+          action: "moderator-role.grant",
+          actorId: moderatorId,
+          credential: { kind: "token", tokenId },
+          clientAddress: spoofedAddress,
+          clientAddressVerified: false,
+          subject: { targetAccountId },
+        },
+      ],
+    ]);
+  });
+
+  it("verifies the address when the secret header carries the configured secret", async () => {
+    setProxySecret(proxySecret);
+
+    await grantWith({ [secretHeaderName]: proxySecret }, spoofedAddress);
+
+    expect(privilegedLines()).toEqual([
+      [
+        "Privileged action",
+        {
+          action: "moderator-role.grant",
+          actorId: moderatorId,
+          credential: { kind: "token", tokenId },
+          clientAddress: spoofedAddress,
+          clientAddressVerified: true,
+          subject: { targetAccountId },
+        },
+      ],
+    ]);
+  });
+
+  it("records the address unverified when the secret header is present but wrong", async () => {
+    setProxySecret(proxySecret);
+
+    await grantWith({ [secretHeaderName]: "not-the-configured-secret" }, spoofedAddress);
+
+    expect(privilegedLines()).toEqual([
+      [
+        "Privileged action",
+        {
+          action: "moderator-role.grant",
+          actorId: moderatorId,
+          credential: { kind: "token", tokenId },
+          clientAddress: spoofedAddress,
+          clientAddressVerified: false,
+          subject: { targetAccountId },
+        },
+      ],
+    ]);
+  });
+
+  it("marks the address unverified when a secret header arrives while no secret is configured (fail-safe)", async () => {
+    setProxySecret(undefined);
+
+    await grantWith({ [secretHeaderName]: proxySecret }, spoofedAddress);
+
+    expect(privilegedLines()).toEqual([
+      [
+        "Privileged action",
+        {
+          action: "moderator-role.grant",
+          actorId: moderatorId,
+          credential: { kind: "token", tokenId },
+          clientAddress: spoofedAddress,
+          clientAddressVerified: false,
+          subject: { targetAccountId },
+        },
+      ],
+    ]);
+  });
+
+  it.each([null, "not-an-address", "203.0.113.77, 198.51.100.4"] as const)(
+    "records a %j X-Real-IP as a null address, unverified, even with a valid secret",
+    async (realIp) => {
+      setProxySecret(proxySecret);
+
+      await grantWith({ [secretHeaderName]: proxySecret }, realIp);
+
+      expect(privilegedLines()).toEqual([
+        [
+          "Privileged action",
+          {
+            action: "moderator-role.grant",
+            actorId: moderatorId,
+            credential: { kind: "token", tokenId },
+            clientAddress: null,
+            clientAddressVerified: false,
+            subject: { targetAccountId },
+          },
+        ],
+      ]);
     },
   );
 });

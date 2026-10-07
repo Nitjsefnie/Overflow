@@ -96,7 +96,7 @@ export function createSettlementOverridePatchHandler(
         action: decision.decision === "GRANT" ? "settlement-override.grant" : "settlement-override.decline",
         actorId: session.user.id,
         credential: session.credential,
-        clientAddress: readClientAddress(request),
+        ...readClientAddress(request),
         subject: { overrideRequestId: requestId, issueId: decided.issueId },
       });
       return Response.json({ request: decided });

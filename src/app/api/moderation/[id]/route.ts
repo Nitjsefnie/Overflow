@@ -68,7 +68,7 @@ export function createModerationAuditPatchHandler(dependencies: ModerationRouteD
         action: input.action === "dismiss" ? "audit.dismiss" : "audit.substantiate",
         actorId: session.user.id,
         credential: session.credential,
-        clientAddress: readClientAddress(request),
+        ...readClientAddress(request),
         subject: { auditId, targetAccountId: audit.targetAccountId },
       });
       return Response.json({ audit });

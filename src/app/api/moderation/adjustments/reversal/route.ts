@@ -64,7 +64,7 @@ export function createModerationReversalPostHandler(dependencies: ModerationCred
         action: "credit-adjustment.reverse",
         actorId: session.user.id,
         credential: session.credential,
-        clientAddress: readClientAddress(request),
+        ...readClientAddress(request),
         subject: {
           adjustmentId: input.adjustmentId,
           reversalId: reversal.id,

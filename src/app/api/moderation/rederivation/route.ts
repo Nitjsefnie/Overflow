@@ -109,7 +109,7 @@ export function createRederivationPostHandler(dependencies: RederivationRouteDep
             action: "repository.rederivation-request",
             actorId: session.user.id,
             credential: session.credential,
-            clientAddress: readClientAddress(request),
+            ...readClientAddress(request),
             subject: { repositoryId: input.repositoryId },
           }),
       );

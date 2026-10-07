@@ -93,7 +93,7 @@ export function createSanctionContestDecisionPostHandler(
             : "sanction.contest.decide",
         actorId: session.user.id,
         credential: session.credential,
-        clientAddress: readClientAddress(request),
+        ...readClientAddress(request),
         subject: { requestId: input.requestId, accountId: decided.request.accountId },
       });
       return Response.json({

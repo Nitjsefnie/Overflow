@@ -96,6 +96,7 @@ describe("the rederivation journal line survives a post-commit failure", () => {
               actorId: moderator.userId,
               credential: { kind: "token", tokenId: moderator.tokenId },
               clientAddress,
+              clientAddressVerified: false,
               subject: { repositoryId },
             },
           ],
