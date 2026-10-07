@@ -48,21 +48,20 @@ describe.each(["github", "gitlab"] as const)("%s receiver journals an unreadable
     const route = createRoute(provider, (inner, expected) => store.findWebhookCredential(inner, expected));
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    let response: Response;
     try {
-      response = await route(bareRequest(provider, selector));
+      const response = await route(bareRequest(provider, selector));
+      expect(response.status).toBe(503);
+      // The journal line is the issue's demand: the phase, the selector
+      // encoded through logField, and the error's class name — never the
+      // message, which for a decrypt failure names material. The spy is
+      // asserted before its restore, which resets the recorded calls.
+      expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+        `Webhook credential lookup failed (phase credential lookup, selector ${logField(selector)},`
+          + ` error ${logField("Error")}); answered 503 so the forge retries.`,
+      );
     } finally {
       errorSpy.mockRestore();
     }
-
-    expect(response.status).toBe(503);
-    // The journal line is the issue's demand: the phase, the selector encoded
-    // through logField, and the error's class name — never the message, which
-    // for a decrypt failure names material.
-    expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
-      `Webhook credential lookup failed (phase credential lookup, selector ${logField(selector)},`
-        + ` error ${logField("Error")}); answered 503 so the forge retries.`,
-    );
     expect(await receiptCount()).toBe(0);
   });
 
@@ -77,13 +76,12 @@ describe.each(["github", "gitlab"] as const)("%s receiver journals an unreadable
       for (let i = 0; i < 4; i += 1) {
         expect((await route(bareRequest(provider, selector))).status).toBe(503);
       }
+      // The FailureLogger bounds the site: the first failure prints in full,
+      // the rest inside the quiet window count silently (issue 661's bound).
+      expect(errorSpy).toHaveBeenCalledTimes(1);
     } finally {
       errorSpy.mockRestore();
     }
-
-    // The FailureLogger bounds the site: the first failure prints in full, the
-    // rest inside the quiet window count silently (issue 661's bound).
-    expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 });
 

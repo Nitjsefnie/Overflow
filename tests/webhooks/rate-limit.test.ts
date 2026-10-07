@@ -325,9 +325,10 @@ describe("createReceiverRateLimiter", () => {
     for (let i = 0; i < 6; i += 1) gate.admit();
 
     // Exactly one line for the whole burst: the first decline's, not one per
-    // declined request (issue 1053).
+    // declined request (issue 1053). The count is the running total at the
+    // burst's start, so successive bursts' lines keep growing.
     expect(lines).toEqual([[
-      "Webhook rate limit engaged for the gitlab receiver: 3 declines since process start.",
+      "Webhook rate limit engaged for the gitlab receiver (declines so far: 1).",
     ]]);
   });
 
@@ -349,9 +350,9 @@ describe("createReceiverRateLimiter", () => {
     expect(gate.admit()).toBe(false); // burst 2 starts: declines = 2
 
     expect(lines).toEqual([[
-      "Webhook rate limit engaged for the github receiver: 1 declines since process start.",
+      "Webhook rate limit engaged for the github receiver (declines so far: 1).",
     ], [
-      "Webhook rate limit engaged for the github receiver: 2 declines since process start.",
+      "Webhook rate limit engaged for the github receiver (declines so far: 3).",
     ]]);
   });
 });
