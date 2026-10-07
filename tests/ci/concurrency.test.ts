@@ -136,6 +136,10 @@ const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = 
     group: "ratchet-guard-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
   },
+  "secret-scan-pr.yml": {
+    group: "secret-scan-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+    "cancel-in-progress": false,
+  },
   "code-scanning.yml": {
     group: "code-scanning-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
@@ -308,16 +312,6 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
         "The report posts a comment the author reads. Cancelling a queued run loses the report for that head commit, and the next run may not come.",
       group:
         "coverage-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
-      "cancel-in-progress": false,
-      queue: undefined,
-    },
-  ],
-  [
-    "secret-scan-pr.yml",
-    {
-      reason:
-        "Every pull request must be scanned, so the group is keyed on the pull request: a newer run can supersede only that same PR's pending scan and never another PR's, and the push that superseded it scheduled the replacement. Bounding it repository-wide would cap the scan at one run no matter how many pull requests are open, so the open-pull-request count would again decide how fast a leaked secret in a pull request is found — the aggregate-spend problem the bound exists to fix. cancel-in-progress false preserves every in-flight full-history detection record, because a scan that is cancelled mid-walk leaves a half-read history and no report. Issue 1090 moved this leg out of secret-scan.yml so the file holding it could have pull_request_target as its only trigger; before the split the single file carried both this group and the per-SHA one.",
-      group: "secret-scan-pr-${{ github.event.pull_request.number }}",
       "cancel-in-progress": false,
       queue: undefined,
     },

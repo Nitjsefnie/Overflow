@@ -35,7 +35,6 @@ on:
       - "actionlint pull request"
       - "ratchet guard pull request"
       - "ci pull request"
-      # Forward wiring: unpinned workflows no-op in scripts/ledger-relay.ts.
       - "secret scan"
       - "secret scan pull request"
     types: [completed]

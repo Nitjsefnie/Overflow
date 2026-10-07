@@ -19,8 +19,8 @@ import { parse } from "yaml";
  * A pin may be a list because issue 1090 splits a workflow that reads
  * pull-request data out of its privileged triggers, leaving one required
  * context produced by a `pull_request_target` file and a push file. Every
- * committed entry is still a string; this suite reads both forms so the split
- * does not arrive with a reader that silently drops half of a pin.
+ * committed entry uses that list form; this suite reads both forms so a
+ * reader that silently drops half of a pin cannot pass.
  */
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
@@ -83,7 +83,9 @@ beforeAll(async () => {
 
 describe(".github/required-checks.json", () => {
   it("pins at least the checks branch protection on main requires", () => {
-    expect(Object.keys(pins)).toEqual(expect.arrayContaining(["actionlint", "ratchet-guard", "verify"]));
+    expect(Object.keys(pins)).toEqual(
+      expect.arrayContaining(["actionlint", "ratchet-guard", "verify", "secret-scan"]),
+    );
   });
 
   it("parses under the committed scripts/required-checks-parse.jq with real jq, one check<TAB>path line per pin pair", () => {
