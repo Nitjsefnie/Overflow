@@ -57,6 +57,7 @@ import {
 } from "@/lib/overrides/apply";
 import type { WebhookDeliveryClaim, WebhookDeliveryStore, WebhookReceiptScope, WebhookRepositoryRegistration } from "@/lib/webhooks/processor";
 import * as webhookReceipts from "@/lib/webhooks/postgres-receipts";
+import { logField } from "@/lib/webhooks/log-field";
 import { credentialBinding, decryptToken, tokenKeySetFrom } from "@/lib/security/token-cipher";
 
 type RepositoryFoldRevisionCountsRow = {
@@ -694,11 +695,10 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       }
       // owner_name is unique and a rename can land on a path another registration
       // still holds. The numeric id already proved which repository this row is, so
-      // keep the crawl available and leave the display name to the row that owns it.
+      // keep the crawl available and leave the display name to the row that owns it; the verified path is forge text, so the warning encodes it (issue 1042).
       console.warn(
-        `Verified owner name ${input.ownerName} for repository ${input.repositoryId} is already registered `
-        + "to another repository. The stored path stays stale, so this recurs on every reconciliation "
-        + "until the other registration releases the path.",
+        `Verified owner name ${logField(input.ownerName)} for repository ${input.repositoryId} is already registered `
+        + "to another repository. The stored path stays stale, so this recurs on every reconciliation until the other registration releases the path.",
       );
       await this.withRepositoryPublication(input.repositoryId, async (transaction) => {
         await transaction`

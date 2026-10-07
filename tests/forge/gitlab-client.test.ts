@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MAX_WALK_ITEMS, MAX_WALK_PAGES } from "@/lib/gitlab/collection-walk-bound";
 import { GitLabGateway, GitLabApiError } from "@/lib/gitlab/client";
+import { logField } from "@/lib/webhooks/log-field";
 
 describe("scoped GitLab hook configuration", () => {
   it("sanitizes upstream errors during scoped GitLab configuration", async () => {
@@ -882,13 +883,15 @@ describe("GitLabGateway", () => {
     // timestamp: the normalization throw must leave `getPullRequest` as an
     // error, never collapse into a null finalCommitAt. The mutant that
     // neutralizes the throw (returning the raw value) fails here — the read
-    // then resolves with `finalCommitAt: "not-a-timestamp"`.
+    // then resolves with `finalCommitAt: "not-a-timestamp"`. The offending
+    // value travels encoded (issue 1042): the instance's own text can neither
+    // split the message into forged journal lines nor carry raw escapes.
     const client = gateway(jsonRouter([
       ["/merge_requests/17/commits", [{ committed_date: "not-a-timestamp" }]],
       ["/merge_requests/17", mergeRequest],
     ]));
     await expect(client.getPullRequest({ owner: "gitlab-org", name: "gitlab" }, 17))
-      .rejects.toThrow("GitLab returned an unparsable timestamp: not-a-timestamp");
+      .rejects.toThrow(`GitLab returned an unparsable timestamp: ${logField("not-a-timestamp")}`);
   });
 
   it("leaves finalCommitAt null when a successful commit read carries no commits", async () => {
@@ -1439,5 +1442,52 @@ index 0123456..789abcd 100644
       status: 401,
     });
     await expect(client.getRepositoryById(278964)).rejects.toBeInstanceOf(GitLabApiError);
+  });
+
+  it("encodes the instance-supplied issue number and repository path in the disappeared-issue line", async () => {
+    // The issue number and the repository path are the instance's own text —
+    // a member-chosen instance can make them carry line breaks and terminal
+    // escapes — so the disappearance line encodes each (issue 1042).
+    const hostileIid = "12\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[31mred";
+    const errors: unknown[][] = [];
+    const errorLog = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { errors.push(args); });
+    try {
+      const client = gateway(async (input) => {
+        const url = String(input);
+        if (url.includes("/issues?")) return Response.json([{ ...issue, iid: hostileIid }]);
+        // Every per-issue evidence read answers 404: the issue "disappeared".
+        return new Response("gone", { status: 404 });
+      });
+      const listed = await client.listIssues({ owner: "evil\u001b[31m", name: "x\ny" });
+
+      expect(listed).toEqual([]);
+      expect(errors).toHaveLength(1);
+      const rendered = String(errors[0]![0]);
+      expect(rendered).not.toContain("\n");
+      expect(rendered).not.toContain("\u001b");
+      expect(rendered).toContain(logField(hostileIid));
+      expect(rendered).toContain(logField("evil\u001b[31m/x\ny"));
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it("encodes a hostile timestamp in the unparsable-timestamp error message", async () => {
+    const hostile = "2026-01-01\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[2J\u001b[31mspoofed";
+    const client = gateway(async (input) => {
+      const url = String(input);
+      // The issue listing carries the hostile payload; every per-issue evidence
+      // collection reads back empty.
+      if (url.includes("/issues?")) return Response.json([{ ...issue, updated_at: hostile }]);
+      return Response.json([]);
+    });
+    const thrown = await client.listIssues({ owner: "gitlab-org", name: "gitlab" }).then(
+      () => { throw new Error("expected the hostile timestamp to reject the listing"); },
+      (error: unknown) => error,
+    );
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe(`GitLab returned an unparsable timestamp: ${logField(hostile)}`);
+    expect((thrown as Error).message).not.toContain("\n");
+    expect((thrown as Error).message).not.toContain("\u001b");
   });
 });

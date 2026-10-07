@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { logField } from "@/lib/webhooks/log-field";
+import { errorLogToken, logField } from "@/lib/webhooks/log-field";
 
 // Every code point the token must never carry literally: C0, DEL, C1, the two
 // Unicode line/paragraph separators, and the bidi controls that can reorder
@@ -98,5 +98,90 @@ describe("logField", () => {
     const output = logField("a\uDC00b\uD800");
     expect(loneSurrogate.test(output)).toBe(false);
     expect(output).toBe("\"a\\udc00b\\ud800\"");
+  });
+});
+
+// The issue 1042 hostile payload: one forge-supplied string that splits into a
+// forged journal line shaped like a privileged-action report and carries raw
+// terminal escapes. Every errorLogToken test drives it or a derivative.
+const hostilePayload = "2026-01-01\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[2J\u001b[31mspoofed";
+
+describe("errorLogToken", () => {
+  it("renders an Error as its name and the logField token of its message", () => {
+    expect(errorLogToken(new Error("boom"))).toBe(`Error: ${logField("boom")}`);
+    expect(errorLogToken(new TypeError("nope"))).toBe(`TypeError: ${logField("nope")}`);
+  });
+
+  it("renders the hostile payload as one line with every escape and no forged block", () => {
+    const token = errorLogToken(new Error(hostilePayload));
+    expect(token).toBe(`Error: ${logField(hostilePayload)}`);
+    expect(token).not.toContain("\n");
+    expect(token).not.toContain("\u001b");
+    // The encoded fragment is present, escaped: the newline between the forged
+    // block's brace and its action line is the four-character \u000a escape,
+    // not the byte.
+    expect(token).toContain("\\u000aPrivileged action {\\u000a  action: 'moderator-role.grant'");
+  });
+
+  it("carries no forbidden code unit when the message holds every class at once", () => {
+    const everything = forbiddenClasses
+      .flatMap(({ from, to }) => codePointsIn(from, to))
+      .map((codePoint) => String.fromCharCode(codePoint))
+      .join("");
+    expect(forbiddenCodeUnitsIn(errorLogToken(new Error(everything)))).toEqual([]);
+  });
+
+  it("follows the cause chain with each link rendered the same way", () => {
+    const error = new Error("outer", { cause: new TypeError("inner\nline") });
+    expect(errorLogToken(error)).toBe(`Error: ${logField("outer")}; TypeError: ${logField("inner\nline")}`);
+  });
+
+  it("renders a fixed number of chain links and marks a deeper chain as continuing", () => {
+    // A ten-link chain m0 -> m1 -> ... -> m9, where m0 is the thrown value.
+    let chain = new TypeError("m9");
+    for (let index = 8; index >= 0; index -= 1) {
+      chain = new Error(`m${index}`, { cause: chain });
+    }
+    // Six links render (the thrown value plus five causes); the rest is one
+    // continuing marker on the same line.
+    expect(errorLogToken(chain)).toBe(
+      [0, 1, 2, 3, 4, 5].map((index) => `Error: ${logField(`m${index}`)}`).join("; ") + "; …",
+    );
+    expect(errorLogToken(chain)).not.toContain("\n");
+  });
+
+  it("terminates on a cause-chain cycle with a continuing marker", () => {
+    const error = new Error("loop");
+    (error as { cause?: unknown }).cause = error;
+    expect(errorLogToken(error)).toBe(`Error: ${logField("loop")}; …`);
+  });
+
+  it("renders a non-Error thrown value through logField(String(...))", () => {
+    expect(errorLogToken("raw\nstring")).toBe(logField("raw\nstring"));
+    expect(errorLogToken(42)).toBe(logField("42"));
+    expect(errorLogToken(undefined)).toBe(logField("undefined"));
+    expect(errorLogToken(null)).toBe(logField("null"));
+    expect(errorLogToken({ fire: true })).toBe(logField("[object Object]"));
+    expect(errorLogToken(Symbol("tag"))).toBe(logField("Symbol(tag)"));
+  });
+
+  it("survives a name, message or cause accessor that throws", () => {
+    const throwing = new Error("secret");
+    Object.defineProperty(throwing, "name", { get() { throw new Error("name refused"); } });
+    Object.defineProperty(throwing, "cause", { get() { throw new Error("cause refused"); } });
+    expect(errorLogToken(throwing)).toBe("\"<unrenderable>\"");
+  });
+
+  it("bounds the rendered length of a huge message", () => {
+    const dropped = 100_000 + 100 - 256;
+    const token = errorLogToken(new Error(`${"x".repeat(100_000)}\n${"y".repeat(100)}`));
+    expect(token.length).toBeLessThanOrEqual("Error: ".length + 256 * 6 + 2 + `… (+${dropped} more)`.length);
+    expect(token).not.toContain("\n");
+  });
+
+  it("keeps an empty or non-string name readable instead of printing an empty prefix", () => {
+    const unnamed = new Error("quiet");
+    Object.defineProperty(unnamed, "name", { value: "" });
+    expect(errorLogToken(unnamed)).toBe(`Error: ${logField("quiet")}`);
   });
 });

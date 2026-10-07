@@ -10,6 +10,7 @@ import {
 } from "@/lib/fold/sweep";
 import { FailureLogger } from "@/lib/worker/failure-logger";
 import { appInstallationTokenResolverFromEnv } from "@/lib/github/app-installation-auth";
+import { errorLogToken } from "@/lib/webhooks/log-field";
 
 /**
  * The drain site's failure key (issue 661): the whole-drain hook the schedule
@@ -99,8 +100,11 @@ export async function registerNodejs(): Promise<void> {
         leaseHeartbeatFailureLogger: failureLogger,
         onFailure: (repositoryId, error) => {
           // The job carries its own retry, so this is the operator's only view of
-          // a repository that keeps failing to fold.
-          console.error(`Reconciliation failed for repository ${repositoryId}`, error);
+          // a repository that keeps failing to fold. The error can carry
+          // member-chosen GitLab text and the console sink renders an error
+          // object through its stack — message raw — so it is encoded into one
+          // bounded single-line token (issue 1042).
+          console.error(`Reconciliation failed for repository ${repositoryId}`, errorLogToken(error));
         },
       });
       // A drain that resolves is the drain site's positive signal: after a
@@ -136,8 +140,9 @@ export async function registerNodejs(): Promise<void> {
         enqueue: (repositoryId) => store.enqueueReconciliationJob(repositoryId, "SWEEP"),
         onFailure: (repositoryId, error) => {
           // One repository that cannot be queued must not silently stall the
-          // sweep for the rest, so the failure is reported and the sweep moves on.
-          console.error(`Reconciliation sweep failed for repository ${repositoryId}`, error);
+          // sweep for the rest, so the failure is reported and the sweep moves
+          // on. Encoded for the same reason as the drain's site above.
+          console.error(`Reconciliation sweep failed for repository ${repositoryId}`, errorLogToken(error));
         },
       });
       // One line per sweep, so an operator can see the repair path running rather

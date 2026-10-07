@@ -58,3 +58,62 @@ function isHighSurrogate(unit: number): boolean {
 function isLowSurrogate(unit: number): boolean {
   return unit >= 0xdc00 && unit <= 0xdfff;
 }
+
+// An error's message reaches the journal through the console sink's rendering
+// of the error object — the stack's first line carries the message raw, and
+// the cause chain after it. Forge-supplied text can ride any message in that
+// chain, so a thrown value rendered for a log line gets the same treatment as
+// any other log field: one bounded single-line token per message, the chain
+// flattened onto the same line, and nothing raw anywhere in the output.
+//
+// The chain walk follows `cause` (Error and plain objects alike), is bounded
+// in depth so a deep chain cannot flood the line, and carries a visited set so
+// a constructed cycle cannot loop it. Every segment render and the cause read
+// itself are guarded, because a thrown value can be a Proxy or carry getters
+// that refuse access — a reason that cannot be read still leaves the line.
+
+const MAX_ERROR_CAUSE_DEPTH = 5;
+const CHAIN_CONTINUES = "…";
+
+export function errorLogToken(value: unknown): string {
+  // The thrown value itself always renders; only a missing cause ends the
+  // chain, so a thrown null or undefined still gets its logField rendering.
+  const segments: string[] = [errorSegment(value)];
+  const visited = new Set<unknown>([value]);
+  let current = causeOf(value);
+  for (let depth = 0; depth < MAX_ERROR_CAUSE_DEPTH; depth += 1) {
+    if (current === null || current === undefined) return segments.join("; ");
+    if (visited.has(current)) {
+      segments.push(CHAIN_CONTINUES);
+      return segments.join("; ");
+    }
+    visited.add(current);
+    segments.push(errorSegment(current));
+    current = causeOf(current);
+  }
+  // The cap is reached with a live cause: the line names that the chain
+  // continues beyond what it carries.
+  if (current !== null && current !== undefined) segments.push(CHAIN_CONTINUES);
+  return segments.join("; ");
+}
+
+function errorSegment(value: unknown): string {
+  try {
+    if (value instanceof Error) {
+      const name = typeof value.name === "string" && value.name !== "" ? value.name : "Error";
+      const message = typeof value.message === "string" ? value.message : String(value.message);
+      return `${name}: ${logField(message)}`;
+    }
+    return logField(String(value));
+  } catch {
+    return "\"<unrenderable>\"";
+  }
+}
+
+function causeOf(value: unknown): unknown {
+  try {
+    return (value as { cause?: unknown }).cause;
+  } catch {
+    return undefined;
+  }
+}

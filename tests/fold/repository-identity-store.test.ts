@@ -5,6 +5,7 @@ import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
+import { logField } from "@/lib/webhooks/log-field";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
@@ -132,13 +133,19 @@ describe("registered repository identity verification", () => {
     // Start the stored visibility disagreeing with GitHub, so the write the unique
     // violation falls back to is observable in the column and not just in the reason.
     await sql`update registered_repositories set visibility = 'PRIVATE' where id = ${renamed.repositoryId}`;
+    // The verified path is member-chosen forge text in production (a GitLab
+    // project's path_with_namespace), so the collision the warning names is
+    // forge text too (issue 1042): make the holder's path hostile and require
+    // the warning to carry it encoded, one line, no raw escapes.
+    const hostileOwnerName = "holder\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[31mred";
+    await sql`update registered_repositories set owner_name = ${hostileOwnerName} where id = ${holder.repositoryId}`;
     const warnings: unknown[][] = [];
     const warn = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => { warnings.push(args); });
 
     try {
       await expect(store.withRepositoryReconciliation(renamed.repositoryId, async () => store.recordVerifiedRepositoryIdentity({
         repositoryId: renamed.repositoryId,
-        ownerName: holder.ownerName,
+        ownerName: hostileOwnerName,
         visibility: "PUBLIC",
       }))).resolves.toBeUndefined();
     } finally {
@@ -147,8 +154,12 @@ describe("registered repository identity verification", () => {
 
     // The CLI resolves a path to a registration, so a rename left unpersisted sends
     // `scripts/reconcile.ts --repository <new path>` to the other row without a word.
-    expect(warnings).toEqual([[expect.stringContaining(holder.ownerName)]]);
-    expect(warnings[0]![0]).toContain(renamed.repositoryId);
+    expect(warnings).toHaveLength(1);
+    const warningLine = String(warnings[0]![0]);
+    expect(warningLine).toContain(logField(hostileOwnerName));
+    expect(warningLine).not.toContain("\n");
+    expect(warningLine).not.toContain("\u001b");
+    expect(warningLine).toContain(renamed.repositoryId);
 
     expect(await unavailability(renamed.repositoryId)).toMatchObject({
       owner_name: renamed.ownerName,
@@ -157,7 +168,7 @@ describe("registered repository identity verification", () => {
       unavailable_since: null,
     });
     expect(await unavailability(holder.repositoryId)).toMatchObject({
-      owner_name: holder.ownerName,
+      owner_name: hostileOwnerName,
       visibility: "PUBLIC",
     });
   });

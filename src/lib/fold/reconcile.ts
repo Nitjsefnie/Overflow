@@ -8,6 +8,7 @@ import { GitLabApiError } from "@/lib/gitlab/client";
 import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { withGraphqlFoldCost } from "@/lib/github/graphql-cost";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
+import { errorLogToken } from "@/lib/webhooks/log-field";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
 import { ForgeCredentialRejectedError } from "@/lib/forge/gateway";
 import { sanitizeForgeStrings } from "@/lib/forge/sanitize-forge-strings";
@@ -462,7 +463,13 @@ async function reconcileRepositoryWhileCoordinated(
     // PostgreSQL diagnostic fields can quote the forge record. Keep them out
     // of this log and every logger that prints the rethrown cause chain.
     const reportedError = redactPostgresError(error);
-    console.error(`Reconciliation of repository ${repositoryId} failed.`, reportedError);
+    // The console sink renders an error object through its stack, whose first
+    // line carries the message raw — and a member-chosen GitLab instance
+    // supplied text that rode into that message. The token is one bounded
+    // single line instead, so no instance can forge a journal line or drive
+    // the operator's terminal (issue 1042). redactPostgresError stays ahead:
+    // its redaction is about stored product data, orthogonal to the encoding.
+    console.error(`Reconciliation of repository ${repositoryId} failed.`, errorLogToken(reportedError));
     await dependencies.store.failRun(
       runId,
       carriesCredentialRejection(error) ? FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE : "Reconciliation failed.",
