@@ -1,0 +1,36 @@
+# Hash-pinned PyYAML install for the suppression gate's workspace-file parse.
+# pnpm-workspace.yaml is parsed by the guard in
+# .github/workflows/ci-pr.yml ("Refuse a pull request that changes the audit
+# suppression list") and by its twin leg in dependency-audit.yml, and the
+# runner image does not ship PyYAML — measured on the real runner, where the
+# gate's fail-closed ImportError refusal fired on every pull request that
+# changed the file (pr suite run 37603325683). The module is therefore
+# installed at run time:
+#
+#   pip install --no-deps --require-hashes --disable-pip-version-check \
+#     --target <fresh dir> -r .github/requirements-pyyaml.txt
+#
+# THE MANIFEST IS BASE-DEFINED. Both guard steps read this file from the pull
+# request's BASE via git objects (git ls-tree + git cat-file, exactly like the
+# audited files), never from the merge tree or the filesystem, so a pull
+# request can neither substitute the manifest nor widen it — the module the
+# parse imports is what main pinned, never what the pull request carries. The
+# install is also hash-gated: --require-hashes refuses any artifact whose
+# sha256 does not match, so tampered or attacker-served wheel content fails
+# the install, never the parse.
+#
+# pyyaml==6.0.3 has no transitive runtime dependencies on PyPI, so the file is
+# the one pin. Two hashes: the manylinux_2_17 x86_64 wheel for the runner's
+# CPython 3.12 (ubuntu-latest), and the sdist, which covers every other
+# CPython — pip falls back to it wherever the wheel does not resolve, so the
+# install works on any interpreter and still fails closed on unexpected
+# content.
+#
+# Regenerate by hand when bumping pyyaml. Take the hashes from the index's own
+# record for the new version, exactly the two artifacts this file pins:
+#   curl -s https://pypi.org/pypi/pyyaml/<version>/json | jq -r '
+#     .urls[] | select(.filename | test("cp312.*x86_64\\.whl$|tar\\.gz$"))
+#     | "--hash=sha256:" + .digests.sha256'
+# then write `pyyaml==<version>` followed by those values, joined onto ONE line
+# with single spaces, as committed here.
+pyyaml==6.0.3 --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc --hash=sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f

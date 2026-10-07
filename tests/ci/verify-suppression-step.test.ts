@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -68,8 +68,8 @@ const REFUSALS = {
     "the audit-affecting settings without a parse",
   wsModule:
     "::error::python3 has no yaml module; refusing to judge pnpm-workspace.yaml without it — " +
-    "the runner image is expected to ship PyYAML, and a missing module is a red run, never a " +
-    "silent pass",
+    "the hash-pinned install above provides it, so a missing module means the install failed " +
+    "and is a red run, never a silent pass",
   wsDump:
     "::error::pnpm-workspace.yaml carries audit-affecting settings that do not serialize to " +
     "JSON; refusing",
@@ -83,6 +83,23 @@ const REFUSALS = {
   npmrcDivergence:
     "::error::this pull request changes audit-affecting keys in .npmrc; a pull request cannot " +
     "change the audit suppression list — the list moves only through a maintainer-reviewed merge",
+  manifestMissing:
+    "::error::.github/requirements-pyyaml.txt is missing from the base; the workspace gate " +
+    "judges pnpm-workspace.yaml with a hash-pinned PyYAML install and refuses without it — the " +
+    "manifest moves only through a maintainer-reviewed merge, like the list it installs for",
+  manifestEntry:
+    "::error::.github/requirements-pyyaml.txt must be exactly one mode-100644 blob entry in " +
+    "the base; refusing. The manifest is read from git objects, never from the filesystem — a " +
+    "pull request can neither substitute it nor hide it — so a symlink leaf, a wrong mode, a " +
+    "non-blob type and an absent file are all refused.",
+  manifestSize: "::error::the PyYAML manifest is larger than the 65536-byte cap; refusing",
+  manifestNul: "::error::the PyYAML manifest carries a NUL byte, which is invalid content wherever it sits; refusing",
+  manifestUtf8: "::error::the PyYAML manifest is not valid UTF-8; refusing",
+  manifestNoLine: "::error::the PyYAML manifest carries no requirement line; refusing",
+  manifestGrammar: "refused by the pin grammar",
+  manifestSecondLine: "the PyYAML manifest carries a second requirement line; exactly one is allowed",
+  manifestSanitized:
+    "already exists; refusing to write the sanitized pin into a directory this run did not create",
 } as const;
 
 /** Planted where a redirected read or a leaked refusal would print it; must never reach output. */
@@ -94,6 +111,7 @@ const BASE_PACKAGE_JSON = (config: unknown): string =>
 let steps: Step[] = [];
 let root = "";
 let counter = 0;
+let pyyamlManifest = "";
 
 beforeAll(async () => {
   const workflow = parse(await readFile(resolve(".github/workflows/ci-pr.yml"), "utf8")) as {
@@ -101,6 +119,7 @@ beforeAll(async () => {
   };
   steps = workflow.jobs.verify.steps;
   root = await mkdtemp(join(tmpdir(), "verify-suppression-step-"));
+  pyyamlManifest = await readFile(resolve(".github/requirements-pyyaml.txt"), "utf8");
 });
 
 afterAll(async () => {
@@ -118,12 +137,15 @@ function theStep(): Step {
  * (or no package.json at all when `null`), plus a merge commit whose tree
  * carries `mergePackage`. Modes are set by index surgery over plumbing, so a
  * 120000 symlink, a 100755 file and a 160000 gitlink ride the same code as the
- * ordinary 100644 cases.
+ * ordinary 100644 cases. The base carries the committed PyYAML manifest unless
+ * `noManifest` says otherwise — the manifest is what main pins, so the ordinary
+ * fixture state is "present on the base".
  */
 async function fixture(
   basePackage: string | null,
   mergePackage: string | { mode: string; content: string } | null,
   extra: { base?: Record<string, string>; merge?: Record<string, string> } = {},
+  opts: { noManifest?: boolean } = {},
 ): Promise<{ repo: string; base: string; merge: string }> {
   counter += 1;
   const repo = join(root, `repo-${counter}`);
@@ -138,6 +160,7 @@ async function fixture(
 
   const files: Record<string, string> = { "README.md": "# scratch\n" };
   if (basePackage !== null) files["package.json"] = basePackage;
+  if (!opts.noManifest) files[".github/requirements-pyyaml.txt"] = pyyamlManifest;
   Object.assign(files, extra.base ?? {});
   const base = await commitFiles(repo, files, "base");
 
@@ -161,9 +184,37 @@ async function fixture(
 
 type StepResult = { status: number | null; stdout: string; stderr: string };
 
+/**
+ * A wrapper `pip`, first on PATH: appends its full argv (space-joined) as one
+ * line to `PYYAML_PIP_LOG`, then execs the REAL pip — the wrapper exists to
+ * record the argv the step pinned and to inject a failure, never to fake the
+ * install. The workspace-parse cases therefore exercise the actual
+ * hash-gated download and the module it produced, on this interpreter.
+ */
+const PIP_WRAPPER = [
+  "#!/usr/bin/env bash",
+  'printf \'%s\\n\' "$*" >> "${PYYAML_PIP_LOG}"',
+  "if [ -n \"${PYYAML_PIP_STUB_EXIT:-}\" ]; then",
+  '  exit "${PYYAML_PIP_STUB_EXIT}"',
+  "fi",
+  'exec "$(command -v pip3 || command -v pip)" "$@"',
+  "",
+].join("\n");
+
 /** Runs the step's real `run:` text the way the runner does. */
-async function runStep(fx: { repo: string; base: string; merge: string }): Promise<StepResult> {
+async function runStep(
+  fx: { repo: string; base: string; merge: string },
+  options: { failPip?: boolean } = {},
+): Promise<StepResult & { runnerTemp: string; argvLog: string }> {
   counter += 1;
+  const runnerTemp = join(root, `runner-temp-${counter}`);
+  await mkdir(runnerTemp);
+  const stubBin = join(root, `stub-bin-${counter}`);
+  await mkdir(stubBin);
+  await writeFile(join(stubBin, "pip"), PIP_WRAPPER);
+  await chmod(join(stubBin, "pip"), 0o755);
+  const argvLog = join(root, `pip-argv-${counter}`);
+  await writeFile(argvLog, "");
   const script = join(root, `step-${counter}.sh`);
   await writeFile(script, theStep().run ?? "exit 99\n");
   const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", script], {
@@ -173,10 +224,13 @@ async function runStep(fx: { repo: string; base: string; merge: string }): Promi
       ...scratchGitEnv,
       BASE_SHA: fx.base,
       MERGE_SHA: fx.merge,
-      PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
+      RUNNER_TEMP: runnerTemp,
+      PYYAML_PIP_LOG: argvLog,
+      ...(options.failPip ? { PYYAML_PIP_STUB_EXIT: "1" } : {}),
+      PATH: `${stubBin}:${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
     },
   });
-  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr, runnerTemp, argvLog };
 }
 
 describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
@@ -203,7 +257,23 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     for (const forbidden of ["GH_TOKEN", "GITHUB_TOKEN", "PR_TREE"]) {
       expect(step.run, `the run block must not touch ${forbidden}`).not.toContain(forbidden);
     }
-    expect(step.run, "the step must not run pip").not.toMatch(/(?<![\w./-])pip3?(?![\w-])/);
+    // The workspace parse needs PyYAML, which the runner image does not ship:
+    // the step installs it from the BASE's hash-pinned manifest — the zizmor
+    // manifest's discipline (base-defined via git objects, --require-hashes,
+    // a sanitized copy under RUNNER_TEMP). The exact install shape is pinned;
+    // anything else pip-shaped must be added here deliberately.
+    expect(step.run, "the step installs PyYAML from a hash-pinned manifest").toContain(
+      "pip install --no-deps --require-hashes --disable-pip-version-check",
+    );
+    expect(step.run, "the install targets a fresh RUNNER_TEMP site").toContain(
+      '--target "${sanitized}/site" -r "${sanitized}/requirements.txt"',
+    );
+    expect(step.run, "the manifest is read from the base side").toContain(
+      'install_pyyaml "${BASE_SHA:?}"',
+    );
+    expect(step.run, "no pip download — the hash-gated install is the only channel").not.toContain(
+      "pip download",
+    );
     expect(step.run, "the step must not run a package manager").not.toMatch(
       /\b(pnpm|npm|npx|yarn|corepack)\s+(audit|install|ci|i|add|update|remove|run|exec|dlx|config)\b/,
     );
@@ -242,7 +312,8 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     const fx = await fixture(BASE_PACKAGE_JSON(config), BASE_PACKAGE_JSON(config));
     const result = await runStep(fx);
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toBe("");
+    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
+    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
   });
 
   it("passes when the two package.json files differ in every way but the auditConfig value", async () => {
@@ -255,14 +326,16 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     const fx = await fixture(BASE_PACKAGE_JSON(config), mergePackage);
     const result = await runStep(fx);
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toBe("");
+    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
+    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
   });
 
   it("passes when neither side carries an audit suppression list", async () => {
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined));
     const result = await runStep(fx);
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toBe("");
+    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
+    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
   });
 
   it("refuses a pull request that adds a suppression the base does not carry", async () => {
@@ -442,7 +515,8 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     });
     const result = await runStep(fx);
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toBe("");
+    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
+    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
   });
 
   it("passes when the merge adds pnpm-workspace.yaml carrying no audit-affecting setting", async () => {
@@ -451,7 +525,8 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     });
     const result = await runStep(fx);
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toBe("");
+    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
+    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
   });
 
   it.each([
@@ -473,7 +548,8 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     });
     const result = await runStep(fx);
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toBe("");
+    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
+    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
   });
 
   it("refuses a suppression list moved into pnpm-workspace.yaml", async () => {
@@ -563,7 +639,11 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     // absent one would refuse before the workspace file is ever read.
     const base = await commitFiles(
       repo,
-      { "README.md": "# scratch\n", "package.json": `${JSON.stringify({ name: "scratch" })}\n` },
+      {
+        "README.md": "# scratch\n",
+        "package.json": `${JSON.stringify({ name: "scratch" })}\n`,
+        ".github/requirements-pyyaml.txt": pyyamlManifest,
+      },
       "base",
     );
     let raw: Buffer;
@@ -597,7 +677,8 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     });
     const result = await runStep(fx);
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toBe("");
+    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
+    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
   });
 
   it("passes when the merge adds .npmrc carrying none of the audited keys", async () => {
@@ -606,7 +687,8 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     });
     const result = await runStep(fx);
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toBe("");
+    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
+    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
   });
 
   it("refuses an audit-level bar added in .npmrc", async () => {
@@ -657,7 +739,8 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     });
     const result = await runStep(fx);
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toBe("");
+    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
+    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
   });
 
   it("refuses an unparseable .npmrc whose bytes differ from the base", async () => {
@@ -728,6 +811,146 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     const result = await runStep(fx);
     expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
     expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.npmrcDivergence);
+  });
+
+  it("refuses a base that lacks the PyYAML manifest when the workspace file changed", async () => {
+    // The manifest is what main pins; until this lands on main every
+    // workspace-changing pull request reds here rather than judging with an
+    // unpinned module.
+    const fx = await fixture(
+      BASE_PACKAGE_JSON(undefined),
+      BASE_PACKAGE_JSON(undefined),
+      {
+        base: { "pnpm-workspace.yaml": "packages:\n  - \"a\"\n" },
+        merge: { "pnpm-workspace.yaml": "packages:\n  - \"b\"\n" },
+      },
+      { noManifest: true },
+    );
+    const result = await runStep(fx);
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.manifestMissing);
+  });
+
+  it("refuses a PyYAML manifest committed as a symlink on the base", async () => {
+    const baseRepo = join(root, `manifest-symlink-${counter}`);
+    await mkdir(baseRepo, { recursive: true });
+    git(baseRepo, "init", "--quiet", "--initial-branch=main");
+    await commitFiles(
+      baseRepo,
+      {
+        "README.md": "# scratch\n",
+        "package.json": `${JSON.stringify({ name: "scratch" })}\n`,
+        "pnpm-workspace.yaml": "packages:\n  - \"a\"\n",
+      },
+      "root",
+    );
+    const base = git(baseRepo, "rev-parse", "HEAD");
+    const target = await blobFile(baseRepo, `planted ${MARKER}`);
+    git(baseRepo, "update-index", "--add", "--cacheinfo", `120000,${target},.github/requirements-pyyaml.txt`);
+    const baseTree = git(baseRepo, "write-tree");
+    const symlinkBase = git(baseRepo, "commit-tree", baseTree, "-m", "symlink manifest");
+    const mergeId = await blobFile(baseRepo, "packages:\n  - \"b\"\n");
+    git(baseRepo, "update-index", "--add", "--cacheinfo", `100644,${mergeId},pnpm-workspace.yaml`);
+    const mergeTree = git(baseRepo, "write-tree");
+    const merge = git(baseRepo, "commit-tree", mergeTree, "-p", symlinkBase, "-m", "merge");
+    const result = await runStep({ repo: baseRepo, base: symlinkBase, merge });
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.manifestEntry);
+    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+  });
+
+  it.each([
+    ["a pin that is not pyyaml", "yaml==6.0.3"],
+    ["a comparison operator that is not ==", "pyyaml!=6.0.3"],
+    [
+      "a stray second requirement line",
+      `pyyaml==6.0.3 --hash=sha256:${"a".repeat(64)}\npyyaml==6.0.2 --hash=sha256:${"b".repeat(64)}`,
+    ],
+  ])("refuses %s in the PyYAML manifest by the pin grammar", async (_label, pinLine) => {
+    // The fixture's base manifest is the committed pin; the extra.base entry
+    // overrides it with the broken content the grammar gate must refuse.
+    const fx = await fixture(
+      BASE_PACKAGE_JSON(undefined),
+      BASE_PACKAGE_JSON(undefined),
+      {
+        base: { ".github/requirements-pyyaml.txt": pinLine },
+        merge: { "pnpm-workspace.yaml": "packages:\n  - \"b\"\n" },
+      },
+    );
+    const result = await runStep(fx);
+    const output = `${result.stdout}${result.stderr}`;
+    expect(result.status, output).not.toBe(0);
+    if (pinLine.includes("\n")) {
+      expect(output).toContain(REFUSALS.manifestSecondLine);
+    } else {
+      expect(output).toContain(REFUSALS.manifestGrammar);
+    }
+  });
+
+  it("fails closed when the hash-pinned install itself fails", async () => {
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
+      base: { "pnpm-workspace.yaml": "packages:\n  - \"a\"\n" },
+      merge: { "pnpm-workspace.yaml": "packages:\n  - \"b\"\n" },
+    });
+    const result = await runStep(fx, { failPip: true });
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+  });
+
+  it("installs PyYAML with the pinned argv from the sanitized copy, and passes a benign workspace change on the real module", async () => {
+    // The runner proof, executed here: the step installs the hash-pinned
+    // wheel through the wrapper (which forwards to the real pip — the log
+    // records the argv, the install is real), and the workspace parse then
+    // runs against the module the install produced. ubuntu-latest's python
+    // is the interpreter this case exercises.
+    const fx = await fixture(
+      BASE_PACKAGE_JSON(undefined),
+      BASE_PACKAGE_JSON(undefined),
+      {
+        base: {
+          "pnpm-workspace.yaml": "packages:\n  - \"a\"\nauditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n",
+        },
+        merge: {
+          // Formatting differs, so the blob ids differ and the parse runs;
+          // the audit-affecting settings are identical, so the step passes.
+          "pnpm-workspace.yaml": "packages: [\"a\"]\nauditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n",
+        },
+      },
+    );
+    const result = await runStep(fx);
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
+    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+
+    const invocations = (await readFile(result.argvLog, "utf8")).split("\n").filter((line) => line !== "");
+    expect(invocations, "exactly one pip invocation").toHaveLength(1);
+    const argv = invocations[0]!.split(" ");
+    expect(argv.slice(0, 5)).toEqual(["install", "--no-deps", "--require-hashes", "--disable-pip-version-check", "--no-input"]);
+    expect(argv).toContain("--retries");
+    expect(argv).toContain("--timeout");
+    expect(argv).toContain("--target");
+    expect(argv.filter((token) => token === "--require-hashes")).toHaveLength(1);
+    const targetIndex = argv.indexOf("--target");
+    expect(argv[targetIndex + 1], "the install site lives under this run's RUNNER_TEMP").toContain(
+      result.runnerTemp,
+    );
+    // The sanitized copy pip was handed is exactly the committed pin line.
+    const requirementsIndex = argv.indexOf("-r");
+    const sanitized = await readFile(argv[requirementsIndex + 1]!, "utf8");
+    expect(sanitized).toBe(
+      `${(await readFile(resolve(".github/requirements-pyyaml.txt"), "utf8"))
+        .split("\n")
+        .filter((line) => line.trim() !== "" && !line.startsWith("#"))
+        .join("\n")}\n`,
+    );
+    // The site the parse imported from carries the module.
+    const site = argv[targetIndex + 1]!;
+    const imported = spawnSync(
+      "python3",
+      ["-c", "import yaml, sys; sys.stdout.write(yaml.__version__)"],
+      { encoding: "utf8", env: { ...process.env, PYTHONPATH: site } },
+    );
+    expect(imported.status, imported.stderr).toBe(0);
+    expect(imported.stdout, "the installed module reports its version").toMatch(/^\d+\.\d+/);
   });
 
   /** Writes `content` as a loose blob in `repo`; returns its object id. */
