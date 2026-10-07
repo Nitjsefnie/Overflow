@@ -1467,6 +1467,108 @@ const ZIZMOR_PIN_RUN_TEXT = [
 function isSanctionedZizmorPinStep(step: WorkflowStep): boolean {
   return (step.run ?? "") === ZIZMOR_PIN_RUN_TEXT;
 }
+
+/**
+ * Issue 1035: the suppression-list divergence gate is the second inline
+ * `python3 -c` step sanctioned on the pull_request_target leg. Like the zizmor
+ * gate, it reads the pull request's package.json as GIT OBJECTS on both the
+ * merge tree and the base, and its behavioural contract is executed end to end
+ * in tests/ci/verify-suppression-step.test.ts; this file pins only that the
+ * exception cannot quietly widen.
+ *
+ * The step's FULL run text, pinned line for line: the exception is sanctioned
+ * only when the workflow step is byte-identical to this, so ANY future addition
+ * - a flag, a variable, a probe - de-sanctions the step and re-arms the
+ * reachability assertions. Extracted verbatim from the step as shipped (never
+ * hand-copied).
+ */
+const SUPPRESSION_STEP_NAME = "Refuse a pull request that changes the audit suppression list";
+
+const SUPPRESSION_PIN_RUN_TEXT = [
+  "file=package.json",
+  "",
+  "# Reads the named commit's package.json as git objects, mirroring the zizmor",
+  "# step's ls-tree gate: exactly one mode-100644 blob entry at package.json, or",
+  "# refuse. Prints the blob id on stdout.",
+  "blob_of() {",
+  "  entries=$(git ls-tree \"${1:?}\" -- \"${file}\")",
+  "  count=0",
+  "  entry_mode=\"\"",
+  "  entry_type=\"\"",
+  "  entry_blob=\"\"",
+  "  while IFS=$'\\t' read -r meta _path; do",
+  "    [ -n \"${meta}\" ] || continue",
+  "    count=$((count + 1))",
+  "    entry_mode=${meta%% *}",
+  "    rest=${meta#* }",
+  "    entry_type=${rest%% *}",
+  "    entry_blob=${rest#* }",
+  "  done <<< \"${entries}\"",
+  "  if [ \"${count}\" -ne 1 ] || [ \"${entry_mode}\" != \"100644\" ] || [ \"${entry_type}\" != \"blob\" ]; then",
+  "    echo \"::error::package.json must be exactly one mode-100644 blob entry in a tree; refusing. The suppression list is read from git objects, never from the filesystem, so a symlink leaf, a wrong mode, a non-blob type and an absent file are all refused.\" >&2",
+  "    exit 1",
+  "  fi",
+  "  printf '%s\\n' \"${entry_blob}\"",
+  "}",
+  "",
+  "# Pipes the named blob through the inline python pre-parse, which emits the",
+  "# CANONICAL form of .pnpm.auditConfig: sort_keys and compact separators make",
+  "# the dump uniquely parseable back to one value, so string equality of the two",
+  "# sides is structural equality - key order, indentation and escaping in",
+  "# package.json never reach the comparison, while every nested value and the",
+  "# order of the ignoreGhsas list itself do.",
+  "value_of() {",
+  "  git cat-file blob \"${1:?}\" | python3 -c \"${pre_parse}\"",
+  "}",
+  "",
+  "pre_parse=$(cat <<'PY'",
+  "import json",
+  "import sys",
+  "",
+  "data = sys.stdin.buffer.read()",
+  "if 65536 < len(data):",
+  "    sys.stderr.write(\"::error::package.json is larger than the 65536-byte cap; refusing\\n\")",
+  "    sys.exit(1)",
+  "if b\"\\x00\" in data:",
+  "    sys.stderr.write(\"::error::package.json carries a NUL byte, which is invalid content wherever it sits; refusing\\n\")",
+  "    sys.exit(1)",
+  "try:",
+  "    text = data.decode(\"utf-8\")",
+  "except UnicodeDecodeError:",
+  "    sys.stderr.write(\"::error::package.json is not valid UTF-8; refusing\\n\")",
+  "    sys.exit(1)",
+  "try:",
+  "    parsed = json.loads(text)",
+  "except ValueError:",
+  "    sys.stderr.write(\"::error::package.json does not parse as JSON; refusing\\n\")",
+  "    sys.exit(1)",
+  "config = None",
+  "if isinstance(parsed, dict):",
+  "    pnpm = parsed.get(\"pnpm\")",
+  "    if isinstance(pnpm, dict):",
+  "        config = pnpm.get(\"auditConfig\")",
+  "if config is None:",
+  "    sys.stdout.write(\"absent\")",
+  "else:",
+  "    sys.stdout.write(json.dumps(config, sort_keys=True, separators=(\",\", \":\")))",
+  "PY",
+  ")",
+  "",
+  "base_blob=$(blob_of \"${BASE_SHA:?}\")",
+  "merge_blob=$(blob_of \"${MERGE_SHA:?}\")",
+  "base_value=$(value_of \"${base_blob}\") || exit 1",
+  "merge_value=$(value_of \"${merge_blob}\") || exit 1",
+  "if [ \"${base_value}\" != \"${merge_value}\" ]; then",
+  "  echo \"::error::this pull request changes pnpm.auditConfig; a pull request cannot change the audit suppression list — the list moves only through a maintainer-reviewed merge\"",
+  "  exit 1",
+  "fi",
+  "",
+].join("\n");
+
+/** Sanctioned only when the named step is byte-identical to the pinned run text. */
+function isSanctionedSuppressionStep(step: WorkflowStep): boolean {
+  return (step.run ?? "") === SUPPRESSION_PIN_RUN_TEXT;
+}
 /** A run block that invokes pip or pip3 at all — the one-step allowance is judged over this set. */
 function runsPip(step: WorkflowStep): boolean {
   return /(?<![\w./-])pip3?(?![\w-])/.test(step.run ?? "");
@@ -1646,6 +1748,10 @@ for (const scenario of PRT_SCENARIOS) {
         // any workflow, fails here exactly as before (see the structural pin
         // directly below, which fails closed if the step's shape drifts).
         if (step.name === ZIZMOR_PIN_STEP_NAME && isSanctionedZizmorPinStep(step)) return [];
+        // The issue-1035 suppression gate is the second sanctioned inline
+        // `python3 -c` step, under the same fail-closed discipline: its run
+        // text must be byte-identical to the pin or it re-joins the offences.
+        if (step.name === SUPPRESSION_STEP_NAME && isSanctionedSuppressionStep(step)) return [];
         return untrustedExecutions(step.run ?? "").map((reason) => `${label(step)}: ${reason}`);
       });
       expect(
@@ -1667,6 +1773,31 @@ for (const scenario of PRT_SCENARIOS) {
         isSanctionedZizmorPinStep(pipSteps[0]!),
         `the sanctioned step's run text drifted from the pinned shape — it must be byte-identical ` +
           `to ZIZMOR_PIN_RUN_TEXT in this file`,
+      ).toBe(true);
+    });
+
+    it("selects the suppression-list divergence gate on this event, whose if survives the evaluator", () => {
+      const gates = selected().filter((step) => step.name === SUPPRESSION_STEP_NAME);
+      expect(
+        gates.map(label),
+        "the issue-1035 gate must be selected on every pull_request_target run: verify is " +
+          "base-defined and required, so a hostile pull request cannot delete the check, and an " +
+          "`if:` that never fires would remove it while every other suite stays green",
+      ).toHaveLength(1);
+      expect(
+        gates[0]!.if,
+        "the gate is gated on the pull_request_target event — the only event this file receives, " +
+          "and the only one on which the checkout is not main itself",
+      ).toBe("github.event_name == 'pull_request_target'");
+    });
+
+    it("sanctions the suppression-list gate only when its run text is byte-identical to the pin", () => {
+      const gates = selected().filter((step) => step.name === SUPPRESSION_STEP_NAME);
+      expect(gates).toHaveLength(1);
+      expect(
+        isSanctionedSuppressionStep(gates[0]!),
+        "the suppression gate's run text drifted from SUPPRESSION_PIN_RUN_TEXT — any edit to the " +
+          "step de-sanctions it here and must be re-pinned deliberately",
       ).toBe(true);
     });
 
