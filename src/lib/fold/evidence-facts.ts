@@ -8,6 +8,7 @@ import {
   type ReconciliationPullRequestEvidence,
   type ReconciliationSynchronization,
 } from "@/lib/fold/reconciliation-evidence";
+import { logField } from "@/lib/webhooks/log-field";
 
 /**
  * The largest serialized fact payload the evidence cache stores by default.
@@ -250,7 +251,7 @@ export async function synchronizeReconciliationEvidence(
     console.error(
       `Reconciliation evidence for repository ${repositoryId}: omitted ${oversized.length} oversized fact(s) `
         + `over the ${factByteLimit}-byte limit; the fold continues without them and a later full pass retries `
-        + `them (${oversized.map(({ kind, subjectKey }) => `${kind}#${subjectKey}`).join(", ")}).`,
+        + `them (${oversized.map(({ kind, subjectKey }) => `${kind}#${logField(subjectKey)}`).join(", ")}).`,
     );
   }
 

@@ -1,14 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { TransactionClient } from "@/lib/db/types";
 import {
   DEFAULT_RECONCILIATION_FACT_BYTE_LIMIT,
   chunkEvidenceFactWrites,
   diffEvidenceFactKeys,
   mergeEvidenceFacts,
   splitEvidenceFacts,
+  synchronizeReconciliationEvidence,
   type MeasuredReconciliationFact,
   type OversizedReconciliationFact,
   type ReconciliationFact,
 } from "@/lib/fold/evidence-facts";
+import { logField } from "@/lib/webhooks/log-field";
 import type {
   NarrowedCachedIssue,
   ReconciliationPullRequestEvidence,
@@ -268,5 +271,38 @@ describe("oversized report", () => {
     const { oversized } = splitEvidenceFacts({ issues: [payload], pullRequests: [] }, { factByteLimit: 8 });
     const report: OversizedReconciliationFact[] = oversized;
     expect(report).toEqual([{ kind: "issue", subjectKey: "5", bytes: Buffer.byteLength(JSON.stringify(payload), "utf8") }]);
+  });
+});
+
+// The oversized-fact report is the one log line the evidence write emits, and
+// the subject key it names is `String(<instance-supplied numeric id>)` — the
+// runtime type of that field is whatever the forge's JSON said, so a hostile
+// instance can make it carry line breaks and terminal escapes. This drives the
+// real publish path (a stub transaction stands in for the SQL) straight to the
+// sink.
+describe("synchronizeReconciliationEvidence oversized log", () => {
+  it("encodes a hostile subject key in the oversized-fact line", async () => {
+    const calls: unknown[][] = [];
+    const errorLog = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { calls.push(args); });
+    try {
+      const hostileId = "102\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[31mred";
+      const transaction = vi.fn().mockResolvedValue([]) as unknown as TransactionClient;
+      await synchronizeReconciliationEvidence(transaction, "repository-1", {
+        expectedVersion: null,
+        scanStartedAt: new Date("2030-01-02T03:04:05.678Z"),
+        full: true,
+        issues: [issue({ id: hostileId as unknown as number, title: "x".repeat(1000) })],
+        pullRequests: [],
+        dirtySubjects: [],
+      }, 600);
+
+      expect(calls).toHaveLength(1);
+      const rendered = String(calls[0]![0]);
+      expect(rendered).not.toContain("\n");
+      expect(rendered).not.toContain("\u001b");
+      expect(rendered).toContain(logField(hostileId));
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 });

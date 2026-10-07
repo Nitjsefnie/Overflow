@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FAILURE_LOG_QUIET_WINDOW_MS, FailureLogger } from "@/lib/worker/failure-logger";
+import { errorLogToken, logField } from "@/lib/webhooks/log-field";
 import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 import {
   drainReconciliationJobs,
@@ -477,7 +478,7 @@ describe("running the next reconciliation job", () => {
         args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")],
       });
       expect(logged.mock.calls).toEqual([
-        ["Reconciliation failed for repository", "repo-a", unfolded],
+        ["Reconciliation failed for repository", "repo-a", errorLogToken(unfolded)],
       ]);
     } finally {
       logged.mockRestore();
@@ -510,7 +511,7 @@ describe("running the next reconciliation job", () => {
         args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")],
       });
       expect(logged.mock.calls).toEqual([
-        ["Reconciliation failed for repository", "repo-a", unfolded],
+        ["Reconciliation failed for repository", "repo-a", errorLogToken(unfolded)],
       ]);
     } finally {
       logged.mockRestore();
@@ -551,7 +552,7 @@ describe("running the next reconciliation job", () => {
       await settle();
       expect(rejections.seen).toEqual([]);
       expect(logged.mock.calls).toEqual([
-        ["Reconciliation failed for repository", "repo-a", unfolded],
+        ["Reconciliation failed for repository", "repo-a", errorLogToken(unfolded)],
       ]);
     } finally {
       logged.mockRestore();
@@ -1768,7 +1769,7 @@ describe("the scheduled reconciliation worker", () => {
       expect(drains).toBe(1);
       expect(rejections.seen).toEqual([]);
       expect(logged.mock.calls).toEqual([
-        ["Reconciliation worker could not drain the job queue", undrained],
+        ["Reconciliation worker could not drain the job queue", errorLogToken(undrained)],
       ]);
     } finally {
       logged.mockRestore();
@@ -1803,7 +1804,7 @@ describe("the scheduled reconciliation worker", () => {
 
       expect(rejections.seen).toEqual([]);
       expect(logged.mock.calls).toEqual([
-        ["Reconciliation worker could not drain the job queue", undrained],
+        ["Reconciliation worker could not drain the job queue", errorLogToken(undrained)],
       ]);
 
       // A reporter that could not even be read must still leave the worker able
@@ -1844,7 +1845,7 @@ describe("the scheduled reconciliation worker", () => {
       expect(reports).toEqual([undrained]);
       expect(rejections.seen).toEqual([]);
       expect(logged.mock.calls).toEqual([
-        ["Reconciliation worker could not drain the job queue", undrained],
+        ["Reconciliation worker could not drain the job queue", errorLogToken(undrained)],
       ]);
     } finally {
       logged.mockRestore();
@@ -2250,3 +2251,34 @@ function createRenewalTimer() {
 async function surfaceUnhandledRejections(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
+
+// The fallback that prints when the reporter cannot even be read renders the
+// fold's error raw — and the error's message can carry the hostile payload a
+// member-chosen instance supplied — so the fallback argument is the encoded
+// token, one line, no raw escape (issue 1042).
+describe("fallback log encoding (issue 1042)", () => {
+  it("renders a hostile fold error as one encoded token when the reporter cannot be read", async () => {
+    const { store } = createFakeStore({ jobs: [job()] });
+    const hostile = "fold\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[2J\u001b[31mspoofed";
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const dependencies = {
+      store,
+      now: () => new Date("2030-01-02T03:04:05.678Z"),
+      reconcile: async () => {
+        throw new Error(hostile);
+      },
+      get onFailure(): (repositoryId: string, error: unknown) => void {
+        throw new Error("the reporter is not wired up yet");
+      },
+    };
+
+    try {
+      await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RETRY_SCHEDULED");
+      expect(logged.mock.calls).toEqual([
+        ["Reconciliation failed for repository", "repo-a", `${logField("Error")}: ${logField(hostile)}`],
+      ]);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+});
