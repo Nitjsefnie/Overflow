@@ -32,10 +32,12 @@ export interface TriggeringRun {
    * lives in, per the run body's `head_repository.full_name`; empty when the
    * run's fields carry none (the workflow_run path's env carries none). The
    * refusal gate compares it against this repository's slug (issue 1115): a
-   * known mismatch throws before any listing is consulted. Empty does NOT
-   * mean "same repository" — a fork head's commit resolves in the base
-   * repository through its pull ref — so the gate fetches the run body to
-   * learn the name, and a name still missing keeps the throw.
+   * known mismatch is decided by liveness — a same-repo head reads the
+   * commit's associated pulls, a fork head (issue 1142) the base repository's
+   * open pulls at `head=<owner>:<branch>` — while empty (a deleted fork's
+   * null head_repository among them) throws before any listing is consulted.
+   * Empty does NOT mean "same repository": the gate fetches the run body to
+   * learn the name.
    */
   headRepository: string;
 }
