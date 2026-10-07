@@ -357,6 +357,11 @@ table covers variables read only by surrounding tooling: the Node runtime's
 | `OVERFLOW_DISABLE_RECONCILIATION_SWEEP` | Any non-empty value turns off the reconciliation worker and its sweep — the whole of automatic reconciliation; jobs still accumulate and nothing drains them (see Reconciliation) |
 | `OVERFLOW_SKIP_STARTUP_RECONCILIATION` | Exactly `1` skips the reconciliation sweep a restart runs at startup, as a temporary deploy override; missed deliveries stay unrecovered until the six-hour sweep or a manual reconciliation, and any other value keeps the startup sweep on |
 | `DEBUG_GITHUB_COST` | Debug-only, do not set in production: any non-empty value makes the GitHub client log the point cost and remaining balance of an issues-page query whose response carries a rate-limit reading |
+| `RATE_LIMIT_EXPORT_PER_HOUR` | Optional per-identity hourly bound for `POST /api/account/export`; defaults to 3. Present but nonpositive or non-numeric values fall back to the default. One of the five expensive-route bounds (with the repositories, tokens, forge-identities and overrides rows below): each value is one acting credential's burst per hour, refilled steadily at value/60 per minute and keyed by the credential that acts — the session's account id, or the API token's issuance id — shared with the MCP dispatch of the same operation |
+| `RATE_LIMIT_REPOSITORIES_PER_HOUR` | Optional per-identity hourly bound for `POST`, `PATCH` and `DELETE /api/repositories`; defaults to 10. Same derivation, keying and fallback as the export bound |
+| `RATE_LIMIT_TOKENS_PER_HOUR` | Optional per-identity hourly bound for `POST /api/tokens`; defaults to 5. Same derivation, keying and fallback as the export bound |
+| `RATE_LIMIT_FORGE_IDENTITIES_PER_HOUR` | Optional per-identity hourly bound for `POST` and `DELETE /api/forge-identities`; defaults to 5. Same derivation, keying and fallback as the export bound |
+| `RATE_LIMIT_OVERRIDES_PER_HOUR` | Optional per-identity hourly bound for `POST /api/overrides`, the settlement-correction request, including its MCP `correction_open` dispatch; defaults to 5. Same derivation, keying and fallback as the export bound |
 
 ### Deployment and build inputs
 
