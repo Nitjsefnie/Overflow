@@ -2708,3 +2708,73 @@ every mbox reader makes, and a message misread across a boundary is bounded to
 one misclassification. The definitive remote-mailbox check remains the IMAP
 probe priced above, which needs the app-password credential recorded as
 externally blocked on issue 842.
+
+## 13. Verifying the privileged-action journal's client addresses
+
+Every successful privileged action — a moderator grant or revoke, an audit
+decision, a recalibration closure, a ban reversal, a credit adjustment or its
+reversal, a rederivation request, a settlement-override decision, a sanction
+contest decision — writes one `Privileged action` line into the service
+journal, naming the acting account, the credential reference, and the client
+address the request claimed. That address is read from `X-Real-IP`, which the
+production vhost sets. The application listens on loopback only, but loopback
+is not trust: any local process can reach the listener and set that header
+itself, so an unmarked address in the journal is a claim, not a fact.
+
+To keep the journal honest about the difference, the application marks an
+address verified only when the request also carries the
+`x-privileged-proxy-secret` header with exactly the value of the
+`PRIVILEGED_PROXY_SECRET` environment variable. Only nginx — and the operator
+who configured both — hold that secret, so a header that carries it cannot
+come from a forger on loopback.
+
+The application change is safe to deploy before any host step: until the
+variable is set, every entry is written with the claimed address recorded and
+`clientAddressVerified: false`, which is the previous behavior with an honest
+marker added. The steps below close that gap.
+
+1. Generate the secret once per host:
+
+   ```bash
+   openssl rand -hex 32
+   ```
+
+2. Put `PRIVILEGED_PROXY_SECRET=<value>` in `/etc/overflow/overflow.env`
+   (root:root `0600`, like the rest of that file), and restart the service so
+   the running process picks the variable up:
+
+   ```bash
+   systemctl restart overflow.service
+   ```
+
+3. In the overflow vhost's proxy `location` block — the same block that
+   already sets `X-Real-IP` — add the echo header line, with the literal
+   replaced by the value generated in step 1:
+
+   `proxy_set_header X-Privileged-Proxy-Secret "<value from step 1>";`
+
+   The literal goes in the vhost itself, generated per host: it is the same
+   value `PRIVILEGED_PROXY_SECRET` carries in `/etc/overflow/overflow.env`.
+
+4. Validate and reload nginx:
+
+   ```bash
+   nginx -t && systemctl reload nginx
+   ```
+
+Steps 2 and 3 may land in either order: a header the application does not
+have the secret for, or a secret with no header echoing it, leaves entries
+marked unverified for the gap — it never marks an unverified address
+verified.
+
+Verify the end state with one privileged action (a moderator grant through
+the moderation page, say) and the journal:
+
+```bash
+journalctl -u overflow.service --no-pager -e | grep "Privileged action"
+```
+
+The newest line must carry `"clientAddressVerified": true` beside the address
+nginx recorded. A later vhost edit that drops the header, or a value changed
+on one side only, shows up the same way: entries keep arriving, marked
+unverified.
