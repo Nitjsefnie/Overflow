@@ -22,6 +22,13 @@ const { json: mutationRequest } = guardedRequests("/api/forge-identities");
 const TEST_KEY = Buffer.from("0123456789abcdef0123456789abcdef").toString("base64url");
 const SESSION = { user: { id: "user-1", role: "MEMBER" as const } };
 
+/**
+ * The unlink schema accepts uuid ids only (issue 1042), so the DELETE bodies
+ * these fixtures build carry uuids. The two differ only in the final nibble.
+ */
+const LINKED_IDENTITY_UUID = "01890a5d-ac96-774b-bcce-b302099a8057";
+const UNKNOWN_IDENTITY_UUID = "01890a5d-ac96-774b-bcce-b302099a8058";
+
 function identityView(overrides: Partial<ForgeIdentityView> = {}): ForgeIdentityView {
   return {
     id: "identity-1",
@@ -110,7 +117,7 @@ describe("forge identities API", () => {
       instanceUrl: "https://gitlab.example.com", token: "glpat-x",
     })), checksLiveRole: true },
     { method: "DELETE", invoke: (dependencies) => createForgeIdentitiesDeleteHandler(dependencies)(mutationRequest({
-      id: "identity-1",
+      id: LINKED_IDENTITY_UUID,
     }, "DELETE")), checksLiveRole: true },
   ];
 
@@ -306,14 +313,38 @@ describe("forge identities API", () => {
 
   it("deletes only the caller's own identity and answers 404 on a foreign or absent id", async () => {
     const f = fixture({ deleted: true });
-    const response = await createForgeIdentitiesDeleteHandler(f.dependencies)(mutationRequest({ id: "identity-9" }, "DELETE"));
+    const response = await createForgeIdentitiesDeleteHandler(f.dependencies)(mutationRequest({ id: LINKED_IDENTITY_UUID }, "DELETE"));
     expect(response.status).toBe(200);
     const deletion = f.calls.find((call) => call.op === "deleteForUser");
-    expect(deletion!.args).toEqual({ identityId: "identity-9", userId: "user-1" });
+    expect(deletion!.args).toEqual({ identityId: LINKED_IDENTITY_UUID, userId: "user-1" });
 
     const foreign = fixture({ deleted: false });
-    const refused = await createForgeIdentitiesDeleteHandler(foreign.dependencies)(mutationRequest({ id: "identity-9" }, "DELETE"));
+    const refused = await createForgeIdentitiesDeleteHandler(foreign.dependencies)(mutationRequest({ id: UNKNOWN_IDENTITY_UUID }, "DELETE"));
     expect(refused.status).toBe(404);
+  });
+
+  it("answers 400 INVALID_REQUEST when the unlink id is not a uuid, without touching the store", async () => {
+    const f = fixture();
+    const response = await createForgeIdentitiesDeleteHandler(f.dependencies)(mutationRequest({ id: "x" }, "DELETE"));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid forge identity unlink request." },
+    });
+    expect(f.dependencies.createIdentityStore).not.toHaveBeenCalled();
+    expect(f.calls).toEqual([]);
+  });
+
+  it("answers 404 NOT_FOUND for a syntactically valid uuid unknown to the account", async () => {
+    const f = fixture({ deleted: false });
+    const response = await createForgeIdentitiesDeleteHandler(f.dependencies)(mutationRequest({ id: UNKNOWN_IDENTITY_UUID }, "DELETE"));
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "NOT_FOUND", message: "No such forge identity is linked to this account." },
+    });
+    // The valid uuid reached the store unblocked — validation refused only the shape.
+    expect(f.calls).toEqual([{ op: "deleteForUser", args: { identityId: UNKNOWN_IDENTITY_UUID, userId: "user-1" } }]);
   });
 });
 
@@ -328,7 +359,7 @@ describe.each([
   {
     method: "DELETE",
     createHandler: createForgeIdentitiesDeleteHandler,
-    body: { id: "identity-1" },
+    body: { id: LINKED_IDENTITY_UUID },
     successStatus: 200,
     storeOperation: "deleteForUser",
   },
