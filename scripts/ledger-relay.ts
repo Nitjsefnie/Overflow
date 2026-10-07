@@ -29,10 +29,12 @@
 // workflow definition it executed is the base branch's (isTrustedProducerRun);
 // any other pinned run is refused without posting, whichever of its context's
 // paths the run came from. The refusal keeps the byte-identical throw unless
-// the head is provably dead; the head repository is decided first because a
-// fork head's commit resolves in this repository — an unknown name is learned
-// by fetching the run body — and a live head, a fork head, a missing name, or
-// any read failure throws (issue 1115). The App key arrives only through the
+// the head is provably dead: a same-repository head reads the commit's
+// associated pulls, a fork head (issue 1142) the base repository's open pulls
+// at `head=<owner>:<branch>`, its owner proven from the run body's
+// head_repository; an unknown name — a deleted fork's null head_repository —
+// an unprovable fork owner, or any read failure throws (issue 1115). The App
+// key arrives only through the
 // LEDGER_APP_KEY secret and is never logged; every failure exits nonzero so a
 // dead relay is visible as a red job, never as silence.
 
@@ -76,6 +78,7 @@ import {
   SHA_40,
   type TriggeringRun,
 } from "./ledger-relay-trigger.ts";
+import { forkOwnerLoginOf, openPullAtForkHead } from "./ledger-relay-fork.ts";
 
 export type { TriggeringRun };
 
@@ -614,9 +617,13 @@ function headRepositoryFullNameOf(body: Record<string, unknown>): string {
  * a live head keeps the byte-identical throw (issue 1083's visibility); a
  * DEAD head downgrades the refusal to the visible exit-0 no-op. The head's
  * repository is decided FIRST, because a fork head's commit resolves in the
- * base repository through its pull ref and the listing answers 200 with
- * count 0 for it: an unknown name is learned by fetching the run body, and
- * a fork name, a live head, or any read failure throws.
+ * base repository through its pull ref and the same-repo liveness listing
+ * answers 200 with count 0 for it: an unknown name is learned by fetching
+ * the run body. A same-repo head's liveness is the commit's associated-PR
+ * listing; a fork head's (issue 1142) is the base repository's open pulls at
+ * `head=<owner>:<branch>`, live only when one carries the run's head SHA. A
+ * deleted fork, an unprovable fork owner, an unnamed branch, a missing name,
+ * or any read failure throws (fail closed).
  */
 async function refuseUntrustedProducer(
   deps: RelayDeps,
@@ -624,9 +631,15 @@ async function refuseUntrustedProducer(
   run: TriggeringRun,
   auth: Record<string, string>,
 ): Promise<RelayResult> {
-  let headRepository = run.headRepository;
-  if (headRepository === "") {
-    const fetched = await apiCall<Record<string, unknown>>(
+  const refusedDeadHead = (): RelayResult => ({
+    decisions: [],
+    posted: [],
+    rerunDispatched: false,
+    sweep: NO_SWEEP,
+    refusedDeadHead: untrustedProducerMessage(run),
+  });
+  const fetchRunBody = async (): Promise<Record<string, unknown>> =>
+    apiCall<Record<string, unknown>>(
       deps,
       {
         url: `${API_ROOT}/repos/${repo}/actions/runs/${run.runId}`,
@@ -635,22 +648,51 @@ async function refuseUntrustedProducer(
       },
       `the workflow run ${run.runId}`,
     );
-    headRepository = headRepositoryFullNameOf(fetched);
+  let headRepository = run.headRepository;
+  let runBody: Record<string, unknown> | undefined;
+  if (headRepository === "") {
+    runBody = await fetchRunBody();
+    headRepository = headRepositoryFullNameOf(runBody);
   }
-  if (headRepository === "" || headRepository !== repo) {
+  if (headRepository === "") {
+    // Unknown name: a deleted fork's head_repository is null, so this limb
+    // is the deleted-fork throw too (issue 1142). Fails closed.
     throw new Error(untrustedProducerMessage(run));
   }
-  const pr = await findOpenPullRequestAtHead(deps, repo, run.headSha, auth);
-  if (pr !== null) {
+  if (headRepository === repo) {
+    const pr = await findOpenPullRequestAtHead(deps, repo, run.headSha, auth);
+    if (pr !== null) {
+      throw new Error(untrustedProducerMessage(run));
+    }
+    return refusedDeadHead();
+  }
+  // Fork head (issue 1142): the owner must be provable from the run body
+  // before any request; the branch-scoped listing then decides liveness.
+  const ownerLogin = forkOwnerLoginOf(runBody ?? (await fetchRunBody()));
+  if (run.headBranch === "") {
+    throw new Error(
+      "the refused fork run names no head branch; the fork head's liveness cannot be read, so the refusal stays visible",
+    );
+  }
+  if (
+    openPullAtForkHead(
+      await apiCall<unknown>(
+        deps,
+        {
+          url:
+            `${API_ROOT}/repos/${repo}/pulls?state=open&head=` +
+            `${encodeURIComponent(`${ownerLogin}:${run.headBranch}`)}&per_page=100`,
+          method: "GET",
+          headers: { ...API_HEADERS, ...auth },
+        },
+        `the open pull requests from ${ownerLogin}:${run.headBranch}`,
+      ),
+      run.headSha,
+    )
+  ) {
     throw new Error(untrustedProducerMessage(run));
   }
-  return {
-    decisions: [],
-    posted: [],
-    rerunDispatched: false,
-    sweep: NO_SWEEP,
-    refusedDeadHead: untrustedProducerMessage(run),
-  };
+  return refusedDeadHead();
 }
 
 /**
