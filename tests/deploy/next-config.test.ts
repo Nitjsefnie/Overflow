@@ -347,11 +347,14 @@ describe("framing-protection headers", () => {
   }
 
   // Fails unless the route's unconditioned map carries exactly the framing
-  // values, and unless no matching conditioned rule sets a framing header.
+  // values plus the issue 1046 hardening pair, and unless no matching
+  // conditioned rule sets a framing header.
   async function expectRouteFramed(route: string) {
     const { effective, conditionedFramingHeaders } = await routeHeaders(route);
     expect(effective["content-security-policy"], route).toBe("frame-ancestors 'none'");
     expect(effective["x-frame-options"], route).toBe("DENY");
+    expect(effective["x-content-type-options"], route).toBe("nosniff");
+    expect(effective["referrer-policy"], route).toBe("strict-origin-when-cross-origin");
     expect(conditionedFramingHeaders, route).toEqual([]);
   }
 
@@ -368,5 +371,18 @@ describe("framing-protection headers", () => {
     vi.resetModules();
 
     for (const route of framedRoutes) await expectRouteFramed(route);
+  });
+});
+
+describe("poweredByHeader", () => {
+  // Issue 1046: Next's default X-Powered-By response header advertises the
+  // framework; the config must opt out so responses carry no such marker.
+  it("is disabled so no X-Powered-By header is served", async () => {
+    delete process.env.NEXT_DIST_DIR;
+    vi.resetModules();
+
+    const { default: config } = await import("../../next.config");
+
+    expect(config.poweredByHeader).toBe(false);
   });
 });
