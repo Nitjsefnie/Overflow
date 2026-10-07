@@ -632,11 +632,31 @@ fi
       'node "${GITHUB_WORKSPACE}/scripts/await-pr-suite.ts"',
       'bash "${GITHUB_WORKSPACE}/scripts/ci-base-freshness.sh"',
     ]));
+    // The issue-1035 suppression gate is the one sanctioned exception, by
+    // exact name — the same sanction the reachability suite grants it (its run
+    // text is pinned byte-identical there, and any drift re-arms this pin).
+    // The step must NAME the pnpm.auditConfig key in its fixed refusals, so the
+    // bare-word scan would flag prose; it is instead held to executing no
+    // package-manager COMMAND, and it shells out to git and python3 only.
+    const suppressionGate = "Refuse a pull request that changes the audit suppression list";
     expect(
-      verify.steps.map((step) => step.run ?? "").join("\n"),
+      verify.steps
+        .filter((step) => step.name !== suppressionGate)
+        .map((step) => step.run ?? "")
+        .join("\n"),
       "the pull-request leg must run no package manager at all — the pull request's install, " +
         "migrations, tests and build run in pr-suite.yml, whose outcome this job awaits as data",
     ).not.toMatch(/\b(pnpm|npm|npx|yarn|corepack)\b/);
+    expect(
+      verify.steps.filter((step) => step.name === suppressionGate),
+      "the sanctioned suppression gate must exist; without it the exemption above is dead",
+    ).toHaveLength(1);
+    expect(
+      verify.steps.find((step) => step.name === suppressionGate)!.run ?? "",
+      "the sanctioned suppression gate executes no package-manager command — git and python3 only",
+    ).not.toMatch(
+      /\b(pnpm|npm|npx|yarn|corepack)\s+(install|ci|i|add|update|remove|run|exec|dlx|audit|config|test|info|view|publish|--version)\b/,
+    );
     // Base freshness last, over the materialised merge tree.
     expect(verify.steps.at(-1)?.name).toBe("Base freshness");
     expect(verify.env).toEqual(expect.objectContaining({
@@ -905,11 +925,19 @@ cp .github/workflows/*.yml .github/workflows-pr/
       env: {
         COREPACK_ENABLE_PROJECT_SPEC: "0",
         npm_config_registry: "https://registry.npmjs.org/",
+        npm_config_strict_ssl: "true",
+        npm_config_cafile: "/etc/ssl/certs/ca-certificates.crt",
       },
       steps: [
         {
           uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
           with: { "persist-credentials": false },
+        },
+        {
+          name: "Refuse a pull request that changes the audit suppression list",
+          if: "github.event_name == 'pull_request'",
+          env: { BASE_SHA: "${{ github.event.pull_request.base.sha }}" },
+          run: "file=package.json\n\n# Reads a commit's package.json as git objects with the ls-tree single-blob\n# discipline: exactly one mode-100644 blob entry at package.json, or refuse.\n# Prints the blob id on stdout.\nblob_of() {\n  entries=$(git ls-tree \"${1:?}\" -- \"${file}\")\n  count=0\n  entry_mode=\"\"\n  entry_type=\"\"\n  entry_blob=\"\"\n  while IFS=$'\\t' read -r meta _path; do\n    [ -n \"${meta}\" ] || continue\n    count=$((count + 1))\n    entry_mode=${meta%% *}\n    rest=${meta#* }\n    entry_type=${rest%% *}\n    entry_blob=${rest#* }\n  done <<< \"${entries}\"\n  if [ \"${count}\" -ne 1 ] || [ \"${entry_mode}\" != \"100644\" ] || [ \"${entry_type}\" != \"blob\" ]; then\n    echo \"::error::package.json must be exactly one mode-100644 blob entry in a tree; refusing. The suppression list is read from git objects, never from the filesystem, so a symlink leaf, a wrong mode, a non-blob type and an absent file are all refused.\" >&2\n    exit 1\n  fi\n  printf '%s\\n' \"${entry_blob}\"\n}\n\n# Pipes the named blob through the inline python pre-parse, which emits the\n# CANONICAL form of .pnpm.auditConfig: sort_keys and compact separators make\n# the dump uniquely parseable back to one value, so string equality of the two\n# sides is structural equality - key order, indentation and escaping in\n# package.json never reach the comparison, while every nested value and the\n# order of the ignoreGhsas list itself do.\nvalue_of() {\n  git cat-file blob \"${1:?}\" | python3 -c \"${pre_parse}\"\n}\n\npre_parse=$(cat <<'PY'\nimport json\nimport sys\n\ndata = sys.stdin.buffer.read()\nif 65536 < len(data):\n    sys.stderr.write(\"::error::package.json is larger than the 65536-byte cap; refusing\\n\")\n    sys.exit(1)\nif b\"\\x00\" in data:\n    sys.stderr.write(\"::error::package.json carries a NUL byte, which is invalid content wherever it sits; refusing\\n\")\n    sys.exit(1)\ntry:\n    text = data.decode(\"utf-8\")\nexcept UnicodeDecodeError:\n    sys.stderr.write(\"::error::package.json is not valid UTF-8; refusing\\n\")\n    sys.exit(1)\ntry:\n    parsed = json.loads(text)\nexcept ValueError:\n    sys.stderr.write(\"::error::package.json does not parse as JSON; refusing\\n\")\n    sys.exit(1)\nconfig = None\nif isinstance(parsed, dict):\n    pnpm = parsed.get(\"pnpm\")\n    if isinstance(pnpm, dict):\n        config = pnpm.get(\"auditConfig\")\nif config is None:\n    sys.stdout.write(\"absent\")\nelse:\n    sys.stdout.write(json.dumps(config, sort_keys=True, separators=(\",\", \":\")))\nPY\n)\n\nif ! git fetch --quiet --depth=1 origin \"${BASE_SHA:?}\"; then\n  echo \"::error::could not fetch the pull request's base commit; refusing to judge the suppression list without it\" >&2\n  exit 1\nfi\nbase_blob=$(blob_of FETCH_HEAD)\nmerge_blob=$(blob_of HEAD)\nbase_value=$(value_of \"${base_blob}\") || exit 1\nmerge_value=$(value_of \"${merge_blob}\") || exit 1\nif [ \"${base_value}\" != \"${merge_value}\" ]; then\n  echo \"::error::this pull request changes pnpm.auditConfig; a pull request cannot change the audit suppression list — the list moves only through a maintainer-reviewed merge\"\n  exit 1\nfi\n",
         },
         {
           uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
