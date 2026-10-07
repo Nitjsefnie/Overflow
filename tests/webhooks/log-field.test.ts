@@ -108,13 +108,13 @@ const hostilePayload = "2026-01-01\nPrivileged action {\n  action: 'moderator-ro
 
 describe("errorLogToken", () => {
   it("renders an Error as its name and the logField token of its message", () => {
-    expect(errorLogToken(new Error("boom"))).toBe(`Error: ${logField("boom")}`);
-    expect(errorLogToken(new TypeError("nope"))).toBe(`TypeError: ${logField("nope")}`);
+    expect(errorLogToken(new Error("boom"))).toBe(`${logField("Error")}: ${logField("boom")}`);
+    expect(errorLogToken(new TypeError("nope"))).toBe(`${logField("TypeError")}: ${logField("nope")}`);
   });
 
   it("renders the hostile payload as one line with every escape and no forged block", () => {
     const token = errorLogToken(new Error(hostilePayload));
-    expect(token).toBe(`Error: ${logField(hostilePayload)}`);
+    expect(token).toBe(`${logField("Error")}: ${logField(hostilePayload)}`);
     expect(token).not.toContain("\n");
     expect(token).not.toContain("\u001b");
     // The encoded fragment is present, escaped: the newline between the forged
@@ -133,7 +133,7 @@ describe("errorLogToken", () => {
 
   it("follows the cause chain with each link rendered the same way", () => {
     const error = new Error("outer", { cause: new TypeError("inner\nline") });
-    expect(errorLogToken(error)).toBe(`Error: ${logField("outer")}; TypeError: ${logField("inner\nline")}`);
+    expect(errorLogToken(error)).toBe(`${logField("Error")}: ${logField("outer")}; ${logField("TypeError")}: ${logField("inner\nline")}`);
   });
 
   it("renders a fixed number of chain links and marks a deeper chain as continuing", () => {
@@ -145,7 +145,7 @@ describe("errorLogToken", () => {
     // Six links render (the thrown value plus five causes); the rest is one
     // continuing marker on the same line.
     expect(errorLogToken(chain)).toBe(
-      [0, 1, 2, 3, 4, 5].map((index) => `Error: ${logField(`m${index}`)}`).join("; ") + "; …",
+      [0, 1, 2, 3, 4, 5].map((index) => `${logField("Error")}: ${logField(`m${index}`)}`).join("; ") + "; …",
     );
     expect(errorLogToken(chain)).not.toContain("\n");
   });
@@ -153,7 +153,7 @@ describe("errorLogToken", () => {
   it("terminates on a cause-chain cycle with a continuing marker", () => {
     const error = new Error("loop");
     (error as { cause?: unknown }).cause = error;
-    expect(errorLogToken(error)).toBe(`Error: ${logField("loop")}; …`);
+    expect(errorLogToken(error)).toBe(`${logField("Error")}: ${logField("loop")}; …`);
   });
 
   it("renders a non-Error thrown value through logField(String(...))", () => {
@@ -182,6 +182,6 @@ describe("errorLogToken", () => {
   it("keeps an empty or non-string name readable instead of printing an empty prefix", () => {
     const unnamed = new Error("quiet");
     Object.defineProperty(unnamed, "name", { value: "" });
-    expect(errorLogToken(unnamed)).toBe(`Error: ${logField("quiet")}`);
+    expect(errorLogToken(unnamed)).toBe(`${logField("Error")}: ${logField("quiet")}`);
   });
 });

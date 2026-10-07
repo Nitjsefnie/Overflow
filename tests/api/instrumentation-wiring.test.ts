@@ -225,7 +225,7 @@ describe("server instrumentation log encoding (issue 1042)", () => {
     const rendered = String(call![1]);
     expect(rendered).not.toContain("\n");
     expect(rendered).not.toContain("\u001b");
-    expect(rendered).toBe(`Error: ${logField(hostilePayload)}`);
+    expect(rendered).toBe(`${logField("Error")}: ${logField(hostilePayload)}`);
   });
 
   it("renders the sweep's enqueue failure as one encoded single-line token", async () => {
@@ -250,6 +250,6 @@ describe("server instrumentation log encoding (issue 1042)", () => {
     const rendered = String(call![1]);
     expect(rendered).not.toContain("\n");
     expect(rendered).not.toContain("\u001b");
-    expect(rendered).toBe(`Error: ${logField(hostilePayload)}`);
+    expect(rendered).toBe(`${logField("Error")}: ${logField(hostilePayload)}`);
   });
 });
