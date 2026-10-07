@@ -447,12 +447,17 @@ jobs:
           pip download --no-deps --only-binary=:all: --require-hashes --index-url https://pypi.org/simple --no-input --disable-pip-version-check --retries 2 --timeout 60 -d "${sanitized}/download" -r "${sanitized}/requirements.txt"
 
       # Issue 1035. The dependency audit honours the audit suppression list a
-      # pull request itself writes into package.json — pnpm.auditConfig — so a
+      # pull request itself writes into package.json — pnpm.auditConfig — and,
+      # as the fix-round-3 measurement recorded beside the twin guard in
+      # dependency-audit.yml, the same auditConfig from pnpm-workspace.yaml
+      # (plus auditLevel and the registries mapping there, and audit-level,
+      # registry, strict-ssl, cafile, proxy and https-proxy from .npmrc) — so a
       # pull request could silence its own audit by listing an advisory it
       # introduces, and once merged, the scheduled audit on main is silenced
       # too. The list therefore moves only through a maintainer-reviewed merge:
-      # this base-defined gate deep-compares the merge tree's pnpm.auditConfig
-      # against the base's and refuses divergence.
+      # this base-defined gate deep-compares the merge tree's package.json,
+      # pnpm-workspace.yaml and .npmrc against the base's and refuses
+      # divergence on every audit-affecting key.
       #
       # MECHANICS, mirroring the zizmor step above it: package.json is read from
       # GIT OBJECTS on both sides — git ls-tree shows exactly one mode-100644
@@ -469,6 +474,21 @@ jobs:
       # whole key counts as divergence, as does adding one; present-null and
       # absent read as the same, because pnpm treats both as no config.
       #
+      # pnpm-workspace.yaml and .npmrc are read the same way, with two
+      # differences their optionality buys: absent compares equal to a file
+      # carrying none of the audited keys (the base's own state on main), and
+      # an unparseable CHANGED file is a refusal, never a silent pass — the
+      # workspace side needs PyYAML and fails closed if the runner lacks it (a
+      # red run, never a green), and a file whose audit-affecting settings do
+      # not serialize to JSON refuses too. The audited keys are the MEASURED
+      # sets on pnpm 10.33.0: the workspace projection covers auditConfig,
+      # auditLevel and the registries mapping (measured beating a pinned
+      # npm_config_registry), the .npmrc projection covers audit-level,
+      # registry, strict-ssl, cafile, proxy and https-proxy; keys measured
+      # NOT honoured by the audit — the workspace's singular registry, its
+      # kebab-case audit-level, and .npmrc @scope:registry — stay outside the
+      # projections so ordinary edits stay green.
+      #
       # Every refusal is a FIXED constant: no pull-request-controlled bytes ever
       # reach the log. Identical lists exit 0 silently. The step carries the
       # event gate the leg itself implies — this file receives nothing but
@@ -482,6 +502,18 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           file=package.json
+          ws_file=pnpm-workspace.yaml
+          npmrc_file=.npmrc
+          
+          # Two more suppression surfaces, measured on pnpm 10.33.0 with a real advisory
+          # carrying its github_advisory_id (the invalid-first-leg lesson applied): the
+          # audit honours auditConfig, auditLevel and the registries mapping from
+          # pnpm-workspace.yaml — the mapping BEATS a pinned npm_config_registry, so it
+          # redirects the advisory endpoint — and audit-level, registry, strict-ssl,
+          # cafile, proxy and https-proxy from .npmrc. Both files are therefore compared
+          # alongside package.json; absent compares equal to a file carrying none of the
+          # audited keys, and an unparseable CHANGED file is a refusal, never a silent
+          # pass.
           
           # Reads the named commit's package.json as git objects, mirroring the zizmor
           # step's ls-tree gate: exactly one mode-100644 blob entry at package.json, or
@@ -507,6 +539,37 @@ jobs:
             printf '%s\n' "${entry_blob}"
           }
           
+          # Reads a commit's pnpm-workspace.yaml or .npmrc as git objects: absent is a
+          # legitimate state — the files are optional — so unlike package.json it prints
+          # the ABSENT sentinel instead of refusing. Any PRESENT shape other than exactly
+          # one mode-100644 blob is a refusal: pnpm reads these files from the checkout
+          # on disk, where a symlink leaf redirects the read outside the tree, so the
+          # git-objects read must refuse what a filesystem read would follow.
+          optional_entry_of() {
+            entries=$(git ls-tree "${1:?}" -- "${2:?}")
+            count=0
+            entry_mode=""
+            entry_type=""
+            entry_blob=""
+            while IFS=$'\t' read -r meta _path; do
+              [ -n "${meta}" ] || continue
+              count=$((count + 1))
+              entry_mode=${meta%% *}
+              rest=${meta#* }
+              entry_type=${rest%% *}
+              entry_blob=${rest#* }
+            done <<< "${entries}"
+            if [ "${count}" -eq 0 ]; then
+              printf 'ABSENT\n'
+              return 0
+            fi
+            if [ "${count}" -ne 1 ] || [ "${entry_mode}" != "100644" ] || [ "${entry_type}" != "blob" ]; then
+              echo "::error::pnpm-workspace.yaml and .npmrc must be absent or exactly one mode-100644 blob entry in a tree; refusing. These files are read from git objects, never from the filesystem — pnpm reads the checkout on disk, where a symlink leaf redirects the read outside the tree, so a symlink leaf, a wrong mode and a non-blob type are all refused." >&2
+              exit 1
+            fi
+            printf '%s\n' "${entry_blob}"
+          }
+          
           # Pipes the named blob through the inline python pre-parse, which emits the
           # CANONICAL form of .pnpm.auditConfig: sort_keys and compact separators make
           # the dump uniquely parseable back to one value, so string equality of the two
@@ -515,6 +578,29 @@ jobs:
           # order of the ignoreGhsas list itself do.
           value_of() {
             git cat-file blob "${1:?}" | python3 -c "${pre_parse}"
+          }
+          
+          # Projects one side's pnpm-workspace.yaml (a blob id, or the ABSENT sentinel)
+          # to the canonical form of its audit-affecting settings. Absent compares equal
+          # to a file carrying none of the audited keys; identical bytes cannot diverge,
+          # so identical blob ids never reach the parse (and a runner missing PyYAML
+          # only ever reds a pull request that CHANGED the file).
+          ws_value_of() {
+            if [ "${1:?}" = "ABSENT" ]; then
+              printf 'absent\n'
+              return 0
+            fi
+            git cat-file blob "${1:?}" | python3 -c "${ws_pre_parse}"
+          }
+          
+          # Projects one side's .npmrc to the canonical form of its audit-affecting
+          # keys, with the same ABSENT handling as the workspace projection.
+          npmrc_value_of() {
+            if [ "${1:?}" = "ABSENT" ]; then
+              printf 'absent\n'
+              return 0
+            fi
+            git cat-file blob "${1:?}" | python3 -c "${npmrc_pre_parse}"
           }
           
           pre_parse=$(cat <<'PY'
@@ -549,6 +635,89 @@ jobs:
               sys.stdout.write(json.dumps(config, sort_keys=True, separators=(",", ":")))
           PY
           )
+          ws_pre_parse=$(cat <<'PY'
+          import json
+          import sys
+          
+          data = sys.stdin.buffer.read()
+          if 65536 < len(data):
+              sys.stderr.write("::error::pnpm-workspace.yaml and .npmrc are larger than the 65536-byte cap; refusing\n")
+              sys.exit(1)
+          if b"\x00" in data:
+              sys.stderr.write("::error::pnpm-workspace.yaml and .npmrc carry a NUL byte, which is invalid content wherever it sits; refusing\n")
+              sys.exit(1)
+          try:
+              text = data.decode("utf-8")
+          except UnicodeDecodeError:
+              sys.stderr.write("::error::pnpm-workspace.yaml and .npmrc are not valid UTF-8; refusing\n")
+              sys.exit(1)
+          try:
+              import yaml
+          except ImportError:
+              sys.stderr.write("::error::python3 has no yaml module; refusing to judge pnpm-workspace.yaml without it — the runner image is expected to ship PyYAML, and a missing module is a red run, never a silent pass\n")
+              sys.exit(1)
+          try:
+              parsed = yaml.safe_load(text)
+          except Exception:
+              sys.stderr.write("::error::pnpm-workspace.yaml does not parse as a mapping of settings; refusing to judge the audit-affecting settings without a parse\n")
+              sys.exit(1)
+          if parsed is None:
+              parsed = {}
+          if not isinstance(parsed, dict):
+              sys.stderr.write("::error::pnpm-workspace.yaml does not parse as a mapping of settings; refusing to judge the audit-affecting settings without a parse\n")
+              sys.exit(1)
+          projection = {}
+          for key in ("auditConfig", "auditLevel", "registries"):
+              if key in parsed:
+                  projection[key] = parsed[key]
+          try:
+              dump = json.dumps(projection, sort_keys=True, separators=(",", ":"))
+          except (TypeError, ValueError):
+              sys.stderr.write("::error::pnpm-workspace.yaml carries audit-affecting settings that do not serialize to JSON; refusing\n")
+              sys.exit(1)
+          sys.stdout.write(dump if projection else "absent")
+          PY
+          )
+          
+          npmrc_pre_parse=$(cat <<'PY'
+          import json
+          import sys
+          
+          data = sys.stdin.buffer.read()
+          if 65536 < len(data):
+              sys.stderr.write("::error::pnpm-workspace.yaml and .npmrc are larger than the 65536-byte cap; refusing\n")
+              sys.exit(1)
+          if b"\x00" in data:
+              sys.stderr.write("::error::pnpm-workspace.yaml and .npmrc carry a NUL byte, which is invalid content wherever it sits; refusing\n")
+              sys.exit(1)
+          try:
+              text = data.decode("utf-8")
+          except UnicodeDecodeError:
+              sys.stderr.write("::error::pnpm-workspace.yaml and .npmrc are not valid UTF-8; refusing\n")
+              sys.exit(1)
+          ALLOWED = ("audit-level", "registry", "strict-ssl", "cafile", "proxy", "https-proxy")
+          projection = {}
+          for line in text.split("\n"):
+              stripped = line.strip()
+              if not stripped or stripped.startswith("#") or stripped.startswith(";"):
+                  continue
+              if "=" not in stripped:
+                  sys.stderr.write("::error::.npmrc carries a line that is neither blank, a comment, nor key=value; refusing to judge its audit-affecting keys without a parse\n")
+                  sys.exit(1)
+              key, _, value = stripped.partition("=")
+              key = key.strip().lower()
+              value = value.strip()
+              if not key:
+                  sys.stderr.write("::error::.npmrc carries a line that is neither blank, a comment, nor key=value; refusing to judge its audit-affecting keys without a parse\n")
+                  sys.exit(1)
+              if key in ALLOWED:
+                  projection[key] = value
+          if projection:
+              sys.stdout.write(json.dumps(projection, sort_keys=True, separators=(",", ":")))
+          else:
+              sys.stdout.write("absent")
+          PY
+          )
           
           base_blob=$(blob_of "${BASE_SHA:?}")
           merge_blob=$(blob_of "${MERGE_SHA:?}")
@@ -557,6 +726,27 @@ jobs:
           if [ "${base_value}" != "${merge_value}" ]; then
             echo "::error::this pull request changes pnpm.auditConfig; a pull request cannot change the audit suppression list — the list moves only through a maintainer-reviewed merge"
             exit 1
+          fi
+          base_ws=$(optional_entry_of "${BASE_SHA:?}" "${ws_file}")
+          merge_ws=$(optional_entry_of "${MERGE_SHA:?}" "${ws_file}")
+          if [ "${base_ws}" != "${merge_ws}" ]; then
+            base_ws_value=$(ws_value_of "${base_ws}") || exit 1
+            merge_ws_value=$(ws_value_of "${merge_ws}") || exit 1
+            if [ "${base_ws_value}" != "${merge_ws_value}" ]; then
+              echo "::error::this pull request changes audit-affecting settings in pnpm-workspace.yaml; a pull request cannot change the audit suppression list — the list moves only through a maintainer-reviewed merge"
+              exit 1
+            fi
+          fi
+          
+          base_npmrc=$(optional_entry_of "${BASE_SHA:?}" "${npmrc_file}")
+          merge_npmrc=$(optional_entry_of "${MERGE_SHA:?}" "${npmrc_file}")
+          if [ "${base_npmrc}" != "${merge_npmrc}" ]; then
+            base_npmrc_value=$(npmrc_value_of "${base_npmrc}") || exit 1
+            merge_npmrc_value=$(npmrc_value_of "${merge_npmrc}") || exit 1
+            if [ "${base_npmrc_value}" != "${merge_npmrc_value}" ]; then
+              echo "::error::this pull request changes audit-affecting keys in .npmrc; a pull request cannot change the audit suppression list — the list moves only through a maintainer-reviewed merge"
+              exit 1
+            fi
           fi
 
 
