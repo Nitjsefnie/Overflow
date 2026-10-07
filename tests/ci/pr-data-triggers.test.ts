@@ -627,10 +627,10 @@ describe("the ledger relay's producer filter", () => {
   // MUST be relayed, which is the relay owner's call — not a silent change made
   // by a trigger sweep. The cheap alternative is measurably wrong rather than
   // merely weaker: "every shipped non-pinned workflow must be declared" fails
-  // on today's tree, where 11 of the 17 shipped workflows are unpinned and 9 of
-  // those are deliberately NOT relayed (claim, pr-suite, pr-gate, scorecard,
-  // code-scanning, coverage-comment, dependency-audit, event-policy,
-  // ledger-relay), so it would demand a declaration and a filter entry for each.
+  // on today's tree, where 8 of the 18 shipped workflows are unpinned and all
+  // 8 of those are deliberately NOT relayed (claim, pr-suite, pr-gate,
+  // scorecard, code-scanning, coverage-comment, event-policy, ledger-relay),
+  // so it would demand a declaration and a filter entry for each.
   //
   // The residual is unchanged from what this sweep replaced, and it is not the
   // silent direction: removing a line from a tracked workflow is a reviewable

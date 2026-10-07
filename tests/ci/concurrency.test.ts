@@ -148,22 +148,12 @@ const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = 
     group: "event-policy-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
   },
-  // Issue 1149 pins `dependency-audit` as a required context, produced by the
-  // push/schedule/dispatch leg (dependency-audit.yml) and the new
-  // pull_request_target leg (dependency-audit-pr.yml). Both files are
-  // pull-request-reachable required-context producers, so the suite's rule
-  // puts each of them here: one repository-level group per file, cancel
-  // false. On the push, schedule and dispatch legs the event test is false and
-  // the group falls through to github.sha, so a push run keeps its private
-  // per-SHA group — the same behavior the sibling push files ship
-  // unbounded-with-reason — while a pull-request arrival lands in the single
-  // repo-wide group instead of a per-pull-request one. The two files' groups
-  // differ (…-repo-wide vs …-pr-repo-wide), so the two producers never cancel
-  // each other's pending runs.
-  "dependency-audit.yml": {
-    group: "dependency-audit-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": false,
-  },
+  // Issue 1149 pins `dependency-audit` as a required context, produced by two
+  // files. Only the pull-request leg is pull-request-reachable, so only it
+  // belongs here: one repository-level group for every pull request, cancel
+  // false. The push leg (dependency-audit.yml) receives no pull-request
+  // event since the split completed in fix round 2 and is recorded in
+  // UNBOUNDED_BY_CHOICE with the sibling push files' per-SHA shape.
   "dependency-audit-pr.yml": {
     group: "dependency-audit-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
@@ -372,6 +362,16 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
       reason:
         "No pull-request trigger reaches this file since issue 1090 moved the pull-request leg to ci-pr.yml, which is the bounded one. Its remaining legs are push to main and workflow_dispatch — the latter being the deploy-recovery dispatch — and the group is per-SHA so no push to main shares a group with another push: a cancelled conclusion on a merged SHA makes the deploy gate refuse immediately (issue 474). A workflow with no pull_request and no pull_request_target event cannot be listed in BOUNDED at all, because the bound it would carry would be vacuous: the repository-level arm is dead code, so recording it would pin a promise no run exercises.",
       group: "ci-${{ github.sha }}",
+      "cancel-in-progress": false,
+      queue: undefined,
+    },
+  ],
+  [
+    "dependency-audit.yml",
+    {
+      reason:
+        "No pull-request trigger reaches this file since issue 1090's split completed for it in issue 1149's fix round 2: the pull-request leg is dependency-audit-pr.yml, which is the bounded one. Its remaining legs are push to main, the daily tick and workflow_dispatch, and the group is per-SHA so no push to main shares a group with another push or with the tick — a cancelled conclusion on a merged SHA makes the deploy gate refuse immediately (issue 474), and the audit's fast path never changes what a red run means. A workflow with no pull_request and no pull_request_target event cannot be listed in BOUNDED at all, because the bound it would carry would be vacuous: the repository-level arm is dead code, so recording it would pin a promise no run exercises.",
+      group: "dependency-audit-${{ github.sha }}",
       "cancel-in-progress": false,
       queue: undefined,
     },
