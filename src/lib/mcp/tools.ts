@@ -306,6 +306,16 @@ function defineRouteTool(spec: RouteToolSpec, forwarded: Headers): ToolDefinitio
         if (response.status >= 400) {
           result.isError = true;
         }
+        // A header exists only on the transport that answered, so the client
+        // reading the in-band result cannot see one: carry the seconds a
+        // declined bound names as the structured field it can act on instead.
+        // The header's presence is checked before the conversion — Number(null)
+        // is 0, and a fabricated 0 on every answer would be worse than none.
+        const retryAfter = response.headers.get("retry-after");
+        const retryAfterSeconds = retryAfter === null ? Number.NaN : Number(retryAfter);
+        if (Number.isSafeInteger(retryAfterSeconds)) {
+          result.structuredContent = { retryAfterSeconds };
+        }
         return result;
       } catch (error) {
         // A failed handler is a tool failure, not a transport one: it stays
