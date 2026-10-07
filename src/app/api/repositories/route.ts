@@ -13,6 +13,14 @@ import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-stor
 import { getSql } from "@/lib/db/client";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { hashApiToken, readApiTokenCredential } from "@/lib/security/api-token";
+import {
+  applyRouteRateGate,
+  createRouteRateGate,
+  EXPENSIVE_ROUTE_RATE_CLASSES,
+  resolveRouteRateLimit,
+  type RouteRateGate,
+} from "@/lib/security/route-rate-limit";
+import type { RouteCredentialReference } from "@/lib/security/route-credential";
 import { readBodyWithinLimit } from "@/lib/http/request-body";
 import {
   rejectUnsupportedMediaType,
@@ -21,6 +29,7 @@ import {
 import { PostgresApiTokenStore, type ApiTokenAccount } from "@/lib/tokens/postgres-store";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { plural } from "@/lib/plural";
+import { createRateLimiter } from "@/lib/webhooks/rate-limit";
 import {
   changeRepositoryCatalog,
   describeErrorCause,
@@ -85,7 +94,36 @@ export type RepositoryRouteDependencies = {
     session: RepositoryRouteSession,
     input: Partial<RepositoryRegistrationInput>,
   ) => Promise<RepositoryRegistrationDependencies>;
+  /**
+   * The keyed expensive-route bound (issue 1054), checked by all three verbs
+   * after authorization and before the body is read. The production wiring
+   * passes this file's module-scope gate; a handler built without one — a
+   * test factory call — stays unbounded.
+   */
+  rateGate?: RouteRateGate;
 };
+
+/**
+ * The authorized request together with the credential that authorized it, so
+ * the expensive-route bound keys by the acting credential identity (issue
+ * 1054): a session's account id, or an API token's issuance id.
+ */
+type AuthorizedRepositoryRequest = {
+  session: RepositoryRouteSession;
+  credential: RouteCredentialReference;
+};
+
+// One keyed limiter per route file, born at the wall clock: its buckets are
+// keyed by the acting credential identity and never evict (issue 1054). All
+// three verbs share the file's one limiter: the class is the repository
+// change itself, whichever of registration, catalog change, or unregistration
+// it takes.
+const repositoryRateLimiter = createRateLimiter({ nowMs: () => Date.now() });
+const repositoryRateGate = createRouteRateGate({
+  className: "repositories",
+  limiter: repositoryRateLimiter,
+  limits: resolveRouteRateLimit(process.env, EXPENSIVE_ROUTE_RATE_CLASSES.repositories),
+});
 
 export function createRepositoryPostHandler(dependencies: RepositoryRouteDependencies) {
   return async function postRepository(request: Request): Promise<Response> {
@@ -96,6 +134,12 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
     if (authorized === null) {
       return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
     }
+    const rateRefusal = applyRouteRateGate(
+      dependencies.rateGate,
+      authorized.credential,
+      authorized.session.user.id,
+    );
+    if (rateRefusal !== null) return rateRefusal;
 
     const input = await parseInput(request);
     if (input === "tooLarge") {
@@ -106,7 +150,10 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
     }
 
     try {
-      const registrationDependencies = await dependencies.createRegistrationDependencies(authorized, input);
+      const registrationDependencies = await dependencies.createRegistrationDependencies(
+        authorized.session,
+        input,
+      );
       const { initialImportScheduled, claimPath, ...repository } = await registerRepository(
         registrationDependencies,
         input,
@@ -171,6 +218,12 @@ export function createRepositoryPatchHandler(dependencies: RepositoryRouteDepend
     if (authorized === null) {
       return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
     }
+    const rateRefusal = applyRouteRateGate(
+      dependencies.rateGate,
+      authorized.credential,
+      authorized.session.user.id,
+    );
+    if (rateRefusal !== null) return rateRefusal;
 
     const input = await parseInput(request);
     if (input === "tooLarge") {
@@ -181,7 +234,10 @@ export function createRepositoryPatchHandler(dependencies: RepositoryRouteDepend
     }
 
     try {
-      const registrationDependencies = await dependencies.createRegistrationDependencies(authorized, input);
+      const registrationDependencies = await dependencies.createRegistrationDependencies(
+        authorized.session,
+        input,
+      );
       const change = await changeRepositoryCatalog(registrationDependencies, input);
       return Response.json(change, { status: 200 });
     } catch (error) {
@@ -216,6 +272,13 @@ export function createRepositoryDeleteHandler(dependencies: RepositoryRouteDepen
       return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
     }
 
+    const rateRefusal = applyRouteRateGate(
+      dependencies.rateGate,
+      authorized.credential,
+      authorized.session.user.id,
+    );
+    if (rateRefusal !== null) return rateRefusal;
+
     const input = await parseUnregisterInput(request);
     if (input === "tooLarge") {
       return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
@@ -225,7 +288,10 @@ export function createRepositoryDeleteHandler(dependencies: RepositoryRouteDepen
     }
 
     try {
-      const registrationDependencies = await dependencies.createRegistrationDependencies(authorized, input);
+      const registrationDependencies = await dependencies.createRegistrationDependencies(
+        authorized.session,
+        input,
+      );
       const result = await unregisterRepository(registrationDependencies, input);
       return Response.json(result, { status: 200 });
     } catch (error) {
@@ -257,7 +323,7 @@ export function createRepositoryDeleteHandler(dependencies: RepositoryRouteDepen
 async function authorizeRepositoryRequest(
   request: Request,
   dependencies: RepositoryRouteDependencies,
-): Promise<Response | RepositoryRouteSession | null> {
+): Promise<Response | AuthorizedRepositoryRequest | null> {
   const credential = readApiTokenCredential(request);
   const refusal =
     credential === null ? rejectUntrustedRequest(request) : rejectUnsupportedMediaType(request);
@@ -266,7 +332,7 @@ async function authorizeRepositoryRequest(
   }
 
   try {
-    let resolved: RepositoryRouteSession;
+    let resolved: AuthorizedRepositoryRequest;
     if (credential !== null) {
       const hash = hashApiToken(credential);
       if (hash === null) {
@@ -276,13 +342,16 @@ async function authorizeRepositoryRequest(
       if (account === null) {
         return errorResponse(401, "UNAUTHENTICATED", "The supplied API token was not accepted.");
       }
-      resolved = { user: { id: account.id, role: account.role } };
+      resolved = {
+        session: { user: { id: account.id, role: account.role } },
+        credential: { kind: "token", tokenId: account.tokenId },
+      };
     } else {
       const session = await dependencies.getSession();
       if (session === null) {
         return null;
       }
-      resolved = session;
+      resolved = { session, credential: { kind: "session" } };
     }
 
     // The live-account gate both credential paths run (issue 733): a session
@@ -292,7 +361,7 @@ async function authorizeRepositoryRequest(
     // the account. A null role is a deleted (or missing) account.
     let role: UserRole | null;
     try {
-      role = await dependencies.getCurrentRole(resolved.user.id);
+      role = await dependencies.getCurrentRole(resolved.session.user.id);
     } catch {
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
     }
@@ -307,6 +376,7 @@ async function authorizeRepositoryRequest(
 
 export const POST = createRepositoryPostHandler({
   getCurrentRole: getCurrentUserRole,
+  rateGate: repositoryRateGate,
   async findAccountByTokenHash(hash) {
     return new PostgresApiTokenStore().findAccountByTokenHash(hash);
   },
@@ -336,6 +406,7 @@ export const POST = createRepositoryPostHandler({
 
 export const PATCH = createRepositoryPatchHandler({
   getCurrentRole: getCurrentUserRole,
+  rateGate: repositoryRateGate,
   async findAccountByTokenHash(hash) {
     return new PostgresApiTokenStore().findAccountByTokenHash(hash);
   },
@@ -362,6 +433,7 @@ export const PATCH = createRepositoryPatchHandler({
 
 export const DELETE = createRepositoryDeleteHandler({
   getCurrentRole: getCurrentUserRole,
+  rateGate: repositoryRateGate,
   async findAccountByTokenHash(hash) {
     return new PostgresApiTokenStore().findAccountByTokenHash(hash);
   },

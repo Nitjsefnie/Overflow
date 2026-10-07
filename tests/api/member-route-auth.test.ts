@@ -61,7 +61,7 @@ describe("requiredMemberSession", () => {
   });
 
   it("answers a credential whose account no longer exists with the 403 member refusal", async () => {
-    resolveRouteCredential.mockResolvedValue({ user: { id: memberId } });
+    resolveRouteCredential.mockResolvedValue({ user: { id: memberId }, credential: { kind: "session" } });
     const dependencies = memberDependencies({
       getCurrentRole: vi.fn().mockResolvedValue(null),
     });
@@ -76,7 +76,7 @@ describe("requiredMemberSession", () => {
   });
 
   it("passes a cookie member session through with the role re-read from the database", async () => {
-    resolveRouteCredential.mockResolvedValue({ user: { id: memberId } });
+    resolveRouteCredential.mockResolvedValue({ user: { id: memberId }, credential: { kind: "session" } });
     const dependencies = memberDependencies({
       getCurrentRole: vi.fn().mockResolvedValue("MEMBER"),
     });
@@ -86,7 +86,7 @@ describe("requiredMemberSession", () => {
       dependencies,
     );
 
-    expect(result).toEqual({ user: { id: memberId, role: "MEMBER" } });
+    expect(result).toEqual({ user: { id: memberId, role: "MEMBER" }, credential: { kind: "session" } });
     expect(dependencies.getCurrentRole).toHaveBeenCalledExactlyOnceWith(memberId);
   });
 
@@ -94,7 +94,11 @@ describe("requiredMemberSession", () => {
     // The bearer path resolves to the token owner and nothing more, so the
     // credential carries a role only here to pin that the gate does not trust
     // one from the credential: the refusal boundary re-reads it.
-    resolveRouteCredential.mockResolvedValue({ user: { id: tokenOwnerId, role: "MODERATOR" } });
+    const issuedTokenId = "00000000-0000-4000-8000-00000000e2d6";
+    resolveRouteCredential.mockResolvedValue({
+      user: { id: tokenOwnerId, role: "MODERATOR" },
+      credential: { kind: "token", tokenId: issuedTokenId },
+    });
     const dependencies = memberDependencies({
       getCurrentRole: vi.fn().mockResolvedValue("MEMBER"),
     });
@@ -106,7 +110,10 @@ describe("requiredMemberSession", () => {
       dependencies,
     );
 
-    expect(result).toEqual({ user: { id: tokenOwnerId, role: "MEMBER" } });
+    expect(result).toEqual({
+      user: { id: tokenOwnerId, role: "MEMBER" },
+      credential: { kind: "token", tokenId: issuedTokenId },
+    });
     expect(dependencies.getCurrentRole).toHaveBeenCalledExactlyOnceWith(tokenOwnerId);
   });
 

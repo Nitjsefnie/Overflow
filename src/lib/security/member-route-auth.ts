@@ -2,6 +2,7 @@ import type { UserRole } from "@/lib/db/types";
 import {
   resolveRouteCredential,
   type ResolvedRouteCredential,
+  type RouteCredentialReference,
 } from "@/lib/security/route-credential";
 
 /**
@@ -60,7 +61,10 @@ export async function getProductionSession(): Promise<MemberRouteSession | null>
 export async function requiredMemberSession(
   request: Request,
   dependencies: MemberRouteDependencies,
-): Promise<{ user: { id: string; role: UserRole } } | Response> {
+): Promise<{
+  user: { id: string; role: UserRole };
+  credential: RouteCredentialReference;
+} | Response> {
   let credential: ResolvedRouteCredential | Response | null;
   try {
     credential = await resolveRouteCredential(request, dependencies);
@@ -86,5 +90,9 @@ export async function requiredMemberSession(
     return errorResponse(403, "FORBIDDEN", "A member account is required.");
   }
 
-  return { user: { id: credential.user.id, role } };
+  // The credential reference rides the admitted session the moderator gate's
+  // shape already carries, so a caller that names the credential behind the
+  // action — the expensive-route bound keys by it (issue 1054) — never has to
+  // re-resolve the request to get it.
+  return { user: { id: credential.user.id, role }, credential: credential.credential };
 }
