@@ -185,7 +185,8 @@ describe("scripts/commit_scopes.py", () => {
       "actionlint", "actionlint pull request",
       "ci", "ci pull request",
       "claim", "code scanning", "coverage comment",
-      "dependency audit", "ledger relay", "pr gate", "pr suite",
+      "dependency audit", "dependency audit pull request",
+      "ledger relay", "pr gate", "pr suite",
       "ratchet guard", "ratchet guard pull request", "scorecard",
       "secret scan", "secret scan pull request",
     ]);
