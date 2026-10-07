@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { productionClosureContains } from "./production-closure";
+import { productionClosure, productionClosureContains } from "./production-closure";
 
 /**
  * Acceptance record — GHSA-vfj7-8cjw-p6xm (braces <= 3.0.3, no patched
@@ -55,12 +55,14 @@ describe("braces advisory acceptance (GHSA-vfj7-8cjw-p6xm)", () => {
     expect(productionClosureContains(lock, "braces")).toBe(false);
     // Non-vacuity: the walk must also find every root production dependency
     // package.json declares, so a broken or empty closure cannot read as a
-    // green "absent".
+    // green "absent". The walk input is parsed once; membership is checked
+    // against the computed closure's names.
     const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
     const rootProdDeps = Object.keys(pkg.dependencies ?? {});
     expect(rootProdDeps.length).toBeGreaterThan(0);
+    const { names: closureNames } = productionClosure(lock);
     for (const name of rootProdDeps) {
-      expect(productionClosureContains(lock, name)).toBe(true);
+      expect(closureNames.has(name)).toBe(true);
     }
   });
 
@@ -81,6 +83,16 @@ describe("braces advisory acceptance (GHSA-vfj7-8cjw-p6xm)", () => {
     expect(productionClosureContains(LOCK_FIXTURE_DEV_ONLY_BRACES, "braces")).toBe(false);
     expect(productionClosureContains(LOCK_FIXTURE_DEV_ONLY_BRACES, "prod-root")).toBe(true);
     expect(productionClosureContains(LOCK_FIXTURE_DEV_ONLY_BRACES, "dev-root")).toBe(false);
+  });
+
+  it("fails closed when a production edge resolves to no snapshot (synthetic fixture)", () => {
+    // The fail-closed contract: an edge resolving to neither `name@value`
+    // nor an aliased snapshot id must THROW — a swallow-and-skip would read
+    // an unresolvable production edge as "absent", exactly the false green
+    // this guard exists to prevent.
+    expect(() =>
+      productionClosureContains(LOCK_FIXTURE_UNRESOLVABLE_EDGE, "braces")
+    ).toThrow(/unresolved production edge "ghost: 9\.9\.9"/);
   });
 
   it("reports braces present when the real lockfile gains a fabricated production edge", async () => {
@@ -165,4 +177,24 @@ snapshots:
     dependencies:
       braces: 3.0.3
   braces@3.0.3: {}
+`;
+
+const LOCK_FIXTURE_UNRESOLVABLE_EDGE = `\
+lockfileVersion: '9.0'
+
+importers:
+  .:
+    dependencies:
+      prod-root:
+        specifier: 1.0.0
+        version: 1.0.0
+
+packages:
+  prod-root@1.0.0:
+    resolution: {integrity: sha512-fixture}
+
+snapshots:
+  prod-root@1.0.0:
+    dependencies:
+      ghost: 9.9.9
 `;
