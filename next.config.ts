@@ -74,14 +74,25 @@ const frameProtectionHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
 ];
 
+// Defense in depth (issue 1046): stop MIME sniffing and cap referrer leakage
+// on every response, set globally beside the framing pair so no route misses
+// them.
+const hardeningHeaders = [
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+];
+
 const nextConfig: NextConfig = {
   // next dev generates AGENTS.md and CLAUDE.md at the project root by default
   // (gated on agentRules !== false in next's start-server); this repository's
   // agent documentation is not generated, so a dev run must write nothing.
   agentRules: false,
+  // Next sets X-Powered-By: Next.js <version> on responses by default; that
+  // advertises the framework to attackers, so the header stays off (issue 1046).
+  poweredByHeader: false,
   ...(distDir ? { distDir, typescript: { tsconfigPath } } : {}),
   async headers() {
-    return [{ source: "/:path*", headers: frameProtectionHeaders }];
+    return [{ source: "/:path*", headers: [...frameProtectionHeaders, ...hardeningHeaders] }];
   },
 };
 
