@@ -4,7 +4,7 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
-import { legacyV1Envelope, legacyV1Key, legacyV1Plaintext } from "../support/legacy-token-envelope";
+import { legacyV1Envelope, legacyV1Key } from "../support/legacy-token-envelope";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
@@ -128,14 +128,14 @@ describe("stored credentials are bound to their row", () => {
     await expect(store.getForgeToken(other.id, instanceUrl)).resolves.toMatchObject({ token: "other-pat" });
   });
 
-  it("still reads a pre-change v1 credential stored in a row, under the current or the previous key", async () => {
+  it("refuses a pre-change v1 credential stored in a row, whatever key or column holds it", async () => {
     const user = await insertUser();
     await setOAuthToken(user.id, legacyV1Envelope);
 
     await expect(new PostgresRepositoryStore(sql, legacyV1Key, "").getGitHubAccessToken(user.id))
-      .resolves.toBe(legacyV1Plaintext);
+      .rejects.toThrow(decryptionFailure);
     await expect(new PostgresFoldStore(sql, currentKey, undefined, legacyV1Key).getGitHubAccessToken(user.id))
-      .resolves.toBe(legacyV1Plaintext);
+      .rejects.toThrow(decryptionFailure);
 
     const forgeOwner = await insertUser();
     await sql`
@@ -145,7 +145,7 @@ describe("stored credentials are bound to their row", () => {
         ${Buffer.from(legacyV1Envelope, "utf8")}, now())
     `;
     await expect(new PostgresForgeIdentityStore(sql, currentKey, legacyV1Key)
-      .getForgeToken(forgeOwner.id, "https://legacy.example.com")).resolves.toMatchObject({ token: legacyV1Plaintext });
+      .getForgeToken(forgeOwner.id, "https://legacy.example.com")).rejects.toThrow(decryptionFailure);
   });
 
   it("seals new webhook secrets under the current key only while a previous key is configured", async () => {

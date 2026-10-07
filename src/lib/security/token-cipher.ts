@@ -10,12 +10,12 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
  * bound through associated data to the column and the natural key of the row
  * it lives in, so ciphertext copied into another row or column fails to open.
  *
- * `v1.<iv>.<tag>.<ct>` (no key id, no associated data) is the legacy shape; it
- * is still read, trying the current then the previous key, and never written.
+ * `v1.<iv>.<tag>.<ct>` (no key id, no associated data) was the legacy shape; it
+ * is no longer read anywhere, so a v1 envelope fails closed like any invalid
+ * envelope, and it is never written.
  */
 
 const algorithm = "aes-256-gcm";
-const legacyEnvelopeVersion = "v1";
 const envelopeVersion = "v2";
 const initializationVectorLength = 12;
 const authenticationTagLength = 16;
@@ -127,15 +127,6 @@ export function decryptToken(envelope: string, keys: string | TokenKeySet, bindi
       }
       return open(key, sealed, binding.associatedData);
     }
-    if (version === legacyEnvelopeVersion && parts.length === 3) {
-      for (const key of candidates) {
-        try {
-          return open(key, parts as [string, string, string], null);
-        } catch {
-          // Try the next configured key.
-        }
-      }
-    }
     throw new Error("Invalid envelope.");
   } catch {
     throw new Error(decryptionFailure);
@@ -156,7 +147,7 @@ export function isEnvelopeCurrent(envelope: string, currentKey: string): boolean
 function open(
   key: Buffer,
   [encodedInitializationVector, encodedAuthenticationTag, encodedCiphertext]: readonly [string, string, string],
-  associatedData: Buffer | null,
+  associatedData: Buffer,
 ): string {
   const initializationVector = decodeBase64url(encodedInitializationVector);
   const authenticationTag = decodeBase64url(encodedAuthenticationTag);
@@ -171,9 +162,7 @@ function open(
   const decipher = createDecipheriv(algorithm, key, initializationVector, {
     authTagLength: authenticationTagLength,
   });
-  if (associatedData !== null) {
-    decipher.setAAD(associatedData);
-  }
+  decipher.setAAD(associatedData);
   decipher.setAuthTag(authenticationTag);
 
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
