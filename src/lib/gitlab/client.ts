@@ -16,6 +16,7 @@ import type {
 import { GitLabApiError, responseJson, responseJsonArray } from "@/lib/gitlab/api-error";
 import { CollectionWalkBound } from "@/lib/gitlab/collection-walk-bound";
 import { gitlabApiFetch } from "@/lib/security/gitlab-api-fetch";
+import { logField } from "@/lib/webhooks/log-field";
 
 export { GitLabApiError } from "@/lib/gitlab/api-error";
 
@@ -127,7 +128,10 @@ type GitLabHookObject = {
 function normalizeTimestamp(value: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
-    throw new Error(`GitLab returned an unparsable timestamp: ${value}`);
+    // The value is the instance's own text: encoded, it can neither forge a
+    // second journal line where the message is logged raw nor drive the
+    // operator's terminal.
+    throw new Error(`GitLab returned an unparsable timestamp: ${logField(value)}`);
   }
   return parsed.toISOString();
 }
@@ -211,10 +215,13 @@ export class GitLabGateway {
         // for the remaining issues. The repository itself is not gone — any
         // other status is an upstream problem and still fails the run. The
         // skip is logged because a silent skip on a list endpoint is easy to
-        // misread as "no issues".
+        // misread as "no issues". Every value in the line is the instance's own
+        // text — the issue number and the repository path arrive from its
+        // responses — so each is encoded (issue 1042).
         if (error instanceof GitLabApiError && error.status === 404) {
           console.error(
-            `GitLab issue ${object.iid} in ${repository.owner}/${repository.name} disappeared between the listing and its evidence reads; omitting it from the listing.`,
+            `GitLab issue ${logField(String(object.iid))} in ${logField(`${repository.owner}/${repository.name}`)}`
+              + " disappeared between the listing and its evidence reads; omitting it from the listing.",
           );
           continue;
         }

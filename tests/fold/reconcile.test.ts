@@ -14,11 +14,12 @@ import type { GitHubRepository, GitHubRepositoryReference, GitHubSubject } from 
 import { createHash } from "node:crypto";
 import { GitHubApiError } from "@/lib/github/errors";
 import { GitHubResponseTooLargeError, MAX_SUCCESS_BODY_BYTES } from "@/lib/github/response-text";
-import { GitLabApiError } from "@/lib/gitlab/client";
+import { GitLabApiError, GitLabGateway } from "@/lib/gitlab/client";
+import { errorLogToken, logField } from "@/lib/webhooks/log-field";
 import { runReconciliationCli } from "../../scripts/reconcile";
 import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
 import { verifiedRepositoryPayload } from "../support/verified-repository";
-import { inspect } from "node:util";
+import { inspect, format } from "node:util";
 import { RECORD_MARKER, withRecordBearingPostgresWrite } from "../support/record-bearing-postgres-error";
 
 describe("reconcileRepository", () => {
@@ -591,7 +592,9 @@ describe("reconcileRepository", () => {
       expect((failure as Error).message).toBe("Unable to reconcile repository.");
       expect((failure as Error).cause).toBe(upstream);
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
-      expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", upstream);
+      // The log carries the encoded token, not the raw object (issue 1042):
+      // one line, so no text the error picked up can forge journal lines.
+      expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", errorLogToken(upstream));
       expect(errorLog).toHaveBeenCalledTimes(1);
     } finally {
       errorLog.mockRestore();
@@ -617,7 +620,7 @@ describe("reconcileRepository", () => {
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
       expect(dependencies.store.materialize).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
-      expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", overCap);
+      expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", errorLogToken(overCap));
     } finally {
       errorLog.mockRestore();
     }
@@ -636,7 +639,11 @@ describe("reconcileRepository", () => {
         expect(logged).not.toContain(RECORD_MARKER);
         expect(thrown).not.toContain(RECORD_MARKER);
         expect(logged).toContain("Reconciliation of repository repository failed.");
-        expect(logged).toContain(upstream.code);
+        // The log line carries the encoded name and message (issue 1042); the
+        // code's visibility is superseded there — it still rides the rethrown
+        // cause object, which is what `thrown` asserts next.
+        expect(logged).toContain("PostgresError:");
+        expect(logged).toContain("test write failed");
         expect(thrown).toContain(upstream.code);
         const reportedCause = (failure as Error).cause as Error;
         expect(reportedCause.message).toBe("test write failed");
@@ -648,7 +655,7 @@ describe("reconcileRepository", () => {
     });
   });
 
-  it("keeps a GitHub response body in the logged cause and out of the stored failure", async () => {
+  it("keeps a GitHub response body on the rethrown cause and out of the stored failure", async () => {
     const body = "secondary rate limit at https://github.com/?token=sponsor-secret";
     const upstream = new GitHubApiError(403, true, null, body);
     const dependencies = reconciliationDependencies({
@@ -662,7 +669,9 @@ describe("reconcileRepository", () => {
         cause: upstream,
       });
       expect(dependencies.store.failRun.mock.calls).toEqual([["run-1", "Reconciliation failed."]]);
-      expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", upstream);
+      // The log carries the encoded token (issue 1042); the body stays on the
+      // cause object the rethrow attaches, out of the product-readable row.
+      expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", errorLogToken(upstream));
       expect(upstream.body).toBe(body);
     } finally {
       errorLog.mockRestore();
@@ -681,8 +690,9 @@ describe("reconcileRepository", () => {
         cause: rejection,
       });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE);
-      // The cause still reaches the service log, exactly as on the generic path.
-      expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", rejection);
+      // The cause still reaches the service log as the encoded token, exactly
+      // as on the generic path (issue 1042).
+      expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", errorLogToken(rejection));
     } finally {
       errorLog.mockRestore();
     }
@@ -1669,6 +1679,79 @@ describe("reconcileRepository", () => {
     await expect(runReconciliationCli(["--repository", "not/a/repository/path"], dependencies)).rejects.toThrow(
       "Usage: pnpm reconcile [--repository owner/name]",
     );
+  });
+
+  it("encodes forge text at the failure log when the GitLab read fails", async () => {
+    // The member chooses the GitLab instance, so every string it returns is
+    // member-supplied: this `updated_at` splits into a forged journal line
+    // shaped like a privileged-action report and carries raw terminal escapes.
+    const hostile = "2026-01-01\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[2J\u001b[31mspoofed";
+    const gitlabProject = {
+      id: 5001,
+      name: "example",
+      path: "example",
+      path_with_namespace: "octo/example",
+      visibility: "public",
+      web_url: "https://gitlab.test/octo/example",
+      namespace: { id: 1, name: "Octo", path: "octo", kind: "group" },
+      permissions: { project_access: { access_level: 40 } },
+    };
+    const hostileIssue = {
+      id: 6600001,
+      iid: 12,
+      project_id: 5001,
+      title: "Broken ledger",
+      description: "It broke.",
+      state: "opened",
+      web_url: "https://gitlab.test/octo/example/-/issues/12",
+      author: { id: 901, username: "sponsor" },
+      labels: [],
+      created_at: "2026-09-10T06:00:00.000Z",
+      updated_at: hostile,
+      closed_at: null,
+      assignees: [{ id: 902, username: "claimer" }],
+    };
+    const gateway = new GitLabGateway({
+      instanceUrl: "https://gitlab.test",
+      token: "synthetic-pat",
+      fetch: async (input) => {
+        const url = String(input);
+        if (url.includes("/projects/5001")) return Response.json(gitlabProject);
+        if (url.includes("/issues?")) return Response.json([hostileIssue]);
+        // Per-issue evidence collections (label events, notes, closed_by).
+        return Response.json([]);
+      },
+    });
+    const calls: unknown[][] = [];
+    const errorLog = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { calls.push(args); });
+    try {
+      // The harness spreads the github override over its own mocks, and a
+      // class instance's methods live on its prototype — bind the real
+      // gateway's methods explicitly so the real gateway serves the fold.
+      const gatewayBindings: ReconciliationDependencies["github"] = {
+        getRepositoryById: (githubRepositoryId) => gateway.getRepositoryById(githubRepositoryId),
+        listIssues: (repository, options) => gateway.listIssues(repository, options),
+        getIssue: (repository, subject) => gateway.getIssue(repository, subject),
+        getPullRequestClosingIssues: (repository, subject) => gateway.getPullRequestClosingIssues(repository, subject),
+        getPullRequestReviews: (repository, pullRequestNumber) => gateway.getPullRequestReviews(repository, pullRequestNumber),
+        getPullRequestDiff: (repository, pullRequestNumber) => gateway.getPullRequestDiff(repository, pullRequestNumber),
+      };
+      const dependencies = reconciliationDependencies({ github: gatewayBindings });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toThrow("Unable to reconcile repository.");
+
+      expect(calls).toHaveLength(1);
+      const rendered = format(...calls[0]!);
+      // The log line is exactly one line: the fixed message plus the error as
+      // one encoded token — the raw object (whose stack carries the forge text
+      // raw) is never passed.
+      expect(rendered).not.toContain("\n");
+      expect(rendered).not.toContain("\u001b");
+      expect(rendered).toBe(`Reconciliation of repository repository failed. ${
+        errorLogToken(new Error(`GitLab returned an unparsable timestamp: ${logField(hostile)}`))
+      }`);
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 });
 

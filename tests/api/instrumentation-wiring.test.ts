@@ -3,6 +3,7 @@ import type { ReconciliationDependencies, ReconciliationRepository } from "@/lib
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import type { ReconciliationWorkerDependencies, ReconciliationWorkerSchedule } from "@/lib/fold/reconciliation-worker";
 import type { ReconciliationSweepSchedule } from "@/lib/fold/sweep";
+import { logField } from "@/lib/webhooks/log-field";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 
 /**
@@ -191,5 +192,64 @@ describe("server instrumentation", () => {
     expect(requests[0]!.headers.get("authorization")).toBe("Bearer token-a");
     expect(resolveToken).toHaveBeenCalledExactlyOnceWith("sponsor-1", "https://gitlab.example.com");
     expect(markRejected).toHaveBeenCalledExactlyOnceWith("sponsor-1", "identity-a");
+  });
+});
+describe("server instrumentation log encoding (issue 1042)", () => {
+  // The issue 1042 hostile payload: one forge-supplied string that splits into
+  // a forged journal line shaped like a privileged-action report and carries
+  // raw terminal escapes. The console sink renders an error object through its
+  // stack — message raw — so these sites must pass one encoded token, never
+  // the raw object.
+  const hostilePayload = "2026-01-01\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[2J\u001b[31mspoofed";
+
+  it("renders the drain's per-repository failure as one encoded single-line token", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv("NEXT_PHASE", "");
+    vi.stubEnv("OVERFLOW_DISABLE_RECONCILIATION_SWEEP", "");
+    const { register } = await import("@/instrumentation");
+    await register();
+
+    // The per-repository hook rides inside the drain closure the worker calls,
+    // so one drain is run — its mock stands in for drainReconciliationJobs and
+    // captures the hook — and the hook is invoked the way the worker would.
+    drain.mockImplementationOnce(async () => []);
+    const schedule = startWorker.mock.calls[0]![0] as ReconciliationWorkerSchedule;
+    await schedule.drain();
+    const workerDependencies = drain.mock.calls[0]![0] as ReconciliationWorkerDependencies;
+    workerDependencies.onFailure!("repo-uuid", new Error(hostilePayload));
+
+    const call = errors.mock.calls.find(([first]) => first === "Reconciliation failed for repository repo-uuid");
+    expect(call).toBeDefined();
+    expect(call).toHaveLength(2);
+    const rendered = String(call![1]);
+    expect(rendered).not.toContain("\n");
+    expect(rendered).not.toContain("\u001b");
+    expect(rendered).toBe(`Error: ${logField(hostilePayload)}`);
+  });
+
+  it("renders the sweep's enqueue failure as one encoded single-line token", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv("NEXT_PHASE", "");
+    vi.stubEnv("OVERFLOW_DISABLE_RECONCILIATION_SWEEP", "");
+    const { register } = await import("@/instrumentation");
+    await register();
+
+    // The sweep's per-repository hook rides inside the runSweep closure: run
+    // one sweep so the real hook is captured, then invoke it the way the
+    // sweep would.
+    const sweepSchedule = startSweep.mock.calls[0]![0] as ReconciliationSweepSchedule;
+    await sweepSchedule.runSweep();
+    const sweepDependencies = sweep.mock.calls[0]![0] as { onFailure(repositoryId: string, error: unknown): void };
+    sweepDependencies.onFailure("repo-uuid", new Error(hostilePayload));
+
+    const call = errors.mock.calls.find(([first]) => first === "Reconciliation sweep failed for repository repo-uuid");
+    expect(call).toBeDefined();
+    expect(call).toHaveLength(2);
+    const rendered = String(call![1]);
+    expect(rendered).not.toContain("\n");
+    expect(rendered).not.toContain("\u001b");
+    expect(rendered).toBe(`Error: ${logField(hostilePayload)}`);
   });
 });
