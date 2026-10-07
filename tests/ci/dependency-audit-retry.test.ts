@@ -552,7 +552,25 @@ describe("the dependency audit workflow's audit step", () => {
     // clean. Measured to be ignored by pnpm 10.33.0's audit in every spelling:
     // no-proxy / noproxy / NO_PROXY, so there is nothing to pin there.
     //
-    // All four pins are swept over every step that runs pnpm, from ONE table.
+    // The severity-bar pin closes the channel the other pins cannot see: the
+    // bar itself. A project `.npmrc` `audit-level=critical` filters a HIGH
+    // advisory out of `pnpm audit --json` on pnpm 10.33.0 — reported clean,
+    // exit 0, no proxy and no MITM needed (measured, advisory carrying its
+    // github_advisory_id; the earlier probe whose mock advisory lacked that
+    // field could never have seen this filter, which is the invalid-first-leg
+    // lesson). The audit reads the bar from `opts.auditLevel ?? "low"` against
+    // its severity ladder `AUDIT_LEVEL_NUMBER = {low: 0, moderate: 1, high: 2,
+    // critical: 3}` (dist/pnpm.cjs:137290, :137504-137505), so `low` is the
+    // lowest bar the ladder defines and reports every advisory pnpm can
+    // report. There is no lower safe value: `npm_config_audit_level: "info"`
+    // was MEASURED filtering EVERY advisory, because the ladder has no `info`
+    // key — `AUDIT_LEVEL_NUMBER[severity] >= undefined` is false for all four
+    // severities — so an "info" pin would silently disable the audit. The env
+    // value outranks the project `.npmrc` (measured: with
+    // `npm_config_audit_level=low` set, a `.npmrc audit-level=critical` no
+    // longer filters the high advisory; with no env value set, it does).
+    //
+    // All five pins are swept over every step that runs pnpm, from ONE table.
     // They were placed on mirrored steps by accident once — one right, one
     // wrong — and it was the ASYMMETRY that let it stand: one pin was
     // asserted, the other was not. A table means a pin cannot be added,
@@ -563,6 +581,7 @@ describe("the dependency audit workflow's audit step", () => {
       npm_config_registry: "https://registry.npmjs.org/",
       npm_config_strict_ssl: "true",
       npm_config_cafile: "/etc/ssl/certs/ca-certificates.crt",
+      npm_config_audit_level: "low",
     };
 
     // Actions resolves a step's environment as workflow, then job, then the

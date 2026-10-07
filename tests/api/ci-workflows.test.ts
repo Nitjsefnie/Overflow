@@ -895,7 +895,7 @@ cp .github/workflows/*.yml .github/workflows-pr/
     // `ref:` would cross that line, and corepack would otherwise download the
     // pnpm the pull request's own `packageManager` names. Both steps' `env`
     // blocks are pinned here for the same reason — they are what holds those
-    // two inputs — and tests/ci/dependency-audit-retry.test.ts denies all four
+    // two inputs — and tests/ci/dependency-audit-retry.test.ts denies all five
     // by name and asserts the env values.
     //
     // On pinning this 78-line script verbatim, at roughly eight times the
@@ -927,6 +927,7 @@ cp .github/workflows/*.yml .github/workflows-pr/
         npm_config_registry: "https://registry.npmjs.org/",
         npm_config_strict_ssl: "true",
         npm_config_cafile: "/etc/ssl/certs/ca-certificates.crt",
+        npm_config_audit_level: "low",
       },
       steps: [
         {

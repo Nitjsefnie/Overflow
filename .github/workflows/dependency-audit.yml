@@ -83,10 +83,14 @@ name: dependency audit
 # the budget is pinned by the suite because a larger one would overrun this
 # job's `timeout-minutes`.
 #
-# Do not add --audit-level: it sets a severity bar, and findings below the bar
-# still print but exit 0 (captured: a critical bar over 3 moderate + 3 high
-# advisories printed all six and exited 0) — a bar on a detection signal
-# silently passes below-bar findings. Do not add --ignore-registry-errors: a
+# Do not add --audit-level to the command: it sets a severity bar, and findings
+# below the bar still print but exit 0 (captured: a critical bar over 3 moderate
+# + 3 high advisories printed all six and exited 0) — a bar on a detection
+# signal silently passes below-bar findings. The bar itself is pinned instead:
+# the job-level `npm_config_audit_level: "low"` below sets the severity bar at
+# pnpm's lowest reportable rung, where the pull request's own `.npmrc`
+# `audit-level=` cannot raise it (measured; see that pin's comment). Do not add
+# --ignore-registry-errors: a
 # registry outage also exits 1, so a red run would mean only "advisories
 # found, or the registry could not answer" — either way a human looks, which is
 # what a detection signal is for. The retry does not change what a red run
@@ -207,6 +211,24 @@ jobs:
       # not empty strings.
       npm_config_strict_ssl: "true"
       npm_config_cafile: "/etc/ssl/certs/ca-certificates.crt"
+      # The severity bar, pinned for the same reason as the registry above: the
+      # audit reads it from the project `.npmrc` the pull request carries, and a
+      # `.npmrc audit-level=critical` filters a HIGH advisory out of
+      # `pnpm audit --json` — reported clean, exit 0, no MITM needed (measured
+      # on pnpm 10.33.0 with an advisory carrying its github_advisory_id; the
+      # earlier probe whose mock advisory lacked that field could never have
+      # seen this filter). The audit resolves the bar as
+      # `AUDIT_LEVEL_NUMBER[opts.auditLevel ?? "low"]` over the ladder
+      # `{low: 0, moderate: 1, high: 2, critical: 3}` (dist/pnpm.cjs:137290,
+      # :137504-137505), so `low` is the lowest bar the ladder defines and
+      # reports every advisory pnpm can report. There is no lower safe value:
+      # `npm_config_audit_level: "info"` was MEASURED filtering EVERY advisory —
+      # the ladder has no `info` key, `AUDIT_LEVEL_NUMBER[severity] >=
+      # undefined` is false for all four severities — so an "info" pin would
+      # silently disable the audit. And the env value outranks `.npmrc`:
+      # measured with `npm_config_audit_level=low` set, the same
+      # `audit-level=critical` no longer filters the high advisory.
+      npm_config_audit_level: "low"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
