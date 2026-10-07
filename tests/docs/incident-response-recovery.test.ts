@@ -74,8 +74,24 @@ const journalHeading = "### Journal and request correlation";
  * heading of any level, with `firstLine` naming the body's line in the file.
  */
 function journalSection(): { body: string; firstLine: number } {
+  return sectionBody(journalHeading);
+}
+
+/** The heading that identifies the request-flood section (issue 1053). */
+const floodHeading = "### Request flood";
+
+/** The flood section's body, extracted the same way as the journal's. */
+function floodSection(): { body: string; firstLine: number } {
+  return sectionBody(floodHeading);
+}
+
+/**
+ * A section's body: every line after its heading, up to the next heading of
+ * any level, with `firstLine` naming the body's line in the file.
+ */
+function sectionBody(heading: string): { body: string; firstLine: number } {
   const lines = source.split("\n");
-  const start = lines.findIndex((line) => line === journalHeading);
+  const start = lines.findIndex((line) => line === heading);
   if (start === -1) return { body: "", firstLine: 1 };
   const rest = lines.slice(start + 1);
   const end = rest.findIndex((line) => /^#{1,6}\s/.test(line));
@@ -156,5 +172,42 @@ describe("incident response privileged-action journal section", () => {
     for (const action of actions) {
       expect(table, `the journal table in ${document} omits the action name ${action}`).toContain(`\`${action}\``);
     }
+  });
+});
+
+describe("incident response request-flood section", () => {
+  it("exists with a body under Contain", () => {
+    expect(
+      floodSection().body.trim(),
+      `"${floodHeading}" in ${document} is missing or has no body`,
+    ).not.toHaveLength(0);
+    // The section is a Contain action, next to the other containment
+    // subsections; the anchor the intro's steps can link is therefore inside
+    // the Contain extent.
+    expect(
+      source.split(/^## Contain\r?$/m)[1]?.split(/^## /m)[0] ?? "",
+      `"${floodHeading}" in ${document} does not sit under "## Contain"`,
+    ).toContain(floodHeading);
+  });
+
+  it("carries the decline signal's fixed template so an operator can grep for it", () => {
+    // Structural identifier, not prose: the fixed prefix the receivers' gate
+    // emits once per decline burst (issue 1053). The word after the receiver
+    // placeholder is the operator's journalctl --grep key.
+    expect(
+      floodSection().body,
+      `"${floodHeading}" in ${document} does not carry the decline log's fixed template`,
+    ).toContain("Webhook rate limit engaged for the");
+  });
+
+  it("links the deploy guide and resolves every link in the section", () => {
+    const { body, firstLine } = floodSection();
+    const links = relativeLinks(body);
+    expect(
+      links.some((link) => link.target.startsWith("README.md")),
+      `"${floodHeading}" in ${document} carries no deploy-guide link`,
+    ).toBe(true);
+    const failures = unresolvedLinks(body, document, repositoryRoot, firstLine);
+    expect(failures, `\n${failures.join("\n")}`).toStrictEqual([]);
   });
 });
