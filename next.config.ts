@@ -65,12 +65,15 @@ if (distDir) {
   }
 }
 
-// Framing protection (issue 677): refuse cross-site framing everywhere. The
-// CSP carries exactly frame-ancestors 'none' — no other directive, so Next's
-// inline scripts are unaffected — with X-Frame-Options: DENY as the fallback
-// for clients without CSP frame-ancestors support.
+// Framing protection (issue 677): refuse cross-site framing everywhere via
+// X-Frame-Options: DENY, the fallback for clients without CSP frame-ancestors
+// support. The CSP leg — frame-ancestors 'none' — is deliberately NOT set
+// here: Next merges headers() and middleware response headers by overwriting
+// same-named keys, so a CSP emitted in this array never reaches the wire and
+// would only mask the middleware's. The one delivered Content-Security-Policy
+// lives in src/middleware.ts, which single-sources frame-ancestors 'none'
+// alongside the per-request nonce script-src (issue 1046 review).
 const frameProtectionHeaders = [
-  { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
   { key: "X-Frame-Options", value: "DENY" },
 ];
 
