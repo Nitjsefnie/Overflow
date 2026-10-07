@@ -96,13 +96,15 @@ set -euo pipefail
 # .github/workflows/secret-scan.yml and secret-scan-pr.yml (issue 1090).
 readonly PINNED_GITLEAKS_VERSION="8.30.1"
 
-# Resolved from this script's own location so the script can be invoked from
-# any working directory — a caller-chosen report path is resolved against the
-# directory the caller ran it in, but the baseline and the repository it scans
-# are this checkout's, not the caller's.
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly REPO_ROOT="$(dirname -- "$SCRIPT_DIR")"
+# Resolved from this script's own location, as in secret-scan.sh: the baseline
+# and the history it must be reachable from are this checkout's, not the
+# caller's working directory's.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
+REPO_ROOT="$(dirname -- "$SCRIPT_DIR")"
+readonly REPO_ROOT
 readonly BASELINE_PATH="$REPO_ROOT/.github/gitleaks-baseline.json"
+
 
 # Unqualified by default so the report lands where the caller ran the script.
 # The workflow sets this to the path it uploads as an artifact.
