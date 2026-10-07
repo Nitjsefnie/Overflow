@@ -187,6 +187,26 @@ jobs:
       # `.npmrc` at all, so the audit step is the only one with this exposure —
       # at job level it costs the install step nothing.
       npm_config_registry: "https://registry.npmjs.org/"
+      # The transport half of the same attack. A project `.npmrc` `proxy=` or
+      # `https-proxy=` is honoured by the audit's own HTTP agent, and an env
+      # value cannot neutralise it: measured on pnpm 10.33.0, a non-empty
+      # `npm_config_proxy`/`npm_config_https_proxy` is honoured and an EMPTY one
+      # does NOT beat `.npmrc`, so no proxy pin exists — a pull request can
+      # still choose the network path the audit request takes. What it cannot
+      # choose is what the audit TRUSTS at the end of that path. Measured on
+      # pnpm 10.33.0 against a local TLS endpoint: a project `strict-ssl=false`
+      # accepts a self-signed certificate the default configuration rejects,
+      # and `npm_config_strict_ssl` at `true` outranks it, so an intercepted
+      # connection fails closed (red run) instead of reporting the
+      # intercepting server's answer. The same measurement with a project
+      # `cafile=` showed the cafile REPLACES the whole trust store — one
+      # attacker-chosen CA would launder any interception — and the non-empty
+      # `npm_config_cafile` outranks it, so the pin below holds the store at
+      # the runner's system bundle. Both probe runs under the empty env values
+      # left the project's attack in place, which is why these are values and
+      # not empty strings.
+      npm_config_strict_ssl: "true"
+      npm_config_cafile: "/etc/ssl/certs/ca-certificates.crt"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -510,7 +510,7 @@ describe("the dependency audit workflow's audit step", () => {
     expect(run).not.toMatch(/\bbash\s+(\.\/)?scripts\//);
   });
 
-  it("binds both pull-request-controlled inputs for every step that runs pnpm", () => {
+  it("binds the pull-request-controlled inputs for every step that runs pnpm", () => {
     // `corepack install --global pnpm@10.33.0` sets corepack's DEFAULT and
     // nothing more. When the `pnpm` shim runs, corepack otherwise reads
     // `packageManager` from the nearest `package.json` and downloads THAT
@@ -529,8 +529,8 @@ describe("the dependency audit workflow's audit step", () => {
     //   step 1 with the variable on the step:  pnpm --version -> 10.33.0
     //   step 2 without it:                     pnpm --version -> 9.15.9
     //
-    // The second pin is the same class of thing about a different input: pnpm
-    // reads `.npmrc` from the working directory, and a `registry=` there
+    // The registry pin is the same class of thing about a different input:
+    // pnpm reads `.npmrc` from the working directory, and a `registry=` there
     // redirects the advisory endpoint, so a pull request touching `.npmrc` AND
     // `package.json` could have the audit answer "no known vulnerabilities".
     // `.npmrc` is not in the path filter so that pair does not trigger on its
@@ -538,15 +538,31 @@ describe("the dependency audit workflow's audit step", () => {
     // Measured on pnpm 10.33.0: a project `.npmrc` does redirect `pnpm config
     // get registry`, and `npm_config_registry` outranks it.
     //
-    // Both pins are swept over every step that runs pnpm, from ONE table. They
-    // were placed on mirrored steps by accident once — one right, one wrong —
-    // and it was the ASYMMETRY that let it stand: one pin was asserted, the
-    // other was not. A table means a pin cannot be added, removed or given a
-    // different value without the sweep noticing, and no second pin can slip in
-    // beside it unasserted.
+    // The two TLS pins close the transport half of the same attack: a project
+    // `.npmrc` proxy that the env cannot neutralise (measured on pnpm 10.33.0:
+    // a non-empty `npm_config_proxy`/`npm_config_https_proxy` is honoured, but
+    // an EMPTY one does NOT beat `.npmrc`, so no proxy pin exists) would let a
+    // pull request intercept the audit connection — if it could also make the
+    // interception trusted. It cannot: `npm_config_strict_ssl: "true"` beats a
+    // project `strict-ssl=false` (measured: env true rejects a self-signed
+    // endpoint that `strict-ssl=false` alone accepts), and `npm_config_cafile`
+    // at the system bundle beats a project `cafile=` (measured: a project
+    // cafile REPLACES the trust store, and the non-empty env value outranks
+    // it). An intercepted connection then fails closed — red run, not a false
+    // clean. Measured to be ignored by pnpm 10.33.0's audit in every spelling:
+    // no-proxy / noproxy / NO_PROXY, so there is nothing to pin there.
+    //
+    // All four pins are swept over every step that runs pnpm, from ONE table.
+    // They were placed on mirrored steps by accident once — one right, one
+    // wrong — and it was the ASYMMETRY that let it stand: one pin was
+    // asserted, the other was not. A table means a pin cannot be added,
+    // removed or given a different value without the sweep noticing, and no
+    // second pin can slip in beside it unasserted.
     const PINS: Record<string, string> = {
       COREPACK_ENABLE_PROJECT_SPEC: "0",
       npm_config_registry: "https://registry.npmjs.org/",
+      npm_config_strict_ssl: "true",
+      npm_config_cafile: "/etc/ssl/certs/ca-certificates.crt",
     };
 
     // Actions resolves a step's environment as workflow, then job, then the
