@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   upsertGitHubAccount: vi.fn<(...args: unknown[]) => Promise<PersistedGitHubUser>>(),
   findGitHubAccount: vi.fn<(githubUserId: number) => Promise<PersistedGitHubUser | null>>(),
   findSessionAccountState: vi.fn<(id: string) => Promise<SessionAccountSnapshot>>(),
+  findStoredGitHubToken: vi.fn<(githubUserId: number) => Promise<Buffer | null>>(),
+  sponsorsActiveRegisteredRepository: vi.fn<(githubUserId: number) => Promise<boolean>>(),
   readSessionGuardState: vi.fn<(id: string) => Promise<SessionGuardSnapshot>>(),
   revokeAccountSessions: vi.fn<(id: string) => Promise<number>>(),
 }));
@@ -38,9 +40,12 @@ vi.mock("@/lib/auth/account-store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/auth/account-store")>();
   return {
     refreshSessionToken: actual.refreshSessionToken,
+    shouldKeepStoredGitHubToken: actual.shouldKeepStoredGitHubToken,
     upsertGitHubAccount: mocks.upsertGitHubAccount,
     findGitHubAccount: mocks.findGitHubAccount,
     findSessionAccountState: mocks.findSessionAccountState,
+    findStoredGitHubToken: mocks.findStoredGitHubToken,
+    sponsorsActiveRegisteredRepository: mocks.sponsorsActiveRegisteredRepository,
   };
 });
 // The refresh lookup reads the guard state (liveness, login and epoch) in one

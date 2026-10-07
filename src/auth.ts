@@ -14,7 +14,10 @@ import {
 import { requestGitHubPublicIdentity } from "@/lib/auth/github-userinfo";
 import {
   findGitHubAccount,
+  findStoredGitHubToken,
   refreshSessionToken,
+  shouldKeepStoredGitHubToken,
+  sponsorsActiveRegisteredRepository,
   upsertGitHubAccount,
 } from "@/lib/auth/account-store";
 import {
@@ -32,6 +35,7 @@ import {
 } from "@/lib/auth/github-oauth-scopes";
 import { authTrustHost } from "@/lib/auth/trusted-host";
 import { boundedAuthErrorLine } from "@/lib/auth/bounded-logger";
+import { readGitHubGrantedScopes } from "@/lib/auth/github-granted-scopes";
 
 export { GITHUB_CONTRIBUTOR_SCOPE, GITHUB_REPOSITORY_REGISTRATION_SCOPE };
 
@@ -216,7 +220,19 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
 });
 
 
-async function upsertGitHubIdentity(identity: GitHubIdentity, accessToken: string): Promise<PersistedGitHubUser> {
+/**
+ * The signIn callback's persistence step: validates the encryption
+ * configuration, resolves the role, applies the stored-token continuity
+ * ruling (issue 1154), and upserts the account. Exported for the storage-path
+ * regression suite (tests/auth/sign-in-token-continuity.test.ts); its only
+ * production caller is the signIn callback's `persist` argument — the
+ * optional `fetchImpl` parameter stays at its default there.
+ */
+export async function upsertGitHubIdentity(
+  identity: GitHubIdentity,
+  accessToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<PersistedGitHubUser> {
   const tokenEncryptionKey = process.env.TOKEN_ENCRYPTION_KEY;
   if (tokenEncryptionKey === undefined || tokenEncryptionKey.length === 0) {
     throw new Error("Token encryption key must be configured.");
@@ -225,9 +241,34 @@ async function upsertGitHubIdentity(identity: GitHubIdentity, accessToken: strin
   const role = normalizeModeratorGitHubUserIds(process.env.MODERATOR_GITHUB_USER_IDS).has(identity.githubUserId)
     ? "MODERATOR"
     : "MEMBER";
-  const encryptedAccessToken = Buffer.from(encryptToken(
-    accessToken, tokenEncryptionKey, credentialBinding.userOAuthToken(identity.githubUserId),
+  const tokenBinding = credentialBinding.userOAuthToken(identity.githubUserId);
+  // Stored-token continuity (issue 1154): GitHub issues a new authorization
+  // carrying only the scopes the sign-in requested, so a contributor sign-in
+  // mints a zero-scope token that must not overwrite the token the sponsor's
+  // active registered repositories' webhook repairs still spend. Probe the
+  // NEW token only when a stored token exists to protect; the ruling then
+  // decides whether the stored bytes stay.
+  const existingToken = await findStoredGitHubToken(identity.githubUserId);
+  // `Buffer`'s default type parameter is ArrayBufferLike, the bytea read
+  // back from the database; Buffer.from narrows to ArrayBuffer.
+  let encryptedAccessToken: Buffer = Buffer.from(encryptToken(
+    accessToken, tokenEncryptionKey, tokenBinding,
   ), "utf8");
+  if (existingToken !== null) {
+    const probe = await probeGrantedScopes(accessToken, fetchImpl);
+    if (shouldKeepStoredGitHubToken({
+      existingToken,
+      newTokenGrantedScopes: probe.failed ? [] : probe.grantedScopes,
+      probesFailed: probe.failed,
+      sponsorsRegisteredRepository: await sponsorsActiveRegisteredRepository(identity.githubUserId),
+    })) {
+      // The stored bytes are written back unchanged: the upsert's
+      // `encrypted_oauth_token = excluded.encrypted_oauth_token` stores the
+      // kept token, while the login and avatar still update.
+      encryptedAccessToken = existingToken;
+    }
+  }
+
   const user = await upsertGitHubAccount({
     githubUserId: identity.githubUserId,
     login: identity.login,
@@ -239,4 +280,21 @@ async function upsertGitHubIdentity(identity: GitHubIdentity, accessToken: strin
   await claimGitHubIdentity(getSql(), user.id, identity.githubUserId);
 
   return user;
+}
+
+/**
+ * The scopes GitHub grants the sign-in's new token, or the typed failure.
+ * Any probe throw — non-2xx, rate limit, deadline, transport — lands in
+ * `failed`: the continuity ruling reads a failed probe as "scopes unknown",
+ * never as "incapable", and fail-safes to keeping the stored token.
+ */
+type ScopeProbe = { failed: true } | { failed: false; grantedScopes: string[] };
+
+async function probeGrantedScopes(accessToken: string, fetchImpl: typeof fetch): Promise<ScopeProbe> {
+  try {
+    return { failed: false, grantedScopes: await readGitHubGrantedScopes(accessToken, fetchImpl) };
+  } catch (error) {
+    console.error("GitHub sign-in scope probe failed; continuity falls safe to the stored token.", error);
+    return { failed: true };
+  }
 }
