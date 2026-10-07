@@ -138,6 +138,25 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
     });
   }
 
+  /**
+   * The workflow_dispatch recovery's environment: no workflow_run fields,
+   * only the run id — the shape that reaches the gate with a KNOWN head
+   * repository (read from the fetched run body) and no body in hand.
+   */
+  function dispatchEnv(over: Record<string, string> = {}): Record<string, string> {
+    return relayEnv({
+      GITHUB_WORKFLOW_RUN_ID: "",
+      GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
+      GITHUB_WORKFLOW_RUN_PATH: "",
+      GITHUB_WORKFLOW_RUN_CONCLUSION: "",
+      GITHUB_WORKFLOW_RUN_HTML_URL: "",
+      GITHUB_WORKFLOW_RUN_EVENT: "",
+      GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "",
+      LEDGER_DISPATCH_RUN_ID: RUN_ID,
+      ...over,
+    });
+  }
+
   async function caughtError(promise: Promise<unknown>): Promise<Error | undefined> {
     return promise.then(
       () => undefined,
@@ -223,6 +242,33 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
       RUN_URL,
       FORK_PULLS_URL,
     ]);
+  });
+
+  it("proceeds on a valid owner login alone when the gate's body names no full name", async () => {
+    // The lenient limb (issue 1142): a full_name is nothing to cross-check
+    // when absent, so a valid owner.login on its own is enough to read the
+    // fork's liveness. The dispatch path is the only shape that reaches it —
+    // the trigger fetch names the fork, and the gate's owner fetch returns a
+    // body whose head_repository carries no full_name.
+    const fetchStub = makeFetch([
+      token(),
+      fetchedRunBody(),
+      fetchedRunBody({ head_repository: { owner: { login: "v01dst" } } }),
+      forkPullsListing([]),
+    ]);
+    const result = await relay(dispatchEnv(), fetchStub);
+
+    expect(result.refusedDeadHead, "the owner login alone suffices for a dead fork head").toBe(
+      REFUSAL,
+    );
+    expect(result.posted).toEqual([]);
+    expect(fetchStub.requests.map((request) => request.url)).toEqual([
+      TOKEN_URL,
+      RUN_URL,
+      RUN_URL,
+      FORK_PULLS_URL,
+    ]);
+    expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
   });
 
   it.each([
