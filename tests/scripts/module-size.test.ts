@@ -304,6 +304,7 @@ describe("module size families and exclusions", () => {
     [".github/workflows/ci.yml", "repository metadata"],
     [".github/required-checks.json", "repository metadata"],
     [".github/requirements-zizmor.txt", "repository metadata"],
+    [".github/requirements-pyyaml.txt", "repository metadata"],
     [".gitignore", "repository metadata"],
     [".dockerignore", "repository metadata"],
     [".env.example", "repository metadata"],
@@ -465,6 +466,20 @@ describe("module size families and exclusions", () => {
       { kind: "over", path: "src/app/big.css" },
       { kind: "unclassified", path: "tools/build.py" },
     ]);
+  });
+
+  it("leaves an admitted-but-absent exclusion inert: no stale-exclusion violation fires", () => {
+    // .github/requirements-pyyaml.txt is admitted here before the file it
+    // admits is tracked (it lands with the suppression-gate pull request).
+    // An exclusion is consulted only for a TRACKED path — classify runs over
+    // the tree, never over the exclusion list — so an admission whose file is
+    // absent produces no violation of any kind: the tree below deliberately
+    // carries no manifest, and the check stays silent about it.
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: root });
+    git("init", "-q");
+    filesWithLines({ "README.md": 3000, "src/app/page.css": 300 });
+    git("add", "-A");
+    expect(runCheck(root, document())).toEqual([]);
   });
 
   it("gives every family and exclusion a distinct name", () => {

@@ -102,6 +102,9 @@ export const EXCLUSIONS: readonly PathClass[] = [
         // The hashed pip requirements file the actionlint workflow installs
         // zizmor from: reviewed artifact pins, not program code.
         ".github/requirements-zizmor.txt",
+        // The hashed pip requirements file the ci-pr suppression gate
+        // installs PyYAML from: reviewed artifact pins, not program code.
+        ".github/requirements-pyyaml.txt",
       ])(p),
   },
   // Package manifests and the lockfile, which pnpm generates.
