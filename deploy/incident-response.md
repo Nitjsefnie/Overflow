@@ -303,7 +303,7 @@ journalctl -u overflow --utc --since '2026-09-26 00:00:00 UTC' \
 ```
 
 This filter locates starts, not necessarily whole objects. The logger calls
-`console.info("Privileged action", { action, actorId, credential, clientAddress, subject })`;
+`console.info("Privileged action", { action, actorId, credential, clientAddress, clientAddressVerified, subject })`;
 Node may print the object over multiple lines. Inspect the full exported
 window around each match for all fields; do not treat this output as JSON or
 throw away continuation entries.
@@ -315,10 +315,12 @@ The implemented action names and `subject` keys are:
 | `moderator-role.grant`, `moderator-role.revoke` | `targetAccountId` |
 | `audit.open`, `audit.dismiss`, `audit.substantiate` | `auditId`, `targetAccountId` |
 | `recalibration.close` | `targetAccountId` |
+| `ban.reverse` | `targetAccountId` |
 | `credit-adjustment.create` | `adjustmentId`, `targetAccountId` |
 | `credit-adjustment.reverse` | `adjustmentId`, `reversalId`, `targetAccountId` |
 | `repository.rederivation-request` | `repositoryId` |
 | `settlement-override.grant`, `settlement-override.decline` | `overrideRequestId`, `issueId` |
+| `sanction.contest.decide`, `sanction.contest.decide.already_gone` | `requestId`, `accountId` |
 
 Match journal `actorId` to SQL `actor_id`, `credential.kind` to
 `credential_kind`, and `credential.tokenId` (when present) to
@@ -331,12 +333,23 @@ follow its subject IDs when scoping other actions. Missing journal output is
 not proof of no mutation, particularly beyond retention or after a crash.
 
 `clientAddress` appears only in the journal, never in these database rows.
-It is trustworthy only because nginx sets `X-Real-IP` from `$remote_addr`
-after the Cloudflare real-ip step and the app listens on `127.0.0.1`; the app
-never reads `X-Forwarded-For`. `readClientAddress` validates a single address
-with `node:net` `isIP()`, returning null for an invalid or absent header.
-The MCP adapter forwards `x-real-ip` to its wrapped routes. If the proxy or
-loopback boundary was bypassed or compromised, do not trust the address.
+The app listens on `127.0.0.1`, but loopback is not a trust boundary: any
+local process can reach the listener and set `X-Real-IP` itself, so an
+address in the journal is a claim unless the request also carried the
+`x-privileged-proxy-secret` header with exactly the value of
+`PRIVILEGED_PROXY_SECRET`, in which case the entry's `clientAddressVerified`
+is true. Only nginx (and the operator who configured both sides) hold that
+secret, so a verified flag says the address is the one nginx recorded.
+`readClientAddress` validates a single address with `node:net` `isIP()`,
+returning null for an invalid or absent header; the app never reads
+`X-Forwarded-For`, and the MCP adapter forwards `x-real-ip` to its wrapped
+routes. Read `clientAddressVerified` before reasoning from an address: an
+unverified entry names a claimed address, not a proven one — entries written
+before a host applies the deploy steps are unverified by design
+([deploy/README.md section 13](README.md#13-verifying-the-privileged-action-journals-client-addresses)
+has the operator procedure), and a verified flag is only as good as the
+secret's secrecy. If the proxy or loopback boundary was bypassed or
+compromised, do not trust the address.
 
 The nginx access log contains IP, path and user agent, with no account, and
 is shared by every site on this host and kept 14 days (host facts measured on

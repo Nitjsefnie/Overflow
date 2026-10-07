@@ -15,6 +15,11 @@ import { relativeLinks, unresolvedLinks } from "../support/markdown-links";
  * has to exist under `## Recover`, it has to have a body, and everything it
  * links has to be there — a faithful paraphrase, a rewording or a rewrite that
  * keeps those properties leaves this file green, which is the point.
+ *
+ * A second describe holds the privileged-action journal section the same way:
+ * its entry-shape quote must name the fields the logger emits, its trust
+ * paragraph must carry the verification contract, and its action table must
+ * name every action the code's union declares.
  */
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -60,6 +65,34 @@ function recoverySectionExtent(): string[] {
   return end === -1 ? rest : rest.slice(0, end);
 }
 
+/** The heading that identifies the privileged-action journal section. */
+const journalHeading = "### Journal and request correlation";
+
+/**
+ * The journal section's body: every line after its heading, up to the next
+ * heading of any level, with `firstLine` naming the body's line in the file.
+ */
+function journalSection(): { body: string; firstLine: number } {
+  const lines = source.split("\n");
+  const start = lines.findIndex((line) => line === journalHeading);
+  if (start === -1) return { body: "", firstLine: 1 };
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => /^#{1,6}\s/.test(line));
+  return {
+    body: (end === -1 ? rest : rest.slice(0, end)).join("\n"),
+    firstLine: start + 2,
+  };
+}
+
+/** The one line of the section that quotes the logger call's entry shape. */
+function journalShapeQuote(): string {
+  return (
+    journalSection()
+      .body.split("\n")
+      .find((line) => line.includes('console.info("Privileged action"')) ?? ""
+  );
+}
+
 describe("incident response account-loss recovery", () => {
   it("places the recovery section under ## Recover", () => {
     const recover = recoverSection();
@@ -93,5 +126,71 @@ describe("incident response account-loss recovery", () => {
       subHeadings,
       `"${recoveryHeading}" in ${document} has a sub-heading. The body above stops at the first one, so every line after it goes unchecked`,
     ).toStrictEqual([]);
+  });
+});
+
+describe("incident response privileged-action journal section", () => {
+  it("exists with a body", () => {
+    expect(
+      journalSection().body.trim(),
+      `"${journalHeading}" in ${document} is missing or has no body`,
+    ).not.toHaveLength(0);
+  });
+
+  it("quotes the entry shape the code emits, clientAddressVerified included", () => {
+    // The shape quote is the responder's field list: when the logger's entry
+    // grows a field, the quote must grow with it or the runbook teaches a
+    // shape that no longer matches the lines it explains.
+    const quote = journalShapeQuote();
+    expect(quote, `"${journalHeading}" in ${document} quotes no console.info("Privileged action", …) call`).not.toBe("");
+    for (const field of ["action", "actorId", "credential", "clientAddress", "clientAddressVerified", "subject"]) {
+      expect(quote, `the journal shape quote in ${document} does not name ${field}`).toContain(field);
+    }
+  });
+
+  it("states the verification contract, not the falsified loopback-is-trust premise", () => {
+    const body = journalSection().body;
+    for (const name of ["clientAddressVerified", "x-privileged-proxy-secret", "PRIVILEGED_PROXY_SECRET"]) {
+      expect(
+        body,
+        `"${journalHeading}" in ${document} never names ${name}, so the runbook cannot tell a verified address from a claimed one`,
+      ).toContain(name);
+    }
+    // The old paragraph trusted the address because the app listens on
+    // `127.0.0.1`. That premise is false — any local process can reach the
+    // listener and set the header — and the runbook must not reassert it.
+    expect(
+      body,
+      `"${journalHeading}" in ${document} still claims the address is "trustworthy only because" of the loopback boundary`,
+    ).not.toContain("trustworthy only because");
+  });
+
+  it("links the deploy guide's host procedure and resolves every link in the section", () => {
+    const { body, firstLine } = journalSection();
+    // From inside deploy/, the guide is linked as `README.md#…` (the doc's
+    // own convention), so the section-13 anchor names the target directly.
+    const links = relativeLinks(body).filter((link) => link.target.startsWith("README.md#13-"));
+    expect(
+      links,
+      `"${journalHeading}" in ${document} does not link deploy/README.md section 13 for the proxy-secret host procedure`,
+    ).toHaveLength(1);
+    const failures = unresolvedLinks(body, document, repositoryRoot, firstLine);
+    expect(failures, `\n${failures.join("\n")}`).toStrictEqual([]);
+  });
+
+  it("lists every implemented action name in the subject-keys table", () => {
+    // Extracted from the source union, so a new action fails here until the
+    // runbook's table names it — the table claims to be exhaustive.
+    const logSource = readFileSync(
+      new URL("../../src/lib/security/privileged-action-log.ts", import.meta.url),
+      "utf8",
+    );
+    const union = logSource.match(/export type PrivilegedAction =([\s\S]*?);/)?.[1] ?? "";
+    const actions = [...union.matchAll(/"([a-z.-]+)"/g)].map((match) => match[1]!);
+    expect(actions.length, "no action names extracted from the PrivilegedAction union").toBeGreaterThan(0);
+    const table = journalSection().body;
+    for (const action of actions) {
+      expect(table, `the journal table in ${document} omits the action name ${action}`).toContain(`\`${action}\``);
+    }
   });
 });
