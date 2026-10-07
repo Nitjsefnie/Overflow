@@ -12,6 +12,13 @@ export const MCP_SERVER_VERSION = "1.0.0";
 export interface ToolCallResult {
   content: { type: "text"; text: string }[];
   isError?: boolean;
+  /**
+   * The protocol's structured tool-result field, carried when the wrapped
+   * route's answer carries detail a text payload alone would drop — today the
+   * Retry-After seconds a declined expensive-route bound answers with, so an
+   * MCP client over a bound can act on the same number the REST header names.
+   */
+  structuredContent?: Record<string, unknown>;
 }
 
 export interface ToolDefinition {

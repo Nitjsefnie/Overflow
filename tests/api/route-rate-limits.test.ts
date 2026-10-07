@@ -524,12 +524,21 @@ describe("the MCP composition shares the bound with the REST route", () => {
 
       // ...and the MCP dispatch of the same operation for the same credential
       // meets the shared bucket, so the bound declines it through the tool
-      // result (HTTP stays 200; the 429 travels in-band).
+      // result (HTTP stays 200; the 429 travels in-band, and the seconds the
+      // REST answer carries as a header reach the client as a field it can
+      // act on).
       const mcp = await mcpRoute.POST(correctionOpenCall());
       expect(mcp.status).toBe(200);
-      const body = (await mcp.json()) as { result: { isError?: boolean; content: { text: string }[] } };
+      const body = (await mcp.json()) as {
+        result: {
+          isError?: boolean;
+          content: { text: string }[];
+          structuredContent?: { retryAfterSeconds: number };
+        };
+      };
       expect(body.result.isError).toBe(true);
       expect(body.result.content[0]?.text).toContain("RATE_LIMITED");
+      expect(body.result.structuredContent).toEqual({ retryAfterSeconds: 3600 });
     } finally {
       vi.unstubAllEnvs();
       vi.resetModules();
