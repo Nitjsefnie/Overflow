@@ -23,6 +23,18 @@ const CREDENTIAL_HEADER_NAMES = ["authorization", "cookie"] as const;
  */
 const CLIENT_ADDRESS_HEADER_NAMES = ["x-real-ip"] as const;
 
+/**
+ * The proxy attestation the address above rides on, carried through verbatim
+ * by the same present-when-present rule. It authenticates nothing at the MCP
+ * hop — the incoming request has already passed the endpoint's own gate — but
+ * a wrapped privileged route marks the claimed address verified only when the
+ * synthesized request also carries this header with the shared
+ * `PRIVILEGED_PROXY_SECRET` value, so the hop must not strip it. Pure
+ * pass-through, never synthesized: a caller that sends no secret keeps the
+ * journal's unverified fail-safe.
+ */
+const PROXY_ATTESTATION_HEADER_NAMES = ["x-privileged-proxy-secret"] as const;
+
 export type WrappedRouteContext = {
   params: Promise<Record<string, string>>;
 };
@@ -308,14 +320,18 @@ function defineRouteTool(spec: RouteToolSpec, forwarded: Headers): ToolDefinitio
 }
 
 /**
- * Only the two credential headers and the client-address header cross the
- * boundary, and only when the incoming request actually carried them — never
- * the rest of the MCP transport's headers, which mean nothing to the wrapped
- * routes.
+ * Only the credential headers, the client-address header and the proxy
+ * attestation cross the boundary, and only when the incoming request actually
+ * carried them — never the rest of the MCP transport's headers, which mean
+ * nothing to the wrapped routes.
  */
 function forwardedHeaders(incoming: Headers): Headers {
   const forwarded = new Headers();
-  for (const name of [...CREDENTIAL_HEADER_NAMES, ...CLIENT_ADDRESS_HEADER_NAMES]) {
+  for (const name of [
+    ...CREDENTIAL_HEADER_NAMES,
+    ...CLIENT_ADDRESS_HEADER_NAMES,
+    ...PROXY_ATTESTATION_HEADER_NAMES,
+  ]) {
     const value = incoming.get(name);
     if (value !== null) {
       forwarded.set(name, value);

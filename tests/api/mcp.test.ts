@@ -292,6 +292,27 @@ describe("POST /api/mcp", () => {
     expect(synthesized.headers.get("x-real-ip")).toBeNull();
   });
 
+  it("forwards the outer request's proxy attestation beside the address it vouches for", async () => {
+    const synthesized = await synthesizedAuditOpen({
+      "x-real-ip": "203.0.113.7",
+      "x-privileged-proxy-secret": "attestation-secret",
+    });
+
+    expect(synthesized.headers.get("x-privileged-proxy-secret")).toBe("attestation-secret");
+    expect(synthesized.headers.get("x-real-ip")).toBe("203.0.113.7");
+  });
+
+  it("grows no proxy attestation header when the incoming request carried none", async () => {
+    const synthesized = await synthesizedAuditOpen({ "x-real-ip": "203.0.113.7" });
+
+    expect(synthesized.headers.get("x-privileged-proxy-secret")).toBeNull();
+    expect([...synthesized.headers.keys()].sort()).toEqual([
+      "authorization",
+      "content-type",
+      "x-real-ip",
+    ]);
+  });
+
   it("answers a notification with 202 and an empty body", async () => {
     const dependencies = endpointDependencies();
     const notification = JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" });
@@ -675,6 +696,41 @@ describe("transport-to-wrapped-route composition", () => {
         subject: { auditId: openedAudit.id, targetAccountId },
       });
     } finally {
+      consoleInfo.mockRestore();
+    }
+  });
+
+  it("marks the journal address verified when the outer MCP request carries the proxy attestation", async () => {
+    const bearerTokenId = "00000000-0000-4000-8000-00000000000b";
+    const gate = {
+      getSession: vi.fn().mockResolvedValue(null),
+      findAccountByTokenHash: vi.fn().mockResolvedValue({ id: memberId, tokenId: bearerTokenId }),
+      getCurrentRole: vi.fn().mockResolvedValue("MODERATOR"),
+    };
+    const { endpoint } = auditOpenComposition({ endpoint: gate, moderation: gate });
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
+    const proxySecret = "mcp-proxy-secret-1044";
+    vi.stubEnv("PRIVILEGED_PROXY_SECRET", proxySecret);
+
+    try {
+      await createMcpPostHandler(endpoint)(
+        mcpRequest(rpc(11, "tools/call", { name: "audit_open", arguments: auditOpenArguments }), {
+          authorization: `Bearer ${TOKEN}`,
+          "x-real-ip": "2001:db8::17",
+          "x-privileged-proxy-secret": proxySecret,
+        }),
+      );
+
+      expect(consoleInfo).toHaveBeenCalledExactlyOnceWith("Privileged action", {
+        action: "audit.open",
+        actorId: memberId,
+        credential: { kind: "token", tokenId: bearerTokenId },
+        clientAddress: "2001:db8::17",
+        clientAddressVerified: true,
+        subject: { auditId: openedAudit.id, targetAccountId },
+      });
+    } finally {
+      vi.unstubAllEnvs();
       consoleInfo.mockRestore();
     }
   });
