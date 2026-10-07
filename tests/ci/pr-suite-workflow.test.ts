@@ -368,7 +368,13 @@ describe("the pull request suite workflow", () => {
       await readFile(resolve(".github/required-checks.json"), "utf8"),
     );
     const required = Object.keys(requiredChecks);
-    expect(required.sort()).toEqual(["actionlint", "ratchet-guard", "secret-scan", "verify"]);
+    expect(required.sort()).toEqual([
+      "actionlint",
+      "dependency-audit",
+      "ratchet-guard",
+      "secret-scan",
+      "verify",
+    ]);
     for (const [id, job] of Object.entries(workflow.jobs)) {
       expect(required).not.toContain(id);
       expect(required).not.toContain(job.name ?? id);
