@@ -100,9 +100,12 @@ export function errorLogToken(value: unknown): string {
 function errorSegment(value: unknown): string {
   try {
     if (value instanceof Error) {
+      // The name is class-controlled in practice but is an own property any
+      // constructor can set to arbitrary text, so it is encoded like the
+      // message — nothing in the token is raw.
       const name = typeof value.name === "string" && value.name !== "" ? value.name : "Error";
       const message = typeof value.message === "string" ? value.message : String(value.message);
-      return `${name}: ${logField(message)}`;
+      return `${logField(name)}: ${logField(message)}`;
     }
     return logField(String(value));
   } catch {

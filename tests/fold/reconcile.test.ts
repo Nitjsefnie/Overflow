@@ -642,7 +642,7 @@ describe("reconcileRepository", () => {
         // The log line carries the encoded name and message (issue 1042); the
         // code's visibility is superseded there — it still rides the rethrown
         // cause object, which is what `thrown` asserts next.
-        expect(logged).toContain("PostgresError:");
+        expect(logged).toContain(`${logField("PostgresError")}:`);
         expect(logged).toContain("test write failed");
         expect(thrown).toContain(upstream.code);
         const reportedCause = (failure as Error).cause as Error;
