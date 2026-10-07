@@ -2747,14 +2747,28 @@ marker added. The steps below close that gap.
    systemctl restart overflow.service
    ```
 
-3. In the overflow vhost's proxy `location` block — the same block that
-   already sets `X-Real-IP` — add the echo header line, with the literal
-   replaced by the value generated in step 1:
+3. Put the echo header in its own include file rather than the vhost: vhost
+   files are typically world-readable, which would hand the secret to any
+   local process — the exact adversary this section defends against — while
+   nginx's master process reads its configuration as root, so a root-only
+   include works:
+
+   ```bash
+   install -o root -g root -m 0600 /dev/null /etc/nginx/overflow-privileged-proxy.conf
+   ```
+
+   Into that file, with the literal replaced by the value generated in
+   step 1:
 
    `proxy_set_header X-Privileged-Proxy-Secret "<value from step 1>";`
 
-   The literal goes in the vhost itself, generated per host: it is the same
-   value `PRIVILEGED_PROXY_SECRET` carries in `/etc/overflow/overflow.env`.
+   Then include it from the overflow vhost's proxy `location` block — the
+   same block that already sets `X-Real-IP`:
+
+   `include /etc/nginx/overflow-privileged-proxy.conf;`
+
+   The literal is generated per host: it is the same value
+   `PRIVILEGED_PROXY_SECRET` carries in `/etc/overflow/overflow.env`.
 
 4. Validate and reload nginx:
 

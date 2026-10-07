@@ -175,6 +175,27 @@ describe("logPrivilegedAction", () => {
     ]);
   });
 
+  it("logs the record with exactly the entry's keys, clientAddressVerified among them", () => {
+    logPrivilegedAction({
+      action: "audit.open",
+      actorId: "00000000-0000-4000-8000-000000000001",
+      credential: { kind: "session" },
+      clientAddress: "203.0.113.7",
+      clientAddressVerified: true,
+      subject: { auditId: "00000000-0000-4000-8000-000000000003" },
+    });
+
+    const record = consoleInfo.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(Object.keys(record).sort()).toStrictEqual([
+      "action",
+      "actorId",
+      "clientAddress",
+      "clientAddressVerified",
+      "credential",
+      "subject",
+    ]);
+  });
+
   it("logs a session reference as its kind alone, and a verified address as verified", () => {
     logPrivilegedAction({
       action: "audit.dismiss",

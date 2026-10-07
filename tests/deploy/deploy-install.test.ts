@@ -372,8 +372,11 @@ for (const line of [
   "gh workflow run actionlint.yml --ref main",
   'gh workflow run ratchet-guard.yml --ref main -f base="$base"',
   // Section 13's client-address verification steps (issue 1044): the secret
-  // generation, the nginx validation, and the journal check.
+  // generation, the root-only include file carrying the proxy secret (the
+  // vhost itself stays world-readable), the nginx validation, and the
+  // journal check.
   "openssl rand -hex 32",
+  "install -o root -g root -m 0600 /dev/null /etc/nginx/overflow-privileged-proxy.conf",
   "nginx -t && systemctl reload nginx",
   'journalctl -u overflow.service --no-pager -e | grep "Privileged action"',
 ]) otherShellLines.add(line);
