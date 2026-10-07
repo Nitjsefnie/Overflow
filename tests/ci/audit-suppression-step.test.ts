@@ -144,14 +144,14 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     const origin = join(root, `origin-${counter}`);
     const workspace = join(root, `workspace-${counter}`);
     await mkdir(origin, { recursive: true });
-    const gitEnv = {
+    const gitEnv: Record<string, string> = {
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_AUTHOR_NAME: "scratch repository",
       GIT_AUTHOR_EMAIL: "scratch@example.invalid",
       GIT_COMMITTER_NAME: "scratch repository",
       GIT_COMMITTER_EMAIL: "scratch@example.invalid",
-    } as NodeJS.ProcessEnv;
+    };
     const g = (repo: string, ...args: string[]): string => {
       const result = spawnSync("git", args, {
         cwd: repo,
