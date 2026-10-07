@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { parseGitLabWebhookDeliveryDetailed } from "@/lib/gitlab/webhook-schema";
 import { verifyGitLabWebhookToken } from "@/lib/gitlab/webhook-token";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
@@ -66,6 +67,13 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
     if (rawBody === null) {
       return new Response(null, { status: 413 });
     }
+    // The receipt's replay key: a digest of the signed bytes. The shared
+    // secret was verified against the token header before this body was read,
+    // so anything that reaches this line is already authenticated; the
+    // digest is recorded on the receipt and lets the receipts layer count a
+    // fresh receipt key over an already-processed body as a duplicate
+    // (issue 1041).
+    const bodyDigest = createHash("sha256").update(rawBody).digest("hex");
 
     let payload: unknown;
     try {
@@ -91,7 +99,9 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
     }
 
     try {
-      const processed = await dependencies.processWebhook(delivery, { provider: credential.provider, registrationId: credential.repositoryId });
+      const processed = await dependencies.processWebhook(delivery, {
+        provider: credential.provider, registrationId: credential.repositoryId, bodyDigest,
+      });
       if (processed.status === "IN_PROGRESS") {
         // An earlier attempt still holds this message's lease and may yet
         // fail, so the retry is not acknowledged: an empty 503 records the

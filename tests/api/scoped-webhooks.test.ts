@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { createGitHubWebhookPostHandler } from "@/app/api/github/webhooks/route";
 import { createGitLabWebhookPostHandler } from "@/app/api/gitlab/webhooks/route";
@@ -53,7 +53,10 @@ describe.each(["github", "gitlab"] as const)("%s scoped webhook authentication",
     expect(response.status).toBe(202);
     expect(processWebhook).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ repositoryFullName: "renamed/project" }),
-      { provider: credential.provider, registrationId: credential.repositoryId },
+      {
+        provider: credential.provider, registrationId: credential.repositoryId,
+        bodyDigest: createHash("sha256").update(body).digest("hex"),
+      },
     );
   });
 

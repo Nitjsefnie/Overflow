@@ -2,7 +2,7 @@ import { webhookCredential } from "../support/webhook-credential";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import * as database from "@/lib/db/client";
 import type { SqlClient } from "@/lib/db/types";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -197,7 +197,10 @@ describe("GitHub webhook route", () => {
       repositoryGitHubId: 42,
       repositoryFullName: "octo/example",
       subject: { kind: "PULL_REQUEST", id: 201, number: 11 },
-    }, { provider: "github", registrationId: "test-registration" });
+    }, {
+      provider: "github", registrationId: "test-registration",
+      bodyDigest: createHash("sha256").update(rawPayload).digest("hex"),
+    });
   });
 
   it("answers a tracked repository's delivery with a scheduled fold and none of the fold", async () => {
@@ -606,7 +609,10 @@ describe("GitHub webhook route", () => {
       repositoryGitHubId: 42,
       repositoryFullName: "octo/example",
       subject: { kind: "PULL_REQUEST", id: 201, number: 11 },
-    }, { provider: "github", registrationId: "test-registration" });
+    }, {
+      provider: "github", registrationId: "test-registration",
+      bodyDigest: createHash("sha256").update(paddedPayload).digest("hex"),
+    });
   });
 
   // Mutants: DRAIN_UNCONDITIONALLY (and any fix that only reads Content-Length).

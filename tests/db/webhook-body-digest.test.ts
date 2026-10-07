@@ -159,10 +159,12 @@ describe("webhook body-digest replay dedup", () => {
       expect(await store.markFailed(claim.receiptId, claim.leaseToken, "ignored")).toBe(true);
       expect((await sender.send({ deliveryId: "gh-lease-1", body })).status).toBe(202);
 
-      expect(sender.results).toEqual([{ status: "PROCESSED" }]);
+      expect(sender.results).toEqual([{ status: "IN_PROGRESS" }, { status: "PROCESSED" }]);
+      // The re-claim writes the redelivery's execution id over the store
+      // claim's, as the on-conflict update always has.
       expect(await receiptRows(fixture.repositoryId)).toEqual([
         {
-          delivery_key: "gh-lease-1", execution_id: claimDeliveryExecution("gh-lease-1"),
+          delivery_key: "gh-lease-1", execution_id: "gh-lease-1",
           processing_state: "PROCESSED", attempt_count: 2, body_digest: sha256(body),
         },
       ]);
@@ -222,9 +224,11 @@ describe("webhook body-digest replay dedup", () => {
       expect((await sender.send({ deliveryId: "gh-legacy-failed", body })).status).toBe(202);
 
       expect(sender.results).toEqual([{ status: "PROCESSED" }]);
+      // The re-claim writes the redelivery's own execution id over the
+      // seeded one, as the on-conflict update always has.
       expect(await receiptRows(fixture.repositoryId)).toEqual([
         {
-          delivery_key: "gh-legacy-failed", execution_id: legacyExecutionId("gh-legacy-failed"),
+          delivery_key: "gh-legacy-failed", execution_id: "gh-legacy-failed",
           processing_state: "PROCESSED", attempt_count: 2, body_digest: sha256(body),
         },
       ]);

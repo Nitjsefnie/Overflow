@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   parseGitHubWebhookDeliveryDetailed,
   type GitHubWebhookDelivery,
@@ -64,6 +65,13 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
     if (!verifyGitHubWebhookSignature(rawBody, signature, credential.secret)) {
       return new Response(null, { status: 401 });
     }
+    // The receipt's replay key: a digest of the signed bytes, taken only once
+    // the signature has proved them. A replay reuses the signed body — the
+    // attacker cannot mint a new one — so under this registration the same
+    // digest names the same event, and recording it lets the receipts layer
+    // count a fresh delivery id over an already-processed body as a duplicate
+    // (issue 1041).
+    const bodyDigest = createHash("sha256").update(rawBody).digest("hex");
 
     let payload: unknown;
     try {
@@ -88,7 +96,9 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
     const delivery = result.delivery;
 
     try {
-      const processed = await dependencies.processWebhook(delivery, { provider: credential.provider, registrationId: credential.repositoryId });
+      const processed = await dependencies.processWebhook(delivery, {
+        provider: credential.provider, registrationId: credential.repositoryId, bodyDigest,
+      });
       if (processed.status === "IN_PROGRESS") {
         // An earlier attempt still holds this delivery's lease and may yet
         // fail, so the redelivery is not acknowledged: an empty 503 leaves it
