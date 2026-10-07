@@ -1,6 +1,7 @@
 import { getSql } from "@/lib/db/client";
 import type { SqlClient, UserRole } from "@/lib/db/types";
 import type { PersistedGitHubUser } from "@/lib/auth/sign-in-decision";
+import { grantsWebhookAdministration } from "@/lib/auth/github-oauth-scopes";
 
 /**
  * The liveness state of the GitHub account row, as the session refresh reads
@@ -21,6 +22,74 @@ export type SessionAccountSnapshot = {
   state: SessionAccountState;
   githubLogin: string | null;
 };
+
+/**
+ * The stored OAuth-token bytes for a GitHub identity, or null when no account
+ * row exists or nothing is stored for it. The continuity ruling's "is there a
+ * token worth protecting" read.
+ */
+export async function findStoredGitHubToken(
+  githubUserId: number,
+  sql: SqlClient = getSql(),
+): Promise<Buffer | null> {
+  const [row] = await sql<{ encrypted_oauth_token: Buffer | null }[]>`
+    select encrypted_oauth_token
+    from users
+    where github_user_id = ${githubUserId}
+  `;
+  return row?.encrypted_oauth_token ?? null;
+}
+
+/**
+ * Whether this GitHub identity sponsors at least one ACTIVE registered
+ * repository (`registered_repositories.active = true`, the state both a
+ * sponsor unregistration and a moderation deactivation clear). The continuity
+ * ruling's "is there something the stored token still serves" read.
+ */
+export async function sponsorsActiveRegisteredRepository(
+  githubUserId: number,
+  sql: SqlClient = getSql(),
+): Promise<boolean> {
+  const [row] = await sql<{ sponsored: boolean }[]>`
+    select exists (
+      select 1
+      from registered_repositories
+      join users on users.id = registered_repositories.sponsor_id
+      where users.github_user_id = ${githubUserId}
+        and registered_repositories.active = true
+    ) as sponsored
+  `;
+  return row?.sponsored ?? false;
+}
+
+/**
+ * The sign-in continuity ruling (issue 1154): whether the storage path keeps
+ * the STORED token instead of the new sign-in's. GitHub issues a new
+ * authorization carrying only the scopes the sign-in requested (an
+ * already-authorized account skips the consent screen), so a contributor
+ * sign-in mints a zero-scope token that would otherwise overwrite the token
+ * the sponsor's registered repositories' webhook repairs still spend. Keep
+ * the stored token exactly when there is one, the account sponsors an active
+ * registration, and the new token is not known to administer webhooks — a
+ * probe that failed leaves the new token's capability unknown, and the ruling
+ * reads unknown as keep (fail-safe continuity).
+ */
+export type StoredTokenContinuity = {
+  /** The stored token bytes, or null when nothing is stored yet. */
+  existingToken: Buffer | null;
+  /** The scopes GitHub grants the new token, empty when unknown. */
+  newTokenGrantedScopes: readonly string[];
+  /** Whether the granted-scope probe failed, leaving the scopes unknown. */
+  probesFailed: boolean;
+  /** Whether the account sponsors at least one active registered repository. */
+  sponsorsRegisteredRepository: boolean;
+};
+
+export function shouldKeepStoredGitHubToken(input: StoredTokenContinuity): boolean {
+  return input.existingToken !== null
+    && input.sponsorsRegisteredRepository
+    && (input.probesFailed || !grantsWebhookAdministration(input.newTokenGrantedScopes));
+}
 
 /**
  * The one writer of `users.github_login`/`avatar_url`/`encrypted_oauth_token`:

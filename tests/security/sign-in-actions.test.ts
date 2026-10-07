@@ -58,8 +58,9 @@ describe("sign-in server actions", () => {
   });
 
   // Minting an API token needs a recent sign-in, not a wider grant: this one
-  // requests no scope. GitHub answers an already-authorized account with the
-  // union of what it granted, so nothing already granted is lost.
+  // requests no scope. GitHub issues the new authorization with only the
+  // scopes the sign-in requested, so an earlier webhook-administration grant
+  // survives through the storage path's continuity ruling (src/auth.ts).
   it("re-confirms a member's sign-in for an API token with the empty scope and returns to repository registration", async () => {
     const { confirmSignInForApiToken } = await import("@/lib/auth/sign-in-actions");
 
