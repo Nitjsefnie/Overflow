@@ -591,7 +591,11 @@ jobs:
             fi
             mkdir -- "${sanitized}"
             git cat-file blob "${pyyaml_manifest}" | PYAML_SANITIZED_REQUIREMENTS="${sanitized}/requirements.txt" python3 -c "${pyyaml_manifest_pre_parse}" || return 1
-            pip install --no-deps --require-hashes --disable-pip-version-check --no-input --retries 2 --timeout 60 --target "${sanitized}/site" -r "${sanitized}/requirements.txt" || return 1
+            # pip writes its progress to stdout; this function's stdout is the
+            # site path the caller captures, so pip's own output is diverted to
+            # the step log — captured, it would ride inside PYTHONPATH and the
+            # import would fall back to the system module or fail.
+            pip install --no-deps --require-hashes --disable-pip-version-check --no-input --retries 2 --timeout 60 --target "${sanitized}/site" -r "${sanitized}/requirements.txt" 1>&2 || return 1
             printf '%s\n' "${sanitized}/site"
           }
 
