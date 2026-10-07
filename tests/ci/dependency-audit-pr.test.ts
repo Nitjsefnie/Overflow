@@ -520,6 +520,85 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
     expect(outcome.stdout).toContain("clean — no known vulnerabilities found");
   });
 
+  it("audits the merge tree's bytes, not the head's, when main has advanced past the branch point", async () => {
+    // Fix round 1: every green-path fixture above builds a head whose
+    // merge-tree bytes EQUAL the head's, so a step that materialized
+    // "${HEAD_SHA}" instead of the merged tree passed all of them while
+    // auditing the wrong artifact on exactly the pull requests where the two
+    // diverge. Here main has ADVANCED past the branch point, and the two
+    // sides' lockfile edits sit in different regions of the file, so the
+    // merge is clean and its lockfile carries BOTH sides' lines — the head's
+    // carries only its own, the (advanced) base's only its own.
+    cases += 1;
+    const origin = join(root, `origin-advance-${cases}`);
+    const workspace = join(root, `workspace-advance-${cases}`);
+    await mkdir(origin, { recursive: true });
+    const gitEnv: Record<string, string> = {
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_AUTHOR_NAME: "scratch repository",
+      GIT_AUTHOR_EMAIL: "scratch@example.invalid",
+      GIT_COMMITTER_NAME: "scratch repository",
+      GIT_COMMITTER_EMAIL: "scratch@example.invalid",
+    };
+    const g = (repo: string, ...args: string[]): string => {
+      const result = spawnSync("git", args, { cwd: repo, encoding: "utf8", env: { ...process.env, ...gitEnv } });
+      if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
+      return result.stdout.trim();
+    };
+    let blobCount = 0;
+    const write = async (content: string): Promise<string> => {
+      const file = join(root, `advance-blob-${cases}-${(blobCount += 1)}`);
+      await writeFile(file, content);
+      return g(origin, "hash-object", "-w", file);
+    };
+    const baseLock = "lockfileVersion: '9.0'\n";
+    const lockAtMain = `# main-side prepended\n${baseLock}`;
+    const lockAtHead = `${baseLock}# head-side appended\n`;
+    const mergedLock = `# main-side prepended\n${baseLock}# head-side appended\n`;
+    // The state must actually discriminate: if a future edit collapses these
+    // into one string, the fixture can no longer tell a merge-tree read from
+    // a head read, and the assertion below would hold for the wrong reason.
+    expect(mergedLock).not.toBe(lockAtHead);
+    expect(mergedLock).not.toBe(lockAtMain);
+
+    g(origin, "init", "--quiet", "--initial-branch=main");
+    g(origin, "config", "uploadpack.allowAnySHA1InWant", "true");
+    // Branch point: the shared manifests.
+    const idPkg = await write(BASE_PACKAGE);
+    const id0 = await write(baseLock);
+    g(origin, "update-index", "--add", "--cacheinfo", `100644,${idPkg},package.json`);
+    g(origin, "update-index", "--add", "--cacheinfo", `100644,${id0},pnpm-lock.yaml`);
+    g(origin, "commit", "--quiet", "-m", "branch point");
+    const branchPoint = g(origin, "rev-parse", "HEAD");
+    // main advances: the lockfile gains a line at the top.
+    const idMain = await write(lockAtMain);
+    g(origin, "update-index", "--add", "--cacheinfo", `100644,${idMain},pnpm-lock.yaml`);
+    g(origin, "commit", "--quiet", "-m", "main advances the lockfile");
+    const baseSha = g(origin, "rev-parse", "HEAD");
+    // The pull request's head, from the branch point: the lockfile gains a
+    // line at the bottom, and nothing else changes.
+    g(origin, "update-index", "--add", "--cacheinfo", `100644,${id0},pnpm-lock.yaml`);
+    const idHead = await write(lockAtHead);
+    g(origin, "update-index", "--add", "--cacheinfo", `100644,${idHead},pnpm-lock.yaml`);
+    const headTree = g(origin, "write-tree");
+    const headSha = g(origin, "commit-tree", headTree, "-p", branchPoint, "-m", "head advances the lockfile");
+    g(origin, "update-ref", "refs/heads/main", baseSha);
+    g(origin, "update-ref", "refs/heads/feature", headSha);
+    const clone = spawnSync("git", ["clone", "--quiet", `file://${origin}`, workspace], {
+      encoding: "utf8",
+      env: { ...process.env, ...gitEnv },
+    });
+    if (clone.status !== 0) throw new Error(`clone failed: ${clone.stderr}`);
+
+    const outcome = await runStep({ workspace, baseSha, headSha }, [CLEAN]);
+    expect(outcome.status).toBe(0);
+    // The bytes the audit actually read are the MERGE tree's lockfile — both
+    // sides' lines — not the head's and not the advanced base's.
+    expect(readFileSync(join(outcome.sanitized, "pnpm-lock.yaml"), "utf8")).toBe(mergedLock);
+    expect(readFileSync(join(outcome.sanitized, "package.json"), "utf8")).toBe(BASE_PACKAGE);
+  });
+
   it("refuses a pull request that deletes a manifest, with the fixed constant", async () => {
     const fx = await fixture(
       { "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE },
