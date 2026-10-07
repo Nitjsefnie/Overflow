@@ -294,7 +294,7 @@ async function probeGrantedScopes(accessToken: string, fetchImpl: typeof fetch):
   try {
     return { failed: false, grantedScopes: await readGitHubGrantedScopes(accessToken, fetchImpl) };
   } catch (error) {
-    console.error("GitHub sign-in scope probe failed; continuity falls safe to the stored token.", error);
+    console.error(`GitHub sign-in scope probe failed; continuity falls safe to the stored token. ${boundedAuthErrorLine(error)}`);
     return { failed: true };
   }
 }
