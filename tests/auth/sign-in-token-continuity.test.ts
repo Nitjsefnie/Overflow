@@ -145,17 +145,46 @@ const probeTransportDown: typeof fetch = async () => {
   throw new Error("transport refused the connection");
 };
 
+/**
+ * A GET /user double answering per bearer token: the continuity ruling probes
+ * TWO live-seeming tokens in one sign-in (the new one, then the stored one),
+ * and GitHub answers each with its own X-OAuth-Scopes header — or with its
+ * own failure. Keys are the bearer tokens; a token with no entry fails the
+ * call the way an unscripted transport would.
+ */
+function perTokenProbe(table: Record<string, () => Response>): typeof fetch {
+  return async (_input, init) => {
+    const authorization = new Headers(init?.headers).get("authorization") ?? "";
+    const answer = table[authorization.slice("Bearer ".length)];
+    if (answer === undefined) {
+      throw new Error(`no scripted GET /user answer for this bearer token`);
+    }
+    return answer();
+  };
+}
+
+/**
+ * The incident's healthiest shape: the stored token is hook-capable, the new
+ * contributor sign-in grants nothing. Continuity keeps the stored token only
+ * through the stored probe answering with its administration scopes.
+ */
+const capableStoredNarrowNew: typeof fetch = perTokenProbe({
+  [wideToken]: () => userResponse("admin:repo_hook, repo"),
+  [narrowToken]: () => userResponse(""),
+});
+
 describe("sign-in token continuity in the storage path (issue 1154)", () => {
   it("keeps the sponsor's stored token when a contributor sign-in would overwrite it", async () => {
     const githubUserId = nextExternalId();
     const { sponsorId, seededBytes } = await seedAccount(githubUserId, wideToken);
     await sponsorRepository(sponsorId);
 
-    await upsertGitHubIdentity(identityFor(githubUserId), narrowToken, contributorSignIn);
+    await upsertGitHubIdentity(identityFor(githubUserId), narrowToken, capableStoredNarrowNew);
 
     const stored = await storedTokenRow(githubUserId);
     // The stored bytes stay the injected existing token's, and the stored
-    // VALUE decrypts to the kept token — not to the narrow new one.
+    // VALUE decrypts to the kept token — not to the narrow new one. The kept
+    // token itself answered its own probe with webhook administration.
     expect(stored.bytes).toEqual(seededBytes);
     expect(stored.token).toBe(wideToken);
     // The login and avatar still update while the token bytes stay.
@@ -176,10 +205,14 @@ describe("sign-in token continuity in the storage path (issue 1154)", () => {
     const githubUserId = nextExternalId();
     const { sponsorId } = await seedAccount(githubUserId, narrowToken);
     await sponsorRepository(sponsorId);
+    const probeDouble = vi.fn<typeof fetch>(registrationSignIn);
 
-    await upsertGitHubIdentity(identityFor(githubUserId), wideToken, registrationSignIn);
+    await upsertGitHubIdentity(identityFor(githubUserId), wideToken, probeDouble);
 
     expect((await storedTokenRow(githubUserId)).token).toBe(wideToken);
+    // The stored probe is spent only when keeping is otherwise reachable: a
+    // capable new sign-in ends the question with the one probe it needed.
+    expect(probeDouble).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the stored token when the scope probe fails (fail-safe)", async () => {
@@ -192,6 +225,56 @@ describe("sign-in token continuity in the storage path (issue 1154)", () => {
 
       expect((await storedTokenRow(githubUserId)).token).toBe(wideToken);
     }
+  });
+
+  it.each([401, 404])("stores the new token when the stored token answers %i (revoked)", async (status) => {
+    const githubUserId = nextExternalId();
+    const { sponsorId } = await seedAccount(githubUserId, wideToken);
+    await sponsorRepository(sponsorId);
+    // GitHub answers the STORED token as revoked and the new contributor
+    // token with no scopes: nothing is gained by keeping the dead token.
+    const revokedStored: typeof fetch = perTokenProbe({
+      [wideToken]: () => userResponse(null, status),
+      [narrowToken]: () => userResponse(""),
+    });
+
+    await upsertGitHubIdentity(identityFor(githubUserId), narrowToken, revokedStored);
+
+    expect((await storedTokenRow(githubUserId)).token).toBe(narrowToken);
+  });
+
+  it("stores the new token when the stored token answers without webhook administration", async () => {
+    const githubUserId = nextExternalId();
+    const { sponsorId } = await seedAccount(githubUserId, wideToken);
+    await sponsorRepository(sponsorId);
+    // Both tokens answer live but narrow: the stored one cannot serve the
+    // repositories either, so least privilege stores the new token.
+    const bothNarrow: typeof fetch = perTokenProbe({
+      [wideToken]: () => userResponse(""),
+      [narrowToken]: () => userResponse(""),
+    });
+
+    await upsertGitHubIdentity(identityFor(githubUserId), narrowToken, bothNarrow);
+
+    expect((await storedTokenRow(githubUserId)).token).toBe(narrowToken);
+  });
+
+  it("keeps the stored token when its own probe transport fails (fail-safe)", async () => {
+    const githubUserId = nextExternalId();
+    const { sponsorId } = await seedAccount(githubUserId, wideToken);
+    await sponsorRepository(sponsorId);
+    // The NEW token's probe answers (narrow); the STORED token's probe never
+    // settles. Unknown is keep: the unchanged fail-safe direction.
+    const storedTransportDown: typeof fetch = perTokenProbe({
+      [wideToken]: () => {
+        throw new Error("transport refused the connection");
+      },
+      [narrowToken]: () => userResponse(""),
+    });
+
+    await upsertGitHubIdentity(identityFor(githubUserId), narrowToken, storedTransportDown);
+
+    expect((await storedTokenRow(githubUserId)).token).toBe(wideToken);
   });
 
   it("stores a first token for an account with nothing stored yet and never probes", async () => {
@@ -209,7 +292,7 @@ describe("sign-in token continuity in the storage path (issue 1154)", () => {
     const { sponsorId } = await seedAccount(githubUserId, wideToken);
     await sponsorRepository(sponsorId);
 
-    await upsertGitHubIdentity(identityFor(githubUserId), narrowToken, contributorSignIn);
+    await upsertGitHubIdentity(identityFor(githubUserId), narrowToken, capableStoredNarrowNew);
 
     const kept = (await storedTokenRow(githubUserId)).token;
     expect(kept).toBe(wideToken);
@@ -227,12 +310,40 @@ describe("shouldKeepStoredGitHubToken", () => {
 
   it.each([
     {
-      label: "the incident: a scope-less new token for a sponsoring account with a stored token",
+      label: "the incident, with the stored token provably still capable",
       existingToken: storedBytes,
       granted: [] as string[],
       probesFailed: false,
       sponsors: true,
+      storedProbe: "capable" as const,
       keep: true,
+    },
+    {
+      label: "the incident, with the stored token's probe unanswered (fail-safe)",
+      existingToken: storedBytes,
+      granted: [],
+      probesFailed: false,
+      sponsors: true,
+      storedProbe: "unanswered" as const,
+      keep: true,
+    },
+    {
+      label: "the stored token answered revoked — the new token is stored instead",
+      existingToken: storedBytes,
+      granted: [],
+      probesFailed: false,
+      sponsors: true,
+      storedProbe: "notCapable" as const,
+      keep: false,
+    },
+    {
+      label: "the stored token was never probed (keeping unreachable earlier)",
+      existingToken: storedBytes,
+      granted: [],
+      probesFailed: false,
+      sponsors: true,
+      storedProbe: null,
+      keep: false,
     },
     {
       label: "no stored token — nothing to protect",
@@ -240,6 +351,7 @@ describe("shouldKeepStoredGitHubToken", () => {
       granted: [],
       probesFailed: false,
       sponsors: true,
+      storedProbe: "notCapable" as const,
       keep: false,
     },
     {
@@ -248,6 +360,7 @@ describe("shouldKeepStoredGitHubToken", () => {
       granted: [],
       probesFailed: false,
       sponsors: false,
+      storedProbe: "notCapable" as const,
       keep: false,
     },
     {
@@ -256,6 +369,7 @@ describe("shouldKeepStoredGitHubToken", () => {
       granted: ["admin:repo_hook"],
       probesFailed: false,
       sponsors: true,
+      storedProbe: "notCapable" as const,
       keep: false,
     },
     {
@@ -264,6 +378,7 @@ describe("shouldKeepStoredGitHubToken", () => {
       granted: ["repo"],
       probesFailed: false,
       sponsors: true,
+      storedProbe: "notCapable" as const,
       keep: false,
     },
     {
@@ -272,6 +387,7 @@ describe("shouldKeepStoredGitHubToken", () => {
       granted: ["public_repo"],
       probesFailed: false,
       sponsors: true,
+      storedProbe: "notCapable" as const,
       keep: false,
     },
     {
@@ -280,6 +396,7 @@ describe("shouldKeepStoredGitHubToken", () => {
       granted: ["write:repo_hook"],
       probesFailed: false,
       sponsors: true,
+      storedProbe: "capable" as const,
       keep: true,
     },
     {
@@ -288,6 +405,7 @@ describe("shouldKeepStoredGitHubToken", () => {
       granted: [],
       probesFailed: true,
       sponsors: true,
+      storedProbe: "capable" as const,
       keep: true,
     },
     {
@@ -296,14 +414,16 @@ describe("shouldKeepStoredGitHubToken", () => {
       granted: [],
       probesFailed: true,
       sponsors: false,
+      storedProbe: "notCapable" as const,
       keep: false,
     },
-  ])("$label", ({ existingToken, granted, probesFailed, sponsors, keep }) => {
+  ])("$label", ({ existingToken, granted, probesFailed, sponsors, storedProbe, keep }) => {
     expect(shouldKeepStoredGitHubToken({
       existingToken,
       newTokenGrantedScopes: granted,
       probesFailed,
       sponsorsRegisteredRepository: sponsors,
+      storedTokenProbe: storedProbe,
     })).toBe(keep);
   });
 });

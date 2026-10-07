@@ -4,7 +4,7 @@ import type { UserRole } from "@/lib/db/types";
 import { getSql } from "@/lib/db/client";
 import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
 import { normalizeModeratorGitHubUserIds } from "@/lib/moderation/roles";
-import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, decryptToken, encryptToken, type CredentialBinding } from "@/lib/security/token-cipher";
 import {
   decideGitHubSignIn,
   readGitHubIdentity,
@@ -19,6 +19,7 @@ import {
   shouldKeepStoredGitHubToken,
   sponsorsActiveRegisteredRepository,
   upsertGitHubAccount,
+  type StoredTokenProbeOutcome,
 } from "@/lib/auth/account-store";
 import {
   isEpochRejected,
@@ -35,7 +36,7 @@ import {
 } from "@/lib/auth/github-oauth-scopes";
 import { authTrustHost } from "@/lib/auth/trusted-host";
 import { boundedAuthErrorLine } from "@/lib/auth/bounded-logger";
-import { readGitHubGrantedScopes } from "@/lib/auth/github-granted-scopes";
+import { GitHubScopeProbeError, readGitHubGrantedScopes } from "@/lib/auth/github-granted-scopes";
 
 export { GITHUB_CONTRIBUTOR_SCOPE, GITHUB_REPOSITORY_REGISTRATION_SCOPE };
 
@@ -246,8 +247,10 @@ export async function upsertGitHubIdentity(
   // carrying only the scopes the sign-in requested, so a contributor sign-in
   // mints a zero-scope token that must not overwrite the token the sponsor's
   // active registered repositories' webhook repairs still spend. Probe the
-  // NEW token only when a stored token exists to protect; the ruling then
-  // decides whether the stored bytes stay.
+  // NEW token only when a stored token exists to protect, and the STORED
+  // token only when keeping is otherwise reachable — the stored token itself
+  // can be dead (the authorization revoked on GitHub) or scope-less, and
+  // keeping either gains nothing.
   const existingToken = await findStoredGitHubToken(identity.githubUserId);
   // `Buffer`'s default type parameter is ArrayBufferLike, the bytea read
   // back from the database; Buffer.from narrows to ArrayBuffer.
@@ -256,11 +259,19 @@ export async function upsertGitHubIdentity(
   ), "utf8");
   if (existingToken !== null) {
     const probe = await probeGrantedScopes(accessToken, fetchImpl);
+    const sponsorsRegisteredRepository = await sponsorsActiveRegisteredRepository(identity.githubUserId);
+    // The stored probe is the sign-in's second GitHub round trip; spend it
+    // only when the ruling could otherwise keep. This pre-check only decides
+    // whether to spend it — the ruling below stays the sole decider.
+    const storedTokenProbe = (probe.failed || !grantsWebhookAdministration(probe.grantedScopes)) && sponsorsRegisteredRepository
+      ? await probeStoredToken(existingToken, tokenEncryptionKey, tokenBinding, fetchImpl)
+      : null;
     if (shouldKeepStoredGitHubToken({
       existingToken,
       newTokenGrantedScopes: probe.failed ? [] : probe.grantedScopes,
       probesFailed: probe.failed,
-      sponsorsRegisteredRepository: await sponsorsActiveRegisteredRepository(identity.githubUserId),
+      sponsorsRegisteredRepository,
+      storedTokenProbe,
     })) {
       // The stored bytes are written back unchanged: the upsert's
       // `encrypted_oauth_token = excluded.encrypted_oauth_token` stores the
@@ -296,5 +307,45 @@ async function probeGrantedScopes(accessToken: string, fetchImpl: typeof fetch):
   } catch (error) {
     console.error(`GitHub sign-in scope probe failed; continuity falls safe to the stored token. ${boundedAuthErrorLine(error)}`);
     return { failed: true };
+  }
+}
+
+/**
+ * The stored token's own probe verdict: decrypt the stored bytes in-process
+ * (the same key set and row binding that wrote them) and run the SAME
+ * X-OAuth-Scopes probe the new token gets. GitHub ANSWERING 401/404 is the
+ * authoritative dead answer — the authorization no longer exists on
+ * GitHub's side — and an answer without an administration scope cannot serve
+ * the repositories either; both store the NEW token. Every other failure — a
+ * transport throw, a deadline, an unreliable status (an outage or a rate
+ * limit) — leaves the stored token's capability UNKNOWN, and the verdict is
+ * `unanswered`: the continuity ruling reads that as keep, the unchanged
+ * fail-safe direction.
+ */
+async function probeStoredToken(
+  existingToken: Buffer,
+  tokenEncryptionKey: string,
+  tokenBinding: CredentialBinding,
+  fetchImpl: typeof fetch,
+): Promise<StoredTokenProbeOutcome> {
+  let storedAccessToken: string;
+  try {
+    storedAccessToken = decryptToken(existingToken.toString("utf8"), tokenEncryptionKey, tokenBinding);
+  } catch (error) {
+    // The stored bytes cannot be opened under the configured keys: there is
+    // no usable token to protect, so the new one is stored.
+    console.error(`GitHub sign-in stored-token probe could not decrypt the stored token; storing the new token. ${boundedAuthErrorLine(error)}`);
+    return "notCapable";
+  }
+  try {
+    return grantsWebhookAdministration(await readGitHubGrantedScopes(storedAccessToken, fetchImpl))
+      ? "capable"
+      : "notCapable";
+  } catch (error) {
+    if (error instanceof GitHubScopeProbeError && (error.status === 401 || error.status === 404)) {
+      return "notCapable";
+    }
+    console.error(`GitHub sign-in stored-token probe failed; continuity falls safe to the stored token. ${boundedAuthErrorLine(error)}`);
+    return "unanswered";
   }
 }

@@ -63,6 +63,31 @@ export async function sponsorsActiveRegisteredRepository(
 }
 
 /**
+ * What the stored token's OWN probe established (issue 1154 fix round): a
+ * stored token can be dead — the sponsor revoked the app's authorization on
+ * GitHub — or scope-less, and keeping either gains nothing while a live new
+ * token is discarded. The storage path probes it with the same
+ * X-OAuth-Scopes read the new token gets, and this is that probe's verdict.
+ */
+export type StoredTokenProbeOutcome =
+  /** GitHub answered the stored token and it grants webhook administration. */
+  | "capable"
+  /**
+   * The stored token cannot serve the repositories: GitHub answered it
+   * without an administration scope, answered 401/404 (the authorization no
+   * longer exists), or the stored bytes do not decrypt under the configured
+   * keys.
+   */
+  | "notCapable"
+  /**
+   * No reliable answer — a transport failure, a deadline, or an unreliable
+   * status (an outage or a rate limit, not 401/404). The stored token's
+   * capability is UNKNOWN, and unknown reads as keep: the unchanged
+   * fail-safe direction.
+   */
+  | "unanswered";
+
+/**
  * The sign-in continuity ruling (issue 1154): whether the storage path keeps
  * the STORED token instead of the new sign-in's. GitHub issues a new
  * authorization carrying only the scopes the sign-in requested (an
@@ -70,9 +95,11 @@ export async function sponsorsActiveRegisteredRepository(
  * sign-in mints a zero-scope token that would otherwise overwrite the token
  * the sponsor's registered repositories' webhook repairs still spend. Keep
  * the stored token exactly when there is one, the account sponsors an active
- * registration, and the new token is not known to administer webhooks — a
- * probe that failed leaves the new token's capability unknown, and the ruling
- * reads unknown as keep (fail-safe continuity).
+ * registration, the new token is not known to administer webhooks (a probe
+ * that failed leaves that unknown, which reads as keep — fail-safe), and the
+ * stored token itself proved live and hook-capable when probed — or its own
+ * probe could not answer, which fails safe the same way. A stored token that
+ * answers revoked or scope-less is replaced by the new token.
  */
 export type StoredTokenContinuity = {
   /** The stored token bytes, or null when nothing is stored yet. */
@@ -83,12 +110,19 @@ export type StoredTokenContinuity = {
   probesFailed: boolean;
   /** Whether the account sponsors at least one active registered repository. */
   sponsorsRegisteredRepository: boolean;
+  /**
+   * The stored token's own probe verdict. Probed only when keeping is
+   * otherwise reachable; null when the wiring did not probe because an
+   * earlier condition already decides against keeping.
+   */
+  storedTokenProbe: StoredTokenProbeOutcome | null;
 };
 
 export function shouldKeepStoredGitHubToken(input: StoredTokenContinuity): boolean {
   return input.existingToken !== null
     && input.sponsorsRegisteredRepository
-    && (input.probesFailed || !grantsWebhookAdministration(input.newTokenGrantedScopes));
+    && (input.probesFailed || !grantsWebhookAdministration(input.newTokenGrantedScopes))
+    && (input.storedTokenProbe === "capable" || input.storedTokenProbe === "unanswered");
 }
 
 /**
