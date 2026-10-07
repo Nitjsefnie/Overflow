@@ -1,9 +1,17 @@
 import type { UserRole } from "@/lib/db/types";
 import { mintApiToken } from "@/lib/security/api-token";
+import {
+  applyRouteRateGate,
+  createRouteRateGate,
+  EXPENSIVE_ROUTE_RATE_CLASSES,
+  resolveRouteRateLimit,
+  type RouteRateGate,
+} from "@/lib/security/route-rate-limit";
 import { rejectUntrustedRequest } from "@/lib/security/request-origin";
 import { PostgresApiTokenStore, type ApiTokenSummary } from "@/lib/tokens/postgres-store";
 import { isRecentSignIn } from "@/lib/auth/recent-sign-in";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
+import { createRateLimiter } from "@/lib/webhooks/rate-limit";
 
 export { REAUTHENTICATION_WINDOW_MS, AUTHENTICATION_CLOCK_SKEW_MS } from "@/lib/auth/recent-sign-in";
 
@@ -51,7 +59,23 @@ export type ApiTokenRouteDependencies = {
   createTokenStore: () => Promise<ApiTokenIssuer>;
   /** The current instant in epoch milliseconds; `Date.now` unless a test pins it. */
   now?: () => number;
+  /**
+   * The keyed expensive-route bound (issue 1054), checked after every
+   * authorization refusal and before a token is minted. The production wiring
+   * passes this file's module-scope gate; a handler built without one — a
+   * test factory call — stays unbounded.
+   */
+  rateGate?: RouteRateGate;
 };
+
+// One keyed limiter per route file, born at the wall clock: its buckets are
+// keyed by the acting credential identity and never evict (issue 1054).
+const apiTokenRateLimiter = createRateLimiter({ nowMs: () => Date.now() });
+const apiTokenRateGate = createRouteRateGate({
+  className: "tokens",
+  limiter: apiTokenRateLimiter,
+  limits: resolveRouteRateLimit(process.env, EXPENSIVE_ROUTE_RATE_CLASSES.tokens),
+});
 
 export type ApiTokenPostHandler = (request: Request) => Promise<Response>;
 
@@ -98,6 +122,9 @@ export function createApiTokenPostHandler(
       );
     }
 
+    const rateRefusal = applyRouteRateGate(dependencies.rateGate, { kind: "session" }, session.user.id);
+    if (rateRefusal !== null) return rateRefusal;
+
     const { token, tokenHash } = mintApiToken();
     let createdAt: Date;
     let expiresAt: Date;
@@ -128,6 +155,7 @@ export function createApiTokenPostHandler(
 
 export const POST = createApiTokenPostHandler({
   getCurrentRole: getCurrentUserRole,
+  rateGate: apiTokenRateGate,
   async getSession() {
     const { auth } = await import("@/auth");
     const session = await auth();

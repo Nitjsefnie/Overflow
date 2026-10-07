@@ -10,8 +10,16 @@ import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-stor
 import type { ForgeIdentityStore } from "@/lib/forge/identities";
 import type { UserRole } from "@/lib/db/types";
 import { readBodyWithinLimit } from "@/lib/http/request-body";
+import {
+  applyRouteRateGate,
+  createRouteRateGate,
+  EXPENSIVE_ROUTE_RATE_CLASSES,
+  resolveRouteRateLimit,
+  type RouteRateGate,
+} from "@/lib/security/route-rate-limit";
 import { rejectUntrustedRequest } from "@/lib/security/request-origin";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
+import { createRateLimiter } from "@/lib/webhooks/rate-limit";
 
 /**
  * The link and unlink bodies carry one instance URL and token, or one identity
@@ -38,7 +46,24 @@ export type ForgeIdentitiesRouteDependencies = {
   fetch?: typeof fetch;
   /** Claims past GitLab work for the freshly verified triple (fold store). */
   claimPastWork?: (input: { userId: string; instanceUrl: string; forgeUserId: number }) => Promise<void>;
+  /**
+   * The keyed expensive-route bound (issue 1054), checked by the write verbs
+   * after every authorization refusal and before the body is read. GET — a
+   * read of the caller's own rows — is not one of the expensive classes and
+   * stays unbounded. The production wiring passes this file's module-scope
+   * gate; a handler built without one — a test factory call — stays unbounded.
+   */
+  rateGate?: RouteRateGate;
 };
+
+// One keyed limiter per route file, born at the wall clock: its buckets are
+// keyed by the acting credential identity and never evict (issue 1054).
+const forgeIdentitiesRateLimiter = createRateLimiter({ nowMs: () => Date.now() });
+const forgeIdentitiesRateGate = createRouteRateGate({
+  className: "forge-identities",
+  limiter: forgeIdentitiesRateLimiter,
+  limits: resolveRouteRateLimit(process.env, EXPENSIVE_ROUTE_RATE_CLASSES.forgeIdentities),
+});
 
 const linkSchema = z
   .object({
@@ -52,6 +77,7 @@ const unlinkSchema = z.object({ id: z.string().uuid() }).strict();
 export function createForgeIdentitiesRouteDependencies(): ForgeIdentitiesRouteDependencies {
   return {
     getCurrentRole: getCurrentUserRole,
+    rateGate: forgeIdentitiesRateGate,
     async getSession() {
       const { auth } = await import("@/auth");
       const session = await auth();
@@ -115,6 +141,8 @@ export function createForgeIdentitiesPostHandler(dependencies: ForgeIdentitiesRo
     if (liveAccountRefusal !== null) {
       return liveAccountRefusal;
     }
+    const rateRefusal = applyRouteRateGate(dependencies.rateGate, { kind: "session" }, session.user.id);
+    if (rateRefusal !== null) return rateRefusal;
     const input = await parseBody(request, linkSchema);
     if (input === "tooLarge") {
       return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
@@ -164,6 +192,8 @@ export function createForgeIdentitiesDeleteHandler(dependencies: ForgeIdentities
     if (liveAccountRefusal !== null) {
       return liveAccountRefusal;
     }
+    const rateRefusal = applyRouteRateGate(dependencies.rateGate, { kind: "session" }, session.user.id);
+    if (rateRefusal !== null) return rateRefusal;
     const input = await parseBody(request, unlinkSchema);
     if (input === "tooLarge") {
       return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");

@@ -52,7 +52,10 @@ const routeGates = [
     gate: "member route gate",
     run: requiredMemberSession,
     message: "Unable to authorize the member request.",
-    authorized: { user: { id: sessionUserId, role: "MODERATOR" } },
+    authorized: {
+      user: { id: sessionUserId, role: "MODERATOR" },
+      credential: { kind: "token", tokenId: sessionTokenId },
+    },
   },
   {
     gate: "moderator route gate",

@@ -17,9 +17,17 @@ import {
   getProductionSession,
   requiredMemberSession,
 } from "@/lib/security/member-route-auth";
+import {
+  applyRouteRateGate,
+  createRouteRateGate,
+  EXPENSIVE_ROUTE_RATE_CLASSES,
+  resolveRouteRateLimit,
+  type RouteRateGate,
+} from "@/lib/security/route-rate-limit";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import { readBodyWithinLimit } from "@/lib/http/request-body";
 import { reasonText } from "@/lib/validation/reason";
+import { createRateLimiter } from "@/lib/webhooks/rate-limit";
 
 /**
  * The correction body is one target id plus a reason reasonText() caps at
@@ -60,7 +68,26 @@ export type SettlementOverrideRouteDependencies = {
   findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string; tokenId: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createService: () => Promise<SettlementOverrideRequestService>;
+  /**
+   * The keyed expensive-route bound (issue 1054), checked after the member
+   * gate and before the body is read. The REST wiring and the MCP
+   * correction_open tool pass the SAME module-scope gate, which is what makes
+   * their bound shared per identity; a handler built without one — a test
+   * factory call — stays unbounded.
+   */
+  rateGate?: RouteRateGate;
 };
+
+// One keyed limiter per route file, born at the wall clock: its buckets are
+// keyed by the acting credential identity and never evict (issue 1054). The
+// gate is exported because the MCP tool registry composes this route's
+// factory and must admit through this same instance for the two surfaces to
+// share one bound per identity.
+export const overridesRouteRateGate = createRouteRateGate({
+  className: "overrides",
+  limiter: createRateLimiter({ nowMs: () => Date.now() }),
+  limits: resolveRouteRateLimit(process.env, EXPENSIVE_ROUTE_RATE_CLASSES.overrides),
+});
 
 export type SettlementOverrideListRouteDependencies = {
   getSession: () => Promise<SettlementOverrideRouteSession | null>;
@@ -102,6 +129,13 @@ export function createSettlementOverridePostHandler(dependencies: SettlementOver
     if (session instanceof Response) {
       return session;
     }
+
+    const rateRefusal = applyRouteRateGate(
+      dependencies.rateGate,
+      session.credential,
+      session.user.id,
+    );
+    if (rateRefusal !== null) return rateRefusal;
 
     const input = await parseOverrideRequest(request);
     if (input === "tooLarge") {
@@ -174,6 +208,7 @@ export const POST = createSettlementOverridePostHandler({
   async createService() {
     return new SettlementOverrideService(new PostgresSettlementOverrideStore());
   },
+  rateGate: overridesRouteRateGate,
 });
 
 export const GET = createSettlementOverrideListGetHandler({

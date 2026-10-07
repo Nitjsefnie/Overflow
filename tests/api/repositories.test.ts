@@ -50,6 +50,9 @@ import {
 
 // Release stores evaluated with this file's mocked database client.
 vi.hoisted(() => { vi.resetModules(); });
+// The production exports below carry the module-scope rate bound (issue 1054)
+// and are driven here as one identity: stub a bound no test here can exhaust.
+vi.hoisted(() => { vi.stubEnv("RATE_LIMIT_REPOSITORIES_PER_HOUR", "100000"); });
 afterAll(() => { vi.resetModules(); });
 
 const { readSession } = vi.hoisted(() => ({ readSession: vi.fn() }));

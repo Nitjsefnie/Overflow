@@ -28,7 +28,11 @@ import { createSettlementsGetHandler } from "@/app/api/settlements/route";
 import { createSettlementProofGetHandler } from "@/app/api/settlements/[id]/route";
 import { createCalibrationGetHandler } from "@/app/api/calibration/route";
 import { createDashboardGetHandler } from "@/app/api/dashboard/route";
-import { createSettlementOverrideListGetHandler, createSettlementOverridePostHandler } from "@/app/api/overrides/route";
+import {
+  createSettlementOverrideListGetHandler,
+  createSettlementOverridePostHandler,
+  overridesRouteRateGate,
+} from "@/app/api/overrides/route";
 import { createSettlementOverridePatchHandler } from "@/app/api/overrides/[id]/route";
 import {
   listEligibleIssues,
@@ -155,6 +159,10 @@ const productionToolDependencies: McpToolDependencies = {
     async createService() {
       return new SettlementOverrideService(new PostgresSettlementOverrideStore());
     },
+    // The same gate instance the REST route's export wires, so the MCP
+    // dispatch of the same operation shares the REST bound per identity
+    // (issue 1054).
+    rateGate: overridesRouteRateGate,
   }),
   correctionList: createSettlementOverrideListGetHandler({
     getSession: getProductionSession,
