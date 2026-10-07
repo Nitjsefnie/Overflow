@@ -2,7 +2,15 @@ import type { GitHubWebhookDelivery, GitHubWebhookIssue } from "@/lib/github/web
 import { sanitizeForgeStrings } from "@/lib/forge/sanitize-forge-strings";
 import { redactPostgresError } from "@/lib/db/redact-postgres-error";
 
-export type WebhookReceiptScope = { provider: "github" | "gitlab"; registrationId: string };
+/**
+ * The registration a delivery resolves against, plus the replay key the
+ * receipts layer dedups on: `bodyDigest` is the SHA-256 of the signed body,
+ * computed by the receiver route after its signature check. A repeat digest
+ * that matches a PROCESSED receipt for this registration is a duplicate,
+ * whatever the delivery id; a null or absent digest falls back to the
+ * delivery-id-only rule the previous release used (issue 1041).
+ */
+export type WebhookReceiptScope = { provider: "github" | "gitlab"; registrationId: string; bodyDigest?: string };
 
 /**
  * The registration row a webhook delivery resolves against. `unavailableReason`

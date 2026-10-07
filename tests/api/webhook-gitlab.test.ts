@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { webhookCredential } from "../support/webhook-credential";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import * as database from "@/lib/db/client";
@@ -138,7 +139,10 @@ describe("GitLab webhook route", () => {
     expect(accepted.status).toBe(202);
     expect(processWebhook).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ deliveryId: "x".repeat(255), executionId: "uuid-1" }),
-      { provider: "gitlab", registrationId: "test-registration" },
+      {
+        provider: "gitlab", registrationId: "test-registration",
+        bodyDigest: createHash("sha256").update(issuePayload).digest("hex"),
+      },
     );
   });
 
@@ -178,7 +182,10 @@ describe("GitLab webhook route", () => {
       repositoryFullName: "gitlab-org/gitlab",
       subject: { kind: "ISSUE", id: 301, number: 23 },
       forge: { provider: "gitlab", instanceUrl: "https://gitlab.com" },
-    }), { provider: "gitlab", registrationId: "test-registration" });
+    }), {
+      provider: "gitlab", registrationId: "test-registration",
+      bodyDigest: createHash("sha256").update(issuePayload).digest("hex"),
+    });
   });
 
   // The missing execution UUID case sends both a stable message key and an
@@ -259,7 +266,10 @@ describe("GitLab webhook route", () => {
       repositoryFullName: "gitlab-org/gitlab",
       subject: { kind: "PULL_REQUEST", id: 401, number: 7 },
       forge: { provider: "gitlab", instanceUrl: "https://gitlab.com" },
-    }, { provider: "gitlab", registrationId: "test-registration" });
+    }, {
+      provider: "gitlab", registrationId: "test-registration",
+      bodyDigest: createHash("sha256").update(mergeRequestPayload).digest("hex"),
+    });
   });
 
   it("answers 400 for an unrecognised object kind", async () => {
