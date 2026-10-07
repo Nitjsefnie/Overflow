@@ -446,6 +446,120 @@ jobs:
           git cat-file blob "${entry_blob}" | ZIZMOR_SANITIZED_REQUIREMENTS="${sanitized}/requirements.txt" python3 -c "${pre_parse}"
           pip download --no-deps --only-binary=:all: --require-hashes --index-url https://pypi.org/simple --no-input --disable-pip-version-check --retries 2 --timeout 60 -d "${sanitized}/download" -r "${sanitized}/requirements.txt"
 
+      # Issue 1035. The dependency audit honours the audit suppression list a
+      # pull request itself writes into package.json — pnpm.auditConfig — so a
+      # pull request could silence its own audit by listing an advisory it
+      # introduces, and once merged, the scheduled audit on main is silenced
+      # too. The list therefore moves only through a maintainer-reviewed merge:
+      # this base-defined gate deep-compares the merge tree's pnpm.auditConfig
+      # against the base's and refuses divergence.
+      #
+      # MECHANICS, mirroring the zizmor step above it: package.json is read from
+      # GIT OBJECTS on both sides — git ls-tree shows exactly one mode-100644
+      # blob at package.json in each tree, or the step refuses (a symlink leaf,
+      # a wrong mode, a non-blob type and an absent file are all refusals), and
+      # git cat-file pipes each side through an inline python3 pre-parse that
+      # enforces the 65536-byte cap, refuses NUL bytes and invalid UTF-8,
+      # parses the JSON, and emits the CANONICAL form of .pnpm.auditConfig.
+      # Comparing the canonical dumps is structural equality, not string
+      # equality: sort_keys with compact separators makes each dump uniquely
+      # parseable back to exactly one JSON value, so package.json's key order,
+      # indentation and escaping never reach the comparison, while every nested
+      # value and the order of the ignoreGhsas list itself do. Removal of the
+      # whole key counts as divergence, as does adding one; present-null and
+      # absent read as the same, because pnpm treats both as no config.
+      #
+      # Every refusal is a FIXED constant: no pull-request-controlled bytes ever
+      # reach the log. Identical lists exit 0 silently. The step carries the
+      # event gate the leg itself implies — this file receives nothing but
+      # pull_request_target, so the gate is redundant by the closed-trigger-set
+      # argument, and it is pinned in the reachability suite so it cannot be
+      # mutated into unreachability silently.
+      - name: Refuse a pull request that changes the audit suppression list
+        if: github.event_name == 'pull_request_target'
+        env:
+          MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          file=package.json
+          
+          # Reads the named commit's package.json as git objects, mirroring the zizmor
+          # step's ls-tree gate: exactly one mode-100644 blob entry at package.json, or
+          # refuse. Prints the blob id on stdout.
+          blob_of() {
+            entries=$(git ls-tree "${1:?}" -- "${file}")
+            count=0
+            entry_mode=""
+            entry_type=""
+            entry_blob=""
+            while IFS=$'\t' read -r meta _path; do
+              [ -n "${meta}" ] || continue
+              count=$((count + 1))
+              entry_mode=${meta%% *}
+              rest=${meta#* }
+              entry_type=${rest%% *}
+              entry_blob=${rest#* }
+            done <<< "${entries}"
+            if [ "${count}" -ne 1 ] || [ "${entry_mode}" != "100644" ] || [ "${entry_type}" != "blob" ]; then
+              echo "::error::package.json must be exactly one mode-100644 blob entry in a tree; refusing. The suppression list is read from git objects, never from the filesystem, so a symlink leaf, a wrong mode, a non-blob type and an absent file are all refused." >&2
+              exit 1
+            fi
+            printf '%s\n' "${entry_blob}"
+          }
+          
+          # Pipes the named blob through the inline python pre-parse, which emits the
+          # CANONICAL form of .pnpm.auditConfig: sort_keys and compact separators make
+          # the dump uniquely parseable back to one value, so string equality of the two
+          # sides is structural equality - key order, indentation and escaping in
+          # package.json never reach the comparison, while every nested value and the
+          # order of the ignoreGhsas list itself do.
+          value_of() {
+            git cat-file blob "${1:?}" | python3 -c "${pre_parse}"
+          }
+          
+          pre_parse=$(cat <<'PY'
+          import json
+          import sys
+          
+          data = sys.stdin.buffer.read()
+          if 65536 < len(data):
+              sys.stderr.write("::error::package.json is larger than the 65536-byte cap; refusing\n")
+              sys.exit(1)
+          if b"\x00" in data:
+              sys.stderr.write("::error::package.json carries a NUL byte, which is invalid content wherever it sits; refusing\n")
+              sys.exit(1)
+          try:
+              text = data.decode("utf-8")
+          except UnicodeDecodeError:
+              sys.stderr.write("::error::package.json is not valid UTF-8; refusing\n")
+              sys.exit(1)
+          try:
+              parsed = json.loads(text)
+          except ValueError:
+              sys.stderr.write("::error::package.json does not parse as JSON; refusing\n")
+              sys.exit(1)
+          config = None
+          if isinstance(parsed, dict):
+              pnpm = parsed.get("pnpm")
+              if isinstance(pnpm, dict):
+                  config = pnpm.get("auditConfig")
+          if config is None:
+              sys.stdout.write("absent")
+          else:
+              sys.stdout.write(json.dumps(config, sort_keys=True, separators=(",", ":")))
+          PY
+          )
+          
+          base_blob=$(blob_of "${BASE_SHA:?}")
+          merge_blob=$(blob_of "${MERGE_SHA:?}")
+          base_value=$(value_of "${base_blob}") || exit 1
+          merge_value=$(value_of "${merge_blob}") || exit 1
+          if [ "${base_value}" != "${merge_value}" ]; then
+            echo "::error::this pull request changes pnpm.auditConfig; a pull request cannot change the audit suppression list — the list moves only through a maintainer-reviewed merge"
+            exit 1
+          fi
+
+
       # The pull request's suite — install, migrations, tests, lint,
       # typecheck, build, page geometry — runs as its own code in pr-suite.yml
       # under `pull_request`. This step reads that run's outcome as data: the
