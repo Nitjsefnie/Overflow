@@ -3,17 +3,21 @@ import { describe, expect, it } from "vitest";
 import { config, middleware } from "../../src/middleware";
 
 // Issue 1046: the middleware serves a per-request, nonce-based script CSP so
-// Next's bootstrap scripts stay allowlisted without unsafe-inline. These tests
-// drive the real middleware with a NextRequest and read back the headers Next's
-// own adapter reads (x-middleware-override-headers plus one
-// x-middleware-request-<name> per propagated header), and evaluate
-// config.matcher with Next's own build-time compiler and runtime route matcher
-// rather than a re-derivation of either.
+// Next's bootstrap scripts stay allowlisted without unsafe-inline. Next merges
+// headers() and middleware response headers by overwriting same-named keys, so
+// exactly ONE Content-Security-Policy header reaches the wire — this
+// middleware's. It therefore also carries the frame pair's CSP leg
+// (frame-ancestors 'none', issue 677), single-sourced here; next.config keeps
+// only the X-Frame-Options fallback. These tests drive the real middleware
+// with a NextRequest and read back the headers Next's own adapter reads
+// (x-middleware-override-headers plus one x-middleware-request-<name> per
+// propagated header), and evaluate config.matcher with Next's own build-time
+// compiler and runtime route matcher rather than a re-derivation of either.
 
-// The full CSP template: only the nonce varies, and nothing else is in the
-// value. A nonce is base64 (from a UUID string), so its characters are
-// unreserved plus '+' and '/'.
-const cspPattern = /^script-src 'self' 'nonce-([A-Za-z0-9+/]+=*)' 'strict-dynamic'$/;
+// The full delivered CSP, exactly one header's value: only the nonce varies.
+// A nonce is base64 (from a UUID string), so its characters are unreserved
+// plus '+' and '/'.
+const cspPattern = /^script-src 'self' 'nonce-([A-Za-z0-9+/]+=*)' 'strict-dynamic'; frame-ancestors 'none'$/;
 
 function cspOf(response: Response) {
   const csp = response.headers.get("content-security-policy");
@@ -48,10 +52,19 @@ describe("middleware script CSP", () => {
     expect(first).not.toBe(second);
   });
 
-  it("carries no unsafe-inline, unsafe-eval, default-src or frame-ancestors", () => {
+  it("delivers frame-ancestors 'none' in the middleware's own CSP header", () => {
+    const response = middleware(request("/some-page"));
+
+    // The one CSP that reaches the wire (Next overwrites same-named headers
+    // between headers() and the middleware) must keep refusing framing; the
+    // static next.config header no longer carries this directive.
+    expect(cspOf(response)).toContain("frame-ancestors 'none'");
+  });
+
+  it("carries no unsafe-inline, unsafe-eval or default-src", () => {
     const csp = cspOf(middleware(request("/some-page")));
 
-    for (const forbidden of ["unsafe-inline", "unsafe-eval", "default-src", "frame-ancestors"]) {
+    for (const forbidden of ["unsafe-inline", "unsafe-eval", "default-src"]) {
       expect(csp.toLowerCase()).not.toContain(forbidden);
     }
   });

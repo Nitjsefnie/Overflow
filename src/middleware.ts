@@ -1,18 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 
 // Script CSP (issue 1046): give every document a per-request nonce so Next's
-// bootstrap scripts stay allowlisted without unsafe-inline. The header carries
-// ONLY the script-src directive — no default-src (which would silently
-// constrain styles, images and connects this app has not audited), no
-// unsafe-inline and no unsafe-eval (the nonce plus strict-dynamic replaces
-// them), and no frame-ancestors (owned by the static next.config header;
-// browsers enforce both headers' intersection). Next parses the nonce out of
-// the request's Content-Security-Policy header and applies it to its own
-// scripts automatically, so the request and the response carry the same value.
+// bootstrap scripts stay allowlisted without unsafe-inline. Next merges
+// headers() and middleware response headers by overwriting same-named keys, so
+// exactly ONE Content-Security-Policy header reaches the wire — this one. It
+// therefore also carries the frame pair's CSP leg (frame-ancestors 'none',
+// issue 677), single-sourced here; next.config keeps only the X-Frame-Options
+// fallback. No default-src (which would silently constrain styles, images and
+// connects this app has not audited), no unsafe-inline and no unsafe-eval (the
+// nonce plus strict-dynamic replaces them). Next parses the nonce out of the
+// request's Content-Security-Policy header and applies it to its own scripts
+// automatically, so the request and the response carry the same value.
 
 export function middleware(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
-  const contentSecurityPolicyHeaderValue = `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`;
+  const contentSecurityPolicyHeaderValue = `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'; frame-ancestors 'none'`;
 
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
