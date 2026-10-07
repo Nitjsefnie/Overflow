@@ -20,10 +20,14 @@
 // Issue 1054 generalises the same mechanism into a keyed limiter for the
 // expensive routes: one bucket PER KEY, with the burst size and refill rate
 // of each key's class supplied by the caller on every admit (the route layer
-// derives them from configuration). The keys are caller-assigned identities,
-// so the per-key isolation is only as strong as the key derivation — an
-// unauthenticated, spoofable key buys nothing, which is why the webhook
-// receivers above keep their deliberately shared single bucket.
+// derives them from configuration). The registry has no eviction: a key's
+// bucket lives as long as the process, so the key space must be bounded.
+// The keys are caller-assigned identities, so the per-key isolation is only
+// as strong as the key derivation — an unauthenticated, spoofable key buys
+// nothing, which is why the webhook receivers above keep their deliberately
+// shared single bucket. The route wiring must therefore derive keys from
+// bounded identities (authenticated user or account ids), never raw request
+// IPs.
 //
 // Standard token bucket: refilling is a function of elapsed time alone and
 // happens on every admit, whether or not it succeeds — a declined caller's
@@ -91,8 +95,10 @@ function refillTo(
 /**
  * Seconds until the bucket next admits, as a ceiling: the deficit to one
  * token converted at the refill rate. `Infinity` when `refillPerMinute` is
- * 0 — a bucket that never refills never admits again. Only meaningful after
- * a decline (a decline guarantees tokens < 1, so the deficit is positive).
+ * 0 — a bucket that never refills never admits again. Assumes capacity ≥ 1:
+ * a capacity-0 bucket declines forever while this math keeps reporting a
+ * finite retry. Only meaningful after a decline (a decline guarantees
+ * tokens < 1, so the deficit is positive).
  */
 function secondsUntilNextAdmit(tokens: number, refillPerMinute: number): number {
   return Math.ceil((((1 - tokens) / refillPerMinute) * 60_000) / 1000);
@@ -133,7 +139,12 @@ export interface AdmitOptions {
    * a fresh budget and defeat the limit.
    */
   capacity: number;
-  /** Tokens restored per 60,000 ms of elapsed time, capped at capacity. */
+  /**
+   * Tokens restored per 60,000 ms of elapsed time, capped at capacity. 0
+   * makes `retryAfterSeconds` `Infinity` — validate env-derived values > 0
+   * (and capacity ≥ 1) at the wiring boundary, before any of this reaches a
+   * response header.
+   */
   refillPerMinute: number;
   /**
    * Evaluated at this instant when given; otherwise the limiter's injected
