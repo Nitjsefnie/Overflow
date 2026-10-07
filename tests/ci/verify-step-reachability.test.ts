@@ -1567,14 +1567,15 @@ const SUPPRESSION_PIN_RUN_TEXT = [
   "# Projects one side's pnpm-workspace.yaml (a blob id, or the ABSENT sentinel)",
   "# to the canonical form of its audit-affecting settings. Absent compares equal",
   "# to a file carrying none of the audited keys; identical bytes cannot diverge,",
-  "# so identical blob ids never reach the parse (and a runner missing PyYAML",
-  "# only ever reds a pull request that CHANGED the file).",
+  "# so identical blob ids never reach the parse — the PyYAML install below runs",
+  "# only when a side actually needs judging, and a runner without a working",
+  "# module only ever reds a pull request that CHANGED the file.",
   "ws_value_of() {",
   "  if [ \"${1:?}\" = \"ABSENT\" ]; then",
   "    printf 'absent\\n'",
   "    return 0",
   "  fi",
-  "  git cat-file blob \"${1:?}\" | python3 -c \"${ws_pre_parse}\"",
+  "  git cat-file blob \"${1:?}\" | PYTHONPATH=\"${pyyaml_site}${PYTHONPATH:+:${PYTHONPATH}}\" python3 -c \"${ws_pre_parse}\"",
   "}",
   "",
   "# Projects one side's .npmrc to the canonical form of its audit-affecting",
@@ -1638,7 +1639,7 @@ const SUPPRESSION_PIN_RUN_TEXT = [
   "try:",
   "    import yaml",
   "except ImportError:",
-  "    sys.stderr.write(\"::error::python3 has no yaml module; refusing to judge pnpm-workspace.yaml without it — the runner image is expected to ship PyYAML, and a missing module is a red run, never a silent pass\\n\")",
+  "    sys.stderr.write(\"::error::python3 has no yaml module; refusing to judge pnpm-workspace.yaml without it — the hash-pinned install above provides it, so a missing module means the install failed and is a red run, never a silent pass\\n\")",
   "    sys.exit(1)",
   "try:",
   "    parsed = yaml.safe_load(text)",
@@ -1703,6 +1704,97 @@ const SUPPRESSION_PIN_RUN_TEXT = [
   "PY",
   ")",
   "",
+  "# The workspace parse needs PyYAML, and the runner image does not ship",
+  "# it. The module is installed from the BASE's hash-pinned manifest,",
+  "# read from git objects exactly like the zizmor gate above: a pull",
+  "# request can neither substitute the manifest (base-defined, not in",
+  "# the merge tree) nor the wheel content (--require-hashes), so the",
+  "# module the parse imports is what main pinned, never what the pull",
+  "# request carries. Called only when the two sides' pnpm-workspace.yaml",
+  "# blob ids differ — identical bytes cannot diverge, so identical",
+  "# trees skip the install (and its network round trip) entirely.",
+  "pyyaml_manifest_of() {",
+  "  entries=$(git ls-tree \"${1:?}\" -- \"${manifest}\")",
+  "  count=0",
+  "  entry_mode=\"\"",
+  "  entry_type=\"\"",
+  "  entry_blob=\"\"",
+  "  while IFS=$'\\t' read -r meta _path; do",
+  "    [ -n \"${meta}\" ] || continue",
+  "    count=$((count + 1))",
+  "    entry_mode=${meta%% *}",
+  "    rest=${meta#* }",
+  "    entry_type=${rest%% *}",
+  "    entry_blob=${rest#* }",
+  "  done <<< \"${entries}\"",
+  "  if [ \"${count}\" -eq 0 ]; then",
+  "    echo \"::error::.github/requirements-pyyaml.txt is missing from the base; the workspace gate judges pnpm-workspace.yaml with a hash-pinned PyYAML install and refuses without it — the manifest moves only through a maintainer-reviewed merge, like the list it installs for\" >&2",
+  "    exit 1",
+  "  fi",
+  "  if [ \"${count}\" -ne 1 ] || [ \"${entry_mode}\" != \"100644\" ] || [ \"${entry_type}\" != \"blob\" ]; then",
+  "    echo \"::error::.github/requirements-pyyaml.txt must be exactly one mode-100644 blob entry in the base; refusing. The manifest is read from git objects, never from the filesystem — a pull request can neither substitute it nor hide it — so a symlink leaf, a wrong mode, a non-blob type and an absent file are all refused.\" >&2",
+  "    exit 1",
+  "  fi",
+  "  printf '%s\\n' \"${entry_blob}\"",
+  "}",
+  "",
+  "# Validates the manifest by the pin grammar (pyyaml==VERSION followed",
+  "# by one to 32 --hash=sha256:HEX64 values) and writes the sanitized",
+  "# copy pip installs from — the zizmor pre-parse's shape, so no",
+  "# includes, index options, URL lines or environment markers ever",
+  "# reach pip.",
+  "pyyaml_manifest_pre_parse=$(cat <<'PY'",
+  "import os",
+  "import re",
+  "import sys",
+  "",
+  "data = sys.stdin.buffer.read()",
+  "if 65536 < len(data):",
+  "    sys.stderr.write(\"::error::the PyYAML manifest is larger than the 65536-byte cap; refusing\\n\")",
+  "    sys.exit(1)",
+  "if b\"\\x00\" in data:",
+  "    sys.stderr.write(\"::error::the PyYAML manifest carries a NUL byte, which is invalid content wherever it sits; refusing\\n\")",
+  "    sys.exit(1)",
+  "try:",
+  "    text = data.decode(\"utf-8\")",
+  "except UnicodeDecodeError:",
+  "    sys.stderr.write(\"::error::the PyYAML manifest is not valid UTF-8; refusing\\n\")",
+  "    sys.exit(1)",
+  "pin = re.compile(r\"pyyaml==[A-Za-z0-9][A-Za-z0-9._+-]*( --hash=sha256:[0-9a-f]{64}){1,32}\")",
+  "accepted = None",
+  "for number, line in enumerate(text.split(\"\\n\"), start=1):",
+  "    if line == \"\" or line.startswith(\"#\"):",
+  "        continue",
+  "    if accepted is not None:",
+  "        sys.stderr.write(f\"::error::line {number}: the PyYAML manifest carries a second requirement line; exactly one is allowed\\n\")",
+  "        sys.exit(1)",
+  "    if pin.fullmatch(line) is None:",
+  "        sys.stderr.write(f\"::error::line {number}: refused by the pin grammar — the one accepted shape is pyyaml==VERSION followed by one to 32 --hash=sha256:HEX64 values; includes, index options, URL lines, environment markers, CRLF and stray whitespace are refused\\n\")",
+  "        sys.exit(1)",
+  "    accepted = line",
+  "if accepted is None:",
+  "    sys.stderr.write(\"::error::the PyYAML manifest carries no requirement line; refusing\\n\")",
+  "    sys.exit(1)",
+  "with open(os.environ[\"PYAML_SANITIZED_REQUIREMENTS\"], \"w\", encoding=\"utf-8\", newline=\"\\n\") as handle:",
+  "    handle.write(accepted)",
+  "    handle.write(\"\\n\")",
+  "PY",
+  ")",
+  "",
+  "install_pyyaml() {",
+  "  manifest=.github/requirements-pyyaml.txt",
+  "  pyyaml_manifest=$(pyyaml_manifest_of \"${1:?}\")",
+  "  sanitized=\"${RUNNER_TEMP}/pyyaml-manifest-check\"",
+  "  if [ -e \"${sanitized}\" ] || [ -L \"${sanitized}\" ]; then",
+  "    echo \"::error::${sanitized} already exists; refusing to write the sanitized pin into a directory this run did not create\"",
+  "    exit 1",
+  "  fi",
+  "  mkdir -- \"${sanitized}\"",
+  "  git cat-file blob \"${pyyaml_manifest}\" | PYAML_SANITIZED_REQUIREMENTS=\"${sanitized}/requirements.txt\" python3 -c \"${pyyaml_manifest_pre_parse}\" || return 1",
+  "  pip install --no-deps --require-hashes --disable-pip-version-check --no-input --retries 2 --timeout 60 --target \"${sanitized}/site\" -r \"${sanitized}/requirements.txt\" || return 1",
+  "  printf '%s\\n' \"${sanitized}/site\"",
+  "}",
+  "",
   "base_blob=$(blob_of \"${BASE_SHA:?}\")",
   "merge_blob=$(blob_of \"${MERGE_SHA:?}\")",
   "base_value=$(value_of \"${base_blob}\") || exit 1",
@@ -1714,6 +1806,7 @@ const SUPPRESSION_PIN_RUN_TEXT = [
   "base_ws=$(optional_entry_of \"${BASE_SHA:?}\" \"${ws_file}\")",
   "merge_ws=$(optional_entry_of \"${MERGE_SHA:?}\" \"${ws_file}\")",
   "if [ \"${base_ws}\" != \"${merge_ws}\" ]; then",
+  "  pyyaml_site=$(install_pyyaml \"${BASE_SHA:?}\") || exit 1",
   "  base_ws_value=$(ws_value_of \"${base_ws}\") || exit 1",
   "  merge_ws_value=$(ws_value_of \"${merge_ws}\") || exit 1",
   "  if [ \"${base_ws_value}\" != \"${merge_ws_value}\" ]; then",
@@ -1932,17 +2025,24 @@ for (const scenario of PRT_SCENARIOS) {
       ).toEqual([]);
     });
 
-    it("sanctions the zizmor pin gate as the ONLY pip step, and only with the pinned argv", () => {
+    it("sanctions the zizmor and suppression gates as the ONLY pip steps, each byte-identical to its pin", () => {
       const pipSteps = selected().filter(runsPip);
       expect(
         pipSteps.map(label),
-        "the issue-1099 zizmor gate is the one step on this leg allowed to invoke pip or pip3; a " +
-          "second package-manager step must fail here, sanctioned or not",
-      ).toEqual([ZIZMOR_PIN_STEP_NAME]);
+        "the issue-1099 zizmor gate and the issue-1035 suppression gate are the only steps on " +
+          "this leg allowed to invoke pip or pip3 — the latter installs the hash-pinned PyYAML " +
+          "its workspace parse needs — and a third package-manager step must fail here, " +
+          "sanctioned or not",
+      ).toEqual([ZIZMOR_PIN_STEP_NAME, SUPPRESSION_STEP_NAME]);
       expect(
         isSanctionedZizmorPinStep(pipSteps[0]!),
         `the sanctioned step's run text drifted from the pinned shape — it must be byte-identical ` +
           `to ZIZMOR_PIN_RUN_TEXT in this file`,
+      ).toBe(true);
+      expect(
+        isSanctionedSuppressionStep(pipSteps[1]!),
+        `the sanctioned step's run text drifted from the pinned shape — it must be byte-identical ` +
+          `to SUPPRESSION_PIN_RUN_TEXT in this file`,
       ).toBe(true);
     });
 
@@ -2115,6 +2215,12 @@ for (const scenario of PRT_SCENARIOS) {
     it("writes nothing into the pull request tree or the workspace", () => {
       const offences: string[] = [];
       for (const step of selected()) {
+        // The suppression gate is byte-pinned (see the execution sanction
+        // above): its write surface — a sanitized manifest copy and the pip
+        // site, both under RUNNER_TEMP — is fixed by the pin, and the generic
+        // detector's bare-word rules (`pip install` names the file-moving word
+        // `install`) cannot apply to a text this fully known.
+        if (step.name === SUPPRESSION_STEP_NAME && isSanctionedSuppressionStep(step)) continue;
         for (const value of [step.with?.path, (step.with as Record<string, unknown> | undefined)?.["working-directory"]]) {
           if (value === undefined) continue;
           const text = String(value);
