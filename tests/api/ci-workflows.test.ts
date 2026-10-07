@@ -856,42 +856,33 @@ cp .github/workflows/*.yml .github/workflows-pr/
     });
   });
 
-  it("parses a lockfile audit that fires on a lockfile change, daily, and on demand", async () => {
+  it("parses a lockfile audit that fires on every push to main, daily, and on demand", async () => {
     const workflow = await readWorkflow("dependency-audit.yml");
-    // The whole `on`, because the shape IS the fix (issue 985): the audit used
-    // to run on `37 6 * * 1` and dispatch only, so a pull request adding a
-    // vulnerable package merged unaudited and an advisory against an unchanged
-    // pin went unreported for up to a week. The two path filters name the
-    // lockfile and the manifest and NOTHING else — this workflow must not
-    // spend a runner on an unrelated source edit — and `branches: [main]` on
-    // both legs matches ci.yml, actionlint.yml, ratchet-guard.yml and
-    // code-scanning.yml, so a feature branch's own pushes are covered by its
-    // pull_request run rather than by a second one. The pull-request leg
-    // carries the siblings' explicit `opened`/`synchronize`/`reopened`: with a
-    // path filter an `edited` event has nothing new to audit, and without one
-    // a retarget to main would carry a stale green.
+    // The whole `on`, because the shape IS the fix (issue 985 gave the audit
+    // its first pull-request trigger; issue 1149's rounds finished the job).
+    // The push trigger carries NO paths filter, deliberately: once branch
+    // protection requires `dependency-audit`, the deploy gate derives its
+    // required set from protection, so a push whose diff touched no manifest
+    // must still leave a green check-run — a filter would strand it with a
+    // MISSING context, which protection refuses, and every such deploy would
+    // be refused. The audit step itself classifies no-manifest pushes (an
+    // outcome, never a skip; tests/ci/dependency-audit-push.test.ts holds
+    // that). The pull_request trigger is gone entirely: the pull-request leg
+    // is dependency-audit-pr.yml, the issue-1090 split's base-defined
+    // pull_request_target file.
     expect(workflow.on).toEqual({
-      push: { branches: ["main"], paths: ["package.json", "pnpm-lock.yaml"] },
-      pull_request: {
-        branches: ["main"],
-        types: ["opened", "synchronize", "reopened"],
-        paths: ["package.json", "pnpm-lock.yaml"],
-      },
+      push: { branches: ["main"] },
       schedule: [{ cron: "37 6 * * *" }],
       workflow_dispatch: null,
     });
     expect(workflow.permissions).toEqual({ contents: "read" });
-    // Issue 1149 made `dependency-audit` a required context, so the old
-    // per-pull-request group with its cancel expression had to go:
-    // tests/ci/concurrency.test.ts refuses a pull-request-reachable
-    // required-context producer a per-PR group (the 1034 precedent), and a
-    // cancelled conclusion on a required context blocks the pull request no
-    // later push unblocks. The shape is the bounded event-class form: a
-    // pull-request arrival shares one repository-level group, and every other
-    // leg — push, schedule, dispatch — falls through to a private per-SHA
-    // group, so no push to main ever shares a group with another event.
+    // The issue-1090 split is complete for this file: no pull-request trigger
+    // reaches it, so the per-SHA group is the sibling push files' shape — no
+    // two pushes share a group, so a cancelled conclusion on a merged SHA
+    // makes the deploy gate refuse immediately (issue 474). The
+    // repository-level bound lives on dependency-audit-pr.yml.
     expect(workflow.concurrency).toEqual({
-      group: "dependency-audit-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+      group: "dependency-audit-${{ github.sha }}",
       "cancel-in-progress": false,
     });
 
@@ -941,7 +932,11 @@ cp .github/workflows/*.yml .github/workflows-pr/
       steps: [
         {
           uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-          with: { "persist-credentials": false },
+          // Full history for the audit step's fast-path ancestor check: the
+          // previous tip must be present and provably an ancestor of the
+          // pushed HEAD, or the classification falls through to the full
+          // audit (safe, but never fast).
+          with: { "persist-credentials": false, "fetch-depth": 0 },
         },
         {
           name: "Refuse a pull request that changes the audit suppression list",
@@ -959,7 +954,37 @@ cp .github/workflows/*.yml .github/workflows-pr/
         },
         {
           name: "Audit lockfile advisories",
-          run: `set -uo pipefail
+          // The fast path's two inputs, delivered through env like every
+          // event value (no ${{ }} in run blocks). github.event.before is
+          // the previous tip on main for a push, and the all-zeros SHA when
+          // there is no previous tip — a new branch or a force push.
+          env: {
+            EVENT_NAME: "${{ github.event_name }}",
+            BEFORE_SHA: "${{ github.event.before }}",
+          },
+          run: `# THE FAST PATH IS AN OUTCOME, NOT A SKIP (issue 1149 fix round 2).
+# The deploy gate derives its required set from branch protection,
+# so a push whose diff touched no manifest must still leave a green
+# dependency-audit check-run — a skipped audit would strand it. The
+# manifest and the lockfile ARE the audit's inputs, so a push that
+# changed neither cannot have changed what the audit reads, and the
+# green verdict is recorded here without asking the registry. The
+# branch is gated to push events, and EVERY ambiguity falls through
+# to the full audit below: a before-SHA that is not 40 hex, the
+# all-zeros SHA, a before commit missing from the checkout, a before
+# that is not an ancestor of the pushed HEAD, and a diff error are
+# all ambiguity, and ambiguity audits. The schedule and dispatch
+# legs never enter this branch — they audit unconditionally.
+if [ "\${EVENT_NAME:?}" = "push" ] \\
+  && [[ "\${BEFORE_SHA:?}" =~ ^[0-9a-f]{40}$ ]] \\
+  && [ "\${BEFORE_SHA}" != "0000000000000000000000000000000000000000" ] \\
+  && git cat-file -e "\${BEFORE_SHA}^{commit}" 2>/dev/null \\
+  && git merge-base --is-ancestor "\${BEFORE_SHA}" HEAD 2>/dev/null \\
+  && git diff --quiet "\${BEFORE_SHA}" HEAD -- package.json pnpm-lock.yaml; then
+  echo "no manifest change since the previous push — audit skipped, context green"
+  exit 0
+fi
+set -uo pipefail
 attempts=3
 delay="\${DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS:-30}"
 for attempt in $(seq 1 "$attempts"); do

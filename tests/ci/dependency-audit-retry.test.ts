@@ -480,10 +480,12 @@ describe("the dependency audit workflow's audit step", () => {
   });
 
   it("executes nothing from the pull request, and reads the lockfile as data", () => {
-    // Issue 985's scope guard: the audit reads pnpm-lock.yaml and queries the
-    // registry's advisory endpoint. It never runs anything the pull request
-    // authored, because on a `pull_request` event the checkout IS the pull
-    // request. Each of the three shapes that would break that boundary is
+    // Issue 985's scope guard, held across the leg split: the audit reads
+    // pnpm-lock.yaml and queries the registry's advisory endpoint, and never
+    // runs anything out of the checked-out tree. This file's legs are push,
+    // schedule and dispatch of main's own tip; the pull-request leg is
+    // dependency-audit-pr.yml, which materializes the manifests as data for
+    // the same reason. Each of the shapes that would break the boundary is
     // denied by name rather than left to a whole-job diff.
     const checkout = steps.filter((step) => step.uses?.startsWith("actions/checkout"));
     expect(checkout).toHaveLength(1);
@@ -502,9 +504,11 @@ describe("the dependency audit workflow's audit step", () => {
 
   it("keeps the retry inside the workflow, where a pull request cannot replace it", () => {
     // The classifier is a run-script step rather than a module under
-    // `scripts/`, and that placement IS the fork boundary: on a
-    // `pull_request` event `actions/checkout` checks out the pull request, so
-    // `node scripts/<anything>.ts` would execute the pull request's copy of it.
+    // `scripts/`, and that placement is the fork boundary of issue-985's
+    // original `pull_request` leg — the discipline both legs keep: a
+    // pull-request leg's checkout IS the pull request, so
+    // `node scripts/<anything>.ts` would execute the pull request's copy,
+    // and a gate's logic stays where the trigger cannot substitute it.
     const run = auditSteps[0]?.run ?? "";
     expect(run).not.toMatch(/\bnode\s+(\.\/)?scripts\//);
     expect(run).not.toMatch(/\bbash\s+(\.\/)?scripts\//);
@@ -709,6 +713,11 @@ describe("the dependency audit workflow's audit step", () => {
         ...process.env,
         PATH: `${join(home, "bin")}:${process.env.PATH}`,
         AUDIT_STUB_DIR: home,
+        // These cases exercise the classifier and its retry budget, so they
+        // simulate a leg that audits unconditionally: the fast path's event
+        // gate short-circuits on anything but push, and BEFORE_SHA stays
+        // unset exactly as the schedule and dispatch legs receive it.
+        EVENT_NAME: "schedule",
       };
       // Omitting the key entirely is how the shipped default is exercised.
       if (options?.delaySeconds !== undefined) {
@@ -874,8 +883,8 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("does not blame the registry when there was no lockfile to audit", () => {
-      // A pull request that DELETES pnpm-lock.yaml still triggers this workflow
-      // — the path filter names that file — and pnpm then answers
+      // A push that DELETES pnpm-lock.yaml still triggers this workflow — the
+      // trigger is unfiltered (issue 1149 fix round 2) — and pnpm then answers
       // ERR_PNPM_AUDIT_NO_LOCKFILE. No registry was asked and none failed, so
       // the `unreachable` label ("an answered or unconnected registry") is
       // wrong on both halves, and a reader who believes it goes looking for an
