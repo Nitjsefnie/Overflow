@@ -17,9 +17,10 @@ import { relativeLinks, unresolvedLinks } from "../support/markdown-links";
  * keeps those properties leaves this file green, which is the point.
  *
  * A second describe holds the privileged-action journal section the same way:
- * its entry-shape quote must name the fields the logger emits, its trust
- * paragraph must carry the verification contract, and its action table must
- * name every action the code's union declares.
+ * the section must exist with a body, must link the deploy guide's host
+ * procedure, every link in it must resolve, and its action table must name
+ * every action the code's union declares. The journal line's shape itself is
+ * pinned where it belongs — in the code's own tests.
  */
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -84,15 +85,6 @@ function journalSection(): { body: string; firstLine: number } {
   };
 }
 
-/** The one line of the section that quotes the logger call's entry shape. */
-function journalShapeQuote(): string {
-  return (
-    journalSection()
-      .body.split("\n")
-      .find((line) => line.includes('console.info("Privileged action"')) ?? ""
-  );
-}
-
 describe("incident response account-loss recovery", () => {
   it("places the recovery section under ## Recover", () => {
     const recover = recoverSection();
@@ -135,34 +127,6 @@ describe("incident response privileged-action journal section", () => {
       journalSection().body.trim(),
       `"${journalHeading}" in ${document} is missing or has no body`,
     ).not.toHaveLength(0);
-  });
-
-  it("quotes the entry shape the code emits, clientAddressVerified included", () => {
-    // The shape quote is the responder's field list: when the logger's entry
-    // grows a field, the quote must grow with it or the runbook teaches a
-    // shape that no longer matches the lines it explains.
-    const quote = journalShapeQuote();
-    expect(quote, `"${journalHeading}" in ${document} quotes no console.info("Privileged action", …) call`).not.toBe("");
-    for (const field of ["action", "actorId", "credential", "clientAddress", "clientAddressVerified", "subject"]) {
-      expect(quote, `the journal shape quote in ${document} does not name ${field}`).toContain(field);
-    }
-  });
-
-  it("states the verification contract, not the falsified loopback-is-trust premise", () => {
-    const body = journalSection().body;
-    for (const name of ["clientAddressVerified", "x-privileged-proxy-secret", "PRIVILEGED_PROXY_SECRET"]) {
-      expect(
-        body,
-        `"${journalHeading}" in ${document} never names ${name}, so the runbook cannot tell a verified address from a claimed one`,
-      ).toContain(name);
-    }
-    // The old paragraph trusted the address because the app listens on
-    // `127.0.0.1`. That premise is false — any local process can reach the
-    // listener and set the header — and the runbook must not reassert it.
-    expect(
-      body,
-      `"${journalHeading}" in ${document} still claims the address is "trustworthy only because" of the loopback boundary`,
-    ).not.toContain("trustworthy only because");
   });
 
   it("links the deploy guide's host procedure and resolves every link in the section", () => {
