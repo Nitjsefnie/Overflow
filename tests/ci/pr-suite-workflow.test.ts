@@ -361,9 +361,13 @@ describe("the pull request suite workflow", () => {
   });
 
   it("names no job after a required context", async () => {
-    const required = Object.keys(
-      JSON.parse(await readFile(resolve(".github/required-checks.json"), "utf8")) as Record<string, string>,
+    // A pin may name several files (issue 1090's split), so the value type is
+    // the accurate one: a `Record<string, string>` annotation would repeat the
+    // same lie the removed `as` cast told.
+    const requiredChecks: Record<string, string | string[]> = JSON.parse(
+      await readFile(resolve(".github/required-checks.json"), "utf8"),
     );
+    const required = Object.keys(requiredChecks);
     expect(required.sort()).toEqual(["actionlint", "ratchet-guard", "secret-scan", "verify"]);
     for (const [id, job] of Object.entries(workflow.jobs)) {
       expect(required).not.toContain(id);
