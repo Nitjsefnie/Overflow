@@ -1968,42 +1968,63 @@ describe("runRelay", () => {
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
     });
 
-    it("keeps the byte-identical throw for a fork head even when the liveness listing would say dead", async () => {
-      // A known fork name throws before the listing is consulted: whether
-      // commits/{sha}/pulls surfaces a fork PR's head is unverified.
-      const fetchStub = makeFetch([
-        token(),
-        untrustedFetchedRun({ head_repository: { full_name: "someone-else/fork" } }),
-        pullsListing([]),
-      ]);
-      const error = await caughtError(relay(dispatchEnv(), fetchStub));
+    it("downgrades a dispatch-path fork head's refusal to the exit-0 no-op when the fork listing says dead (issue 1142)", async () => {
+      // Issue 1142 reverses the old fork throw: the owner comes from a
+      // second run-body fetch, the open pulls at `head=<owner>:<branch>`
+      // decide, and an empty listing is a dead head, so the refusal exits 0.
+      const forkPullsUrl =
+        `https://api.github.com/repos/Nitjsefnie/Overflow/pulls?state=open` +
+        `&head=${encodeURIComponent("someone-else:feature/some-branch")}&per_page=100`;
+      const forkBody =
+        untrustedFetchedRun({ head_repository: { full_name: "someone-else/fork", owner: { login: "someone-else" } } });
+      const fetchStub = makeFetch([token(), forkBody, forkBody, { status: 200, body: [] }]);
+      const result = await relay(dispatchEnv(), fetchStub);
 
-      expect(error, "a fork head must keep the refusal visible").toBeInstanceOf(Error);
-      expect(error?.message, "the message stays byte-identical").toBe(REFUSAL);
-      // The listing was never consulted: the fork is decided from the run body.
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL]);
+      expect(result.posted).toEqual([]);
+      expect(result.refusedDeadHead, "a dead fork head exits 0 through the refusal").toBe(REFUSAL);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([
+        TOKEN_URL,
+        RUN_URL,
+        RUN_URL,
+        forkPullsUrl,
+      ]);
+      expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
+      expect(renderRelayResult(result)).toEqual([
+        `[ledger-relay] ${REFUSAL}`,
+        "[ledger-relay] no open pull request is waiting at this head",
+      ]);
     });
 
-    it("throws for a workflow_run fork head: the run body is fetched to learn the head repository, and the listing is never consulted", async () => {
-      // PM-measured: a fork head's commit resolves in this repository
-      // (the listing reads 200, count 0), so the gate fetches the run body
-      // to learn the head repository and a fork name keeps the throw.
+    it("downgrades a workflow_run fork head's refusal to the exit-0 no-op when the fork listing says dead (issue 1142)", async () => {
+      // Issue 1142 reverses the old throw: the run body now also carries the
+      // fork's owner login, and the open pulls at `head=<owner>:<branch>`
+      // decide; an empty listing is a dead head, so the refusal exits 0.
+      const forkPullsUrl =
+        `https://api.github.com/repos/Nitjsefnie/Overflow/pulls?state=open` +
+        `&head=${encodeURIComponent("someone-else:feature/some-branch")}&per_page=100`;
       const fetchStub = makeFetch([
         token(),
         fetchedRun({
           event: "pull_request",
           head_branch: "feature/some-branch",
-          head_repository: { full_name: "someone-else/fork" },
+          head_repository: { full_name: "someone-else/fork", owner: { login: "someone-else" } },
         }),
-        pullsListing([]),
+        { status: 200, body: [] },
       ]);
-      const error = await caughtError(relay(untrustedWorkflowRunEnv(), fetchStub));
+      const result = await relay(untrustedWorkflowRunEnv(), fetchStub);
 
-      expect(error, "a fork head must keep the refusal visible").toBeInstanceOf(Error);
-      expect(error?.message, "the message stays byte-identical").toBe(REFUSAL);
-      // Token mint and run fetch only: the listing was never consulted.
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL]);
+      expect(result.posted).toEqual([]);
+      expect(result.refusedDeadHead, "a dead fork head exits 0 through the refusal").toBe(REFUSAL);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([
+        TOKEN_URL,
+        RUN_URL,
+        forkPullsUrl,
+      ]);
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
+      expect(renderRelayResult(result)).toEqual([
+        `[ledger-relay] ${REFUSAL}`,
+        "[ledger-relay] no open pull request is waiting at this head",
+      ]);
     });
 
     it.each([
