@@ -193,6 +193,111 @@ jobs:
         with:
           persist-credentials: false
 
+      # Issue 1035, defence in depth. The audit honours the audit suppression
+      # list the pull request writes into package.json (pnpm.auditConfig), so
+      # before auditing, this leg deep-compares the pull request's package.json
+      # against the pull request's BASE, fetched by its pinned event SHA, and
+      # refuses divergence — the audit then never runs on a divergent list, and
+      # a red here says the list moved without a maintainer-reviewed merge.
+      #
+      # THIS LEG IS ADVISORY. It is defined by the pull request's own workflow
+      # copy — this workflow runs under pull_request, so the checkout IS the
+      # pull request — and the pull request could edit or delete the step. The
+      # LOAD-BEARING guard is the same comparison in ci-pr.yml's verify job:
+      # that job is base-defined and required, so a hostile pull request cannot
+      # remove it and a red blocks the merge. package.json is still read as git
+      # objects on both sides (ls-tree single-blob discipline, 65536-byte cap,
+      # NUL and UTF-8 refusals, an inline python pre-parse emitting the
+      # canonical form of .pnpm.auditConfig, structural comparison; removal of
+      # the key counts as divergence), and every refusal is a fixed constant
+      # carrying no pull-request bytes. Measured with the repository's other
+      # gates: identical lists exit 0 silently.
+      - name: Refuse a pull request that changes the audit suppression list
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          file=package.json
+          
+          # Reads a commit's package.json as git objects with the ls-tree single-blob
+          # discipline: exactly one mode-100644 blob entry at package.json, or refuse.
+          # Prints the blob id on stdout.
+          blob_of() {
+            entries=$(git ls-tree "${1:?}" -- "${file}")
+            count=0
+            entry_mode=""
+            entry_type=""
+            entry_blob=""
+            while IFS=$'\t' read -r meta _path; do
+              [ -n "${meta}" ] || continue
+              count=$((count + 1))
+              entry_mode=${meta%% *}
+              rest=${meta#* }
+              entry_type=${rest%% *}
+              entry_blob=${rest#* }
+            done <<< "${entries}"
+            if [ "${count}" -ne 1 ] || [ "${entry_mode}" != "100644" ] || [ "${entry_type}" != "blob" ]; then
+              echo "::error::package.json must be exactly one mode-100644 blob entry in a tree; refusing. The suppression list is read from git objects, never from the filesystem, so a symlink leaf, a wrong mode, a non-blob type and an absent file are all refused." >&2
+              exit 1
+            fi
+            printf '%s\n' "${entry_blob}"
+          }
+          
+          # Pipes the named blob through the inline python pre-parse, which emits the
+          # CANONICAL form of .pnpm.auditConfig: sort_keys and compact separators make
+          # the dump uniquely parseable back to one value, so string equality of the two
+          # sides is structural equality - key order, indentation and escaping in
+          # package.json never reach the comparison, while every nested value and the
+          # order of the ignoreGhsas list itself do.
+          value_of() {
+            git cat-file blob "${1:?}" | python3 -c "${pre_parse}"
+          }
+          
+          pre_parse=$(cat <<'PY'
+          import json
+          import sys
+          
+          data = sys.stdin.buffer.read()
+          if 65536 < len(data):
+              sys.stderr.write("::error::package.json is larger than the 65536-byte cap; refusing\n")
+              sys.exit(1)
+          if b"\x00" in data:
+              sys.stderr.write("::error::package.json carries a NUL byte, which is invalid content wherever it sits; refusing\n")
+              sys.exit(1)
+          try:
+              text = data.decode("utf-8")
+          except UnicodeDecodeError:
+              sys.stderr.write("::error::package.json is not valid UTF-8; refusing\n")
+              sys.exit(1)
+          try:
+              parsed = json.loads(text)
+          except ValueError:
+              sys.stderr.write("::error::package.json does not parse as JSON; refusing\n")
+              sys.exit(1)
+          config = None
+          if isinstance(parsed, dict):
+              pnpm = parsed.get("pnpm")
+              if isinstance(pnpm, dict):
+                  config = pnpm.get("auditConfig")
+          if config is None:
+              sys.stdout.write("absent")
+          else:
+              sys.stdout.write(json.dumps(config, sort_keys=True, separators=(",", ":")))
+          PY
+          )
+          
+          if ! git fetch --quiet --depth=1 origin "${BASE_SHA:?}"; then
+            echo "::error::could not fetch the pull request's base commit; refusing to judge the suppression list without it" >&2
+            exit 1
+          fi
+          base_blob=$(blob_of FETCH_HEAD)
+          merge_blob=$(blob_of HEAD)
+          base_value=$(value_of "${base_blob}") || exit 1
+          merge_value=$(value_of "${merge_blob}") || exit 1
+          if [ "${base_value}" != "${merge_value}" ]; then
+            echo "::error::this pull request changes pnpm.auditConfig; a pull request cannot change the audit suppression list — the list moves only through a maintainer-reviewed merge"
+            exit 1
+          fi
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.17.0"
