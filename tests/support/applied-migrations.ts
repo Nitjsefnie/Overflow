@@ -67,4 +67,5 @@ export const appliedMigrationNames: readonly string[] = [
   "059_session_epoch.sql",
   "060_sanction_deactivation_flag.sql",
   "061_sanction_contest_requests.sql",
+  "062_webhook_delivery_body_digest.sql",
 ];
