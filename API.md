@@ -90,6 +90,7 @@ Failures use `{ "error": { "code": "...", "message": "..." } }`:
 | 403 | `FORBIDDEN` | `The request origin is not allowed.` | The request carried no `Origin` header or one that is not the origin of `APP_URL`. Mint the token from the Overflow page in the browser. |
 | 403 | `REAUTHENTICATION_REQUIRED` | `Confirm your GitHub sign-in to issue an API token.` | The session's last GitHub sign-in was more than 10 minutes ago, or the session predates this check. Sign in with GitHub again from the panel, then generate the token. |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` | The request declared a `Content-Type` that is not `application/json`. Send no `Content-Type` at all, or send `application/json`. |
+| 429 | `RATE_LIMITED` | `Too many requests of this kind. Retry after the number of seconds the Retry-After header names.` | The account's hourly minting bound (`RATE_LIMIT_TOKENS_PER_HOUR`, default 5) is spent. Wait out the response's `Retry-After` interval, then retry. |
 | 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | The deployment's `APP_URL` is missing or malformed, so it cannot recognize its own origin. Fix the server configuration; nothing about the request will help. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to issue an API token.` | Session lookup or token storage failed; retry when the service recovers. |
 
@@ -358,6 +359,7 @@ status and code, then use the message to distinguish causes:
 | 409 | `CONFLICT` | `The GitHub webhook created for the submitted repository collided with one a different registration already records. The submitted repository is not registered. Registering again requests a new webhook from GitHub, so retry once before treating this as stored state that has to be resolved.` | The submitted repository has never been registered. The collision is on the webhook id GitHub returned for the hook this attempt created, and registering again requests another webhook, so retry once first. Only a collision that repeats points at stored state that has to be resolved. |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` | The request declared a `Content-Type` that is not `application/json`. This applies to bearer-token requests too, and is answered before the token is looked up. |
 | 429 | `GITHUB_RATE_LIMITED` | `GitHub rate-limited the request to <step> (HTTP <status>). Please retry registration later.` | GitHub limited a setup step. `<status>` is 429, or 403 carrying rate-limit evidence; GitHub may append a `Retry after <N> seconds.` sentence when it supplies a delay, and the message ends with the retry instruction either way. Wait out the delay if given, then retry. `<step>` is `read its granted permissions` when the limit hit the granted-scope check that precedes every GitHub registration, otherwise the lookup, label-read, or webhook-create step. |
+| 429 | `RATE_LIMITED` | `Too many requests of this kind. Retry after the number of seconds the Retry-After header names.` | The credential's hourly bound of repository changes (`RATE_LIMIT_REPOSITORIES_PER_HOUR`, default 10) is spent; registration, catalog change and unregistration draw on it together, keyed by the credential that acts. Wait out the response's `Retry-After` interval, then retry. |
 | 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | The deployment's `APP_URL` is missing or malformed. Only a browser request reaches this; a bearer-token request does not read `APP_URL`. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to initialize repository registration.` | Credential/session lookup or registration setup failed; check service configuration and account GitHub access before retrying. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to retrieve the submitted GitHub repository.` | GitHub repository lookup failed; check the reference, access, and GitHub availability. |
@@ -498,6 +500,7 @@ All three methods answer failures through `{ "error": { "code": "...", "message"
 | 404 | `NOT_FOUND` | `No such forge identity is linked to this account.` (DELETE): the id is absent or belongs to another account. |
 | 413 | `PAYLOAD_TOO_LARGE` | `The request body is too large.` (writes): the body exceeds `4 KiB`. |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` (writes): a declared non-JSON media type. |
+| 429 | `RATE_LIMITED` | `Too many requests of this kind. Retry after the number of seconds the Retry-After header names.` (writes): the account's hourly bound of link and unlink operations (`RATE_LIMIT_FORGE_IDENTITIES_PER_HOUR`, default 5) is spent. Wait out the response's `Retry-After` interval, then retry. |
 | 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` (writes): `APP_URL` is absent or malformed. |
 | 502 | `UPSTREAM_FAILURE` | (All methods) Session lookup or store construction failed; (GET) the identity list read failed; (POST/DELETE) the live account-role lookup failed, the link/unlink service returned this code, or another error was thrown during linking/unlinking. Session, store, list, live-role, and unexpected link/unlink failures use `The forge identity operation could not complete.`; a service `UPSTREAM_FAILURE` uses the service's message. |
 | 503 | `CONFIGURATION` | `Token encryption is not configured.` (POST): set `TOKEN_ENCRYPTION_KEY` on the server. |
@@ -542,6 +545,7 @@ describes what the deletion retains and scrubs.
 | 409 | `SPONSOR_BLOCKED` | `Unregister your sponsored repositories before deleting your account.` | DELETE: `error.repositories` lists registrations that must be unregistered first. |
 | 413 | `PAYLOAD_TOO_LARGE` | `The request body is too large.` | DELETE: body exceeds `4 KiB`. |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` | Both: a declared non-JSON media type. |
+| 429 | `RATE_LIMITED` | `Too many requests of this kind. Retry after the number of seconds the Retry-After header names.` | POST: the account's hourly export bound (`RATE_LIMIT_EXPORT_PER_HOUR`, default 3) is spent. Wait out the response's `Retry-After` interval, then retry. |
 | 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | Both: `APP_URL` is absent or malformed. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to export account data.` or `Unable to delete account.` | The corresponding session, database, or operation failed. |
 
@@ -777,6 +781,7 @@ error envelope:
 | 409 | `CONFLICT` | `This issue already has a correction request awaiting a moderator.` | (POST) The outcome already has an open request; wait for it to be decided instead of opening another. |
 | 409 | `CONFLICT` | `This correction request has already been decided.` | (PATCH) Another moderator decided it first. |
 | 422 | `INVALID_INPUT` | The message names the rule. | A blank reason, a missing identifier, or settled points outside 1 through 10. |
+| 429 | `RATE_LIMITED` | `Too many requests of this kind. Retry after the number of seconds the Retry-After header names.` | (POST) The account's hourly bound of correction requests (`RATE_LIMIT_OVERRIDES_PER_HOUR`, default 5) is spent, the same bound the MCP `correction_open` tool draws on. Wait out the response's `Retry-After` interval, then retry. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to complete the settlement correction request.` | The service behind the route failed; retry when it recovers. |
 
 ## Sanction contests

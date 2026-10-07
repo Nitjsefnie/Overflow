@@ -375,6 +375,8 @@ const routeLevelAnswers: Record<string, string> = {
   "Unable to initialize repository registration.": "the route's catch-all answers when registration itself fails unexpectedly",
   "The GitHub authorization Overflow holds for your account cannot administer repository webhooks: registration needs the admin:repo_hook scope. Use \"Sign in to register a repository\" to authorize webhook administration with the same GitHub account, then register again.":
     "the route's granted-scope check (issue 599, src/lib/auth/github-granted-scopes.ts) answers before registerRepository runs; pinned by tests/api/repositories.test.ts",
+  "Too many requests of this kind. Retry after the number of seconds the Retry-After header names.":
+    "the route's expensive-route bound (issue 1054, src/lib/security/route-rate-limit.ts) answers before registerRepository runs; pinned by tests/api/route-rate-limits.test.ts",
 };
 
 // One submission per catalog-validation message, each crafted so validating it fails on exactly
