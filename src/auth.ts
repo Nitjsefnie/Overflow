@@ -4,7 +4,14 @@ import type { UserRole } from "@/lib/db/types";
 import { getSql } from "@/lib/db/client";
 import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
 import { normalizeModeratorGitHubUserIds } from "@/lib/moderation/roles";
-import { credentialBinding, decryptToken, encryptToken, type CredentialBinding } from "@/lib/security/token-cipher";
+import {
+  credentialBinding,
+  decryptToken,
+  encryptToken,
+  tokenKeySetFrom,
+  type CredentialBinding,
+  type TokenKeySet,
+} from "@/lib/security/token-cipher";
 import {
   decideGitHubSignIn,
   readGitHubIdentity,
@@ -243,6 +250,12 @@ export async function upsertGitHubIdentity(
     ? "MODERATOR"
     : "MEMBER";
   const tokenBinding = credentialBinding.userOAuthToken(identity.githubUserId);
+  // The key set every reader of the column shares (the same tokenKeySetFrom
+  // shape the fold, repository and forge stores decrypt with): the current
+  // key seals, and a previous key, when configured, still opens what it
+  // sealed during a rotation window. Encryption of anything new stays on the
+  // current key; the stored-token probe decrypts with the whole set.
+  const tokenKeys = tokenKeySetFrom(tokenEncryptionKey, process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS);
   // Stored-token continuity (issue 1154): GitHub issues a new authorization
   // carrying only the scopes the sign-in requested, so a contributor sign-in
   // mints a zero-scope token that must not overwrite the token the sponsor's
@@ -264,7 +277,7 @@ export async function upsertGitHubIdentity(
     // only when the ruling could otherwise keep. This pre-check only decides
     // whether to spend it — the ruling below stays the sole decider.
     const storedTokenProbe = (probe.failed || !grantsWebhookAdministration(probe.grantedScopes)) && sponsorsRegisteredRepository
-      ? await probeStoredToken(existingToken, tokenEncryptionKey, tokenBinding, fetchImpl)
+      ? await probeStoredToken(existingToken, tokenKeys, tokenBinding, fetchImpl)
       : null;
     if (shouldKeepStoredGitHubToken({
       existingToken,
@@ -312,7 +325,8 @@ async function probeGrantedScopes(accessToken: string, fetchImpl: typeof fetch):
 
 /**
  * The stored token's own probe verdict: decrypt the stored bytes in-process
- * (the same key set and row binding that wrote them) and run the SAME
+ * (the same key set every reader of the column opens them with, current and
+ * previous, and the row binding that wrote them) and run the SAME
  * X-OAuth-Scopes probe the new token gets. GitHub ANSWERING 401/404 is the
  * authoritative dead answer — the authorization no longer exists on
  * GitHub's side — and an answer without an administration scope cannot serve
@@ -324,13 +338,13 @@ async function probeGrantedScopes(accessToken: string, fetchImpl: typeof fetch):
  */
 async function probeStoredToken(
   existingToken: Buffer,
-  tokenEncryptionKey: string,
+  tokenKeys: TokenKeySet,
   tokenBinding: CredentialBinding,
   fetchImpl: typeof fetch,
 ): Promise<StoredTokenProbeOutcome> {
   let storedAccessToken: string;
   try {
-    storedAccessToken = decryptToken(existingToken.toString("utf8"), tokenEncryptionKey, tokenBinding);
+    storedAccessToken = decryptToken(existingToken.toString("utf8"), tokenKeys, tokenBinding);
   } catch (error) {
     // The stored bytes cannot be opened under the configured keys: there is
     // no usable token to protect, so the new one is stored.

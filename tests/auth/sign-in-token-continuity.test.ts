@@ -29,8 +29,11 @@ let sql: Sql;
 let container: StartedTestContainer | undefined;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 const originalTokenKey = process.env.TOKEN_ENCRYPTION_KEY;
-// 43 base64url characters decode to exactly 32 bytes.
-const TOKEN_KEY = "A".repeat(43);
+const originalPreviousKey = process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS;
+// Two distinct 32-byte keys, encoded canonically (the same shape
+// tests/security/github-oauth-scope.test.ts uses).
+const TOKEN_KEY = Buffer.alloc(32, 1).toString("base64url");
+const PREVIOUS_KEY = Buffer.alloc(32, 2).toString("base64url");
 
 beforeAll(async () => {
   const started = await startPostgresContainer({
@@ -40,6 +43,8 @@ beforeAll(async () => {
   container = started.container;
   process.env.DATABASE_URL = started.databaseUrl;
   process.env.TOKEN_ENCRYPTION_KEY = TOKEN_KEY;
+  // A rotation window: the previous key still opens what it sealed.
+  process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS = PREVIOUS_KEY;
   sql = getSql();
   await runMigrations();
 });
@@ -51,6 +56,8 @@ afterAll(async () => {
   else process.env.DATABASE_URL = originalDatabaseUrl;
   if (originalTokenKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
   else process.env.TOKEN_ENCRYPTION_KEY = originalTokenKey;
+  if (originalPreviousKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS;
+  else process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS = originalPreviousKey;
   // The "@/auth" graph keeps this file's NextAuth stub until cleared.
   vi.resetModules();
 });
@@ -72,20 +79,28 @@ function identityFor(githubUserId: number): GitHubIdentity {
   };
 }
 
-function encryptFor(githubUserId: number, plaintext: string): Buffer {
-  return Buffer.from(encryptToken(plaintext, TOKEN_KEY, credentialBinding.userOAuthToken(githubUserId)), "utf8");
+function encryptFor(githubUserId: number, plaintext: string, key: string = TOKEN_KEY): Buffer {
+  return Buffer.from(encryptToken(plaintext, key, credentialBinding.userOAuthToken(githubUserId)), "utf8");
 }
 
-async function seedAccount(githubUserId: number, token: string): Promise<{ sponsorId: string; seededBytes: Buffer }> {
-  const seededBytes = encryptFor(githubUserId, token);
+async function seedAccount(
+  githubUserId: number,
+  token: string,
+  key: string = TOKEN_KEY,
+): Promise<{ sponsorId: string; seededBytes: Buffer }> {
+  return seedAccountBytes(githubUserId, encryptFor(githubUserId, token, key));
+}
+
+/** Plants stored bytes verbatim — for an envelope no configured key can open. */
+async function seedAccountBytes(githubUserId: number, encryptedAccessToken: Buffer): Promise<{ sponsorId: string; seededBytes: Buffer }> {
   const user = await upsertGitHubAccount({
     githubUserId,
     login: `stale-${githubUserId}`,
     avatarUrl: "https://avatars.example/stale.png",
     role: "MEMBER",
-    encryptedAccessToken: seededBytes,
+    encryptedAccessToken,
   }, sql);
-  return { sponsorId: user.id, seededBytes };
+  return { sponsorId: user.id, seededBytes: encryptedAccessToken };
 }
 
 async function storedTokenRow(githubUserId: number): Promise<{
@@ -105,7 +120,7 @@ async function storedTokenRow(githubUserId: number): Promise<{
     bytes,
     token: bytes === null
       ? null
-      : decryptToken(bytes.toString("utf8"), { current: TOKEN_KEY }, credentialBinding.userOAuthToken(githubUserId)),
+      : decryptToken(bytes.toString("utf8"), { current: TOKEN_KEY, previous: PREVIOUS_KEY }, credentialBinding.userOAuthToken(githubUserId)),
     login: row!.github_login,
     avatarUrl: row!.avatar_url,
   };
@@ -255,6 +270,38 @@ describe("sign-in token continuity in the storage path (issue 1154)", () => {
     });
 
     await upsertGitHubIdentity(identityFor(githubUserId), narrowToken, bothNarrow);
+
+    expect((await storedTokenRow(githubUserId)).token).toBe(narrowToken);
+  });
+
+  it("keeps a previous-key-sealed stored token that still answers capable", async () => {
+    const githubUserId = nextExternalId();
+    // Sealed under the previous key during a rotation window: every other
+    // reader of the column still opens it, and so must the probe.
+    const previousSealedToken = "stored-previous-key-token";
+    const { sponsorId, seededBytes } = await seedAccount(githubUserId, previousSealedToken, PREVIOUS_KEY);
+    await sponsorRepository(sponsorId);
+    const previousCapable: typeof fetch = perTokenProbe({
+      [previousSealedToken]: () => userResponse("admin:repo_hook, repo"),
+      [narrowToken]: () => userResponse(""),
+    });
+
+    await upsertGitHubIdentity(identityFor(githubUserId), narrowToken, previousCapable);
+
+    const stored = await storedTokenRow(githubUserId);
+    expect(stored.bytes).toEqual(seededBytes);
+    expect(stored.token).toBe(previousSealedToken);
+  });
+
+  it("stores the new token when the stored envelope cannot be decrypted at all", async () => {
+    const githubUserId = nextExternalId();
+    // Bytes no configured key can open: there is no usable token to protect,
+    // so the probe reads the stored token as not answerable and the new one
+    // is stored.
+    const { sponsorId } = await seedAccountBytes(githubUserId, Buffer.from("not-an-envelope", "utf8"));
+    await sponsorRepository(sponsorId);
+
+    await upsertGitHubIdentity(identityFor(githubUserId), narrowToken, contributorSignIn);
 
     expect((await storedTokenRow(githubUserId)).token).toBe(narrowToken);
   });
