@@ -68,7 +68,7 @@ export function createModerationAdjustmentPostHandler(dependencies: ModerationCr
         action: "credit-adjustment.create",
         actorId: session.user.id,
         credential: session.credential,
-        clientAddress: readClientAddress(request),
+        ...readClientAddress(request),
         subject: { adjustmentId: adjustment.id, targetAccountId: input.targetAccountId },
       });
       return Response.json({ adjustment }, { status: 201 });

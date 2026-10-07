@@ -671,6 +671,7 @@ describe("transport-to-wrapped-route composition", () => {
         actorId: memberId,
         credential: { kind: "token", tokenId: bearerTokenId },
         clientAddress: "2001:db8::17",
+        clientAddressVerified: false,
         subject: { auditId: openedAudit.id, targetAccountId },
       });
     } finally {

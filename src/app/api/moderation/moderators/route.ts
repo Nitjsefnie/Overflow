@@ -107,7 +107,7 @@ export function createModeratorPostHandler(dependencies: ModeratorRouteDependenc
         action: input.moderator ? "moderator-role.grant" : "moderator-role.revoke",
         actorId: session.user.id,
         credential: session.credential,
-        clientAddress: readClientAddress(request),
+        ...readClientAddress(request),
         subject: { targetAccountId: input.targetAccountId },
       });
       return Response.json({ change });

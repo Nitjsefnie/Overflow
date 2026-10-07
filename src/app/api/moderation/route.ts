@@ -103,7 +103,7 @@ export function createModerationPostHandler(dependencies: ModerationRouteDepende
         action: "audit.open",
         actorId: session.user.id,
         credential: session.credential,
-        clientAddress: readClientAddress(request),
+        ...readClientAddress(request),
         subject: { auditId: audit.id, targetAccountId: input.targetAccountId },
       });
       return Response.json({ audit }, { status: 201 });
@@ -144,7 +144,7 @@ export function createModerationClosePatchHandler(dependencies: ModerationRouteD
         action: "recalibration.close",
         actorId: session.user.id,
         credential: session.credential,
-        clientAddress: readClientAddress(request),
+        ...readClientAddress(request),
         subject: { targetAccountId: input.targetAccountId },
       });
       return Response.json({ recalibration });
