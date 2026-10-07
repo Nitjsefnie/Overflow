@@ -461,10 +461,10 @@ describe("the dependency audit workflow's audit step", () => {
   beforeAll(async () => {
     const workflow = parse(await readFile(resolve(".github/workflows/dependency-audit.yml"), "utf8")) as {
       env?: Record<string, string>;
-      jobs?: { audit?: { env?: Record<string, string>; steps?: Step[] } };
+      jobs?: { "dependency-audit"?: { env?: Record<string, string>; steps?: Step[] } };
     };
-    steps = workflow.jobs?.audit?.steps ?? [];
-    jobEnv = workflow.jobs?.audit?.env;
+    steps = workflow.jobs?.["dependency-audit"]?.steps ?? [];
+    jobEnv = workflow.jobs?.["dependency-audit"]?.env;
     // Read, not asserted: Actions merges workflow-level env into every job, so
     // a pin there is as effective as one on the job and this suite must not
     // fail a placement that works. The exact shape is the string pin's to own.

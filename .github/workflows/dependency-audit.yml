@@ -132,24 +132,31 @@ permissions:
   contents: read
 
 concurrency:
-  # One group per pull request, and cancellation true only on a pull-request
-  # event. On the schedule, push and dispatch legs
-  # github.event.pull_request.number is null, so the group falls through to
-  # github.ref and nothing cancels an in-flight run — the daily tick is never
-  # disturbed. On a pull-request event the group is dependency-audit-<number>,
-  # so the run a new push cancels is always that same pull request's superseded
-  # head, and the push that superseded it scheduled the replacement. Cancelling
-  # it costs nothing: an audit is reproducible from the next push, and this
-  # workflow produces no required check, so a cancelled run blocks no merge.
-  # (Not ci-pr.yml's shape, which is one repository-level group for every pull
-  # request: bounding this one there would cap the audit at a single run no
-  # matter how many pull requests are open. tests/ci/concurrency.test.ts holds
-  # the entry and the reasoning.)
-  group: dependency-audit-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Issue 1149 made `dependency-audit` a required context in
+  # .github/required-checks.json, so this workflow is a required-context
+  # producer and tests/ci/concurrency.test.ts refuses such a producer a
+  # per-pull-request group — a cancelled conclusion on a required context is
+  # the peer's blocked pull request, which no later push unblocks. The shape
+  # is the bounded event-class form shared with the sibling producers: a
+  # pull-request arrival joins one repository-level group, and every other
+  # leg — push, schedule, dispatch — falls through to a private per-SHA group,
+  # so no push to main shares a group with another event and the issue-474
+  # deploy-gate refusal can never fire on this workflow's own pushes.
+  #
+  # cancel-in-progress is the literal false, for the same reason: no in-flight
+  # run of a required context is ever destroyed. It does NOT stop GitHub
+  # cancelling the PENDING run when a newer arrival claims the repo-wide
+  # slot; that pull request stays blocked until its author pushes again.
+  # (ci-pr.yml's block and tests/ci/concurrency.test.ts hold the full
+  # argument and the measured rates.)
+  group: dependency-audit-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
+  cancel-in-progress: false
 
 jobs:
-  audit:
+  # The job id IS the required context's name: branch protection requires
+  # `dependency-audit` and the relay's decideContexts matches producing jobs
+  # by this name (issue 1149; formerly `audit`).
+  dependency-audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

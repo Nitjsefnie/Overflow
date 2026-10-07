@@ -881,9 +881,18 @@ cp .github/workflows/*.yml .github/workflows-pr/
       workflow_dispatch: null,
     });
     expect(workflow.permissions).toEqual({ contents: "read" });
+    // Issue 1149 made `dependency-audit` a required context, so the old
+    // per-pull-request group with its cancel expression had to go:
+    // tests/ci/concurrency.test.ts refuses a pull-request-reachable
+    // required-context producer a per-PR group (the 1034 precedent), and a
+    // cancelled conclusion on a required context blocks the pull request no
+    // later push unblocks. The shape is the bounded event-class form: a
+    // pull-request arrival shares one repository-level group, and every other
+    // leg — push, schedule, dispatch — falls through to a private per-SHA
+    // group, so no push to main ever shares a group with another event.
     expect(workflow.concurrency).toEqual({
-      group: "dependency-audit-${{ github.event.pull_request.number || github.ref }}",
-      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+      group: "dependency-audit-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+      "cancel-in-progress": false,
     });
 
     // The whole job, exactly, in the claim/pr-gate style: any extra key — a
@@ -911,7 +920,7 @@ cp .github/workflows/*.yml .github/workflows-pr/
     // the behavioural suite: exact equality makes drift impossible, so the only
     // cost of the copy is a partial edit leaving one side stale, which fails
     // loudly and immediately instead of quietly.
-    expect(workflow.jobs.audit).toEqual({
+    expect(workflow.jobs["dependency-audit"]).toEqual({
       "runs-on": "ubuntu-latest",
       "timeout-minutes": 10,
       // The env block is JOB-level and that is load-bearing, not tidiness:

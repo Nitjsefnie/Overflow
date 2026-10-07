@@ -148,6 +148,26 @@ const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = 
     group: "event-policy-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
   },
+  // Issue 1149 pins `dependency-audit` as a required context, produced by the
+  // push/schedule/dispatch leg (dependency-audit.yml) and the new
+  // pull_request_target leg (dependency-audit-pr.yml). Both files are
+  // pull-request-reachable required-context producers, so the suite's rule
+  // puts each of them here: one repository-level group per file, cancel
+  // false. On the push, schedule and dispatch legs the event test is false and
+  // the group falls through to github.sha, so a push run keeps its private
+  // per-SHA group — the same behavior the sibling push files ship
+  // unbounded-with-reason — while a pull-request arrival lands in the single
+  // repo-wide group instead of a per-pull-request one. The two files' groups
+  // differ (…-repo-wide vs …-pr-repo-wide), so the two producers never cancel
+  // each other's pending runs.
+  "dependency-audit.yml": {
+    group: "dependency-audit-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+    "cancel-in-progress": false,
+  },
+  "dependency-audit-pr.yml": {
+    group: "dependency-audit-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+    "cancel-in-progress": false,
+  },
 };
 
 /**
@@ -357,17 +377,6 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     },
   ],
   [
-    "dependency-audit.yml",
-    {
-      reason:
-        "Issue 985 gave this workflow a pull_request trigger, so the arm of its group that used to be dead now fires: on a pull-request event github.event.pull_request.number resolves and the group is dependency-audit-<number> rather than a per-ref fallback. That makes this the SECOND shape of justification in this table, and the difference is the point. Bounding it repository-wide would cap the audit at one run no matter how many pull requests are open, so the open-pull-request count would again decide how quickly an advisory surfaces — the aggregate-spend problem the bound exists to fix. It stays unbounded because its group is scoped to ONE pull request, which is the narrower of the two: a run this workflow cancels is always that same pull request's superseded head, never a peer's, and the push that superseded it scheduled the replacement. That is why cancel-in-progress is the pull-request event expression rather than the literal false the other entries carry — it stops a superseded audit accruing runner minutes for a verdict nobody reads, and on the schedule, push and dispatch legs the expression is false, so the daily tick is never cancelled. The premise holds only while this workflow produces no required check, and this file asserts that: a cancelled run concluding on a required context is a blocked pull request that no later push unblocks. Should the audit ever become merge-blocking, this entry has to be re-decided, and the event expression is the first thing to go.",
-      group: "dependency-audit-${{ github.event.pull_request.number || github.ref }}",
-      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
-      queue: undefined,
-      premise: "superseded-attempt",
-    },
-  ],
-  [
     "pr-suite.yml",
     {
       reason:
@@ -516,7 +525,8 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   "claim.yml": ["claim"],
   "code-scanning.yml": ["analyze"],
   "coverage-comment.yml": ["comment"],
-  "dependency-audit.yml": ["audit"],
+  "dependency-audit.yml": ["dependency-audit"],
+  "dependency-audit-pr.yml": ["dependency-audit"],
   "event-policy.yml": ["event-policy", "event-policy-pull-request"],
   "ledger-relay.yml": ["relay-required-checks"],
   "pr-gate.yml": ["gate"],

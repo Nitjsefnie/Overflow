@@ -84,7 +84,13 @@ beforeAll(async () => {
 describe(".github/required-checks.json", () => {
   it("pins at least the checks branch protection on main requires", () => {
     expect(Object.keys(pins)).toEqual(
-      expect.arrayContaining(["actionlint", "ratchet-guard", "verify", "secret-scan"]),
+      expect.arrayContaining([
+        "actionlint",
+        "ratchet-guard",
+        "verify",
+        "secret-scan",
+        "dependency-audit",
+      ]),
     );
   });
 

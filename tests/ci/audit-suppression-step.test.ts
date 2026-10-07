@@ -115,9 +115,9 @@ let pyyamlManifest = "";
 
 beforeAll(async () => {
   const workflow = parse(await readFile(resolve(".github/workflows/dependency-audit.yml"), "utf8")) as {
-    jobs: { audit: { steps: Step[] } };
+    jobs: { "dependency-audit": { steps: Step[] } };
   };
-  steps = workflow.jobs.audit.steps;
+  steps = workflow.jobs["dependency-audit"].steps;
   root = await mkdtemp(join(tmpdir(), "audit-suppression-step-"));
   pyyamlManifest = await readFile(resolve(".github/requirements-pyyaml.txt"), "utf8");
 });
