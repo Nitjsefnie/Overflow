@@ -2,7 +2,7 @@
 
 **Recorded:** 2026-10-08
 
-**Source notice:** `/account-data`, version 1.7, effective 2026-10-08
+**Source notice:** `/account-data`, version 1.8, effective 2026-10-08
 **Scope:** Processing described by the account-data notice and the current Overflow implementation. The controller is the operator of the deployment described by the notice. Controller name and contact routes are operator configuration; when the hosted deployment has no overrides, its hosted identity and route values are used. A self-hosted operator supplies its own values.
 
 This record follows the four activities in the notice's “Purposes and legal bases” section. The balancing notes record the operator's reasoning and remaining impact; they are not a specialist legal opinion.
@@ -46,10 +46,10 @@ Read public forge data about people who have never signed in, so reconciliation 
 
 ### Data categories
 
-- Forge provider and numeric id, login, issue and pull-request titles, URLs and states, issue authors, claim assignees, and pull-request authors.
+- Forge provider, normalized instance origin and numeric id, login, issue and pull-request titles, URLs and states, issue authors, claim assignees, and pull-request authors.
 - Per-repository cache data: issue titles, authors, assignees, label and assignment history, comment authors and ids, and the title and author of closing pull requests. For merged closing pull requests, the cache also holds diffs and review-round data; reviewer logins and review text are not kept in that cache.
-- Change-log entries containing logins and titles, and moderation notes that can name the account that applied a label.
-- For a data-subject removal, a `data_subject_suppressions` row records the forge provider, numeric forge id, optional resolved login, and decision time. The provider/id key prevents later reconciliation from writing that person's identifiers again.
+- Policy diagnostics and change-log entries containing logins and titles, and moderation notes that can name the account that applied a label.
+- For a data-subject removal, a `data_subject_suppressions` row retains the forge provider, normalized instance origin, numeric forge id, all verified login aliases, a representative login, and decision time. Requests without a GitLab instance are refused. Numeric ids control matching where present; verified aliases cover login-only fields. Repeated removals retain prior aliases, and incoming numeric evidence can add newly observed aliases before publication. A rename with no numeric evidence requires a verified alias from the operator. The suppression is included in the access copy.
 - Reconciliation does not write issue, pull-request, or comment body text. Body text written before 2026-09-26 may remain until repository unregistration. No display name is stored for a person who has never signed in.
 
 ### Data subjects
@@ -62,7 +62,7 @@ GitHub or the relevant GitLab instance supplies the public repository data. Clou
 
 ### Retention
 
-While a repository remains readable and registered, reconciliation refreshes its data; entries no longer returned by a later pass are removed. If a repository becomes unreadable, its stored copy remains until it can be read again. Unregistering stops re-reads but does not remove logins, ids, titles, change-log entries, or closing-pull-request diffs and reviews; stored body text is scrubbed unless a recent settlement is still being computed. Completed or failed reconciliation runs and their change-log entries are pruned after 90 days. Webhook receipts are pruned 30 days after successful processing, 90 days after failure, or 90 days after receipt for abandoned deliveries; an unexpired pending receipt is retained. Suppression rows have no expiry field or fixed expiry in the current implementation and remain available to prevent re-import. Backups can retain prior copies for the periods described under `logs_backups_security`.
+While a repository remains readable and registered, reconciliation refreshes its data; entries no longer returned by a later pass are removed. If a repository becomes unreadable, its stored copy remains until it can be read again. Unregistering stops re-reads but does not remove logins, ids, titles, change-log entries, or closing-pull-request diffs and reviews; stored body text is scrubbed unless a recent settlement is still being computed. Completed or failed reconciliation runs and their change-log entries are pruned after 90 days. Webhook receipts are pruned 30 days after successful processing, 90 days after failure, or 90 days after receipt for abandoned deliveries; an unexpired pending receipt is retained. Removal preserves existing moderation notes and journal entries; current policy diagnostics are exported as written until a later publication replaces their set. New derived identity fields, cached identities and generated policy diagnostic references are scrubbed before writing. Titles and proof material are retained. Linked credentials and identity logins are scrubbed by account id whenever a request pseudonymises an account. Suppression rows have no expiry field or fixed expiry in the current implementation and remain available to prevent re-import. Backups can retain prior copies for the periods described under `logs_backups_security`.
 
 ### Basis
 
@@ -70,7 +70,7 @@ Legitimate interests: operating a public work-attribution tracker and maintainin
 
 ### Balancing note
 
-The operational interest is to attribute public work accurately and make settlement proofs reproducible. The collection is scoped to registered repositories and public forge records; no new issue, pull-request, or comment body text is written, and visitors are not shown the identities of people who have never signed in. Export and removal are keyed by forge provider and numeric id, and a suppression prevents a later import from restoring removed identifiers. Against that interest, identifiers and titles can remain while a repository is registered, cached data includes comment authors, unregistering retains attribution records, and removal preserves the ledger and moderation record. These limits reduce exposure but do not eliminate the impact on a non-member. Reassess this balance if the collected fields, visibility, or retention change.
+The operational interest is to attribute public work accurately and make settlement proofs reproducible. The collection is scoped to registered repositories and public forge records; no new issue, pull-request, or comment body text is written, and visitors are not shown the identities of people who have never signed in. Export and removal are keyed by forge provider, instance origin and numeric id. Suppression covers matched structured identities and generated policy diagnostic references on later imports; numeric evidence is authoritative and login-only matching depends on verified aliases. Renames without numeric evidence require operator verification. Retained audit text, titles and proof material are outside that scrub. Against that interest, identifiers and titles can remain while a repository is registered, cached data includes comment authors, unregistering retains attribution records, and removal preserves the ledger and moderation record. These limits reduce exposure but do not eliminate the impact on a non-member. Reassess this balance if the collected fields, visibility, or retention change.
 
 ## Activity: logs_backups_security
 

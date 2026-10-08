@@ -10,6 +10,8 @@ import type { GitHubIssue, GitHubIssueReference, GitHubPullRequest, GitHubPullRe
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
+import { scrubIssueIdentity, scrubSuppressedForgeData } from "@/lib/fold/data-subject-suppression";
+import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { startPostgresContainer } from "../support/postgres-container";
 
 let sql: Sql;
@@ -846,9 +848,15 @@ describe("whole branch review regressions", () => {
     await sql`update registered_repositories set provider='gitlab',instance_url='https://first.example',forge_project_id=github_repository_id where id=${first.repositoryId}`;
     await sql`update registered_repositories set provider='gitlab',instance_url='https://other.example',forge_project_id=github_repository_id where id=${other.repositoryId}`;
     await sql`update pull_requests set author_github_user_id=${first.person.forgeId} where id=${other.personPullRequest.id}`;
+    await sql`insert into user_forge_identities (user_id, provider, instance_url, forge_user_id, forge_login, encrypted_token) values
+      (${first.member.id}, 'gitlab', 'https://first.example', ${first.person.forgeId}, ${first.person.login}, ${Buffer.from("first credential")}),
+      (${other.member.id}, 'gitlab', 'https://other.example', ${first.person.forgeId}, ${other.person.login}, ${Buffer.from("other credential")})`;
     await removeForgePerson(sql, {provider:'gitlab',instanceUrl:'https://first.example/',forgeId:first.person.forgeId, login:first.person.login}, {confirm:true});
     const [row] = await sql`select author_github_login,body from pull_requests where id=${other.personPullRequest.id}`;
     expect(row.body).toBe(other.personPullRequest.body);
+    expect((await rowJson("users", other.member.id)).deleted_at).toBeNull();
+    const [otherIdentity] = await sql`select encrypted_token from user_forge_identities where user_id=${other.member.id}`;
+    expect(otherIdentity!.encrypted_token).not.toBeNull();
   });
   it("review: provider scoping includes changes without a pull request", async () => {
     const seed = await seedHandScenario();
@@ -1088,6 +1096,240 @@ describe("identity authority and access inventory", () => {
     expect(doc.logins).toContain(alias);
     await removeForgePerson(sql, { provider: "github", forgeId: seed.person.forgeId }, { confirm: true });
     expect((await rowJson("issues", seed.personIssue.id)).owner_github_login).toBe(DATA_SUBJECT_TOMBSTONE_LOGIN);
+    await removeForgePerson(sql, { provider: "github", forgeId: seed.person.forgeId }, { confirm: true });
+    const repeated = await exportForgePerson(sql, { provider: "github", forgeId: seed.person.forgeId });
+    expect(repeated.logins).toEqual(doc.logins);
+    expect(repeated.logins).not.toContain(DATA_SUBJECT_TOMBSTONE_LOGIN);
   });
 
+});
+
+  it("review: GitHub removal clears the linked GitLab token of the deleted account", async () => {
+    const seed = await seedHandScenario();
+    await sql`insert into user_forge_identities (user_id, provider, instance_url, forge_user_id, forge_login, encrypted_token)
+      values (${seed.member.id}, 'gitlab', 'https://gitlab.example', ${seed.person.forgeId}, ${seed.person.login}, ${Buffer.from('review token')})`;
+    await removeForgePerson(sql, {provider:'github', forgeId:seed.member.githubUserId}, {confirm:true});
+    expect((await rowJson("users", seed.member.id)).deleted_at).not.toBeNull();
+    const [identity] = await sql`select encrypted_token, forge_login from user_forge_identities where user_id=${seed.member.id}`;
+    expect(identity.encrypted_token).toBeNull();
+  });
+
+  it("review lifecycle: new policy violation cannot reinstate actor login", async () => {
+    const seedNumber = nextSeedNumber();
+    const forgeId = 9_100_000 + seedNumber;
+    const login = `outsider-${seedNumber}`;
+    const sponsorGitHubId = 9_200_000 + seedNumber;
+    const memberGitHubId = 9_300_000 + seedNumber;
+    const githubRepositoryId = 9_400_000 + seedNumber;
+    const [sponsor] = await sql<{ id: string; github_login: string }[]>`
+      insert into users (github_user_id, github_login, encrypted_oauth_token)
+      values (${sponsorGitHubId}, ${`sponsor-${seedNumber}`},
+              ${Buffer.from(encryptToken("sponsor-token", TEST_ENCRYPTION_KEY,
+                credentialBinding.userOAuthToken(sponsorGitHubId)), "utf8")})
+      returning id, github_login
+    `;
+    await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login)
+      values (${memberGitHubId}, ${`member-${seedNumber}`}) returning id
+    `;
+    const [repository] = await sql<{ id: string }[]>`
+      insert into registered_repositories (
+        github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme,
+        created_at
+      ) values (
+        ${githubRepositoryId}, ${`ds-owner/repo-${seedNumber}`}, ${sponsor!.id}, 'PUBLIC',
+        ${githubRepositoryId + 100}, ${sql.json(validDifficultyScheme())}, '2026-01-01T00:00:00Z'
+      ) returning id
+    `;
+    const repositoryId = String(repository!.id);
+    const mergedAt = "2026-09-01T12:00:00Z";
+    const personComment = {
+      id: `comment-${seedNumber}`, databaseId: 900_000 + seedNumber,
+      authorLogin: login, authorGitHubUserId: forgeId,
+      body: "Seeing this too.", createdAt: "2026-09-01T09:00:00Z", lastEditedAt: null,
+    };
+    const sponsorRationale = {
+      id: `comment-${seedNumber}-s`, databaseId: 900_100 + seedNumber,
+      authorLogin: `sponsor-${seedNumber}`, authorGitHubUserId: sponsorGitHubId,
+      body: "Settled on the recorded difficulty.", createdAt: "2026-09-01T11:30:00Z", lastEditedAt: null,
+    };
+    const closingPullRequest = (prId: number, number: number, author: string, authorId: number): GitHubPullRequest => ({
+      id: prId, number, title: `Work ${number}`, body: "PR body", url: "https://github.com/ds-owner/repo/pull/1",
+      state: "MERGED", mergedAt, mergeCommitOid: String(prId).padStart(40, "3"), finalCommitAt: "2026-09-01T10:00:00Z",
+      authorLogin: author, authorGitHubUserId: authorId,
+      repositoryGitHubId: githubRepositoryId, repositoryNameWithOwner: `ds-owner/repo-${seedNumber}`,
+    });
+    const personIssueId = 9_500_000 + seedNumber;
+    const memberIssueId = 9_500_100 + seedNumber;
+    const issue = (issueId: number, number: number, prNumber: number, author: string, authorId: number, prId: number): GitHubIssue => ({
+      id: issueId, number, title: `Issue ${number}`, body: "Issue body",
+      url: "https://github.com/ds-owner/repo/issues/1", state: "CLOSED", stateReason: "COMPLETED",
+      createdAt: "2026-09-01T07:00:00Z", updatedAt: "2026-09-01T12:00:00Z",
+      closedAt: "2026-09-01T12:00:00Z", authorLogin: author, authorGitHubUserId: authorId,
+      labels: ["M"], claimAssigneeGitHubLogin: null, claimAssigneeGitHubUserId: null,
+      history: [
+        { kind: "LABELED", id: `opening-${issueId}`, actorLogin: `sponsor-${seedNumber}`,
+          actorGitHubUserId: sponsorGitHubId, label: "M", createdAt: "2026-09-01T08:00:00Z" },
+        { kind: "LABELED", id: `settled-${issueId}`, actorLogin: `sponsor-${seedNumber}`,
+          actorGitHubUserId: sponsorGitHubId, label: "delivered/6", createdAt: "2026-09-01T11:00:00Z" },
+      ],
+      comments: issueId === personIssueId ? [personComment, sponsorRationale] : [sponsorRationale],
+      closingPullRequests: [closingPullRequest(prId, prNumber, author, authorId)],
+    });
+    const double: ForgeDouble = {
+      store: new PostgresFoldStore(sql, TEST_ENCRYPTION_KEY),
+      clock: start,
+      issues: [
+        issue(personIssueId, 1, 11, login, forgeId, 9_600_000 + seedNumber),
+        issue(memberIssueId, 2, 12, `member-${seedNumber}`, memberGitHubId, 9_600_100 + seedNumber),
+      ],
+      run: async (options?: { rederive?: boolean }) =>
+        reconcileRepository(
+          {
+            store: double.store,
+            github: gatewayDouble(double.issues, githubRepositoryId),
+            now: () => double.clock,
+          },
+          repositoryId,
+          options,
+        ),
+    };
+
+
+    await double.run();
+    await removeForgePerson(sql,{provider:'github',forgeId},{confirm:true});
+    const opening=double.issues[0]!.history[0]!;
+    opening.actorLogin=login; opening.actorGitHubUserId=forgeId;
+    double.clock=new Date('2026-09-08T10:06:00Z');
+    await double.run({rederive:true});
+    const actual=await sql`select violation from repository_policy_violations where repository_id=${repositoryId}`;
+    expect(JSON.stringify(actual)).not.toContain(login);
+   });
+
+
+  it("exports linked identities with secret presence flags for a GitHub account", async () => {
+    const seed = await seedHandScenario();
+    await sql`insert into user_forge_identities (user_id, provider, instance_url, forge_user_id, forge_login, encrypted_token)
+      values (${seed.member.id}, 'gitlab', 'https://gitlab.example', ${seed.person.forgeId}, ${seed.person.login}, ${Buffer.from("test credential")})`;
+    const doc = await exportForgePerson(sql, { provider: "github", forgeId: seed.member.githubUserId });
+    expect(storeOf(doc, "user_forge_identities").rows).toEqual([expect.objectContaining({ user_id: seed.member.id, hasStoredToken: true })]);
+    expect(JSON.stringify(doc)).not.toContain("encrypted_token");
+  });
+
+  it("exports retained policy rows and the suppression decision itself", async () => {
+    const seed = await seedHandScenario();
+    await sql`insert into repository_policy_violations (repository_id, violation) values (${seed.repositoryId}, ${sql.json({ code: "OPENING_LABEL_UNAUTHORIZED", openingSourceActorLogin: seed.person.login, reason: `Actor ${seed.person.login}` })})`;
+    await removeForgePerson(sql, { provider: "github", forgeId: seed.person.forgeId }, { confirm: true });
+    const doc = await exportForgePerson(sql, { provider: "github", forgeId: seed.person.forgeId });
+    expect(storeOf(doc, "repository_policy_violations").count).toBe(1);
+    expect(storeOf(doc, "data_subject_suppressions").rows).toEqual([expect.objectContaining({ forge_id: seed.person.forgeId })]);
+  });
+describe("actor-only publication lifecycle", () => {
+  it("keeps an opening actor tombstoned after removal and a real materialization", async () => {
+    const { repositoryId, store, fold } = await materializeRepositoryFixture(sql);
+    const forgeId = 9_100_000 + nextSeedNumber();
+    const login = `actor-only-${forgeId}`;
+    fold.issues[0]!.openingSourceActorLogin = login;
+    fold.settlements[0]!.settledLabelActorLogin = login;
+    fold.settlements[0]!.settledRationaleActorLogin = login;
+    fold.selfWorkCalibrations[0]!.actualLabelActorLogin = login;
+    fold.selfWorkCalibrations[0]!.rationaleActorLogin = login;
+    const publish = async () => {
+      const runId = await store.beginRun(repositoryId);
+      await store.withRepositoryReconciliation(repositoryId, () => store.materialize({ repositoryId, runId, fold: structuredClone(fold) }));
+      return runId;
+    };
+    await publish();
+    const actors = () => sql`select opening_source_actor_login from issues where repository_id=${repositoryId} and github_issue_id=${fold.issues[0]!.githubIssueId}`;
+    expect((await actors())[0]!.opening_source_actor_login).toBe(login);
+    await removeForgePerson(sql, { provider: "github", forgeId, login }, { confirm: true });
+    expect((await actors())[0]!.opening_source_actor_login).toBe(DATA_SUBJECT_TOMBSTONE_LOGIN);
+    const postRemovalRun = await publish();
+    expect((await actors())[0]!.opening_source_actor_login).toBe(DATA_SUBJECT_TOMBSTONE_LOGIN);
+    const [journal] = await sql`select count(*)::int as count from reconciliation_changes as c join reconciliation_runs as r on r.id=c.reconciliation_run_id where r.id=${postRemovalRun} and c.after_state::text like ${`%${login}%`}`;
+    expect(journal!.count).toBe(0);
+  });
+});
+
+describe("publication identity authority", () => {
+  it("keeps a recycled-login author, assignee, actor and commenter with different ids", async () => {
+    const seed = await seedHandScenario();
+    const [fact] = await sql`select payload from repository_reconciliation_evidence_facts where repository_id=${seed.repositoryId}`;
+    const payload = fact!.payload;
+    payload.claimAssigneeGitHubLogin = seed.person.login;
+    payload.claimAssigneeGitHubUserId = seed.member.githubUserId;
+    payload.history[0].actorLogin = seed.person.login;
+    payload.history[0].actorGitHubUserId = seed.member.githubUserId;
+    payload.comments[1].authorLogin = seed.person.login;
+    payload.comments[1].authorGitHubUserId = seed.member.githubUserId;
+    payload.closingPullRequests.push({ authorLogin: seed.person.login, authorGitHubUserId: seed.member.githubUserId });
+    scrubIssueIdentity(payload, { forgeId: seed.person.forgeId, logins: new Set([seed.person.login]) });
+    expect(payload.authorLogin).toBe(DATA_SUBJECT_TOMBSTONE_LOGIN);
+    expect(payload.claimAssigneeGitHubUserId).toBe(seed.member.githubUserId);
+    expect(payload.history[0].actorLogin).toBe(seed.person.login);
+    expect(payload.comments[1].authorGitHubUserId).toBe(seed.member.githubUserId);
+    expect(payload.closingPullRequests[1].authorGitHubUserId).toBe(seed.member.githubUserId);
+  });
+  it("applies suppression only in the requested GitLab instance at publication", async () => {
+    const left = await materializeRepositoryFixture(sql);
+    const right = await materializeRepositoryFixture(sql);
+    const forgeId = left.fold.pullRequests[0]!.authorGitHubUserId!;
+    for (const [fixture, origin] of [[left, "https://left.example"], [right, "https://right.example"]] as const) {
+      await sql`update registered_repositories set provider='gitlab', instance_url=${origin}, forge_project_id=github_repository_id where id=${fixture.repositoryId}`;
+      fixture.fold.pullRequests[0]!.authorGitHubUserId = forgeId;
+    }
+    await removeForgePerson(sql, { provider: "gitlab", instanceUrl: "https://LEFT.example/", forgeId }, { confirm: true });
+    const leftCopy = structuredClone(left.fold);
+    const rightCopy = structuredClone(right.fold);
+    await sql.begin(async (tx) => {
+      await scrubSuppressedForgeData(tx, left.repositoryId, { fold: leftCopy });
+      await scrubSuppressedForgeData(tx, right.repositoryId, { fold: rightCopy });
+    });
+    expect(leftCopy.pullRequests[0]!.authorGitHubUserId).toBeNull();
+    expect(rightCopy.pullRequests[0]!.authorGitHubUserId).toBe(forgeId);
+    const [suppression] = await sql`select instance_url from data_subject_suppressions where provider='gitlab' and forge_id=${forgeId}`;
+    expect(suppression!.instance_url).toBe("https://left.example");
+  });
+});
+
+describe("journal namespace provenance", () => {
+  it("exports PR-less policy records and a journal row surviving actual PR deletion only in its instance", async () => {
+    const seed = await seedHandScenario();
+    await sql`update registered_repositories set provider='gitlab',instance_url='https://journal.example',forge_project_id=github_repository_id where id=${seed.repositoryId}`;
+    const [change] = await sql`select reconciliation_run_id from reconciliation_changes where id=${seed.changeRecord.id}`;
+    const [policy] = await sql`insert into reconciliation_changes (reconciliation_run_id, entity_kind, change_kind, after_state)
+      values (${change!.reconciliation_run_id}, 'POLICY_VIOLATION', 'POLICY_VIOLATION', ${sql.json({ code: "OPENING_LABEL_UNAUTHORIZED", openingSourceActorLogin: seed.person.login })}) returning id`;
+    await sql`delete from settlements where pull_request_id=${seed.personPullRequest.id}`;
+    await sql`delete from pull_request_issues where pull_request_id=${seed.personPullRequest.id}`;
+    await sql`delete from pull_requests where id=${seed.personPullRequest.id}`;
+    expect((await rowJson("reconciliation_changes", seed.changeRecord.id)).pull_request_id).toBeNull();
+    const right = await exportForgePerson(sql, { provider: "gitlab", instanceUrl: "https://journal.example", forgeId: seed.person.forgeId, login: seed.person.login });
+    expect(storeOf(right, "reconciliation_changes").rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: seed.changeRecord.id }), expect.objectContaining({ id: policy!.id }),
+    ]));
+    const other = await exportForgePerson(sql, { provider: "gitlab", instanceUrl: "https://other.example", forgeId: seed.person.forgeId, login: seed.person.login });
+    expect(storeOf(other, "reconciliation_changes").rows).toEqual([]);
+    const github = await exportForgePerson(sql, { provider: "github", forgeId: seed.person.forgeId, login: seed.person.login });
+    expect(storeOf(github, "reconciliation_changes").rows).toEqual([]);
+  });
+});
+
+describe("access-copy numeric authority in JSON stores", () => {
+  it("excludes a cache row whose reused login pairs all have a different numeric id", async () => {
+    const seed = await seedHandScenario();
+    const [fact] = await sql`select payload from repository_reconciliation_evidence_facts where repository_id=${seed.repositoryId}`;
+    const payload = fact!.payload;
+    payload.authorGitHubUserId = seed.member.githubUserId;
+    payload.comments[0].authorGitHubUserId = seed.member.githubUserId;
+    payload.closingPullRequests[0].authorGitHubUserId = seed.member.githubUserId;
+    await sql`update repository_reconciliation_evidence_facts set payload=${sql.json(payload)} where repository_id=${seed.repositoryId}`;
+    const doc = await exportForgePerson(sql, { provider: "github", forgeId: seed.person.forgeId });
+    expect(storeOf(doc, "repository_reconciliation_evidence_facts").count).toBe(0);
+  });
+  it("excludes a journal identity with the subject's old login and a different id", async () => {
+    const seed = await seedHandScenario();
+    await sql`update reconciliation_changes set after_state=${sql.json({ creditorGitHubLogin: seed.person.login, creditorGitHubUserId: seed.member.githubUserId })} where id=${seed.changeRecord.id}`;
+    const doc = await exportForgePerson(sql, { provider: "github", forgeId: seed.person.forgeId });
+    expect(storeOf(doc, "reconciliation_changes").rows).toEqual([]);
+  });
 });

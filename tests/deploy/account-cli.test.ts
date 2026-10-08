@@ -177,6 +177,7 @@ function documentedArgumentWords(command: string, githubUserId: number): string[
     .replaceAll("<github-user-id>", String(githubUserId))
     .replaceAll("<forge-id>", String(githubUserId))
     .replaceAll("<provider>", "github")
+    .replaceAll("<forge-origin>", "https://github.com")
     .trim()
     .split(/\s+/);
   for (const word of words) {
@@ -211,9 +212,9 @@ describe("documented account commands", () => {
       ["export", "--github-user-id", "<github-user-id>"],
       ["delete", "--github-user-id", "<github-user-id>"],
       ["delete", "--github-user-id", "<github-user-id>", "--confirm"],
-      ["export-forge", "--provider", "<provider>", "--forge-id", "<forge-id>"],
-      ["remove-forge", "--provider", "<provider>", "--forge-id", "<forge-id>"],
-      ["remove-forge", "--provider", "<provider>", "--forge-id", "<forge-id>", "--confirm"],
+      ["export-forge", "--provider", "<provider>", "--instance-url", "<forge-origin>", "--forge-id", "<forge-id>"],
+      ["remove-forge", "--provider", "<provider>", "--instance-url", "<forge-origin>", "--forge-id", "<forge-id>"],
+      ["remove-forge", "--provider", "<provider>", "--instance-url", "<forge-origin>", "--forge-id", "<forge-id>", "--confirm"],
     ]);
   });
 
