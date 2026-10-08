@@ -294,6 +294,12 @@ export function anyJobStartedOf(body: unknown): boolean {
  * a maintainer pressed Cancel on executing work — and stays cancelled. The
  * primary signal decides when it names anything at all; the fallback decides
  * alone when the primary is absent.
+ *
+ * The rule's boundary: a deliberate cancellation of a run that has STARTED
+ * stays cancelled; a cancellation of a never-started run is indistinguishable
+ * from supersession (GitHub's data carries no discriminator) and heals up to
+ * the attempt cap. This is the issue's own operationalization — "only runs
+ * that never started" — not a narrower rule, because none exists.
  */
 export function runNeverStarted(evidence: RerunStartedEvidence): boolean {
   return evidence.runStartedAt === null && !evidence.anyJobStarted;

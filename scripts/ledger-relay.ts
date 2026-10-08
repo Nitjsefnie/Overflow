@@ -394,6 +394,12 @@ async function healWithRerun(
   // guards, BEFORE the heal's queries: a run that had started was cancelled
   // deliberately, and querying for a heal that must never happen would ask
   // GitHub for permission to repeat a maintainer's cancellation.
+  //
+  // Boundary (fix-round proven): a deliberate cancellation of a STARTED run
+  // stays cancelled; a cancellation of a never-started run is
+  // indistinguishable from supersession — GitHub's data carries no
+  // discriminator — and heals up to the attempt cap. Full statement on
+  // runNeverStarted in scripts/ledger-relay-decisions.ts.
   const startedEvidence: RerunStartedEvidence = {
     runStartedAt: run.runStartedAt,
     anyJobStarted: anyJobStartedOf(jobsBody),
