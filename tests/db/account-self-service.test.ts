@@ -89,13 +89,15 @@ describe("self-service account data on Postgres", () => {
     expect(await findLiveAccountIdentity(sql, account.id)).toBeNull();
   });
 
-  it("exports an account whose row carries an avatar without any avatar entry in the document (issue 1075)", async () => {
+  it("exports account.avatarUrl as a stable null, whatever the row carries (issue 1075 deprecation window)", async () => {
     // The row is seeded through raw SQL with an avatar value — the pre-1075
     // shape the migration nulls — so the pin holds even against a row that
-    // still carries one when the export runs.
+    // still carries one when the export runs: the key stays for shape
+    // compatibility (API.md deprecations), and its value is constant null.
     const account = await insertUser("export-no-avatar");
     const document = await exportAccount(sql, account.githubUserId);
     expect(document).not.toBeNull();
-    expect(Object.hasOwn(document!.account, "avatarUrl")).toBe(false);
+    expect(Object.hasOwn(document!.account, "avatarUrl")).toBe(true);
+    expect(document!.account.avatarUrl).toBeNull();
   });
 });

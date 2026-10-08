@@ -81,6 +81,7 @@
     },
     "POST /api/account/export": {
       "account": {
+        "avatarUrl": "null",
         "confirmedMiscalibrationCount": "number",
         "createdAt": "string",
         "deletedAt": "null",
