@@ -1,5 +1,7 @@
 import type { ParameterOrJSON } from "postgres";
 import type { SqlClient, TransactionClient } from "@/lib/db/types";
+import { repositoryLockNamespace } from "@/lib/fold/postgres-store";
+import { waitForRepositoryLockRetry } from "@/lib/fold/repository-lock-retry";
 import {
   DATA_SUBJECT_TOMBSTONE_LOGIN,
   scrubIssueIdentity,
@@ -287,7 +289,10 @@ export async function exportForgePerson(
              join registered_repositories as repositories on repositories.id = t.repository_id
              where repositories.provider = $1 and (
                t.owner_github_login = any($2) or t.claim_assignee_github_user_id = $3
-               or t.claim_assignee_github_login = any($2))`,
+               or t.claim_assignee_github_login = any($2)
+               or t.opening_source_actor_login = any($2)
+               or t.settled_label_actor_login = any($2)
+               or t.settled_rationale_actor_login = any($2))`,
           [request.provider, sql.array(uniqueLogins), request.forgeId]),
         await section("pull_requests",
           `select to_jsonb(t.*) as row from pull_requests as t
@@ -363,18 +368,50 @@ export type ForgePersonRemovalOutcome =
 
 /**
  * The per-person removal (issue 1071): one documented decision per store,
- * applied inside one transaction that also records the suppression, so a
- * reconciliation pass either commits before it (and is scrubbed by it) or
- * commits after it (and sees the suppression at the import check). The
- * dry run writes nothing, exactly as the account deletion's does. Every
- * store query binds its own consecutive $1..$n placeholders.
+ * applied inside one transaction that takes the fold's own repository
+ * advisory locks for every registered repository of the provider, so a
+ * concurrent reconciliation pass either commits before the removal (and is
+ * scrubbed by it) or starts after it (and sees the suppression at the import
+ * check) — the pass and the removal serialize, and the window where a pass
+ * that read the suppressions early could re-write the person's identifiers
+ * after the removal committed is closed. The dry run writes nothing, exactly
+ * as the account deletion's does. Every store query binds its own
+ * consecutive $1..$n placeholders.
  */
 export async function removeForgePerson(
   sql: SqlClient,
   request: ForgePersonRequest,
-  options: { confirm: boolean },
+  options: { confirm: boolean; lockWaitMs?: number },
 ): Promise<ForgePersonRemovalOutcome> {
   return sql.begin(async (tx) => {
+    // The fold pass holds session-level advisory locks on the repository it
+    // folds; this transaction takes the transaction-scoped form of the same
+    // keys over every repository of the provider, which is exactly the set
+    // whose fold passes can write this person's identifiers. Held locks make
+    // the take wait with the fold's own retry shape and refuse closed when
+    // the budget runs out — never race.
+    const lockWaitMs = options.lockWaitMs ?? 60_000;
+    const lockDeadline = Date.now() + lockWaitMs;
+    let lockAttempt = 0;
+    for (;;) {
+      const [gate] = await tx<{ repositories: number; locked: number }[]>`
+        select count(*)::int as repositories,
+               count(*) filter (
+                 where pg_try_advisory_xact_lock(hashtextextended(id::text, ${repositoryLockNamespace}))
+               )::int as locked
+        from registered_repositories where provider = ${request.provider}
+      `;
+      if (gate!.locked === gate!.repositories) {
+        break;
+      }
+      const remainingMs = lockDeadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error("Unable to coordinate the data-subject removal.");
+      }
+      await waitForRepositoryLockRetry(lockAttempt, remainingMs);
+      lockAttempt += 1;
+    }
+
     const userIds = await matchedUserIds(tx, request.forgeId, request.provider);
     const blockers = userIds.length === 0
       ? []
@@ -415,7 +452,7 @@ export async function removeForgePerson(
       {
         key: "users",
         update: `update users set
-            github_login = '${DATA_SUBJECT_TOMBSTONE_LOGIN}',
+            github_login = $2,
             avatar_url = null,
             encrypted_oauth_token = null,
             role = 'MEMBER',
@@ -435,7 +472,7 @@ export async function removeForgePerson(
         key: "forgeIdentities",
         update: `update user_forge_identities set
             encrypted_token = null,
-            forge_login = '${DATA_SUBJECT_TOMBSTONE_LOGIN}',
+            forge_login = $3,
             token_failed_at = coalesce(token_failed_at, now())
           where provider = $2 and forge_user_id = $1 returning id`,
         count: `select count(*)::int as count from user_forge_identities
@@ -446,7 +483,7 @@ export async function removeForgePerson(
         key: "pullRequests",
         update: `update pull_requests set
             body = null,
-            author_github_login = '${DATA_SUBJECT_TOMBSTONE_LOGIN}',
+            author_github_login = $4,
             author_github_user_id = null
           where repository_id in (select id from registered_repositories where provider = $2)
             and (author_github_user_id = $1 or author_github_login = any($3)) returning id`,
@@ -458,7 +495,7 @@ export async function removeForgePerson(
       {
         key: "settlements",
         update: `update settlements set
-            creditor_github_login = '${DATA_SUBJECT_TOMBSTONE_LOGIN}',
+            creditor_github_login = $4,
             creditor_github_user_id = null
           where pull_request_id in (
               select pr.id from pull_requests as pr
@@ -485,7 +522,7 @@ export async function removeForgePerson(
     const issuesOfProvider = "repository_id in (select id from registered_repositories where provider = $1)";
     const issuesOperations: Array<{ update: string; count: string; parameters: ParameterOrJSON<never>[] }> = [
       {
-        update: `update issues set body = null, owner_github_login = '${DATA_SUBJECT_TOMBSTONE_LOGIN}'
+        update: `update issues set body = null, owner_github_login = $3
           where ${issuesOfProvider} and owner_github_login = any($2) returning id`,
         count: `select count(*)::int as count from issues
           where ${issuesOfProvider} and owner_github_login = any($2)`,
@@ -493,7 +530,7 @@ export async function removeForgePerson(
       },
       {
         update: `update issues set
-            claim_assignee_github_login = '${DATA_SUBJECT_TOMBSTONE_LOGIN}',
+            claim_assignee_github_login = $4,
             claim_assignee_github_user_id = null
           where ${issuesOfProvider}
             and (claim_assignee_github_user_id = $3 or claim_assignee_github_login = any($2)) returning id`,
@@ -505,11 +542,11 @@ export async function removeForgePerson(
       {
         update: `update issues set
             opening_source_actor_login = case when opening_source_actor_login = any($2)
-              then '${DATA_SUBJECT_TOMBSTONE_LOGIN}' else opening_source_actor_login end,
+              then $3 else opening_source_actor_login end,
             settled_label_actor_login = case when settled_label_actor_login = any($2)
-              then '${DATA_SUBJECT_TOMBSTONE_LOGIN}' else settled_label_actor_login end,
+              then $3 else settled_label_actor_login end,
             settled_rationale_actor_login = case when settled_rationale_actor_login = any($2)
-              then '${DATA_SUBJECT_TOMBSTONE_LOGIN}' else settled_rationale_actor_login end
+              then $3 else settled_rationale_actor_login end
           where ${issuesOfProvider} and (
             opening_source_actor_login = any($2)
             or settled_label_actor_login = any($2)
@@ -526,7 +563,10 @@ export async function removeForgePerson(
     let issuesCount = 0;
     if (options.confirm) {
       for (const operation of issuesOperations) {
-        const rows = await tx.unsafe<{ id: string }[]>(operation.update, operation.parameters);
+        const rows = await tx.unsafe<{ id: string }[]>(
+          operation.update,
+          [...operation.parameters, DATA_SUBJECT_TOMBSTONE_LOGIN],
+        );
         for (const row of rows) issueIds.add(row.id);
       }
       issuesCount = issueIds.size;
@@ -559,6 +599,12 @@ export async function removeForgePerson(
         operationParameters.push(userIdsParameter);
       }
       if (options.confirm) {
+        // The tombstone-writing updates bind it as their last placeholder; the
+        // api_tokens deletion removes rows and writes nothing, and the counts
+        // match rows only and never write it.
+        if (operation.key !== "apiTokens") {
+          operationParameters.push(DATA_SUBJECT_TOMBSTONE_LOGIN);
+        }
         const rows = await tx.unsafe<{ id: string }[]>(operation.update, operationParameters);
         perStore[operation.key] = rows.length;
       } else {
