@@ -32,6 +32,8 @@ import {
   type ReconciliationSynchronization,
 } from "@/lib/fold/reconciliation-evidence";
 import { RECONCILIATION_LEASE_MS } from "@/lib/fold/reconciliation-worker";
+import { waitForRepositoryLockRetry } from "@/lib/fold/repository-lock-retry";
+import { scrubSuppressedForgeData } from "@/lib/fold/data-subject-suppression";
 import type {
   FoldModerationEvent,
   FoldResult,
@@ -217,8 +219,6 @@ type ReconciledEntityKind =
 type ReconciliationChangeKind = "ADD" | "CHANGE" | "REMOVE";
 
 const repositoryLockWaitDeadlineMs = 60_000;
-const repositoryLockInitialRetryMs = 10;
-const repositoryLockMaximumRetryMs = 250;
 export const repositoryLockNamespace = 684029183;
 const repositoryCoordinationFailure = "Unable to coordinate repository reconciliation.";
 
@@ -321,18 +321,6 @@ export async function reclaimCoordinationConnection(
   }
 
   return false;
-}
-
-function waitForRepositoryLockRetry(attempt: number, remainingMs: number): Promise<void> {
-  const retryCeilingMs = Math.min(
-    repositoryLockMaximumRetryMs,
-    repositoryLockInitialRetryMs * (2 ** Math.min(attempt, 10)),
-  );
-  const retryFloorMs = Math.ceil(retryCeilingMs / 2);
-  const jitteredRetryMs = retryFloorMs
-    + Math.floor(Math.random() * (retryCeilingMs - retryFloorMs + 1));
-  const retryMs = Math.max(1, Math.min(remainingMs, jitteredRetryMs));
-  return new Promise((resolve) => setTimeout(resolve, retryMs));
 }
 
 /**
@@ -1038,16 +1026,21 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         throw new Error(cost === undefined ? "Reconciliation publication requires a pending run."
           : "Reconciliation cost publication requires a pending run.");
       }
-      if (input.synchronization !== undefined) {
-        await synchronizeReconciliationEvidence(transaction, input.repositoryId, input.synchronization,
+      // Data-subject suppressions check the import write itself (issue 1071):
+      // inside the publication transaction, before any derived row or evidence
+      // fact is written, so a pass that commits after a removal can never
+      // re-write a suppressed person's identifiers.
+      const scrubbed = await scrubSuppressedForgeData(transaction, input.repositoryId, input);
+      if (scrubbed.synchronization !== undefined) {
+        await synchronizeReconciliationEvidence(transaction, input.repositoryId, scrubbed.synchronization,
           this.options.reconciliationFactByteLimit ?? DEFAULT_RECONCILIATION_FACT_BYTE_LIMIT);
       }
       // A stale snapshot must not replay a pre-claim state over rows an
       // identity claim has since written (issue 446), so resolve the fold's
       // unclaimed GitHub identities inside this publication transaction before
       // any materialization applies fold state.
-      const resolved = await reResolveIdentityClaims(transaction, input.fold);
-      const publication = { ...input, fold: resolved };
+      const resolved = await reResolveIdentityClaims(transaction, scrubbed.fold);
+      const publication = { ...scrubbed, fold: resolved };
       // One snapshot of the granted corrections for the whole run: settlements
       // and calibrations are two ways of recording the same issue's outcome, so
       // reading the table twice could price one against a grant the other never
