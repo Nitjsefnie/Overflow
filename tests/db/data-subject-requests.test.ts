@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Sql } from "postgres";
+import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
-import { PostgresFoldStore } from "@/lib/fold/postgres-store";
+import { PostgresFoldStore, repositoryLockNamespace } from "@/lib/fold/postgres-store";
 import { DATA_SUBJECT_TOMBSTONE_LOGIN, exportForgePerson, removeForgePerson } from "@/lib/accounts/forge-person";
 import type { GitHubIssue, GitHubIssueReference, GitHubPullRequest, GitHubPullRequestReview } from "@/lib/github/types";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
@@ -14,6 +14,7 @@ import { startPostgresContainer } from "../support/postgres-container";
 
 let sql: Sql;
 let container: StartedTestContainer;
+let databaseUrl: string;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
 // 32 raw bytes, base64url: a real key so the sponsor credential round-trips.
@@ -27,6 +28,7 @@ beforeAll(async () => {
     password: "data_subject_requests",
   });
   container = started.container;
+  databaseUrl = started.databaseUrl;
   process.env.DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
@@ -64,6 +66,7 @@ type HandSeeded = {
   personIssue: { id: string; githubIssueId: string; body: string };
   /** The sponsor-authored issue the person claimed as assignee. */
   claimedIssue: { id: string; githubIssueId: string };
+  actorIssue: { id: string; githubIssueId: string };
   memberIssue: { id: string; githubIssueId: string; body: string };
   personPullRequest: { id: string; githubPullRequestId: string; body: string };
   memberPullRequest: { id: string };
@@ -126,6 +129,16 @@ async function seedHandScenario(): Promise<HandSeeded> {
             ${`https://example.test/issues/${9_500_100 + seed}`}, 'CLOSED',
             ${`member-${seed}`}, 'M', 5, 5,
             ${`opening-${seed}-m`}, ${`sponsor-${seed}`}, '2026-09-01T08:00:00Z')
+    returning id, github_issue_id
+  `;
+  const [actorIssue] = await sql<{ id: string; github_issue_id: string }[]>`
+    insert into issues (github_issue_id, repository_id, issue_number, title, body, url, state,
+                        owner_github_login, opening_label, opening_comparison_points, opening_reserve_points,
+                        opening_source_event_id, opening_source_actor_login, opening_source_at)
+    values (${9_500_300 + seed}, ${repositoryId}, 4, 'Sponsor-acted work item', null,
+            ${`https://example.test/issues/${9_500_300 + seed}`}, 'CLOSED',
+            ${`sponsor-${seed}`}, 'M', 5, 5,
+            ${`opening-${seed}-a`}, ${login}, '2026-09-01T08:00:00Z')
     returning id, github_issue_id
   `;
   const [claimedIssue] = await sql<{ id: string; github_issue_id: string }[]>`
@@ -250,6 +263,7 @@ async function seedHandScenario(): Promise<HandSeeded> {
     person: { forgeId, login },
     personIssue: { id: personIssue!.id, githubIssueId: personIssue!.github_issue_id, body: personIssueBody },
     claimedIssue: { id: claimedIssue!.id, githubIssueId: claimedIssue!.github_issue_id },
+    actorIssue: { id: actorIssue!.id, githubIssueId: actorIssue!.github_issue_id },
     memberIssue: { id: memberIssue!.id, githubIssueId: memberIssue!.github_issue_id, body: memberIssueBody },
     personPullRequest: {
       id: personPullRequest!.id,
@@ -293,9 +307,10 @@ describe("data-subject export", () => {
 
     expect(storeOf(document, "users")).toMatchObject({ count: 0, rows: [] });
     expect(storeOf(document, "user_forge_identities")).toMatchObject({ count: 0, rows: [] });
-    expect(storeOf(document, "issues")).toMatchObject({ count: 2, rows: [
+    expect(storeOf(document, "issues")).toMatchObject({ count: 3, rows: [
       await rowJson("issues", seed.personIssue.id),
       await rowJson("issues", seed.claimedIssue.id),
+      await rowJson("issues", seed.actorIssue.id),
     ] });
     expect(storeOf(document, "pull_requests")).toMatchObject({ count: 1, rows: [
       await rowJson("pull_requests", seed.personPullRequest.id),
@@ -353,13 +368,15 @@ describe("data-subject removal", () => {
       login: seed.person.login,
     });
     if (outcome.kind !== "REMOVED") return;
+    // Captured before the removal: the journal row must still equal it after.
+    const changeBefore = await rowJson("reconciliation_changes", seed.changeRecord.id);
 
     // users: the person never signed in, so there is no row to pseudonymise.
     expect(outcome.perStore).toEqual({
       users: 0,
       apiTokens: 0,
       forgeIdentities: 0,
-      issues: 2,
+      issues: 3,
       pullRequests: 1,
       settlements: 1,
       evidenceFacts: 1,
@@ -375,6 +392,11 @@ describe("data-subject removal", () => {
     expect(claimedIssueAfter.claim_assignee_github_login).toBe(DATA_SUBJECT_TOMBSTONE_LOGIN);
     expect(claimedIssueAfter.claim_assignee_github_user_id).toBeNull();
     expect(claimedIssueAfter.body).toBeNull();
+    // The actor-only row: the removal scrubs the sponsor-actor copy that
+    // names the person and nothing else about the row.
+    const actorIssueAfter = await rowJson("issues", seed.actorIssue.id);
+    expect(actorIssueAfter.opening_source_actor_login).toBe(DATA_SUBJECT_TOMBSTONE_LOGIN);
+    expect(actorIssueAfter.owner_github_login).toBe(`sponsor-${seedCounter}`);
 
     // pull_requests: author copies scrubbed, the attribution key untouched.
     const personPrAfter = await rowJson("pull_requests", seed.personPullRequest.id);
@@ -447,9 +469,9 @@ describe("data-subject removal", () => {
     expect(suppression).toMatchObject({ provider: "github", forge_id: String(seed.person.forgeId), login: seed.person.login });
 
     // The change journal is kept: the append-only reconciliation history is
-    // not rewritten by a removal, and retention prunes it later.
-    const changeAfter = await rowJson("reconciliation_changes", seed.changeRecord.id);
-    expect(changeAfter).toEqual(await rowJson("reconciliation_changes", seed.changeRecord.id));
+    // not rewritten by a removal, and retention prunes it later. The snapshot
+    // was captured before the removal ran.
+    expect(await rowJson("reconciliation_changes", seed.changeRecord.id)).toEqual(changeBefore);
     const [changeCount] = await sql<{ count: number }[]>`
       select count(*)::int as count from reconciliation_changes
       where pull_request_id = ${seed.personPullRequest.id}
@@ -464,7 +486,7 @@ describe("data-subject removal", () => {
     }, { confirm: false });
     expect(planned.kind).toBe("PLANNED");
     if (planned.kind === "PLANNED") {
-      expect(planned.perStore).toMatchObject({ issues: 2, pullRequests: 1, settlements: 1, evidenceFacts: 1 });
+      expect(planned.perStore).toMatchObject({ issues: 3, pullRequests: 1, settlements: 1, evidenceFacts: 1 });
     }
     const personIssuePlanned = await rowJson("issues", seed.personIssue.id);
     expect(personIssuePlanned.owner_github_login).toBe(seed.person.login);
@@ -528,6 +550,45 @@ describe("data-subject removal", () => {
       select login from data_subject_suppressions where provider = 'github' and forge_id = ${forgeId}
     `;
     expect(suppression!.login).toBeNull();
+  });
+
+  it("case 8: the removal contends on the fold's repository locks and refuses while one is held", async () => {
+    const seed = await seedHandScenario();
+    // A raw client holds the fold pass's own session-level advisory lock on
+    // the seeded repository — the same key shape withRepositoryReconciliation
+    // takes (hashtextextended(repository id, the fold's lock namespace)).
+    const holdClient = postgres(databaseUrl, { max: 1 });
+    try {
+      await holdClient`
+        select pg_advisory_lock(hashtextextended(${seed.repositoryId}, ${repositoryLockNamespace}))
+      `;
+      // What this pins: the removal really contends on those keys — held, it
+      // waits out its budget and refuses closed instead of racing a fold
+      // pass's publication. The exact interleaving (a pass whose suppression
+      // read preceded the removal committing after it) is not drivable here;
+      // the shared lock is what makes it unreachable.
+      await expect(removeForgePerson(sql, {
+        provider: "github", forgeId: seed.person.forgeId,
+      }, { confirm: true, lockWaitMs: 200 })).rejects.toThrow("Unable to coordinate the data-subject removal.");
+      const [suppressionCount] = await sql<{ count: number }[]>`
+        select count(*)::int as count from data_subject_suppressions
+        where provider = 'github' and forge_id = ${seed.person.forgeId}
+      `;
+      expect(suppressionCount!.count).toBe(0);
+      const refusedRow = await rowJson("issues", seed.personIssue.id);
+      expect(refusedRow.owner_github_login).toBe(seed.person.login);
+    } finally {
+      await holdClient.end();
+    }
+    // Released, the removal acquires every lock and completes.
+    const outcome = await removeForgePerson(sql, {
+      provider: "github", forgeId: seed.person.forgeId,
+    }, { confirm: true });
+    expect(outcome).toMatchObject({ kind: "REMOVED", perStore: { issues: 3 } });
+    const [suppression] = await sql<{ login: string | null }[]>`
+      select login from data_subject_suppressions where provider = 'github' and forge_id = ${seed.person.forgeId}
+    `;
+    expect(suppression).not.toBeUndefined();
   });
 });
 
@@ -615,23 +676,16 @@ describe("suppression at the reconciliation import", () => {
         issue(personIssueId, 1, 11, login, forgeId, 9_600_000 + seedNumber),
         issue(memberIssueId, 2, 12, `member-${seedNumber}`, memberGitHubId, 9_600_100 + seedNumber),
       ],
-      run: async (options?: { rederive?: boolean }) => {
-        try {
-          return await reconcileRepository(
+      run: async (options?: { rederive?: boolean }) =>
+        reconcileRepository(
           {
             store: double.store,
             github: gatewayDouble(double.issues, githubRepositoryId),
             now: () => double.clock,
           },
-            repositoryId,
-            options,
-          );
-        } catch (error) {
-          const cause = (error as { cause?: { query?: string; parameters?: string[] } }).cause;
-          console.error("RECONCILE FAILED ON QUERY:", cause?.query, "PARAMS:", cause?.parameters);
-          throw error;
-        }
-      },
+          repositoryId,
+          options,
+        ),
     };
     const personIssueRow = () =>
       sql<{ owner_github_login: string; body: string | null }[]>`

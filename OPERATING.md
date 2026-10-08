@@ -284,11 +284,17 @@ Every later reconciliation pass checks the suppressions for its repository's
 provider inside the publication transaction, before any derived row or cache
 fact is written, and scrubs the person's identity from what it is about to
 write — so a pass after the removal can never reinstate what was removed, on a
-quiet pass or a full re-read. The recorded login is the one the commands
-resolved at removal time; if the person renames on the forge afterwards, run
-the removal command again (it refreshes the recorded login and re-scrubs the
-new copy). Backups taken before the removal keep the pre-removal data until
-each dump is pruned — in practice about 15 days, like any pre-deletion dump.
+quiet pass or a full re-read. A suppression by provider and numeric id applies
+across every instance of that provider, so the same id numbering two different
+people on two instances suppresses both — the request is honoured more widely
+than asked, never less. The removal takes the fold's own repository advisory
+locks for the provider's repositories while it works, so it cannot race a
+reconciliation pass that is mid-publication. The recorded login is the one the
+commands resolved at removal time; if the person renames on the forge
+afterwards, run the removal command again (it refreshes the recorded login and
+re-scrubs the new copy). Backups taken before the removal keep the pre-removal
+data until each dump is pruned — in practice about 15 days, like any
+pre-deletion dump.
 
 ### Running the commands
 
