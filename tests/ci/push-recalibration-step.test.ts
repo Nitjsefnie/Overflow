@@ -17,17 +17,15 @@ import { git } from "../support/scratch-git";
 /**
  * Issue 1036 moved the calibration push out of the calibrate job into
  * push-recalibration, a job that holds contents: write and runs no repository
- * or dependency code — its push half is inline shell where
- * scripts/push-recalibration.ts used to be invoked. A structural pin cannot
+ * or dependency code — its push half is inline shell. A structural pin cannot
  * tell a shell that commits and pushes from a shell that only says so, so this
  * suite EXECUTES the two steps the split introduced, the way the runner does —
  * bash with the runner's flags, in scratch repositories holding a bare origin,
- * a seed commit and a clone — mirroring how tests/scripts/push-recalibration.test.ts
- * covers the script whose semantics the shell mirrors, and how
- * tests/ci/docs-only-step.test.ts executes its step's real `run:` text. There
- * is NO NETWORK: the push URL is redirected to a local bare remote through the
- * PUSH_REMOTE_URL override the shell shares with the script, and the refusal
- * and race cases arrive as pre-receive hooks on that remote.
+ * a seed commit and a clone — the way tests/ci/docs-only-step.test.ts executes
+ * its step's real `run:` text. There is NO NETWORK: the push URL is redirected
+ * to a local bare remote through the PUSH_REMOTE_URL override the shell
+ * honors, and the refusal and race cases arrive as pre-receive hooks on that
+ * remote.
  *
  * Two halves:
  *
@@ -35,8 +33,7 @@ import { git } from "../support/scratch-git";
  *    the document bytes it received as github-actions[bot], pushes
  *    HEAD:refs/heads/main, fetch-rebase-retries once on a refusal, and fails
  *    with a ::error:: naming the recorded and measured floors when the remote
- *    refuses for good. Every case the script's own suite covers has its
- *    counterpart here.
+ *    refuses for good.
  *  - calibrate's "Export the recalibrated document": the diff decides
  *    `changed`, and the document bytes leave through a GITHUB_OUTPUT heredoc
  *    that the push job's env receives back byte-for-byte.
