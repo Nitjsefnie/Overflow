@@ -1,9 +1,25 @@
 import Link from "next/link";
 import { PublicAppShell } from "@/components/app-shell";
+import {
+  HOSTED_INSTANCE_ORIGIN,
+  HOSTED_ISSUES_URL,
+  HOSTED_SENSITIVE_URL,
+  readControllerIdentity,
+} from "@/lib/controller-config";
 import { ACCOUNT_DATA_REVISION } from "@/lib/legal-revisions";
 import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
 
+/** Link text for a channel URL: the bare URL without its scheme. */
+function displayUrl(url: string): string {
+  return url.replace(/^https?:\/\//i, "");
+}
+
 export function AccountDataNotice() {
+  const identity = readControllerIdentity();
+  // The hosted instance's own two GitHub routes render the established
+  // sentences about them; any other configuration renders the neutral shapes.
+  const githubRoutes =
+    identity.issuesUrl === HOSTED_ISSUES_URL && identity.sensitiveUrl === HOSTED_SENSITIVE_URL;
   return (
     <main className="page-content" id="main-content">
       <section className="page-heading" aria-labelledby="account-data-title">
@@ -27,24 +43,75 @@ export function AccountDataNotice() {
 
       <section className="surface" aria-labelledby="account-data-controller-heading">
         <h2 id="account-data-controller-heading">Controller and contact</h2>
-        <p>
-          The controller for the data this notice describes is the operator of this site — the
-          maintainer of the Nitjsefnie/Overflow project, personally. This notice describes that
-          hosted instance, the one you are reading it on, not the project&apos;s codebase.
-        </p>
-        <p>
-          Two contact routes exist, both on GitHub. For an ordinary request, open an issue at{" "}
-          <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
-            github.com/Nitjsefnie/Overflow/issues
-          </a>{" "}
-          — the tracker is public, so the request and any reply are public too. For anything
-          sensitive — a request carrying personal data you would not post publicly, for example —
-          use the private vulnerability reporting form at{" "}
-          <a href="https://github.com/Nitjsefnie/Overflow/security/advisories/new" rel="noreferrer">
-            github.com/Nitjsefnie/Overflow/security/advisories/new
-          </a>
-          , which is private. No email address is published.
-        </p>
+        {identity.isHosted ? (
+          <p>
+            The controller for the data this notice describes is the operator of this site —{" "}
+            {identity.name}. This notice describes that hosted instance, the one you are reading it
+            on, not the project&apos;s codebase.
+          </p>
+        ) : (
+          <p className="self-hosted-statement">
+            The controller for the data this notice describes is the operator of this site
+            {identity.name !== null && <> — {identity.name}</>}. This notice describes this
+            deployment of Overflow, a self-hosted copy — not the hosted instance at{" "}
+            {HOSTED_INSTANCE_ORIGIN} — and not the project&apos;s codebase.
+          </p>
+        )}
+        {identity.issuesUrl !== null && identity.sensitiveUrl !== null ? (
+          githubRoutes ? (
+            <p>
+              Two contact routes exist, both on GitHub. For an ordinary request, open an issue at{" "}
+              <a href={identity.issuesUrl} rel="noreferrer">
+                {displayUrl(identity.issuesUrl)}
+              </a>{" "}
+              — the tracker is public, so the request and any reply are public too. For anything
+              sensitive — a request carrying personal data you would not post publicly, for
+              example — use the private vulnerability reporting form at{" "}
+              <a href={identity.sensitiveUrl} rel="noreferrer">
+                {displayUrl(identity.sensitiveUrl)}
+              </a>
+              , which is private. No email address is published.
+            </p>
+          ) : (
+            <p>
+              This copy&apos;s operator publishes two contact routes. For an ordinary request,
+              open an issue at{" "}
+              <a href={identity.issuesUrl} rel="noreferrer">
+                {displayUrl(identity.issuesUrl)}
+              </a>
+              . For anything sensitive — a request carrying personal data you would not post
+              publicly, for example — use the sensitive-request route at{" "}
+              <a href={identity.sensitiveUrl} rel="noreferrer">
+                {displayUrl(identity.sensitiveUrl)}
+              </a>
+              .
+            </p>
+          )
+        ) : identity.issuesUrl !== null ? (
+          <p>
+            This copy&apos;s operator publishes one contact route. For an ordinary request, open
+            an issue at{" "}
+            <a href={identity.issuesUrl} rel="noreferrer">
+              {displayUrl(identity.issuesUrl)}
+            </a>
+            . No sensitive-request route is published, and no email address is published.
+          </p>
+        ) : identity.sensitiveUrl !== null ? (
+          <p>
+            This copy&apos;s operator publishes one contact route. For anything sensitive — a
+            request carrying personal data you would not post publicly, for example — use the
+            sensitive-request route at{" "}
+            <a href={identity.sensitiveUrl} rel="noreferrer">
+              {displayUrl(identity.sensitiveUrl)}
+            </a>
+            . No public issues channel is published, and no email address is published.
+          </p>
+        ) : (
+          <p>
+            This copy publishes no contact route: its operator has configured none. No email
+            address is published.
+          </p>
+        )}
       </section>
 
       <section className="surface" aria-labelledby="account-data-stored-heading">
@@ -241,15 +308,27 @@ export function AccountDataNotice() {
           <li>The daily database backups described in the How long it is kept section below hold this data too.</li>
         </ul>
         <p>
-          To ask for data about you to be removed, open an issue at{" "}
-          <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
-            github.com/Nitjsefnie/Overflow/issues
-          </a>{" "}
-          from the account the request is about. For a public request no private channel exists, and opening an
-          issue needs a GitHub account; the Controller and contact section names the private route for a request
-          you would not post publicly. Overflow has no removal feature for people who have not signed in, so the
-          operator handles a request by hand. Content still on GitHub or GitLab in a registered repository is read again at the next
-          pass, so removing it there first is what keeps it out of Overflow.
+          {identity.issuesUrl === null ? (
+            <>
+              To ask for data about you to be removed, contact this copy&apos;s operator (see
+              Controller and contact above).{" "}
+            </>
+          ) : (
+            <>
+              To ask for data about you to be removed, open an issue at{" "}
+              <a href={identity.issuesUrl} rel="noreferrer">
+                {displayUrl(identity.issuesUrl)}
+              </a>{" "}
+              from the account the request is about. For a public request no private channel exists,
+              and opening an issue needs a GitHub account
+              {identity.sensitiveUrl === null
+                ? ". "
+                : "; the Controller and contact section names the private route for a request you would not post publicly. "}
+            </>
+          )}
+          Overflow has no removal feature for people who have not signed in, so the operator handles a
+          request by hand. Content still on GitHub or GitLab in a registered repository is read again at the
+          next pass, so removing it there first is what keeps it out of Overflow.
         </p>
       </section>
 
@@ -473,8 +552,10 @@ export function AccountDataNotice() {
         <ul>
           <li>
             <strong>Access and export</strong> — download an export of the data stored about your
-            account from your dashboard (see Your controls below); if you cannot sign in, request
-            it by opening an issue.
+            account from your dashboard (see Your controls below); if you cannot sign in,{" "}
+            {identity.issuesUrl === null
+              ? "request it by contacting this copy's operator."
+              : "request it by opening an issue."}
           </li>
           <li>
             <strong>Rectification</strong> — much of it self-corrects: signing in again re-reads
@@ -485,7 +566,10 @@ export function AccountDataNotice() {
           <li>
             <strong>Erasure</strong> — delete your account from your dashboard (What deletion
             means, below, describes what deletion keeps as pseudonymised rows); if you cannot sign
-            in, request it by opening an issue.
+            in,{" "}
+            {identity.issuesUrl === null
+              ? "request it by contacting this copy's operator."
+              : "request it by opening an issue."}
           </li>
           <li>
             <strong>Restriction and objection</strong> — contact the operator. Concretely, the
@@ -544,14 +628,26 @@ export function AccountDataNotice() {
             public request is needed.
           </li>
           <li>
-            If you cannot sign in to Overflow, request deletion or an export of the data stored about
-            your account by opening an issue at{" "}
-            <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
-              github.com/Nitjsefnie/Overflow/issues
-            </a>{" "}
-            from the GitHub account the request is about. For a public request no private channel
-            exists; the Controller and contact section names the private route for anything
-            sensitive.
+            {identity.issuesUrl === null ? (
+              <>
+                If you cannot sign in to Overflow, request deletion or an export of the data stored
+                about your account by contacting this copy&apos;s operator (see Controller and
+                contact above).
+              </>
+            ) : (
+              <>
+                If you cannot sign in to Overflow, request deletion or an export of the data stored
+                about your account by opening an issue at{" "}
+                <a href={identity.issuesUrl} rel="noreferrer">
+                  {displayUrl(identity.issuesUrl)}
+                </a>{" "}
+                from the GitHub account the request is about. For a public request no private
+                channel exists
+                {identity.sensitiveUrl === null
+                  ? "."
+                  : "; the Controller and contact section names the private route for anything sensitive."}
+              </>
+            )}
           </li>
           <li>
             An export contains the fields stored about your account — a stored secret appears only as
@@ -646,11 +742,17 @@ export function AccountDataNotice() {
           first, and refuses while your account still sponsors a registered repository.
         </p>
         <p>
-          If you cannot sign in, request deletion by opening an issue at{" "}
-          <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
-            github.com/Nitjsefnie/Overflow/issues
-          </a>
-          .
+          {identity.issuesUrl === null ? (
+            <>If you cannot sign in, request deletion by contacting this copy&apos;s operator.</>
+          ) : (
+            <>
+              If you cannot sign in, request deletion by opening an issue at{" "}
+              <a href={identity.issuesUrl} rel="noreferrer">
+                {displayUrl(identity.issuesUrl)}
+              </a>
+              .
+            </>
+          )}
         </p>
       </section>
     </main>

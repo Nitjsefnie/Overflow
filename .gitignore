@@ -220,6 +220,7 @@ src/lib/*
 !src/lib/format-instant.ts
 !src/lib/format-signed.ts
 !src/lib/legal-revisions.ts
+!src/lib/controller-config.ts
 !src/lib/plural.ts
 !src/lib/strip-name-prefix.ts
 !src/lib/version.ts

@@ -3,7 +3,7 @@
 import { render, screen } from "@testing-library/react";
 import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const signIn = vi.hoisted(() => vi.fn());
 
@@ -62,6 +62,10 @@ function keptList(section: Element): Element {
 }
 
 describe("account-data notice page", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("mentions no avatar anywhere: Overflow stopped collecting the avatar URL (issue 1075)", async () => {
     await renderAccountDataPage();
 
@@ -121,6 +125,8 @@ describe("account-data notice page", () => {
   });
 
   it("points its external links at github.com over https, including the two named controls", async () => {
+    // The maintainer's channels render on the hosted origin (issue 1077).
+    vi.stubEnv("APP_URL", "https://overflow.nitjsefni.eu");
     await renderAccountDataPage();
 
     const external = Array.from(document.querySelectorAll("a[href]"))
@@ -142,6 +148,8 @@ describe("account-data notice page", () => {
   });
 
   it("reaches the request route from the deletion description", async () => {
+    // The maintainer's channels render on the hosted origin (issue 1077).
+    vi.stubEnv("APP_URL", "https://overflow.nitjsefni.eu");
     await renderAccountDataPage();
 
     const deletionSection = document.getElementById("account-data-deletion-heading")!.closest("section");
@@ -175,6 +183,8 @@ describe("account-data notice page", () => {
   });
 
   it("reaches the request route from the controls section too, for someone who cannot sign in", async () => {
+    // The maintainer's channels render on the hosted origin (issue 1077).
+    vi.stubEnv("APP_URL", "https://overflow.nitjsefni.eu");
     await renderAccountDataPage();
 
     const controlsSection = document.getElementById("account-data-controls-heading")!.closest("section");
@@ -186,6 +196,8 @@ describe("account-data notice page", () => {
   });
 
   it("reaches the request route from the non-member section", async () => {
+    // The maintainer's channels render on the hosted origin (issue 1077).
+    vi.stubEnv("APP_URL", "https://overflow.nitjsefni.eu");
     await renderAccountDataPage();
 
     const nonMemberSection = document.getElementById("account-data-non-member-heading")!.closest("section");
@@ -283,6 +295,8 @@ describe("account-data notice page", () => {
   });
 
   it("opens with the controller section, which carries both contact routes", async () => {
+    // The maintainer's channels render on the hosted origin (issue 1077).
+    vi.stubEnv("APP_URL", "https://overflow.nitjsefni.eu");
     await renderAccountDataPage();
 
     const sections = Array.from(document.querySelectorAll("main section.surface"));
@@ -550,5 +564,115 @@ describe("routes that link the notice", () => {
     const form = screen.getByRole("button", { name: "Sign in with GitHub" }).closest("form")!;
     expect(link.parentElement).toBe(form.parentElement);
     expect(form.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe("controller identity renders from the instance's configuration (issue 1077)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("renders the maintainer's channels on the hosted origin, with no self-hosted statement", async () => {
+    vi.stubEnv("APP_URL", "https://overflow.nitjsefni.eu");
+    await renderAccountDataPage();
+
+    const controller = document.getElementById("account-data-controller-heading")!.closest("section")!;
+    expect(
+      controller.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/issues"]'),
+      "the hosted instance publishes the project's public tracker",
+    ).not.toBeNull();
+    expect(
+      controller.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/security/advisories/new"]'),
+      "the hosted instance publishes the project's private reporting form",
+    ).not.toBeNull();
+    expect(
+      document.querySelector(".self-hosted-statement"),
+      "the hosted instance states no self-hosted disclosure",
+    ).toBeNull();
+  });
+
+  it("renders the plain self-hosted statement on another origin, and publishes no channel the operator never configured", async () => {
+    vi.stubEnv("APP_URL", "https://selfhost.example");
+    await renderAccountDataPage();
+
+    const statement = document.querySelector("p.self-hosted-statement");
+    expect(statement, "a non-hosted origin carries the plain self-hosted statement").not.toBeNull();
+    expect(statement, "the statement is one a reader can see").toBeVisible();
+    expect(
+      statement!.textContent,
+      "the statement names the hosted instance so a reader can reach it",
+    ).toContain("https://overflow.nitjsefni.eu");
+
+    const controller = document.getElementById("account-data-controller-heading")!.closest("section")!;
+    expect(
+      controller.querySelectorAll("a[href]"),
+      "no contact detail is invented for an operator who configured none",
+    ).toHaveLength(0);
+    expect(
+      document.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/issues"]'),
+      "the maintainer's tracker is not published as this copy's channel",
+    ).toBeNull();
+    expect(
+      document.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/security/advisories/new"]'),
+      "the maintainer's private form is not published as this copy's channel",
+    ).toBeNull();
+    expect(
+      document
+        .getElementById("account-data-deletion-heading")!
+        .closest("section")!
+        .querySelector('a[href="https://github.com/Nitjsefni/Overflow/issues"]'),
+      "the deletion description does not send readers to the maintainer's tracker",
+    ).toBeNull();
+  });
+
+  it("renders the operator's configured identity and channels in place of the maintainer's", async () => {
+    vi.stubEnv("APP_URL", "https://selfhost.example");
+    vi.stubEnv("CONTROLLER_NAME", "Example Operator");
+    vi.stubEnv("CONTROLLER_ISSUES_URL", "https://issues.example.org/overflow-requests");
+    vi.stubEnv("CONTROLLER_SENSITIVE_URL", "https://requests.example.org/sensitive");
+    await renderAccountDataPage();
+
+    const statement = document.querySelector("p.self-hosted-statement");
+    expect(statement, "a non-hosted origin carries the plain self-hosted statement").not.toBeNull();
+    expect(statement!.textContent, "the configured operator's name renders").toContain("Example Operator");
+
+    const controller = document.getElementById("account-data-controller-heading")!.closest("section")!;
+    expect(
+      controller.querySelector('a[href="https://issues.example.org/overflow-requests"]'),
+      "the operator's public channel renders in the controller section",
+    ).not.toBeNull();
+    expect(
+      controller.querySelector('a[href="https://requests.example.org/sensitive"]'),
+      "the operator's sensitive-request route renders in the controller section",
+    ).not.toBeNull();
+    expect(
+      document.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/issues"]'),
+      "the maintainer's tracker is not published anywhere on the notice",
+    ).toBeNull();
+
+    // The request channel is one fact rendered wherever the notice names it:
+    // the secondary mentions render the configured channel too, not only the
+    // controller section.
+    expect(
+      document
+        .getElementById("account-data-non-member-heading")!
+        .closest("section")!
+        .querySelector('a[href="https://issues.example.org/overflow-requests"]'),
+      "the non-member section's removal request names the operator's channel",
+    ).not.toBeNull();
+    expect(
+      document
+        .getElementById("account-data-controls-heading")!
+        .closest("section")!
+        .querySelector('a[href="https://issues.example.org/overflow-requests"]'),
+      "the controls section's cannot-sign-in request names the operator's channel",
+    ).not.toBeNull();
+    expect(
+      document
+        .getElementById("account-data-deletion-heading")!
+        .closest("section")!
+        .querySelector('a[href="https://issues.example.org/overflow-requests"]'),
+      "the deletion description names the operator's channel",
+    ).not.toBeNull();
   });
 });
