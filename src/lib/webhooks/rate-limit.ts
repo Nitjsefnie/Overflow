@@ -224,3 +224,62 @@ interface KeyedBucket {
   /** Whether the key's previous admit was a decline — the burst tracker. */
   declining: boolean;
 }
+
+export interface ReceiverRateLimiterOptions {
+  /** Which receiver the gate serves; the decline line names it verbatim. */
+  receiver: "github" | "gitlab";
+  /** Maximum tokens held at once; the bucket starts full. */
+  capacity: number;
+  /** Tokens restored per 60,000 ms of elapsed time, capped at capacity. */
+  refillPerMinute: number;
+  /** The injectable clock; `Date.now` in production. */
+  nowMs?: () => number;
+  /**
+   * Where decline lines are emitted, shaped like console.error;
+   * console.error in production.
+   */
+  error?: (...args: unknown[]) => void;
+}
+
+export interface ReceiverRateLimiter {
+  /**
+   * Attempts to consume the shared bucket's one token. True when admitted;
+   * false when the bucket is empty — the caller maps that to 429 exactly as
+   * it mapped the boolean token bucket before (issue 852's shape, unchanged).
+   */
+  admit(): boolean;
+}
+
+/**
+ * The webhook receivers' shared gate, with the once-per-burst decline signal
+ * the incident response needs (issue 1053). It is `createRateLimiter` over a
+ * single constant key — one shared bucket per receiver, the deliberate shape
+ * issue 852 chose for unauthenticated senders — so the decline mechanism is
+ * the #1054 limiter's own `firstDecline` transition rather than a second
+ * implementation beside it. A declined request bumps the receiver's running
+ * decline count; the burst's FIRST decline emits one fixed-template line
+ * naming the receiver and that count, and the burst's continuation stays
+ * silent until a refilled token admits (which ends the burst), so a sustained
+ * flood costs one line per burst, never one line per request.
+ */
+export function createReceiverRateLimiter(options: ReceiverRateLimiterOptions): ReceiverRateLimiter {
+  const { receiver, capacity, refillPerMinute } = options;
+  const limiter = createRateLimiter({ nowMs: options.nowMs ?? (() => Date.now()) });
+  const error = options.error ?? ((...args: unknown[]) => console.error(...args));
+  let declines = 0;
+  // The receivers share one bucket per process by design (issue 852); the
+  // constant key is that design expressed in the keyed limiter's terms.
+  const sharedKey = "webhook-receiver-shared";
+
+  return {
+    admit(): boolean {
+      const result = limiter.admit(sharedKey, { capacity, refillPerMinute });
+      if (result.allowed) return true;
+      declines += 1;
+      if (result.firstDecline) {
+        error(`Webhook rate limit engaged for the ${receiver} receiver (declines so far: ${declines}).`);
+      }
+      return false;
+    },
+  };
+}

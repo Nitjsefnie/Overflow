@@ -1,9 +1,26 @@
 import Link from "next/link";
 import { PublicAppShell } from "@/components/app-shell";
+import {
+  HOSTED_INSTANCE_ORIGIN,
+  HOSTED_ISSUES_URL,
+  HOSTED_SENSITIVE_URL,
+  readControllerIdentity,
+} from "@/lib/controller-config";
 import { ACCOUNT_DATA_REVISION } from "@/lib/legal-revisions";
+import { PROCESSING_ACTIVITIES } from "@/lib/processing-activities";
 import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
 
+/** Link text for a channel URL: the bare URL without its scheme. */
+function displayUrl(url: string): string {
+  return url.replace(/^https?:\/\//i, "");
+}
+
 export function AccountDataNotice() {
+  const identity = readControllerIdentity();
+  // The hosted instance's own two GitHub routes render the established
+  // sentences about them; any other configuration renders the neutral shapes.
+  const githubRoutes =
+    identity.issuesUrl === HOSTED_ISSUES_URL && identity.sensitiveUrl === HOSTED_SENSITIVE_URL;
   return (
     <main className="page-content" id="main-content">
       <section className="page-heading" aria-labelledby="account-data-title">
@@ -27,24 +44,75 @@ export function AccountDataNotice() {
 
       <section className="surface" aria-labelledby="account-data-controller-heading">
         <h2 id="account-data-controller-heading">Controller and contact</h2>
-        <p>
-          The controller for the data this notice describes is the operator of this site — the
-          maintainer of the Nitjsefnie/Overflow project, personally. This notice describes that
-          hosted instance, the one you are reading it on, not the project&apos;s codebase.
-        </p>
-        <p>
-          Two contact routes exist, both on GitHub. For an ordinary request, open an issue at{" "}
-          <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
-            github.com/Nitjsefnie/Overflow/issues
-          </a>{" "}
-          — the tracker is public, so the request and any reply are public too. For anything
-          sensitive — a request carrying personal data you would not post publicly, for example —
-          use the private vulnerability reporting form at{" "}
-          <a href="https://github.com/Nitjsefnie/Overflow/security/advisories/new" rel="noreferrer">
-            github.com/Nitjsefnie/Overflow/security/advisories/new
-          </a>
-          , which is private. No email address is published.
-        </p>
+        {identity.isHosted ? (
+          <p>
+            The controller for the data this notice describes is the operator of this site —{" "}
+            {identity.name}. This notice describes that hosted instance, the one you are reading it
+            on, not the project&apos;s codebase.
+          </p>
+        ) : (
+          <p className="self-hosted-statement">
+            The controller for the data this notice describes is the operator of this site
+            {identity.name !== null && <> — {identity.name}</>}. This notice describes this
+            deployment of Overflow, a self-hosted copy — not the hosted instance at{" "}
+            {HOSTED_INSTANCE_ORIGIN} — and not the project&apos;s codebase.
+          </p>
+        )}
+        {identity.issuesUrl !== null && identity.sensitiveUrl !== null ? (
+          githubRoutes ? (
+            <p>
+              Two contact routes exist, both on GitHub. For an ordinary request, open an issue at{" "}
+              <a href={identity.issuesUrl} rel="noreferrer">
+                {displayUrl(identity.issuesUrl)}
+              </a>{" "}
+              — the tracker is public, so the request and any reply are public too. For anything
+              sensitive — a request carrying personal data you would not post publicly, for
+              example — use the private vulnerability reporting form at{" "}
+              <a href={identity.sensitiveUrl} rel="noreferrer">
+                {displayUrl(identity.sensitiveUrl)}
+              </a>
+              , which is private. No email address is published.
+            </p>
+          ) : (
+            <p>
+              This copy&apos;s operator publishes two contact routes. For an ordinary request,
+              open an issue at{" "}
+              <a href={identity.issuesUrl} rel="noreferrer">
+                {displayUrl(identity.issuesUrl)}
+              </a>
+              . For anything sensitive — a request carrying personal data you would not post
+              publicly, for example — use the sensitive-request route at{" "}
+              <a href={identity.sensitiveUrl} rel="noreferrer">
+                {displayUrl(identity.sensitiveUrl)}
+              </a>
+              .
+            </p>
+          )
+        ) : identity.issuesUrl !== null ? (
+          <p>
+            This copy&apos;s operator publishes one contact route. For an ordinary request, open
+            an issue at{" "}
+            <a href={identity.issuesUrl} rel="noreferrer">
+              {displayUrl(identity.issuesUrl)}
+            </a>
+            . No sensitive-request route is published, and no email address is published.
+          </p>
+        ) : identity.sensitiveUrl !== null ? (
+          <p>
+            This copy&apos;s operator publishes one contact route. For anything sensitive — a
+            request carrying personal data you would not post publicly, for example — use the
+            sensitive-request route at{" "}
+            <a href={identity.sensitiveUrl} rel="noreferrer">
+              {displayUrl(identity.sensitiveUrl)}
+            </a>
+            . No public issues channel is published, and no email address is published.
+          </p>
+        ) : (
+          <p>
+            This copy publishes no contact route: its operator has configured none. No email
+            address is published.
+          </p>
+        )}
       </section>
 
       <section className="surface" aria-labelledby="account-data-stored-heading">
@@ -52,15 +120,15 @@ export function AccountDataNotice() {
         <p>You sign in with GitHub and can also link a GitLab identity for each GitLab instance you use.</p>
         <p>
           Signing in with GitHub creates one account row in Overflow&apos;s database. The sign-in reads only the
-          public fields of GitHub&apos;s <code>/user</code> endpoint: your numeric GitHub user id, your login, and
-          your avatar URL. Which permission it asks GitHub for depends on the sign-in you choose. Signing in to
+          public fields of GitHub&apos;s <code>/user</code> endpoint: your numeric GitHub user id and your
+          login. Which permission it asks GitHub for depends on the sign-in you choose. Signing in to
           contribute requests no permission at all. Signing in to register a repository requests exactly one — the{" "}
           <code>admin:repo_hook</code> scope, which creating and removing Overflow&apos;s webhook on a repository you
           administer needs — and a contributor who later registers a repository is asked for that one scope then.
           Overflow reads no email address anywhere: it requests no email scope and reads no email endpoint.
         </p>
         <ul>
-          <li>your GitHub user id, login, and avatar URL</li>
+          <li>your GitHub user id and login</li>
           <li>the role Overflow assigns you — MEMBER or MODERATOR</li>
           <li>an enforcement state and a confirmed-miscalibration count, which moderation uses</li>
           <li>the row&apos;s creation and last-update timestamps</li>
@@ -139,8 +207,7 @@ export function AccountDataNotice() {
         <p>The site operator administers Overflow&apos;s database and the token&apos;s encryption key.</p>
         <p>
           Other signed-in members and moderators see your GitHub login — the member roster and the moderation
-          surfaces display it. Your avatar URL is stored and included in your account-data export (which only
-          you see); it is not displayed to other members.
+          surfaces display it. It is not displayed to anyone else.
         </p>
         <p>
           Your linked GitLab identities are shown only to you in your dashboard&apos;s forge-identities panel,
@@ -186,7 +253,7 @@ export function AccountDataNotice() {
           2026-09-26 may persist until the repository is unregistered: unregistering a repository scrubs what
           earlier passes stored (unless a settlement from the last few minutes is still being computed).
         </p>
-        <p>Overflow stores no avatar and no display name for someone who has not signed in.</p>
+        <p>Overflow stores no display name for someone who has not signed in.</p>
         <p>
           Nothing about a person who has not signed in is shown to a visitor who is not signed in. Signed-in
           members see a claim assignee&apos;s login and issue titles on the issues board. A repository&apos;s
@@ -242,15 +309,41 @@ export function AccountDataNotice() {
           <li>The daily database backups described in the How long it is kept section below hold this data too.</li>
         </ul>
         <p>
-          To ask for data about you to be removed, open an issue at{" "}
-          <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
-            github.com/Nitjsefnie/Overflow/issues
-          </a>{" "}
-          from the account the request is about. For a public request no private channel exists, and opening an
-          issue needs a GitHub account; the Controller and contact section names the private route for a request
-          you would not post publicly. Overflow has no removal feature for people who have not signed in, so the
-          operator handles a request by hand. Content still on GitHub or GitLab in a registered repository is read again at the next
-          pass, so removing it there first is what keeps it out of Overflow.
+          {identity.issuesUrl === null ? (
+            <>
+              To ask for data about you to be removed, contact this copy&apos;s operator (see
+              Controller and contact above).{" "}
+            </>
+          ) : (
+            <>
+              To ask for data about you to be removed, open an issue at{" "}
+              <a href={identity.issuesUrl} rel="noreferrer">
+                {displayUrl(identity.issuesUrl)}
+              </a>{" "}
+              from the account the request is about. For a public request no private channel exists,
+              and opening an issue needs a GitHub account
+              {identity.sensitiveUrl === null
+                ? ". "
+                : "; the Controller and contact section names the private route for a request you would not post publicly. "}
+            </>
+          )}
+          The operator answers with a documented procedure, keyed by the forge provider, its
+          instance origin and your numeric forge account id. They can produce an export of the rows
+          naming you, including linked account identities, issues and claim assignees, pull requests,
+          settlements, cached authors and history actors, policy diagnostics, change-log entries,
+          moderation notes and the suppression decision itself. Numeric ids control matching where
+          present; verified login aliases cover fields that have no id. A removal clears linked
+          credentials when it pseudonymises an account, tombstones the matched identity copies,
+          removes stored body text on rows you authored, and preserves ledger attribution and other
+          people&apos;s rows. Existing moderation notes and the change journal stay as written; existing
+          policy diagnostics stay until a later publication replaces them. The export shows these
+          retained records. A recorded suppression applies within that forge instance to future
+          derived rows, cache identities and generated policy diagnostics before they are written.
+          It retains verified aliases across repeated requests and learns new ones from numeric
+          evidence on import. If a renamed login occurs only in fields without numeric evidence,
+          the operator must verify and add that alias to the request. The suppression does not
+          rewrite retained audit text, titles or proof material; it prevents the matched structured
+          identities and generated diagnostic references from being reinstated.
         </p>
       </section>
 
@@ -288,24 +381,9 @@ export function AccountDataNotice() {
         <h2 id="account-data-purposes-heading">Purposes and legal bases</h2>
         <p>Each activity this notice describes, and the basis it relies on:</p>
         <ul>
-          <li>
-            running the service for signed-in members — accounts, the shared ledger, claims, and
-            dashboards — under performance of a contract: your use of the service
-          </li>
-          <li>
-            reading public forge data about people who have never signed in — reconciliation, the
-            ledger, and settlement proofs — under legitimate interests: operating a public
-            work-attribution tracker, weighed against their rights and freedoms
-          </li>
-          <li>
-            server logs, database backups, and abuse and security handling, including
-            Cloudflare&apos;s — under legitimate interests: securing and operating the service
-          </li>
-          <li>
-            automated scoring and moderation, described under Scoring and sanctions below — under
-            legitimate interests: keeping the ledger&apos;s records accurate and its rules
-            enforceable
-          </li>
+          {PROCESSING_ACTIVITIES.map((activity) => (
+            <li key={activity.identifier}>{activity.noticeLabel}</li>
+          ))}
         </ul>
       </section>
 
@@ -319,7 +397,7 @@ export function AccountDataNotice() {
             submitted in transit, including GitLab tokens, necessarily passes through it
           </li>
           <li>
-            GitHub, Inc. (US) — sign-in reads your numeric id, login, and avatar URL from
+            GitHub, Inc. (US) — sign-in reads your numeric id and login from
             GitHub&apos;s API; requests are filed on the public issue tracker; and Overflow reads
             the registered repositories&apos; issues, pull requests, reviews, and diffs from GitHub
           </li>
@@ -368,7 +446,7 @@ export function AccountDataNotice() {
           <li>
             Signed-in state is an encrypted cookie — a JSON Web Encryption token, not a plain signed JWT — which
             expires after 30 days, and Overflow keeps no server-side session rows. The cookie records the identity
-            the sign-in read from GitHub — your login and your avatar URL — together with Overflow&apos;s own
+            the sign-in read from GitHub — your login — together with Overflow&apos;s own
             reference to your account and your role, when you last completed a GitHub sign-in, and whether the
             permissions GitHub granted at sign-in include webhook administration, which decides whether the
             registration page shows its form. Signing out clears that cookie and nothing else.
@@ -474,19 +552,24 @@ export function AccountDataNotice() {
         <ul>
           <li>
             <strong>Access and export</strong> — download an export of the data stored about your
-            account from your dashboard (see Your controls below); if you cannot sign in, request
-            it by opening an issue.
+            account from your dashboard (see Your controls below); if you cannot sign in,{" "}
+            {identity.issuesUrl === null
+              ? "request it by contacting this copy's operator."
+              : "request it by opening an issue."}
           </li>
           <li>
             <strong>Rectification</strong> — much of it self-corrects: signing in again re-reads
-            your GitHub login and avatar, re-linking a GitLab identity refreshes its stored
+            your GitHub login, re-linking a GitLab identity refreshes its stored
             verification, and reconciliation keeps overwriting the forge data it re-reads. For the
             rest, contact the operator (see Controller and contact above).
           </li>
           <li>
             <strong>Erasure</strong> — delete your account from your dashboard (What deletion
             means, below, describes what deletion keeps as pseudonymised rows); if you cannot sign
-            in, request it by opening an issue.
+            in,{" "}
+            {identity.issuesUrl === null
+              ? "request it by contacting this copy's operator."
+              : "request it by opening an issue."}
           </li>
           <li>
             <strong>Restriction and objection</strong> — contact the operator. Concretely, the
@@ -545,14 +628,26 @@ export function AccountDataNotice() {
             public request is needed.
           </li>
           <li>
-            If you cannot sign in to Overflow, request deletion or an export of the data stored about
-            your account by opening an issue at{" "}
-            <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
-              github.com/Nitjsefnie/Overflow/issues
-            </a>{" "}
-            from the GitHub account the request is about. For a public request no private channel
-            exists; the Controller and contact section names the private route for anything
-            sensitive.
+            {identity.issuesUrl === null ? (
+              <>
+                If you cannot sign in to Overflow, request deletion or an export of the data stored
+                about your account by contacting this copy&apos;s operator (see Controller and
+                contact above).
+              </>
+            ) : (
+              <>
+                If you cannot sign in to Overflow, request deletion or an export of the data stored
+                about your account by opening an issue at{" "}
+                <a href={identity.issuesUrl} rel="noreferrer">
+                  {displayUrl(identity.issuesUrl)}
+                </a>{" "}
+                from the GitHub account the request is about. For a public request no private
+                channel exists
+                {identity.sensitiveUrl === null
+                  ? "."
+                  : "; the Controller and contact section names the private route for anything sensitive."}
+              </>
+            )}
           </li>
           <li>
             An export contains the fields stored about your account — a stored secret appears only as
@@ -583,7 +678,6 @@ export function AccountDataNotice() {
         <p>Deletion removes:</p>
         <ul>
           <li>your GitHub login, replaced with the placeholder (deleted account)</li>
-          <li>your avatar URL</li>
           <li>Overflow&apos;s stored access token for your GitHub account</li>
           <li>your API token, if you have one</li>
           <li>
@@ -648,11 +742,17 @@ export function AccountDataNotice() {
           first, and refuses while your account still sponsors a registered repository.
         </p>
         <p>
-          If you cannot sign in, request deletion by opening an issue at{" "}
-          <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
-            github.com/Nitjsefnie/Overflow/issues
-          </a>
-          .
+          {identity.issuesUrl === null ? (
+            <>If you cannot sign in, request deletion by contacting this copy&apos;s operator.</>
+          ) : (
+            <>
+              If you cannot sign in, request deletion by opening an issue at{" "}
+              <a href={identity.issuesUrl} rel="noreferrer">
+                {displayUrl(identity.issuesUrl)}
+              </a>
+              .
+            </>
+          )}
         </p>
       </section>
     </main>

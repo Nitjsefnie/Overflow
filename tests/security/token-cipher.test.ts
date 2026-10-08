@@ -8,7 +8,7 @@ import {
   loadTokenKeySet,
   tokenKeySetFrom,
 } from "@/lib/security/token-cipher";
-import { legacyV1Envelope, legacyV1Key, legacyV1Plaintext } from "../support/legacy-token-envelope";
+import { legacyV1Envelope, legacyV1Key } from "../support/legacy-token-envelope";
 
 const encryptionKey = randomBytes(32).toString("base64url");
 const otherKey = randomBytes(32).toString("base64url");
@@ -39,6 +39,17 @@ function sealKnownAnswer(encodedKey: string, literalAssociatedData: string, plai
   cipher.setAAD(Buffer.from(literalAssociatedData, "utf8"));
   const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   return ["v2", expectedKeyId(encodedKey), iv.toString("base64url"), cipher.getAuthTag().toString("base64url"),
+    ciphertext.toString("base64url")].join(".");
+}
+
+// Seals the way the persisted v1 format was specified, with raw node:crypto
+// and no associated data, so a v1 envelope of a known plaintext can be offered
+// to the module the way the issue constructs it.
+function sealLegacyV1(encodedKey: string, plaintext: string): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", Buffer.from(encodedKey, "base64url"), iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  return ["v1", iv.toString("base64url"), cipher.getAuthTag().toString("base64url"),
     ciphertext.toString("base64url")].join(".");
 }
 
@@ -161,11 +172,23 @@ describe("stored credential cipher", () => {
       webhookBinding)).toThrow(decryptionFailure);
   });
 
-  it("still decrypts a pre-change v1 envelope under the current or the previous key", () => {
-    expect(decryptToken(legacyV1Envelope, legacyV1Key, oauthBinding)).toBe(legacyV1Plaintext);
-    expect(decryptToken(legacyV1Envelope, { current: otherKey, previous: legacyV1Key }, oauthBinding))
-      .toBe(legacyV1Plaintext);
-    expect(() => decryptToken(legacyV1Envelope, otherKey, oauthBinding)).toThrow(decryptionFailure);
+  it("refuses a hand-built v1 envelope of a known plaintext under any binding", () => {
+    const v1Envelope = sealLegacyV1(encryptionKey, "secret-of-A");
+    const bindingA = credentialBinding.webhookSecret("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    const bindingB = credentialBinding.webhookSecret("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+
+    expect(() => decryptToken(v1Envelope, encryptionKey, bindingA)).toThrow(decryptionFailure);
+    expect(() => decryptToken(v1Envelope, encryptionKey, bindingB)).toThrow(decryptionFailure);
+    expect(() => decryptToken(v1Envelope, { current: encryptionKey, previous: otherKey }, bindingA))
+      .toThrow(decryptionFailure);
+    expect(() => decryptToken(v1Envelope, otherKey, bindingA)).toThrow(decryptionFailure);
+  });
+
+  it("refuses the persisted pre-change v1 envelope under any key or binding", () => {
+    expect(() => decryptToken(legacyV1Envelope, legacyV1Key, oauthBinding)).toThrow(decryptionFailure);
+    expect(() => decryptToken(legacyV1Envelope, { current: otherKey, previous: legacyV1Key }, oauthBinding))
+      .toThrow(decryptionFailure);
+    expect(() => decryptToken(legacyV1Envelope, legacyV1Key, forgeBinding)).toThrow(decryptionFailure);
   });
 
   it("refuses a tampered iv, tag, ciphertext or key id", () => {

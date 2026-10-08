@@ -59,8 +59,9 @@ describe("requestGitHubPublicIdentity", () => {
     const profile = await requestGitHubPublicIdentity({ tokens: { access_token: secretAccessToken } });
 
     // The projection keeps exactly the public identity fields; the display
-    // name field is dropped even when it is null.
-    expect(profile).toEqual({ login: "octocat", id: 4242, avatar_url: "https://avatars.example/octocat.png" });
+    // name field is dropped even when it is null, and the avatar URL is
+    // dropped even when GitHub answers with one (issue 1075).
+    expect(profile).toEqual({ login: "octocat", id: 4242 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(requestedUrls(fetchMock)).toEqual([GITHUB_USER_URL]);
     expect(requestedUrls(fetchMock).some((url) => url.startsWith(GITHUB_USER_EMAILS_URL))).toBe(false);
@@ -99,7 +100,6 @@ describe("requestGitHubPublicIdentity", () => {
     expect(profile).toEqual({
       id: 4242,
       login: "octocat",
-      avatar_url: "https://avatars.example/octocat.png",
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(requestedUrls(fetchMock)).toEqual([GITHUB_USER_URL]);

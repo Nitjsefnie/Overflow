@@ -6,20 +6,23 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 /**
- * Issue 1035, defence in depth: dependency-audit.yml's pull-request leg runs
- * the same suppression-list divergence comparison as the load-bearing gate in
- * ci-pr.yml's verify job, so the audit step itself never runs on a divergent
- * list.
+ * Issue 1035, defence in depth: the suppression-list divergence comparison in
+ * dependency-audit.yml is the same one the load-bearing gate in ci-pr.yml's
+ * verify job runs, so an audit never runs on a divergent list where the step
+ * fires.
  *
- * The leg is ADVISORY by construction: it is defined by the pull request's own
- * workflow copy (this workflow runs under `pull_request`, so the checkout IS
- * the pull request), and a pull request that wanted to could edit or delete
- * the step. The load-bearing guard is ci-pr.yml's — base-defined, required,
- * un-deletable by the pull request. What this leg buys is that the audit
- * refuses to answer at all on a divergent list instead of reporting the pull
- * request's chosen answer.
+ * The step is RETAINED but no longer fires: issue 1149's fix round 2 removed
+ * the `pull_request` trigger that armed it (the issue-1090 split completed —
+ * the pull-request leg is dependency-audit-pr.yml, which materializes only
+ * the two manifests and audits them under main's definition, so no
+ * pull-request .npmrc or workspace file reaches an audit at all). The
+ * load-bearing guard is and was ci-pr.yml's — base-defined, required,
+ * un-deletable by the pull request. The step stays deliberately: its suites
+ * pin it structurally with the event gate this file no longer receives, and
+ * a future leg that audits a tree a pull request can shape through its
+ * configuration re-arms it.
  *
- * This suite EXECUTES the leg's real `run:` text the way the runner does —
+ * This suite EXECUTES the step's real `run:` text the way the runner does —
  * bash with the runner's flags, BASE_SHA from the event, cwd a workspace
  * holding the pull request's checked-out merge commit — against a scratch
  * origin repository. There is NO NETWORK: the origin is a local git remote.
@@ -115,9 +118,9 @@ let pyyamlManifest = "";
 
 beforeAll(async () => {
   const workflow = parse(await readFile(resolve(".github/workflows/dependency-audit.yml"), "utf8")) as {
-    jobs: { audit: { steps: Step[] } };
+    jobs: { "dependency-audit": { steps: Step[] } };
   };
-  steps = workflow.jobs.audit.steps;
+  steps = workflow.jobs["dependency-audit"].steps;
   root = await mkdtemp(join(tmpdir(), "audit-suppression-step-"));
   pyyamlManifest = await readFile(resolve(".github/requirements-pyyaml.txt"), "utf8");
 });

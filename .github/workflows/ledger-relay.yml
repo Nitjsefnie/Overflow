@@ -30,14 +30,18 @@ on:
       # Issue 1090 split each required gate's pull-request leg into its own
       # file so the only trigger it can be started by is `pull_request_target`.
       # This filter matches the workflow `name:` FIELD, not the filename, so a
-      # new producer file whose `name:` is absent here is never relayed — these
-      # four are the pull-request legs of the pinned contexts above.
+      # new producer file whose `name:` is absent here is never relayed — the
+      # pull-request legs of the pinned contexts are listed beside their push
+      # legs, five of each after issue 1149 added the dependency audit.
       - "actionlint pull request"
       - "ratchet guard pull request"
       - "ci pull request"
-      # Forward wiring: unpinned workflows no-op in scripts/ledger-relay.ts.
       - "secret scan"
       - "secret scan pull request"
+      # Issue 1149: `dependency-audit` is a required context, and both of its
+      # producer legs are listed the way every other pinned context's are.
+      - "dependency audit"
+      - "dependency audit pull request"
     types: [completed]
   workflow_dispatch:
     inputs:

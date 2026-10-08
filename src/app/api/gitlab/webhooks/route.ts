@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { parseGitLabWebhookDeliveryDetailed } from "@/lib/gitlab/webhook-schema";
 import { verifyGitLabWebhookToken } from "@/lib/gitlab/webhook-token";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
@@ -6,12 +7,13 @@ import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { webhookSelector, type WebhookCredentialLookup } from "@/lib/webhooks/credentials";
-import { errorLogToken, logField } from "@/lib/webhooks/log-field";
+import { errorClassName, errorLogToken, logField } from "@/lib/webhooks/log-field";
 import { readBodyWithinLimit } from "@/lib/http/request-body";
+import { FailureLogger } from "@/lib/worker/failure-logger";
 import {
   WEBHOOK_RATE_LIMIT_CAPACITY,
   WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE,
-  createTokenBucket,
+  createReceiverRateLimiter,
 } from "@/lib/webhooks/rate-limit";
 
 export type GitLabWebhookRouteDependencies = {
@@ -44,7 +46,18 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
     let credential;
     try {
       credential = await dependencies.lookupCredential(selector, "gitlab");
-    } catch {
+    } catch (error) {
+      // Every 503 a forge receives has a journal line (issue 1057). The
+      // message is deliberately absent — a decrypt failure's message names
+      // material, so errorLogToken is not used here — and the line names the
+      // phase, the logField-encoded selector, and the error's class name
+      // only. The FailureLogger bounds it per selector: the first failure of
+      // an outage prints, the rest count until the quiet window passes.
+      credentialLookupFailures.failure(
+        `webhook-credential-lookup:${selector}`,
+        `Webhook credential lookup failed (phase credential lookup, selector ${logField(selector)},`
+          + ` error ${logField(errorClassName(error))}); answered 503 so the forge retries.`,
+      );
       return new Response(null, { status: 503 });
     }
     if (credential === null || credential.provider !== "gitlab" || credential.credentialId !== selector) {
@@ -66,6 +79,13 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
     if (rawBody === null) {
       return new Response(null, { status: 413 });
     }
+    // The receipt's replay key: a digest of the signed bytes. The shared
+    // secret was verified against the token header before this body was read,
+    // so anything that reaches this line is already authenticated; the
+    // digest is recorded on the receipt and lets the receipts layer count a
+    // fresh receipt key over an already-processed body as a duplicate
+    // (issue 1041).
+    const bodyDigest = createHash("sha256").update(rawBody).digest("hex");
 
     let payload: unknown;
     try {
@@ -91,7 +111,9 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
     }
 
     try {
-      const processed = await dependencies.processWebhook(delivery, { provider: credential.provider, registrationId: credential.repositoryId });
+      const processed = await dependencies.processWebhook(delivery, {
+        provider: credential.provider, registrationId: credential.repositoryId, bodyDigest,
+      });
       if (processed.status === "IN_PROGRESS") {
         // An earlier attempt still holds this message's lease and may yet
         // fail, so the retry is not acknowledged: an empty 503 records the
@@ -135,15 +157,22 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
   };
 }
 
-// The receiver's token bucket, built once at module scope and shared by every
-// request this process serves: the bucket IS the receiver's rate limit
-// (issue 852), so it must outlive individual requests — one bucket per
-// receiver, refilled by the wall clock.
-const webhookRateLimiter = createTokenBucket({
+// The receiver's gate, built once at module scope and shared by every request
+// this process serves: the bucket IS the receiver's rate limit (issue 852),
+// so it must outlive individual requests — one bucket per receiver, refilled
+// by the wall clock. The gate is the keyed limiter over one constant key, so
+// the decline burst's start carries the once-per-burst journal line (issue
+// 1053) from the same mechanism that answers the 429.
+const webhookRateLimiter = createReceiverRateLimiter({
+  receiver: "gitlab",
   capacity: WEBHOOK_RATE_LIMIT_CAPACITY,
   refillPerMinute: WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE,
-  nowMs: () => Date.now(),
 });
+
+// The credential lookup's journal bound, one per route module: the key is
+// per selector, so a burst of unreadable credentials for one registration
+// prints once per quiet window (issue 1057).
+const credentialLookupFailures = new FailureLogger();
 
 export async function POST(request: Request): Promise<Response> {
   return createGitLabWebhookPostHandler({

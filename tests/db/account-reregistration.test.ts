@@ -72,7 +72,6 @@ describe("account re-registration after deletion", () => {
     const seeded = await upsertGitHubAccount({
       githubUserId: 9_900_001,
       login: "seeded-user",
-      avatarUrl: "https://avatars.example/seeded.png",
       role: "MEMBER",
       encryptedAccessToken: Buffer.from("seeded-token-bytes", "utf8"),
     }, sql);
@@ -96,7 +95,6 @@ describe("account re-registration after deletion", () => {
     const restored = await upsertGitHubAccount({
       githubUserId: 9_900_001,
       login: "octocat",
-      avatarUrl: "https://avatars.example/octocat.png",
       role: "MEMBER",
       encryptedAccessToken: reRegisteredToken,
     }, sql);
@@ -105,8 +103,11 @@ describe("account re-registration after deletion", () => {
     const row = await identityRow(seeded.id);
     expect(row.deleted_at).toBeNull();
     expect(row.github_login).toBe("octocat");
-    // The restored identity is exactly what the second upsert supplied.
-    expect(row.avatar_url).toBe("https://avatars.example/octocat.png");
+    // The avatar is not restored — sign-in no longer collects it (issue 1075) —
+    // while the login and the token are: the on-conflict arm touches the
+    // identity columns sign-in still owns, and the scrubbed-check holds with
+    // the avatar nulled and the row live again.
+    expect(row.avatar_url).toBeNull();
     expect(row.encrypted_oauth_token).toEqual(reRegisteredToken);
     expect(await getCurrentUserRole(seeded.id, sql)).toBe("MEMBER");
   });
@@ -125,7 +126,6 @@ describe("account re-registration after deletion", () => {
     await upsertGitHubAccount({
       githubUserId: creditorGithubId,
       login: "octocat",
-      avatarUrl: "https://avatars.example/octocat.png",
       role: "MEMBER",
       encryptedAccessToken: reRegisteredToken,
     }, sql);
@@ -146,7 +146,6 @@ describe("account re-registration after deletion", () => {
     const seeded = await upsertGitHubAccount({
       githubUserId: 9_900_002,
       login: "deleted-moderator",
-      avatarUrl: "https://avatars.example/deleted-mod.png",
       role: "MODERATOR",
       encryptedAccessToken: Buffer.from("deleted-moderator-token-bytes", "utf8"),
     }, sql);
@@ -160,7 +159,6 @@ describe("account re-registration after deletion", () => {
     const restored = await upsertGitHubAccount({
       githubUserId: 9_900_002,
       login: "octocat",
-      avatarUrl: "https://avatars.example/octocat.png",
       role: "MEMBER",
       encryptedAccessToken: reRegisteredToken,
     }, sql);
@@ -181,7 +179,6 @@ describe("account re-registration after deletion", () => {
     const seeded = await upsertGitHubAccount({
       githubUserId: 9_900_003,
       login: "configured-moderator",
-      avatarUrl: "https://avatars.example/configured-mod.png",
       role: "MEMBER",
       encryptedAccessToken: Buffer.from("configured-moderator-token-bytes", "utf8"),
     }, sql);
@@ -194,7 +191,6 @@ describe("account re-registration after deletion", () => {
     const restored = await upsertGitHubAccount({
       githubUserId: 9_900_003,
       login: "octocat",
-      avatarUrl: "https://avatars.example/octocat.png",
       role: "MODERATOR",
       encryptedAccessToken: reRegisteredToken,
     }, sql);

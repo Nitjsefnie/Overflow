@@ -7,6 +7,14 @@
     ".github/workflows/ratchet-guard.yml",
     ".github/workflows/ratchet-guard-pr.yml"
   ],
+  "secret-scan": [
+    ".github/workflows/secret-scan.yml",
+    ".github/workflows/secret-scan-pr.yml"
+  ],
+  "dependency-audit": [
+    ".github/workflows/dependency-audit.yml",
+    ".github/workflows/dependency-audit-pr.yml"
+  ],
   "verify": [
     ".github/workflows/ci.yml",
     ".github/workflows/ci-pr.yml"

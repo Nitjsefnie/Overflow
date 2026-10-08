@@ -53,9 +53,16 @@ describe("GitHub OAuth scope", () => {
       profile: { id, login, avatar_url: null } as unknown as Profile,
     })).resolves.toBe(true);
 
-    expect(mocks.sql).toHaveBeenCalledTimes(1);
-    const [, ...bindings] = mocks.sql.mock.calls[0]!;
-    expect(bindings.slice(0, 4)).toEqual([id, login, null, role]);
+    // Two storage-path round trips (issue 1154): the stored-token continuity
+    // read runs first, then the upsert. The upsert's bindings are pinned on
+    // the second call; the read resolves no row token here, so continuity
+    // keeps nothing and the first sign-in stores the new token. Four bindings
+    // since issue 1075: the avatar URL the old insert bound third is gone.
+    expect(mocks.sql).toHaveBeenCalledTimes(2);
+    const [, ...bindings] = mocks.sql.mock.calls[1]!;
+    expect(bindings).toHaveLength(4);
+    expect(bindings.slice(0, 3)).toEqual([id, login, role]);
+    expect(bindings[3]).toBeInstanceOf(Buffer);
     expect(mocks.claimGitHubIdentity).toHaveBeenCalledExactlyOnceWith(mocks.sql, "claimant-uuid", id);
   });
 

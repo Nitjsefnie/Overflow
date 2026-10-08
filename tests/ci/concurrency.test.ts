@@ -136,12 +136,26 @@ const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = 
     group: "ratchet-guard-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
   },
+  "secret-scan-pr.yml": {
+    group: "secret-scan-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+    "cancel-in-progress": false,
+  },
   "code-scanning.yml": {
     group: "code-scanning-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
   },
   "event-policy.yml": {
     group: "event-policy-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+    "cancel-in-progress": false,
+  },
+  // Issue 1149 pins `dependency-audit` as a required context, produced by two
+  // files. Only the pull-request leg is pull-request-reachable, so only it
+  // belongs here: one repository-level group for every pull request, cancel
+  // false. The push leg (dependency-audit.yml) receives no pull-request
+  // event since the split completed in fix round 2 and is recorded in
+  // UNBOUNDED_BY_CHOICE with the sibling push files' per-SHA shape.
+  "dependency-audit-pr.yml": {
+    group: "dependency-audit-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
   },
 };
@@ -313,16 +327,6 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     },
   ],
   [
-    "secret-scan-pr.yml",
-    {
-      reason:
-        "Every pull request must be scanned, so the group is keyed on the pull request: a newer run can supersede only that same PR's pending scan and never another PR's, and the push that superseded it scheduled the replacement. Bounding it repository-wide would cap the scan at one run no matter how many pull requests are open, so the open-pull-request count would again decide how fast a leaked secret in a pull request is found — the aggregate-spend problem the bound exists to fix. cancel-in-progress false preserves every in-flight full-history detection record, because a scan that is cancelled mid-walk leaves a half-read history and no report. Issue 1090 moved this leg out of secret-scan.yml so the file holding it could have pull_request_target as its only trigger; before the split the single file carried both this group and the per-SHA one.",
-      group: "secret-scan-pr-${{ github.event.pull_request.number }}",
-      "cancel-in-progress": false,
-      queue: undefined,
-    },
-  ],
-  [
     "secret-scan.yml",
     {
       reason:
@@ -366,11 +370,10 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     "dependency-audit.yml",
     {
       reason:
-        "Issue 985 gave this workflow a pull_request trigger, so the arm of its group that used to be dead now fires: on a pull-request event github.event.pull_request.number resolves and the group is dependency-audit-<number> rather than a per-ref fallback. That makes this the SECOND shape of justification in this table, and the difference is the point. Bounding it repository-wide would cap the audit at one run no matter how many pull requests are open, so the open-pull-request count would again decide how quickly an advisory surfaces — the aggregate-spend problem the bound exists to fix. It stays unbounded because its group is scoped to ONE pull request, which is the narrower of the two: a run this workflow cancels is always that same pull request's superseded head, never a peer's, and the push that superseded it scheduled the replacement. That is why cancel-in-progress is the pull-request event expression rather than the literal false the other entries carry — it stops a superseded audit accruing runner minutes for a verdict nobody reads, and on the schedule, push and dispatch legs the expression is false, so the daily tick is never cancelled. The premise holds only while this workflow produces no required check, and this file asserts that: a cancelled run concluding on a required context is a blocked pull request that no later push unblocks. Should the audit ever become merge-blocking, this entry has to be re-decided, and the event expression is the first thing to go.",
-      group: "dependency-audit-${{ github.event.pull_request.number || github.ref }}",
-      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+        "No pull-request trigger reaches this file since issue 1090's split completed for it in issue 1149's fix round 2: the pull-request leg is dependency-audit-pr.yml, which is the bounded one. Its remaining legs are push to main, the daily tick and workflow_dispatch, and the group is per-SHA so no push to main shares a group with another push or with the tick — a cancelled conclusion on a merged SHA makes the deploy gate refuse immediately (issue 474), and the audit's fast path never changes what a red run means. A workflow with no pull_request and no pull_request_target event cannot be listed in BOUNDED at all, because the bound it would carry would be vacuous: the repository-level arm is dead code, so recording it would pin a promise no run exercises.",
+      group: "dependency-audit-${{ github.sha }}",
+      "cancel-in-progress": false,
       queue: undefined,
-      premise: "superseded-attempt",
     },
   ],
   [
@@ -518,11 +521,12 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   "actionlint-pr.yml": ["actionlint"],
   "actionlint.yml": ["actionlint"],
   "ci-pr.yml": ["verify"],
-  "ci.yml": ["calibrate", "verify"],
+  "ci.yml": ["calibrate", "push-recalibration", "verify"],
   "claim.yml": ["claim"],
   "code-scanning.yml": ["analyze"],
   "coverage-comment.yml": ["comment"],
-  "dependency-audit.yml": ["audit"],
+  "dependency-audit.yml": ["dependency-audit"],
+  "dependency-audit-pr.yml": ["dependency-audit"],
   "event-policy.yml": ["event-policy", "event-policy-pull-request"],
   "ledger-relay.yml": ["relay-required-checks"],
   "pr-gate.yml": ["gate"],

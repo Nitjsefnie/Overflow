@@ -50,22 +50,42 @@ import {
   type SweepApi,
   type SweepOutcome,
 } from "./ledger-relay-sweep.ts";
+import { LEDGER_APP_MINT_PERMISSIONS } from "./ledger-app-mint-permissions.ts";
 // The pure decision layer. Re-exported below, with `.ts` specifiers, so the
 // surface this entry has always presented is unchanged: a caller importing
 // decideContexts from here keeps working without knowing the layer exists.
 import {
+  anyJobStartedOf,
   decideContexts,
+  decideRerun,
+  hasPullRequestProducerAtHead,
+  isHealableEvent,
+  isTrustedProducerRun,
+  openPullRequestsAtHead,
+  PIN_SHAPE,
+  pinsFor,
+  RERUN_ATTEMPT_CAP,
+  runNeverStarted,
+  validatePinMap,
+  type ContextDecision,
+  type HealPullRequest,
+  type PinMap,
+  type RelayJob,
+  type RerunRun,
+  type RerunStartedEvidence,
+} from "./ledger-relay-decisions.ts";
+
+export {
+  anyJobStartedOf,
+  decideContexts,
+  decideRerun,
   isTrustedProducerRun,
   PIN_SHAPE,
   pinsFor,
+  RERUN_ATTEMPT_CAP,
   validatePinMap,
-  type ContextDecision,
-  type PinMap,
-  type RelayJob,
-} from "./ledger-relay-decisions.ts";
-
-export { decideContexts, isTrustedProducerRun, PIN_SHAPE, pinsFor, validatePinMap };
-export type { ContextDecision, PinMap, RelayJob };
+};
+export type { ContextDecision, HealPullRequest, PinMap, RelayJob, RerunRun, RerunStartedEvidence };
 
 // The trigger's identifying fields and the env rules that decide what kind of
 // relay a start is; their own module holds the ceiling headroom this entry
@@ -95,57 +115,6 @@ const API_HEADERS = {
 // other 4xx fails immediately, because it will not heal within this job's
 // lifetime.
 const BACKOFF_MS = [1_000, 2_000];
-
-/** A rerun is capped at this attempt, so a flapping heal cannot ping-pong forever. */
-export const RERUN_ATTEMPT_CAP = 5;
-
-/** The heal-relevant fields of the triggering run. */
-export interface RerunRun {
-  conclusion: string | null;
-  event: string;
-  runAttempt: number;
-  /** The run's head commit, compared against the associated PR's tip to detect supersession. */
-  headSha: string;
-}
-
-/** The one PR the heal found associated with the run's head commit, if any. */
-export interface HealPullRequest {
-  state: string;
-  headSha: string;
-}
-
-/**
- * The rerun-heal's decision (issue 861), pure. Every condition is required;
- * they are evaluated in this order:
- *
- * - a. the run concluded `cancelled` — the shape GitHub leaves when it cancels
- *   a pending run out of the shared concurrency slot;
- * - b. the run's event is pull_request_target — push legs key their own SHA
- *   and are never healed, and a pull_request run is never relayed at all
- *   (isTrustedProducerRun), so re-dispatching one would heal nothing;
- * - c. the attempt is under RERUN_ATTEMPT_CAP — a run cancelled from the
- *   pending slot never started, so attempts increment only via rerun and the
- *   cap bounds the churn;
- * - d. the head is still live: an open PR whose tip is the run's head SHA;
- * - e. no live run of the same workflow is already queued, in_progress,
- *   pending, waiting or requested at that head — the rerun must not duplicate
- *   one in flight.
- */
-export function decideRerun(
-  run: RerunRun,
-  pr: HealPullRequest | null,
-  liveRunExists: boolean,
-): boolean {
-  if (run.conclusion !== "cancelled") return false;
-  if (!isHealableEvent(run.event)) return false;
-  if (run.runAttempt >= RERUN_ATTEMPT_CAP) return false;
-  if (pr === null || pr.state !== "open" || pr.headSha !== run.headSha) return false;
-  return !liveRunExists;
-}
-
-function isHealableEvent(event: string): boolean {
-  return event === "pull_request_target";
-}
 
 /**
  * The App JWT: RS256 over base64url(header).base64url(payload), signed with
@@ -329,7 +298,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     sweepError = error;
   }
 
-  const rerunDispatched = await healWithRerun(deps, env, repo, run, auth);
+  const rerunDispatched = await healWithRerun(deps, env, repo, run, jobsBody, auth);
   if (sweepError !== undefined) throw sweepError;
 
   return { decisions, posted, rerunDispatched, sweep };
@@ -355,7 +324,10 @@ async function mintInstallationToken(
       url: `${API_ROOT}/app/installations/${installationId}/access_tokens`,
       method: "POST",
       headers: { ...API_HEADERS, authorization: `Bearer ${jwt}` },
-      body: JSON.stringify({ repositories: [repoName] }),
+      body: JSON.stringify({
+        repositories: [repoName],
+        permissions: LEDGER_APP_MINT_PERMISSIONS,
+      }),
     },
     "the installation-token mint",
   );
@@ -394,9 +366,10 @@ function sweepApi(deps: RelayDeps, repo: string, auth: Record<string, string>): 
  * shared pending concurrency slot while its pull request's head is still live,
  * dispatch a fresh run of it, so the cancelled conclusion — mirrored above —
  * is replaced when the rerun's own completion event arrives. The heal runs
- * only for a cancelled pull_request_target run; its conditions are evaluated
- * in order and each query is issued only when every earlier condition already
- * holds.
+ * only for a cancelled pull_request_target run that NEVER STARTED (issue
+ * 1037): a cancellation caused by supersession is healed, a deliberate
+ * cancellation stays cancelled. Its conditions are evaluated in order and each
+ * query is issued only when every earlier condition already holds.
  * Returns true exactly when the rerun was dispatched.
  */
 async function healWithRerun(
@@ -404,6 +377,7 @@ async function healWithRerun(
   env: Record<string, string | undefined>,
   repo: string,
   run: TriggeringRun,
+  jobsBody: Record<string, unknown>,
   auth: Record<string, string>,
 ): Promise<boolean> {
   // The rerun token is required whenever a cancelled PR run is on the table —
@@ -414,10 +388,29 @@ async function healWithRerun(
   // The attempt cap precedes the queries.
   if (run.runAttempt >= RERUN_ATTEMPT_CAP) return false;
 
-  const pr = await findOpenPullRequestAtHead(deps, repo, run.headSha, auth);
+  // The never-started evidence (issue 1037): the run body's run_started_at is
+  // the primary signal — read from the fetched body on the dispatch path, null
+  // on the workflow_run path whose workflow passes no started-at through the
+  // environment — and the job listing the mirror already fetched is the
+  // fallback when the primary names nothing. The gate sits with the cheap
+  // guards, BEFORE the heal's queries: a run that had started was cancelled
+  // deliberately, and querying for a heal that must never happen would ask
+  // GitHub for permission to repeat a maintainer's cancellation.
+  //
+  // Boundary (fix-round proven): a deliberate cancellation of a STARTED run
+  // stays cancelled; a cancellation of a never-started run is
+  // indistinguishable from supersession — GitHub's data carries no
+  // discriminator — and heals up to the attempt cap. Full statement on
+  // runNeverStarted in scripts/ledger-relay-decisions.ts.
+  const startedEvidence: RerunStartedEvidence = {
+    runStartedAt: run.runStartedAt,
+    anyJobStarted: anyJobStartedOf(jobsBody),
+  };
+  if (!runNeverStarted(startedEvidence)) return false;
+  const pr = (await findOpenPullRequestsAtHead(deps, repo, run.headSha, auth))[0] ?? null;
   const liveRunExists =
     pr === null ? false : await hasLiveRunOfPath(deps, repo, run.headSha, run.path, auth);
-  if (!decideRerun(run, pr, liveRunExists)) return false;
+  if (!decideRerun(run, pr, liveRunExists, startedEvidence)) return false;
 
   // The rerun authenticates as the workflow's own repo-scoped token, not the
   // App token: the rerun needs actions: write, which the App does not hold.
@@ -434,16 +427,16 @@ async function healWithRerun(
 }
 
 /**
- * Condition (d): the one open PR whose tip is the run's head SHA, or null.
- * The commit's associated PRs are filtered client-side; a PR whose head has
- * moved on (superseded) does not match.
+ * Condition (d): the open PRs whose tips match the run's head SHA. The
+ * commit's associated PRs are filtered client-side; a superseded PR does not
+ * match.
  */
-async function findOpenPullRequestAtHead(
+async function findOpenPullRequestsAtHead(
   deps: RelayDeps,
   repo: string,
   headSha: string,
   auth: Record<string, string>,
-): Promise<HealPullRequest | null> {
+): Promise<HealPullRequest[]> {
   const body = await apiCall<unknown>(
     deps,
     {
@@ -453,19 +446,7 @@ async function findOpenPullRequestAtHead(
     },
     `the pull requests associated with commit ${headSha}`,
   );
-  if (!Array.isArray(body)) {
-    throw new Error("the commit's associated-pull-request listing returned no array");
-  }
-  for (const entry of body) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const candidate = entry as { state?: unknown; head?: { sha?: unknown } | undefined };
-    if (candidate.state !== "open") continue;
-    const prHeadSha = typeof candidate.head?.sha === "string" ? candidate.head.sha : "";
-    if (prHeadSha === headSha) {
-      return { state: candidate.state, headSha: prHeadSha };
-    }
-  }
-  return null;
+  return openPullRequestsAtHead(body, headSha);
 }
 
 /**
@@ -485,7 +466,7 @@ const LIVE_RUN_STATUSES = new Set(["queued", "in_progress", "pending", "waiting"
  * filtered client-side for the workflow's path and the live statuses.
  *
  * A malformed listing reads as "no live run" rather than throwing — the
- * deliberate asymmetry with findOpenPullRequestAtHead, which throws: the
+ * deliberate asymmetry with findOpenPullRequestsAtHead, which throws: the
  * failure direction is bounded by GitHub's own rerun guard, which refuses a
  * live run with a 4xx that apiCall throws, so the worst case is a visible red
  * relay job, never a duplicate dispatch.
@@ -593,6 +574,13 @@ function triggeringRunFromApi(body: Record<string, unknown>): TriggeringRun {
         ? body.run_attempt
         : undefined,
     ),
+    // Issue 1037's primary never-started signal: the time the run began
+    // executing, or null when the body names none — absent, null and empty all
+    // read as absent, and the job-listing fallback decides in their place.
+    runStartedAt:
+      typeof body.run_started_at === "string" && body.run_started_at !== ""
+        ? body.run_started_at
+        : null,
     headRepository: headRepositoryFullNameOf(body),
   };
 }
@@ -660,11 +648,13 @@ async function refuseUntrustedProducer(
     throw new Error(untrustedProducerMessage(run));
   }
   if (headRepository === repo) {
-    const pr = await findOpenPullRequestAtHead(deps, repo, run.headSha, auth);
-    if (pr !== null) {
+    const pullRequests = await findOpenPullRequestsAtHead(deps, repo, run.headSha, auth);
+    if (hasPullRequestProducerAtHead(run.event, run.headBranch, pullRequests)) {
       throw new Error(untrustedProducerMessage(run));
     }
-    return refusedDeadHead();
+    return pullRequests.length === 0
+      ? refusedDeadHead()
+      : { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
   }
   // Fork head (issue 1142): the owner must be provable from the run body
   // before any request; the branch-scoped listing then decides liveness.

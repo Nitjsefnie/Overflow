@@ -3,6 +3,7 @@ import {
   WEBHOOK_RATE_LIMIT_CAPACITY,
   WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE,
   createRateLimiter,
+  createReceiverRateLimiter,
   createTokenBucket,
 } from "@/lib/webhooks/rate-limit";
 
@@ -298,5 +299,60 @@ describe("createRateLimiter", () => {
       retryAfterSeconds: 0,
       firstDecline: false,
     });
+  });
+});
+
+describe("createReceiverRateLimiter", () => {
+  it("admits a burst up to capacity and declines the rest, answering the boolean the routes map to 429", () => {
+    const gate = createReceiverRateLimiter({
+      receiver: "github", capacity: 3, refillPerMinute: 60, nowMs: clockFrozenAt(0),
+    });
+
+    expect(gate.admit()).toBe(true);
+    expect(gate.admit()).toBe(true);
+    expect(gate.admit()).toBe(true);
+    expect(gate.admit()).toBe(false);
+    expect(gate.admit()).toBe(false);
+  });
+
+  it("logs the burst's start once, naming the receiver and the running decline count", () => {
+    const lines: unknown[][] = [];
+    const gate = createReceiverRateLimiter({
+      receiver: "gitlab", capacity: 2, refillPerMinute: 60, nowMs: clockFrozenAt(0),
+      error: (...args: unknown[]) => { lines.push(args); },
+    });
+
+    for (let i = 0; i < 6; i += 1) gate.admit();
+
+    // Exactly one line for the whole burst: the first decline's, not one per
+    // declined request (issue 1053). The count is the running total at the
+    // burst's start, so successive bursts' lines keep growing.
+    expect(lines).toEqual([[
+      "Webhook rate limit engaged for the gitlab receiver (declines so far: 1).",
+    ]]);
+  });
+
+  it("keeps counting declines across bursts and logs each new burst's start with the updated count", () => {
+    const lines: unknown[][] = [];
+    // A controllable clock: a refilled token admits, which is the recovery
+    // that ends the burst, so the next decline starts a new one.
+    const clock = controllableClock(0);
+    const gate = createReceiverRateLimiter({
+      receiver: "github", capacity: 1, refillPerMinute: 60, nowMs: clock.read,
+      error: (...args: unknown[]) => { lines.push(args); },
+    });
+
+    expect(gate.admit()).toBe(true);
+    expect(gate.admit()).toBe(false); // burst 1 starts: declines = 1
+    expect(gate.admit()).toBe(false); // same burst: no new line
+    clock.advance(70_000);
+    expect(gate.admit()).toBe(true);  // recovery: the burst is over
+    expect(gate.admit()).toBe(false); // burst 2 starts: declines = 2
+
+    expect(lines).toEqual([[
+      "Webhook rate limit engaged for the github receiver (declines so far: 1).",
+    ], [
+      "Webhook rate limit engaged for the github receiver (declines so far: 3).",
+    ]]);
   });
 });

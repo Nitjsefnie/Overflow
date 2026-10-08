@@ -215,11 +215,13 @@ src/components/*
 !src/components/*.tsx
 !src/lib/
 src/lib/*
+!src/lib/processing-activities.ts
 !src/lib/disputes.ts
 !src/lib/sanctions.ts
 !src/lib/format-instant.ts
 !src/lib/format-signed.ts
 !src/lib/legal-revisions.ts
+!src/lib/controller-config.ts
 !src/lib/plural.ts
 !src/lib/strip-name-prefix.ts
 !src/lib/version.ts
@@ -375,6 +377,7 @@ tests/calibration/*
 !tests/components/
 tests/components/*
 !tests/components/*.tsx
+!tests/components/processing-record.test.ts
 !tests/config/
 tests/config/*
 !tests/config/*.ts

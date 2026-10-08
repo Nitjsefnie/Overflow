@@ -24,7 +24,9 @@ export async function signInAsContributor(): Promise<void> {
  * Webhook administration for repository registration; lands on the
  * registration page. Also the widening step a signed-in contributor takes
  * from that page: GitHub sends an already-authorized account straight back
- * with the union of scopes, so the same account continues after callback.
+ * without a consent screen, carrying only the scopes this sign-in requested.
+ * A narrower stored token survives that replacement through the storage
+ * path's continuity ruling (src/auth.ts), not through any scope union.
  */
 export async function signInForRepositoryRegistration(): Promise<void> {
   await assertTrustedServerActionOrigin();
@@ -35,9 +37,10 @@ export async function signInForRepositoryRegistration(): Promise<void> {
 /**
  * Re-confirms a signed-in member's identity so the session may mint an API
  * token (src/app/api/tokens/route.ts), without requesting any scope; lands
- * back on the registration page that holds the token panel. GitHub returns an
- * already-authorized account with the union of the scopes it granted, so a
- * member who already granted webhook administration keeps it.
+ * back on the registration page that holds the token panel. GitHub issues the
+ * new authorization with only the scopes this sign-in requested — none — so
+ * webhook administration a member granted earlier survives only through the
+ * storage path's continuity ruling (src/auth.ts).
  */
 export async function confirmSignInForApiToken(): Promise<void> {
   await assertTrustedServerActionOrigin();

@@ -88,4 +88,16 @@ describe("self-service account data on Postgres", () => {
     expect(row).toEqual({ github_login: DELETED_ACCOUNT_LOGIN, avatar_url: null, encrypted_oauth_token: null, deleted_at: expect.any(Date) });
     expect(await findLiveAccountIdentity(sql, account.id)).toBeNull();
   });
+
+  it("exports account.avatarUrl as a stable null, whatever the row carries (issue 1075 deprecation window)", async () => {
+    // The row is seeded through raw SQL with an avatar value — the pre-1075
+    // shape the migration nulls — so the pin holds even against a row that
+    // still carries one when the export runs: the key stays for shape
+    // compatibility (API.md deprecations), and its value is constant null.
+    const account = await insertUser("export-no-avatar");
+    const document = await exportAccount(sql, account.githubUserId);
+    expect(document).not.toBeNull();
+    expect(Object.hasOwn(document!.account, "avatarUrl")).toBe(true);
+    expect(document!.account.avatarUrl).toBeNull();
+  });
 });

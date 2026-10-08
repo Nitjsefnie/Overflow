@@ -627,19 +627,16 @@ describe("the ledger relay's producer filter", () => {
   // MUST be relayed, which is the relay owner's call — not a silent change made
   // by a trigger sweep. The cheap alternative is measurably wrong rather than
   // merely weaker: "every shipped non-pinned workflow must be declared" fails
-  // on today's tree, where 11 of the 17 shipped workflows are unpinned and 9 of
-  // those are deliberately NOT relayed (claim, pr-suite, pr-gate, scorecard,
-  // code-scanning, coverage-comment, dependency-audit, event-policy,
-  // ledger-relay), so it would demand a declaration and a filter entry for each.
+  // on today's tree, where 8 of the 18 shipped workflows are unpinned and all
+  // 8 of those are deliberately NOT relayed (claim, pr-suite, pr-gate,
+  // scorecard, code-scanning, coverage-comment, event-policy, ledger-relay),
+  // so it would demand a declaration and a filter entry for each.
   //
   // The residual is unchanged from what this sweep replaced, and it is not the
   // silent direction: removing a line from a tracked workflow is a reviewable
   // diff, whereas adding a producer to the filter with no declaration was the
   // quiet case, and that one now dies.
   const FORWARD_WIRED: Record<string, string> = {
-    "secret scan": "the secret-scan workflow is not a required context, so nothing in " +
-      ".github/required-checks.json names it; the relay still forwards its completions so the " +
-      "context can be pinned later without a second change to the relay.",
     "secret scan pull request": "the pull-request leg of the same workflow (issue 1090). " +
       "Naming only the push leg would relay half of that workflow's runs.",
   };
@@ -678,6 +675,21 @@ describe("the ledger relay's producer filter", () => {
         "name in the relay filter is unchecked. That list IS the control, and an empty one " +
         "removes it without failing a single other assertion here.",
     ).not.toEqual([]);
+  });
+
+  it("holds exactly the post-1034 shape: one declaration, the pull-request leg's", () => {
+    // Issue 1034 pinned secret-scan, which made the push-leg declaration's
+    // reason ("is not a required context") false in the tree, so that entry is
+    // deleted. Equality, not containment, pins the shape from drifting in
+    // either direction: a re-added declaration whose reason the tree
+    // contradicts is a doc that overstates or misstates a guard's reach, and a
+    // brand-new unpinned producer in the relay filter must be declared here
+    // with its own true reason (the directional test below catches that too;
+    // this pins the list besides). The one remaining entry names a producer
+    // that is also PINNED — the redundant-rather-than-wrong state this file's
+    // header sanctions — and its reason stays true: both leg names are needed
+    // for both legs' completions to relay.
+    expect(Object.keys(FORWARD_WIRED).sort()).toEqual(["secret scan pull request"]);
   });
 
   it("names every PINNED and every FORWARD-WIRED producer's workflow name", async () => {

@@ -7,6 +7,7 @@
 // a failure with no GH_TOKEN fallback (issue 1026). The neutral check run stays
 // best-effort: its failure is a warning that never fails the job.
 
+import { LEDGER_APP_MINT_PERMISSIONS } from "./ledger-app-mint-permissions.ts";
 import { mintAppJwt } from "./ledger-relay.ts";
 
 const API_ROOT = "https://api.github.com";
@@ -63,7 +64,13 @@ export async function mintInstallationToken(
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
         },
-        body: JSON.stringify({ repositories: ["Overflow"] }),
+        // Issue 1051: the minimal permission set both scripts' calls derive —
+        // never the App's whole grant, which without a `permissions` field is
+        // what GitHub puts on the token.
+        body: JSON.stringify({
+          repositories: ["Overflow"],
+          permissions: LEDGER_APP_MINT_PERMISSIONS,
+        }),
         // Same bound as the check's request(): a blackhole connection must
         // not hold the job until its timeout.
         signal: AbortSignal.timeout(30_000),

@@ -105,6 +105,20 @@ export function isTrustedProducerRun(event: string, headBranch: string): boolean
   return EVENTS_TRUSTED_ON_BASE_BRANCH.has(event) && headBranch === BASE_BRANCH;
 }
 
+/** Whether any open pull request at a refused run's SHA is that run's own producer. */
+export function hasPullRequestProducerAtHead(
+  event: string,
+  headBranch: string,
+  pullRequests: readonly { headRef?: string }[],
+): boolean {
+  if (event !== "pull_request" || headBranch === "") return false;
+  return pullRequests.some((pullRequest) =>
+    pullRequest.headRef !== undefined &&
+    pullRequest.headRef !== "" &&
+    headBranch === pullRequest.headRef,
+  );
+}
+
 /**
  * The relay's core. Contexts come from the pin map entries whose pin NAMES the
  * triggering run's path — every path of a list pin, in pin-map order, and one
@@ -221,6 +235,153 @@ function isCompletedSuccess(job: RelayJob): boolean {
 
 function conclusionWord(conclusion: string | null): string {
   return conclusion === null || conclusion === "" ? "without a conclusion" : conclusion;
+}
+
+/** A rerun is capped at this attempt, so a flapping heal cannot ping-pong forever. */
+export const RERUN_ATTEMPT_CAP = 5;
+
+/** The heal-relevant fields of the triggering run. */
+export interface RerunRun {
+  conclusion: string | null;
+  event: string;
+  runAttempt: number;
+  /** The run's head commit, compared against the associated PR's tip to detect supersession. */
+  headSha: string;
+}
+
+/** The one PR the heal found associated with the run's head commit, if any. */
+export interface HealPullRequest {
+  state: string;
+  headSha: string;
+  /** The PR's head branch, carried for the refused-producer decision when the API names it. */
+  headRef?: string;
+}
+
+/** The open pull requests in a commit listing whose current tip is this SHA. */
+export function openPullRequestsAtHead(body: unknown, headSha: string): HealPullRequest[] {
+  if (!Array.isArray(body)) {
+    throw new Error("the commit's associated-pull-request listing returned no array");
+  }
+  const pullRequests: HealPullRequest[] = [];
+  for (const entry of body) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const candidate = entry as { state?: unknown; head?: { sha?: unknown; ref?: unknown } | undefined };
+    if (candidate.state !== "open") continue;
+    const prHeadSha = typeof candidate.head?.sha === "string" ? candidate.head.sha : "";
+    if (prHeadSha !== headSha) continue;
+    const headRef = typeof candidate.head?.ref === "string" ? candidate.head.ref : undefined;
+    pullRequests.push({ state: candidate.state, headSha: prHeadSha, headRef });
+  }
+  return pullRequests;
+}
+
+/**
+ * The never-started evidence the rerun-heal supplies (issue 1037): two signals
+ * for the same question, did the run ever start executing.
+ *
+ * - `runStartedAt` is the PRIMARY signal — the run object's `run_started_at`,
+ *   which GitHub names the moment the run began executing. On the relay's
+ *   dispatch path it is read from the fetched run body; on the workflow_run
+ *   path the workflow passes no started-at through the environment (the
+ *   workflow file is a gate-executed surface this change does not open), so
+ *   it carries null there and the fallback decides.
+ * - `anyJobStarted` is the FALLBACK signal — whether the run's job listing
+ *   (which the mirror has already fetched on both paths) holds any job that
+ *   started. A step can only start inside a job that started, so the
+ *   job-level signal subsumes the issue's "no started job or step".
+ *
+ * The recognition rule (runNeverStarted below): a run that NEVER started is
+ * the supersession case the heal exists for; a run that DID start was
+ * cancelled deliberately — a maintainer pressed Cancel on executing work —
+ * and stays cancelled. When the primary is absent the fallback decides alone;
+ * when it is present it decides, and the fallback is not consulted.
+ */
+export interface RerunStartedEvidence {
+  /** The run body's `run_started_at`, or null when it names none. */
+  runStartedAt: string | null;
+  /** Whether the run's job listing holds any job whose `started_at` names a time. */
+  anyJobStarted: boolean;
+}
+
+/**
+ * The job listing's started signal, read from the RAW listing body: whether
+ * any listed job carries a non-empty `started_at`. A body that is not an
+ * object, or holds no jobs array, reads as no started job — the same
+ * reads-as-absent direction the sweep's listing readers take; a listing the
+ * relay cannot read can never testify that a run started, and a wrongful heal
+ * remains bounded by GitHub's own rerun guard and the relay's red job.
+ */
+export function anyJobStartedOf(body: unknown): boolean {
+  if (typeof body !== "object" || body === null) return false;
+  const jobs = (body as { jobs?: unknown }).jobs;
+  if (!Array.isArray(jobs)) return false;
+  return jobs.some((entry) => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const startedAt = (entry as { started_at?: unknown }).started_at;
+    return typeof startedAt === "string" && startedAt !== "";
+  });
+}
+
+/**
+ * The recognition rule itself: a run that NEVER started is the supersession
+ * case the heal exists for; a run that DID start was cancelled deliberately —
+ * a maintainer pressed Cancel on executing work — and stays cancelled. The
+ * primary signal decides when it names anything at all; the fallback decides
+ * alone when the primary is absent.
+ *
+ * The rule's boundary: a deliberate cancellation of a run that has STARTED
+ * stays cancelled; a cancellation of a never-started run is indistinguishable
+ * from supersession (GitHub's data carries no discriminator) and heals up to
+ * the attempt cap. This is the issue's own operationalization — "only runs
+ * that never started" — not a narrower rule, because none exists.
+ */
+export function runNeverStarted(evidence: RerunStartedEvidence): boolean {
+  return evidence.runStartedAt === null && !evidence.anyJobStarted;
+}
+
+/**
+ * The rerun-heal's decision (issue 861), pure. Every condition is required;
+ * they are evaluated in this order:
+ *
+ * - a. the run concluded `cancelled` — the shape GitHub leaves when it cancels
+ *   a pending run out of the shared concurrency slot;
+ * - b. the run's event is pull_request_target — push legs key their own SHA
+ *   and are never healed, and a pull_request run is never relayed at all
+ *   (isTrustedProducerRun), so re-dispatching one would heal nothing;
+ * - c. the attempt is under RERUN_ATTEMPT_CAP — a run cancelled from the
+ *   pending slot never started, so attempts increment only via rerun and the
+ *   cap bounds the churn;
+ * - c2. the run NEVER STARTED (issue 1037): `startedEvidence` decides, and a
+ *   call that supplies none decides as the pre-1037 heal did — the relay
+ *   always supplies it, gating on runNeverStarted BEFORE its queries (so a
+ *   started run is never probed for a heal that must not happen) and passing
+ *   the same evidence here so the decision is self-contained;
+ *   tests/scripts/ledger-relay-never-started.test.ts pins both legs;
+ * - d. the head is still live: an open PR whose tip is the run's head SHA;
+ * - e. no live run of the same workflow is already queued, in_progress,
+ *   pending, waiting or requested at that head — the rerun must not duplicate
+ *   one in flight.
+ */
+export function decideRerun(
+  run: RerunRun,
+  pr: HealPullRequest | null,
+  liveRunExists: boolean,
+  startedEvidence?: RerunStartedEvidence,
+): boolean {
+  if (run.conclusion !== "cancelled") return false;
+  if (!isHealableEvent(run.event)) return false;
+  if (run.runAttempt >= RERUN_ATTEMPT_CAP) return false;
+  if (startedEvidence !== undefined && !runNeverStarted(startedEvidence)) return false;
+  if (pr === null || pr.state !== "open" || pr.headSha !== run.headSha) return false;
+  return !liveRunExists;
+}
+
+/**
+ * The heal's event gate, shared by decideRerun and the relay's early return
+ * that avoids requiring RELAY_RERUN_TOKEN for runs no heal could ever take.
+ */
+export function isHealableEvent(event: string): boolean {
+  return event === "pull_request_target";
 }
 
 /**

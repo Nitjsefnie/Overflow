@@ -1,5 +1,5 @@
 {
-  "httpServerVersion": "1.0.0",
+  "httpServerVersion": "1.1.0",
   "routes": {
     "GET /api/version": {
       "version": "string"
@@ -171,6 +171,16 @@
       "repositoryReconciliationUsage": {
         "createdAt": "string",
         "id": "string"
+      },
+      "sanctionContestRequests": {
+        "asAccount": {
+          "createdAt": "string",
+          "id": "string"
+        },
+        "asDecider": {
+          "createdAt": "string",
+          "id": "string"
+        }
       },
       "selfWorkCalibrations": {
         "createdAt": "string",

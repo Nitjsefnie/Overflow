@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   parseGitHubWebhookDeliveryDetailed,
   type GitHubWebhookDelivery,
@@ -7,12 +8,13 @@ import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { processWebhook, type WebhookProcessingResult, type WebhookReceiptScope } from "@/lib/webhooks/processor";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { githubPayloadRepositoryId, webhookSelector, type WebhookCredentialLookup } from "@/lib/webhooks/credentials";
-import { errorLogToken, logField } from "@/lib/webhooks/log-field";
+import { errorClassName, errorLogToken, logField } from "@/lib/webhooks/log-field";
 import { readBodyWithinLimit } from "@/lib/http/request-body";
+import { FailureLogger } from "@/lib/worker/failure-logger";
 import {
   WEBHOOK_RATE_LIMIT_CAPACITY,
   WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE,
-  createTokenBucket,
+  createReceiverRateLimiter,
 } from "@/lib/webhooks/rate-limit";
 
 export type GitHubWebhookRouteDependencies = {
@@ -46,7 +48,18 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
     let credential;
     try {
       credential = await dependencies.lookupCredential(selector, "github");
-    } catch {
+    } catch (error) {
+      // Every 503 a forge receives has a journal line (issue 1057). The
+      // message is deliberately absent — a decrypt failure's message names
+      // material, so errorLogToken is not used here — and the line names the
+      // phase, the logField-encoded selector, and the error's class name
+      // only. The FailureLogger bounds it per selector: the first failure of
+      // an outage prints, the rest count until the quiet window passes.
+      credentialLookupFailures.failure(
+        `webhook-credential-lookup:${selector}`,
+        `Webhook credential lookup failed (phase credential lookup, selector ${logField(selector)},`
+          + ` error ${logField(errorClassName(error))}); answered 503 so the forge retries.`,
+      );
       return new Response(null, { status: 503 });
     }
     if (credential === null || credential.provider !== "github" || credential.credentialId !== selector) {
@@ -64,6 +77,17 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
     if (!verifyGitHubWebhookSignature(rawBody, signature, credential.secret)) {
       return new Response(null, { status: 401 });
     }
+    // The receipt's replay key: a digest of the signed bytes, taken only once
+    // the signature has proved them. A replay reuses the signed body — the
+    // attacker cannot mint a new one — so recording it lets the receipts
+    // layer count a fresh delivery id over an already-processed body as a
+    // duplicate (issue 1041). The receipts layer scopes the digest by the
+    // parsed event as well as the registration, because distinct event
+    // headers can carry byte-identical bodies — an `issues/edited` and an
+    // `issue_comment/edited` envelope can match byte for byte — and each
+    // accepted delivery must write its own effects; the digest alone never
+    // conceals one event behind another.
+    const bodyDigest = createHash("sha256").update(rawBody).digest("hex");
 
     let payload: unknown;
     try {
@@ -88,7 +112,9 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
     const delivery = result.delivery;
 
     try {
-      const processed = await dependencies.processWebhook(delivery, { provider: credential.provider, registrationId: credential.repositoryId });
+      const processed = await dependencies.processWebhook(delivery, {
+        provider: credential.provider, registrationId: credential.repositoryId, bodyDigest,
+      });
       if (processed.status === "IN_PROGRESS") {
         // An earlier attempt still holds this delivery's lease and may yet
         // fail, so the redelivery is not acknowledged: an empty 503 leaves it
@@ -123,15 +149,22 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
   };
 }
 
-// The receiver's token bucket, built once at module scope and shared by every
-// request this process serves: the bucket IS the receiver's rate limit
-// (issue 852), so it must outlive individual requests — one bucket per
-// receiver, refilled by the wall clock.
-const webhookRateLimiter = createTokenBucket({
+// The receiver's gate, built once at module scope and shared by every request
+// this process serves: the bucket IS the receiver's rate limit (issue 852),
+// so it must outlive individual requests — one bucket per receiver, refilled
+// by the wall clock. The gate is the keyed limiter over one constant key, so
+// the decline burst's start carries the once-per-burst journal line (issue
+// 1053) from the same mechanism that answers the 429.
+const webhookRateLimiter = createReceiverRateLimiter({
+  receiver: "github",
   capacity: WEBHOOK_RATE_LIMIT_CAPACITY,
   refillPerMinute: WEBHOOK_RATE_LIMIT_REFILL_PER_MINUTE,
-  nowMs: () => Date.now(),
 });
+
+// The credential lookup's journal bound, one per route module: the key is
+// per selector, so a burst of unreadable credentials for one registration
+// prints once per quiet window (issue 1057).
+const credentialLookupFailures = new FailureLogger();
 
 export async function POST(request: Request): Promise<Response> {
   return createGitHubWebhookPostHandler({

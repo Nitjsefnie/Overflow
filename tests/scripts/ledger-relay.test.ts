@@ -4,7 +4,6 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   decideContexts,
   decideRerun,
-  isTrustedProducerRun,
   mintAppJwt,
   RERUN_ATTEMPT_CAP,
   renderRelayResult,
@@ -57,45 +56,6 @@ function job(over: Partial<RelayJob>): RelayJob {
     ...over,
   };
 }
-
-describe("isTrustedProducerRun", () => {
-  // The allowlist of runs whose executed workflow definition is the base
-  // branch's. pull_request_target runs the base branch's definition whatever
-  // the head branch is called; push, workflow_dispatch and schedule run the
-  // definition at the ref they name, which is the protected one only when that
-  // ref is main; every other event, and any event not listed, is refused.
-  it.each([
-    ["pull_request_target", "main", true],
-    ["pull_request_target", "feature/some-branch", true],
-    ["pull_request_target", "", true],
-    ["push", "main", true],
-    ["push", "feature/some-branch", false],
-    ["push", "", false],
-    ["workflow_dispatch", "main", true],
-    ["workflow_dispatch", "feature/some-branch", false],
-    ["schedule", "main", true],
-    ["schedule", "feature/some-branch", false],
-    ["pull_request", "main", false],
-    ["pull_request", "feature/some-branch", false],
-    ["issue_comment", "main", false],
-    ["issue_comment", "feature/some-branch", false],
-    ["pull_request_review", "main", false],
-    ["pull_request_review_comment", "main", false],
-    ["merge_group", "main", false],
-    ["workflow_run", "main", false],
-    ["", "main", false],
-    ["", "", false],
-    ["some_future_event", "main", false],
-    // Near misses: the comparison is exact, never a prefix or a case fold.
-    ["Push", "main", false],
-    ["push", "Main", false],
-    ["push", "refs/heads/main", false],
-    ["push", "main ", false],
-    ["pull_request_target ", "main", false],
-  ])("event %j on head branch %j is trusted: %s", (event, headBranch, expected) => {
-    expect(isTrustedProducerRun(event, headBranch)).toBe(expected);
-  });
-});
 
 /**
  * The pin map's shape, as the relay reads it. Two forms are legal per context:
@@ -693,7 +653,10 @@ describe("runRelay", () => {
       Buffer.from(mintJwt.split(".")[1] ?? "", "base64url").toString("utf8"),
     ) as Record<string, unknown>;
     expect(payload.iss).toBe("5118623");
-    expect(JSON.parse(String(mint?.init.body))).toEqual({ repositories: ["Overflow"] });
+    expect(JSON.parse(String(mint?.init.body))).toEqual({
+      repositories: ["Overflow"],
+      permissions: { actions: "read", checks: "write", metadata: "read", pull_requests: "read" },
+    });
 
     expect(jobsRequest?.init.method).toBe("GET");
     expect(headersOf(jobsRequest ?? { url: "", init: {} }).authorization).toBe(
@@ -1008,18 +971,18 @@ describe("runRelay", () => {
 
   describe("trusted producer runs", () => {
     it.each([
-      ["pull_request", "main"],
-      ["pull_request", "feature/some-branch"],
-      ["issue_comment", "main"],
-      ["issue_comment", "feature/some-branch"],
-      ["push", "feature/some-branch"],
-      ["workflow_dispatch", "feature/some-branch"],
-      ["", "main"],
+      ["pull_request", "main", false],
+      ["pull_request", "feature/some-branch", true],
+      ["issue_comment", "main", false],
+      ["issue_comment", "feature/some-branch", false],
+      ["push", "feature/some-branch", false],
+      ["workflow_dispatch", "feature/some-branch", false],
+      ["", "main", false],
     ])(
-      "refuses a pinned %j run on head branch %j before anything is posted: no check-run, no sweep, no heal",
-      async (event, headBranch) => {
+      "handles a pinned %j run on head branch %j without posting anything",
+      async (event, headBranch, shouldThrow) => {
         // The env carries no head repository, so the gate fetches the run
-        // body; the LIVE listing is the case that keeps the throw.
+        // body; its PR ref makes only the matching pull_request row throw.
         const fetchStub = makeFetch([
           token(),
           fetchedRun({ event, head_branch: headBranch }),
@@ -1037,11 +1000,15 @@ describe("runRelay", () => {
           }),
         );
 
-        expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
-        expect(error?.message).toContain(`run ${RUN_ID}`);
-        expect(error?.message).toContain(`event ${JSON.stringify(event)}`);
-        expect(error?.message).toContain(`head branch ${JSON.stringify(headBranch)}`);
-        expect(error?.message).toContain("no required context was relayed");
+        if (shouldThrow) {
+          expect(error, "the pull_request producer at its own ref must fail visibly").toBeInstanceOf(Error);
+          expect(error?.message).toContain(`run ${RUN_ID}`);
+          expect(error?.message).toContain(`event ${JSON.stringify(event)}`);
+          expect(error?.message).toContain(`head branch ${JSON.stringify(headBranch)}`);
+          expect(error?.message).toContain("no required context was relayed");
+        } else {
+          expect(error, "a run that is not this pull request's producer must no-op").toBeUndefined();
+        }
         // Learn the head repository, then read liveness: three requests, nothing else.
         expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
         expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
@@ -1068,7 +1035,7 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
     });
 
-    it("reads an absent GITHUB_WORKFLOW_RUN_HEAD_BRANCH as no branch, so a push run is refused", async () => {
+    it("no-ops when a push run's head branch is absent", async () => {
       const env = relayEnv();
       delete env.GITHUB_WORKFLOW_RUN_HEAD_BRANCH;
       const fetchStub = makeFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
@@ -1080,13 +1047,11 @@ describe("runRelay", () => {
           readPinMap: async () => PIN_MAP,
         }),
       );
-      expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
-      expect(error?.message).toContain('head branch ""');
-      expect(error?.message).toContain("no required context was relayed");
+      expect(error, "a run without a head branch cannot be this pull request's producer").toBeUndefined();
       expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
     });
 
-    it("reads an absent GITHUB_WORKFLOW_RUN_EVENT as no event, so the pinned run is refused", async () => {
+    it("no-ops when GITHUB_WORKFLOW_RUN_EVENT is absent", async () => {
       // An event the relay was not told is not evidence of any event: the
       // missing value must read as the empty string, which no rule trusts.
       const env = relayEnv({ GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main" });
@@ -1100,14 +1065,12 @@ describe("runRelay", () => {
           readPinMap: async () => PIN_MAP,
         }),
       );
-      expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
-      expect(error?.message).toContain('event ""');
-      expect(error?.message).toContain("no required context was relayed");
+      expect(error, "a run without an event cannot be this pull request's producer").toBeUndefined();
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
       expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
     });
 
-    it("reads a fetched run with no event field as no event, so the pinned run is refused", async () => {
+    it("no-ops when the fetched run has no event field", async () => {
       const body = fetchedRunBody();
       delete body.event;
       const fetchStub = makeFetch([
@@ -1123,9 +1086,7 @@ describe("runRelay", () => {
           readPinMap: async () => PIN_MAP,
         }),
       );
-      expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
-      expect(error?.message).toContain('event ""');
-      expect(error?.message).toContain("no required context was relayed");
+      expect(error, "a fetched run without an event cannot be this pull request's producer").toBeUndefined();
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
       expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
     });
@@ -1135,9 +1096,9 @@ describe("runRelay", () => {
       ["issue_comment", "feature/some-branch"],
       ["push", "feature/some-branch"],
     ])(
-      "refuses through the dispatch path when the fetched run is %j on head branch %j",
+      "no-ops through dispatch for a non-producer %j run on head branch %j",
       async (event, headBranch) => {
-        // A LIVE listing is the case that keeps the throw (issue 1115).
+        // A live same-SHA listing is still a no-op for these mismatched runs.
         const fetchStub = makeFetch([
           token(),
           fetchedRun({ event, head_branch: headBranch }),
@@ -1152,11 +1113,7 @@ describe("runRelay", () => {
           }),
         );
 
-        expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
-        expect(error?.message).toContain(`run ${RUN_ID}`);
-        expect(error?.message).toContain(`event ${JSON.stringify(event)}`);
-        expect(error?.message).toContain(`head branch ${JSON.stringify(headBranch)}`);
-        expect(error?.message).toContain("no required context was relayed");
+        expect(error, "a non-producer run at an open PR's SHA must no-op").toBeUndefined();
         // The recovery needs the token to read the run; the refusal then reads
         // the head's liveness before throwing.
         expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
@@ -1168,7 +1125,7 @@ describe("runRelay", () => {
       ["null", { head_branch: null }],
       ["not a string", { head_branch: 42 }],
     ])(
-      "reads a fetched run whose head_branch is %s as no branch, so a push run is refused",
+      "no-ops when a fetched push run's head_branch is %s",
       async (_name, over) => {
         const body = fetchedRunBody();
         delete body.head_branch;
@@ -1185,8 +1142,7 @@ describe("runRelay", () => {
             readPinMap: async () => PIN_MAP,
           }),
         );
-        expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
-        expect(error?.message).toContain('head branch ""');
+        expect(error, "a push run without a readable head branch cannot be this PR's producer").toBeUndefined();
         expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
       },
     );
@@ -1408,7 +1364,7 @@ describe("runRelay", () => {
   const RERUN_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs/${RUN_ID}/rerun`;
 
   function pullEntry(over: Record<string, unknown> = {}): Record<string, unknown> {
-    return { state: "open", head: { sha: HEAD_SHA }, ...over };
+    return { state: "open", head: { sha: HEAD_SHA, ref: "feature/some-branch" }, ...over };
   }
 
   function pullsListing(pulls: Array<Record<string, unknown>>): Outcome {

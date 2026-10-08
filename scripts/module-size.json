@@ -11,7 +11,7 @@
     "src/app/globals.css": 1234,
     "src/components/repository-form.tsx": 836,
     "src/lib/dashboard/queries.ts": 1546,
-    "src/lib/fold/postgres-store.ts": 2707,
+    "src/lib/fold/postgres-store.ts": 2700,
     "src/lib/fold/repository-fold.ts": 1475,
     "src/lib/github/client.ts": 1487,
     "src/lib/moderation/credit-adjustment-store.ts": 827,

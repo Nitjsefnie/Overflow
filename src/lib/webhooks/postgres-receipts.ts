@@ -12,10 +12,20 @@ type WebhookDeliveryClaimRow = {
 /**
  * Claims a delivery's receipt under a fresh processing lease, classifying it in
  * the same statement as the upsert so no second read can race it. CLAIMED when
- * the receipt was new, FAILED or held by a lapsed lease; DUPLICATE only when
- * the scoped receipt is PROCESSED; IN_PROGRESS otherwise — a live lease, or a
- * conflicting row committed after this statement's snapshot, which it cannot
- * see. Legacy receipts carry no registration and never match the lookup.
+ * the receipt was new, FAILED or held by a lapsed lease; DUPLICATE when the
+ * scoped receipt is PROCESSED — by delivery key, or by the signed body's
+ * digest under the same event whatever the delivery id; IN_PROGRESS otherwise
+ * — a live lease, or a conflicting row committed after this statement's
+ * snapshot, which it cannot see. Legacy receipts carry no registration and
+ * never match the lookup.
+ *
+ * The digest is the mixed-version safe leg of that rule: the previous release
+ * keeps writing digest-less receipts during the switch, so the lookup can only
+ * match rows this release wrote, and a claim whose digest is absent matches
+ * nothing at all and falls back to the delivery-id-only rule (issue 1041).
+ * The event name rides the key because distinct forge events may share body
+ * bytes and each accepted delivery must write its own effects — the digest
+ * alone never conceals one event behind another.
  */
 export async function claimDelivery(
   sql: SqlClient,
@@ -24,15 +34,28 @@ export async function claimDelivery(
 ): Promise<WebhookDeliveryClaim> {
   const leaseToken = randomUUID();
   const [row] = await sql<WebhookDeliveryClaimRow[]>`
-      with claimed as (
+      with replay as (
+        select exists (
+          select 1 from webhook_deliveries
+          where provider = ${scope.provider}
+            and registration_id = ${scope.registrationId}
+            and event_name = ${delivery.event}
+            and body_digest = ${scope.bodyDigest ?? null}
+            and processing_state = ${"PROCESSED"}
+        ) as hit
+      ),
+      claimed as (
         insert into webhook_deliveries (
-          provider, registration_id, delivery_key, execution_id, event_name,
+          provider, registration_id, delivery_key, execution_id, event_name, body_digest,
           processing_state, processing_lease_token, lease_expires_at, attempt_count
         )
-        values (${scope.provider}, ${scope.registrationId}, ${delivery.deliveryId}, ${delivery.executionId},
-          ${delivery.event}, ${"PENDING"}, ${leaseToken}, now() + interval '5 minutes', 1)
+        select ${scope.provider}, ${scope.registrationId}, ${delivery.deliveryId}, ${delivery.executionId},
+          ${delivery.event}, ${scope.bodyDigest ?? null},
+          ${"PENDING"}, ${leaseToken}, now() + interval '5 minutes', 1
+        where not exists (select 1 from replay where hit)
         on conflict (provider, registration_id, delivery_key) where registration_id is not null do update
         set event_name = excluded.event_name, execution_id = excluded.execution_id,
+            body_digest = excluded.body_digest,
             processing_state = ${"PENDING"},
             processing_lease_token = excluded.processing_lease_token,
             lease_expires_at = excluded.lease_expires_at,
@@ -47,13 +70,17 @@ export async function claimDelivery(
       )
       select 'CLAIMED' as status, id, processing_lease_token from claimed
       union all
-      select case when exists (
-          select 1 from webhook_deliveries existing
-          where existing.provider = ${scope.provider}
-            and existing.registration_id = ${scope.registrationId}
-            and existing.delivery_key = ${delivery.deliveryId}
-            and existing.processing_state = ${"PROCESSED"}
-        ) then 'DUPLICATE' else 'IN_PROGRESS' end, null, null
+      select case
+          when (select hit from replay) then 'DUPLICATE'
+          when exists (
+            select 1 from webhook_deliveries existing
+            where existing.provider = ${scope.provider}
+              and existing.registration_id = ${scope.registrationId}
+              and existing.delivery_key = ${delivery.deliveryId}
+              and existing.processing_state = ${"PROCESSED"}
+          ) then 'DUPLICATE'
+          else 'IN_PROGRESS'
+        end, null, null
       where not exists (select 1 from claimed)
     `;
   if (row?.status === "CLAIMED" && row.id !== null && row.processing_lease_token !== null) {

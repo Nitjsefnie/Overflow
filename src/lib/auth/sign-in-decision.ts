@@ -35,7 +35,6 @@ export type SignInRefusalReason = (typeof SIGN_IN_REFUSAL_REASONS)[keyof typeof 
 export type GitHubIdentity = {
   githubUserId: number;
   login: string;
-  avatarUrl: string | null;
 };
 
 export type PersistedGitHubUser = {
@@ -51,6 +50,9 @@ export type PersistGitHubIdentity = (
 /**
  * Validates the GitHub profile and returns the identity Overflow persists, or
  * null when the profile cannot be trusted. Moved verbatim from `src/auth.ts`.
+ * The profile's avatar field is never read: Overflow stopped collecting the
+ * avatar URL (issue 1075), so a profile whose avatar field is missing or
+ * malformed validates exactly as one carrying a string.
  */
 export function readGitHubIdentity(profile: Profile | undefined): GitHubIdentity | null {
   if (profile === undefined) {
@@ -59,13 +61,11 @@ export function readGitHubIdentity(profile: Profile | undefined): GitHubIdentity
 
   const githubUserId = typeof profile.id === "number" ? profile.id : Number(profile.id);
   const login = profile.login;
-  const avatarUrl = profile.avatar_url;
   if (
     !Number.isSafeInteger(githubUserId) ||
     githubUserId <= 0 ||
     typeof login !== "string" ||
-    login.trim().length === 0 ||
-    (avatarUrl !== undefined && avatarUrl !== null && typeof avatarUrl !== "string")
+    login.trim().length === 0
   ) {
     return null;
   }
@@ -73,7 +73,6 @@ export function readGitHubIdentity(profile: Profile | undefined): GitHubIdentity
   return {
     githubUserId,
     login,
-    avatarUrl: typeof avatarUrl === "string" ? avatarUrl : null,
   };
 }
 

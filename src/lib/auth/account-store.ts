@@ -1,6 +1,7 @@
 import { getSql } from "@/lib/db/client";
 import type { SqlClient, UserRole } from "@/lib/db/types";
 import type { PersistedGitHubUser } from "@/lib/auth/sign-in-decision";
+import { grantsWebhookAdministration } from "@/lib/auth/github-oauth-scopes";
 
 /**
  * The liveness state of the GitHub account row, as the session refresh reads
@@ -23,18 +24,122 @@ export type SessionAccountSnapshot = {
 };
 
 /**
- * The one writer of `users.github_login`/`avatar_url`/`encrypted_oauth_token`:
- * the sign-in upsert, moved verbatim from `src/auth.ts`. On conflict it also
- * clears `deleted_at` IN THE SAME statement that restores the avatar and the
- * OAuth token — the `users_deleted_account_scrubbed_check` admits no
- * half-restored state, and this is the exact shape it allows (a later GitHub
- * sign-in re-registers the account).
+ * The stored OAuth-token bytes for a GitHub identity, or null when no account
+ * row exists or nothing is stored for it. The continuity ruling's "is there a
+ * token worth protecting" read.
+ */
+export async function findStoredGitHubToken(
+  githubUserId: number,
+  sql: SqlClient = getSql(),
+): Promise<Buffer | null> {
+  const [row] = await sql<{ encrypted_oauth_token: Buffer | null }[]>`
+    select encrypted_oauth_token
+    from users
+    where github_user_id = ${githubUserId}
+  `;
+  return row?.encrypted_oauth_token ?? null;
+}
+
+/**
+ * Whether this GitHub identity sponsors at least one ACTIVE registered
+ * repository (`registered_repositories.active = true`, the state both a
+ * sponsor unregistration and a moderation deactivation clear). The continuity
+ * ruling's "is there something the stored token still serves" read.
+ */
+export async function sponsorsActiveRegisteredRepository(
+  githubUserId: number,
+  sql: SqlClient = getSql(),
+): Promise<boolean> {
+  const [row] = await sql<{ sponsored: boolean }[]>`
+    select exists (
+      select 1
+      from registered_repositories
+      join users on users.id = registered_repositories.sponsor_id
+      where users.github_user_id = ${githubUserId}
+        and registered_repositories.active = true
+    ) as sponsored
+  `;
+  return row?.sponsored ?? false;
+}
+
+/**
+ * What the stored token's OWN probe established (issue 1154 fix round): a
+ * stored token can be dead — the sponsor revoked the app's authorization on
+ * GitHub — or scope-less, and keeping either gains nothing while a live new
+ * token is discarded. The storage path probes it with the same
+ * X-OAuth-Scopes read the new token gets, and this is that probe's verdict.
+ */
+export type StoredTokenProbeOutcome =
+  /** GitHub answered the stored token and it grants webhook administration. */
+  | "capable"
+  /**
+   * The stored token cannot serve the repositories: GitHub answered it
+   * without an administration scope, answered 401/404 (the authorization no
+   * longer exists), or the stored bytes do not decrypt under the configured
+   * keys.
+   */
+  | "notCapable"
+  /**
+   * No reliable answer — a transport failure, a deadline, or an unreliable
+   * status (an outage or a rate limit, not 401/404). The stored token's
+   * capability is UNKNOWN, and unknown reads as keep: the unchanged
+   * fail-safe direction.
+   */
+  | "unanswered";
+
+/**
+ * The sign-in continuity ruling (issue 1154): whether the storage path keeps
+ * the STORED token instead of the new sign-in's. GitHub issues a new
+ * authorization carrying only the scopes the sign-in requested (an
+ * already-authorized account skips the consent screen), so a contributor
+ * sign-in mints a zero-scope token that would otherwise overwrite the token
+ * the sponsor's registered repositories' webhook repairs still spend. Keep
+ * the stored token exactly when there is one, the account sponsors an active
+ * registration, the new token is not known to administer webhooks (a probe
+ * that failed leaves that unknown, which reads as keep — fail-safe), and the
+ * stored token itself proved live and hook-capable when probed — or its own
+ * probe could not answer, which fails safe the same way. A stored token that
+ * answers revoked or scope-less is replaced by the new token.
+ */
+export type StoredTokenContinuity = {
+  /** The stored token bytes, or null when nothing is stored yet. */
+  existingToken: Buffer | null;
+  /** The scopes GitHub grants the new token, empty when unknown. */
+  newTokenGrantedScopes: readonly string[];
+  /** Whether the granted-scope probe failed, leaving the scopes unknown. */
+  probesFailed: boolean;
+  /** Whether the account sponsors at least one active registered repository. */
+  sponsorsRegisteredRepository: boolean;
+  /**
+   * The stored token's own probe verdict. Probed only when keeping is
+   * otherwise reachable; null when the wiring did not probe because an
+   * earlier condition already decides against keeping.
+   */
+  storedTokenProbe: StoredTokenProbeOutcome | null;
+};
+
+export function shouldKeepStoredGitHubToken(input: StoredTokenContinuity): boolean {
+  return input.existingToken !== null
+    && input.sponsorsRegisteredRepository
+    && (input.probesFailed || !grantsWebhookAdministration(input.newTokenGrantedScopes))
+    && (input.storedTokenProbe === "capable" || input.storedTokenProbe === "unanswered");
+}
+
+/**
+ * The one writer of `users.github_login`/`encrypted_oauth_token`: the sign-in
+ * upsert, moved verbatim from `src/auth.ts`. Nothing writes `avatar_url`
+ * anymore (issue 1075) — the column stays in the schema only so old rows need
+ * no drop; the deletion scrub still clears it and the migration nulled it.
+ * On conflict it also clears `deleted_at` IN THE SAME statement that
+ * restores the OAuth token — the `users_deleted_account_scrubbed_check`
+ * admits no half-restored state, and this is the exact shape it allows (a
+ * later GitHub sign-in re-registers the account; the nulled avatar stays
+ * nulled, which the check reads as scrubbed).
  */
 export async function upsertGitHubAccount(
   input: {
     githubUserId: number;
     login: string;
-    avatarUrl: string | null;
     role: UserRole;
     encryptedAccessToken: Buffer;
   },
@@ -44,21 +149,18 @@ export async function upsertGitHubAccount(
     insert into users (
       github_user_id,
       github_login,
-      avatar_url,
       role,
       encrypted_oauth_token
     )
     values (
       ${input.githubUserId},
       ${input.login},
-      ${input.avatarUrl},
       ${input.role},
       ${input.encryptedAccessToken}
     )
     on conflict (github_user_id) do update
     set
       github_login = excluded.github_login,
-      avatar_url = excluded.avatar_url,
       -- A FLOOR, never an override — but only for a LIVE row. The stored role
       -- floors against sign-in demotion while the account is live: writing
       -- excluded.role unconditionally meant a moderator granted inside the

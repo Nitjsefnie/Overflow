@@ -273,6 +273,44 @@ const otherShellLines = new Set([
   "rm /etc/systemd/system/overflow-bounce.service",
   "sed -i -e '/^overflow-canary:/d' -e '/^overflow-alert:/d' /etc/aliases",
   "rm -rf /var/lib/overflow-bounce",
+  // Section 14's Ledger App private-key rotation (issue 1032): the fingerprint
+  // computation GitHub's documentation prescribes (three spellings, one per
+  // key file the procedure fingerprints), the guarded key-file moves, the
+  // restart is section 7's already above, and the relay and reconciliation
+  // verifications under the new key.
+  "test \"$(id -u)\" = 0 || { echo \"Refusing: run as root.\" >&2; exit 1; }",
+  "test ! -e /etc/overflow/github-app/private-key.pem.rotation-backup || { echo \"Refusing: private-key.pem.rotation-backup already exists; finish or roll back the interrupted rotation first.\" >&2; exit 1; }",
+  "printf 'old key fingerprint: '",
+  "openssl rsa -in /etc/overflow/github-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64",
+  "cp -p /etc/overflow/github-app/private-key.pem /etc/overflow/github-app/private-key.pem.rotation-backup",
+  "test \"$(openssl rsa -in /etc/overflow/github-app/private-key.pem.rotation-backup -pubout -outform DER | openssl sha256 -binary | openssl base64)\" = \"$(openssl rsa -in /etc/overflow/github-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)\" || { echo \"Refusing: the rollback copy does not match the live key.\" >&2; exit 1; }",
+  "scp /local/path/to/the-downloaded.pem root@DEPLOY-HOST:/etc/overflow/github-app/private-key.new.pem",
+  "test -s /etc/overflow/github-app/private-key.new.pem || { echo \"Refusing: private-key.new.pem is missing or empty; run the transfer above first.\" >&2; exit 1; }",
+  "chown root:root /etc/overflow/github-app/private-key.new.pem",
+  "chmod 0600 /etc/overflow/github-app/private-key.new.pem",
+  "openssl rsa -in /etc/overflow/github-app/private-key.new.pem -check -noout || { echo \"Refusing: private-key.new.pem is not a readable RSA private key.\" >&2; exit 1; }",
+  "printf 'new key fingerprint: '",
+  "openssl rsa -in /etc/overflow/github-app/private-key.new.pem -pubout -outform DER | openssl sha256 -binary | openssl base64",
+  "test -e /etc/overflow/github-app/private-key.pem.rotation-backup || { echo \"Refusing: private-key.pem.rotation-backup is missing; run step 1 first.\" >&2; exit 1; }",
+  "test -s /etc/overflow/github-app/private-key.new.pem || { echo \"Refusing: private-key.new.pem is missing; run step 2 first.\" >&2; exit 1; }",
+  "old_fp=$(openssl rsa -in /etc/overflow/github-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)",
+  "new_fp=$(openssl rsa -in /etc/overflow/github-app/private-key.new.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)",
+  "test \"$new_fp\" != \"$old_fp\" || { echo \"Refusing: private-key.new.pem holds the same key as the live file.\" >&2; exit 1; }",
+  "cat /etc/overflow/github-app/private-key.new.pem > /etc/overflow/github-app/private-key.pem",
+  "test \"$(openssl rsa -in /etc/overflow/github-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)\" = \"$new_fp\" || { echo \"The replaced file does not read back as the staged key; restore from the rollback copy as Rolling back describes.\" >&2; exit 1; }",
+  "gh secret set LEDGER_APP_KEY --repo Nitjsefnie/Overflow --env overflow-ledger < /etc/overflow/github-app/private-key.new.pem",
+  "gh secret list --repo Nitjsefnie/Overflow --env overflow-ledger",
+  "gh workflow run ledger-relay.yml --repo Nitjsefnie/Overflow",
+  "run_id=$(gh run list --repo Nitjsefnie/Overflow --workflow ledger-relay.yml --limit 1 --json databaseId --jq '.[0].databaseId')",
+  "printf 'relay probe run: %s\\n' \"$run_id\"",
+  "gh run watch \"$run_id\" --repo Nitjsefnie/Overflow --exit-status",
+  "gh api 'repos/Nitjsefnie/Overflow/commits/MERGE-COMMIT-SHA/check-runs?filter=all&per_page=100' --paginate --jq '.check_runs[] | select(.app.id == 5118623) | {name: .name, status: .status, conclusion: .conclusion}'",
+  "pnpm reconcile --repository Nitjsefnie/Overflow",
+  "psql \"$DATABASE_URL\" -tAc \"select status, completed_at is not null from reconciliation_runs where id = 'REPLACE-WITH-THE-RUNID'\"",
+  "rm /etc/overflow/github-app/private-key.new.pem /etc/overflow/github-app/private-key.pem.rotation-backup",
+  "test -e /etc/overflow/github-app/private-key.pem.rotation-backup || { echo \"Refusing: private-key.pem.rotation-backup is missing; there is nothing to restore from.\" >&2; exit 1; }",
+  "cat /etc/overflow/github-app/private-key.pem.rotation-backup > /etc/overflow/github-app/private-key.pem",
+  "test \"$(openssl rsa -in /etc/overflow/github-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)\" = \"$(openssl rsa -in /etc/overflow/github-app/private-key.pem.rotation-backup -pubout -outform DER | openssl sha256 -binary | openssl base64)\" || { echo \"The restored file does not read back as the rollback copy.\" >&2; exit 1; }",
 ].map((line) => tokenizeLines(line)[0].join(" ")));
 
 // The manual fallback's expanded source-attestation gates are explicitly

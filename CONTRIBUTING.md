@@ -573,8 +573,9 @@ conditional but always worth checking — closing keywords go there and nowhere
 else. Bugs Discovered is a pointer list only, one line per filed issue with the
 title copied verbatim and no commentary. Breaking Changes, Follow-ups / Known
 Limitations and Dependencies are optional; delete the heading and its comment
-when it does not apply. The Footer is required and names every model that
-touched the pull request.
+when it does not apply. The Footer is required when any AI model touched the
+pull request and is omitted otherwise; it names every model that touched the
+pull request.
 
 Testing means what you actually ran and what it said. For a change to the fold
 or the schema, that includes confirming the container-backed suites ran rather
