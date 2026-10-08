@@ -318,6 +318,7 @@ describe("Overflow production unit", () => {
     expect(files.map((file) => file.name).sort(),
       "deploy/ may contain only README.md, backup-restore.md, container.md, " +
         "decommission.md, dpia-screening.md, incident-response.md, " +
+        "processing-record.md, " +
         "overflow-alert@.service, " +
         "overflow-backup.service, overflow-backup.timer, overflow-bounce.service, " +
         "overflow-bounce.timer, overflow-canary.service, overflow-canary.timer, " +
@@ -341,6 +342,7 @@ describe("Overflow production unit", () => {
       "overflow-offhost-backup.service",
       "overflow-offhost-backup.timer",
       "overflow.service",
+      "processing-record.md",
     ]);
     expect(files.filter((file) => !file.isFile()).map((file) => file.name),
       "the reviewed deployment artifacts must be regular files",

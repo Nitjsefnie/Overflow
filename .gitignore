@@ -215,6 +215,7 @@ src/components/*
 !src/components/*.tsx
 !src/lib/
 src/lib/*
+!src/lib/processing-activities.ts
 !src/lib/disputes.ts
 !src/lib/sanctions.ts
 !src/lib/format-instant.ts
@@ -376,6 +377,7 @@ tests/calibration/*
 !tests/components/
 tests/components/*
 !tests/components/*.tsx
+!tests/components/processing-record.test.ts
 !tests/config/
 tests/config/*
 !tests/config/*.ts
