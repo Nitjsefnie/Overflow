@@ -859,6 +859,19 @@ describe("Actions event policy entry orchestration", () => {
     expect(mintCall.url).toContain("/app/installations/166057493/access_tokens");
     expect(mintCall.init?.method).toBe("POST");
     expect(mintCall.init?.signal).toBeInstanceOf(AbortSignal);
+    // Issue 1051: the mint requests exactly the minimal permission set both
+    // scripts' GitHub calls derive, not the App's whole grant. Pinned as an
+    // exact body so a permission added to the mint without a matching call —
+    // or a new call without its permission — fails here.
+    expect(JSON.parse(String(mintCall.init?.body))).toEqual({
+      repositories: ["Overflow"],
+      permissions: {
+        actions: "read",
+        checks: "write",
+        metadata: "read",
+        pull_requests: "read",
+      },
+    });
     const jwt = String(
       new Headers(mintCall.init?.headers).get("authorization"),
     ).slice("Bearer ".length);

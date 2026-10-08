@@ -28,6 +28,17 @@ export interface TriggeringRun {
   /** The triggering run's attempt number; 1 when the environment or the API did not name one. */
   runAttempt: number;
   /**
+   * When the run began executing, per the run body's `run_started_at` — the
+   * rerun-heal's primary never-started signal (issue 1037): a run whose
+   * started-at names a time was executing when it was cancelled, so the
+   * cancellation was deliberate and the heal must not touch it. Null when the
+   * run names none. The workflow_run path ALWAYS carries null here: the
+   * workflow passes the triggering run's fields through the environment and
+   * names no started-at, so on that path the heal's job-listing fallback
+   * decides alone.
+   */
+  runStartedAt: string | null;
+  /**
    * The full name ("OWNER/REPO") of the repository the run's head commit
    * lives in, per the run body's `head_repository.full_name`; empty when the
    * run's fields carry none (the workflow_run path's env carries none). The
@@ -88,6 +99,7 @@ export function parseTrigger(env: Record<string, string | undefined>): Trigger {
         event: env.GITHUB_WORKFLOW_RUN_EVENT ?? "",
         headBranch: env.GITHUB_WORKFLOW_RUN_HEAD_BRANCH ?? "",
         runAttempt: normalizedAttempt(env.GITHUB_WORKFLOW_RUN_ATTEMPT),
+        runStartedAt: null,
         headRepository: "",
       },
     };
