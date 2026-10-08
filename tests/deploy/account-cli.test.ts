@@ -18,8 +18,8 @@ const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const operating = readFileSync(new URL("../../OPERATING.md", import.meta.url), "utf8");
 
 const usageLine = "Usage: account.ts export --github-user-id <id> | delete --github-user-id <id> [--confirm]"
-  + " | export-forge --provider github|gitlab --forge-id <id> [--login <login>]"
-  + " | remove-forge --provider github|gitlab --forge-id <id> [--login <login>] [--confirm]";
+  + " | export-forge --provider github|gitlab --forge-id <id> [--instance-url <https-origin>] [--login <login>]"
+  + " | remove-forge --provider github|gitlab --forge-id <id> [--instance-url <https-origin>] [--login <login>] [--confirm]";
 
 /**
  * An sql client that fails the case the moment anything reaches for the
@@ -99,6 +99,11 @@ describe("account CLI grammar", () => {
     { args: ["remove-forge", "--provider", "github", "--forge-id", "1", "--confirm", "--confirm"] },
     { args: ["remove-forge", "--provider", "github", "--forge-id", "1", "extra"] },
     { args: ["remove-forge", "--forge-id", "1", "--confirm"] },
+    { args: ["remove-forge", "--provider", "gitlab", "--forge-id", "1", "--confirm"] },
+    { args: ["export-forge", "--provider", "gitlab", "--forge-id", "1"] },
+    { args: ["export-forge", "--provider", "gitlab", "--instance-url", "http://gitlab.example", "--forge-id", "1"] },
+    { args: ["export-forge", "--provider", "github", "--instance-url", "https://other.example", "--forge-id", "1"] },
+    { args: ["export-forge", "--provider", "gitlab", "--instance-url", "https://gitlab.example", "--instance-url", "https://other.example", "--forge-id", "1"] },
   ])("rejects $args before touching the database", async ({ args }) => {
     const { lines, dependencies } = fixture(refusingSql);
     expect(await runAccountCli(args, dependencies)).toBe(2);
@@ -137,7 +142,7 @@ describe("account CLI grammar", () => {
     { command: "export", arguments: ["export", "--github-user-id", "1"] },
     { command: "delete", arguments: ["delete", "--github-user-id", "1", "--confirm"] },
     { command: "export-forge", arguments: ["export-forge", "--provider", "github", "--forge-id", "1"] },
-    { command: "remove-forge", arguments: ["remove-forge", "--provider", "gitlab", "--forge-id", "1", "--confirm"] },
+    { command: "remove-forge", arguments: ["remove-forge", "--provider", "gitlab", "--instance-url", "https://gitlab.example", "--forge-id", "1", "--confirm"] },
   ])("sanitizes a failing $command instead of printing the connection string", async ({ arguments: argumentsList }) => {
     const { lines, dependencies } = fixture(leakingSql());
     expect(await runAccountCli(argumentsList, dependencies)).toBe(1);
@@ -358,7 +363,7 @@ describe("account CLI with PostgreSQL", () => {
       expect(forgeExport.formatVersion).toBe(1);
       // The account deletion ran first, so the login copy the export resolves
       // from the surviving id-keyed row is the deletion tombstone.
-      expect(forgeExport.logins).toContain(DELETED_ACCOUNT_LOGIN);
+      expect(forgeExport.logins).not.toContain(DELETED_ACCOUNT_LOGIN);
       const forgeRemoval = JSON.parse(results[5]!.stdout);
       expect(forgeRemoval.kind).toBe("REMOVED");
     } finally {

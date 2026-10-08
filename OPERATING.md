@@ -227,7 +227,9 @@ is held.
 
 A request from a person who never signed in has no account row to delete and no
 dashboard route, so the operator handles it by hand with the forge-keyed
-commands — keyed by forge provider and numeric forge id, never a login alone.
+commands — keyed by forge provider, normalized HTTPS instance origin and numeric
+forge id, never a login alone. GitHub defaults to `https://github.com`; GitLab
+requires `--instance-url <https-origin>` and refuses a request without it.
 Resolve the numeric id first (`gh api users/<login> --jq .id` for a GitHub
 person), and pass `--login` only to widen matching to rows that carry no
 numeric id: an issue's owner login is the one identity column with no id beside
@@ -242,8 +244,9 @@ facts whose payloads carry their identity, the change-log entries recording
 their logins or ids, and the moderation notes naming them. It is an access
 copy: secret material appears only as presence booleans, never as a value.
 Where a table carries no provider column, matching is scoped by the row's
-repository's provider, so a GitHub request never returns a GitLab person's
-rows.
+repository's provider and instance origin. A numeric id, where present,
+controls matching; a verified login is used only where the id is absent, so
+a reused login never overrides a known different id.
 
 The removal applies one documented decision per store — the decision table is
 the module constant `forgePersonRemovalDecisions` in
@@ -278,21 +281,25 @@ the module constant `forgePersonRemovalDecisions` in
   person columns, and the account-keyed stores follow the account-side
   deletion and export when the person has an account.
 
-The removal records a suppression — one row per (provider, numeric forge id)
-in `data_subject_suppressions`, with the login copy resolved at decision time.
-Every later reconciliation pass checks the suppressions for its repository's
-provider inside the publication transaction, before any derived row or cache
-fact is written, and scrubs the person's identity from what it is about to
-write — so a pass after the removal can never reinstate what was removed, on a
-quiet pass or a full re-read. A suppression by provider and numeric id applies
-across every instance of that provider, so the same id numbering two different
-people on two instances suppresses both — the request is honoured more widely
-than asked, never less. The removal takes the fold's own repository advisory
-locks for the provider's repositories while it works, so it cannot race a
-reconciliation pass that is mid-publication. The recorded login is the one the
-commands resolved at removal time; if the person renames on the forge
-afterwards, run the removal command again (it refreshes the recorded login and
-re-scrubs the new copy). Backups taken before the removal keep the pre-removal
+The removal records a suppression — one row per (provider, normalized instance
+origin, numeric forge id) in `data_subject_suppressions`, retaining all verified
+login aliases across reruns. Shared account-deletion and data-subject tombstones
+are excluded from alias resolution. The aliases come from id-bearing users,
+linked identities, PRs, settlements, claim assignees and cache authors, assignees
+and history actors. An operator-supplied `--login` must be verified against the
+person before use on login-only fields.
+
+Every later reconciliation pass checks only suppressions for its repository's
+provider and origin inside the publication transaction, before writing derived
+rows or cache facts. Id-bearing fields match by id; login-only fields use the
+verified aliases. Different people with the same id on different GitLab
+instances are separate. The removal takes the fold's repository advisory locks
+for that provider and origin, so it cannot race a pass in mid-publication. A
+repeat removal retains previous aliases and adds newly verified ones. Imports
+also learn and retain new aliases from incoming id-bearing evidence before
+scrubbing. If a
+person renames, rerun with their verified `--login` to cover login-only rows
+that have no accompanying numeric evidence. Backups taken before the removal keep the pre-removal
 data until each dump is pruned — in practice about 15 days, like any
 pre-deletion dump.
 

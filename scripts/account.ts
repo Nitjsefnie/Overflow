@@ -2,26 +2,27 @@ import { pathToFileURL } from "node:url";
 import { closeSql, getSql } from "../src/lib/db/client.ts";
 import { deleteAccount } from "../src/lib/accounts/deletion.ts";
 import { exportAccount, formatAccountExport } from "../src/lib/accounts/export.ts";
-import { exportForgePerson, removeForgePerson } from "../src/lib/accounts/forge-person.ts";
+import { exportForgePerson, forgePersonInstance, removeForgePerson } from "../src/lib/accounts/forge-person.ts";
 import type { SqlClient } from "../src/lib/db/types.ts";
 
 export type AccountCliDependencies = { sql: SqlClient; write(line: string): void };
 
 const usageLine = "Usage: account.ts export --github-user-id <id> | delete --github-user-id <id> [--confirm]"
-  + " | export-forge --provider github|gitlab --forge-id <id> [--login <login>]"
-  + " | remove-forge --provider github|gitlab --forge-id <id> [--login <login>] [--confirm]";
+  + " | export-forge --provider github|gitlab --forge-id <id> [--instance-url <https-origin>] [--login <login>]"
+  + " | remove-forge --provider github|gitlab --forge-id <id> [--instance-url <https-origin>] [--login <login>] [--confirm]";
 
 type ParsedCommand =
   | { command: "export"; githubUserId: number }
   | { command: "delete"; githubUserId: number; confirm: boolean }
-  | { command: "export-forge"; provider: string; forgeId: number; login: string | null }
-  | { command: "remove-forge"; provider: string; forgeId: number; login: string | null; confirm: boolean };
+  | { command: "export-forge"; provider: string; forgeId: number; instanceUrl: string; login: string | null }
+  | { command: "remove-forge"; provider: string; forgeId: number; instanceUrl: string; login: string | null; confirm: boolean };
 
 /**
  * The argument grammar, parsed whole before anything touches the database:
  * `export|delete --github-user-id <positive safe integer>`, plus `--confirm`
  * on `delete` alone; `export-forge|remove-forge --provider github|gitlab
- * --forge-id <positive safe integer>`, plus `--login <nonblank>` and, on
+ * --forge-id <positive safe integer>`, plus `--instance-url <https-origin>`
+ * (required for GitLab), `--login <nonblank>` and, on
  * `remove-forge` alone, `--confirm`. Anything else — a missing or unknown
  * subcommand, a missing, duplicated or malformed id, provider or login,
  * `--confirm` on `export` or `export-forge`, an account flag on a forge
@@ -37,6 +38,7 @@ function parseAccountCommand(argumentsList: readonly string[]): ParsedCommand | 
   let githubUserId: number | undefined;
   let provider: string | undefined;
   let forgeId: number | undefined;
+  let instanceUrl: string | undefined;
   let login: string | null = null;
   let confirm = false;
   for (let index = 0; index < rest.length; index++) {
@@ -68,6 +70,11 @@ function parseAccountCommand(argumentsList: readonly string[]): ParsedCommand | 
         return null;
       }
       forgeId = Number(value);
+    } else if (argument === "--instance-url") {
+      if (!forgeCommand || instanceUrl !== undefined) return null;
+      const value = rest[++index];
+      if (value === undefined || value.trim().length === 0) return null;
+      instanceUrl = value;
     } else if (argument === "--login") {
       if (!forgeCommand || login !== null) {
         return null;
@@ -90,9 +97,14 @@ function parseAccountCommand(argumentsList: readonly string[]): ParsedCommand | 
     if (provider === undefined || forgeId === undefined) {
       return null;
     }
+    try {
+      instanceUrl = forgePersonInstance({ provider, forgeId, instanceUrl });
+    } catch {
+      return null;
+    }
     return command === "export-forge"
-      ? { command, provider, forgeId, login }
-      : { command, provider, forgeId, login, confirm };
+      ? { command, provider, forgeId, instanceUrl, login }
+      : { command, provider, forgeId, instanceUrl, login, confirm };
   }
   if (githubUserId === undefined) {
     return null;
@@ -130,13 +142,13 @@ export async function runAccountCli(
     }
     if (parsed.command === "export-forge") {
       write(JSON.stringify(await exportForgePerson(sql, {
-        provider: parsed.provider, forgeId: parsed.forgeId, login: parsed.login,
+        provider: parsed.provider, instanceUrl: parsed.instanceUrl, forgeId: parsed.forgeId, login: parsed.login,
       })));
       return 0;
     }
     if (parsed.command === "remove-forge") {
       const outcome = await removeForgePerson(sql, {
-        provider: parsed.provider, forgeId: parsed.forgeId, login: parsed.login,
+        provider: parsed.provider, instanceUrl: parsed.instanceUrl, forgeId: parsed.forgeId, login: parsed.login,
       }, { confirm: parsed.confirm });
       write(JSON.stringify(outcome));
       switch (outcome.kind) {

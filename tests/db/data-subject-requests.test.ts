@@ -302,7 +302,7 @@ describe("data-subject export", () => {
     });
 
     expect(document.formatVersion).toBe(1);
-    expect(document.requested).toEqual({ provider: "github", forgeId: seed.person.forgeId, login: null });
+    expect(document.requested).toEqual({ provider: "github", instanceUrl: "https://github.com", forgeId: seed.person.forgeId, login: null });
     expect(document.logins).toEqual([seed.person.login]);
 
     expect(storeOf(document, "users")).toMatchObject({ count: 0, rows: [] });
@@ -805,3 +805,289 @@ function gatewayDouble(issues: GitHubIssue[], githubRepositoryId: number): Recon
     getPullRequestDiff: async () => "diff of the recorded work",
   };
 }
+
+// Whole-branch adversarial reproductions: appended temporarily by the reviewer.
+describe("whole branch review regressions", () => {
+  it("review: linked GitLab export resolves its account UUID", async () => {
+    const seed = await seedHandScenario();
+    await sql`insert into user_forge_identities (user_id, provider, instance_url, forge_user_id, forge_login, encrypted_token)
+      values (${seed.member.id}, 'gitlab', 'https://gitlab.example', ${seed.person.forgeId}, ${seed.person.login}, ${Buffer.from('review token')})`;
+    const doc = await exportForgePerson(sql, {provider: 'gitlab', instanceUrl: 'https://gitlab.example/', forgeId: seed.person.forgeId});
+    expect(storeOf(doc, 'users').rows).toEqual([expect.objectContaining({id: seed.member.id})]);
+  });
+  it("review: repeat removal retains the suppression login", async () => {
+    const seed = await seedHandScenario();
+    const request = {provider:'github',forgeId:seed.person.forgeId};
+    await removeForgePerson(sql, request, {confirm:true});
+    await removeForgePerson(sql, request, {confirm:true});
+    const [suppression] = await sql`select login from data_subject_suppressions where provider='github' and forge_id=${seed.person.forgeId}`;
+    expect(suppression.login).toBe(seed.person.login);
+  });
+  it("review: a known different numeric identity beats a reused login", async () => {
+    const seed = await seedHandScenario();
+    await sql`update pull_requests set author_github_login=${seed.person.login}, body='Other person legacy body' where id=${seed.memberPullRequest.id}`;
+    await removeForgePerson(sql, {provider:'github',forgeId:seed.person.forgeId}, {confirm:true});
+    const [row] = await sql`select author_github_user_id, body from pull_requests where id=${seed.memberPullRequest.id}`;
+    expect(row.body).toBe('Other person legacy body');
+    expect(Number(row.author_github_user_id)).toBe(seed.member.githubUserId);
+  });
+  it("review: resolve a login known only by a claim-assignee ID", async () => {
+    const seed = await seedHandScenario();
+    const historicalLogin = `historical-${seed.person.forgeId}`;
+    await sql`update issues set owner_github_login=${historicalLogin}, claim_assignee_github_login=${historicalLogin}, claim_assignee_github_user_id=${seed.person.forgeId} where id=${seed.personIssue.id}`;
+    await removeForgePerson(sql, {provider:'github',forgeId:seed.person.forgeId}, {confirm:true});
+    const [row] = await sql`select owner_github_login,body from issues where id=${seed.personIssue.id}`;
+    expect(row.owner_github_login).toBe(DATA_SUBJECT_TOMBSTONE_LOGIN);
+    expect(row.body).toBeNull();
+  });
+  it("review: same GitLab id on another instance belongs to another person", async () => {
+    const first = await seedHandScenario();
+    const other = await seedHandScenario();
+    await sql`update registered_repositories set provider='gitlab',instance_url='https://first.example',forge_project_id=github_repository_id where id=${first.repositoryId}`;
+    await sql`update registered_repositories set provider='gitlab',instance_url='https://other.example',forge_project_id=github_repository_id where id=${other.repositoryId}`;
+    await sql`update pull_requests set author_github_user_id=${first.person.forgeId} where id=${other.personPullRequest.id}`;
+    await removeForgePerson(sql, {provider:'gitlab',instanceUrl:'https://first.example/',forgeId:first.person.forgeId, login:first.person.login}, {confirm:true});
+    const [row] = await sql`select author_github_login,body from pull_requests where id=${other.personPullRequest.id}`;
+    expect(row.body).toBe(other.personPullRequest.body);
+  });
+  it("review: provider scoping includes changes without a pull request", async () => {
+    const seed = await seedHandScenario();
+    await sql`update registered_repositories set provider='gitlab',instance_url='https://other.example',forge_project_id=github_repository_id where id=${seed.repositoryId}`;
+    await sql`update reconciliation_changes set pull_request_id=null where id=${seed.changeRecord.id}`;
+    const doc = await exportForgePerson(sql,{provider:'github',forgeId:seed.person.forgeId});
+    expect(storeOf(doc,'reconciliation_changes').rows).not.toEqual(expect.arrayContaining([expect.objectContaining({id:seed.changeRecord.id})]));
+  });
+});
+
+  it.each([false, true])("review lifecycle: repeat removal followed by full import (renamed=%s)", async (renamed) => {
+    const seedNumber = nextSeedNumber();
+    const forgeId = 9_100_000 + seedNumber;
+    const login = `outsider-${seedNumber}`;
+    const sponsorGitHubId = 9_200_000 + seedNumber;
+    const memberGitHubId = 9_300_000 + seedNumber;
+    const githubRepositoryId = 9_400_000 + seedNumber;
+    const [sponsor] = await sql<{ id: string; github_login: string }[]>`
+      insert into users (github_user_id, github_login, encrypted_oauth_token)
+      values (${sponsorGitHubId}, ${`sponsor-${seedNumber}`},
+              ${Buffer.from(encryptToken("sponsor-token", TEST_ENCRYPTION_KEY,
+                credentialBinding.userOAuthToken(sponsorGitHubId)), "utf8")})
+      returning id, github_login
+    `;
+    await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login)
+      values (${memberGitHubId}, ${`member-${seedNumber}`}) returning id
+    `;
+    const [repository] = await sql<{ id: string }[]>`
+      insert into registered_repositories (
+        github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme,
+        created_at
+      ) values (
+        ${githubRepositoryId}, ${`ds-owner/repo-${seedNumber}`}, ${sponsor!.id}, 'PUBLIC',
+        ${githubRepositoryId + 100}, ${sql.json(validDifficultyScheme())}, '2026-01-01T00:00:00Z'
+      ) returning id
+    `;
+    const repositoryId = String(repository!.id);
+    const mergedAt = "2026-09-01T12:00:00Z";
+    const personComment = {
+      id: `comment-${seedNumber}`, databaseId: 900_000 + seedNumber,
+      authorLogin: login, authorGitHubUserId: forgeId,
+      body: "Seeing this too.", createdAt: "2026-09-01T09:00:00Z", lastEditedAt: null,
+    };
+    const sponsorRationale = {
+      id: `comment-${seedNumber}-s`, databaseId: 900_100 + seedNumber,
+      authorLogin: `sponsor-${seedNumber}`, authorGitHubUserId: sponsorGitHubId,
+      body: "Settled on the recorded difficulty.", createdAt: "2026-09-01T11:30:00Z", lastEditedAt: null,
+    };
+    const closingPullRequest = (prId: number, number: number, author: string, authorId: number): GitHubPullRequest => ({
+      id: prId, number, title: `Work ${number}`, body: "PR body", url: "https://github.com/ds-owner/repo/pull/1",
+      state: "MERGED", mergedAt, mergeCommitOid: String(prId).padStart(40, "3"), finalCommitAt: "2026-09-01T10:00:00Z",
+      authorLogin: author, authorGitHubUserId: authorId,
+      repositoryGitHubId: githubRepositoryId, repositoryNameWithOwner: `ds-owner/repo-${seedNumber}`,
+    });
+    const personIssueId = 9_500_000 + seedNumber;
+    const memberIssueId = 9_500_100 + seedNumber;
+    const issue = (issueId: number, number: number, prNumber: number, author: string, authorId: number, prId: number): GitHubIssue => ({
+      id: issueId, number, title: `Issue ${number}`, body: "Issue body",
+      url: "https://github.com/ds-owner/repo/issues/1", state: "CLOSED", stateReason: "COMPLETED",
+      createdAt: "2026-09-01T07:00:00Z", updatedAt: "2026-09-01T12:00:00Z",
+      closedAt: "2026-09-01T12:00:00Z", authorLogin: author, authorGitHubUserId: authorId,
+      labels: ["M"], claimAssigneeGitHubLogin: null, claimAssigneeGitHubUserId: null,
+      history: [
+        { kind: "LABELED", id: `opening-${issueId}`, actorLogin: `sponsor-${seedNumber}`,
+          actorGitHubUserId: sponsorGitHubId, label: "M", createdAt: "2026-09-01T08:00:00Z" },
+        { kind: "LABELED", id: `settled-${issueId}`, actorLogin: `sponsor-${seedNumber}`,
+          actorGitHubUserId: sponsorGitHubId, label: "delivered/6", createdAt: "2026-09-01T11:00:00Z" },
+      ],
+      comments: issueId === personIssueId ? [personComment, sponsorRationale] : [sponsorRationale],
+      closingPullRequests: [closingPullRequest(prId, prNumber, author, authorId)],
+    });
+    const double: ForgeDouble = {
+      store: new PostgresFoldStore(sql, TEST_ENCRYPTION_KEY),
+      clock: start,
+      issues: [
+        issue(personIssueId, 1, 11, login, forgeId, 9_600_000 + seedNumber),
+        issue(memberIssueId, 2, 12, `member-${seedNumber}`, memberGitHubId, 9_600_100 + seedNumber),
+      ],
+      run: async (options?: { rederive?: boolean }) =>
+        reconcileRepository(
+          {
+            store: double.store,
+            github: gatewayDouble(double.issues, githubRepositoryId),
+            now: () => double.clock,
+          },
+          repositoryId,
+          options,
+        ),
+    };
+    const personIssueRow = () =>
+      sql<{ owner_github_login: string; body: string | null }[]>`
+        select owner_github_login, body from issues
+        where repository_id = ${repositoryId} and github_issue_id = ${personIssueId}
+      `;
+
+
+    await double.run();
+    await removeForgePerson(sql,{provider:'github',forgeId},{confirm:true});
+    await removeForgePerson(sql,{provider:'github',forgeId},{confirm:true});
+    if (renamed) double.issues[0]!.authorLogin = `renamed-${forgeId}`;
+    double.clock=new Date('2026-09-08T10:06:00Z');
+    await double.run({rederive:true});
+    const [actual]=await personIssueRow();
+    expect(actual.owner_github_login).toBe(DATA_SUBJECT_TOMBSTONE_LOGIN);
+   });
+  it("review lifecycle: cached fold preserves credited member attribution", async () => {
+    const seedNumber = nextSeedNumber();
+    const forgeId = 9_100_000 + seedNumber;
+    const login = `outsider-${seedNumber}`;
+    const sponsorGitHubId = 9_200_000 + seedNumber;
+    const memberGitHubId = 9_300_000 + seedNumber;
+    const githubRepositoryId = 9_400_000 + seedNumber;
+    const [sponsor] = await sql<{ id: string; github_login: string }[]>`
+      insert into users (github_user_id, github_login, encrypted_oauth_token)
+      values (${sponsorGitHubId}, ${`sponsor-${seedNumber}`},
+              ${Buffer.from(encryptToken("sponsor-token", TEST_ENCRYPTION_KEY,
+                credentialBinding.userOAuthToken(sponsorGitHubId)), "utf8")})
+      returning id, github_login
+    `;
+    await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login)
+      values (${memberGitHubId}, ${`member-${seedNumber}`}) returning id
+    `;
+    const [repository] = await sql<{ id: string }[]>`
+      insert into registered_repositories (
+        github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme,
+        created_at
+      ) values (
+        ${githubRepositoryId}, ${`ds-owner/repo-${seedNumber}`}, ${sponsor!.id}, 'PUBLIC',
+        ${githubRepositoryId + 100}, ${sql.json(validDifficultyScheme())}, '2026-01-01T00:00:00Z'
+      ) returning id
+    `;
+    const repositoryId = String(repository!.id);
+    const mergedAt = "2026-09-01T12:00:00Z";
+    const personComment = {
+      id: `comment-${seedNumber}`, databaseId: 900_000 + seedNumber,
+      authorLogin: login, authorGitHubUserId: forgeId,
+      body: "Seeing this too.", createdAt: "2026-09-01T09:00:00Z", lastEditedAt: null,
+    };
+    const sponsorRationale = {
+      id: `comment-${seedNumber}-s`, databaseId: 900_100 + seedNumber,
+      authorLogin: `sponsor-${seedNumber}`, authorGitHubUserId: sponsorGitHubId,
+      body: "Settled on the recorded difficulty.", createdAt: "2026-09-01T11:30:00Z", lastEditedAt: null,
+    };
+    const closingPullRequest = (prId: number, number: number, author: string, authorId: number): GitHubPullRequest => ({
+      id: prId, number, title: `Work ${number}`, body: "PR body", url: "https://github.com/ds-owner/repo/pull/1",
+      state: "MERGED", mergedAt, mergeCommitOid: String(prId).padStart(40, "3"), finalCommitAt: "2026-09-01T10:00:00Z",
+      authorLogin: author, authorGitHubUserId: authorId,
+      repositoryGitHubId: githubRepositoryId, repositoryNameWithOwner: `ds-owner/repo-${seedNumber}`,
+    });
+    const personIssueId = 9_500_000 + seedNumber;
+    const memberIssueId = 9_500_100 + seedNumber;
+    const issue = (issueId: number, number: number, prNumber: number, author: string, authorId: number, prId: number): GitHubIssue => ({
+      id: issueId, number, title: `Issue ${number}`, body: "Issue body",
+      url: "https://github.com/ds-owner/repo/issues/1", state: "CLOSED", stateReason: "COMPLETED",
+      createdAt: "2026-09-01T07:00:00Z", updatedAt: "2026-09-01T12:00:00Z",
+      closedAt: "2026-09-01T12:00:00Z", authorLogin: author, authorGitHubUserId: authorId,
+      labels: ["M"], claimAssigneeGitHubLogin: null, claimAssigneeGitHubUserId: null,
+      history: [
+        { kind: "LABELED", id: `opening-${issueId}`, actorLogin: `sponsor-${seedNumber}`,
+          actorGitHubUserId: sponsorGitHubId, label: "M", createdAt: "2026-09-01T08:00:00Z" },
+        { kind: "LABELED", id: `settled-${issueId}`, actorLogin: `sponsor-${seedNumber}`,
+          actorGitHubUserId: sponsorGitHubId, label: "delivered/6", createdAt: "2026-09-01T11:00:00Z" },
+      ],
+      comments: issueId === personIssueId ? [personComment, sponsorRationale] : [sponsorRationale],
+      closingPullRequests: [closingPullRequest(prId, prNumber, author, authorId)],
+    });
+    const double: ForgeDouble = {
+      store: new PostgresFoldStore(sql, TEST_ENCRYPTION_KEY),
+      clock: start,
+      issues: [
+        issue(personIssueId, 1, 11, login, forgeId, 9_600_000 + seedNumber),
+        issue(memberIssueId, 2, 12, `member-${seedNumber}`, memberGitHubId, 9_600_100 + seedNumber),
+      ],
+      run: async (options?: { rederive?: boolean }) =>
+        reconcileRepository(
+          {
+            store: double.store,
+            github: gatewayDouble(double.issues, githubRepositoryId),
+            now: () => double.clock,
+          },
+          repositoryId,
+          options,
+        ),
+    };
+    const personSettlementRow = () =>
+      sql<{ creditor_github_login: string | null; creditor_github_user_id: string | null; creditor_id: string | null; status: string }[]>`
+        select creditor_github_login, creditor_github_user_id::text as creditor_github_user_id,
+               creditor_id, status::text as status
+        from settlements join issues on issues.id = settlements.issue_id
+        where issues.repository_id = ${repositoryId} and issues.github_issue_id = ${personIssueId}
+      `;
+
+
+    const [person]=await sql`insert into users (github_user_id,github_login) values (${forgeId},${login}) returning id`;
+    await double.run();
+    const [before]=await personSettlementRow();
+    expect(before.creditor_id).toBe(person.id);
+    await removeForgePerson(sql,{provider:'github',forgeId},{confirm:true});
+    double.clock=new Date('2026-09-08T10:04:00Z');
+    await double.run();
+    const [actual]=await personSettlementRow();
+    expect(actual.creditor_id).toBe(person.id);
+    expect(actual.status).toBe(before.status);
+   });
+describe("identity authority and access inventory", () => {
+  it("exports only the numeric subject when another id reuses the login", async () => {
+    const seed = await seedHandScenario();
+    await sql`update pull_requests set author_github_login=${seed.person.login} where id=${seed.memberPullRequest.id}`;
+    const doc = await exportForgePerson(sql, { provider: "github", forgeId: seed.person.forgeId });
+    expect(storeOf(doc, "pull_requests").rows).toEqual([expect.objectContaining({ id: seed.personPullRequest.id })]);
+  });
+  it("refuses a GitLab request without an instance before writing", async () => {
+    const seed = await seedHandScenario();
+    await expect(removeForgePerson(sql, { provider: "gitlab", forgeId: seed.person.forgeId }, { confirm: true })).rejects.toThrow();
+  });
+  it.each([false, true])("linked GitLab removal resolves account and sponsor refusal (blocked=%s)", async (blocked) => {
+    const seed = await seedHandScenario();
+    const userId = blocked ? seed.sponsor.id : seed.member.id;
+    await sql`insert into user_forge_identities (user_id, provider, instance_url, forge_user_id, forge_login, encrypted_token)
+      values (${userId}, 'gitlab', 'https://gitlab.example', ${seed.person.forgeId}, ${seed.person.login}, ${Buffer.from("test credential")})`;
+    const outcome = await removeForgePerson(sql, { provider: "gitlab", instanceUrl: "https://gitlab.example", forgeId: seed.person.forgeId }, { confirm: true });
+    expect(outcome.kind).toBe(blocked ? "SPONSOR_BLOCKED" : "REMOVED");
+    expect((await rowJson("users", userId)).deleted_at === null).toBe(blocked);
+  });
+  it.each(["assignee", "actor"])("resolves aliases whose only id evidence is cache %s", async (role) => {
+    const seed = await seedHandScenario();
+    const alias = `cache-${role}-${seed.person.forgeId}`;
+    const [fact] = await sql`select payload from repository_reconciliation_evidence_facts where repository_id=${seed.repositoryId}`;
+    const payload = fact!.payload;
+    if (role === "assignee") { payload.claimAssigneeGitHubLogin = alias; payload.claimAssigneeGitHubUserId = seed.person.forgeId; }
+    else { payload.history.push({ kind: "LABELED", id: "actor-only", actorLogin: alias, actorGitHubUserId: seed.person.forgeId, label: "M", createdAt: "2026-09-01T08:00:00Z" }); }
+    await sql`update repository_reconciliation_evidence_facts set payload=${sql.json(payload)} where repository_id=${seed.repositoryId}`;
+    await sql`update issues set owner_github_login=${alias} where id=${seed.personIssue.id}`;
+    const doc = await exportForgePerson(sql, { provider: "github", forgeId: seed.person.forgeId });
+    expect(doc.logins).toContain(alias);
+    await removeForgePerson(sql, { provider: "github", forgeId: seed.person.forgeId }, { confirm: true });
+    expect((await rowJson("issues", seed.personIssue.id)).owner_github_login).toBe(DATA_SUBJECT_TOMBSTONE_LOGIN);
+  });
+
+});

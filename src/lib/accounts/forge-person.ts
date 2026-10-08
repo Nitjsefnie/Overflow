@@ -1,5 +1,7 @@
 import type { ParameterOrJSON } from "postgres";
 import type { SqlClient, TransactionClient } from "@/lib/db/types";
+import { normalizeInstanceUrl } from "@/lib/forge/identities";
+import { DELETED_ACCOUNT_LOGIN } from "@/lib/accounts/deletion";
 import { repositoryLockNamespace } from "@/lib/fold/postgres-store";
 import { waitForRepositoryLockRetry } from "@/lib/fold/repository-lock-retry";
 import {
@@ -12,7 +14,7 @@ export { DATA_SUBJECT_TOMBSTONE_LOGIN };
 
 /**
  * The data-subject request procedure for a person keyed by forge provider and
- * numeric forge id (issue 1071): an operator export of every row naming the
+ * instance origin and numeric forge id (issue 1071): an operator export of every row naming the
  * person, and a removal that applies one documented decision per store and
  * records a suppression the reconciliation import checks on every later pass.
  *
@@ -20,13 +22,15 @@ export { DATA_SUBJECT_TOMBSTONE_LOGIN };
  * required. The numeric id is authoritative; logins are display copies
  * resolved from id-keyed rows (and the operator can add one with `--login` for
  * rows that carry only a login column). Where a table carries no provider
- * column, matching is scoped by the row's repository's provider, so a GitHub
+ * column, matching is scoped by the row's repository's provider and origin, so a GitHub
  * request never exports a GitLab person's rows.
  */
 
 export type ForgePersonKey = {
   provider: string;
   forgeId: number;
+  /** GitLab requires an explicit origin; GitHub defaults to github.com. */
+  instanceUrl?: string;
 };
 
 export type ForgePersonRequest = ForgePersonKey & {
@@ -43,7 +47,7 @@ export type ForgePersonExportSection = {
 export type ForgePersonExport = {
   formatVersion: typeof FORGE_PERSON_EXPORT_FORMAT_VERSION;
   exportedAt: string;
-  requested: { provider: string; forgeId: number; login: string | null };
+  requested: { provider: string; instanceUrl: string; forgeId: number; login: string | null };
   logins: string[];
   stores: ForgePersonExportSection[];
 };
@@ -149,6 +153,25 @@ export const forgePersonRemovalDecisions: readonly {
   },
 ];
 
+/** Validate before any transaction; a GitLab id has no authority without its instance. */
+export function forgePersonInstance(request: ForgePersonKey): string {
+  if (!["github", "gitlab"].includes(request.provider) || !Number.isSafeInteger(request.forgeId) || request.forgeId <= 0) {
+    throw new Error("Invalid forge person.");
+  }
+  if (request.provider === "gitlab" && !request.instanceUrl) throw new Error("GitLab requires an instance URL.");
+  const origin = normalizeInstanceUrl(request.instanceUrl ?? "https://github.com");
+  if (request.provider === "github" && origin !== "https://github.com") throw new Error("Unsupported GitHub instance.");
+  return origin;
+}
+
+async function personRepositoryIds(sql: SqlClient | TransactionClient, provider: string, instanceUrl: string): Promise<string[]> {
+  const rows = await sql<{ id: string }[]>`
+    select id from registered_repositories where provider = ${provider}
+      and coalesce(instance_url, 'https://github.com') = ${instanceUrl}
+  `;
+  return rows.map((row) => row.id);
+}
+
 /** Escapes a login for a Postgres regular expression. */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -173,43 +196,62 @@ async function resolveForgePersonLogins(
   sql: SqlClient | TransactionClient,
   forgeId: number,
   provider: string,
+  instanceUrl: string,
 ): Promise<string[]> {
   const rows = await sql.unsafe<{ login: string }[]>(`
     select distinct login from (
       select github_login as login from users
         where ${provider === "github" ? "true" : "false"} and github_user_id = $1
       union
-      select forge_login from user_forge_identities where provider = $2 and forge_user_id = $1
+      select forge_login from user_forge_identities where provider = $2 and instance_url = $4 and forge_user_id = $1
       union
       select pr.author_github_login from pull_requests as pr
         join registered_repositories as repositories on repositories.id = pr.repository_id
-        where repositories.provider = $2 and pr.author_github_user_id = $1
+        where repositories.provider = $2 and coalesce(repositories.instance_url, 'https://github.com') = $4 and pr.author_github_user_id = $1
       union
       select settlements.creditor_github_login from settlements
         join pull_requests as pr on pr.id = settlements.pull_request_id
         join registered_repositories as repositories on repositories.id = pr.repository_id
-        where repositories.provider = $2 and settlements.creditor_github_user_id = $1
+        where repositories.provider = $2 and coalesce(repositories.instance_url, 'https://github.com') = $4 and settlements.creditor_github_user_id = $1
+      union
+      select unnest(logins) from data_subject_suppressions where provider = $2 and instance_url = $4 and forge_id = $1
+      union
+      select i.claim_assignee_github_login from issues as i
+        join registered_repositories as repositories on repositories.id = i.repository_id
+        where repositories.provider = $2 and coalesce(repositories.instance_url, 'https://github.com') = $4
+          and i.claim_assignee_github_user_id = $1
       union
       select facts.payload->>'authorLogin' from repository_reconciliation_evidence_facts as facts
         join registered_repositories as repositories on repositories.id = facts.repository_id
-        where repositories.provider = $2 and facts.kind = 'issue'
+        where repositories.provider = $2 and coalesce(repositories.instance_url, 'https://github.com') = $4 and facts.kind = 'issue'
           and facts.payload->>'authorGitHubUserId' = $3
       union
       select comment->>'authorLogin' from repository_reconciliation_evidence_facts as facts
         join registered_repositories as repositories on repositories.id = facts.repository_id,
         jsonb_array_elements(facts.payload->'comments') as comment
-        where repositories.provider = $2 and facts.kind = 'issue'
+        where repositories.provider = $2 and coalesce(repositories.instance_url, 'https://github.com') = $4 and facts.kind = 'issue'
           and comment->>'authorGitHubUserId' = $3
       union
       select nested->>'authorLogin' from repository_reconciliation_evidence_facts as facts
         join registered_repositories as repositories on repositories.id = facts.repository_id,
         jsonb_array_elements(facts.payload->'closingPullRequests') as nested
-        where repositories.provider = $2 and facts.kind = 'issue'
+        where repositories.provider = $2 and coalesce(repositories.instance_url, 'https://github.com') = $4 and facts.kind = 'issue'
           and nested->>'authorGitHubUserId' = $3
+      union
+      select facts.payload->>'claimAssigneeGitHubLogin' from repository_reconciliation_evidence_facts as facts
+        join registered_repositories as repositories on repositories.id = facts.repository_id
+        where repositories.provider = $2 and coalesce(repositories.instance_url, 'https://github.com') = $4
+          and facts.kind = 'issue' and facts.payload->>'claimAssigneeGitHubUserId' = $3
+      union
+      select event->>'actorLogin' from repository_reconciliation_evidence_facts as facts
+        join registered_repositories as repositories on repositories.id = facts.repository_id,
+        jsonb_array_elements(facts.payload->'history') as event
+        where repositories.provider = $2 and coalesce(repositories.instance_url, 'https://github.com') = $4
+          and facts.kind = 'issue' and event->>'actorGitHubUserId' = $3
     ) as candidates
     where login is not null and length(trim(login)) > 0
-  `, [forgeId, provider, String(forgeId)]);
-  return rows.map((row) => row.login);
+  `, [forgeId, provider, String(forgeId), instanceUrl]);
+  return rows.map((row) => row.login).filter((login) => login !== DATA_SUBJECT_TOMBSTONE_LOGIN && login !== DELETED_ACCOUNT_LOGIN);
 }
 
 /**
@@ -221,6 +263,7 @@ async function matchedUserIds(
   sql: SqlClient | TransactionClient,
   forgeId: number,
   provider: string,
+  instanceUrl: string,
 ): Promise<string[]> {
   if (provider === "github") {
     const rows = await sql<{ id: string }[]>`
@@ -229,8 +272,8 @@ async function matchedUserIds(
     return rows.map((row) => row.id);
   }
   const rows = await sql<{ user_id: string }[]>`
-    select identities.user_id as id from user_forge_identities as identities
-    where identities.provider = ${provider} and identities.forge_user_id = ${forgeId}
+    select identities.user_id from user_forge_identities as identities
+    where identities.provider = ${provider} and identities.instance_url = ${instanceUrl} and identities.forge_user_id = ${forgeId}
   `;
   return [...new Set(rows.map((row) => row.user_id))];
 }
@@ -249,16 +292,19 @@ export async function exportForgePerson(
   sql: SqlClient,
   request: ForgePersonRequest,
 ): Promise<ForgePersonExport> {
+  const instanceUrl = forgePersonInstance(request);
   return sql.begin(
     "isolation level repeatable read read only",
     async (tx): Promise<ForgePersonExport> => {
-      const logins = await resolveForgePersonLogins(tx, request.forgeId, request.provider);
-      if (request.login !== null && request.login !== undefined && request.login.trim().length > 0) {
+      const logins = await resolveForgePersonLogins(tx, request.forgeId, request.provider, instanceUrl);
+      if (request.login !== null && request.login !== undefined && request.login.trim().length > 0 &&
+        ![DATA_SUBJECT_TOMBSTONE_LOGIN, DELETED_ACCOUNT_LOGIN].includes(request.login.trim())) {
         logins.push(request.login.trim());
       }
       const uniqueLogins = [...new Set(logins)].sort();
       const tokenPattern = forgeTokenPattern([...uniqueLogins, String(request.forgeId)]);
-      const userIds = await matchedUserIds(tx, request.forgeId, request.provider);
+      const userIds = await matchedUserIds(tx, request.forgeId, request.provider, instanceUrl);
+      const repositoryIds = tx.array(await personRepositoryIds(tx, request.provider, instanceUrl));
       // One bound-parameter pair per section: a query's placeholders run $1..$n
       // consecutively, and its array carries exactly those n values — Postgres
       // rejects both a spare parameter and a spare value.
@@ -282,43 +328,43 @@ export async function exportForgePerson(
           : `${usersProjection} where t.id::text = any($1::text[])`,
           request.provider === "github" ? [request.forgeId] : [sql.array(userIds)]),
         await section("user_forge_identities",
-          `${identityProjection} where t.provider = $1 and t.forge_user_id = $2`,
-          [request.provider, request.forgeId]),
+          `${identityProjection} where t.provider = $1 and t.forge_user_id = $2 and t.instance_url = $3`,
+          [request.provider, request.forgeId, instanceUrl]),
         await section("issues",
           `select to_jsonb(t.*) as row from issues as t
              join registered_repositories as repositories on repositories.id = t.repository_id
-             where repositories.provider = $1 and (
+             where repositories.id::text = any($1::text[]) and (
                t.owner_github_login = any($2) or t.claim_assignee_github_user_id = $3
-               or t.claim_assignee_github_login = any($2)
+               or (t.claim_assignee_github_user_id is null and t.claim_assignee_github_login = any($2))
                or t.opening_source_actor_login = any($2)
                or t.settled_label_actor_login = any($2)
                or t.settled_rationale_actor_login = any($2))`,
-          [request.provider, sql.array(uniqueLogins), request.forgeId]),
+          [repositoryIds, sql.array(uniqueLogins), request.forgeId]),
         await section("pull_requests",
           `select to_jsonb(t.*) as row from pull_requests as t
              join registered_repositories as repositories on repositories.id = t.repository_id
-             where repositories.provider = $1 and (
-               t.author_github_user_id = $3 or t.author_github_login = any($2))`,
-          [request.provider, sql.array(uniqueLogins), request.forgeId]),
+             where repositories.id::text = any($1::text[]) and (
+               t.author_github_user_id = $3 or (t.author_github_user_id is null and t.author_github_login = any($2)))`,
+          [repositoryIds, sql.array(uniqueLogins), request.forgeId]),
         await section("settlements",
           `select to_jsonb(t.*) as row from settlements as t
              join pull_requests as pr on pr.id = t.pull_request_id
              join registered_repositories as repositories on repositories.id = pr.repository_id
-             where repositories.provider = $1 and (
-               t.creditor_github_user_id = $3 or t.creditor_github_login = any($2))`,
-          [request.provider, sql.array(uniqueLogins), request.forgeId]),
+             where repositories.id::text = any($1::text[]) and (
+               t.creditor_github_user_id = $3 or (t.creditor_github_user_id is null and t.creditor_github_login = any($2)))`,
+          [repositoryIds, sql.array(uniqueLogins), request.forgeId]),
         await section("repository_reconciliation_evidence_facts",
           `select to_jsonb(t.*) as row from repository_reconciliation_evidence_facts as t
              join registered_repositories as repositories on repositories.id = t.repository_id
-             where repositories.provider = $1 and t.payload::text ~ $2`,
-          [request.provider, tokenPattern]),
+             where repositories.id::text = any($1::text[]) and t.payload::text ~ $2`,
+          [repositoryIds, tokenPattern]),
         await section("reconciliation_changes",
           `select to_jsonb(t.*) as row from reconciliation_changes as t
-             left join pull_requests as pr on pr.id = t.pull_request_id
-             left join registered_repositories as repositories on repositories.id = pr.repository_id
+             join reconciliation_runs as run on run.id = t.reconciliation_run_id
+             join registered_repositories as repositories on repositories.id = run.repository_id
              where ((t.before_state::text ~ $1 or t.after_state::text ~ $1)
-               and (repositories.provider = $2 or repositories.provider is null))`,
-          [tokenPattern, request.provider]),
+               and repositories.id::text = any($2::text[]))`,
+          [tokenPattern, repositoryIds]),
         await section("moderation_events",
           `select to_jsonb(t.*) as row from moderation_events as t
              where t.reason ~ $1
@@ -329,7 +375,7 @@ export async function exportForgePerson(
       return {
         formatVersion: FORGE_PERSON_EXPORT_FORMAT_VERSION,
         exportedAt: new Date().toISOString(),
-        requested: { provider: request.provider, forgeId: request.forgeId, login: request.login ?? null },
+        requested: { provider: request.provider, instanceUrl, forgeId: request.forgeId, login: request.login ?? null },
         logins: uniqueLogins,
         stores,
       };
@@ -355,11 +401,12 @@ export type ForgePersonBlockedRegistration = {
 };
 
 export type ForgePersonRemovalOutcome =
-  | { kind: "SPONSOR_BLOCKED"; provider: string; forgeId: number; repositories: ForgePersonBlockedRegistration[] }
-  | { kind: "PLANNED"; provider: string; forgeId: number; login: string | null; perStore: ForgePersonRemovalPerStore }
+  | { kind: "SPONSOR_BLOCKED"; provider: string; instanceUrl: string; forgeId: number; repositories: ForgePersonBlockedRegistration[] }
+  | { kind: "PLANNED"; provider: string; instanceUrl: string; forgeId: number; login: string | null; perStore: ForgePersonRemovalPerStore }
   | {
       kind: "REMOVED";
       provider: string;
+      instanceUrl: string;
       forgeId: number;
       login: string | null;
       suppressedAt: string;
@@ -383,6 +430,7 @@ export async function removeForgePerson(
   request: ForgePersonRequest,
   options: { confirm: boolean; lockWaitMs?: number },
 ): Promise<ForgePersonRemovalOutcome> {
+  const instanceUrl = forgePersonInstance(request);
   return sql.begin(async (tx) => {
     // The fold pass holds session-level advisory locks on the repository it
     // folds; this transaction takes the transaction-scoped form of the same
@@ -400,6 +448,7 @@ export async function removeForgePerson(
                  where pg_try_advisory_xact_lock(hashtextextended(id::text, ${repositoryLockNamespace}))
                )::int as locked
         from registered_repositories where provider = ${request.provider}
+          and coalesce(instance_url, 'https://github.com') = ${instanceUrl}
       `;
       if (gate!.locked === gate!.repositories) {
         break;
@@ -412,7 +461,8 @@ export async function removeForgePerson(
       lockAttempt += 1;
     }
 
-    const userIds = await matchedUserIds(tx, request.forgeId, request.provider);
+    const userIds = await matchedUserIds(tx, request.forgeId, request.provider, instanceUrl);
+      const repositoryIds = tx.array(await personRepositoryIds(tx, request.provider, instanceUrl));
     const blockers = userIds.length === 0
       ? []
       : await tx<{ owner_name: string; provider: string; instance_url: string | null }[]>`
@@ -424,6 +474,7 @@ export async function removeForgePerson(
       return {
         kind: "SPONSOR_BLOCKED",
         provider: request.provider,
+        instanceUrl,
         forgeId: request.forgeId,
         repositories: blockers.map((row) => ({
           ownerName: row.owner_name, provider: row.provider, instanceUrl: row.instance_url,
@@ -431,8 +482,9 @@ export async function removeForgePerson(
       };
     }
 
-    const logins = await resolveForgePersonLogins(tx, request.forgeId, request.provider);
-    if (request.login !== null && request.login !== undefined && request.login.trim().length > 0) {
+    const logins = await resolveForgePersonLogins(tx, request.forgeId, request.provider, instanceUrl);
+    if (request.login !== null && request.login !== undefined && request.login.trim().length > 0 &&
+        ![DATA_SUBJECT_TOMBSTONE_LOGIN, DELETED_ACCOUNT_LOGIN].includes(request.login.trim())) {
       logins.push(request.login.trim());
     }
     const uniqueLogins = [...new Set(logins)].sort();
@@ -472,12 +524,12 @@ export async function removeForgePerson(
         key: "forgeIdentities",
         update: `update user_forge_identities set
             encrypted_token = null,
-            forge_login = $3,
+            forge_login = $4,
             token_failed_at = coalesce(token_failed_at, now())
-          where provider = $2 and forge_user_id = $1 returning id`,
+          where provider = $2 and forge_user_id = $1 and instance_url = $3 returning id`,
         count: `select count(*)::int as count from user_forge_identities
-          where provider = $2 and forge_user_id = $1`,
-        parameters: [request.forgeId, request.provider],
+          where provider = $2 and forge_user_id = $1 and instance_url = $3`,
+        parameters: [request.forgeId, request.provider, instanceUrl],
       },
       {
         key: "pullRequests",
@@ -485,12 +537,12 @@ export async function removeForgePerson(
             body = null,
             author_github_login = $4,
             author_github_user_id = null
-          where repository_id in (select id from registered_repositories where provider = $2)
-            and (author_github_user_id = $1 or author_github_login = any($3)) returning id`,
+          where repository_id in (select id from registered_repositories where id::text = any($2::text[]))
+            and (author_github_user_id = $1 or (author_github_user_id is null and author_github_login = any($3))) returning id`,
         count: `select count(*)::int as count from pull_requests
-          where repository_id in (select id from registered_repositories where provider = $2)
-            and (author_github_user_id = $1 or author_github_login = any($3))`,
-        parameters: [request.forgeId, request.provider, tx.array(uniqueLogins)],
+          where repository_id in (select id from registered_repositories where id::text = any($2::text[]))
+            and (author_github_user_id = $1 or (author_github_user_id is null and author_github_login = any($3)))`,
+        parameters: [request.forgeId, repositoryIds, tx.array(uniqueLogins)],
       },
       {
         key: "settlements",
@@ -500,15 +552,15 @@ export async function removeForgePerson(
           where pull_request_id in (
               select pr.id from pull_requests as pr
                 join registered_repositories as repositories on repositories.id = pr.repository_id
-                where repositories.provider = $2)
-            and (creditor_github_user_id = $1 or creditor_github_login = any($3)) returning id`,
+                where repositories.id::text = any($2::text[]))
+            and (creditor_github_user_id = $1 or (creditor_github_user_id is null and creditor_github_login = any($3))) returning id`,
         count: `select count(*)::int as count from settlements
           where pull_request_id in (
               select pr.id from pull_requests as pr
                 join registered_repositories as repositories on repositories.id = pr.repository_id
-                where repositories.provider = $2)
-            and (creditor_github_user_id = $1 or creditor_github_login = any($3))`,
-        parameters: [request.forgeId, request.provider, tx.array(uniqueLogins)],
+                where repositories.id::text = any($2::text[]))
+            and (creditor_github_user_id = $1 or (creditor_github_user_id is null and creditor_github_login = any($3)))`,
+        parameters: [request.forgeId, repositoryIds, tx.array(uniqueLogins)],
       },
     ];
 
@@ -519,25 +571,25 @@ export async function removeForgePerson(
       const [row] = await tx.unsafe<{ count: number }[]>(query, parameters);
       return row?.count ?? 0;
     };
-    const issuesOfProvider = "repository_id in (select id from registered_repositories where provider = $1)";
+    const issuesOfProvider = "repository_id in (select id from registered_repositories where id::text = any($1::text[]))";
     const issuesOperations: Array<{ update: string; count: string; parameters: ParameterOrJSON<never>[] }> = [
       {
         update: `update issues set body = null, owner_github_login = $3
           where ${issuesOfProvider} and owner_github_login = any($2) returning id`,
         count: `select count(*)::int as count from issues
           where ${issuesOfProvider} and owner_github_login = any($2)`,
-        parameters: [request.provider, sql.array(uniqueLogins)],
+        parameters: [repositoryIds, sql.array(uniqueLogins)],
       },
       {
         update: `update issues set
             claim_assignee_github_login = $4,
             claim_assignee_github_user_id = null
           where ${issuesOfProvider}
-            and (claim_assignee_github_user_id = $3 or claim_assignee_github_login = any($2)) returning id`,
+            and (claim_assignee_github_user_id = $3 or (claim_assignee_github_user_id is null and claim_assignee_github_login = any($2))) returning id`,
         count: `select count(*)::int as count from issues
           where ${issuesOfProvider}
-            and (claim_assignee_github_user_id = $3 or claim_assignee_github_login = any($2))`,
-        parameters: [request.provider, sql.array(uniqueLogins), request.forgeId],
+            and (claim_assignee_github_user_id = $3 or (claim_assignee_github_user_id is null and claim_assignee_github_login = any($2)))`,
+        parameters: [repositoryIds, sql.array(uniqueLogins), request.forgeId],
       },
       {
         update: `update issues set
@@ -556,7 +608,7 @@ export async function removeForgePerson(
             opening_source_actor_login = any($2)
             or settled_label_actor_login = any($2)
             or settled_rationale_actor_login = any($2))`,
-        parameters: [request.provider, sql.array(uniqueLogins)],
+        parameters: [repositoryIds, sql.array(uniqueLogins)],
       },
     ];
     const issueIds = new Set<string>();
@@ -575,12 +627,12 @@ export async function removeForgePerson(
         select id from issues where ${issuesOfProvider} and owner_github_login = any($2)
         union
         select id from issues where ${issuesOfProvider}
-          and (claim_assignee_github_user_id = $3 or claim_assignee_github_login = any($2))
+          and (claim_assignee_github_user_id = $3 or (claim_assignee_github_user_id is null and claim_assignee_github_login = any($2)))
         union
         select id from issues where ${issuesOfProvider} and (
           opening_source_actor_login = any($2) or settled_label_actor_login = any($2)
           or settled_rationale_actor_login = any($2))
-      ) as touched`, [request.provider, sql.array(uniqueLogins), request.forgeId]);
+      ) as touched`, [repositoryIds, sql.array(uniqueLogins), request.forgeId]);
     }
 
     const perStore: ForgePersonRemovalPerStore = {
@@ -621,8 +673,8 @@ export async function removeForgePerson(
       `select t.repository_id, t.kind, t.subject_key, t.payload
          from repository_reconciliation_evidence_facts as t
          join registered_repositories as repositories on repositories.id = t.repository_id
-         where repositories.provider = $1 and t.payload::text ~ $2`,
-      [request.provider, tokenPattern],
+         where repositories.id::text = any($1::text[]) and t.payload::text ~ $2`,
+      [repositoryIds, tokenPattern],
     );
     const person: SuppressedForgePerson = {
       forgeId: request.forgeId,
@@ -654,6 +706,7 @@ export async function removeForgePerson(
       return {
         kind: "PLANNED",
         provider: request.provider,
+        instanceUrl,
         forgeId: request.forgeId,
         login: recordedLogin,
         perStore,
@@ -661,14 +714,17 @@ export async function removeForgePerson(
     }
 
     await tx`
-      insert into data_subject_suppressions (provider, forge_id, login)
-      values (${request.provider}, ${request.forgeId}, ${recordedLogin})
-      on conflict (provider, forge_id) do update set login = excluded.login, decided_at = now()
+      insert into data_subject_suppressions (provider, instance_url, forge_id, login, logins)
+      values (${request.provider}, ${instanceUrl}, ${request.forgeId}, ${recordedLogin}, ${tx.array(uniqueLogins)}::text[])
+      on conflict (provider, instance_url, forge_id) do update set
+        logins = array(select distinct unnest(data_subject_suppressions.logins || excluded.logins)),
+        login = coalesce(excluded.login, data_subject_suppressions.login), decided_at = now()
     `;
 
     return {
       kind: "REMOVED",
       provider: request.provider,
+        instanceUrl,
       forgeId: request.forgeId,
       login: recordedLogin,
       suppressedAt: new Date().toISOString(),
