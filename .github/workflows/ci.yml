@@ -372,8 +372,8 @@ jobs:
   # The push half (issue 1036): the only contents: write holder in this file,
   # and it runs no repository or dependency code — plain git over the document
   # bytes calibrate exported, so no code this workflow runs can reach a write
-  # token. The refusal semantics mirror the scripts/push-recalibration.ts this
-  # wiring replaced: the bot identity set per command, the commit message, the
+  # token. The refusal semantics are the superseded script's own, kept on its
+  # deletion: the bot identity set per command, the commit message, the
   # HEAD:refs/heads/main refspec, the one fetch-rebase-retry on a warranted
   # raise racing main, and a ::error:: naming the recorded and measured floors
   # plus the manual remedy — a refusal is EXPECTED under main's branch
