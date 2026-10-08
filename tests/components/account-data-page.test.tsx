@@ -608,6 +608,19 @@ describe("controller identity renders from the instance's configuration (issue 1
       controller.querySelectorAll("a[href]"),
       "no contact detail is invented for an operator who configured none",
     ).toHaveLength(0);
+    // Scoped before document-wide on purpose: the deletion description is the
+    // mention a regression is likeliest to leave behind (it carried the tracker
+    // link unconditionally before issue 1077), so its own guard runs first and
+    // a deletion-section regression fails HERE, naming the location, instead of
+    // at the document-wide guard below — which would fire on a tracker link
+    // anywhere at all and leave this one unreachable.
+    expect(
+      document
+        .getElementById("account-data-deletion-heading")!
+        .closest("section")!
+        .querySelector('a[href="https://github.com/Nitjsefnie/Overflow/issues"]'),
+      "the deletion description does not send readers to the maintainer's tracker",
+    ).toBeNull();
     expect(
       document.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/issues"]'),
       "the maintainer's tracker is not published as this copy's channel",
@@ -615,13 +628,6 @@ describe("controller identity renders from the instance's configuration (issue 1
     expect(
       document.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/security/advisories/new"]'),
       "the maintainer's private form is not published as this copy's channel",
-    ).toBeNull();
-    expect(
-      document
-        .getElementById("account-data-deletion-heading")!
-        .closest("section")!
-        .querySelector('a[href="https://github.com/Nitjsefni/Overflow/issues"]'),
-      "the deletion description does not send readers to the maintainer's tracker",
     ).toBeNull();
   });
 
@@ -674,5 +680,39 @@ describe("controller identity renders from the instance's configuration (issue 1
         .querySelector('a[href="https://issues.example.org/overflow-requests"]'),
       "the deletion description names the operator's channel",
     ).not.toBeNull();
+  });
+
+  it("renders the operator's configured values on the hosted origin too, in place of the defaults", async () => {
+    // configured() takes precedence over the hosted defaults regardless of
+    // isHosted (controller-config.ts): an explicit CONTROLLER_* setting wins
+    // even where APP_URL names the hosted instance. Pinned so a future change
+    // that hardwires the maintainer onto the hosted origin fails here.
+    vi.stubEnv("APP_URL", "https://overflow.nitjsefni.eu");
+    vi.stubEnv("CONTROLLER_NAME", "Example Operator");
+    vi.stubEnv("CONTROLLER_ISSUES_URL", "https://issues.example.org/overflow-requests");
+    vi.stubEnv("CONTROLLER_SENSITIVE_URL", "https://requests.example.org/sensitive");
+    await renderAccountDataPage();
+
+    const controller = document.getElementById("account-data-controller-heading")!.closest("section")!;
+    expect(
+      controller.textContent,
+      "the configured operator's name renders on the hosted origin",
+    ).toContain("Example Operator");
+    expect(
+      controller.querySelector('a[href="https://issues.example.org/overflow-requests"]'),
+      "the configured public channel renders on the hosted origin",
+    ).not.toBeNull();
+    expect(
+      controller.querySelector('a[href="https://requests.example.org/sensitive"]'),
+      "the configured sensitive route renders on the hosted origin",
+    ).not.toBeNull();
+    expect(
+      document.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/issues"]'),
+      "the maintainer's tracker yields to the operator's configuration",
+    ).toBeNull();
+    expect(
+      document.querySelector(".self-hosted-statement"),
+      "the hosted origin still carries no self-hosted disclosure",
+    ).toBeNull();
   });
 });
