@@ -14,7 +14,6 @@ export type AccountExportAccount = {
   id: string;
   githubUserId: number;
   githubLogin: string;
-  avatarUrl: string | null;
   role: string;
   enforcementState: string;
   confirmedMiscalibrationCount: number;
@@ -323,7 +322,6 @@ export async function exportAccount(
         id: string;
         github_user_id: string;
         github_login: string;
-        avatar_url: string | null;
         role: string;
         enforcement_state: string;
         confirmed_miscalibration_count: number;
@@ -332,7 +330,7 @@ export async function exportAccount(
         deleted_at: Date | null;
         has_stored_github_token: boolean;
       }[]>`
-        select id, github_user_id, github_login, avatar_url, role, enforcement_state,
+        select id, github_user_id, github_login, role, enforcement_state,
                confirmed_miscalibration_count, created_at, updated_at, deleted_at,
                encrypted_oauth_token is not null as has_stored_github_token
         from users
@@ -349,7 +347,6 @@ export async function exportAccount(
           id: account.id,
           githubUserId: Number(account.github_user_id),
           githubLogin: account.github_login,
-          avatarUrl: account.avatar_url,
           role: account.role,
           enforcementState: account.enforcement_state,
           confirmedMiscalibrationCount: account.confirmed_miscalibration_count,
