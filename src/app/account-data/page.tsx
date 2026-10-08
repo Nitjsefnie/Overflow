@@ -7,6 +7,7 @@ import {
   readControllerIdentity,
 } from "@/lib/controller-config";
 import { ACCOUNT_DATA_REVISION } from "@/lib/legal-revisions";
+import { PROCESSING_ACTIVITIES } from "@/lib/processing-activities";
 import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
 
 /** Link text for a channel URL: the bare URL without its scheme. */
@@ -376,24 +377,9 @@ export function AccountDataNotice() {
         <h2 id="account-data-purposes-heading">Purposes and legal bases</h2>
         <p>Each activity this notice describes, and the basis it relies on:</p>
         <ul>
-          <li>
-            running the service for signed-in members — accounts, the shared ledger, claims, and
-            dashboards — under performance of a contract: your use of the service
-          </li>
-          <li>
-            reading public forge data about people who have never signed in — reconciliation, the
-            ledger, and settlement proofs — under legitimate interests: operating a public
-            work-attribution tracker, weighed against their rights and freedoms
-          </li>
-          <li>
-            server logs, database backups, and abuse and security handling, including
-            Cloudflare&apos;s — under legitimate interests: securing and operating the service
-          </li>
-          <li>
-            automated scoring and moderation, described under Scoring and sanctions below — under
-            legitimate interests: keeping the ledger&apos;s records accurate and its rules
-            enforceable
-          </li>
+          {PROCESSING_ACTIVITIES.map((activity) => (
+            <li key={activity.identifier}>{activity.noticeLabel}</li>
+          ))}
         </ul>
       </section>
 
