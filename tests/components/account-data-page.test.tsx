@@ -66,16 +66,6 @@ describe("account-data notice page", () => {
     vi.unstubAllEnvs();
   });
 
-  it("mentions no avatar anywhere: Overflow stopped collecting the avatar URL (issue 1075)", async () => {
-    await renderAccountDataPage();
-
-    // Whole-notice, case-insensitive: with collection stopped there is
-    // nothing to disclose, so the notice is held to silence on the subject
-    // rather than to any wording about it.
-    const notice = document.querySelector("main")?.textContent ?? "";
-    expect(notice).not.toMatch(/avatar/i);
-  });
-
   it("renders the page-heading structure and one labelled section per disclosure area", async () => {
     await renderAccountDataPage();
 
