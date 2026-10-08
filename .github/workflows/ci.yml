@@ -295,8 +295,9 @@ jobs:
   # a bot commit can never carry the required checks — and the push job below
   # fails visibly, which is the point (issue 684). Push-only otherwise: a pull
   # request must never write to the branch it targets, and the pull-request
-  # leg of this gate is a different workflow (ci.yml carries no pull-request
-  # trigger), so nothing here can write to a branch a pull request targets.
+  # leg of this gate is ci-pr.yml, which calibrate cannot reach — ci.yml
+  # carries no pull-request trigger, so nothing in this file ever runs on a
+  # pull request.
   # Docs-only runs produce no coverage summary and are skipped by the
   # verify job's docs_only output.
   #
