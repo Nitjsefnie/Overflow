@@ -105,6 +105,21 @@ export function isTrustedProducerRun(event: string, headBranch: string): boolean
   return EVENTS_TRUSTED_ON_BASE_BRANCH.has(event) && headBranch === BASE_BRANCH;
 }
 
+/** Whether an open pull request at a refused run's SHA is that run's own producer. */
+export function isPullRequestProducerAtHead(
+  event: string,
+  headBranch: string,
+  pullRequestHeadRef: string | undefined,
+): boolean {
+  return (
+    event === "pull_request" &&
+    headBranch !== "" &&
+    pullRequestHeadRef !== undefined &&
+    pullRequestHeadRef !== "" &&
+    headBranch === pullRequestHeadRef
+  );
+}
+
 /**
  * The relay's core. Contexts come from the pin map entries whose pin NAMES the
  * triggering run's path — every path of a list pin, in pin-map order, and one
@@ -239,6 +254,8 @@ export interface RerunRun {
 export interface HealPullRequest {
   state: string;
   headSha: string;
+  /** The PR's head branch, carried for the refused-producer decision when the API names it. */
+  headRef?: string;
 }
 
 /**

@@ -59,6 +59,7 @@ import {
   decideContexts,
   decideRerun,
   isHealableEvent,
+  isPullRequestProducerAtHead,
   isTrustedProducerRun,
   PIN_SHAPE,
   pinsFor,
@@ -449,11 +450,12 @@ async function findOpenPullRequestAtHead(
   }
   for (const entry of body) {
     if (typeof entry !== "object" || entry === null) continue;
-    const candidate = entry as { state?: unknown; head?: { sha?: unknown } | undefined };
+    const candidate = entry as { state?: unknown; head?: { sha?: unknown; ref?: unknown } | undefined };
     if (candidate.state !== "open") continue;
     const prHeadSha = typeof candidate.head?.sha === "string" ? candidate.head.sha : "";
     if (prHeadSha === headSha) {
-      return { state: candidate.state, headSha: prHeadSha };
+      const headRef = typeof candidate.head?.ref === "string" ? candidate.head.ref : undefined;
+      return { state: candidate.state, headSha: prHeadSha, headRef };
     }
   }
   return null;
@@ -659,10 +661,11 @@ async function refuseUntrustedProducer(
   }
   if (headRepository === repo) {
     const pr = await findOpenPullRequestAtHead(deps, repo, run.headSha, auth);
-    if (pr !== null) {
+    if (pr === null) return refusedDeadHead();
+    if (isPullRequestProducerAtHead(run.event, run.headBranch, pr.headRef)) {
       throw new Error(untrustedProducerMessage(run));
     }
-    return refusedDeadHead();
+    return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
   }
   // Fork head (issue 1142): the owner must be provable from the run body
   // before any request; the branch-scoped listing then decides liveness.
