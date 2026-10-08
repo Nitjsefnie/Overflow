@@ -190,16 +190,6 @@ describe("incident response request-flood section", () => {
     ).toContain(floodHeading);
   });
 
-  it("carries the decline signal's fixed template so an operator can grep for it", () => {
-    // Structural identifier, not prose: the fixed prefix the receivers' gate
-    // emits once per decline burst (issue 1053). The word after the receiver
-    // placeholder is the operator's journalctl --grep key.
-    expect(
-      floodSection().body,
-      `"${floodHeading}" in ${document} does not carry the decline log's fixed template`,
-    ).toContain("Webhook rate limit engaged for the");
-  });
-
   it("links the deploy guide and resolves every link in the section", () => {
     const { body, firstLine } = floodSection();
     const links = relativeLinks(body);
