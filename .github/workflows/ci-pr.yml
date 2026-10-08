@@ -950,3 +950,8 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: bash "${GITHUB_WORKSPACE}/scripts/ci-base-freshness.sh"
+
+      - name: Run ShellCheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck -f gcc scripts/*.sh

@@ -365,3 +365,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/push-recalibration.ts
+
+      - name: Run ShellCheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck -f gcc scripts/*.sh
+
