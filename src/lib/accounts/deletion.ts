@@ -104,6 +104,16 @@ export type AccountDeletionOutcome =
       leftNoLiveModerator: boolean;
     };
 
+/** Shared credential cleanup for account deletion and forge-person removal. */
+export async function scrubLinkedForgeIdentities(sql: TransactionClient, userIds: readonly string[], login: string): Promise<number> {
+  const rows = await sql<{ id: string }[]>`
+    update user_forge_identities set encrypted_token = null, forge_login = ${login},
+      token_failed_at = coalesce(token_failed_at, now())
+    where user_id = any(${sql.array([...userIds])}::uuid[]) returning id
+  `;
+  return rows.length;
+}
+
 /**
  * Pseudonymise one account, identified by its public GitHub user id, inside
  * ONE transaction. Every outcome writes nothing but its own documented effect:
@@ -188,14 +198,7 @@ export async function deleteAccount(
     const removedApiTokens = await tx<{ id: string }[]>`
       delete from api_tokens where user_id = ${account.id} returning id
     `;
-    const scrubbedForgeIdentities = await tx<{ id: string }[]>`
-      update user_forge_identities
-      set encrypted_token = null,
-          forge_login = ${DELETED_ACCOUNT_LOGIN},
-          token_failed_at = coalesce(token_failed_at, now())
-      where user_id = ${account.id}
-      returning id
-    `;
+    const scrubbedForgeIdentities = await scrubLinkedForgeIdentities(tx, [account.id], DELETED_ACCOUNT_LOGIN);
     // One statement clears avatar, token, resets the role and sets the stamp
     // together: the users_deleted_account_scrubbed_check admits no
     // half-scrubbed state. The role resets to MEMBER — moderator authority
@@ -222,7 +225,7 @@ export async function deleteAccount(
       alreadyDeleted,
       deletedAt: scrubbed!.deleted_at.toISOString(),
       removedApiTokens: removedApiTokens.length,
-      scrubbedForgeIdentities: scrubbedForgeIdentities.length,
+      scrubbedForgeIdentities,
       leftNoLiveModerator: isLastLiveModeratorStanding(standing),
     };
   });

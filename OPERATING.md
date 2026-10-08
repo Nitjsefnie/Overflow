@@ -237,11 +237,13 @@ it, so the commands resolve login copies from id-keyed rows themselves and add
 the explicit `--login` token to those.
 
 The export writes every row naming the person, one section per store, each with
-its table name, its rows and its count: the account row if they have one, their
-linked forge identities, the issues they authored or claimed (bodies included),
+its table name, its rows and its count: the account row if they have one, all
+identities linked to their account, the issues they authored or claimed
+(bodies included),
 their pull requests, the settlements crediting them, the per-repository cache
 facts whose payloads carry their identity, the change-log entries recording
-their logins or ids, and the moderation notes naming them. It is an access
+their logins or ids, policy diagnostic rows, the suppression decision itself,
+and the moderation notes naming them. It is an access
 copy: secret material appears only as presence booleans, never as a value.
 Where a table carries no provider column, matching is scoped by the row's
 repository's provider and instance origin. A numeric id, where present,
@@ -252,8 +254,11 @@ The removal applies one documented decision per store — the decision table is
 the module constant `forgePersonRemovalDecisions` in
 `src/lib/accounts/forge-person.ts` and is the whole policy in one place:
 
-- `users`, `user_forge_identities` — pseudonymised: the rows and the numeric
-  ids stay (the ledger attributes work by them) while logins are tombstoned to
+- `users`, `user_forge_identities` — pseudonymised: a matched account has every
+  linked forge identity scrubbed by `user_id`, even on another provider or
+  instance; a provider-only person with no matched account has no linked
+  credentials to clear. The rows and the numeric ids stay (the ledger attributes
+  work by them) while logins are tombstoned to
   `(data subject removal)` and tokens cleared; the account row is stamped
   `deleted_at` and its API token is deleted. The removal is refused while the
   person sponsors a registration that has not been unregistered
@@ -272,8 +277,15 @@ the module constant `forgePersonRemovalDecisions` in
   lists the notes naming the person so the request can be answered about them
   by hand.
 - `reconciliation_changes` — kept: the append-only journal is not rewritten;
-  new entries no longer name the person because the import scrub precedes
-  every write, and retention prunes old entries with their run after 90 days.
+  new structured identity and generated diagnostic references are scrubbed
+  before every write, and retention prunes old entries with their run after
+  90 days.
+- `repository_policy_violations` — kept as written until a later publication
+  replaces the current set. The access copy includes matching diagnostics.
+  New diagnostic actor logins and generated reason references are scrubbed
+  before publication and journaling.
+- `data_subject_suppressions` — kept: the namespaced id and every verified alias
+  remain to enforce the removal and are included in the access copy.
 - `registered_repositories`, `webhook_deliveries`, and the account-keyed
   stores (audits, calibrations, role changes, override and contest requests,
   runs and usage, credit adjustments) — kept: the registration belongs to its
@@ -291,15 +303,17 @@ person before use on login-only fields.
 
 Every later reconciliation pass checks only suppressions for its repository's
 provider and origin inside the publication transaction, before writing derived
-rows or cache facts. Id-bearing fields match by id; login-only fields use the
-verified aliases. Different people with the same id on different GitLab
+rows, cache facts or generated policy diagnostics. Retained moderation and
+journal text, existing diagnostics until replacement, titles and proof
+material are outside the scrub. Id-bearing fields match by id; login-only
+fields use the verified aliases. Different people with the same id on different GitLab
 instances are separate. The removal takes the fold's repository advisory locks
 for that provider and origin, so it cannot race a pass in mid-publication. A
 repeat removal retains previous aliases and adds newly verified ones. Imports
 also learn and retain new aliases from incoming id-bearing evidence before
-scrubbing. If a
-person renames, rerun with their verified `--login` to cover login-only rows
-that have no accompanying numeric evidence. Backups taken before the removal keep the pre-removal
+scrubbing. If a person renames, rerun with their verified `--login` to cover
+login-only rows that have no accompanying numeric evidence. Backups taken
+before the removal keep the pre-removal
 data until each dump is pruned — in practice about 15 days, like any
 pre-deletion dump.
 
@@ -313,9 +327,9 @@ set -a; . /etc/overflow/overflow.env; set +a
 node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts export --github-user-id <github-user-id>
 node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts delete --github-user-id <github-user-id>
 node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts delete --github-user-id <github-user-id> --confirm
-node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts export-forge --provider <provider> --forge-id <forge-id>
-node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts remove-forge --provider <provider> --forge-id <forge-id>
-node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts remove-forge --provider <provider> --forge-id <forge-id> --confirm
+node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts export-forge --provider <provider> --instance-url <forge-origin> --forge-id <forge-id>
+node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts remove-forge --provider <provider> --instance-url <forge-origin> --forge-id <forge-id>
+node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts remove-forge --provider <provider> --instance-url <forge-origin> --forge-id <forge-id> --confirm
 ```
 
 Each command writes its JSON document to standard output and reports its

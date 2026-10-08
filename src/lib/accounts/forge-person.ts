@@ -1,12 +1,13 @@
 import type { ParameterOrJSON } from "postgres";
 import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
-import { DELETED_ACCOUNT_LOGIN } from "@/lib/accounts/deletion";
+import { DELETED_ACCOUNT_LOGIN, scrubLinkedForgeIdentities } from "@/lib/accounts/deletion";
 import { repositoryLockNamespace } from "@/lib/fold/postgres-store";
 import { waitForRepositoryLockRetry } from "@/lib/fold/repository-lock-retry";
 import {
   DATA_SUBJECT_TOMBSTONE_LOGIN,
   scrubIssueIdentity,
+  recordNamesPerson,
   type SuppressedForgePerson,
 } from "@/lib/fold/data-subject-suppression";
 
@@ -86,7 +87,8 @@ export const forgePersonRemovalDecisions: readonly {
     store: "user_forge_identities",
     decision: "pseudonymised",
     reason:
-      "the (provider, instance_url, forge_user_id) triple stays so authorship still resolves to the pseudonymised " +
+      "all identities linked to a matched account are scrubbed by user_id; the (provider, instance_url, forge_user_id) " +
+      "triple stays so authorship still resolves to the pseudonymised " +
       "account row; the token is cleared, the login tombstoned and a failure stamped",
   },
   {
@@ -123,6 +125,16 @@ export const forgePersonRemovalDecisions: readonly {
       "authors — are tombstoned in place; titles, reviews and the raw diff are kept (proof material, no reviewer identity)",
   },
   {
+    store: "repository_policy_violations",
+    decision: "kept",
+    reason: "existing diagnostic records are exported as written until the next publication replaces the set; new diagnostics and their journal entries are scrubbed before writing",
+  },
+  {
+    store: "data_subject_suppressions",
+    decision: "kept",
+    reason: "the namespaced id and verified aliases are retained to enforce the removal on future imports; reruns add aliases without discarding earlier ones",
+  },
+  {
     store: "moderation_events",
     decision: "kept",
     reason:
@@ -133,8 +145,8 @@ export const forgePersonRemovalDecisions: readonly {
     store: "reconciliation_changes",
     decision: "kept",
     reason:
-      "the append-only reconciliation journal is not rewritten; new entries no longer name the person because the " +
-      "import scrub precedes every write, and retention prunes old entries with their run after 90 days",
+      "the append-only reconciliation journal is not rewritten; matched structured identities and generated diagnostic " +
+      "references are scrubbed before new entries are written; titles and proof material stay, and retention prunes runs after 90 days",
   },
   {
     store: "webhook_deliveries",
@@ -312,9 +324,11 @@ export async function exportForgePerson(
         table: string,
         query: string,
         values: ParameterOrJSON<never>[],
+        matches?: (row: Record<string, unknown>) => boolean,
       ): Promise<ForgePersonExportSection> => {
         const rows = await tx.unsafe<Array<{ row: Record<string, unknown> }>>(query, values);
-        return { table, count: rows.length, rows: rows.map((entry) => entry.row) };
+        const selected = rows.map((entry) => entry.row).filter((row) => matches?.(row) ?? true);
+        return { table, count: selected.length, rows: selected };
       };
       const usersProjection =
         "select to_jsonb(t.*) - 'encrypted_oauth_token' || " +
@@ -322,14 +336,15 @@ export async function exportForgePerson(
       const identityProjection =
         "select to_jsonb(t.*) - 'encrypted_token' || " +
         "jsonb_build_object('hasStoredToken', t.encrypted_token is not null) as row from user_forge_identities as t";
+      const person = { forgeId: request.forgeId, logins: new Set(uniqueLogins) };
       const stores = [
         await section("users", request.provider === "github"
           ? `${usersProjection} where t.github_user_id = $1`
           : `${usersProjection} where t.id::text = any($1::text[])`,
           request.provider === "github" ? [request.forgeId] : [sql.array(userIds)]),
         await section("user_forge_identities",
-          `${identityProjection} where t.provider = $1 and t.forge_user_id = $2 and t.instance_url = $3`,
-          [request.provider, request.forgeId, instanceUrl]),
+          `${identityProjection} where t.user_id::text = any($1::text[])`,
+          [sql.array(userIds)]),
         await section("issues",
           `select to_jsonb(t.*) as row from issues as t
              join registered_repositories as repositories on repositories.id = t.repository_id
@@ -357,14 +372,22 @@ export async function exportForgePerson(
           `select to_jsonb(t.*) as row from repository_reconciliation_evidence_facts as t
              join registered_repositories as repositories on repositories.id = t.repository_id
              where repositories.id::text = any($1::text[]) and t.payload::text ~ $2`,
-          [repositoryIds, tokenPattern]),
+          [repositoryIds, tokenPattern], (row) => recordNamesPerson(row.payload, person)),
         await section("reconciliation_changes",
           `select to_jsonb(t.*) as row from reconciliation_changes as t
              join reconciliation_runs as run on run.id = t.reconciliation_run_id
              join registered_repositories as repositories on repositories.id = run.repository_id
              where ((t.before_state::text ~ $1 or t.after_state::text ~ $1)
                and repositories.id::text = any($2::text[]))`,
-          [tokenPattern, repositoryIds]),
+          [tokenPattern, repositoryIds], (row) => recordNamesPerson(row.before_state, person) || recordNamesPerson(row.after_state, person)),
+        await section("repository_policy_violations",
+          `select to_jsonb(t.*) as row from repository_policy_violations as t
+            where t.repository_id::text = any($1::text[]) and t.violation::text ~ $2`,
+          [repositoryIds, tokenPattern]),
+        await section("data_subject_suppressions",
+          `select to_jsonb(t.*) as row from data_subject_suppressions as t
+            where t.provider = $1 and t.instance_url = $2 and t.forge_id = $3`,
+          [request.provider, instanceUrl, request.forgeId]),
         await section("moderation_events",
           `select to_jsonb(t.*) as row from moderation_events as t
              where t.reason ~ $1
@@ -521,17 +544,6 @@ export async function removeForgePerson(
         parameters: [],
       },
       {
-        key: "forgeIdentities",
-        update: `update user_forge_identities set
-            encrypted_token = null,
-            forge_login = $4,
-            token_failed_at = coalesce(token_failed_at, now())
-          where provider = $2 and forge_user_id = $1 and instance_url = $3 returning id`,
-        count: `select count(*)::int as count from user_forge_identities
-          where provider = $2 and forge_user_id = $1 and instance_url = $3`,
-        parameters: [request.forgeId, request.provider, instanceUrl],
-      },
-      {
         key: "pullRequests",
         update: `update pull_requests set
             body = null,
@@ -638,7 +650,9 @@ export async function removeForgePerson(
     const perStore: ForgePersonRemovalPerStore = {
       users: 0,
       apiTokens: 0,
-      forgeIdentities: 0,
+      forgeIdentities: options.confirm
+        ? await scrubLinkedForgeIdentities(tx, userIds, DATA_SUBJECT_TOMBSTONE_LOGIN)
+        : await countOf("select count(*)::int as count from user_forge_identities where user_id::text = any($1::text[])", [tx.array(userIds)]),
       issues: issuesCount,
       pullRequests: 0,
       settlements: 0,

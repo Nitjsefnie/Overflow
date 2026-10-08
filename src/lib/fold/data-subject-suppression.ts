@@ -39,6 +39,32 @@ export function identityNamesPerson(login: string | null | undefined, id: number
   return id == null ? namesPerson(login, person) : id === person.forgeId;
 }
 
+/** Access-copy matching for cache and journal JSON, using the same numeric authority. */
+export function recordNamesPerson(value: unknown, person: SuppressedForgePerson): boolean {
+  const pairs = [
+    ["authorLogin", "authorGitHubUserId"], ["authorGitHubLogin", "authorGitHubUserId"],
+    ["actorLogin", "actorGitHubUserId"], ["claimAssigneeGitHubLogin", "claimAssigneeGitHubUserId"],
+    ["creditorGitHubLogin", "creditorGitHubUserId"],
+  ] as const;
+  const pairedKeys = new Set<string>(pairs.flatMap(([login, id]) => [login, id]));
+  const tokens = [...person.logins, String(person.forgeId)].map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const pattern = new RegExp(`(?<![A-Za-z0-9_-])(?:${tokens.join("|")})(?![A-Za-z0-9_-])`);
+  const visit = (node: unknown): boolean => {
+    if (typeof node === "string") return pattern.test(node);
+    if (Array.isArray(node)) return node.some(visit);
+    if (node === null || typeof node !== "object") return false;
+    const row = node as Record<string, unknown>;
+    for (const [loginKey, idKey] of pairs) {
+      if (!(loginKey in row) && !(idKey in row)) continue;
+      const id = row[idKey] == null ? null : Number(row[idKey]);
+      const login = typeof row[loginKey] === "string" ? row[loginKey] : null;
+      if (identityNamesPerson(login, id, person)) return true;
+    }
+    return Object.entries(row).some(([key, child]) => !pairedKeys.has(key) && visit(child));
+  };
+  return visit(value);
+}
+
 /**
  * Scrubs one { login, githubUserId } pair wherever the fold's data carries it.
  * The login becomes the tombstone and the numeric id drops. Idempotent — an
@@ -179,6 +205,13 @@ export function scrubFoldResultForPerson(
     }
   }
   for (const settlement of fold.settlements) {
+    const source = evidence.find((row) => row.id === settlement.githubIssueId);
+    if (identityNamesPerson(settlement.settledLabelActorLogin, source?.history.find((event) => event.id === settlement.settledLabelEventId)?.actorGitHubUserId, person)) {
+      settlement.settledLabelActorLogin = DATA_SUBJECT_TOMBSTONE_LOGIN;
+    }
+    if (identityNamesPerson(settlement.settledRationaleActorLogin, source?.comments.find((comment) => comment.id === settlement.settledRationaleCommentId)?.authorGitHubUserId, person)) {
+      settlement.settledRationaleActorLogin = DATA_SUBJECT_TOMBSTONE_LOGIN;
+    }
     scrubIdentityPair(
       { login: settlement.creditorGitHubLogin, githubUserId: settlement.creditorGitHubUserId },
       person,
@@ -187,6 +220,26 @@ export function scrubFoldResultForPerson(
         settlement.creditorGitHubUserId = scrubbed.githubUserId;
       },
     );
+  }
+  for (const calibration of fold.selfWorkCalibrations) {
+    const source = evidence.find((row) => row.id === calibration.githubIssueId);
+    if (identityNamesPerson(calibration.actualLabelActorLogin, source?.history.find((event) => event.id === calibration.actualLabelEventId)?.actorGitHubUserId, person)) {
+      calibration.actualLabelActorLogin = DATA_SUBJECT_TOMBSTONE_LOGIN;
+    }
+    if (identityNamesPerson(calibration.rationaleActorLogin, source?.comments.find((comment) => comment.id === calibration.rationaleCommentId)?.authorGitHubUserId, person)) {
+      calibration.rationaleActorLogin = DATA_SUBJECT_TOMBSTONE_LOGIN;
+    }
+  }
+  for (const violation of fold.policyViolations) {
+    if ("openingSourceActorLogin" in violation && namesPerson(violation.openingSourceActorLogin, person)) {
+      violation.openingSourceActorLogin = DATA_SUBJECT_TOMBSTONE_LOGIN;
+    }
+    if ("reason" in violation) {
+      for (const login of person.logins) {
+        // These are generated actor/sponsor references, delimited by backticks.
+        violation.reason = violation.reason.replaceAll(`\`${login}\``, `\`${DATA_SUBJECT_TOMBSTONE_LOGIN}\``);
+      }
+    }
   }
 }
 
