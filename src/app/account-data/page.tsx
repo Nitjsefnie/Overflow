@@ -52,15 +52,15 @@ export function AccountDataNotice() {
         <p>You sign in with GitHub and can also link a GitLab identity for each GitLab instance you use.</p>
         <p>
           Signing in with GitHub creates one account row in Overflow&apos;s database. The sign-in reads only the
-          public fields of GitHub&apos;s <code>/user</code> endpoint: your numeric GitHub user id, your login, and
-          your avatar URL. Which permission it asks GitHub for depends on the sign-in you choose. Signing in to
+          public fields of GitHub&apos;s <code>/user</code> endpoint: your numeric GitHub user id and your
+          login. Which permission it asks GitHub for depends on the sign-in you choose. Signing in to
           contribute requests no permission at all. Signing in to register a repository requests exactly one — the{" "}
           <code>admin:repo_hook</code> scope, which creating and removing Overflow&apos;s webhook on a repository you
           administer needs — and a contributor who later registers a repository is asked for that one scope then.
           Overflow reads no email address anywhere: it requests no email scope and reads no email endpoint.
         </p>
         <ul>
-          <li>your GitHub user id, login, and avatar URL</li>
+          <li>your GitHub user id and login</li>
           <li>the role Overflow assigns you — MEMBER or MODERATOR</li>
           <li>an enforcement state and a confirmed-miscalibration count, which moderation uses</li>
           <li>the row&apos;s creation and last-update timestamps</li>
@@ -139,8 +139,7 @@ export function AccountDataNotice() {
         <p>The site operator administers Overflow&apos;s database and the token&apos;s encryption key.</p>
         <p>
           Other signed-in members and moderators see your GitHub login — the member roster and the moderation
-          surfaces display it. Your avatar URL is stored and included in your account-data export (which only
-          you see); it is not displayed to other members.
+          surfaces display it. It is not displayed to anyone else.
         </p>
         <p>
           Your linked GitLab identities are shown only to you in your dashboard&apos;s forge-identities panel,
@@ -186,7 +185,7 @@ export function AccountDataNotice() {
           2026-09-26 may persist until the repository is unregistered: unregistering a repository scrubs what
           earlier passes stored (unless a settlement from the last few minutes is still being computed).
         </p>
-        <p>Overflow stores no avatar and no display name for someone who has not signed in.</p>
+        <p>Overflow stores no display name for someone who has not signed in.</p>
         <p>
           Nothing about a person who has not signed in is shown to a visitor who is not signed in. Signed-in
           members see a claim assignee&apos;s login and issue titles on the issues board. A repository&apos;s
@@ -319,7 +318,7 @@ export function AccountDataNotice() {
             submitted in transit, including GitLab tokens, necessarily passes through it
           </li>
           <li>
-            GitHub, Inc. (US) — sign-in reads your numeric id, login, and avatar URL from
+            GitHub, Inc. (US) — sign-in reads your numeric id and login from
             GitHub&apos;s API; requests are filed on the public issue tracker; and Overflow reads
             the registered repositories&apos; issues, pull requests, reviews, and diffs from GitHub
           </li>
@@ -368,7 +367,7 @@ export function AccountDataNotice() {
           <li>
             Signed-in state is an encrypted cookie — a JSON Web Encryption token, not a plain signed JWT — which
             expires after 30 days, and Overflow keeps no server-side session rows. The cookie records the identity
-            the sign-in read from GitHub — your login and your avatar URL — together with Overflow&apos;s own
+            the sign-in read from GitHub — your login — together with Overflow&apos;s own
             reference to your account and your role, when you last completed a GitHub sign-in, and whether the
             permissions GitHub granted at sign-in include webhook administration, which decides whether the
             registration page shows its form. Signing out clears that cookie and nothing else.
@@ -479,7 +478,7 @@ export function AccountDataNotice() {
           </li>
           <li>
             <strong>Rectification</strong> — much of it self-corrects: signing in again re-reads
-            your GitHub login and avatar, re-linking a GitLab identity refreshes its stored
+            your GitHub login, re-linking a GitLab identity refreshes its stored
             verification, and reconciliation keeps overwriting the forge data it re-reads. For the
             rest, contact the operator (see Controller and contact above).
           </li>
@@ -583,7 +582,6 @@ export function AccountDataNotice() {
         <p>Deletion removes:</p>
         <ul>
           <li>your GitHub login, replaced with the placeholder (deleted account)</li>
-          <li>your avatar URL</li>
           <li>Overflow&apos;s stored access token for your GitHub account</li>
           <li>your API token, if you have one</li>
           <li>
