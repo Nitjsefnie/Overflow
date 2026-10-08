@@ -885,7 +885,7 @@ async function readFileHead(path) {
 export function spawnedServerEnv(env = process.env) {
   const existing = env.AUTH_TRUST_HOST;
   return {
-    ...env,
+    ...env, APP_URL: "https://overflow.nitjsefni.eu", // controller-config.ts selects hosted defaults by origin.
     AUTH_TRUST_HOST: existing !== undefined && existing !== "" ? existing : "true",
   };
 }
