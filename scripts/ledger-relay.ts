@@ -58,9 +58,10 @@ import {
   anyJobStartedOf,
   decideContexts,
   decideRerun,
+  hasPullRequestProducerAtHead,
   isHealableEvent,
-  isPullRequestProducerAtHead,
   isTrustedProducerRun,
+  openPullRequestsAtHead,
   PIN_SHAPE,
   pinsFor,
   RERUN_ATTEMPT_CAP,
@@ -406,7 +407,7 @@ async function healWithRerun(
     anyJobStarted: anyJobStartedOf(jobsBody),
   };
   if (!runNeverStarted(startedEvidence)) return false;
-  const pr = await findOpenPullRequestAtHead(deps, repo, run.headSha, auth);
+  const pr = (await findOpenPullRequestsAtHead(deps, repo, run.headSha, auth))[0] ?? null;
   const liveRunExists =
     pr === null ? false : await hasLiveRunOfPath(deps, repo, run.headSha, run.path, auth);
   if (!decideRerun(run, pr, liveRunExists, startedEvidence)) return false;
@@ -426,16 +427,16 @@ async function healWithRerun(
 }
 
 /**
- * Condition (d): the one open PR whose tip is the run's head SHA, or null.
- * The commit's associated PRs are filtered client-side; a PR whose head has
- * moved on (superseded) does not match.
+ * Condition (d): the open PRs whose tips match the run's head SHA. The
+ * commit's associated PRs are filtered client-side; a superseded PR does not
+ * match.
  */
-async function findOpenPullRequestAtHead(
+async function findOpenPullRequestsAtHead(
   deps: RelayDeps,
   repo: string,
   headSha: string,
   auth: Record<string, string>,
-): Promise<HealPullRequest | null> {
+): Promise<HealPullRequest[]> {
   const body = await apiCall<unknown>(
     deps,
     {
@@ -445,20 +446,7 @@ async function findOpenPullRequestAtHead(
     },
     `the pull requests associated with commit ${headSha}`,
   );
-  if (!Array.isArray(body)) {
-    throw new Error("the commit's associated-pull-request listing returned no array");
-  }
-  for (const entry of body) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const candidate = entry as { state?: unknown; head?: { sha?: unknown; ref?: unknown } | undefined };
-    if (candidate.state !== "open") continue;
-    const prHeadSha = typeof candidate.head?.sha === "string" ? candidate.head.sha : "";
-    if (prHeadSha === headSha) {
-      const headRef = typeof candidate.head?.ref === "string" ? candidate.head.ref : undefined;
-      return { state: candidate.state, headSha: prHeadSha, headRef };
-    }
-  }
-  return null;
+  return openPullRequestsAtHead(body, headSha);
 }
 
 /**
@@ -478,7 +466,7 @@ const LIVE_RUN_STATUSES = new Set(["queued", "in_progress", "pending", "waiting"
  * filtered client-side for the workflow's path and the live statuses.
  *
  * A malformed listing reads as "no live run" rather than throwing — the
- * deliberate asymmetry with findOpenPullRequestAtHead, which throws: the
+ * deliberate asymmetry with findOpenPullRequestsAtHead, which throws: the
  * failure direction is bounded by GitHub's own rerun guard, which refuses a
  * live run with a 4xx that apiCall throws, so the worst case is a visible red
  * relay job, never a duplicate dispatch.
@@ -660,12 +648,13 @@ async function refuseUntrustedProducer(
     throw new Error(untrustedProducerMessage(run));
   }
   if (headRepository === repo) {
-    const pr = await findOpenPullRequestAtHead(deps, repo, run.headSha, auth);
-    if (pr === null) return refusedDeadHead();
-    if (isPullRequestProducerAtHead(run.event, run.headBranch, pr.headRef)) {
+    const pullRequests = await findOpenPullRequestsAtHead(deps, repo, run.headSha, auth);
+    if (hasPullRequestProducerAtHead(run.event, run.headBranch, pullRequests)) {
       throw new Error(untrustedProducerMessage(run));
     }
-    return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
+    return pullRequests.length === 0
+      ? refusedDeadHead()
+      : { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
   }
   // Fork head (issue 1142): the owner must be provable from the run body
   // before any request; the branch-scoped listing then decides liveness.

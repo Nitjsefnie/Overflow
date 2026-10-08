@@ -10,6 +10,10 @@ const CI_PATH = ".github/workflows/ci.yml";
 const HTML_URL = `https://github.com/${REPOSITORY}/actions/runs/${RUN_ID}`;
 const PULL_REQUEST_BRANCH = "feature/issue-1170";
 const PROBE_BRANCH = "codex-probe-issue-1071";
+const UNRELATED_FIRST_PULL_REQUESTS = [
+  { state: "open", head: { sha: HEAD_SHA, ref: "another-branch" } },
+  { state: "open", head: { sha: HEAD_SHA, ref: PULL_REQUEST_BRANCH } },
+];
 const APP_KEY = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey
   .export({ type: "pkcs8", format: "pem" })
   .toString();
@@ -50,7 +54,21 @@ describe("untrusted runs whose SHA is an open pull request head", () => {
       headBranch: PULL_REQUEST_BRANCH,
       throws: false,
     },
-  ])("$name", async ({ event, headBranch, throws }) => {
+    {
+      name: "no-ops for a probe when an unrelated same-SHA pull request is listed first",
+      event: "workflow_dispatch",
+      headBranch: PROBE_BRANCH,
+      throws: false,
+      pullRequests: UNRELATED_FIRST_PULL_REQUESTS,
+    },
+    {
+      name: "throws when its producer pull request follows an unrelated same-SHA pull request",
+      event: "pull_request",
+      headBranch: PULL_REQUEST_BRANCH,
+      throws: true,
+      pullRequests: UNRELATED_FIRST_PULL_REQUESTS,
+    },
+  ])("$name", async ({ event, headBranch, throws, pullRequests }) => {
     const requests: RequestRecord[] = [];
     const outcomes: Outcome[] = [
       { status: 201, body: { token: Buffer.from("relay-test").toString("base64url") } },
@@ -60,7 +78,7 @@ describe("untrusted runs whose SHA is an open pull request head", () => {
       },
       {
         status: 200,
-        body: [{ state: "open", head: { sha: HEAD_SHA, ref: PULL_REQUEST_BRANCH } }],
+        body: pullRequests ?? [{ state: "open", head: { sha: HEAD_SHA, ref: PULL_REQUEST_BRANCH } }],
       },
     ];
     const fetchFn = vi.fn(async (input: unknown, init?: RequestInit) => {
