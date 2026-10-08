@@ -14,6 +14,14 @@ export type AccountExportAccount = {
   id: string;
   githubUserId: number;
   githubLogin: string;
+  /**
+   * Deprecated, constant null: Overflow stopped collecting the avatar URL
+   * (issue 1075), so nothing reads the column anymore — the key stays so a
+   * document keeps the shape clients parsed before. Deprecation announced
+   * 2026-10-08; the earliest removal is 2026-11-07, at the next major
+   * (API.md, Stability and versioning).
+   */
+  avatarUrl: string | null;
   role: string;
   enforcementState: string;
   confirmedMiscalibrationCount: number;
@@ -347,6 +355,9 @@ export async function exportAccount(
           id: account.id,
           githubUserId: Number(account.github_user_id),
           githubLogin: account.github_login,
+          // Constant null, never the row's column — the deprecated key keeps
+          // the document shape stable through the removal window (API.md).
+          avatarUrl: null,
           role: account.role,
           enforcementState: account.enforcement_state,
           confirmedMiscalibrationCount: account.confirmed_miscalibration_count,
