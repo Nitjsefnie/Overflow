@@ -358,6 +358,8 @@ describe("data-subject export", () => {
 describe("data-subject removal", () => {
   it("case 3: applies the decision table, leaves the member untouched, records the suppression", async () => {
     const seed = await seedHandScenario();
+    // Captured before the removal: the journal row must still equal it after.
+    const changeBefore = await rowJson("reconciliation_changes", seed.changeRecord.id);
     const outcome = await removeForgePerson(sql, {
       provider: "github", forgeId: seed.person.forgeId,
     }, { confirm: true });
@@ -368,8 +370,6 @@ describe("data-subject removal", () => {
       login: seed.person.login,
     });
     if (outcome.kind !== "REMOVED") return;
-    // Captured before the removal: the journal row must still equal it after.
-    const changeBefore = await rowJson("reconciliation_changes", seed.changeRecord.id);
 
     // users: the person never signed in, so there is no row to pseudonymise.
     expect(outcome.perStore).toEqual({
