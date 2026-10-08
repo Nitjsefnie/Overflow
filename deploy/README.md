@@ -1236,7 +1236,9 @@ credential sealed under a key the service no longer holds, and each one fails
 until it is minted again: sponsors sign in again, forge identities are linked
 again, webhook secrets are replaced. For the same reason, never run
 `pnpm credentials:reencrypt` against the production database outside this
-procedure.
+procedure. The Ledger App private key is a different credential with its own
+rotation, which [section 14](#14-rotating-the-ledger-app-private-key) carries;
+this section's steps do not extend to it and must not be applied to it.
 
 The rotation runs while the service keeps serving, and costs two restarts. It
 relies on the service reading two keys: `TOKEN_ENCRYPTION_KEY` is the current
@@ -2792,3 +2794,310 @@ The newest line must carry `clientAddressVerified: true` beside the address
 nginx recorded. A later vhost edit that drops the header, or a value changed
 on one side only, shows up the same way: entries keep arriving, marked
 unverified.
+
+## 14. Rotating the Ledger App private key
+
+The Overflow Ledger App's private key signs the RS256 JWT every App
+authentication begins with: the required-checks relay mints its installation
+token from the `LEDGER_APP_KEY` secret, and the reconciliation path mints
+from the PEM file `GITHUB_APP_PRIVATE_KEY_PATH` names. Section 10 explains
+why the required contexts are pinned to that App at all. This section is the
+only sanctioned way to change the App's private key, and it does not extend
+to `TOKEN_ENCRYPTION_KEY` — section 11 owns that key and its steps must not
+be applied to this one.
+
+The key lives in two copies. The host copy is the PEM at the path
+[section 4](README.md#4-create-the-environment-file) names —
+`/etc/overflow/github-app/private-key.pem` on the production host — with the
+ownership and readability discipline that section records; the service
+reads it at wiring time, at each start, never later. The repository copy is
+the `LEDGER_APP_KEY` secret of the `overflow-ledger` environment, which the
+relay workflow reads at the start of each of its jobs. No API returns a
+secret's value or its fingerprint, so nothing compares the two copies after
+the fact; they are equal because this procedure sets both from the same
+downloaded key, in one maintenance window, and nothing else writes either
+one. A rotation replaces the two copies as one operation before anything is
+verified against the new key: a JWT minted from one copy verifies only while
+the key it holds is registered on the App, so a pair left split past the
+overlap window fails on whichever half still holds the retired key.
+
+### The overlap, and the fact that bounds the rollback
+
+GitHub Apps hold up to 25 private keys at once, and a JWT verifies against
+whichever registered public half it was signed by, so while two keys are
+registered, JWTs minted from either verify. That overlap is what makes a
+rotation possible without downtime: the new key is added first, the two
+copies move while both keys verify, and the old key is deleted last. GitHub
+generates the keys itself — **New key** on the App's key-pairs page downloads
+the private half once, and GitHub keeps the public half — and a deleted key
+cannot be re-added: **New key** always generates a new pair. Once the old key
+is deleted in the App settings there is no way back to it, so the rollback
+below is available only while the old key still exists. Everything before
+step 5 is recoverable by rolling the copies back; everything after step 5 is
+forward repair under the new key.
+
+GitHub shows a fingerprint for every registered key pair, and an operator
+proves which key a file holds before acting on it with the same computation
+GitHub's documentation prescribes:
+
+```bash
+openssl rsa -in /etc/overflow/github-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64
+```
+
+Expect a short base64 string that matches the fingerprint the App settings'
+key-pairs page shows for that key. Keep the fingerprints you record during
+this section with the rotation record.
+
+### Step 1: record the old key's fingerprint and stage a rollback copy
+
+Run every block as root on the deployment host, in a fresh shell. The block
+stages the rollback copy every later step requires, and refuses rather than
+overwrite anything:
+
+```bash
+(
+set -e
+test "$(id -u)" = 0 || { echo "Refusing: run as root." >&2; exit 1; }
+test ! -e /etc/overflow/github-app/private-key.pem.rotation-backup || { echo "Refusing: private-key.pem.rotation-backup already exists; finish or roll back the interrupted rotation first." >&2; exit 1; }
+printf 'old key fingerprint: '
+openssl rsa -in /etc/overflow/github-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64
+cp -p /etc/overflow/github-app/private-key.pem /etc/overflow/github-app/private-key.pem.rotation-backup
+test "$(openssl rsa -in /etc/overflow/github-app/private-key.pem.rotation-backup -pubout -outform DER | openssl sha256 -binary | openssl base64)" = "$(openssl rsa -in /etc/overflow/github-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)" || { echo "Refusing: the rollback copy does not match the live key." >&2; exit 1; }
+)
+```
+
+Expect one `old key fingerprint:` line and no refusal. Record the
+fingerprint with the rotation. It must match the fingerprint the App
+settings' key-pairs page shows for the App's current key; if it does not,
+the host copy and the registration have already diverged — stop, and treat
+[incident-response.md](incident-response.md) as the runbook in force rather
+than starting a rotation on top of an unknown state.
+
+### Step 2: generate the new key in the App settings and stage it on the host
+
+GitHub generates the key, not the host. On the App's settings page
+(Settings → Developer settings → GitHub Apps → the Overflow Ledger App →
+Credentials → Key pairs), click **New key**; the private half downloads once
+to the machine you clicked from. From that machine, transfer it onto the
+deployment host as the root-only staged file this section works from:
+
+```bash
+scp /local/path/to/the-downloaded.pem root@DEPLOY-HOST:/etc/overflow/github-app/private-key.new.pem
+```
+
+Then, on the host, restore the staged file's ownership and mode, prove it is
+a parseable RSA private key, and record its fingerprint:
+
+```bash
+(
+set -e
+test "$(id -u)" = 0 || { echo "Refusing: run as root." >&2; exit 1; }
+test -s /etc/overflow/github-app/private-key.new.pem || { echo "Refusing: private-key.new.pem is missing or empty; run the transfer above first." >&2; exit 1; }
+chown root:root /etc/overflow/github-app/private-key.new.pem
+chmod 0600 /etc/overflow/github-app/private-key.new.pem
+openssl rsa -in /etc/overflow/github-app/private-key.new.pem -check -noout || { echo "Refusing: private-key.new.pem is not a readable RSA private key." >&2; exit 1; }
+printf 'new key fingerprint: '
+openssl rsa -in /etc/overflow/github-app/private-key.new.pem -pubout -outform DER | openssl sha256 -binary | openssl base64
+)
+```
+
+Expect the RSA check to pass and one `new key fingerprint:` line. The
+fingerprint must differ from step 1's, and it must match the entry the
+key-pairs page now shows for the new key — that comparison is the proof the
+downloaded file holds the key GitHub registered. Record both fingerprints
+with the rotation. From here the App holds two keys: every JWT either mints
+verifies, and the relay and the reconciliation path keep working on the old
+copies exactly as before, so any pause between this step and step 3 is safe.
+
+### Step 3: replace both copies as one operation
+
+Both halves move now, before anything verifies under the new key. The host
+block replaces the live PEM in place — redirection into the existing file
+keeps the owner, group and mode the running service depends on, where
+`install` would have to reproduce them — and refuses every state it cannot
+complete safely: it runs only as root, only with step 1's rollback copy in
+place and matching the live key, and only with a staged new key that parses
+and whose fingerprint differs from the live key's:
+
+```bash
+(
+set -e
+test "$(id -u)" = 0 || { echo "Refusing: run as root." >&2; exit 1; }
+test -e /etc/overflow/github-app/private-key.pem.rotation-backup || { echo "Refusing: private-key.pem.rotation-backup is missing; run step 1 first." >&2; exit 1; }
+test "$(openssl rsa -in /etc/overflow/github-app/private-key.pem.rotation-backup -pubout -outform DER | openssl sha256 -binary | openssl base64)" = "$(openssl rsa -in /etc/overflow/github-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)" || { echo "Refusing: the rollback copy does not match the live key." >&2; exit 1; }
+test -s /etc/overflow/github-app/private-key.new.pem || { echo "Refusing: private-key.new.pem is missing; run step 2 first." >&2; exit 1; }
+old_fp=$(openssl rsa -in /etc/overflow/github-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)
+new_fp=$(openssl rsa -in /etc/overflow/github-app/private-key.new.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)
+test "$new_fp" != "$old_fp" || { echo "Refusing: private-key.new.pem holds the same key as the live file." >&2; exit 1; }
+cat /etc/overflow/github-app/private-key.new.pem > /etc/overflow/github-app/private-key.pem
+test "$(openssl rsa -in /etc/overflow/github-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)" = "$new_fp" || { echo "The replaced file does not read back as the staged key; restore from the rollback copy as Rolling back describes." >&2; exit 1; }
+)
+```
+
+The service read the old key at its last start, so restart it now, proving
+the switch the way section 7 does:
+
+```bash
+set -e
+systemctl show overflow.service -p MainPID --value > /run/overflow-preswitch-mainpid
+systemctl restart overflow.service
+systemctl is-active overflow.service
+curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
+  --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/readiness
+printf 'MainPID before the switch: %s\nMainPID now:               %s\n' \
+  "$(cat /run/overflow-preswitch-mainpid)" \
+  "$(systemctl show overflow.service -p MainPID --value)"
+```
+
+Expect `active`, `200` and two different `MainPID` values. The reconciliation
+worker now mints from the new key's bytes; until the secret below moves, the
+relay keeps minting from the old one, and both verify.
+
+Then set the environment secret from the same staged file — through stdin,
+never an inline value, so the key material appears nowhere on a command
+line:
+
+```bash
+(
+set -e
+gh secret set LEDGER_APP_KEY --repo Nitjsefnie/Overflow --env overflow-ledger < /etc/overflow/github-app/private-key.new.pem
+gh secret list --repo Nitjsefnie/Overflow --env overflow-ledger
+)
+```
+
+Expect the list to name `LEDGER_APP_KEY` with an `Updated at` of the current
+time. The value is never readable back — the timestamp and step 4's green
+relay run are the evidence the secret holds the staged key, which is why
+this procedure keeps the staged file on the host until step 5 is done. This
+block needs a `gh` authenticated with admin on the repository; root's on the
+deployment host is the one the other sections assume.
+
+With both copies moved, the two-key overlap is doing its only job: every
+mint on the host and in Actions verifies, whichever key it read.
+
+### Step 4: verify under the new key, before the old key dies
+
+Two verifications, one per copy. The relay probe first, because it is
+immediate: a dispatch with no run id is a sweep-only start, which mints the
+App installation token before it sweeps and exits nonzero if that mint
+fails — a red run here names the mint, which is the moved secret's only
+plausible failure.
+
+```bash
+gh workflow run ledger-relay.yml --repo Nitjsefnie/Overflow
+run_id=$(gh run list --repo Nitjsefnie/Overflow --workflow ledger-relay.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+printf 'relay probe run: %s\n' "$run_id"
+gh run watch "$run_id" --repo Nitjsefnie/Overflow --exit-status
+```
+
+If the list prints nothing, the dispatched run is not registered yet; wait a
+moment and run the lookup again. Expect `watch` to exit 0 on a green run. A
+red run whose log names the installation-token mint means the secret does
+not hold the staged key — re-run step 3's secret block, then dispatch again.
+
+The relay's attestation half is the next merge to `main`: every context the
+pin map requires is relayed as a check run owned by the App on the merge
+commit, so read them back owned-filtered:
+
+```bash
+gh api 'repos/Nitjsefnie/Overflow/commits/MERGE-COMMIT-SHA/check-runs?filter=all&per_page=100' --paginate \
+  --jq '.check_runs[] | select(.app.id == 5118623) | {name: .name, status: .status, conclusion: .conclusion}'
+```
+
+Expect one line per pinned context, each `completed` and `success`. The pin
+map ([`.github/required-checks.json`](../.github/required-checks.json)) names
+the contexts; any missing or failed line is a relay failure to diagnose
+before step 5.
+
+The reconciliation half: run one reconciliation explicitly. The CLI reads
+the host copy fresh at wiring time — no restart, no cached credential — so
+a completed run is the host half's own proof:
+
+```bash
+cd /srv/overflow
+set -a; . /etc/overflow/overflow.env; set +a
+pnpm reconcile --repository Nitjsefnie/Overflow
+```
+
+Expect one JSON summary line:
+`{"repositoryId":…,"added":…,"changed":…,"removed":…,"skipped":false,"runId":"…"}`.
+`"skipped":true` is not a failure — the run was deferred by a budget hold or
+a cooldown, and the block is simply re-run. A thrown error or a nonzero exit
+naming `GitHub App request failed` is the host half failing under the new
+key; restore the rollback copy as Rolling back describes. `"skipped":false`
+with a `runId` is the fold having run; confirm the run it names completed:
+
+```bash
+psql "$DATABASE_URL" -tAc "select status, completed_at is not null from reconciliation_runs where id = 'REPLACE-WITH-THE-RUNID'"
+```
+
+Expect `COMPLETED|t`.
+
+Both green: the new key is proven on both halves, and step 5 may retire the
+old one.
+
+### Step 5: delete the old key and confirm the next merge
+
+In the App settings' key-pairs page (the path step 2 gives), delete the old
+key — the entry whose fingerprint matches step 1's. From this moment the
+rollback window is closed: GitHub cannot re-add a deleted key. Confirm the
+required checks post on the next merge to `main` with the same
+owned-filtered read-back step 4 gives, and expect every pinned context
+`completed` and `success`, owned by the App. Then dispose of what the
+rotation staged: the staged new-key file and the rollback copy of the old
+one are no longer needed — the live host file is the new key's only
+necessary copy, and a deleted key's bytes verify nothing:
+
+```bash
+(
+set -e
+test "$(id -u)" = 0 || { echo "Refusing: run as root." >&2; exit 1; }
+rm /etc/overflow/github-app/private-key.new.pem /etc/overflow/github-app/private-key.pem.rotation-backup
+)
+```
+
+### Rolling back
+
+Everything before step 5 rolls back, because the old key still verifies.
+The overlap window is the recovery: nothing below restores a deleted key,
+and nothing below is needed once step 5 has run — from there the only repair
+is forward, fixing whichever copy misbehaves from the staged file and
+re-running step 4.
+
+The partial states, and the way out of each:
+
+- **Step 2 only — the new key is registered, no copy has moved.** Nothing to
+  restore: both copies still hold the old key and everything works. Either
+  continue with step 3, or, if the rotation is abandoned here, delete the
+  new key in the App settings to return to the single-key posture.
+- **The host copy moved, the secret did not.** Forward: run step 3's secret
+  block. Back: restore the host file from the rollback copy with the block
+  below and restart with step 3's restart block, then delete the new key in
+  the App settings if the rotation is being abandoned.
+- **The secret moved, the host copy did not.** Forward: run step 3's host
+  block and restart. Back: set the secret from the rollback copy (`gh secret
+  set LEDGER_APP_KEY --repo Nitjsefnie/Overflow --env overflow-ledger <
+  /etc/overflow/github-app/private-key.pem.rotation-backup`), then delete
+  the new key in the App settings if the rotation is being abandoned.
+- **Both copies moved and step 4 is red.** Restore both: the host file from
+  the rollback copy, the secret from the same copy, restart with step 3's
+  restart block, re-run step 4's two verifications under the old key — they
+  were green before the rotation and must be green again — and delete the
+  new key in the App settings. Diagnose the staged key's failure only after
+  the old posture is proven restored.
+
+Restoring the host file from the rollback copy is the copy the other way:
+
+```bash
+(
+set -e
+test "$(id -u)" = 0 || { echo "Refusing: run as root." >&2; exit 1; }
+test -e /etc/overflow/github-app/private-key.pem.rotation-backup || { echo "Refusing: private-key.pem.rotation-backup is missing; there is nothing to restore from." >&2; exit 1; }
+cat /etc/overflow/github-app/private-key.pem.rotation-backup > /etc/overflow/github-app/private-key.pem
+test "$(openssl rsa -in /etc/overflow/github-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)" = "$(openssl rsa -in /etc/overflow/github-app/private-key.pem.rotation-backup -pubout -outform DER | openssl sha256 -binary | openssl base64)" || { echo "The restored file does not read back as the rollback copy." >&2; exit 1; }
+)
+```
+
+followed by step 3's restart block. A rollback leaves the staged new-key
+file in place until the new key has been deleted in the App settings and
+the rotation is closed out; then step 5's disposal block removes it.
