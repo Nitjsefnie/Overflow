@@ -18,17 +18,6 @@ const OTHER_SHA = "b".repeat(40);
 const RUN_ID = "9001";
 const HTML_URL = `https://github.com/Nitjsefnie/Overflow/actions/runs/${RUN_ID}`;
 const TOKEN_URL = "https://api.github.com/app/installations/166057493/access_tokens";
-const JOBS_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs/${RUN_ID}/jobs?filter=latest&per_page=100`;
-const CHECK_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/check-runs";
-const RUN_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs/${RUN_ID}`;
-const SWEEP_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs?per_page=100";
-const CHECK_RUNS_AT_HEAD_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${OTHER_SHA}/check-runs?app_id=5118623&filter=latest&per_page=100`;
-const SWEEP_JOBS_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs/9002/jobs?filter=latest&per_page=100`;
-const PULLS_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${HEAD_SHA}/pulls?per_page=100`;
-const RUNS_AT_HEAD_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs?head_sha=${HEAD_SHA}&per_page=100`;
-const RERUN_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs/${RUN_ID}/rerun`;
-const FORK_PULLS_URL =
-  "https://api.github.com/repos/Nitjsefnie/Overflow/pulls?state=open&head=someone%3Asome-branch&per_page=100";
 
 const PATH_CI = ".github/workflows/ci.yml";
 const PATH_ACTIONLINT = ".github/workflows/actionlint.yml";
@@ -175,10 +164,6 @@ function sweepListing(runs: Array<Record<string, unknown>>): Outcome {
   return { status: 200, body: { total_count: runs.length, workflow_runs: runs } };
 }
 
-function noSweepRuns(): Outcome {
-  return sweepListing([]);
-}
-
 function checkRunsListing(names: Array<string>): Outcome {
   return {
     status: 200,
@@ -199,10 +184,6 @@ function pullsListing(pulls: Array<Record<string, unknown>>): Outcome {
 
 function runsListing(runs: Array<Record<string, unknown>>): Outcome {
   return { status: 200, body: { total_count: runs.length, workflow_runs: runs } };
-}
-
-function runEntry(over: Record<string, unknown> = {}): Record<string, unknown> {
-  return { path: PATH_CI, status: "queued", conclusion: null, ...over };
 }
 
 function fetchedRunBody(over: Record<string, unknown> = {}): Record<string, unknown> {
