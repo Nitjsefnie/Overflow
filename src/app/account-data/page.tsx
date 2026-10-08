@@ -326,9 +326,19 @@ export function AccountDataNotice() {
                 : "; the Controller and contact section names the private route for a request you would not post publicly. "}
             </>
           )}
-          Overflow has no removal feature for people who have not signed in, so the operator handles a
-          request by hand. Content still on GitHub or GitLab in a registered repository is read again at the
-          next pass, so removing it there first is what keeps it out of Overflow.
+          The operator answers with a documented procedure, keyed by the forge you used and your
+          numeric forge account id. They can produce an export covering every row in Overflow&apos;s
+          database that names you — by login or numeric id — including your issues and their claim
+          assignees, your pull requests, settlements crediting you, the per-repository cache of
+          issue, comment and closing-pull-request authors, change-log entries, and any moderation
+          note naming you. A removal tombstones the login copies that name you and drops the numeric
+          id copies beside them, removes the stored body text on rows you authored, and keeps the
+          ledger&apos;s attribution of the work and every other person&apos;s rows intact; moderation
+          notes and the change journal are kept as written, and the export is how they are shown to
+          you. A recorded suppression then keeps every later reconciliation pass from writing your
+          identifiers again, whether the pass reads the forge fresh or from its cache — so removing
+          the content on GitHub or GitLab first is no longer the only thing keeping it out of
+          Overflow.
         </p>
       </section>
 
