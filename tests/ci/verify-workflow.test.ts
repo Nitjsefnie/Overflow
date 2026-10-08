@@ -742,8 +742,8 @@ describe("the verify workflows' untrusted-code boundary", () => {
       "ci-pr.yml runs pull_request_target and must therefore reference no secret — " +
         "a `${{ secrets.… }}` in any with:/env: value would hand PR-authored input " +
         "the run's secret context; only the ledger relay holds the App key. ci.yml is " +
-        "asserted on the same terms: it is the sibling that keeps the calibrate job's " +
-        "contents: write, so a secret added beside it would be one step away from " +
+        "asserted on the same terms: it is the sibling that keeps the push-recalibration " +
+        "job's contents: write, so a secret added beside it would be one step away from " +
         "a workflow the pull-request leg runs beside.",
     ).toEqual([]);
   });
@@ -812,17 +812,20 @@ describe("the verify workflows' untrusted-code boundary", () => {
   });
 
   it("confines each job's permissions: override to what its steps actually need", () => {
-    // ci.yml keeps calibrate's contents: write and nothing else — verify there
-    // downloads no artifact and awaits no run, so it inherits the workflow's
-    // contents: read rather than adding a scope no step of it uses.
+    // Issue 1036 moved the write token out of calibrate — which runs
+    // repository scripts on Node built-ins — into push-recalibration, which
+    // runs none. verify there downloads no artifact and awaits no run, so it
+    // inherits the workflow's contents: read rather than adding a scope no
+    // step of it uses.
     expect(
       Object.entries(workflow.jobs ?? {})
         .filter(([, job]) => job !== undefined && "permissions" in job)
         .map(([name]) => name),
-      "only calibrate may carry a permissions: override in ci.yml (its contents: write is pinned " +
-        "by tests/ci/calibrate-workflow.test.ts and it runs only on push and dispatch); a verify " +
+      "only push-recalibration may carry a permissions: override in ci.yml (its contents: write is pinned " +
+        "by tests/ci/calibrate-workflow.test.ts and it runs only when calibrate exported a changed " +
+        "document); a verify " +
         "override here would be a scope no step in that job uses",
-    ).toEqual(["calibrate"]);
+    ).toEqual(["push-recalibration"]);
 
     // ci-pr.yml keeps verify's read-only actions: read — the base copy of the
     // suite awaiter lists the pull request suite's runs and downloads its

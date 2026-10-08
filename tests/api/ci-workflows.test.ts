@@ -485,7 +485,7 @@ fi
             type: "string",
           },
           "simulate-refused-raise": {
-            description: "calibrate self-test: fabricate a coverage raise so the push is refused by branch protection and the job fails visibly (issue 684)",
+            description: "calibrate self-test: fabricate a coverage raise so the push is refused by branch protection and the push-recalibration job fails visibly (issue 684)",
             type: "boolean",
             default: false,
           },

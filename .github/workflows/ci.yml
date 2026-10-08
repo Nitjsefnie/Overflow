@@ -43,7 +43,7 @@ on:
         required: false
         type: string
       simulate-refused-raise:
-        description: "calibrate self-test: fabricate a coverage raise so the push is refused by branch protection and the job fails visibly (issue 684)"
+        description: "calibrate self-test: fabricate a coverage raise so the push is refused by branch protection and the push-recalibration job fails visibly (issue 684)"
         type: boolean
         default: false
 
@@ -292,46 +292,43 @@ jobs:
   # than the record by more than the hysteresis, and doubles as the calibrate
   # self-test: a workflow_dispatch carrying simulate-refused-raise fabricates
   # a coverage raise so the push to main is refused by branch protection —
-  # a bot commit can never carry the required checks — and the job FAILS
-  # visibly, which is the point (issue 684). Push-only otherwise: a pull
+  # a bot commit can never carry the required checks — and the push job below
+  # fails visibly, which is the point (issue 684). Push-only otherwise: a pull
   # request must never write to the branch it targets, and the pull-request
-  # leg of this gate is a different workflow (ci-pr.yml) that calibrate cannot
-  # reach. Docs-only runs produce no coverage summary and are skipped by the
+  # leg of this gate is a different workflow (ci.yml carries no pull-request
+  # trigger), so nothing here can write to a branch a pull request targets.
+  # Docs-only runs produce no coverage summary and are skipped by the
   # verify job's docs_only output.
+  #
+  # Issue 1036 splits the job along its privilege boundary. This job runs
+  # repository scripts — calibrate-coverage.ts and check-coverage-floor.ts,
+  # which import only Node built-ins, so there is no install and no pnpm —
+  # and therefore holds no write token: it publishes the computed document as
+  # the outputs the push-recalibration job consumes. That job alone holds
+  # contents: write and runs no repository or dependency code at all, so no
+  # code this workflow executes can reach a write token.
   calibrate:
     needs: verify
     if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.verify.outputs.docs_only != 'true') || (github.event_name == 'workflow_dispatch' && inputs.simulate-refused-raise == true) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: write
-    # Actions `env:` is step-scoped. Keep these pins at job scope so every
-    # `pnpm` step inherits both, leaving no step on which to forget them.
-    env:
-      COREPACK_ENABLE_PROJECT_SPEC: "0"
-      npm_config_registry: "https://registry.npmjs.org/"
-
+    # No job-level permissions block: the workflow's contents: read is every
+    # scope this job's steps use, the same inheritance verify relies on.
+    outputs:
+      changed: ${{ steps.document.outputs.changed }}
+      document: ${{ steps.document.outputs.document }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # scripts/push-recalibration.ts reads the recorded floor from
-          # HEAD^1 for its refusal message; a depth-1 checkout would degrade
-          # the message to its "floors could not be read" fallback.
-          fetch-depth: 2
+          # The document the job exports is judged against the record HEAD
+          # carries; the HEAD^1 read the old depth-2 checkout served moved to
+          # the push job with the refusal message (issue 1036).
+          fetch-depth: 1
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.17.0"
-
-      - name: Enable the pinned package manager
-        run: |
-          corepack enable
-          corepack install --global pnpm@10.33.0
-          pnpm --version
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
 
       - name: Download coverage summary
         if: ${{ inputs.simulate-refused-raise != true }}
@@ -346,22 +343,142 @@ jobs:
 
       # The self-test half: in place of a measurement, calibrate-coverage
       # fabricates a raise off the recorded document alone, so the push below
-      # is guaranteed to be refused and the job's failure is the thing under
-      # test.
+      # is guaranteed to be refused and the push job's failure is the thing
+      # under test.
       - name: Fabricate the simulated raise
         if: ${{ inputs.simulate-refused-raise == true }}
         run: node scripts/calibrate-coverage.ts --simulate-refused-raise
 
-      # The push half lives in scripts/push-recalibration.ts: it commits
-      # scripts/coverage.json as github-actions[bot] and pushes main, with the
-      # job token riding in the push URL alone — never persisted to
-      # .git/config. A refused push is EXPECTED here — main's branch
-      # protection cannot be satisfied by a GITHUB_TOKEN push — so the script
-      # names the measured and recorded floors in a ::error:: and exits 1:
-      # a refusal fails the job visibly instead of reading as green. On a
-      # warranted raise racing main it fetches, rebases and retries once
-      # before refusing.
-      - name: Push the recalibrated floor
+      # The document leaves this job as an output, not as a push: calibrate
+      # holds no write token (issue 1036). `changed` is the diff of the
+      # document against the record HEAD carries — a within-hysteresis
+      # measurement writes nothing, so a run with nothing to raise sets it
+      # false and the push job below is skipped. The heredoc delimiter cannot
+      # occur in the machine-written JSON document.
+      - name: Export the recalibrated document
+        id: document
+        run: |
+          if git diff --quiet -- scripts/coverage.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo 'document<<COVERAGE_FLOOR_DOCUMENT_END'
+            cat scripts/coverage.json
+            echo 'COVERAGE_FLOOR_DOCUMENT_END'
+          } >> "$GITHUB_OUTPUT"
+
+  # The push half (issue 1036): the only contents: write holder in this file,
+  # and it runs no repository or dependency code — plain git over the document
+  # bytes calibrate exported, so no code this workflow runs can reach a write
+  # token. The refusal semantics mirror the scripts/push-recalibration.ts this
+  # wiring replaced: the bot identity set per command, the commit message, the
+  # HEAD:refs/heads/main refspec, the one fetch-rebase-retry on a warranted
+  # raise racing main, and a ::error:: naming the recorded and measured floors
+  # plus the manual remedy — a refusal is EXPECTED under main's branch
+  # protection (a bot commit can never carry the required checks) and fails
+  # the job visibly instead of reading as green (issue 684).
+  push-recalibration:
+    needs: calibrate
+    if: ${{ needs.calibrate.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The refusal message reads the recorded floor from HEAD^1; a
+          # depth-1 checkout would degrade it to the unreadable-floors
+          # fallback.
+          fetch-depth: 2
+
+      - name: Commit and push the recalibrated floor
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/push-recalibration.ts
+          DOCUMENT: ${{ needs.calibrate.outputs.document }}
+          # Network git must fail, not hang waiting for credentials.
+          GIT_TERMINAL_PROMPT: "0"
+          GIT_ASKPASS: "true"
+        run: |
+          DOC_PATH="scripts/coverage.json"
+
+          if [ -n "${PUSH_REMOTE_URL:-}" ]; then
+            PUSH_URL="${PUSH_REMOTE_URL}"
+          else
+            PUSH_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          fi
+
+          # The document arrives through env and is written verbatim; the
+          # diff below judges it against the record HEAD carries.
+          printf '%s\n' "$DOCUMENT" > "$DOC_PATH"
+
+          # Secrets that must never reach the output: the push and fetch URLs
+          # carry the token and git echoes failing URLs verbatim, so every
+          # line git produced passes through redact() before printing — the
+          # same rule the script applied. The token is replaced literally,
+          # never as a regex, and an unset token — the behavioral tests' —
+          # replaces nothing.
+          redact() {
+            if [ -n "${GH_TOKEN:-}" ]; then
+              printf '%s\n' "${1//"$GH_TOKEN"/***}"
+            else
+              printf '%s\n' "$1"
+            fi
+          }
+
+          # The refusal alarm. Runs once the push has definitely failed for
+          # good; exits 1 even when the floors themselves cannot be read, so
+          # the alarm cannot be swallowed by a secondary failure.
+          refuse() {
+            local floors recorded measured
+            if recorded=$(git show "HEAD^1:${DOC_PATH}" | sed -n 's/^ *"floor": *\([0-9.][0-9.]*\).*/\1/p') &&
+              measured=$(git show "HEAD:${DOC_PATH}" | sed -n 's/^ *"floor": *\([0-9.][0-9.]*\).*/\1/p') &&
+              [ -n "$recorded" ] && [ -n "$measured" ]; then
+              floors="recorded floor ${recorded}% vs measured floor ${measured}%"
+            else
+              floors="the floors could not be read from HEAD^1 and HEAD (shallow checkout?)"
+            fi
+            echo "::error::coverage-floor recalibration refused ($1): ${floors}. Cause: main's branch protection refuses pushes from GITHUB_TOKEN — a bot commit can never carry the required checks. Remedy: record the raise by hand: run the suite with coverage, run node scripts/calibrate-coverage.ts, commit scripts/coverage.json, open an ordinary pull request — CONTRIBUTING.md, 'Coverage is floored'."
+            exit 1
+          }
+
+          # The job's if: on calibrate's changed output is the first gate;
+          # this re-check is the second, the same one the script applied: a
+          # raced main that already carries the raise pushes nothing.
+          if git diff --quiet -- "$DOC_PATH"; then
+            echo "coverage floor already current; nothing to push"
+            exit 0
+          fi
+
+          # Identity set per command, like the push URL: nothing about the
+          # bot is persisted to the repository's config either.
+          git add -- "$DOC_PATH"
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "ci: update CI ratchets"
+
+          if output=$(git push "$PUSH_URL" HEAD:refs/heads/main 2>&1); then
+            echo "coverage floor recalibration: pushed $(git rev-parse HEAD) to main"
+            exit 0
+          fi
+          redact "$output" >&2
+
+          # Refused. Expected whenever a warranted raise races main or
+          # protection refuses bots: fetch the remote main, replay, retry
+          # once.
+          if ! fetched=$(git fetch --depth=2 "$PUSH_URL" main 2>&1); then
+            redact "$fetched" >&2
+            refuse "could not fetch main after the refusal"
+          fi
+          if ! rebased=$(git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" rebase FETCH_HEAD 2>&1); then
+            git rebase --abort || true
+            redact "$rebased" >&2
+            refuse "rebase onto main failed"
+          fi
+          if output=$(git push "$PUSH_URL" HEAD:refs/heads/main 2>&1); then
+            echo "coverage floor recalibration: pushed $(git rev-parse HEAD) to main"
+            exit 0
+          fi
+          redact "$output" >&2
+          refuse "push refused twice"

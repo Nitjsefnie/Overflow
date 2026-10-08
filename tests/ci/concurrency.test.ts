@@ -521,7 +521,7 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   "actionlint-pr.yml": ["actionlint"],
   "actionlint.yml": ["actionlint"],
   "ci-pr.yml": ["verify"],
-  "ci.yml": ["calibrate", "verify"],
+  "ci.yml": ["calibrate", "push-recalibration", "verify"],
   "claim.yml": ["claim"],
   "code-scanning.yml": ["analyze"],
   "coverage-comment.yml": ["comment"],
