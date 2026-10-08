@@ -105,18 +105,17 @@ export function isTrustedProducerRun(event: string, headBranch: string): boolean
   return EVENTS_TRUSTED_ON_BASE_BRANCH.has(event) && headBranch === BASE_BRANCH;
 }
 
-/** Whether an open pull request at a refused run's SHA is that run's own producer. */
-export function isPullRequestProducerAtHead(
+/** Whether any open pull request at a refused run's SHA is that run's own producer. */
+export function hasPullRequestProducerAtHead(
   event: string,
   headBranch: string,
-  pullRequestHeadRef: string | undefined,
+  pullRequests: readonly { headRef?: string }[],
 ): boolean {
-  return (
-    event === "pull_request" &&
-    headBranch !== "" &&
-    pullRequestHeadRef !== undefined &&
-    pullRequestHeadRef !== "" &&
-    headBranch === pullRequestHeadRef
+  if (event !== "pull_request" || headBranch === "") return false;
+  return pullRequests.some((pullRequest) =>
+    pullRequest.headRef !== undefined &&
+    pullRequest.headRef !== "" &&
+    headBranch === pullRequest.headRef,
   );
 }
 
@@ -256,6 +255,24 @@ export interface HealPullRequest {
   headSha: string;
   /** The PR's head branch, carried for the refused-producer decision when the API names it. */
   headRef?: string;
+}
+
+/** The open pull requests in a commit listing whose current tip is this SHA. */
+export function openPullRequestsAtHead(body: unknown, headSha: string): HealPullRequest[] {
+  if (!Array.isArray(body)) {
+    throw new Error("the commit's associated-pull-request listing returned no array");
+  }
+  const pullRequests: HealPullRequest[] = [];
+  for (const entry of body) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const candidate = entry as { state?: unknown; head?: { sha?: unknown; ref?: unknown } | undefined };
+    if (candidate.state !== "open") continue;
+    const prHeadSha = typeof candidate.head?.sha === "string" ? candidate.head.sha : "";
+    if (prHeadSha !== headSha) continue;
+    const headRef = typeof candidate.head?.ref === "string" ? candidate.head.ref : undefined;
+    pullRequests.push({ state: candidate.state, headSha: prHeadSha, headRef });
+  }
+  return pullRequests;
 }
 
 /**
