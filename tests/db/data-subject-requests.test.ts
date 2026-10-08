@@ -10,7 +10,7 @@ import type { GitHubIssue, GitHubIssueReference, GitHubPullRequest, GitHubPullRe
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
-import { scrubIssueIdentity, scrubSuppressedForgeData } from "@/lib/fold/data-subject-suppression";
+import { scrubFoldResultForPerson, scrubIssueIdentity, scrubSuppressedForgeData } from "@/lib/fold/data-subject-suppression";
 import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { startPostgresContainer } from "../support/postgres-container";
 
@@ -1114,7 +1114,7 @@ describe("identity authority and access inventory", () => {
     expect(identity.encrypted_token).toBeNull();
   });
 
-  it("review lifecycle: new policy violation cannot reinstate actor login", async () => {
+  it.each([true, false])("review lifecycle: policy publication honours numeric actor authority (subject=%s)", async (actorIsSubject) => {
     const seedNumber = nextSeedNumber();
     const forgeId = 9_100_000 + seedNumber;
     const login = `outsider-${seedNumber}`;
@@ -1199,11 +1199,14 @@ describe("identity authority and access inventory", () => {
     await double.run();
     await removeForgePerson(sql,{provider:'github',forgeId},{confirm:true});
     const opening=double.issues[0]!.history[0]!;
-    opening.actorLogin=login; opening.actorGitHubUserId=forgeId;
+    opening.actorLogin=login; opening.actorGitHubUserId=actorIsSubject ? forgeId : memberGitHubId;
     double.clock=new Date('2026-09-08T10:06:00Z');
     await double.run({rederive:true});
     const actual=await sql`select violation from repository_policy_violations where repository_id=${repositoryId}`;
-    expect(JSON.stringify(actual)).not.toContain(login);
+    expect(actual).toHaveLength(1);
+    expect(actual[0]!.violation.openingSourceActorLogin).toBe(actorIsSubject ? DATA_SUBJECT_TOMBSTONE_LOGIN : login);
+    if (actorIsSubject) expect(JSON.stringify(actual)).not.toContain(login);
+    else expect(actual[0]!.violation.reason).toContain(login);
    });
 
 
@@ -1331,5 +1334,16 @@ describe("access-copy numeric authority in JSON stores", () => {
     await sql`update reconciliation_changes set after_state=${sql.json({ creditorGitHubLogin: seed.person.login, creditorGitHubUserId: seed.member.githubUserId })} where id=${seed.changeRecord.id}`;
     const doc = await exportForgePerson(sql, { provider: "github", forgeId: seed.person.forgeId });
     expect(storeOf(doc, "reconciliation_changes").rows).toEqual([]);
+  });
+});
+
+describe("ambiguous policy actor authority", () => {
+  it("refuses to guess between different numeric actors using the same verified alias", async () => {
+    const seed = await seedHandScenario();
+    const [fact] = await sql`select payload from repository_reconciliation_evidence_facts where repository_id=${seed.repositoryId}`;
+    const issue = fact!.payload;
+    issue.history = [seed.person.forgeId, seed.member.githubUserId].map((id) => ({ kind: "LABELED", id: `opening-${id}`, actorLogin: seed.person.login, actorGitHubUserId: id, label: "M", createdAt: "2026-09-01T08:00:00Z" }));
+    const fold = { issues: [], pullRequests: [], settlements: [], selfWorkCalibrations: [], unwritableClosures: [], ledgerEntries: [], policyViolations: [{ code: "OPENING_LABEL_UNAUTHORIZED" as const, githubIssueId: issue.id, openingLabel: "M", openingSourceActorLogin: seed.person.login, reason: `Applied by \`${seed.person.login}\`` }] };
+    expect(() => scrubFoldResultForPerson(fold, { forgeId: seed.person.forgeId, logins: new Set([seed.person.login]) }, [issue])).toThrow("Ambiguous policy actor identity.");
   });
 });
