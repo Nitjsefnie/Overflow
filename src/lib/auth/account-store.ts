@@ -126,18 +126,20 @@ export function shouldKeepStoredGitHubToken(input: StoredTokenContinuity): boole
 }
 
 /**
- * The one writer of `users.github_login`/`avatar_url`/`encrypted_oauth_token`:
- * the sign-in upsert, moved verbatim from `src/auth.ts`. On conflict it also
- * clears `deleted_at` IN THE SAME statement that restores the avatar and the
- * OAuth token — the `users_deleted_account_scrubbed_check` admits no
- * half-restored state, and this is the exact shape it allows (a later GitHub
- * sign-in re-registers the account).
+ * The one writer of `users.github_login`/`encrypted_oauth_token`: the sign-in
+ * upsert, moved verbatim from `src/auth.ts`. Nothing writes `avatar_url`
+ * anymore (issue 1075) — the column stays in the schema only so old rows need
+ * no drop; the deletion scrub still clears it and the migration nulled it.
+ * On conflict it also clears `deleted_at` IN THE SAME statement that
+ * restores the OAuth token — the `users_deleted_account_scrubbed_check`
+ * admits no half-restored state, and this is the exact shape it allows (a
+ * later GitHub sign-in re-registers the account; the nulled avatar stays
+ * nulled, which the check reads as scrubbed).
  */
 export async function upsertGitHubAccount(
   input: {
     githubUserId: number;
     login: string;
-    avatarUrl: string | null;
     role: UserRole;
     encryptedAccessToken: Buffer;
   },
@@ -147,21 +149,18 @@ export async function upsertGitHubAccount(
     insert into users (
       github_user_id,
       github_login,
-      avatar_url,
       role,
       encrypted_oauth_token
     )
     values (
       ${input.githubUserId},
       ${input.login},
-      ${input.avatarUrl},
       ${input.role},
       ${input.encryptedAccessToken}
     )
     on conflict (github_user_id) do update
     set
       github_login = excluded.github_login,
-      avatar_url = excluded.avatar_url,
       -- A FLOOR, never an override — but only for a LIVE row. The stored role
       -- floors against sign-in demotion while the account is live: writing
       -- excluded.role unconditionally meant a moderator granted inside the

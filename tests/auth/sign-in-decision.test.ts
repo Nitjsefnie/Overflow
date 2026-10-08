@@ -57,7 +57,7 @@ describe("SIGN_IN_REFUSAL_REASONS", () => {
 });
 
 describe("readGitHubIdentity", () => {
-  it("parses a numeric GitHub id, login, and avatar url", () => {
+  it("parses a numeric GitHub id and login, and carries no avatar field: an avatar-bearing profile parses to an avatar-free identity (issue 1075)", () => {
     expect(
       readGitHubIdentity({
         id: 4242,
@@ -67,14 +67,13 @@ describe("readGitHubIdentity", () => {
     ).toEqual({
       githubUserId: 4242,
       login: "octocat",
-      avatarUrl: "https://avatars.example/octocat.png",
     });
   });
 
   it("parses a numeric-string GitHub id", () => {
     expect(
       readGitHubIdentity({ id: "4242", login: "octocat" } as unknown as Profile),
-    ).toEqual({ githubUserId: 4242, login: "octocat", avatarUrl: null });
+    ).toEqual({ githubUserId: 4242, login: "octocat" });
   });
 
   it("refuses a whitespace-only login", () => {
@@ -105,7 +104,7 @@ describe("decideGitHubSignIn", () => {
     ).resolves.toBe(true);
 
     expect(persist).toHaveBeenCalledExactlyOnceWith(
-      { githubUserId: 4242, login: "octocat", avatarUrl: "https://avatars.example/octocat.png" },
+      { githubUserId: 4242, login: "octocat" },
       secretAccessToken,
     );
     expect(errorSpy).not.toHaveBeenCalled();
@@ -128,10 +127,6 @@ describe("decideGitHubSignIn", () => {
     { label: "a profile without a login", profile: { id: 4242 } },
     { label: "a profile with a non-numeric id", profile: { login: "octocat", id: "octocat" } },
     { label: "a profile with a non-positive id", profile: { id: 0, login: "octocat" } },
-    {
-      label: "a profile with a non-string avatar url",
-      profile: { id: 4242, login: "octocat", avatar_url: 7 },
-    },
   ])("classifies $label as SIGNIN_IDENTITY_INVALID", async ({ profile }) => {
     const persist = persistSucceeding();
 
@@ -142,6 +137,23 @@ describe("decideGitHubSignIn", () => {
     expect(persist).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(String(errorSpy.mock.calls[0]![0])).toContain(SIGN_IN_REFUSAL_REASONS.identity);
+  });
+
+  it("does not inspect the avatar field: a profile whose avatar url is not a string still validates (issue 1075)", async () => {
+    const persist = persistSucceeding();
+
+    await expect(
+      decideGitHubSignIn({
+        profile: { id: 4242, login: "octocat", avatar_url: 7 } as unknown as Profile,
+        accessToken: secretAccessToken,
+        persist,
+      }),
+    ).resolves.toBe(true);
+
+    expect(persist).toHaveBeenCalledExactlyOnceWith(
+      { githubUserId: 4242, login: "octocat" },
+      secretAccessToken,
+    );
   });
 
   it("classifies an undefined access token as SIGNIN_ACCESS_TOKEN_MISSING", async () => {

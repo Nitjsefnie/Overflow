@@ -9,10 +9,10 @@ import { closeSql } from "@/lib/db/client";
 /**
  * The session cookie's content, end to end against the installed @auth/core
  * (issue 678): the /account-data notice promises that sign-in reads only the
- * public GitHub identity — the numeric user id, the login, and the avatar URL
- * — so the cookie minted by the real OAuth handshake must hold exactly that,
- * with no display name and no e-mail claim. The same notice describes the
- * cookie as encrypted, which the decoded payload only fits if the real
+ * public GitHub identity — the numeric user id and the login — so the cookie
+ * minted by the real OAuth handshake must hold exactly that, with no display
+ * name, no e-mail claim, and no avatar (issue 1075). The same notice describes
+ * the cookie as encrypted, which the decoded payload only fits if the real
  * `encode` produced it.
  *
  * Nothing of Auth.js is mocked. The real `GET`/`POST` handlers exported from
@@ -56,9 +56,9 @@ const login = "octocat-678";
 const avatarUrl = `https://avatars.githubusercontent.com/u/${githubUserId}?v=4`;
 
 /**
- * GitHub's real /user body carries the display name and e-mail alongside the
- * public fields; the extra fields are there to prove the projection drops
- * everything but the three it names.
+ * GitHub's real /user body carries the display name, the e-mail, and the
+ * avatar URL alongside the public fields; the extra fields are there to prove
+ * the projection drops everything but the two it names.
  */
 const githubUserBody = {
   login,
@@ -233,7 +233,7 @@ async function sessionCookieValue(jar: Map<string, string>): Promise<string> {
 }
 
 describe("the session cookie the real sign-in handshake mints", () => {
-  it("holds the login, the avatar, and no e-mail — not the profile's display name or address", async () => {
+  it("holds the login and no e-mail — not the profile's display name or address, and not the avatar (issue 1075)", async () => {
     stubGitHubEndpoints();
     const jar = new Map<string, string>();
 
@@ -274,11 +274,12 @@ describe("the session cookie the real sign-in handshake mints", () => {
     const payload = (await decode({ token: cookieValue, secret: authSecret, salt: sessionCookieSalt }))!;
 
     // The public identity only: the login is the name, never the display
-    // name; the e-mail claim is gone entirely, not merely empty.
+    // name; the e-mail claim is gone entirely, not merely empty, and the
+    // avatar the /user body carries never enters the cookie (issue 1075).
     expect(payload.name).toBe(login);
     expect(payload.name).not.toBe("Display Name");
     expect(Object.hasOwn(payload, "email")).toBe(false);
-    expect(payload.picture).toBe(avatarUrl);
+    expect(Object.hasOwn(payload, "picture")).toBe(false);
 
     // The Overflow claims ride along.
     expect(payload.userId).toBe(userId);
@@ -300,9 +301,16 @@ describe("the session cookie the real sign-in handshake mints", () => {
     expect(session.user.name).toBe(login);
     expect(session.user.email).toBeUndefined();
     expect(Object.hasOwn(session.user, "email")).toBe(false);
-    expect(session.user.image).toBe(avatarUrl);
+    expect(Object.hasOwn(session.user, "image")).toBe(false);
     expect(session.user.id).toBe(userId);
     expect(session.user.role).toBe("MEMBER");
+
+    // The storage path ran inside the same handshake, against an avatar-bearing
+    // /user body: the account row's avatar column reads null (issue 1075).
+    const [row] = await sql!<({ avatar_url: string | null }[])>`
+      select avatar_url from users where id = ${userId}
+    `;
+    expect(row!.avatar_url).toBeNull();
   });
 });
 
@@ -349,14 +357,14 @@ describe("a session cookie minted before the epoch existed, refreshed", () => {
 
     // The refresh re-issues the cookie on every successful session read —
     // that re-issued cookie IS what persists, so its decoded payload is the
-    // stripped token: no e-mail claim, the login as the name.
+    // stripped token: no e-mail claim, no avatar, the login as the name.
     mergeSetCookies(jar, sessionResponse);
     const refreshedCookieValue = await sessionCookieValue(jar);
     const refreshedPayload = (await decode({ token: refreshedCookieValue, secret: authSecret, salt: sessionCookieSalt }))!;
 
     expect(Object.hasOwn(refreshedPayload, "email")).toBe(false);
     expect(refreshedPayload.name).toBe(login);
-    expect(refreshedPayload.picture).toBe(avatarUrl);
+    expect(Object.hasOwn(refreshedPayload, "picture")).toBe(false);
     expect(refreshedPayload.userId).toBe(userId);
     expect(refreshedPayload.role).toBe("MEMBER");
     expect(refreshedPayload.canAdministerWebhooks).toBe(true);

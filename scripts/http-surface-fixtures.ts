@@ -273,7 +273,6 @@ function fixtureAccountExportDocument(): AccountExport {
       id: fixtureMemberId,
       githubUserId: fixtureGithubUserId,
       githubLogin: "member",
-      avatarUrl: null,
       role: "MEMBER",
       enforcementState: "ACTIVE",
       confirmedMiscalibrationCount: 0,

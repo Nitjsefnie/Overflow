@@ -122,8 +122,13 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
       // The cookie holds only what the account-data page states (issue 678):
       // the public GitHub identity and Overflow's hints. The e-mail a token
       // minted before this change still carries leaves here, on every
-      // invocation, so one refresh strips it.
+      // invocation, so one refresh strips it — and so does the picture claim
+      // @auth/core seeds from the profile's avatar URL, which Overflow stopped
+      // collecting (issue 1075): @auth/core puts it in the base token it hands
+      // this callback, so deleting it here is the one choke point both a mint
+      // and a refresh pass through.
       delete token.email;
+      delete token.picture;
       // The scopes GitHub reports granting arrive once, on the initial OAuth
       // callback (account.scope). Reduced to one boolean hint: it decides
       // whether the registration page shows its form or the widening
@@ -288,7 +293,7 @@ export async function upsertGitHubIdentity(
     })) {
       // The stored bytes are written back unchanged: the upsert's
       // `encrypted_oauth_token = excluded.encrypted_oauth_token` stores the
-      // kept token, while the login and avatar still update.
+      // kept token, while the login still updates.
       encryptedAccessToken = existingToken;
     }
   }
@@ -296,7 +301,6 @@ export async function upsertGitHubIdentity(
   const user = await upsertGitHubAccount({
     githubUserId: identity.githubUserId,
     login: identity.login,
-    avatarUrl: identity.avatarUrl,
     role,
     encryptedAccessToken,
   });

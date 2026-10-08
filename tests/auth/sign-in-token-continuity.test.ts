@@ -75,7 +75,6 @@ function identityFor(githubUserId: number): GitHubIdentity {
   return {
     githubUserId,
     login: `user-${githubUserId}`,
-    avatarUrl: `https://avatars.example/${githubUserId}.png`,
   };
 }
 
@@ -96,7 +95,6 @@ async function seedAccountBytes(githubUserId: number, encryptedAccessToken: Buff
   const user = await upsertGitHubAccount({
     githubUserId,
     login: `stale-${githubUserId}`,
-    avatarUrl: "https://avatars.example/stale.png",
     role: "MEMBER",
     encryptedAccessToken,
   }, sql);
@@ -202,9 +200,18 @@ describe("sign-in token continuity in the storage path (issue 1154)", () => {
     // token itself answered its own probe with webhook administration.
     expect(stored.bytes).toEqual(seededBytes);
     expect(stored.token).toBe(wideToken);
-    // The login and avatar still update while the token bytes stay.
+    // The login still updates while the token bytes stay, and the avatar
+    // column stays untouched at its null — the storage path writes none.
     expect(stored.login).toBe(identityFor(githubUserId).login);
-    expect(stored.avatarUrl).toBe(identityFor(githubUserId).avatarUrl);
+    expect(stored.avatarUrl).toBeNull();
+  });
+
+  it("stores no avatar URL: the column reads null after the full storage path runs (issue 1075)", async () => {
+    const githubUserId = nextExternalId();
+
+    await upsertGitHubIdentity(identityFor(githubUserId), narrowToken, contributorSignIn);
+
+    expect((await storedTokenRow(githubUserId)).avatarUrl).toBeNull();
   });
 
   it("stores the narrow token when the account sponsors no registered repository", async () => {
