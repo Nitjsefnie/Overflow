@@ -1347,3 +1347,42 @@ describe("ambiguous policy actor authority", () => {
     expect(() => scrubFoldResultForPerson(fold, { forgeId: seed.person.forgeId, logins: new Set([seed.person.login]) }, [issue])).toThrow("Ambiguous policy actor identity.");
   });
 });
+
+describe("cached identity authority for stored issue copies", () => {
+  it.each(["export", "remove"])("uses cached numeric identities before recycled legacy issue logins (%s)", async (operation) => {
+    const seed = await seedHandScenario();
+    const [fact] = await sql`select payload from repository_reconciliation_evidence_facts where repository_id=${seed.repositoryId}`;
+    const payload = fact!.payload;
+    payload.id = Number(seed.memberIssue.githubIssueId);
+    payload.number = 2;
+    payload.authorLogin = `member-${seedCounter}`;
+    payload.authorGitHubUserId = seed.member.githubUserId;
+    payload.history = [{ kind: "LABELED", id: `opening-${seedCounter}-m`, actorLogin: seed.person.login,
+      actorGitHubUserId: seed.sponsor.githubUserId, label: "M", createdAt: "2026-09-01T08:00:00Z" }];
+    payload.history.push({ kind: "LABELED", id: `member-label-${seedCounter}`, actorLogin: seed.person.login,
+      actorGitHubUserId: seed.sponsor.githubUserId, label: "delivered/6", createdAt: "2026-09-01T11:00:00Z" });
+    payload.comments = [{ id: `member-rationale-${seedCounter}`, databaseId: 800_000 + seedCounter,
+      authorLogin: seed.person.login, authorGitHubUserId: seed.sponsor.githubUserId, body: "Non-person proof text",
+      createdAt: "2026-09-01T11:30:00Z", lastEditedAt: null }];
+    payload.closingPullRequests = [];
+    await sql`insert into repository_reconciliation_evidence_facts (repository_id,kind,subject_key,payload)
+      values (${seed.repositoryId},'issue',${seed.memberIssue.githubIssueId},${sql.json(payload)})`;
+    await sql`update issues set owner_github_login=${seed.person.login},opening_source_actor_login=${seed.person.login},
+      settled_label='delivered/6',settled_points=6,settled_label_event_id=${`member-label-${seedCounter}`},
+      settled_label_actor_login=${seed.person.login},settled_label_applied_at='2026-09-01T11:00:00Z',
+      settled_rationale_comment_id=${`member-rationale-${seedCounter}`},settled_rationale_actor_login=${seed.person.login},
+      settled_rationale_commented_at='2026-09-01T11:30:00Z' where id=${seed.memberIssue.id}`;
+    if (operation === "export") {
+      const doc = await exportForgePerson(sql, { provider: "github", forgeId: seed.person.forgeId });
+      expect(storeOf(doc,"issues").rows).not.toEqual(expect.arrayContaining([expect.objectContaining({id:seed.memberIssue.id})]));
+    } else {
+      await removeForgePerson(sql, { provider: "github", forgeId: seed.person.forgeId }, { confirm: true });
+      const row = await rowJson("issues", seed.memberIssue.id);
+      expect(row.body).toBe(seed.memberIssue.body);
+      expect(row.owner_github_login).toBe(seed.person.login);
+      expect(row.opening_source_actor_login).toBe(seed.person.login);
+      expect(row.settled_label_actor_login).toBe(seed.person.login);
+      expect(row.settled_rationale_actor_login).toBe(seed.person.login);
+    }
+  });
+});

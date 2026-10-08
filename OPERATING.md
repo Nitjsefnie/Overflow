@@ -248,7 +248,9 @@ copy: secret material appears only as presence booleans, never as a value.
 Where a table carries no provider column, matching is scoped by the row's
 repository's provider and instance origin. A numeric id, where present,
 controls matching; a verified login is used only where the id is absent, so
-a reused login never overrides a known different id.
+a reused login never overrides a known different id. Issue display copies
+first use cached numeric author identities and actors anchored by event or
+comment id; a verified login is the fallback when that evidence has no id.
 
 The removal applies one documented decision per store — the decision table is
 the module constant `forgePersonRemovalDecisions` in

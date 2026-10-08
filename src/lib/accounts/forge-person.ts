@@ -184,6 +184,23 @@ async function personRepositoryIds(sql: SqlClient | TransactionClient, provider:
   return rows.map((row) => row.id);
 }
 
+/** Issue display copies defer to their immutable cached author/event identities when available. */
+function issueIdentityMatch(alias: "t" | "issues", role: "owner" | "opening" | "label" | "rationale", idParameter: number, loginParameter: number): string {
+  const [login, id, collection, reference] = ({
+    owner: ["owner_github_login", "authorGitHubUserId", null, null],
+    opening: ["opening_source_actor_login", "actorGitHubUserId", "history", "opening_source_event_id"],
+    label: ["settled_label_actor_login", "actorGitHubUserId", "history", "settled_label_event_id"],
+    rationale: ["settled_rationale_actor_login", "authorGitHubUserId", "comments", "settled_rationale_comment_id"],
+  } as const)[role];
+  const source = collection === null ? `facts.payload->>'${id}'` : `identity->>'${id}'`;
+  const nested = collection === null ? "" : `, jsonb_array_elements(facts.payload->'${collection}') as identity`;
+  const anchored = reference === null ? "" : `and identity->>'id' = ${alias}.${reference}`;
+  return `coalesce((select ${source} from repository_reconciliation_evidence_facts as facts ${nested}
+    where facts.repository_id = ${alias}.repository_id and facts.kind = 'issue'
+      and facts.subject_key = ${alias}.github_issue_id::text ${anchored})::bigint = $${idParameter},
+    ${alias}.${login} = any($${loginParameter}))`;
+}
+
 /** Escapes a login for a Postgres regular expression. */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -349,11 +366,11 @@ export async function exportForgePerson(
           `select to_jsonb(t.*) as row from issues as t
              join registered_repositories as repositories on repositories.id = t.repository_id
              where repositories.id::text = any($1::text[]) and (
-               t.owner_github_login = any($2) or t.claim_assignee_github_user_id = $3
+               ${issueIdentityMatch("t", "owner", 3, 2)} or t.claim_assignee_github_user_id = $3
                or (t.claim_assignee_github_user_id is null and t.claim_assignee_github_login = any($2))
-               or t.opening_source_actor_login = any($2)
-               or t.settled_label_actor_login = any($2)
-               or t.settled_rationale_actor_login = any($2))`,
+               or ${issueIdentityMatch("t", "opening", 3, 2)}
+               or ${issueIdentityMatch("t", "label", 3, 2)}
+               or ${issueIdentityMatch("t", "rationale", 3, 2)})`,
           [repositoryIds, sql.array(uniqueLogins), request.forgeId]),
         await section("pull_requests",
           `select to_jsonb(t.*) as row from pull_requests as t
@@ -584,13 +601,17 @@ export async function removeForgePerson(
       return row?.count ?? 0;
     };
     const issuesOfProvider = "repository_id in (select id from registered_repositories where id::text = any($1::text[]))";
+    const ownerMatch = issueIdentityMatch("issues", "owner", 3, 2);
+    const openingMatch = issueIdentityMatch("issues", "opening", 3, 2);
+    const labelMatch = issueIdentityMatch("issues", "label", 3, 2);
+    const rationaleMatch = issueIdentityMatch("issues", "rationale", 3, 2);
     const issuesOperations: Array<{ update: string; count: string; parameters: ParameterOrJSON<never>[] }> = [
       {
-        update: `update issues set body = null, owner_github_login = $3
-          where ${issuesOfProvider} and owner_github_login = any($2) returning id`,
+        update: `update issues set body = null, owner_github_login = $4
+          where ${issuesOfProvider} and ${ownerMatch} returning id`,
         count: `select count(*)::int as count from issues
-          where ${issuesOfProvider} and owner_github_login = any($2)`,
-        parameters: [repositoryIds, sql.array(uniqueLogins)],
+          where ${issuesOfProvider} and ${ownerMatch}`,
+        parameters: [repositoryIds, sql.array(uniqueLogins), request.forgeId],
       },
       {
         update: `update issues set
@@ -605,22 +626,22 @@ export async function removeForgePerson(
       },
       {
         update: `update issues set
-            opening_source_actor_login = case when opening_source_actor_login = any($2)
-              then $3 else opening_source_actor_login end,
-            settled_label_actor_login = case when settled_label_actor_login = any($2)
-              then $3 else settled_label_actor_login end,
-            settled_rationale_actor_login = case when settled_rationale_actor_login = any($2)
-              then $3 else settled_rationale_actor_login end
+            opening_source_actor_login = case when ${openingMatch}
+              then $4 else opening_source_actor_login end,
+            settled_label_actor_login = case when ${labelMatch}
+              then $4 else settled_label_actor_login end,
+            settled_rationale_actor_login = case when ${rationaleMatch}
+              then $4 else settled_rationale_actor_login end
           where ${issuesOfProvider} and (
-            opening_source_actor_login = any($2)
-            or settled_label_actor_login = any($2)
-            or settled_rationale_actor_login = any($2)) returning id`,
+            ${openingMatch}
+            or ${labelMatch}
+            or ${rationaleMatch}) returning id`,
         count: `select count(*)::int as count from issues
           where ${issuesOfProvider} and (
-            opening_source_actor_login = any($2)
-            or settled_label_actor_login = any($2)
-            or settled_rationale_actor_login = any($2))`,
-        parameters: [repositoryIds, sql.array(uniqueLogins)],
+            ${openingMatch}
+            or ${labelMatch}
+            or ${rationaleMatch})`,
+        parameters: [repositoryIds, sql.array(uniqueLogins), request.forgeId],
       },
     ];
     const issueIds = new Set<string>();
@@ -636,14 +657,14 @@ export async function removeForgePerson(
       issuesCount = issueIds.size;
     } else {
       issuesCount = await countOf(`select count(*)::int as count from (
-        select id from issues where ${issuesOfProvider} and owner_github_login = any($2)
+        select id from issues where ${issuesOfProvider} and ${ownerMatch}
         union
         select id from issues where ${issuesOfProvider}
           and (claim_assignee_github_user_id = $3 or (claim_assignee_github_user_id is null and claim_assignee_github_login = any($2)))
         union
         select id from issues where ${issuesOfProvider} and (
-          opening_source_actor_login = any($2) or settled_label_actor_login = any($2)
-          or settled_rationale_actor_login = any($2))
+          ${openingMatch} or ${labelMatch}
+          or ${rationaleMatch})
       ) as touched`, [repositoryIds, sql.array(uniqueLogins), request.forgeId]);
     }
 
