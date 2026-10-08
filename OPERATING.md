@@ -226,24 +226,69 @@ is held.
 ### A person who never signed in
 
 A request from a person who never signed in has no account row to delete and no
-dashboard route, so the operator handles it by hand. Identify the person's rows
-by forge login and numeric user id together, never a login alone, across the
-stores the notice's "People who have never signed in" section enumerates:
-tracked-issue and claim-assignee logins and ids, pull request author logins and
-ids, settlements credited to them, the per-repository cache of issue authors,
-assignees, and comment authors, change-log entries, and moderation notes naming
-them. The free text held for such a person is the issue and pull request body
-text written before 2026-09-26 (comment bodies are placeholder-replaced at
-write time), so for each repository holding their text clear those columns with
-the unregister scrub — `scrubRepositoryFreeText` from
-`src/lib/repositories/unregister-scrub.ts`, the same routine unregistration
-runs, which nulls `issues.body` and `pull_requests.body` for the repository.
-If the person also holds an account, handle it as the deletion commands above
-do — pseudonymisation, never a hard delete: the account row keeps its id and
-`github_user_id` while the login is tombstoned and avatar and tokens go, and
-deletion is refused while they sponsor a registration that has not been
-unregistered. Backups taken before the scrub keep the pre-scrub text until each
-dump is pruned — in practice about 15 days, like any pre-deletion dump.
+dashboard route, so the operator handles it by hand with the forge-keyed
+commands — keyed by forge provider and numeric forge id, never a login alone.
+Resolve the numeric id first (`gh api users/<login> --jq .id` for a GitHub
+person), and pass `--login` only to widen matching to rows that carry no
+numeric id: an issue's owner login is the one identity column with no id beside
+it, so the commands resolve login copies from id-keyed rows themselves and add
+the explicit `--login` token to those.
+
+The export writes every row naming the person, one section per store, each with
+its table name, its rows and its count: the account row if they have one, their
+linked forge identities, the issues they authored or claimed (bodies included),
+their pull requests, the settlements crediting them, the per-repository cache
+facts whose payloads carry their identity, the change-log entries recording
+their logins or ids, and the moderation notes naming them. It is an access
+copy: secret material appears only as presence booleans, never as a value.
+Where a table carries no provider column, matching is scoped by the row's
+repository's provider, so a GitHub request never returns a GitLab person's
+rows.
+
+The removal applies one documented decision per store — the decision table is
+the module constant `forgePersonRemovalDecisions` in
+`src/lib/accounts/forge-person.ts` and is the whole policy in one place:
+
+- `users`, `user_forge_identities` — pseudonymised: the rows and the numeric
+  ids stay (the ledger attributes work by them) while logins are tombstoned to
+  `(data subject removal)` and tokens cleared; the account row is stamped
+  `deleted_at` and its API token is deleted. The removal is refused while the
+  person sponsors a registration that has not been unregistered
+  (`SPONSOR_BLOCKED`, naming each repository — unregister first, as with
+  deletion).
+- `issues`, `pull_requests`, `settlements` — pseudonymised: rows the person
+  authored lose their stored body text, and every login and numeric-id copy
+  naming them is tombstoned or dropped; the attribution keys the ledger needs
+  (`author_id`, `creditor_id`) and everyone else's rows stay untouched.
+- `repository_reconciliation_evidence_facts` — pseudonymised in place: payload
+  identity fields (issue authors, comment authors, history actors and
+  assignees, nested closing-PR authors) are tombstoned; titles, reviews and
+  raw diffs are kept — proof material that names no reviewer.
+- `moderation_events` — kept: the moderation audit trail is immutable by
+  trigger, so its rows, states and reasons stay exactly as written; the export
+  lists the notes naming the person so the request can be answered about them
+  by hand.
+- `reconciliation_changes` — kept: the append-only journal is not rewritten;
+  new entries no longer name the person because the import scrub precedes
+  every write, and retention prunes old entries with their run after 90 days.
+- `registered_repositories`, `webhook_deliveries`, and the account-keyed
+  stores (audits, calibrations, role changes, override and contest requests,
+  runs and usage, credit adjustments) — kept: the registration belongs to its
+  sponsor (unregistering is the separate objection lever), receipts carry no
+  person columns, and the account-keyed stores follow the account-side
+  deletion and export when the person has an account.
+
+The removal records a suppression — one row per (provider, numeric forge id)
+in `data_subject_suppressions`, with the login copy resolved at decision time.
+Every later reconciliation pass checks the suppressions for its repository's
+provider inside the publication transaction, before any derived row or cache
+fact is written, and scrubs the person's identity from what it is about to
+write — so a pass after the removal can never reinstate what was removed, on a
+quiet pass or a full re-read. The recorded login is the one the commands
+resolved at removal time; if the person renames on the forge afterwards, run
+the removal command again (it refreshes the recorded login and re-scrubs the
+new copy). Backups taken before the removal keep the pre-removal data until
+each dump is pruned — in practice about 15 days, like any pre-deletion dump.
 
 ### Running the commands
 
@@ -255,18 +300,22 @@ set -a; . /etc/overflow/overflow.env; set +a
 node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts export --github-user-id <github-user-id>
 node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts delete --github-user-id <github-user-id>
 node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts delete --github-user-id <github-user-id> --confirm
+node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts export-forge --provider <provider> --forge-id <forge-id>
+node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts remove-forge --provider <provider> --forge-id <forge-id>
+node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts remove-forge --provider <provider> --forge-id <forge-id> --confirm
 ```
 
 Each command writes its JSON document to standard output and reports its
-outcome through an exit code. The export covers every table with a foreign
-key to the account — not every record that mentions the person: rows naming
-the person only by GitHub login or id, with no foreign key to the account,
-are not exported. Encrypted tokens appear only as presence booleans
+outcome through an exit code. The account export covers every table with a
+foreign key to the account — not every record that mentions the person: rows
+naming the person only by GitHub login or id, with no foreign key to the
+account, are not exported. Encrypted tokens appear only as presence booleans
 (`hasStoredGitHubToken`, `hasStoredToken`), while the API-token hash and the
 webhook secrets are omitted entirely; API-token metadata is `createdAt` and
 `expiresAt`, never the hash. The first
-`delete` is a dry run; `--confirm` performs it. Exit codes: `0` the command
-succeeded (an export, or a confirmed deletion); `1` it failed — an unknown
+`delete` and the first `remove-forge` are dry runs; `--confirm` performs them.
+Exit codes: `0` the command succeeded (an export, or a confirmed deletion or
+removal); `1` it failed — an unknown
 account, a sponsor refusal, or a command error reported as
 `ACCOUNT_COMMAND_FAILED`; `2` the arguments violate the grammar; `3` the
 dry run completed without deleting.

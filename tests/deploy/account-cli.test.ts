@@ -10,13 +10,16 @@ import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import type { SqlClient } from "@/lib/db/types";
 import { DELETED_ACCOUNT_LOGIN } from "@/lib/accounts/deletion";
+import { DATA_SUBJECT_TOMBSTONE_LOGIN } from "@/lib/accounts/forge-person";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer, type StartedPostgres } from "../support/postgres-container";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const operating = readFileSync(new URL("../../OPERATING.md", import.meta.url), "utf8");
 
-const usageLine = "Usage: account.ts export --github-user-id <id> | delete --github-user-id <id> [--confirm]";
+const usageLine = "Usage: account.ts export --github-user-id <id> | delete --github-user-id <id> [--confirm]"
+  + " | export-forge --provider github|gitlab --forge-id <id> [--login <login>]"
+  + " | remove-forge --provider github|gitlab --forge-id <id> [--login <login>] [--confirm]";
 
 /**
  * An sql client that fails the case the moment anything reaches for the
@@ -78,6 +81,24 @@ describe("account CLI grammar", () => {
     { args: ["delete", "--github-user-id", "1", "--confirm", "extra"] },
     { args: ["delete", "--github-user-id", "1", "--confirm", "--confirm"] },
     { args: ["delete", "--github-user-id", "1", "--github-user-id", "2"] },
+    { args: ["export-forge"] },
+    { args: ["export-forge", "--forge-id", "1"] },
+    { args: ["export-forge", "--provider", "github"] },
+    { args: ["export-forge", "--provider", "sourcehut", "--forge-id", "1"] },
+    { args: ["export-forge", "--provider", "github", "--forge-id", "0"] },
+    { args: ["export-forge", "--provider", "github", "--forge-id", "abc"] },
+    { args: ["export-forge", "--provider", "github", "--forge-id"] },
+    { args: ["export-forge", "--provider", "github", "--forge-id", "1", "--github-user-id", "2"] },
+    { args: ["export-forge", "--provider", "github", "--forge-id", "1", "--confirm"] },
+    { args: ["export-forge", "--provider", "github", "--forge-id", "1", "--login"] },
+    { args: ["export-forge", "--provider", "github", "--forge-id", "1", "--login", ""] },
+    { args: ["export-forge", "--provider", "github", "--forge-id", "1", "--login", "a", "--login", "b"] },
+    { args: ["export-forge", "--provider", "github", "--forge-id", "1", "extra"] },
+    { args: ["export", "--provider", "github", "--forge-id", "1"] },
+    { args: ["export", "--github-user-id", "1", "--login", "a"] },
+    { args: ["remove-forge", "--provider", "github", "--forge-id", "1", "--confirm", "--confirm"] },
+    { args: ["remove-forge", "--provider", "github", "--forge-id", "1", "extra"] },
+    { args: ["remove-forge", "--forge-id", "1", "--confirm"] },
   ])("rejects $args before touching the database", async ({ args }) => {
     const { lines, dependencies } = fixture(refusingSql);
     expect(await runAccountCli(args, dependencies)).toBe(2);
@@ -115,6 +136,8 @@ describe("account CLI grammar", () => {
   it.each([
     { command: "export", arguments: ["export", "--github-user-id", "1"] },
     { command: "delete", arguments: ["delete", "--github-user-id", "1", "--confirm"] },
+    { command: "export-forge", arguments: ["export-forge", "--provider", "github", "--forge-id", "1"] },
+    { command: "remove-forge", arguments: ["remove-forge", "--provider", "gitlab", "--forge-id", "1", "--confirm"] },
   ])("sanitizes a failing $command instead of printing the connection string", async ({ arguments: argumentsList }) => {
     const { lines, dependencies } = fixture(leakingSql());
     expect(await runAccountCli(argumentsList, dependencies)).toBe(1);
@@ -145,7 +168,12 @@ const documentedCommands = extractAccountCommands(operating);
  * being silently passed through.
  */
 function documentedArgumentWords(command: string, githubUserId: number): string[] {
-  const words = command.replaceAll("<github-user-id>", String(githubUserId)).trim().split(/\s+/);
+  const words = command
+    .replaceAll("<github-user-id>", String(githubUserId))
+    .replaceAll("<forge-id>", String(githubUserId))
+    .replaceAll("<provider>", "github")
+    .trim()
+    .split(/\s+/);
   for (const word of words) {
     for (const character of word) {
       if ("$`\\;&|<>(){}*?[]~!'\"".includes(character)) {
@@ -171,13 +199,16 @@ function spawnDocumented(words: readonly string[], environment: Record<string, s
 }
 
 describe("documented account commands", () => {
-  it("documents exactly the export, dry-run delete and confirmed delete invocations", () => {
+  it("documents exactly the account and forge-keyed invocations, in order", () => {
     expect(documentedCommands, "No account commands found in the OPERATING.md bash block").not.toHaveLength(0);
     const argumentShapes = documentedCommands.map((command) => command.slice(accountScriptPrefix.length).trim().split(/\s+/));
     expect(argumentShapes).toEqual([
       ["export", "--github-user-id", "<github-user-id>"],
       ["delete", "--github-user-id", "<github-user-id>"],
       ["delete", "--github-user-id", "<github-user-id>", "--confirm"],
+      ["export-forge", "--provider", "<provider>", "--forge-id", "<forge-id>"],
+      ["remove-forge", "--provider", "<provider>", "--forge-id", "<forge-id>"],
+      ["remove-forge", "--provider", "<provider>", "--forge-id", "<forge-id>", "--confirm"],
     ]);
   });
 
@@ -314,14 +345,29 @@ describe("account CLI with PostgreSQL", () => {
         results.push(result);
         statuses.push(result.status);
       }
-      expect(statuses, "The documented commands must export (0), dry-run (3) and delete (0)").toEqual([0, 3, 0]);
+      // export, delete dry-run, delete, forge export, forge removal dry-run,
+      // forge removal --confirm. The forge commands key the same person by
+      // their numeric forge id — for provider github that is the account's
+      // own numeric id — and run after the account deletion, which the
+      // pseudonymised row survives.
+      expect(statuses, "The documented commands must export (0), dry-run (3), delete (0) in both grammars")
+        .toEqual([0, 3, 0, 0, 3, 0]);
       const exported = JSON.parse(results[0]!.stdout);
       expect(exported.account.githubUserId).toBe(githubUserId);
+      const forgeExport = JSON.parse(results[3]!.stdout);
+      expect(forgeExport.formatVersion).toBe(1);
+      // The account deletion ran first, so the login copy the export resolves
+      // from the surviving id-keyed row is the deletion tombstone.
+      expect(forgeExport.logins).toContain(DELETED_ACCOUNT_LOGIN);
+      const forgeRemoval = JSON.parse(results[5]!.stdout);
+      expect(forgeRemoval.kind).toBe("REMOVED");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
     const row = await userRow(githubUserId);
-    expect(row.github_login).toBe(DELETED_ACCOUNT_LOGIN);
+    // The forge removal ran last: its tombstone is the final login on the
+    // pseudonymised row the account deletion stamped.
+    expect(row.github_login).toBe(DATA_SUBJECT_TOMBSTONE_LOGIN);
     expect(row.deleted_at).not.toBeNull();
   }, 120_000);
 });
