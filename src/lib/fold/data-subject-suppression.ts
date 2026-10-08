@@ -231,14 +231,22 @@ export function scrubFoldResultForPerson(
     }
   }
   for (const violation of fold.policyViolations) {
-    if ("openingSourceActorLogin" in violation && namesPerson(violation.openingSourceActorLogin, person)) {
-      violation.openingSourceActorLogin = DATA_SUBJECT_TOMBSTONE_LOGIN;
+    if (!("openingSourceActorLogin" in violation)) continue;
+    const actorLogin = violation.openingSourceActorLogin;
+    const source = evidence.find((row) => row.id === violation.githubIssueId);
+    const actorIds = new Set(source?.history.filter((event) => event.kind === "LABELED"
+      && event.label === violation.openingLabel && (event.actorLogin?.trim() || "unknown") === actorLogin)
+      .map((event) => event.actorGitHubUserId));
+    // The diagnostic has no event id. Refuse conflicting numeric evidence
+    // rather than substituting an alias for another person's known identity.
+    if (actorIds.size > 1 && (namesPerson(actorLogin, person) || actorIds.has(person.forgeId))) {
+      throw new Error("Ambiguous policy actor identity.");
     }
-    if ("reason" in violation) {
-      for (const login of person.logins) {
-        // These are generated actor/sponsor references, delimited by backticks.
-        violation.reason = violation.reason.replaceAll(`\`${login}\``, `\`${DATA_SUBJECT_TOMBSTONE_LOGIN}\``);
-      }
+    if (identityNamesPerson(actorLogin, actorIds.values().next().value, person)) {
+      violation.openingSourceActorLogin = DATA_SUBJECT_TOMBSTONE_LOGIN;
+      // The generated prose distinguishes the actor from the sponsor, even
+      // when another account has taken the actor's historical login.
+      violation.reason = violation.reason.replace(`by \`${actorLogin}\``, `by \`${DATA_SUBJECT_TOMBSTONE_LOGIN}\``);
     }
   }
 }
