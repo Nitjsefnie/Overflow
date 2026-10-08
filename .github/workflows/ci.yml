@@ -396,16 +396,14 @@ jobs:
           # fallback.
           fetch-depth: 2
 
-      - name: Commit and push the recalibrated floor
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/push-recalibration.ts
-
-      - name: Run ShellCheck
+     - name: Run ShellCheck
         run: |
           sudo apt-get update && sudo apt-get install -y shellcheck
           shellcheck -f gcc scripts/*.sh
 
+    - name: Commit and push the recalibrated floor
+        env:
+          GH_TOKEN: ${{ github.token }}
           DOCUMENT: ${{ needs.calibrate.outputs.document }}
           # Network git must fail, not hang waiting for credentials.
           GIT_TERMINAL_PROMPT: "0"
