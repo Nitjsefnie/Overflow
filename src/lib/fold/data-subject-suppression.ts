@@ -1,3 +1,5 @@
+import { DELETED_ACCOUNT_LOGIN } from "@/lib/accounts/deletion";
+import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import type { TransactionClient } from "@/lib/db/types";
 import type { FoldResult } from "@/lib/fold/repository-fold";
 import type { GitHubIssue, GitHubIssueComment, GitHubIssueHistoryEvent, GitHubPullRequest } from "@/lib/github/types";
@@ -32,8 +34,9 @@ function namesPerson(login: string | null | undefined, person: SuppressedForgePe
   return login !== null && login !== undefined && person.logins.has(login);
 }
 
-function idNamesPerson(id: number | null | undefined, person: SuppressedForgePerson): boolean {
-  return id !== null && id !== undefined && id === person.forgeId;
+/** Numeric authority wins; aliases are a fallback only when the id is absent. */
+export function identityNamesPerson(login: string | null | undefined, id: number | null | undefined, person: SuppressedForgePerson): boolean {
+  return id == null ? namesPerson(login, person) : id === person.forgeId;
 }
 
 /**
@@ -47,7 +50,7 @@ function scrubIdentityPair(
   person: SuppressedForgePerson,
   writeBack: (scrubbed: { login: string; githubUserId: null }) => void,
 ): void {
-  if (namesPerson(identity.login, person) || idNamesPerson(identity.githubUserId, person)) {
+  if (identityNamesPerson(identity.login, identity.githubUserId, person)) {
     writeBack({ login: DATA_SUBJECT_TOMBSTONE_LOGIN, githubUserId: null });
   }
 }
@@ -148,27 +151,29 @@ export function scrubPullRequestIdentity(
 export function scrubFoldResultForPerson(
   fold: FoldResult,
   person: SuppressedForgePerson,
+  evidence: ReconciliationSynchronization["issues"] = [],
 ): void {
   for (const issue of fold.issues) {
-    if (namesPerson(issue.ownerGitHubLogin, person)) {
+    const source = evidence.find((row) => row.id === issue.githubIssueId);
+    if (identityNamesPerson(issue.ownerGitHubLogin, source?.authorGitHubUserId, person)) {
       issue.ownerGitHubLogin = DATA_SUBJECT_TOMBSTONE_LOGIN;
     }
-    if (namesPerson(issue.claimAssigneeGitHubLogin, person) || idNamesPerson(issue.claimAssigneeGitHubUserId, person)) {
+    if (identityNamesPerson(issue.claimAssigneeGitHubLogin, issue.claimAssigneeGitHubUserId, person)) {
       issue.claimAssigneeGitHubLogin = DATA_SUBJECT_TOMBSTONE_LOGIN;
       issue.claimAssigneeGitHubUserId = null;
     }
-    if (namesPerson(issue.openingSourceActorLogin, person)) {
+    if (identityNamesPerson(issue.openingSourceActorLogin, source?.history.find((event) => event.id === issue.openingSourceEventId)?.actorGitHubUserId, person)) {
       issue.openingSourceActorLogin = DATA_SUBJECT_TOMBSTONE_LOGIN;
     }
-    if (namesPerson(issue.settledLabelActorLogin, person)) {
+    if (identityNamesPerson(issue.settledLabelActorLogin, source?.history.find((event) => event.id === issue.settledLabelEventId)?.actorGitHubUserId, person)) {
       issue.settledLabelActorLogin = DATA_SUBJECT_TOMBSTONE_LOGIN;
     }
-    if (namesPerson(issue.settledRationaleActorLogin, person)) {
+    if (identityNamesPerson(issue.settledRationaleActorLogin, source?.comments.find((comment) => comment.id === issue.settledRationaleCommentId)?.authorGitHubUserId, person)) {
       issue.settledRationaleActorLogin = DATA_SUBJECT_TOMBSTONE_LOGIN;
     }
   }
   for (const pullRequest of fold.pullRequests) {
-    if (namesPerson(pullRequest.authorGitHubLogin, person) || idNamesPerson(pullRequest.authorGitHubUserId, person)) {
+    if (identityNamesPerson(pullRequest.authorGitHubLogin, pullRequest.authorGitHubUserId, person)) {
       pullRequest.authorGitHubLogin = DATA_SUBJECT_TOMBSTONE_LOGIN;
       pullRequest.authorGitHubUserId = null;
     }
@@ -185,6 +190,24 @@ export function scrubFoldResultForPerson(
   }
 }
 
+/** Learn new aliases only from numeric evidence, before any identity is scrubbed. */
+function publicationAliases(publication: { fold: FoldResult; synchronization?: ReconciliationSynchronization }, person: SuppressedForgePerson): SuppressedForgePerson {
+  const logins = new Set(person.logins);
+  const learn = (login: string | null, id: number | null) => {
+    if (id === person.forgeId && login?.trim() && login !== DATA_SUBJECT_TOMBSTONE_LOGIN && login !== DELETED_ACCOUNT_LOGIN) logins.add(login);
+  };
+  for (const issue of publication.synchronization?.issues ?? []) {
+    learn(issue.authorLogin, issue.authorGitHubUserId);
+    learn(issue.claimAssigneeGitHubLogin, issue.claimAssigneeGitHubUserId);
+    for (const event of issue.history) learn(event.actorLogin, event.actorGitHubUserId);
+    for (const comment of issue.comments) learn(comment.authorLogin, comment.authorGitHubUserId);
+    for (const pr of issue.closingPullRequests) learn(pr.authorLogin, pr.authorGitHubUserId);
+  }
+  for (const pr of publication.fold.pullRequests) learn(pr.authorGitHubLogin, pr.authorGitHubUserId);
+  for (const settlement of publication.fold.settlements) learn(settlement.creditorGitHubLogin, settlement.creditorGitHubUserId);
+  return { ...person, logins };
+}
+
 /**
  * Scrubs one fold publication — the fold's output rows and the synchronization
  * payloads the evidence cache is written from — in place, for every suppressed
@@ -194,8 +217,9 @@ export function scrubPublicationForSuppressions(publication: {
   fold: FoldResult;
   synchronization?: ReconciliationSynchronization;
 }, persons: readonly SuppressedForgePerson[]): { fold: FoldResult; synchronization?: ReconciliationSynchronization } {
-  for (const person of persons) {
-    scrubFoldResultForPerson(publication.fold, person);
+  for (const storedPerson of persons) {
+    const person = publicationAliases(publication, storedPerson);
+    scrubFoldResultForPerson(publication.fold, person, publication.synchronization?.issues);
     if (publication.synchronization !== undefined) {
       for (const issue of publication.synchronization.issues) {
         scrubIssueIdentity(issue, person);
@@ -220,10 +244,7 @@ export function scrubPublicationForSuppressions(publication: {
  * unchanged), but a pass that commits after a removal can never re-write the
  * person's identifiers, because the write path replaces them first.
  *
- * The suppression key is (provider, forge_id). A provider's numeric ids are
- * authoritative within the provider; on GitLab the same id can number
- * different people on different instances, so a suppression over-covers
- * across instances rather than under-covers.
+ * Suppressions apply only within the repository's provider and normalized origin.
  */
 export async function scrubSuppressedForgeData<Publication extends {
   fold: FoldResult;
@@ -233,22 +254,33 @@ export async function scrubSuppressedForgeData<Publication extends {
   repositoryId: string,
   publication: Publication,
 ): Promise<Publication> {
-  const [repository] = await sql<{ provider: string }[]>`
-    select provider from registered_repositories where id = ${repositoryId}
+  const [repository] = await sql<{ provider: string; instance_url: string | null }[]>`
+    select provider, instance_url from registered_repositories where id = ${repositoryId}
   `;
   if (repository === undefined) {
     return publication;
   }
-  const rows = await sql<{ forge_id: number | string; login: string | null }[]>`
-    select forge_id, login from data_subject_suppressions where provider = ${repository.provider}
+  const rows = await sql<{ forge_id: number | string; logins: string[] }[]>`
+    select forge_id, logins from data_subject_suppressions where provider = ${repository.provider}
+      and instance_url = ${normalizeInstanceUrl(repository.instance_url ?? 'https://github.com')}
   `;
   if (rows.length === 0) {
     return publication;
   }
   const persons: SuppressedForgePerson[] = rows.map((row) => ({
     forgeId: Number(row.forge_id),
-    logins: new Set(row.login === null ? [] : [row.login]),
-  }));
+    logins: new Set(row.logins),
+  })).map((person) => publicationAliases(publication, person));
+  for (const person of persons) {
+    await sql`
+      update data_subject_suppressions set
+        logins = array(select distinct unnest(logins || ${sql.array([...person.logins])}::text[]))
+      where provider = ${repository.provider}
+        and instance_url = ${normalizeInstanceUrl(repository.instance_url ?? "https://github.com")}
+        and forge_id = ${person.forgeId}
+        and not logins @> ${sql.array([...person.logins])}::text[]
+    `;
+  }
   scrubPublicationForSuppressions(publication, persons);
   return publication;
 }
