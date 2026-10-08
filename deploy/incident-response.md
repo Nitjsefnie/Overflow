@@ -675,17 +675,16 @@ action, and as of this writing it has not been done.
    account's own recovery contacts — before treating anything as recovered.
    Then return to [Contain](#contain) for whatever containment the compromise
    case required, and record the whole of it under [Record](#record).
-9. Rotating the App's private key is a separate maintainer-held item, and this
-   runbook deliberately does not carry that procedure.
-   [deploy/README.md](README.md) section 11 is the repository's only
-   sanctioned key-rotation procedure and it names `TOKEN_ENCRYPTION_KEY`
-   specifically; it does not extend to the App key and must not be applied to
-   it. Until the App-key rotation is written, treat that key as unreplaceable
-   in practice. One constraint on that future rotation is already settled, and
-   is what the second limit above means operationally: it must replace the host
-   PEM under `/etc/overflow/github-app/` and the `LEDGER_APP_KEY` environment
-   secret together, as one operation, because nothing verifies that the two
-   hold the same bytes today.
+9. Rotating the App's private key has a written procedure:
+   [deploy/README.md section 14](README.md#14-rotating-the-ledger-app-private-key)
+   covers generating the new key in the App settings, replacing the host PEM
+   and the `LEDGER_APP_KEY` environment secret together as one operation,
+   verifying one relay run and one reconciliation under the new key, and the
+   rollback that is possible while the old key still exists. The one
+   constraint this runbook contributes is what the second limit above means
+   operationally: nothing verifies that the two copies hold the same bytes
+   today, which is why the procedure moves them in one window and never
+   rewrites either copy outside a rotation.
 
 ## Record
 
