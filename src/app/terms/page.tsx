@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { PublicAppShell } from "@/components/app-shell";
+import { HOSTED_INSTANCE_ORIGIN, readControllerIdentity } from "@/lib/controller-config";
 import { DISPUTE_CONTESTABLE_CASE, DISPUTE_RULES } from "@/lib/disputes";
 import { TERMS_REVISION } from "@/lib/legal-revisions";
 import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
 
 export function TermsNotice() {
+  const identity = readControllerIdentity();
   return (
     <main className="page-content" id="main-content">
       <section className="page-heading" aria-labelledby="terms-title">
@@ -20,9 +22,22 @@ export function TermsNotice() {
           <span data-dispute-case>{DISPUTE_CONTESTABLE_CASE}</span> cites that date — it is what
           fixes the text you are held to.
         </p>
-        <p>
-          The terms of Overflow — the hosted instance at https://overflow.nitjsefni.eu — in short: what
-          an account is, how work earns credits, how moderation works, and how to ask for a correction.
+        <p className={identity.isHosted ? undefined : "self-hosted-statement"}>
+          {identity.isHosted ? (
+            <>
+              The terms of Overflow — the hosted instance at {HOSTED_INSTANCE_ORIGIN} — in short:
+              what an account is, how work earns credits, how moderation works, and how to ask for a
+              correction.{" "}
+            </>
+          ) : (
+            <>
+              These terms serve this deployment of Overflow
+              {identity.name !== null && <>, operated by {identity.name}</>}, a self-hosted copy —
+              not the hosted instance at {HOSTED_INSTANCE_ORIGIN}. The terms in short: what an
+              account is, how work earns credits, how moderation works, and how to ask for a
+              correction.{" "}
+            </>
+          )}
           The full rules are on the <Link href="/rules">rules page</Link>.
         </p>
       </section>

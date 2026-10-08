@@ -3,7 +3,7 @@
 import { render, screen } from "@testing-library/react";
 import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DISPUTE_CONTESTABLE_CASE, DISPUTE_RULES } from "@/lib/disputes";
 import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
@@ -286,5 +286,49 @@ describe("terms page", () => {
 
     expect(internal.length).toBeGreaterThan(0);
     expect(internal.filter((href) => !routes.has(href))).toEqual([]);
+  });
+});
+
+describe("the instance statement (issue 1077)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("names the hosted instance and carries no self-hosted statement on the hosted origin", async () => {
+    vi.stubEnv("APP_URL", "https://overflow.nitjsefni.eu");
+    await renderTermsPage();
+
+    expect(
+      document.querySelector(".self-hosted-statement"),
+      "the hosted instance states no self-hosted disclosure",
+    ).toBeNull();
+    const heading = document.querySelector(".page-heading");
+    expect(
+      heading?.textContent,
+      "the hosted instance is named where the terms declare their subject",
+    ).toContain("https://overflow.nitjsefni.eu");
+  });
+
+  it("renders the plain self-hosted statement on another origin", async () => {
+    vi.stubEnv("APP_URL", "https://selfhost.example");
+    await renderTermsPage();
+
+    const statement = document.querySelector("p.self-hosted-statement");
+    expect(statement, "a non-hosted origin carries the plain self-hosted statement").not.toBeNull();
+    expect(statement, "the statement is one a reader can see").toBeVisible();
+    expect(
+      statement!.textContent,
+      "the statement names the hosted instance so a reader can reach it",
+    ).toContain("https://overflow.nitjsefni.eu");
+  });
+
+  it("renders the configured operator's name in the statement", async () => {
+    vi.stubEnv("APP_URL", "https://selfhost.example");
+    vi.stubEnv("CONTROLLER_NAME", "Example Operator");
+    await renderTermsPage();
+
+    const statement = document.querySelector("p.self-hosted-statement");
+    expect(statement, "a non-hosted origin carries the plain self-hosted statement").not.toBeNull();
+    expect(statement!.textContent, "the configured operator's name renders").toContain("Example Operator");
   });
 });
