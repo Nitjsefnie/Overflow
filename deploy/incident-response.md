@@ -221,8 +221,8 @@ The line names the receiver and the running decline count, in this exact
 shape (issue 1053):
 
 ```text
-Webhook rate limit engaged for the github receiver: 12 declines since process start.
-Webhook rate limit engaged for the gitlab receiver: 3 declines since process start.
+Webhook rate limit engaged for the github receiver (declines so far: 12).
+Webhook rate limit engaged for the gitlab receiver (declines so far: 3).
 ```
 
 Identify the flooded entry point and source from the nginx access log, whose

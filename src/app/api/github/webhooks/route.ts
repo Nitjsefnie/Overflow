@@ -79,10 +79,14 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
     }
     // The receipt's replay key: a digest of the signed bytes, taken only once
     // the signature has proved them. A replay reuses the signed body — the
-    // attacker cannot mint a new one — so under this registration the same
-    // digest names the same event, and recording it lets the receipts layer
-    // count a fresh delivery id over an already-processed body as a duplicate
-    // (issue 1041).
+    // attacker cannot mint a new one — so recording it lets the receipts
+    // layer count a fresh delivery id over an already-processed body as a
+    // duplicate (issue 1041). The receipts layer scopes the digest by the
+    // parsed event as well as the registration, because distinct event
+    // headers can carry byte-identical bodies — an `issues/edited` and an
+    // `issue_comment/edited` envelope can match byte for byte — and each
+    // accepted delivery must write its own effects; the digest alone never
+    // conceals one event behind another.
     const bodyDigest = createHash("sha256").update(rawBody).digest("hex");
 
     let payload: unknown;
