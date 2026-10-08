@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { git, scratchGitEnv } from "../support/scratch-git";
+import { git } from "../support/scratch-git";
 
 /**
  * Issue 1036 moved the calibration push out of the calibrate job into
@@ -119,6 +119,7 @@ afterAll(() => {
 const childEnv = (extra: Record<string, string>): NodeJS.ProcessEnv => ({
   PATH: process.env.PATH ?? "",
   HOME: process.env.HOME ?? "",
+  NODE_ENV: process.env.NODE_ENV,
   ...extra,
 });
 

@@ -29,6 +29,7 @@ import { parse } from "yaml";
  */
 type WorkflowStep = {
   name?: string;
+  id?: string;
   run?: string;
   uses?: string;
   if?: unknown;
