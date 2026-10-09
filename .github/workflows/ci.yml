@@ -369,6 +369,10 @@ jobs:
             cat scripts/coverage.json
             echo 'COVERAGE_FLOOR_DOCUMENT_END'
           } >> "$GITHUB_OUTPUT"
+      - name: Run ShellCheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck -f gcc scripts/*.sh
 
   # The push half (issue 1036): the only contents: write holder in this file,
   # and it runs no repository or dependency code — plain git over the document
@@ -396,12 +400,7 @@ jobs:
           # fallback.
           fetch-depth: 2
 
-     - name: Run ShellCheck
-        run: |
-          sudo apt-get update && sudo apt-get install -y shellcheck
-          shellcheck -f gcc scripts/*.sh
-
-    - name: Commit and push the recalibrated floor
+      - name: Commit and push the recalibrated floor
         env:
           GH_TOKEN: ${{ github.token }}
           DOCUMENT: ${{ needs.calibrate.outputs.document }}
