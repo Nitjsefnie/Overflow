@@ -455,7 +455,7 @@ fi
     }
   });
 
-  it("parses a complete PostgreSQL 17 gate with pinned actions and every release command", async () => {
+  it("parses a complete PostgreSQL 17 gate with every release command", async () => {
     const workflow = await readWorkflow("ci.yml");
     const manifest = JSON.parse(await readFile(resolve("package.json"), "utf8")) as {
       packageManager?: string;
@@ -505,7 +505,7 @@ fi
     });
 
     const verify = workflow.jobs.verify!;
-    expect(verify.services?.postgres?.image).toMatch(/^postgres:17@sha256:[0-9a-f]{64}$/);
+    expect(verify.services?.postgres?.image).toMatch(/^postgres:[0-9]+@sha256:[0-9a-f]{64}$/);
     expect(verify.services?.postgres?.options).toContain("pg_isready");
     // Keep the reviewed artifact actions exact across jobs: verify uploads
     // the pair on push and dispatch, then the calibration job downloads the
@@ -663,7 +663,7 @@ fi
     }));
   });
 
-  it("parses a catalogue-style workflow gate with explicit least privilege and pinned actions", async () => {
+  it("parses a catalogue-style workflow gate with explicit least privilege", async () => {
     // Both legs of the gate (issue 1090 split this workflow in two), asserted
     // per file. The pin is per-leg rather than shared, because the two legs
     // genuinely differ — the pull-request leg extracts the head ref's workflows
@@ -703,8 +703,9 @@ fi
         // `concurrency`, so it rejects claim.yml as an unknown key. The
         // repository and version live in env beside the checksum that pins the
         // fork's own tarball. tests/ci/pr-data-triggers.test.ts and the
-        // equality below decide which leg holds pull-request data, so these
-        // three must be bumped in BOTH actionlint files together.
+        // equality below decide which leg holds pull-request data; the version
+        // and checksum are value-free here, so `keeps the actionlint toolchain
+        // identical across both legs` holds these three the same in both files.
         ACTIONLINT_REPO: "Nitjsefnie-OSC/actionlint",
         ACTIONLINT_VERSION: expect.any(String),
         ACTIONLINT_SHA256: expect.any(String),
@@ -721,7 +722,7 @@ fi
         },
         {
           uses: expect.stringMatching(/^actions\/setup-python@/),
-          with: { "python-version": "3.13" },
+          with: { "python-version": expect.any(String) },
         },
         {
           name: "Install actionlint",
@@ -811,7 +812,7 @@ git ls-tree -z --name-only refs/remotes/pr/head:.github/workflows/ |
         },
         {
           uses: expect.stringMatching(/^actions\/setup-python@/),
-          with: { "python-version": "3.13" },
+          with: { "python-version": expect.any(String) },
         },
         {
           name: "Install actionlint",
@@ -847,6 +848,25 @@ cp .github/workflows/*.yml .github/workflows-pr/
         },
       ],
     });
+  });
+
+  it("keeps the actionlint toolchain identical across both legs", async () => {
+    // Both whole-job equalities read their own leg's env, with the version
+    // and checksum value-free in each — so nothing else stops the two files
+    // drifting apart on a bump applied to only one. Derived from the
+    // workflows themselves, quoting no value (fleet-rules, "Merging and CI"):
+    // the three keys must simply be the same in both legs.
+    const readEnv = async (file: string) => {
+      const workflow = await readWorkflow(file);
+      return (workflow.jobs.actionlint!.env ?? {}) as Record<string, string>;
+    };
+    const prEnv = await readEnv("actionlint-pr.yml");
+    const pushEnv = await readEnv("actionlint.yml");
+    for (const key of ["ACTIONLINT_REPO", "ACTIONLINT_VERSION", "ACTIONLINT_SHA256"]) {
+      expect(prEnv[key], `${key} must be present in actionlint-pr.yml`).toBeDefined();
+      expect(pushEnv[key], `${key} must be present in actionlint.yml`).toBeDefined();
+      expect(prEnv[key], `${key} must be identical in both actionlint legs`).toBe(pushEnv[key]);
+    }
   });
 
   it("parses a lockfile audit that fires on every push to main, daily, and on demand", async () => {
@@ -1412,10 +1432,13 @@ exit 1
   // the `regular` persona floor the gate runs under and exits 0; the same pin
   // carrying a STALE comment is reported at `warning` and exits 13. So the
   // annotation is what puts a pin under that audit, and dropping it is silent —
-  // the state issue 1022 found for Nitjsefnie-Actions/pr-gate. This is the check
-  // that closes it. It reads the raw text because a YAML parse drops the comment,
-  // and it does NOT assert which release the comment names: that half is zizmor's
-  // warning-severity job and duplicating it here would restate a value.
+  // the state issue 1022 found for Nitjsefnie-Actions/pr-gate. Nothing here
+  // asserts the annotation any more: fleet-rules, "Merging and CI" reads no
+  // release or version comment out of a workflow, so the comment half is left
+  // to zizmor — whose missing-comment arm sits BELOW the gate's persona floor,
+  // a recorded gap rather than a held property. What remains compares two ways
+  // of FINDING a pin, reading the raw text because a YAML parse drops the
+  // comment, and it does not assert which release any comment names.
   //
   // Three ways that went wrong the first time round, all of them silent, so the
   // shape below is load-bearing rather than incidental:
@@ -1432,14 +1455,16 @@ exit 1
   //    silently matches nothing sits between the two, and a file-count guard
   //    stays green across that. Rotting `{40}` to `{39}` — one character — used
   //    to pass with a version comment deleted.
-  //  - The comment shape is anchored to digits. `#\s*v\S+` is satisfied by
+  //  - The comment shape WAS anchored to digits. `#\s*v\S+` is satisfied by
   //    `# verify against the action docs`, which zizmor does NOT back up: it
-  //    treats any present comment as annotated. `v\d+\.\d+\.\d+` is zizmor's own
-  //    shape and matches every comment the tree ships today.
+  //    treats any present comment as annotated, so the instrument was widened
+  //    to zizmor's own `v\d+\.\d+\.\d+` shape. Both comment-shape arms left
+  //    with the annotation assertion (fleet-rules, "Merging and CI"): no
+  //    instrument here reads the comment any more.
   //
   // A fourth hole, of a different kind, was left open by that fix round: the
   // guard above proves the pin list is NON-EMPTY, and the property this case is
-  // named for is that the list is COMPLETE. `> 0` cannot tell those apart, and a
+  // named for is that the two lists are IDENTICAL. `> 0` cannot tell those apart, and a
   // selector that quietly narrows stays green — which is exactly the state the
   // case shipped in for one commit. A number would close it and rot on every
   // dependency bump. So the coverage is asserted by COMPARING TWO INSTRUMENTS
@@ -1448,14 +1473,14 @@ exit 1
   // equality. Neither side is a literal, so adding or removing a pin moves both
   // and the assertion holds; narrowing one side only is the defect, and the diff
   // names every pin the selector lost or invented.
-  it("annotates every SHA-pinned action with the release its pin names", async () => {
+  it("agrees with the shape-free sweep on every SHA-pinned action reference", async () => {
     const workflows = (await readdir(resolve(".github/workflows")))
       .filter((name) => name.endsWith(".yml"));
 
     // `^\s*(?:-\s+)?uses:` in BOTH, not `\buses:`. `\b` matches mid-line, so a
     // commented-out step (`# - uses: owner/repo@<sha>`) was read as a live pin by
-    // both instruments and landed in `unannotated` — a false red in a required
-    // check, reachable by commenting out a disabled step, which is ordinary.
+    // both instruments — a false red in a required check, reachable by
+    // commenting out a disabled step, which is ordinary.
     // Anchoring to the step start also closes the flow-mapping-with-comment form.
     // Measured over every form recorded in any round of this case, the anchor
     // changes exactly four dispositions, all `both` → `neither`, and creates no
@@ -1474,8 +1499,8 @@ exit 1
     // narrower than it first reads: `[a-z][a-z0-9+.-]*://` is lowercase-only and
     // needs two slashes, so it drops `docker://…` and not `DOCKER://…`, `Docker://…`
     // or `docker:/…`. What it buys is that a container ref is not treated as an
-    // action pin: such a value carries no version tag, so `unannotated` could
-    // never be satisfied for it. Note a REAL container digest is
+    // action pin: such a value carries no version tag and is not an action
+    // reference at all. Note a REAL container digest is
     // `docker://img@sha256:<64hex>`, which `{40}` never matched and the lookahead
     // now drops outright — the form the exclusion actually reaches is the bare
     // `@<40hex>` after a scheme, which is not a value GitHub accepts.
@@ -1497,7 +1522,7 @@ exit 1
       }
     }
 
-    // What these three assertions do and do not establish, since the previous
+    // What these two assertions do and do not establish, since the previous
     // round's note claimed both directions and only had one:
     //
     //  - `pin`'s set is a SUBSET of `shapeFree`'s, structurally: everything
@@ -1551,8 +1576,9 @@ exit 1
     //        version comment is a policy this case never stated; zizmor 1.30.1
     //        at `--persona=pedantic` reports no finding on such a line even with
     //        a deliberately wrong version, so nothing else settles it. If one
-    //        appears here without a comment, this case will red it and no gate
-    //        would.
+    //        appears here without a comment, no assertion here reds it either —
+    //        the comment half left with the annotation arm, so the gap is open
+    //        and recorded here.
     //
     //    These are recorded limits, not closed routes, and the sample is not the
     //    full set of either class. No assertion here pretends otherwise.
@@ -1773,12 +1799,10 @@ exit 1
         matrix: { language: string[] };
       };
     };
-    expect(analyze.steps.filter((step) => step.uses).every((step) => /@[0-9a-f]{40}$/.test(step.uses!))).toBe(true);
-
-    // The whole job, exactly, in the dependency-audit style: the job-level
-    // permissions object is the least privilege uploading SARIF needs, and
-    // any extra key — a tolerated failure, a checkout without
-    // persist-credentials disabled — fails this equality.
+    // The whole job, exactly: the job-level permissions object is the least
+    // privilege uploading SARIF needs, and any extra key — a tolerated
+    // failure, a checkout without persist-credentials disabled — fails this
+    // equality.
     expect(analyze).toEqual({
       permissions: { contents: "read", "security-events": "write" },
       strategy: {
@@ -1851,10 +1875,12 @@ exit 1
    *    while the workflow still reports; without `id-token: write` the
    *    published result carries no signature, so a consumer cannot verify the
    *    score came from this repository's own run.
-   * 7. **A step that is not pinned, or is pinned to the wrong action.** A tag
-   *    or branch ref moves under the workflow, so the action that produced a
-   *    Security-tab finding is not the one that was reviewed. A substitution at
-   *    a VALID digest is the shape the digest regex cannot see.
+   * 7. **A step running an action this workflow was not reviewed for.** A
+   *    substitution swaps `ossf/scorecard-action` for a different action and
+   *    the workflow still runs weekly and concludes green while measuring
+   *    something else; the SET assertion below is what names it. Which
+   *    REVISION of each action runs is zizmor's audit and Dependabot's bumps
+   *    to hold — fleet-rules, "Merging and CI".
    * 8. **A key nobody reads.** Every assertion in this test reads a key this
    *    workflow is expected to carry, so a key they do NOT read is a hole
    *    rather than a coverage gap — and the same is true one level down of a
@@ -1942,23 +1968,17 @@ exit 1
       contents: "read",
     });
 
-    // Every step that runs an action, pinned to a commit digest: a tag or
-    // branch ref moves under the workflow, so the action that produced a
-    // Security-tab finding is not the one that was reviewed.
+    // The steps that run an action — the population the SET below reads —
+    // with a liveness guard first, so a workflow that runs no action at all
+    // is a named failure rather than an empty equality.
     const used = analysis.steps.filter((step) => step.uses);
     expect(used.length, "scorecard.yml must run at least one action").toBeGreaterThan(0);
-    for (const step of used) {
-      expect(
-        step.uses,
-        `scorecard.yml's "${step.name ?? "unnamed"}" step must be pinned to a 40-character ` +
-          "commit digest, so the action that ran is the one that was reviewed",
-      ).toMatch(/@[0-9a-f]{40}$/);
-    }
 
-    // The SET, not only the shape. Swapping `ossf/scorecard-action` for a
-    // different action at a valid 40-hex digest satisfies every assertion above
-    // and would sail past them, leaving a workflow that still runs weekly and
-    // still concludes green while measuring something else.
+    // The SET, not only the count. Every assertion above this point reads
+    // structure — triggers, guards, permissions, the step count — so a swap
+    // of `ossf/scorecard-action` for a different action sails past all of
+    // them and the workflow still runs weekly and concludes green while
+    // measuring something else; the membership below names the substitution.
     expect(used.map((step) => step.uses!.replace(/@[0-9a-f]{40}$/, "@")).sort()).toEqual([
       "actions/checkout@",
       "actions/upload-artifact@",
