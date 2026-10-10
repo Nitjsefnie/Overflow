@@ -25,8 +25,9 @@ import { commitFiles, git, scratchGitEnv, tryGit } from "../support/scratch-git"
  *    baseline;
  *  - a `continue-on-error` or an `if: always()` on the scan step turns findings
  *    into a green run;
- *  - a non-SHA-pinned `uses` makes the supply chain of a repository that reads
- *    full history an unpinned one;
+ *  - a non-SHA-pinned `uses` would make the supply chain of a repository that
+ *    reads full history an unpinned one — pin shape is zizmor's to hold now
+ *    (fleet-rules, "Merging and CI"); no assertion in this file reads it;
  *  - an install step that extracts a binary without putting that directory on
  *    the PATH of LATER steps — the Critical this suite now executes rather than
  *    reads about, below.
