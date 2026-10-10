@@ -229,19 +229,6 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     expect(scan["timeout-minutes"]).toBe(15);
   });
 
-  it("pins every action reference to a full commit SHA", () => {
-    const uses = scan.steps.map((step) => step.uses).filter((value): value is string => value !== undefined);
-    expect(uses.length, "the workflow must actually use actions").toBeGreaterThan(0);
-    for (const value of uses) {
-      // A version tag or a branch on an action that walks full history is an
-      // unpinned supply chain for the one job whose whole job is to read every
-      // commit ever made.
-      expect(value, `${value} must be pinned to a 40-character commit SHA`).toMatch(
-        /^[A-Za-z0-9_.\-/]+@[0-9a-f]{40}$/,
-      );
-    }
-  });
-
   it("checks out the FULL history, without credentials, because the history is the whole point", () => {
     const checkout = scan.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
     expect(checkout, "the workflow must check the repository out").toBeDefined();

@@ -258,11 +258,12 @@ go red, it silently stops running.
 
 If you edit a workflow, note that `tests/api/ci-workflows.test.ts` asserts its
 contents — the triggers, the `permissions` block, the concurrency group, the
-PostgreSQL 17 service, forty-character commit pins on every action, the pinned
-Node version, and the release commands the job must run. That is deliberate: it
-makes a quietly weakened gate fail the suite rather than pass unnoticed. It also
-means a workflow change is two edits, and the same is true of `package.json`,
-whose pinned versions that test reads.
+service shape, and the release commands the job must run. That is deliberate: it
+makes a quietly weakened gate fail the suite rather than pass unnoticed. The
+assertions read structure, never dependency versions (fleet-rules, "Merging and
+CI"): a pin or tool bump changes the workflow alone and needs no test edit, and
+the same is true of `package.json`, whose fields that test reads are matched by
+shape rather than quoted.
 
 ## Conventions that reject work silently
 

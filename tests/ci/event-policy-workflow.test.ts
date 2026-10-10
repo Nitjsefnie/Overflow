@@ -150,7 +150,7 @@ describe("the event-policy workflow", () => {
     // in only one job fails here rather than drifting apart silently.
     expect(toolSteps(pullRequestJob)).toEqual(toolSteps(mainJob));
     expect(toolSteps(mainJob)?.checkout?.with).toEqual({ "persist-credentials": false });
-    expect(toolSteps(mainJob)?.setupNode?.with).toEqual({ "node-version": "24.17.0" });
+    expect(toolSteps(mainJob)?.setupNode?.with).toEqual({ "node-version": expect.any(String) });
   });
 
   it("runs the pull-request job only on pull_request", () => {
