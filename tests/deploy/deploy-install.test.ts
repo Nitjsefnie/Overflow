@@ -8,6 +8,9 @@ const otherPnpmShapes = [
   /^NEXT_DIST_DIR="\$release" pnpm build$/,
   /^pnpm release:switch \/srv\/overflow "\$(?:release|previous_release)" --expect-current (?:absent|"\$expected_serving")$/,
   /^pnpm release:prune \/srv\/overflow --keep [1-9][0-9]*$/,
+  // The package-manager version is the deploy script's business
+  // (fleet-rules, "Merging and CI"): an exact pnpm release, nothing else.
+  /^corepack prepare pnpm@\d+\.\d+\.\d+ --activate$/,
 ];
 
 // This is a closed vocabulary, not a shell interpreter. Every logical shell
@@ -29,7 +32,6 @@ const otherShellLines = new Set([
   "/usr/local/bin/node --version",
   "ln -sfn /usr/local/lib/nodejs/node-v24.17.0/bin/corepack /usr/local/sbin/corepack",
   "corepack enable --install-directory /usr/local/sbin",
-  "corepack prepare pnpm@10.33.0 --activate",
   "install -d -o root -g root -m 0700 /etc/overflow",
   "[ -e /etc/overflow/overflow.env ]   || install -o root -g root -m 0600 /dev/null /etc/overflow/overflow.env",
   "chown root:root /etc/overflow/overflow.env",

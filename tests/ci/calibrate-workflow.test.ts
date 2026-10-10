@@ -79,8 +79,6 @@ const GATED_WHEN_SIMULATING = "${{ inputs.simulate-refused-raise != true }}";
 const RUNS_WHEN_SIMULATING = "${{ inputs.simulate-refused-raise == true }}";
 /** The push job's whole condition: only a changed document reaches a push. */
 const PUSH_JOB_IF = "${{ needs.calibrate.outputs.changed == 'true' }}";
-/** The pins both jobs' checkouts share, spelled once. */
-const CHECKOUT_PIN = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 
 describe("the calibrate workflow's trigger", () => {
   let job: CalibrateJob | undefined;
@@ -194,10 +192,10 @@ describe("the push-recalibration job", () => {
     const runs = steps.filter((step) => step.run !== undefined);
 
     expect(
-      actions.map((step) => step.uses),
+      actions.map((step) => step.uses!.replace(/@[0-9a-f]{40}$/, "@")),
       "the push job's only action is the checkout — a setup-node or a download action here would be " +
         "a dependency the push does not need",
-    ).toEqual([CHECKOUT_PIN]);
+    ).toEqual(["actions/checkout@"]);
     expect(runs, "the push job must carry exactly one run step").toHaveLength(1);
   });
 

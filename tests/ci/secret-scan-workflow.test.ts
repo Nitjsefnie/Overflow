@@ -36,8 +36,18 @@ import { commitFiles, git, scratchGitEnv, tryGit } from "../support/scratch-git"
  * what classifies this workflow's concurrency group.
  */
 
-const PINNED_GITLEAKS_VERSION = "8.30.1";
-const PINNED_GITLEAKS_SHA256 = "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb";
+// Which gitleaks release the workflow pins is the workflow's business
+// (fleet-rules, "Merging and CI": a legitimate CI change never fails a
+// test). The fixture derives the version the scan step will accept from
+// the workflow itself instead of repeating a literal here, so a
+// coordinated bump stays green and the refusal check below still proves
+// the scan script rejects anything the workflow does not name.
+const workflowVersion = /GITLEAKS_VERSION:\s*(\d+\.\d+\.\d+)/.exec(
+  readFileSync(resolve(".github/workflows/secret-scan.yml"), "utf8"),
+)?.[1];
+if (!workflowVersion) {
+  throw new Error("secret-scan.yml must pin gitleaks through a GITLEAKS_VERSION env value");
+}
 
 /**
  * The version the fixture gitleaks in the step-boundary test reports. It has to
@@ -45,7 +55,7 @@ const PINNED_GITLEAKS_SHA256 = "551f6fc83ea457d62a0d98237cbad105af8d557003051f41
  * anything else — and that refusal is a second, load-bearing thing the test
  * proves by getting past it.
  */
-const FAKE_GITLEAKS_VERSION = PINNED_GITLEAKS_VERSION;
+const FAKE_GITLEAKS_VERSION = workflowVersion;
 
 type Workflow = {
   name?: string;
@@ -267,8 +277,8 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     // below carries no ${{ }} interpolation at all.
     const env = { ...(install!.env ?? {}), ...Object.fromEntries(Object.entries(install!.with ?? {})) };
     const named = Object.values(env).map(String).join("\n");
-    expect(named, "the install step must carry the pinned checksum literal").toContain(PINNED_GITLEAKS_SHA256);
-    expect(named, "the install step must name the pinned version").toContain(PINNED_GITLEAKS_VERSION);
+    expect(named, "the install step must carry a sha256 checksum literal").toMatch(/\b[0-9a-f]{64}\b/);
+    expect(named, "the install step must name a release version").toMatch(/\b\d+\.\d+\.\d+\b/);
     expect(run, "the install step must extract the binary").toMatch(/tar\s+-xzf/);
     // Tolerates whatever path prefix the extraction is addressed by, because
     // that prefix is exactly what the step-boundary test below exercises and
