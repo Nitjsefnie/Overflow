@@ -703,8 +703,9 @@ describe("the pull request suite workflow", () => {
     // Pinned zizmor and the pinned actionlint report nothing on any of them.
     //
     // So the job's prefix is pinned as an ordered list of identities: the three
-    // actions, by their commit SHAs. Insert a step, reorder, remove one, or swap
-    // an action, and this reds with the diff of the list.
+    // actions, by identity — the normaliser folds any revision to `@`, so a
+    // same-family bump alone does not red this. Insert a step, reorder, remove
+    // one, or swap an action, and this reds with the diff of the list.
     expect(
       suite.steps.slice(0, suite.steps.indexOf(step))
         .map((s) => stepIdentity(s).replace(/@[0-9a-f]{40}$/, "@")),

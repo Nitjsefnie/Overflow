@@ -48,14 +48,14 @@ type Workflow = {
   }>;
 };
 
-// The exact-value pins below are CONSISTENCY checks, not correctness checks: they
-// prove the tree still says what it said, not that the value is the right one.
-// Substituting a well-shaped wrong SHA at every site at once leaves this file
-// green, because proving that a pin names the real upstream fork would need a
-// network fetch that a suite reading the tree does not make. The `uses` shape
-// checks and the pre-filter guards are correctness checks and do go red on a
-// wrong value. Read a green run as "nothing drifted", never as "this pin is the
-// right fork".
+// What this file asserts is derived structure, never a dependency value: the
+// workflows' triggers, permissions, step identities, behavioural commands, and
+// the cross-file agreements (one revision per action family across the
+// workflow files, both actionlint legs' toolchain env, the CONTRIBUTING claim
+// pin). A legitimate dependency bump moves the tree and these follow it
+// (fleet-rules, "Merging and CI"); which revision is the RIGHT one is zizmor's
+// and Dependabot's to hold — no network fetch happens here. Read a green run
+// as "structure intact", never as "this pin is the right fork".
 
 describe("GitHub Actions release gates", () => {
   it("carries the shared action's reference block: condition, queued concurrency, permission scope and claim policy", async () => {
@@ -455,7 +455,7 @@ fi
     }
   });
 
-  it("parses a complete PostgreSQL 17 gate with every release command", async () => {
+  it("parses a complete PostgreSQL gate with every release command", async () => {
     const workflow = await readWorkflow("ci.yml");
     const manifest = JSON.parse(await readFile(resolve("package.json"), "utf8")) as {
       packageManager?: string;
@@ -507,12 +507,14 @@ fi
     const verify = workflow.jobs.verify!;
     expect(verify.services?.postgres?.image).toMatch(/^postgres:[0-9]+@sha256:[0-9a-f]{64}$/);
     expect(verify.services?.postgres?.options).toContain("pg_isready");
-    // Keep the reviewed artifact actions exact across jobs: verify uploads
-    // the pair on push and dispatch, then the calibration job downloads the
-    // summary. The generic SHA-format check above would accept a different,
-    // valid pin. The pull-request leg's one download is asserted in ci-pr.yml's
-    // own case below, so neither file's artifact actions are checked by a
-    // derivation that only reads this one.
+    // Keep the reviewed artifact actions' counts and identities exact across
+    // jobs: verify uploads the pair on push and dispatch, then the calibration
+    // job downloads the summary. Which REVISION they share across files is
+    // held by `keeps each action family to one revision across all workflow
+    // files`; within this file the family sets below pin the counts. The
+    // pull-request leg's one download is asserted in ci-pr.yml's own case
+    // below, so neither file's artifact actions are checked by a derivation
+    // that only reads this one.
     const ciSteps = Object.values(workflow.jobs).flatMap((job) => job.steps);
     const uploadPins = ciSteps
       .filter((step) =>
@@ -858,7 +860,7 @@ cp .github/workflows/*.yml .github/workflows-pr/
     // the three keys must simply be the same in both legs.
     const readEnv = async (file: string) => {
       const workflow = await readWorkflow(file);
-      return (workflow.jobs.actionlint!.env ?? {}) as Record<string, string>;
+      return (workflow.jobs.actionlint?.env ?? {}) as Record<string, string>;
     };
     const prEnv = await readEnv("actionlint-pr.yml");
     const pushEnv = await readEnv("actionlint.yml");
@@ -866,6 +868,45 @@ cp .github/workflows/*.yml .github/workflows-pr/
       expect(prEnv[key], `${key} must be present in actionlint-pr.yml`).toBeDefined();
       expect(pushEnv[key], `${key} must be present in actionlint.yml`).toBeDefined();
       expect(prEnv[key], `${key} must be identical in both actionlint legs`).toBe(pushEnv[key]);
+    }
+  });
+
+  it("keeps each action family to one revision across all workflow files", async () => {
+    // The consistency check fleet-rules "Merging and CI" explicitly RETAINS:
+    // "one revision per action across the workflows, derived from the
+    // workflows themselves (pr-gate#77's `_shipped_action_pin`)". Identity
+    // matchers elsewhere fold a revision away, so a bump landing in only one
+    // file — the half-applied edit — is invisible to them; this sweep is what
+    // names it. No revision value is quoted here: both sides come out of the
+    // workflow files, so a coordinated bump moves them together and stays
+    // green.
+    const files = (await readdir(resolve(".github/workflows")))
+      .filter((name) => name.endsWith(".yml"));
+    const revisionsByFamily = new Map<string, Map<string, string[]>>();
+    const usesRef = /^\s*(?:-\s+)?uses:\s*([^\s@]+)@(\S+)/;
+    for (const name of files) {
+      const source = await readFile(resolve(".github/workflows", name), "utf8");
+      for (const [index, line] of source.split(/\r?\n/).entries()) {
+        const hit = usesRef.exec(line);
+        if (!hit) continue;
+        const [, refPath, revision] = hit;
+        // Local (`./…`) and container (`docker://…`) refs carry no upstream
+        // revision to agree on; only `owner/repo[/subpath]@ref` does.
+        if (refPath.startsWith(".") || refPath.includes(":")) continue;
+        const family = refPath.split("/").slice(0, 2).join("/");
+        const revisions = revisionsByFamily.get(family) ?? new Map();
+        revisions.set(revision, [...(revisions.get(revision) ?? []), `${name}:${index + 1}`]);
+        revisionsByFamily.set(family, revisions);
+      }
+    }
+    expect(revisionsByFamily.size, "no action refs found — the sweep would pass vacuously")
+      .toBeGreaterThan(0);
+    for (const [family, revisions] of revisionsByFamily) {
+      expect(
+        [...revisions.keys()],
+        `${family} must run exactly one revision across the workflow files: a bump in only ` +
+          `one of them is a half-applied change — ${[...revisions.values()].flat().join(", ")}`,
+      ).toHaveLength(1);
     }
   });
 
@@ -1569,16 +1610,15 @@ exit 1
     //        this is "undocumented", not "impossible", and a red on one of them
     //        is the DETECTOR talking rather than a pin that lost its comment.
     //
-    //    (c) A form BOTH regexes read as an action pin, on which this case
-    //        demands a `vN.N.N` comment: GitHub documents
+    //    (c) A form BOTH regexes read as an action pin: GitHub documents
     //        `{owner}/{repo}/.github/workflows/{filename}@{ref}`, and a SHA ref
     //        matches here. Whether a reusable-workflow call should carry a
-    //        version comment is a policy this case never stated; zizmor 1.30.1
-    //        at `--persona=pedantic` reports no finding on such a line even with
-    //        a deliberately wrong version, so nothing else settles it. If one
-    //        appears here without a comment, no assertion here reds it either —
-    //        the comment half left with the annotation arm, so the gap is open
-    //        and recorded here.
+    //        version comment is a policy no assertion here states (the
+    //        annotation arm left with fleet-rules, "Merging and CI"); zizmor
+    //        1.30.1 at `--persona=pedantic` reports no finding on such a line
+    //        even with a deliberately wrong version, so nothing else settles
+    //        it. If one appears here without a comment, no assertion here
+    //        reds it either — the gap is open and recorded here.
     //
     //    These are recorded limits, not closed routes, and the sample is not the
     //    full set of either class. No assertion here pretends otherwise.
