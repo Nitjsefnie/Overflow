@@ -30,9 +30,13 @@ set -euo pipefail
 
 # Resolved from this script's own location, as in secret-scan.sh: the baseline
 # and the history it must be reachable from are this checkout's, not the
-# caller's working directory's.
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly REPO_ROOT="$(dirname -- "$SCRIPT_DIR")"
+# caller's working directory's. Assigned before the readonly so a failing
+# command substitution still fails the script under `set -e` instead of
+# hiding behind the declaration's own exit status.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
+REPO_ROOT="$(dirname -- "$SCRIPT_DIR")"
+readonly REPO_ROOT
 readonly BASELINE_PATH="$REPO_ROOT/.github/gitleaks-baseline.json"
 
 if [ ! -f "$BASELINE_PATH" ]; then
@@ -48,7 +52,8 @@ if [ "$(git -C "$REPO_ROOT" rev-parse --is-shallow-repository)" = "true" ]; then
   exit 1
 fi
 
-readonly HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse --verify HEAD)"
+HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse --verify HEAD)"
+readonly HEAD_SHA
 additional_sha=""
 if [ -n "${1:-}" ]; then
   additional_sha="$(git -C "$REPO_ROOT" rev-parse --verify "${1}^{commit}")"
@@ -62,7 +67,8 @@ readonly REACHABILITY_ROOTS="$HEAD_SHA${additional_sha:+ or $additional_sha}"
 # pass without having read anything. `set -e` on the redirect makes that failure
 # fatal here instead. `@tsv` is what keeps a fingerprint containing a separator
 # from splitting into fields.
-readonly ENTRIES_FILE="$(mktemp)"
+ENTRIES_FILE="$(mktemp)"
+readonly ENTRIES_FILE
 trap 'rm -f "$ENTRIES_FILE"' EXIT
 jq -r '.[] | [.Fingerprint, .Commit] | @tsv' "$BASELINE_PATH" > "$ENTRIES_FILE"
 

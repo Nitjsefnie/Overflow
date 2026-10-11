@@ -146,6 +146,38 @@ jobs:
             --dest "${RUNNER_TEMP}/zizmor-hash-check" \
             -r .github/requirements-zizmor.txt
 
+      # ShellCheck over THIS request's own scripts (issue 1038): pr-suite is
+      # the one workflow whose checkout is the pull request's tree, so this is
+      # where the request's scripts are linted. ci.yml's shellcheck job is
+      # main's leg of the same gate; ci-pr.yml deliberately carries none — it
+      # runs under pull_request_target, where only the base checkout's gate
+      # scripts may run and nothing may be installed, so a shellcheck step
+      # there would lint main's scripts with the request's privilege, which is
+      # both the wrong tree and the wrong trust. Ordered before the package
+      # manager because nothing here needs the install, and a scripts-only
+      # defect should not wait for one to finish.
+      #
+      # The pins sit on the step, not on the job: the suite job's env is an
+      # input to every step and its key set is pinned by tests/ci/
+      # pr-suite-workflow.test.ts. The version rationale and the
+      # bump-version-and-checksum-together rule are ci.yml's shellcheck job's;
+      # the two installs stay identical.
+      - name: Install ShellCheck
+        env:
+          SHELLCHECK_REPO: koalaman/shellcheck
+          SHELLCHECK_VERSION: "0.11.0"
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          tarball="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          curl -fsSL --retry 3 -o "$tarball" \
+            "https://github.com/${SHELLCHECK_REPO}/releases/download/v${SHELLCHECK_VERSION}/${tarball}"
+          echo "${SHELLCHECK_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xJf "$tarball" --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          ./shellcheck --version
+
+      - name: ShellCheck
+        run: ./shellcheck -f gcc scripts/*.sh
+
       - name: Enable the pinned package manager
         run: |
           corepack enable
