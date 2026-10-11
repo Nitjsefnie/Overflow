@@ -147,6 +147,7 @@ required_checks_gate() {
   map_status=0
   map=$(git show "$full_sha:.github/required-checks.json") || map_status=$?
   if [ "$map_status" -ne 0 ]; then
+    # shellcheck disable=SC2059 # the format is the hoisted prefix above, whose one specifier is exactly the %s this call fills
     printf "${map_refusal_prefix}; refusing to deploy.\n" "$full_sha" >&2
     exit 1
   fi
@@ -162,6 +163,7 @@ required_checks_gate() {
   tree_parse_status=0
   pins=$(jq -rs -f "$tree/scripts/required-checks-parse.jq" <<<"$map") || tree_parse_status=$?
   if [ "$tree_parse_status" -eq 127 ]; then
+    # shellcheck disable=SC2059 # the format is the hoisted prefix above, whose one specifier is exactly the %s this call fills
     printf "${map_refusal_prefix}; jq is not installed; refusing to deploy.\n" "$full_sha" >&2
     exit 1
   fi
@@ -487,7 +489,15 @@ if [ "$serving_release" != absent ] && [ -f "$serving_release/REVISION" ]; then
   fi
 fi
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
-set -a; . "$env_file"; set +a
+# The env file is operator input whose path is resolved at run time from
+# OVERFLOW_DEPLOY_ENV_FILE above, so there is no constant location for the
+# linter to follow it to; the directive below stops that chase rather than
+# naming a source. The variables the file exports are consumed — and their
+# absence fatal — in every step below that reads them.
+set -a
+# shellcheck source=/dev/null
+. "$env_file"
+set +a
 migration_status=$(node scripts/deploy-migration-status.ts) || {
   printf 'Could not list the pending migrations (node scripts/deploy-migration-status.ts failed); refusing to deploy. Database connection details come from %s.\n' "$env_file" >&2
   exit 1

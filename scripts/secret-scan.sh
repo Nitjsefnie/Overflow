@@ -99,9 +99,13 @@ readonly PINNED_GITLEAKS_VERSION="8.30.1"
 # Resolved from this script's own location so the script can be invoked from
 # any working directory — a caller-chosen report path is resolved against the
 # directory the caller ran it in, but the baseline and the repository it scans
-# are this checkout's, not the caller's.
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly REPO_ROOT="$(dirname -- "$SCRIPT_DIR")"
+# are this checkout's, not the caller's. Assigned before the readonly so a
+# failing command substitution still fails the script under `set -e` instead
+# of hiding behind the declaration's own exit status.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
+REPO_ROOT="$(dirname -- "$SCRIPT_DIR")"
+readonly REPO_ROOT
 readonly BASELINE_PATH="$REPO_ROOT/.github/gitleaks-baseline.json"
 
 # Unqualified by default so the report lands where the caller ran the script.

@@ -1468,8 +1468,8 @@ describe("scripts/secret-scan.sh", () => {
         description: "the history subcommand swapped for a working-tree one",
       },
       "caller-cwd-root": {
-        needle: 'readonly REPO_ROOT="$(dirname -- "$SCRIPT_DIR")"',
-        replacement: 'readonly REPO_ROOT="$PWD"',
+        needle: 'REPO_ROOT="$(dirname -- "$SCRIPT_DIR")"',
+        replacement: 'REPO_ROOT="$PWD"',
         description: "the repository root taken from the caller's working directory",
       },
       // Not one of the three the brief names, and not a defect anybody would

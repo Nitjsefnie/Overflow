@@ -787,9 +787,11 @@ describe("overflow-alert.sh send stage", () => {
     // difference between `--url "$smtp_url"` and `--url $smtp_url` is invisible
     // to all of them: an unquoted expansion with a space-free value produces a
     // byte-identical argv. That is why the quoting can be dropped without any
-    // case noticing, and nothing else in the repository would notice either -
-    // there is no shellcheck in CI, and this file is the only place the script's
-    // argv is inspected.
+    // case in this file noticing. ShellCheck now runs in CI and statically
+    // detects quoting defects like an unquoted expansion, but this case still
+    // holds the behavior to account: it inspects the argv an actual run hands
+    // the client, and a spaced endpoint split into multiple --url arguments
+    // fails here on the observed arguments themselves.
     //
     // It is not cosmetic. The client reads `--url A --url B` as TWO transfers,
     // so an endpoint carrying a space submitted unquoted would send the alert

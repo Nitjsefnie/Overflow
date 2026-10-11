@@ -483,3 +483,56 @@ jobs:
           fi
           redact "$output" >&2
           refuse "push refused twice"
+
+  # ShellCheck over the repository's shell scripts (issue 1038). Its own job:
+  # nothing it needs — no database, no install, no build — so it lints beside
+  # verify rather than lengthening it, and a scripts-only defect fails in
+  # minutes. The pull-request leg is NOT here (issue 1090's boundary): ci-pr.yml
+  # runs under pull_request_target, where only the base checkout's gate scripts
+  # may run and nothing may be installed, so the request's OWN scripts are
+  # linted by the ShellCheck steps in pr-suite.yml — the one workflow whose
+  # checkout is the request's tree. Nothing in this job reads pull-request
+  # data: the checkout below is the event's own commit, and tests/ci/
+  # pr-data-triggers.test.ts holds that shape.
+  #
+  # WHY THE VERSION IS PINNED, AND WHY v0.11.0. New shellcheck releases grow
+  # new checks, and a floating version would redden main for reasons no change
+  # in this repository caused — the same argument secret-scan.sh makes for its
+  # gitleaks pin. v0.11.0 is the latest release, so nothing newer exists for a
+  # dependabot lane to propose. The binary comes from the release itself and is
+  # checksum-verified before it runs, exactly as the actionlint workflows
+  # install theirs; that release publishes no checksums file of its own, so the
+  # sha256 below was computed from the downloaded artifact and pins its bytes.
+  # Bump the version and the checksum together.
+  shellcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SHELLCHECK_REPO: koalaman/shellcheck
+      SHELLCHECK_VERSION: 0.11.0
+      # sha256 of shellcheck-v0.11.0.linux.x86_64.tar.xz; bump with the version.
+      SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+
+    steps:
+      # The default checkout: the pushed main tip on a push, the dispatched
+      # ref's commit on a workflow_dispatch — the scripts this job lints. The
+      # check reads the working tree's files only, so the default depth needs
+      # no override.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install ShellCheck
+        run: |
+          tarball="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          curl -fsSL --retry 3 -o "$tarball" \
+            "https://github.com/${SHELLCHECK_REPO}/releases/download/v${SHELLCHECK_VERSION}/${tarball}"
+          echo "${SHELLCHECK_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xJf "$tarball" --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          ./shellcheck --version
+
+      # The gate: any diagnostic fails the job, so a red run means a script in
+      # this repository carries something shellcheck flags — fix it, or carry a
+      # reasoned directive beside it as deploy-revision.sh does.
+      - name: ShellCheck
+        run: ./shellcheck -f gcc scripts/*.sh
