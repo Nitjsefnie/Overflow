@@ -1,10 +1,49 @@
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+import { describe, expect, it, vi } from "vitest";
 
 import { captureUnhandledRejections } from "./unhandled-rejection-probe";
 
 const UNHANDLED = "unhandledRejection";
 
 describe("unhandled rejection probe", () => {
+  it("owns Node rejections when process listener methods redirect to a private queue", async () => {
+    // Next's rejection filter redirects process.on/off. Vitest retains the
+    // native listener counter, so a listener in that private queue cannot tell
+    // it that a test owns the rejection. Exercise a real Node rejection here.
+    const redirected = new EventEmitter();
+    const originalOn = process.on;
+    const originalOff = process.off;
+    const on = vi.spyOn(process, "on").mockImplementation((event, listener) => {
+      if (event === UNHANDLED) redirected.on(event, listener);
+      else originalOn.call(process, event, listener);
+      return process;
+    });
+    const off = vi.spyOn(process, "off").mockImplementation((event, listener) => {
+      if (event === UNHANDLED) redirected.off(event, listener);
+      else originalOff.call(process, event, listener);
+      return process;
+    });
+    const before = process.listenerCount(UNHANDLED);
+    const failure = new Error("Rejection forwarded by Node");
+    const notified: unknown[] = [];
+    const { seen, restore } = captureUnhandledRejections((reason) => { notified.push(reason); });
+
+    try {
+      void Promise.reject(failure);
+      await drainMicrotasks();
+      expect(seen).toEqual([failure]);
+      expect(notified).toEqual([failure]);
+      expect(process.listenerCount(UNHANDLED)).toBe(before + 1);
+      restore();
+      expect(process.listenerCount(UNHANDLED)).toBe(before);
+      expect(redirected.listenerCount(UNHANDLED)).toBe(0);
+    } finally {
+      restore();
+      off.mockRestore();
+      on.mockRestore();
+    }
+  });
+
   it("installs one listener and detaches that one on restore", () => {
     const before = process.listenerCount(UNHANDLED);
     const { restore } = captureUnhandledRejections();
@@ -12,7 +51,7 @@ describe("unhandled rejection probe", () => {
     // The count is what pins the detach. A leak here is invisible from inside
     // any single test — the probe still records, and the suite that installed it
     // still passes — because the listener lives on the process, not on the test.
-    // The three consumers install this probe 29 times across tests/fold/, and
+    // The fold suites install this probe throughout tests/fold/, and
     // vitest.config.ts runs the directory with `isolate: false`, so a listener
     // that outlives its test outlives the file that installed it.
     try {
@@ -53,14 +92,9 @@ describe("unhandled rejection probe", () => {
       // Node reports them — which is the only thing the listener exists to
       // observe.
       //
-      // What keeps floating them here safe is NOT this probe's own listener. It
-      // is vitest's, which is already installed before anything in this file
-      // installs anything — the baseline the first test's count is taken against
-      // is non-zero — so these rejections land in vitest's bucket and fail this
-      // suite. Deleting the probe's `process.on` has been observed to turn every
-      // test in this file red, each naming the listener that caught its
-      // rejections — not into a hang, and not into a dead worker. Anything added
-      // here that floats a rejection is safe for that same reason.
+      // Vitest's listener is already installed, so a broken probe registration
+      // makes these real rejections fail its unhandled-error gate as well as
+      // our assertions, without killing the worker or hanging the test.
       void Promise.reject(first);
       void Promise.reject(second);
 

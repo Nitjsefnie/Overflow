@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+
 /**
  * Records what Node reports as an unhandled rejection during one test, for the
  * suites whose subject is a promise the code under test is expected to contain.
@@ -13,8 +15,11 @@
  * evidence that nothing escaped, and it is a stronger claim than the run simply
  * finishing — a contained rejection and a silenced one are indistinguishable
  * from the outside, and only the recorded one tells them apart.
+ * An optional observer runs after each reason is recorded to signal a wait.
  */
-export function captureUnhandledRejections(): {
+export function captureUnhandledRejections(
+  onRejection?: (reason: unknown) => void,
+): {
   /** The reasons Node reported, in the order it reported them. */
   seen: unknown[];
   restore(): void;
@@ -22,13 +27,17 @@ export function captureUnhandledRejections(): {
   const seen: unknown[] = [];
   const listener = (reason: unknown) => {
     seen.push(reason);
+    onRejection?.(reason);
   };
-  process.on("unhandledRejection", listener);
+  // Next redirects process.on/off to a private queue. Vitest's cached native
+  // listener counter cannot see that queue, so the probe must own a native
+  // listener for the entire capture window, including an observer's wait.
+  EventEmitter.prototype.on.call(process, "unhandledRejection", listener);
 
   return {
     seen,
     restore: () => {
-      process.off("unhandledRejection", listener);
+      EventEmitter.prototype.off.call(process, "unhandledRejection", listener);
     },
   };
 }
