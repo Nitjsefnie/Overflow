@@ -1106,16 +1106,19 @@ describe("GitLabGateway", () => {
     ]));
     // The skip is logged, never silent: on a list endpoint a silent skip is
     // easy to misread as "no issues".
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const issues = await client.listIssues({ owner: "gitlab-org", name: "gitlab" });
       expect(issues).toHaveLength(1);
       expect(issues[0]).toMatchObject({ id: 6_600_001, number: 12 });
-      expect(errorSpy).toHaveBeenCalledTimes(1);
-      expect(String(errorSpy.mock.calls[0]?.[0])).toContain("gitlab-org/gitlab");
-      expect(String(errorSpy.mock.calls[0]?.[0])).toContain("13");
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(errors).not.toHaveBeenCalled();
+      expect(String(warnSpy.mock.calls[0]?.[0])).toContain("gitlab-org/gitlab");
+      expect(String(warnSpy.mock.calls[0]?.[0])).toContain("13");
     } finally {
-      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+      errors.mockRestore();
     }
   });
 
@@ -1449,8 +1452,8 @@ index 0123456..789abcd 100644
     // a member-chosen instance can make them carry line breaks and terminal
     // escapes — so the disappearance line encodes each (issue 1042).
     const hostileIid = "12\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[31mred";
-    const errors: unknown[][] = [];
-    const errorLog = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { errors.push(args); });
+    const warnings: unknown[][] = [];
+    const warningLog = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => { warnings.push(args); });
     try {
       const client = gateway(async (input) => {
         const url = String(input);
@@ -1461,14 +1464,14 @@ index 0123456..789abcd 100644
       const listed = await client.listIssues({ owner: "evil\u001b[31m", name: "x\ny" });
 
       expect(listed).toEqual([]);
-      expect(errors).toHaveLength(1);
-      const rendered = String(errors[0]![0]);
+      expect(warnings).toHaveLength(1);
+      const rendered = String(warnings[0]![0]);
       expect(rendered).not.toContain("\n");
       expect(rendered).not.toContain("\u001b");
       expect(rendered).toContain(logField(hostileIid));
       expect(rendered).toContain(logField("evil\u001b[31m/x\ny"));
     } finally {
-      errorLog.mockRestore();
+      warningLog.mockRestore();
     }
   });
 

@@ -219,7 +219,7 @@ export class GitLabGateway {
         // text — the issue number and the repository path arrive from its
         // responses — so each is encoded (issue 1042).
         if (error instanceof GitLabApiError && error.status === 404) {
-          console.error(
+          console.warn(
             `GitLab issue ${logField(String(object.iid))} in ${logField(`${repository.owner}/${repository.name}`)}`
               + " disappeared between the listing and its evidence reads; omitting it from the listing.",
           );
