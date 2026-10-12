@@ -300,35 +300,54 @@ describe("sanction contest store", () => {
     const accountId = await insertUser("MEMBER");
     await sanctionAccount(accountId, "RECALIBRATING");
     const sanctionEvent = await liveSanctionEvent(accountId);
+    const [sanction] = await sql<{ created_at: string; past_at: string; future_at: string }[]>`
+      select created_at::text,
+             (created_at - interval '1 minute')::text as past_at,
+             (created_at + interval '1 minute')::text as future_at
+      from moderation_events where id = ${sanctionEvent.id}
+    `;
+    expect(sanction).toBeDefined();
+    vi.setSystemTime(new Date(sanction!.created_at).getTime() - 1);
+    try {
+      const beforePast = await eligibilityAt(accountId, sanction!.past_at);
+      const beforeNow = await eligibilityAt(accountId, sanction!.created_at);
+      const beforeFuture = await eligibilityAt(accountId, sanction!.future_at);
 
-    const beforePast = await eligibilityAt(accountId, new Date(Date.now() - 60_000));
-    const beforeNow = await eligibilityAt(accountId, new Date());
-    const beforeFuture = await eligibilityAt(accountId, new Date(Date.now() + 60_000));
+      const result = await store().fileSanctionContest({
+        accountId,
+        sanctionEventId: sanctionEvent.id,
+        reason: "A filing event is a same-state no-op for the fold.",
+      });
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") {
+        throw new Error("Expected the filing to succeed.");
+      }
+      const [filingEvent] = await sql<{ created_at: string; future_at: string }[]>`
+        select created_at::text, (created_at + interval '1 minute')::text as future_at
+        from moderation_events where contest_request_id = ${result.value.id}
+      `;
+      expect(filingEvent).toBeDefined();
 
-    const result = await store().fileSanctionContest({
-      accountId,
-      sanctionEventId: sanctionEvent.id,
-      reason: "A filing event is a same-state no-op for the fold.",
-    });
-    expect(result.kind).toBe("ok");
+      const afterPast = await eligibilityAt(accountId, sanction!.past_at);
+      const afterNow = await eligibilityAt(accountId, filingEvent!.created_at);
+      const afterFuture = await eligibilityAt(accountId, filingEvent!.future_at);
+      expect(afterPast).toEqual(beforePast);
+      expect(afterNow).toEqual(beforeNow);
+      expect(afterFuture).toEqual(beforeFuture);
+      expect(afterNow).toBe(false);
 
-    const afterPast = await eligibilityAt(accountId, new Date(Date.now() - 120_000));
-    const afterNow = await eligibilityAt(accountId, new Date());
-    const afterFuture = await eligibilityAt(accountId, new Date(Date.now() + 60_000));
-    expect(afterPast).toEqual(beforePast);
-    expect(afterNow).toEqual(beforeNow);
-    expect(afterFuture).toEqual(beforeFuture);
-    expect(afterNow).toBe(false);
-
-    const history = await listEnforcementHistory();
-    const filing = history.find((entry) => entry.reason === "A filing event is a same-state no-op for the fold.");
-    expect(filing).toBeDefined();
-    expect(filing).toMatchObject({
-      targetAccountId: accountId,
-      actorLogin: expect.any(String),
-      priorState: "RECALIBRATING",
-      newState: "RECALIBRATING",
-    });
+      const history = await listEnforcementHistory();
+      const filing = history.find((entry) => entry.reason === "A filing event is a same-state no-op for the fold.");
+      expect(filing).toBeDefined();
+      expect(filing).toMatchObject({
+        targetAccountId: accountId,
+        actorLogin: expect.any(String),
+        priorState: "RECALIBRATING",
+        newState: "RECALIBRATING",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   }, 60_000);
 
   it("lists the account's own requests, newest first, with decided outcomes", async () => {
@@ -644,9 +663,17 @@ describe("sanction contest decision path", () => {
     await sanctionAccount(accountId, "RECALIBRATING");
     const sanctionEvent = await sanctionEventBy(accountId, imposerId);
     const requestId = await fileOpenRequest(accountId, sanctionEvent.id, "The cohort was not representative.");
-
-    const beforeNow = await eligibilityAt(accountId, new Date());
-    expect(beforeNow).toBe(false);
+    const [sanction] = await sql<{ created_at: string }[]>`
+      select created_at::text from moderation_events where id = ${sanctionEvent.id}
+    `;
+    expect(sanction).toBeDefined();
+    vi.setSystemTime(new Date(sanction!.created_at).getTime() - 1);
+    try {
+      const beforeNow = await eligibilityAt(accountId, sanction!.created_at);
+      expect(beforeNow).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
 
     const result = await decide(requestId, imposerId, "GRANTED", "The audit overcounted.");
     expect(result).toMatchObject({ kind: "ok" });
