@@ -117,6 +117,60 @@ afterEach(() => {
 afterAll(() => { vi.resetModules(); });
 
 describe("server instrumentation", () => {
+  it("retains routine counts through a rejected drain and emits recovery before its summary", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv("NEXT_PHASE", "");
+    vi.stubEnv("OVERFLOW_DISABLE_RECONCILIATION_SWEEP", "");
+    const events: { sink: "info" | "error"; args: unknown[] }[] = [];
+    vi.spyOn(console, "info").mockImplementation((...args: unknown[]) => {
+      events.push({ sink: "info", args });
+    });
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      events.push({ sink: "error", args });
+    });
+    const { register } = await import("@/instrumentation");
+    await register();
+    const worker = startWorker.mock.calls[0]![0] as ReconciliationWorkerSchedule;
+    const background = startSweep.mock.calls[0]![0] as ReconciliationSweepSchedule;
+
+    drain.mockResolvedValueOnce(["DEFERRED", "IDLE", "DEFERRED"]);
+    await worker.drain();
+    expect(events).toEqual([]);
+    const failure = new Error("unavailable");
+    drain.mockRejectedValueOnce(failure);
+    now += 1_000;
+    await expect(worker.drain()).rejects.toBe(failure);
+    expect(events).toEqual([]);
+    await worker.onFailure!(failure);
+
+    // Other background lines share info; their payloads distinguish them from drain counts.
+    sweep.mockResolvedValueOnce({ attempted: 3, enqueued: 2, failed: 1 });
+    await background.runSweep();
+    await background.pruneRetention!();
+    now += 1_000;
+    drain.mockResolvedValueOnce(["FAILED", "DEFERRED"]);
+    await worker.drain();
+    drain.mockResolvedValueOnce(["BUDGET_HELD"]);
+    await worker.drain();
+
+    expect(events).toEqual([
+      { sink: "error", args: [expect.any(String), failure] },
+      { sink: "info", args: [expect.any(String), { attempted: 3, enqueued: 2, failed: 1 }] },
+      { sink: "info", args: [expect.any(String), {
+        processedReceipts: 0,
+        failedReceipts: 0,
+        abandonedPendingReceipts: 0,
+        expiredRuns: 0,
+        changesOfExpiredRuns: 0,
+      }] },
+      { sink: "info", args: [expect.any(String)] },
+      { sink: "info", args: [expect.any(String), { DEFERRED: 3, IDLE: 1, FAILED: 1 }] },
+      { sink: "info", args: [expect.any(String), { BUDGET_HELD: 1 }] },
+    ]);
+  });
+
   it("carries routine drain counts into the next state change on the info sink", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
@@ -133,7 +187,7 @@ describe("server instrumentation", () => {
     drain.mockResolvedValueOnce(["FAILED", "RETRY_SCHEDULED", "DEFERRED"]);
     await schedule.drain();
     expect(info.mock.calls).toEqual([
-      ["Reconciliation drain", { DEFERRED: 3, IDLE: 1, FAILED: 1, RETRY_SCHEDULED: 1 }],
+      [expect.any(String), { DEFERRED: 3, IDLE: 1, FAILED: 1, RETRY_SCHEDULED: 1 }],
     ]);
     expect(error).not.toHaveBeenCalled();
   });

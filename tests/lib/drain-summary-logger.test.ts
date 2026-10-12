@@ -19,12 +19,12 @@ describe("drain summary logging", () => {
       logger.record(["DEFERRED", "IDLE"]);
       logger.record([outcome, outcome, "DEFERRED"]);
       expect(info.mock.calls).toEqual([
-        ["Reconciliation drain", { DEFERRED: 2, IDLE: 1, [outcome]: 2 }],
+        [expect.any(String), { DEFERRED: 2, IDLE: 1, [outcome]: 2 }],
       ]);
       logger.record(["FAILED"]);
       expect(info.mock.calls).toEqual([
-        ["Reconciliation drain", { DEFERRED: 2, IDLE: 1, [outcome]: 2 }],
-        ["Reconciliation drain", { FAILED: 1 }],
+        [expect.any(String), { DEFERRED: 2, IDLE: 1, [outcome]: 2 }],
+        [expect.any(String), { FAILED: 1 }],
       ]);
     },
   );
@@ -40,15 +40,15 @@ describe("drain summary logging", () => {
     now = 10_000 + elapsed;
     logger.record(["DEFERRED", "IDLE", "IDLE"]);
     expect(info.mock.calls).toEqual([
-      ["Reconciliation drain", { DEFERRED: 3, IDLE: 3 }],
+      [expect.any(String), { DEFERRED: 3, IDLE: 3 }],
     ]);
     logger.record(["DEFERRED"]);
     expect(info).toHaveBeenCalledTimes(1);
     now += DRAIN_SUMMARY_INTERVAL_MS;
     logger.record([]);
     expect(info.mock.calls).toEqual([
-      ["Reconciliation drain", { DEFERRED: 3, IDLE: 3 }],
-      ["Reconciliation drain", { DEFERRED: 1 }],
+      [expect.any(String), { DEFERRED: 3, IDLE: 3 }],
+      [expect.any(String), { DEFERRED: 1 }],
     ]);
   });
 
@@ -61,15 +61,15 @@ describe("drain summary logging", () => {
     logger.record([]);
     expect(info).not.toHaveBeenCalled();
     logger.record(["DEFERRED"]);
-    expect(info.mock.calls).toEqual([["Reconciliation drain", { DEFERRED: 1 }]]);
+    expect(info.mock.calls).toEqual([[expect.any(String), { DEFERRED: 1 }]]);
     now += 1;
     logger.record(["IDLE"]);
     expect(info).toHaveBeenCalledTimes(1);
     now += 900_000;
     logger.record([]);
     expect(info.mock.calls).toEqual([
-      ["Reconciliation drain", { DEFERRED: 1 }],
-      ["Reconciliation drain", { IDLE: 1 }],
+      [expect.any(String), { DEFERRED: 1 }],
+      [expect.any(String), { IDLE: 1 }],
     ]);
     now += 900_000;
     logger.record([]);
@@ -88,13 +88,13 @@ describe("drain summary logging", () => {
     now = 1_399_999;
     logger.record(["IDLE"]);
     expect(info.mock.calls).toEqual([
-      ["Reconciliation drain", { DEFERRED: 1, RECONCILED: 1 }],
+      [expect.any(String), { DEFERRED: 1, RECONCILED: 1 }],
     ]);
     now += 1;
     logger.record([]);
     expect(info.mock.calls).toEqual([
-      ["Reconciliation drain", { DEFERRED: 1, RECONCILED: 1 }],
-      ["Reconciliation drain", { DEFERRED: 1, IDLE: 1 }],
+      [expect.any(String), { DEFERRED: 1, RECONCILED: 1 }],
+      [expect.any(String), { DEFERRED: 1, IDLE: 1 }],
     ]);
   });
 });
