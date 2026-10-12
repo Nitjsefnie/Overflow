@@ -6,22 +6,6 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { parse } from "yaml";
 
-/**
- * Branch protection names each required check only by its check-run name, and
- * every workflow here posts through the same GitHub Actions app, so a job with
- * a required name in ANY workflow satisfies it. `.github/required-checks.json`
- * pins each required name to the workflow file, or files, whose job is trusted
- * to produce it, and scripts/deploy-revision.sh resolves each required check
- * through that pin. This suite holds the committed workflows to the pin: every
- * pinned name has exactly one producing job in every pinned file, and no
- * producing job in any unpinned file.
- *
- * A pin may be a list because issue 1090 splits a workflow that reads
- * pull-request data out of its privileged triggers, leaving one required
- * context produced by a `pull_request_target` file and a push file. Every
- * committed entry uses that list form; this suite reads both forms so a
- * reader that silently drops half of a pin cannot pass.
- */
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const workflowsDir = resolve(root, ".github/workflows");
@@ -140,6 +124,29 @@ describe(".github/required-checks.json", () => {
         [...pinnedFiles].sort(),
       );
       expect(producers, check).toHaveLength(pinnedFiles.size);
+    }
+  });
+
+  it("pins the four PR gate contexts to the aggregate and their push producer", () => {
+    for (const context of ["actionlint", "ratchet-guard", "secret-scan", "dependency-audit"]) {
+      expect(pins[context], context).toEqual([
+        `.github/workflows/${context}.yml`,
+        ".github/workflows/pr-gates.yml",
+      ]);
+    }
+  });
+
+  it("never skips a pinned producer job at the job level", async () => {
+    for (const [check, pin] of Object.entries(pins)) {
+      for (const path of pinsOf(pin)) {
+        const workflow = parse(await readFile(resolve(root, path), "utf8")) as {
+          jobs: Record<string, { name?: string; if?: unknown }>;
+        };
+        const producers = Object.entries(workflow.jobs)
+          .filter(([id, job]) => (job.name ?? id) === check);
+        expect(producers, `${path} must produce ${check}`).toHaveLength(1);
+        expect(producers[0]![1].if, `${path}/${check} must never skip`).toBeUndefined();
+      }
     }
   });
 

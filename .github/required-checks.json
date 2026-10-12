@@ -1,19 +1,19 @@
 {
   "actionlint": [
     ".github/workflows/actionlint.yml",
-    ".github/workflows/actionlint-pr.yml"
+    ".github/workflows/pr-gates.yml"
   ],
   "ratchet-guard": [
     ".github/workflows/ratchet-guard.yml",
-    ".github/workflows/ratchet-guard-pr.yml"
+    ".github/workflows/pr-gates.yml"
   ],
   "secret-scan": [
     ".github/workflows/secret-scan.yml",
-    ".github/workflows/secret-scan-pr.yml"
+    ".github/workflows/pr-gates.yml"
   ],
   "dependency-audit": [
     ".github/workflows/dependency-audit.yml",
-    ".github/workflows/dependency-audit-pr.yml"
+    ".github/workflows/pr-gates.yml"
   ],
   "verify": [
     ".github/workflows/ci.yml",

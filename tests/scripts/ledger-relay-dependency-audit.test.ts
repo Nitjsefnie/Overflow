@@ -13,23 +13,9 @@ import {
   type RelayJob,
 } from "../../scripts/ledger-relay.ts";
 
-/**
- * Issue 1149: `dependency-audit` is a required context produced by TWO
- * workflow files — the push/schedule/dispatch leg (dependency-audit.yml) and
- * the new pull_request_target leg (dependency-audit-pr.yml). The pin lives in
- * .github/required-checks.json as the issue-1090 list form, and the relay
- * mirrors each producer run's conclusion onto the Ledger App check-run named
- * `dependency-audit`.
- *
- * This module is the issue-1034 shape, applied to the fifth context:
- * map-dependent assertions read the COMMITTED map, so unpinning the context
- * fails here for a readable reason instead of silently demoting the audit
- * back to an unrelayed producer. Fixtures are synthetic throughout; no real
- * package, advisory or secret appears.
- */
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const PATH_DEP_AUDIT = ".github/workflows/dependency-audit.yml";
-const PATH_DEP_AUDIT_PR = ".github/workflows/dependency-audit-pr.yml";
+const PATH_DEP_AUDIT_PR = ".github/workflows/pr-gates.yml";
 /** The job name both producer files ship, and the required context itself. */
 const CONTEXT = "dependency-audit";
 
@@ -41,6 +27,14 @@ function job(over: Partial<RelayJob>): RelayJob {
     conclusion: "success",
     ...over,
   };
+}
+
+const PR_CONTEXTS = ["actionlint", "ratchet-guard", "secret-scan", "dependency-audit"];
+
+/** A real aggregate run reports all four jobs, with only this gate failing. */
+function producerJobs(path: string): RelayJob[] {
+  const contexts = path === PATH_DEP_AUDIT_PR ? PR_CONTEXTS : [CONTEXT];
+  return contexts.map((name) => job({ name, conclusion: name === CONTEXT ? "failure" : "success" }));
 }
 
 let committed: PinMap;
@@ -61,13 +55,15 @@ describe("the committed pin (issue 1149)", () => {
 });
 
 describe("a red audit relays as a failing ledger check-run (issue 1149)", () => {
-  const RED_JOB = [job({ conclusion: "failure" })];
 
   it.each([PATH_DEP_AUDIT, PATH_DEP_AUDIT_PR])(
     "maps a failing dependency-audit job to a completed/failure decision for a run of %s",
     (runPath) => {
-      const decisions = decideContexts(committed, runPath, "failure", RED_JOB);
-      expect(decisions).toEqual([
+      const decisions = decideContexts(committed, runPath, "failure", producerJobs(runPath));
+      expect(decisions.map((decision) => decision.context)).toEqual(
+        runPath === PATH_DEP_AUDIT_PR ? PR_CONTEXTS : [CONTEXT],
+      );
+      expect(decisions.filter((decision) => decision.context === CONTEXT)).toEqual([
         {
           context: CONTEXT,
           status: "completed",
@@ -135,7 +131,7 @@ describe("the committed pin drives runRelay end to end (issue 1149)", () => {
 
   it.each([
     [
-      "the pull_request_target leg (dependency-audit-pr.yml)",
+      "the pull_request_target leg (pr-gates.yml)",
       {
         GITHUB_WORKFLOW_RUN_PATH: PATH_DEP_AUDIT_PR,
         GITHUB_WORKFLOW_RUN_EVENT: "pull_request_target",
@@ -151,10 +147,12 @@ describe("the committed pin drives runRelay end to end (issue 1149)", () => {
       },
     ],
   ])("posts the failing dependency-audit check-run for a red run of %s", async (_name, over) => {
+    const jobs = producerJobs(over.GITHUB_WORKFLOW_RUN_PATH);
+    const contexts = over.GITHUB_WORKFLOW_RUN_PATH === PATH_DEP_AUDIT_PR ? PR_CONTEXTS : [CONTEXT];
     const fetchStub = makeFetch([
       { status: 201, body: { token: "installation-token" } },
-      { status: 200, body: { total_count: 1, jobs: [job({ conclusion: "failure" })] } },
-      { status: 201, body: { id: 1 } },
+      { status: 200, body: { total_count: jobs.length, jobs } },
+      ...contexts.map((_, index) => ({ status: 201, body: { id: index + 1 } })),
       { status: 200, body: { total_count: 0, workflow_runs: [] } },
     ]);
     const result = await runRelay({
@@ -164,22 +162,24 @@ describe("the committed pin drives runRelay end to end (issue 1149)", () => {
       readPinMap: async () => committed,
     });
 
-    expect(result.posted).toEqual([CONTEXT]);
+    expect(result.posted).toEqual(contexts);
     expect(fetchStub.requests.map((request) => request.url)).toEqual([
       TOKEN_URL,
       JOBS_URL,
-      CHECK_RUNS_URL,
+      ...contexts.map(() => CHECK_RUNS_URL),
       SWEEP_RUNS_URL,
     ]);
-    const checkRun = fetchStub.requests.find((request) => request.url === CHECK_RUNS_URL);
-    expect(JSON.parse(String(checkRun?.init.body))).toEqual({
-      name: CONTEXT,
-      head_sha: HEAD_SHA,
-      status: "completed",
-      conclusion: "failure",
-      details_url: HTML_URL,
-      output: { title: expect.any(String), summary: expect.any(String) },
-    });
+    const checkRuns = fetchStub.requests.filter((request) => request.url === CHECK_RUNS_URL);
+    expect(checkRuns.map((request) => JSON.parse(String(request.init.body)))).toEqual(
+      contexts.map((context) => ({
+        name: context,
+        head_sha: HEAD_SHA,
+        status: "completed",
+        conclusion: context === CONTEXT ? "failure" : "success",
+        details_url: HTML_URL,
+        output: { title: expect.any(String), summary: expect.any(String) },
+      })),
+    );
   });
 
   it("refuses a red run of the push leg that did not execute main's definition", async () => {

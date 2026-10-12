@@ -262,29 +262,6 @@ function ownProcessGroup(): number | undefined {
  */
 const LINUX_ONLY = process.platform === "linux";
 
-/**
- * NOTE ON THE "RUN STOPPED FROM OUTSIDE" CASE — there is no protection for it,
- * deliberately, and this comment exists so nobody adds one that cannot work.
- *
- * An earlier version kept a set of live process groups and killed them from
- * `process.on("exit")` and from SIGINT/SIGTERM/SIGHUP handlers. Measured here,
- * that set was ALWAYS empty when a handler could run: the only two statements
- * that touched it — the `add` and the `delete` — sit inside a single synchronous
- * `runBoundedScript` frame, and a signal callback cannot interleave inside a
- * synchronous call. An instrumented exit handler printed
- * `observedLiveGroups=0`. So the handlers could never kill anything, while the
- * `process.exit(0)` in them really did change vitest worker's signal semantics
- * — a real cost for zero protection.
- *
- * What actually bounds a step script is the `timeout` in `runBoundedScript`,
- * because that is what stops the script from running indefinitely in the first
- * place. That bound holds only while this process is alive: if the whole test
- * run is killed from outside, the timeout dies with it, so whatever was running
- * at that instant is left behind UNBOUND. The honest summary is narrower than
- * "bounded rather than eternal" — the timeout bounds what a step script can
- * leave behind WHILE THE TEST IS RUNNING, and bounds nothing at all once the
- * test process itself is gone.
- */
 
 /** `pnpm audit --json` over a lockfile with no known vulnerabilities. */
 const CLEAN: ScriptedOutcome = {
@@ -484,7 +461,7 @@ describe("the dependency audit workflow's audit step", () => {
     // pnpm-lock.yaml and queries the registry's advisory endpoint, and never
     // runs anything out of the checked-out tree. This file's legs are push,
     // schedule and dispatch of main's own tip; the pull-request leg is
-    // dependency-audit-pr.yml, which materializes the manifests as data for
+    // pr-gates.yml, which materializes the manifests as data for
     // the same reason. Each of the shapes that would break the boundary is
     // denied by name rather than left to a whole-job diff.
     const checkout = steps.filter((step) => step.uses?.startsWith("actions/checkout"));
@@ -515,71 +492,6 @@ describe("the dependency audit workflow's audit step", () => {
   });
 
   it("binds the pull-request-controlled inputs for every step that runs pnpm", () => {
-    // `corepack install --global pnpm@10.33.0` sets corepack's DEFAULT and
-    // nothing more. When the `pnpm` shim runs, corepack otherwise reads
-    // `packageManager` from the nearest `package.json` and downloads THAT
-    // version — and `package.json` is one of the two files this task added to
-    // the path filter, so the trigger is what put a pull-request-controlled
-    // field in the position that selects the binary.
-    //
-    // The step that matters is the one that EXECUTES `pnpm audit`, not the one
-    // that installs pnpm, and GitHub Actions `env:` is step-scoped: it does not
-    // carry forward. An earlier version of this branch pinned the variable on
-    // the install step and every assertion here stayed green while the hole
-    // was open — measured on the Node 24.17.0 this workflow pins, replaying the
-    // two steps as separate processes against a `packageManager` of
-    // `pnpm@9.15.9`:
-    //
-    //   step 1 with the variable on the step:  pnpm --version -> 10.33.0
-    //   step 2 without it:                     pnpm --version -> 9.15.9
-    //
-    // The registry pin is the same class of thing about a different input:
-    // pnpm reads `.npmrc` from the working directory, and a `registry=` there
-    // redirects the advisory endpoint, so a pull request touching `.npmrc` AND
-    // `package.json` could have the audit answer "no known vulnerabilities".
-    // `.npmrc` is not in the path filter so that pair does not trigger on its
-    // own, but this workflow already runs on the `package.json` half of it.
-    // Measured on pnpm 10.33.0: a project `.npmrc` does redirect `pnpm config
-    // get registry`, and `npm_config_registry` outranks it.
-    //
-    // The two TLS pins close the transport half of the same attack: a project
-    // `.npmrc` proxy that the env cannot neutralise (measured on pnpm 10.33.0:
-    // a non-empty `npm_config_proxy`/`npm_config_https_proxy` is honoured, but
-    // an EMPTY one does NOT beat `.npmrc`, so no proxy pin exists) would let a
-    // pull request intercept the audit connection — if it could also make the
-    // interception trusted. It cannot: `npm_config_strict_ssl: "true"` beats a
-    // project `strict-ssl=false` (measured: env true rejects a self-signed
-    // endpoint that `strict-ssl=false` alone accepts), and `npm_config_cafile`
-    // at the system bundle beats a project `cafile=` (measured: a project
-    // cafile REPLACES the trust store, and the non-empty env value outranks
-    // it). An intercepted connection then fails closed — red run, not a false
-    // clean. Measured to be ignored by pnpm 10.33.0's audit in every spelling:
-    // no-proxy / noproxy / NO_PROXY, so there is nothing to pin there.
-    //
-    // The severity-bar pin closes the channel the other pins cannot see: the
-    // bar itself. A project `.npmrc` `audit-level=critical` filters a HIGH
-    // advisory out of `pnpm audit --json` on pnpm 10.33.0 — reported clean,
-    // exit 0, no proxy and no MITM needed (measured, advisory carrying its
-    // github_advisory_id; the earlier probe whose mock advisory lacked that
-    // field could never have seen this filter, which is the invalid-first-leg
-    // lesson). The audit reads the bar from `opts.auditLevel ?? "low"` against
-    // its severity ladder `AUDIT_LEVEL_NUMBER = {low: 0, moderate: 1, high: 2,
-    // critical: 3}` (dist/pnpm.cjs:137290, :137504-137505), so `low` is the
-    // lowest bar the ladder defines and reports every advisory pnpm can
-    // report. There is no lower safe value: `npm_config_audit_level: "info"`
-    // was MEASURED filtering EVERY advisory, because the ladder has no `info`
-    // key — `AUDIT_LEVEL_NUMBER[severity] >= undefined` is false for all four
-    // severities — so an "info" pin would silently disable the audit. The env
-    // value outranks the project `.npmrc` (measured: with
-    // `npm_config_audit_level=low` set, a `.npmrc audit-level=critical` no
-    // longer filters the high advisory; with no env value set, it does).
-    //
-    // All five pins are swept over every step that runs pnpm, from ONE table.
-    // They were placed on mirrored steps by accident once — one right, one
-    // wrong — and it was the ASYMMETRY that let it stand: one pin was
-    // asserted, the other was not. A table means a pin cannot be added,
-    // removed or given a different value without the sweep noticing, and no
-    // second pin can slip in beside it unasserted.
     const PINS: Record<string, string> = {
       COREPACK_ENABLE_PROJECT_SPEC: "0",
       npm_config_registry: "https://registry.npmjs.org/",
@@ -588,12 +500,6 @@ describe("the dependency audit workflow's audit step", () => {
       npm_config_audit_level: "low",
     };
 
-    // Actions resolves a step's environment as workflow, then job, then the
-    // step's own block. Any of the three levels satisfies the requirement, so
-    // this asserts the PROPERTY — every step that runs pnpm resolves these
-    // inputs from the workflow — rather than a particular level. Asserting a
-    // level instead is what made an earlier version of this message claim a
-    // property that an equally effective placement also had.
     const effective = (step: Step | undefined, key: string): string | undefined =>
       step?.env?.[key] ?? jobEnv?.[key] ?? workflowEnv?.[key];
 
@@ -651,10 +557,6 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     afterAll(async () => {
-      // Nothing to clean up beyond the directory: `runBoundedScript` kills
-      // every group it starts before it returns, so there is never a live
-      // group by the time this runs. An earlier version swept a set of "live"
-      // groups here; it was always empty, for the reason recorded above.
       await rm(root, { recursive: true, force: true });
     });
 
@@ -808,23 +710,6 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("names which of the two non-retryable states it is, in the log a human reads", () => {
-      // `unreachable` and `unreadable` share the `*)` arm, the same echo and
-      // the same exit status — nothing programmatic consumes them — but the
-      // verdict word is echoed into the step's own output, and the two say
-      // different things to whoever reads a red run: a registry that answered
-      // "no" is not a report this step failed to read. Swapping the labels
-      // mislabels the diagnosis without changing anything else, which is why
-      // asserting on the word is the only thing that catches it.
-      //
-      // This is not an assertion on prose. The token is written to stdout at
-      // run time by the classifier, in the same sense as the `not.toContain`
-      // checks below and above it; the repository's ban is on matching page
-      // copy or a comment's wording in a source file.
-      // Matched on the word alone. An earlier version of this asserted
-      // `": unreachable —"`, which copied the colon and em dash out of the echo
-      // above, so reformatting that echo — changing no verdict — turned this
-      // red for an unrelated reason. The word is the contract; its punctuation
-      // is not.
       const forbidden = runStep([FORBIDDEN], { delaySeconds: RETRY_DELAY });
       expect(forbidden.stdout).toMatch(/\bunreachable\b/);
       expect(forbidden.stdout).not.toMatch(/\bunreadable\b/);
@@ -883,13 +768,6 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("does not blame the registry when there was no lockfile to audit", () => {
-      // A push that DELETES pnpm-lock.yaml still triggers this workflow — the
-      // trigger is unfiltered (issue 1149 fix round 2) — and pnpm then answers
-      // ERR_PNPM_AUDIT_NO_LOCKFILE. No registry was asked and none failed, so
-      // the `unreachable` label ("an answered or unconnected registry") is
-      // wrong on both halves, and a reader who believes it goes looking for an
-      // outage. Red either way, and still one attempt: a lockfile does not
-      // appear between two tries.
       const outcome = runStep([NO_LOCKFILE], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       expect(outcome.attempts).toBe(1);

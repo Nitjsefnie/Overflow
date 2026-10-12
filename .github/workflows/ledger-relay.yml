@@ -23,25 +23,16 @@ on:
   # executed, and every event value reaches the script through env:, never
   # through ${{ }} interpolation in run:.
   workflow_run:  # zizmor: ignore[dangerous-triggers]
+    # The filter matches name: fields. Main-push producers, verify's
+    # PR producer, and the four-job privileged PR aggregate all relay.
     workflows:
       - "ci"
       - "actionlint"
       - "ratchet guard"
-      # Issue 1090 split each required gate's pull-request leg into its own
-      # file so the only trigger it can be started by is `pull_request_target`.
-      # This filter matches the workflow `name:` FIELD, not the filename, so a
-      # new producer file whose `name:` is absent here is never relayed — the
-      # pull-request legs of the pinned contexts are listed beside their push
-      # legs, five of each after issue 1149 added the dependency audit.
-      - "actionlint pull request"
-      - "ratchet guard pull request"
       - "ci pull request"
       - "secret scan"
-      - "secret scan pull request"
-      # Issue 1149: `dependency-audit` is a required context, and both of its
-      # producer legs are listed the way every other pinned context's are.
       - "dependency audit"
-      - "dependency audit pull request"
+      - "pr gates"
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -70,13 +61,6 @@ permissions:
   actions: write
 
 concurrency:
-  # Issue 1116 splits the group by event: a scheduled start, or a
-  # workflow_dispatch without a run_id, is SWEEP-ONLY — it heals nothing, so it
-  # must never displace a PENDING workflow_run relay, the exact cancellation
-  # whose orphaned victim the sweep exists to heal (issue 885). It groups as
-  # ledger-relay-sweep; a dispatch WITH a run_id heals exactly as before in
-  # ledger-relay. The same predicate is the step's LEDGER_SWEEP_ONLY env, so
-  # the group and the script's mode cannot drift.
   group: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_id == '')) && 'ledger-relay-sweep' || 'ledger-relay' }}
   # `false` keeps this workflow's RUNNING instance alive when a newer arrival
   # joins the group. It does NOT keep a PENDING one: GitHub keeps at most one
