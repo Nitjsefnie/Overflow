@@ -187,6 +187,7 @@ node scripts/check-module-size.ts
 pnpm typecheck
 pnpm build
 node scripts/check-page-geometry.mjs
+node scripts/check-perf-budget.ts
 ```
 
 The order is CI's, and it is the useful one: the migration runs first because
@@ -207,6 +208,33 @@ the environment or the repo-root `.env` file (the only env file the check
 loads, not the wider Next.js family). A run with no signed-in contract never
 requires it; the default contracts include signed-in pages. Refusals exit 2;
 measured failures exit 1.
+
+The SQL statement budget check counts statements through the real postgres.js
+client during three workloads: two default-size pages of board data, one full
+repository fold, and one signature-verified webhook ingestion. Each workload
+starts from a fresh deterministic fixture and runs twice; unequal counts fail.
+Missing or unbudgeted workloads also fail. This measures statement counts,
+never elapsed time or rows returned. Fixture setup and verification queries
+are outside the count; transaction and coordination statements are included.
+
+`scripts/perf-budget.json` records the initial measured counts. A count above
+its budget fails; a lower count fails as `shrunk` until you run
+`node scripts/check-perf-budget.ts --tighten` and commit the lowered budget.
+The tighten command never raises a value or adds/removes a workload key, and
+refuses to write on a failed or nondeterministic measurement. The ratchet
+check compares committed budgets with the merge base and refuses increases
+or removed keys. A new workload's positive initial budget adds a constraint
+without relaxing an existing workload. Raising a budget would require a
+separate approval marker; no such marker or raise/re-seed path exists yet.
+
+The gate requires `DATABASE_URL` and a database role with `CREATEDB` (the CI
+Postgres service user has it). It creates a unique temporary database on that
+server, migrates it with `DATABASE_URL=<scratch> pnpm db:migrate`, then drops
+it after closing its clients, including on measurement failure. It preserves
+the caller's database for later CI steps. Run locally only against a disposable
+Postgres server. The gate needs the migrated database and installed dependencies;
+it requires no production build or remote forge access. Both CI code jobs run
+it immediately beside `Page geometry check`.
 
 On pull requests the job ends with a Base freshness step that certifies the
 run when the base is unchanged, or has advanced only disjointly from the

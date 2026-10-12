@@ -250,3 +250,6 @@ jobs:
 
       - name: Page geometry check
         run: node scripts/check-page-geometry.mjs
+
+      - name: SQL statement budget check
+        run: node scripts/check-perf-budget.ts

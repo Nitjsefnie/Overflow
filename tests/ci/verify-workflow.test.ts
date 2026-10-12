@@ -952,6 +952,19 @@ describe("the verify workflow's prerender step", () => {
     steps = workflow.jobs.verify.steps;
   });
 
+  it("runs the SQL statement budget gate beside geometry after database migration", () => {
+    const checks = steps.filter((step) => step.name === "SQL statement budget check");
+    expect(checks).toHaveLength(1);
+    const step = checks[0]!;
+    expect(step.run).toBe("node scripts/check-perf-budget.ts");
+    const migration = steps.findIndex((entry) => entry.name === "Apply PostgreSQL migrations");
+    expect(migration).toBeGreaterThan(-1);
+    expect(steps.indexOf(step)).toBeGreaterThan(migration);
+    expect(Math.abs(steps.indexOf(step) - steps.findIndex((entry) => entry.name === "Page geometry check"))).toBe(1);
+    expect(step.if).toBeUndefined();
+    expect((step as { "continue-on-error"?: unknown })["continue-on-error"]).toBeFalsy();
+  });
+
   it("runs the prerender check after the production build, beside geometry, as a required gate", () => {
     const checks = steps.filter((step) => step.name === "Prerendered routes check");
     expect(checks).toHaveLength(1);
