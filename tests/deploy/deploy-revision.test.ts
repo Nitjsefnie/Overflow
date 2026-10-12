@@ -773,6 +773,66 @@ exit 0
     expect(entries.some((entry) => entry.args[0] === "release:switch")).toBe(false);
   });
 
+  it.each(["failure", "success"])("waits without a ledger check when a ci-pr workflow_run verify job concluded %s", async (conclusion) => {
+    const fixture = await makeFixture();
+    await writeFile(fixture.requiredChecks, JSON.stringify({
+      ...FIXTURE_PINS, verify: [FIXTURE_PINS.verify, ".github/workflows/ci-pr.yml"],
+    }));
+    const state = await writeGateState(fixture, "gate-pr-verify", [
+      { id: 300, path: ".github/workflows/ci-pr.yml", event: "workflow_run",
+        jobs: [{ id: 3001, name: "verify", status: "completed", conclusion }] },
+      { id: 200, path: FIXTURE_PINS["deploy-gate"]!,
+        jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "0" });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("verify (absent)");
+    expect(result.stderr).not.toContain("concluded failure");
+    expectGateRefused(await readLog(fixture.shimLog));
+  });
+
+  it.each(["pull_request", "pull_request_target"])("ignores a pinned %s verify job", async (event) => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-pr-event", [
+      { id: 100, path: FIXTURE_PINS.verify!, event,
+        jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "success" }] },
+      { id: 200, path: FIXTURE_PINS["deploy-gate"]!,
+        jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "0" });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("verify (absent)");
+    expectGateRefused(await readLog(fixture.shimLog));
+  });
+
+  it.each(["push", "schedule", "workflow_dispatch"])("accepts a ci.yml verify job from %s", async (event) => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-main-event", [
+      { id: 100, path: FIXTURE_PINS.verify!, event,
+        jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "success" }] },
+      { id: 200, path: FIXTURE_PINS["deploy-gate"]!,
+        jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "0" });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("refuses a pinned workflow run with no API event before reading its jobs", async () => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-missing-event", [
+      { id: 100, path: FIXTURE_PINS.verify!, event: null,
+        jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "success" }] },
+      { id: 200, path: FIXTURE_PINS["deploy-gate"]!,
+        jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "0" });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toMatch(/run 100.*event/);
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "gh" && entry.args[1]?.includes("/runs/100/jobs?"))).toBe(false);
+    expectGateRefused(entries);
+  });
+
   it("refuses when a same-named job in another workflow succeeded while the pinned job failed", async () => {
     const fixture = await makeFixture();
     const state = await writeGateState(fixture, "gate-collision", [
