@@ -4,8 +4,9 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pendingMigrationLines, readMigrationTree } from "../../scripts/deploy-migration-status";
+import { migrationCompatibilityFixtures } from "../fixtures/migration-compatibility";
 
 import {
   ALL_SHIMS,
@@ -1687,9 +1688,20 @@ describe("scripts/deploy-revision.sh", () => {
 describe("deploy-revision.sh pending-migration gate", () => {
   const unmarkedMigration = "052_unmarked.sql";
   const markedMigration = "053_mixed_version_review.sql";
+  let directory: string;
+
+  beforeAll(async () => {
+    directory = await mkdtemp(path.join(tmpdir(), "overflow-1055-deploy-fixtures-"));
+    for (const { name, contents } of migrationCompatibilityFixtures) {
+      await writeFile(path.join(directory, name), contents);
+    }
+  });
+
+  afterAll(async () => {
+    if (directory) await rm(directory, { recursive: true, force: true });
+  });
 
   async function fixtureStatus(name: string): Promise<string> {
-    const directory = fileURLToPath(new URL("../fixtures/migration-compatibility/", import.meta.url));
     const tree = await readMigrationTree(directory);
     return pendingMigrationLines(new Map([[name, tree.get(name)!]]), new Set()).join("\n") + "\n";
   }

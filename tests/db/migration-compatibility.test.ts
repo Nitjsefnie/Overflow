@@ -1,9 +1,24 @@
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { pendingMigrationLines, readMigrationTree } from "../../scripts/deploy-migration-status";
+import { migrationCompatibilityFixtures } from "../fixtures/migration-compatibility";
 
-const fixturesDirectory = fileURLToPath(new URL("../fixtures/migration-compatibility/", import.meta.url));
+let fixturesDirectory: string;
 const migrationsDirectory = fileURLToPath(new URL("../../db/migrations/", import.meta.url));
+
+beforeAll(async () => {
+  fixturesDirectory = await mkdtemp(path.join(tmpdir(), "overflow-1055-migration-fixtures-"));
+  for (const { name, contents } of migrationCompatibilityFixtures) {
+    await writeFile(path.join(fixturesDirectory, name), contents);
+  }
+});
+
+afterAll(async () => {
+  if (fixturesDirectory) await rm(fixturesDirectory, { recursive: true, force: true });
+});
 
 describe("migration compatibility fixtures", () => {
   it.each([
@@ -27,6 +42,7 @@ describe("migration compatibility fixtures", () => {
     ["029_identifier_comment_delimiter.sql", "drop column"],
   ])("flags %s with its matched shapes", async (name, shapes) => {
     const tree = await readMigrationTree(fixturesDirectory);
+    expect(tree.has(name), `disk-backed fixture ${name}`).toBe(true);
     expect(pendingMigrationLines(new Map([[name, tree.get(name)!]]), new Set())).toEqual([
       `${name}\treview\t${shapes}`,
     ]);

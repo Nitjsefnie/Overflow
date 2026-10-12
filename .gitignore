@@ -452,6 +452,4 @@ tests/webhooks/*
 
 !tests/fixtures/
 tests/fixtures/*
-!tests/fixtures/migration-compatibility/
-tests/fixtures/migration-compatibility/*
-!tests/fixtures/migration-compatibility/*.sql
+!tests/fixtures/migration-compatibility.ts
