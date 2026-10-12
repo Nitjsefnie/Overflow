@@ -10,6 +10,14 @@ function lift(occurredAt: string, id = lowId): FoldModerationEvent {
 }
 
 describe("moderation history instants", () => {
+  it.each([
+    ["minute", "2026-01-01T00:59:00Z", "2026-01-01T00:59:00.000000Z", "2026-01-01T00:60:00Z"],
+    ["second", "2026-01-01T00:00:59Z", "2026-01-01T00:00:59.000000Z", "2026-01-01T00:00:60Z"],
+  ])("accepts %s 59 and rejects 60", (_field, valid, canonical, invalid) => {
+    expect(moderationInstantToIso(valid)).toBe(canonical);
+    expect(() => moderationInstantToIso(invalid)).toThrow("Timestamp was invalid.");
+  });
+
   it.each(["+16:00", "-16:00", "+23:59"])("rejects offset %s outside PostgreSQL's range", (offset) => {
     expect(moderationInstantToIso("2026-01-01T00:00:00+15:59:59")).toBe("2025-12-31T08:00:01.000000Z");
     expect(moderationInstantToIso("2026-01-01T00:00:00-15:59:59")).toBe("2026-01-01T15:59:59.000000Z");
