@@ -2,7 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { runRelay } from "../../scripts/ledger-relay.ts";
+import { renderRelayResult, runRelay } from "../../scripts/ledger-relay.ts";
 import { resolveSuitePullRequest } from "../../scripts/resolve-suite-pull-request.ts";
 
 const REPO = "Nitjsefnie/Overflow";
@@ -65,12 +65,15 @@ function world(kind: "verify" | "pr-gates" = "verify") {
     onCommit: undefined as ((body: Body) => void | Promise<void>) | undefined,
     onJobs: undefined as (() => void) | undefined,
     jobsStatus: undefined as "queued" | "in_progress" | undefined,
+    reruns: [] as Array<{ id: string; authorization: string }>,
+    openPulls: true, liveRuns: [] as Body[],
   };
   const blocked = deferred();
   const released = deferred();
   const baseEnv = {
     LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493",
     LEDGER_APP_KEY: key, GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456",
+    RELAY_RERUN_TOKEN: ["rerun", "test"].join("-"),
   };
   const mirrorEnv = (run: Body) => ({
     ...baseEnv, GITHUB_WORKFLOW_RUN_ID: String(run.id), GITHUB_WORKFLOW_RUN_HEAD_SHA: String(run.head_sha),
@@ -97,9 +100,10 @@ function world(kind: "verify" | "pr-gates" = "verify") {
     if (url.includes("/actions/workflows/pr-suite.yml/runs?")) {
       // A matching message is still a transient error, never deterministic exhaustion.
       if (state.historyReadFails) return new Response("suite history exceeds 10 pages / 1000 runs", { status: 503 });
+      const atHead = state.suites.filter((run) => run.head_sha === new URL(url).searchParams.get("head_sha"));
       return response(state.oversized
         ? { total_count: 1001, workflow_runs: Array.from({ length: 100 }, (_, i) => suite(8002 - i, "failure")) }
-        : { total_count: state.suites.length, workflow_runs: state.suites });
+        : { total_count: atHead.length, workflow_runs: atHead });
     }
     if (url === `${ROOT}/actions/runs?per_page=100`) {
       if (state.listingReadFails) return new Response("producer listing unavailable", { status: 503 });
@@ -113,6 +117,15 @@ function world(kind: "verify" | "pr-gates" = "verify") {
       }
       return response({ check_runs: [...latest.values()] });
     }
+    const pullsHead = /\/commits\/([^/]+)\/pulls\?/.exec(url)?.[1];
+    if (pullsHead !== undefined) return response(state.openPulls
+      ? [{ state: "open", head: { sha: pullsHead, ref: "feature/repro" } }] : []);
+    if (url.includes("/actions/runs?head_sha=")) return response({ workflow_runs: state.liveRuns });
+    const rerunId = /\/actions\/runs\/([0-9]+)\/rerun$/.exec(url)?.[1];
+    if (rerunId !== undefined && init.method === "POST") {
+      state.reruns.push({ id: rerunId, authorization: (init.headers as Record<string, string>).authorization });
+      return new Response(null, { status: 202 });
+    }
     for (const run of [...state.suites, ...state.producers]) {
       if (url === `${ROOT}/actions/runs/${run.id}`) return response(run);
       if (url === `${ROOT}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`) {
@@ -125,8 +138,8 @@ function world(kind: "verify" | "pr-gates" = "verify") {
     }
     throw new Error(`unexpected request ${url}`);
   }) as typeof fetch;
-  const relay = (mode: "mirror" | "sweep", run = initial) => runRelay({
-    env: mode === "mirror" ? mirrorEnv(run) : { ...baseEnv, LEDGER_SWEEP_ONLY: "true" },
+  const relay = (mode: "mirror" | "sweep", run = initial, env: Record<string, string | undefined> = {}) => runRelay({
+    env: { ...(mode === "mirror" ? mirrorEnv(run) : { ...baseEnv, LEDGER_SWEEP_ONLY: "true" }), ...env },
     fetchFn, delayFn: async () => {}, readPinMap: async () => pins,
   });
   return { state, blocked, released, fetchFn, relay };
@@ -659,4 +672,251 @@ describe("completed producer and bound selection", () => {
     expect(w.state.checks.map((check) => `${check.external_id}=${check.conclusion}`))
       .toEqual(["9001:1=success"]);
   });
+});
+
+/** One running start and one pending slot; replaced starts are never invoked. */
+function concurrencyGroup() {
+  type Start = { name: string; run: () => Promise<unknown> };
+  let running: Promise<void> | undefined;
+  let pending: Start | undefined;
+  const started: string[] = [], displaced: string[] = [];
+  const errors: unknown[] = [];
+  function launch(start: Start) {
+    started.push(start.name);
+    running = (async () => {
+      try { await start.run(); } catch (error) { errors.push(error); }
+      const next = pending;
+      pending = undefined;
+      running = undefined;
+      if (next !== undefined) launch(next);
+    })();
+  }
+  return {
+    started, displaced, errors,
+    enqueue(name: string, run: () => Promise<unknown>) {
+      if (running === undefined) launch({ name, run });
+      else {
+        if (pending !== undefined) displaced.push(pending.name);
+        pending = { name, run };
+      }
+    },
+    async drain() { while (running !== undefined) await running; },
+  };
+}
+
+describe("issue 1195 pending-start displacement", () => {
+  it.each(["completion", "sweep-only", "refused"] as const)(
+    "attests the burst by the next start cycle when the survivor is %s", async (survivor) => {
+      const w = world();
+      w.state.blockOldWrite = true;
+      const group = concurrencyGroup();
+      group.enqueue("in-flight", () => w.relay("sweep"));
+      await w.blocked.promise;
+      // Five completions while the original sweep's POST is held. The next
+      // cycle must cover two PR heads and the non-verify pr-gates contexts.
+      const secondHead = "c".repeat(40);
+      const burst = [
+        verify(9002, 8001, "success"), verify(9003, 8001, "failure"),
+        verify(9004, 8002, "success"), gate(9005, "success"), gate(9006, "failure"),
+      ];
+      w.state.suites.push({ ...suite(8002, "success"), head_sha: secondHead });
+      for (const producer of burst) {
+        w.state.producers.unshift(producer);
+        group.enqueue(String(producer.id), () => w.relay("mirror", producer));
+      }
+      if (survivor === "sweep-only") group.enqueue(survivor, () => w.relay("sweep"));
+      if (survivor === "refused") {
+        const refused = { ...gate(9007, "success"), event: "pull_request" };
+        w.state.producers.unshift(refused);
+        group.enqueue(survivor, () => w.relay("mirror", refused));
+      }
+      const latest = (head: string, name: string) => w.state.checks
+        .filter((check) => check.head_sha === head && check.name === name).at(-1);
+      let failurePosted = false;
+      w.state.onCommit = () => {
+        if (latest(HEAD, "verify")?.external_id === "9003:1") failurePosted = true;
+        if (failurePosted) expect(latest(HEAD, "verify"))
+          .toMatchObject({ external_id: "9003:1", conclusion: "failure" });
+      };
+      w.released.resolve();
+      await group.drain();
+      expect(group.started).toEqual(["in-flight", survivor === "completion" ? "9006" : survivor]);
+      expect(group.displaced).toEqual(survivor === "completion"
+        ? ["9002", "9003", "9004", "9005"] : ["9002", "9003", "9004", "9005", "9006"]);
+      expect(latest(HEAD, "verify")).toMatchObject({ external_id: "9003:1", conclusion: "failure" });
+      expect(latest(secondHead, "verify")).toMatchObject({ external_id: "9004:1", conclusion: "success" });
+      for (const context of GATE_CONTEXTS) expect(latest(HEAD, context))
+        .toMatchObject({ external_id: "9006:1", conclusion: "failure" });
+      expect(failurePosted).toBe(true);
+      expect(group.errors).toHaveLength(survivor === "refused" ? 1 : 0);
+      if (survivor === "refused") expect(String(group.errors[0])).toContain("did not execute the base branch's workflow definition");
+    },
+  );
+});
+
+describe("issue 1195 every start sweeps", () => {
+  it.each(["unpinned-event", "unpinned-dispatch", "untrusted-live", "untrusted-dead", "workflow-run-refusal"])(
+    "recovers another head's orphan through %s", async (path) => {
+      const w = world("pr-gates");
+      const orphan = gate(9002, "failure");
+      let trigger: Body = { ...gate(9001, "success"), head_sha: "c".repeat(40) };
+      if (path.startsWith("unpinned")) trigger.path = ".github/workflows/other.yml";
+      if (path.startsWith("untrusted")) trigger.event = "pull_request";
+      if (path === "workflow-run-refusal") trigger = { ...trigger, event: "workflow_run" };
+      w.state.producers = [orphan, trigger];
+      w.state.openPulls = path !== "untrusted-dead";
+      const operation = w.relay("mirror", trigger, path === "unpinned-dispatch"
+        ? { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_DISPATCH_RUN_ID: "9001" } : {});
+      if (path === "untrusted-live") await expect(operation).rejects.toThrow(
+        'run 9001 (event "pull_request", head branch "feature/repro") did not execute the base branch\'s workflow definition; no required context was relayed',
+      );
+      else if (path === "workflow-run-refusal") await expect(operation).rejects.toThrow(/producer.*path/);
+      else {
+        const result = await operation;
+        expect(result.posted).toEqual([]);
+        expect(renderRelayResult(result).join("\n")).toContain("orphan-sweep");
+      }
+      for (const context of GATE_CONTEXTS) expect(w.state.checks.find((check) => check.name === context))
+        .toMatchObject({ head_sha: HEAD, external_id: "9002:1", conclusion: "failure" });
+    },
+  );
+
+  it("keeps the original refusal visible when the finally sweep also fails", async () => {
+    const w = world("pr-gates");
+    const refused = { ...gate(9001, "success"), event: "pull_request" };
+    w.state.producers = [refused];
+    w.state.listingReadFails = true;
+    const error = await w.relay("mirror", refused).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).message).toContain("did not execute the base branch's workflow definition");
+    expect(((error as AggregateError).errors[0] as Error).message).toBe(
+      'run 9001 (event "pull_request", head branch "feature/repro") did not execute the base branch\'s workflow definition; no required context was relayed',
+    );
+    expect((error as AggregateError).errors.map((entry: Error) => entry.message).join("\n"))
+      .toContain("the repository's workflow-run listing for the orphan sweep");
+    expect(w.state.requests.filter((url) => url === `${ROOT}/actions/runs?per_page=100`)).toHaveLength(3);
+  });
+});
+
+describe("issue 1195 sweep rerun-heal", () => {
+  it.each(["sweep", "mirror"] as const)("heals the newest cancelled candidate through %s exactly once", async (mode) => {
+    const w = world("pr-gates");
+    const candidate = { ...gate(9001, "cancelled"), run_started_at: null };
+    w.state.producers = [candidate];
+    const result = await w.relay(mode, candidate);
+    expect(w.state.reruns).toEqual([{ id: "9001", authorization: "Bearer rerun-test" }]);
+    expect(result.rerunDispatched).toBe(true);
+    expect(renderRelayResult(result).join("\n")).toContain("rerun-heal");
+  });
+
+  it("heals an already-attested orphan using jobs only as fallback evidence", async () => {
+    const w = world("pr-gates");
+    const candidate = { ...gate(9001, "cancelled"), run_started_at: null };
+    w.state.producers = [candidate];
+    // Pre-attested checks must not prevent the heal from recovering a lost start.
+    for (const name of GATE_CONTEXTS) w.state.checks.push({ name, head_sha: HEAD,
+      external_id: "9001:1", status: "completed", conclusion: "failure", app: { id: 5118623 } });
+    await w.relay("sweep");
+    expect(w.state.reruns.map((run) => run.id)).toEqual(["9001"]);
+    expect(w.state.requests.filter((url) => url.includes("/jobs?"))).toHaveLength(1);
+  });
+
+  it.each([
+    ["non-cancelled", { conclusion: "success" }],
+    ["non-healable event", { event: "push", head_branch: "main" }],
+    ["attempt cap", { run_attempt: 5 }],
+    ["run started", { run_started_at: "2026-10-12T08:00:00Z" }],
+  ] as const)("applies the cheap %s guard before any heal query", async (_name, over) => {
+    const w = world("pr-gates");
+    w.state.producers = [{ ...gate(9001, "cancelled"), ...over }];
+    await w.relay("sweep");
+    expect(w.state.reruns).toEqual([]);
+    expect(w.state.requests.some((url) => url.includes("/pulls?") || url.includes("?head_sha="))).toBe(false);
+  });
+
+  it.each(["started-job", "closed-pr", "live-run", "newer-producer"])("does not heal a %s candidate", async (guard) => {
+    const w = world("pr-gates");
+    const candidate = gate(9001, "cancelled");
+    w.state.producers = [candidate];
+    if (guard === "newer-producer") w.state.producers.unshift(gate(9002, "failure"));
+    if (guard === "closed-pr") w.state.openPulls = false;
+    if (guard === "live-run") w.state.liveRuns = [{ path: candidate.path, status: "pending" }];
+    const fetchFn = (async (input: unknown, init?: RequestInit) => {
+      if (guard === "started-job" && String(input).includes("/jobs?")) {
+        w.state.requests.push(String(input));
+        return response({ jobs: GATE_CONTEXTS.map((name) => ({ name, status: "completed",
+          conclusion: "cancelled", started_at: "2026-10-12T08:00:00Z" })) });
+      }
+      return w.fetchFn(input as RequestInfo, init);
+    }) as typeof fetch;
+    await runRelay({ env: { LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493",
+      LEDGER_APP_KEY: key, GITHUB_REPOSITORY: REPO, LEDGER_SWEEP_ONLY: "true", RELAY_RERUN_TOKEN: "test" },
+    fetchFn, delayFn: async () => {}, readPinMap: async () => pins });
+    expect(w.state.reruns).toEqual([]);
+    if (guard === "started-job" || guard === "newer-producer") {
+      expect(w.state.requests.some((url) => url.includes("/pulls?"))).toBe(false);
+    }
+    if (guard === "closed-pr") expect(w.state.requests.some((url) => url.includes("/actions/runs?head_sha="))).toBe(false);
+  });
+
+  it("uses the listing's started-at for the trigger before the jobs fallback", async () => {
+    const w = world("pr-gates");
+    const candidate = { ...gate(9001, "cancelled"), run_started_at: "2026-10-12T08:00:00Z" };
+    w.state.producers = [candidate];
+    await w.relay("mirror", candidate);
+    expect(w.state.reruns).toEqual([]);
+    expect(w.state.requests.some((url) => url.includes("/pulls?"))).toBe(false);
+  });
+
+  it("fails red for a missing rerun token only when a heal candidate is on the table", async () => {
+    const w = world("pr-gates");
+    await w.relay("sweep", undefined, { RELAY_RERUN_TOKEN: "" });
+    w.state.producers = [gate(9001, "cancelled")];
+    await expect(w.relay("sweep", undefined, { RELAY_RERUN_TOKEN: "" })).rejects.toThrow("RELAY_RERUN_TOKEN is required");
+    expect(w.state.requests.some((url) => url.includes("/pulls?"))).toBe(false);
+  });
+});
+
+describe("issue 1195 sweep request budget", () => {
+  it.each([false, true])("pins all requests for 50 distinct workflow_run heads, attested=%s", async (attested) => {
+    const w = world();
+    w.state.producers = [];
+    w.state.suites = [];
+    for (let index = 0; index < 50; index++) {
+      const head = (index + 1).toString(16).padStart(40, "0");
+      w.state.suites.push({ ...suite(8001 + index, "success"), head_sha: head });
+      w.state.producers.push(verify(9001 + index, 8001 + index, "success"));
+      if (attested) w.state.checks.push({ name: "verify", head_sha: head, external_id: `${9001 + index}:1`,
+        status: "completed", conclusion: "success", app: { id: 5118623 } });
+    }
+    const result = await w.relay("sweep");
+    expect(result.sweep.examined).toBe(50);
+    expect(result.sweep.relayed).toHaveLength(attested ? 0 : 50);
+    expect(w.state.requests).toHaveLength(attested ? 202 : 502);
+    expect(w.state.requests.filter((url) => url.endsWith("/access_tokens"))).toHaveLength(1);
+    expect(w.state.requests.filter((url) => url === `${ROOT}/actions/runs?per_page=100`)).toHaveLength(1);
+    expect(w.state.requests.filter((url) => /\/actions\/runs\/[0-9]+$/.test(url))).toHaveLength(attested ? 100 : 200);
+    expect(w.state.requests.filter((url) => url.includes("/actions/workflows/pr-suite.yml/runs?"))).toHaveLength(attested ? 50 : 150);
+    expect(w.state.requests.filter((url) => url.includes("/commits/") && url.includes("/check-runs?"))).toHaveLength(50);
+    expect(w.state.requests.filter((url) => url.includes("/jobs?"))).toHaveLength(attested ? 0 : 50);
+    expect(w.state.requests.filter((url) => url === `${ROOT}/check-runs`)).toHaveLength(attested ? 0 : 50);
+  });
+});
+
+it("does not heal the trigger's older cancelled attempt after a newer attempt completed", async () => {
+  const w = world("pr-gates");
+  const cancelled = gate(9001, "cancelled");
+  w.state.producers = [{ ...gate(9001, "success"), run_attempt: 2 }];
+  await w.relay("mirror", cancelled);
+  expect(w.state.reruns).toEqual([]);
+  for (const context of GATE_CONTEXTS) expect(w.state.checks.filter((check) => check.name === context).at(-1))
+    .toMatchObject({ external_id: "9001:2", conclusion: "success" });
+});
+
+it("a refused start heals each newest cancelled orphan once across distinct heads", async () => {
+  const w = world("pr-gates");
+  const refused = { ...gate(9003, "success"), event: "pull_request" };
+  w.state.producers = [refused, gate(9002, "cancelled"), { ...gate(9001, "cancelled"), head_sha: "c".repeat(40) }];
+  await expect(w.relay("mirror", refused)).rejects.toThrow("did not execute the base branch's workflow definition");
+  expect(w.state.reruns.map((run) => run.id)).toEqual(["9002", "9001"]);
 });

@@ -5,7 +5,7 @@ import { isTrustedProducerRun, pinsFor, type ContextDecision, type PinMap, type 
 import { normalizedAttempt } from "./ledger-relay-trigger.ts";
 
 /** A bounded recent-producer window; the trigger is retained independently. */
-export const SWEEP_RUN_LIMIT = 20;
+export const SWEEP_RUN_LIMIT = 50;
 
 export interface SweepCandidate {
   runId: string;
@@ -15,6 +15,9 @@ export interface SweepCandidate {
   conclusion: string | null;
   htmlUrl: string;
   workflowRun?: true;
+  /** Heal evidence from the listing; no head-branch inference for workflow_run. */
+  event?: string;
+  runStartedAt?: string | null;
   /** The API-proven producer status, when available to completed-only selection. */
   status?: string;
 }
@@ -47,7 +50,7 @@ export function selectSweepCandidates(
     if (typeof entry !== "object" || entry === null) continue;
     const run = entry as {
       id?: unknown; path?: unknown; status?: unknown; conclusion?: unknown;
-      head_sha?: unknown; html_url?: unknown; event?: unknown; head_branch?: unknown; run_attempt?: unknown;
+      head_sha?: unknown; html_url?: unknown; event?: unknown; head_branch?: unknown; run_attempt?: unknown; run_started_at?: unknown;
     };
     if (!includeUnfinished && run.status !== "completed") continue;
     if (typeof run.path !== "string" || !pinnedPaths.has(run.path)) continue;
@@ -71,6 +74,8 @@ export function selectSweepCandidates(
       path: run.path,
       conclusion: typeof run.conclusion === "string" ? run.conclusion : null,
       htmlUrl: run.html_url,
+      event: typeof run.event === "string" ? run.event : "",
+      runStartedAt: typeof run.run_started_at === "string" && run.run_started_at !== "" ? run.run_started_at : null,
       ...(run.event === "workflow_run" ? { workflowRun: true as const } : {}),
       ...(includeUnfinished ? { status: typeof run.status === "string" ? run.status : "" } : {}),
     });

@@ -589,6 +589,11 @@ describe("runRelay", () => {
     return { requests, fn };
   }
 
+  /** Refusal fixtures also serve the mandatory finally sweep. */
+  function makeRefusalFetch(outcomes: Outcome[]) {
+    return makeFetch([...outcomes, noSweepRuns()]);
+  }
+
   function makeDelay() {
     const delays: number[] = [];
     return { delays, fn: async (ms: number) => void delays.push(ms) };
@@ -921,7 +926,7 @@ describe("runRelay", () => {
   });
 
   it("relays nothing when no required context is pinned to the triggering run's path", async () => {
-    const fetchStub = makeFetch([]);
+    const fetchStub = makeRefusalFetch([token()]);
     const result = await runRelay({
       env: relayEnv({ GITHUB_WORKFLOW_RUN_PATH: PATH_ACTIONLINT }),
       fetchFn: fetchStub.fn,
@@ -930,7 +935,7 @@ describe("runRelay", () => {
     });
     expect(result.decisions).toEqual([]);
     expect(result.posted).toEqual([]);
-    expect(fetchStub.requests).toHaveLength(0);
+    expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, SWEEP_RUNS_URL]);
   });
 
   // --- Trusted producer runs: a required context is relayed only from a run
@@ -997,7 +1002,7 @@ describe("runRelay", () => {
       async (event, headBranch, shouldThrow) => {
         // The env carries no head repository, so the gate fetches the run
         // body; its PR ref makes only the matching pull_request row throw.
-        const fetchStub = makeFetch([
+        const fetchStub = makeRefusalFetch([
           token(),
           fetchedRun({ event, head_branch: headBranch }),
           pullsListing([pullEntry()]),
@@ -1023,15 +1028,15 @@ describe("runRelay", () => {
         } else {
           expect(error, "a run that is not this pull request's producer must no-op").toBeUndefined();
         }
-        // Learn the head repository, then read liveness: three requests, nothing else.
-        expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
+        // Read refusal liveness, then perform the finally sweep.
+        expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL, SWEEP_RUNS_URL]);
         expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
       },
     );
 
     it("refuses a cancelled pinned pull_request run without attempting the heal", async () => {
       // The listing is served LIVE so the throw survives; the heal is unreachable.
-      const fetchStub = makeFetch([
+      const fetchStub = makeRefusalFetch([
         token(),
         fetchedRun(),
         pullsListing([pullEntry()]),
@@ -1046,13 +1051,13 @@ describe("runRelay", () => {
       );
       expect(error, "an untrusted pinned run must fail the relay visibly").toBeInstanceOf(Error);
       expect(error?.message).toContain("no required context was relayed");
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL, SWEEP_RUNS_URL]);
     });
 
     it("no-ops when a push run's head branch is absent", async () => {
       const env = relayEnv();
       delete env.GITHUB_WORKFLOW_RUN_HEAD_BRANCH;
-      const fetchStub = makeFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
+      const fetchStub = makeRefusalFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
       const error = await caughtError(
         runRelay({
           env,
@@ -1062,7 +1067,7 @@ describe("runRelay", () => {
         }),
       );
       expect(error, "a run without a head branch cannot be this pull request's producer").toBeUndefined();
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL, SWEEP_RUNS_URL]);
     });
 
     it("no-ops when GITHUB_WORKFLOW_RUN_EVENT is absent", async () => {
@@ -1070,7 +1075,7 @@ describe("runRelay", () => {
       // missing value must read as the empty string, which no rule trusts.
       const env = relayEnv({ GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main" });
       delete env.GITHUB_WORKFLOW_RUN_EVENT;
-      const fetchStub = makeFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
+      const fetchStub = makeRefusalFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
       const error = await caughtError(
         runRelay({
           env,
@@ -1081,13 +1086,13 @@ describe("runRelay", () => {
       );
       expect(error, "a run without an event cannot be this pull request's producer").toBeUndefined();
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL, SWEEP_RUNS_URL]);
     });
 
     it("no-ops when the fetched run has no event field", async () => {
       const body = fetchedRunBody();
       delete body.event;
-      const fetchStub = makeFetch([
+      const fetchStub = makeRefusalFetch([
         token(),
         { status: 200, body },
         pullsListing([pullEntry()]),
@@ -1102,7 +1107,7 @@ describe("runRelay", () => {
       );
       expect(error, "a fetched run without an event cannot be this pull request's producer").toBeUndefined();
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL, SWEEP_RUNS_URL]);
     });
 
     it.each([
@@ -1113,7 +1118,7 @@ describe("runRelay", () => {
       "no-ops through dispatch for a non-producer %j run on head branch %j",
       async (event, headBranch) => {
         // A live same-SHA listing is still a no-op for these mismatched runs.
-        const fetchStub = makeFetch([
+        const fetchStub = makeRefusalFetch([
           token(),
           fetchedRun({ event, head_branch: headBranch }),
           pullsListing([pullEntry()]),
@@ -1130,7 +1135,7 @@ describe("runRelay", () => {
         expect(error, "a non-producer run at an open PR's SHA must no-op").toBeUndefined();
         // The recovery needs the token to read the run; the refusal then reads
         // the head's liveness before throwing.
-        expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
+        expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL, SWEEP_RUNS_URL]);
       },
     );
 
@@ -1143,7 +1148,7 @@ describe("runRelay", () => {
       async (_name, over) => {
         const body = fetchedRunBody();
         delete body.head_branch;
-        const fetchStub = makeFetch([
+        const fetchStub = makeRefusalFetch([
           token(),
           { status: 200, body: { ...body, ...over } },
           pullsListing([pullEntry()]),
@@ -1157,7 +1162,7 @@ describe("runRelay", () => {
           }),
         );
         expect(error, "a push run without a readable head branch cannot be this PR's producer").toBeUndefined();
-        expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
+        expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL, SWEEP_RUNS_URL]);
       },
     );
 
@@ -1214,7 +1219,7 @@ describe("runRelay", () => {
     it("relays nothing and does not fail for an untrusted run of a workflow nothing is pinned to", async () => {
       // The refusal is about required contexts; a run that could not produce
       // one keeps the existing quiet no-op, on both trigger paths.
-      const viaWorkflowRun = makeFetch([]);
+      const viaWorkflowRun = makeRefusalFetch([token()]);
       const result = await runRelay({
         env: relayEnv({
           GITHUB_WORKFLOW_RUN_PATH: PATH_ACTIONLINT,
@@ -1226,9 +1231,9 @@ describe("runRelay", () => {
         readPinMap: async () => ({ verify: PATH_CI }),
       });
       expect(result.posted).toEqual([]);
-      expect(viaWorkflowRun.requests).toHaveLength(0);
+      expect(viaWorkflowRun.requests.map((request) => request.url)).toEqual([TOKEN_URL, SWEEP_RUNS_URL]);
 
-      const viaDispatch = makeFetch([
+      const viaDispatch = makeRefusalFetch([
         token(),
         fetchedRun({ path: PATH_ACTIONLINT, event: "pull_request" }),
       ]);
@@ -1239,7 +1244,7 @@ describe("runRelay", () => {
         readPinMap: async () => ({ verify: PATH_CI }),
       });
       expect(recovered.posted).toEqual([]);
-      expect(viaDispatch.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL]);
+      expect(viaDispatch.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, SWEEP_RUNS_URL]);
     });
   });
 
@@ -1285,7 +1290,7 @@ describe("runRelay", () => {
       // between a run that executed a definition a pull request could shape
       // and an App-owned check-run branch protection would merge on.
       // LIVE listing: a live head keeps the throw (issue 1115).
-      const fetchStub = makeFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
+      const fetchStub = makeRefusalFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
       const error = await caughtError(
         runRelay({
           env: relayEnv({
@@ -1307,7 +1312,7 @@ describe("runRelay", () => {
       expect(error?.message).toContain('head branch "feature/some-branch"');
       expect(error?.message).toContain("no required context was relayed");
       // Learn the head repository, then read liveness before throwing.
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL, SWEEP_RUNS_URL]);
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
     });
 
@@ -1317,7 +1322,7 @@ describe("runRelay", () => {
       // run resolving "more than one" context would be skipped here, and this
       // repository has two contexts naming one path today.
       // LIVE listing: a live head keeps the throw (issue 1115).
-      const fetchStub = makeFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
+      const fetchStub = makeRefusalFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
       const error = await caughtError(
         runRelay({
           env: relayEnv({
@@ -1336,11 +1341,11 @@ describe("runRelay", () => {
         "the trusted-producer check must precede any posting, however many contexts the path resolves",
       ).toHaveLength(0);
       expect(error?.message).toContain("no required context was relayed");
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL, SWEEP_RUNS_URL]);
     });
 
     it("still relays nothing for a path neither pin names", async () => {
-      const fetchStub = makeFetch([]);
+      const fetchStub = makeRefusalFetch([token()]);
       const result = await runRelay({
         env: relayEnv({
           GITHUB_WORKFLOW_RUN_PATH: PATH_ACTIONLINT,
@@ -1353,7 +1358,7 @@ describe("runRelay", () => {
       });
 
       expect(result.posted).toEqual([]);
-      expect(fetchStub.requests).toHaveLength(0);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, SWEEP_RUNS_URL]);
     });
 
     it("validates the map before it decides, so an unusable list pin never mints a token", async () => {
@@ -1882,7 +1887,7 @@ describe("runRelay", () => {
       // The incident (issue 1115): a stale pull_request run of a closed
       // same-repo PR, refused on the workflow_run path; a definitively empty
       // liveness listing downgrades the refusal to the exit-0 no-op.
-      const fetchStub = makeFetch([
+      const fetchStub = makeRefusalFetch([
         token(),
         fetchedRun({ event: "pull_request", head_branch: "feature/some-branch" }),
         pullsListing([]),
@@ -1893,7 +1898,7 @@ describe("runRelay", () => {
       expect(result.decisions).toEqual([]);
       expect(result.rerunDispatched).toBe(false);
       expect(result.sweep.examined).toBe(0);
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL, SWEEP_RUNS_URL]);
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
       expect(renderRelayResult(result)).toEqual([
         `[ledger-relay] ${REFUSAL}`,
@@ -1902,7 +1907,7 @@ describe("runRelay", () => {
     });
 
     it("exits 0 through the dispatch path when the fetched run's head repository is this repository and the head is dead", async () => {
-      const fetchStub = makeFetch([
+      const fetchStub = makeRefusalFetch([
         token(),
         untrustedFetchedRun({ head_repository: { full_name: "Nitjsefnie/Overflow" } }),
         pullsListing([]),
@@ -1910,7 +1915,7 @@ describe("runRelay", () => {
       const result = await relay(dispatchEnv(), fetchStub);
 
       expect(result.posted).toEqual([]);
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL, SWEEP_RUNS_URL]);
       expect(renderRelayResult(result)).toEqual([
         `[ledger-relay] ${REFUSAL}`,
         "[ledger-relay] no open pull request is waiting at this head",
@@ -1922,18 +1927,18 @@ describe("runRelay", () => {
       // re-fetches the run body; a name still missing keeps the throw.
       const body = fetchedRunBody({ event: "pull_request", head_branch: "feature/some-branch" });
       delete body.head_repository;
-      const fetchStub = makeFetch([token(), { status: 200, body }, { status: 200, body }, pullsListing([])]);
+      const fetchStub = makeRefusalFetch([token(), { status: 200, body }, { status: 200, body }, pullsListing([])]);
       const error = await caughtError(relay(dispatchEnv(), fetchStub));
 
       expect(error, "a nameless head must keep the refusal visible").toBeInstanceOf(Error);
       expect(error?.message, "the message stays byte-identical").toBe(REFUSAL);
       // Re-fetched, still no name: the listing was never consulted.
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, RUN_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, RUN_URL, SWEEP_RUNS_URL]);
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
     });
 
     it("keeps the byte-identical throw when the refused head is live at an open pull request", async () => {
-      const fetchStub = makeFetch([
+      const fetchStub = makeRefusalFetch([
         token(),
         untrustedFetchedRun({ head_repository: { full_name: "Nitjsefnie/Overflow" } }),
         pullsListing([pullEntry()]),
@@ -1942,7 +1947,7 @@ describe("runRelay", () => {
 
       expect(error, "a live head must keep the refusal visible").toBeInstanceOf(Error);
       expect(error?.message, "the message stays byte-identical").toBe(REFUSAL);
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL, SWEEP_RUNS_URL]);
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
     });
 
@@ -1955,7 +1960,7 @@ describe("runRelay", () => {
         `&head=${encodeURIComponent("someone-else:feature/some-branch")}&per_page=100`;
       const forkBody =
         untrustedFetchedRun({ head_repository: { full_name: "someone-else/fork", owner: { login: "someone-else" } } });
-      const fetchStub = makeFetch([token(), forkBody, forkBody, { status: 200, body: [] }]);
+      const fetchStub = makeRefusalFetch([token(), forkBody, forkBody, { status: 200, body: [] }]);
       const result = await relay(dispatchEnv(), fetchStub);
 
       expect(result.posted).toEqual([]);
@@ -1964,7 +1969,7 @@ describe("runRelay", () => {
         TOKEN_URL,
         RUN_URL,
         RUN_URL,
-        forkPullsUrl,
+        forkPullsUrl, SWEEP_RUNS_URL,
       ]);
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
       expect(renderRelayResult(result)).toEqual([
@@ -1980,7 +1985,7 @@ describe("runRelay", () => {
       const forkPullsUrl =
         `https://api.github.com/repos/Nitjsefnie/Overflow/pulls?state=open` +
         `&head=${encodeURIComponent("someone-else:feature/some-branch")}&per_page=100`;
-      const fetchStub = makeFetch([
+      const fetchStub = makeRefusalFetch([
         token(),
         fetchedRun({
           event: "pull_request",
@@ -1996,7 +2001,7 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         RUN_URL,
-        forkPullsUrl,
+        forkPullsUrl, SWEEP_RUNS_URL,
       ]);
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
       expect(renderRelayResult(result)).toEqual([
@@ -2009,7 +2014,7 @@ describe("runRelay", () => {
       ["an API error", { status: 404, body: { message: "No Commit Found" } }, /pull requests associated with commit/],
       ["a non-array listing", { status: 200, body: { total_count: 0 } }, /returned no array/],
     ])("throws when the liveness read is %s, never exiting 0", async (_name, listing, expected) => {
-      const fetchStub = makeFetch([
+      const fetchStub = makeRefusalFetch([
         token(),
         untrustedFetchedRun({ head_repository: { full_name: "Nitjsefnie/Overflow" } }),
         listing,
@@ -2023,7 +2028,7 @@ describe("runRelay", () => {
 
     it("throws when the workflow_run path's liveness read fails after a same-repo head is confirmed", async () => {
       // Same-repo head confirmed from the fetched body; the listing decides.
-      const fetchStub = makeFetch([
+      const fetchStub = makeRefusalFetch([
         token(),
         fetchedRun({ event: "pull_request", head_branch: "feature/some-branch" }),
         { status: 404, body: { message: "No Commit Found" } },
@@ -2032,7 +2037,7 @@ describe("runRelay", () => {
 
       expect(error, "an unresolvable liveness read must fail closed").toBeInstanceOf(Error);
       expect(error?.message).toMatch(/pull requests associated with commit/);
-      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL]);
+      expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, PULLS_URL, SWEEP_RUNS_URL]);
     });
   });
 
@@ -2403,7 +2408,7 @@ describe("runRelay", () => {
         readPinMap: async () => PIN_MAP,
       });
 
-      expect(SWEEP_RUN_LIMIT).toBe(20);
+      expect(SWEEP_RUN_LIMIT).toBe(50);
       expect(result.sweep.examined).toBe(SWEEP_RUN_LIMIT);
       // Exactly the capped candidates, and one post each.
       expect(result.sweep.relayed).toHaveLength(SWEEP_RUN_LIMIT);
@@ -2439,15 +2444,9 @@ describe("runRelay", () => {
       expect(delay.delays).toEqual([1000, 2000]);
     });
 
-    it("still runs the rerun-heal when the sweep dies, and still rejects", async () => {
-      // The sweep and the heal are independent duties that both follow the
-      // mirror. Awaiting the sweep before the heal made the heal hostage to a
-      // much larger failure surface: every relay start issues a repository-wide
-      // listing plus up to SWEEP_RUN_LIMIT check-runs GETs, where the heal
-      // issues at most three queries on a rare path. So a dead sweep must cost
-      // the heal nothing — and must still cost the job its nonzero exit, or a
-      // sweep that quietly stopped running would be indistinguishable from a
-      // relay with nothing to do, which is the failure this issue is about.
+    it("cannot heal without the sweep listing that establishes newest producers, and still rejects", async () => {
+      // A failed listing cannot establish heal eligibility. Keep the mirror's
+      // completed write, fail red, and leave recovery to the next sweep.
       const fetchStub = makeFetch([
         token(),
         jobsListing([]),
@@ -2456,10 +2455,6 @@ describe("runRelay", () => {
         { status: 500, body: { message: "boom" } },
         { status: 500, body: { message: "boom" } },
         { status: 500, body: { message: "boom" } },
-        // …and the heal's own queries still run afterwards.
-        pullsListing([pullEntry()]),
-        runsListing([]),
-        { status: 202, body: undefined },
       ]);
       const delay = makeDelay();
       await expect(
@@ -2471,12 +2466,9 @@ describe("runRelay", () => {
         }),
       ).rejects.toThrow(/workflow-run listing/);
 
-      // The heal ran, and it dispatched the rerun.
-      expect(requestTo(fetchStub.requests, PULLS_URL)).toBeDefined();
-      expect(requestTo(fetchStub.requests, RERUN_URL)).toBeDefined();
-      expect(authHeaderOf(requestTo(fetchStub.requests, RERUN_URL))).toBe("Bearer rerun-token");
-      // The sweep ran exactly once, so it spent its own bounded retry and no
-      // more: three 500s, and the heal added none.
+      expect(requestTo(fetchStub.requests, PULLS_URL)).toBeUndefined();
+      expect(requestTo(fetchStub.requests, RERUN_URL)).toBeUndefined();
+      expect(bodiesOf(fetchStub.requests)).toContainEqual(expect.objectContaining({ name: "verify" }));
       expect(delay.delays).toEqual([1000, 2000]);
     });
   });

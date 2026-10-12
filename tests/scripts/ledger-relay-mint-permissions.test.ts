@@ -341,6 +341,7 @@ async function runForkRefusalFlow(): Promise<Recorded[]> {
       head_repository: { full_name: "someone/some-fork", owner: { login: "someone" } },
     }),
     { status: 200, body: [] },
+    sweepListing([]),
   ]);
   const result = await runRelay({
     env: dispatchEnv(),
