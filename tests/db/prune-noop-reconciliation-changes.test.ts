@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { JSONValue, Sql } from "postgres";
 import { runMigrations } from "../../scripts/migrate";
 import { runPruneNoopReconciliationChangesCli } from "../../scripts/prune-noop-reconciliation-changes";
@@ -177,6 +177,10 @@ beforeAll(async () => {
   process.env.DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
+});
+
+beforeEach(async () => {
+  await sql`truncate reconciliation_changes, reconciliation_runs cascade`;
   const [run] = await sql<{ id: string }[]>`insert into reconciliation_runs default values returning id`;
   runId = run!.id;
   for (const seed of seeds) {
@@ -238,6 +242,8 @@ describe("pruning no-op reconciliation changes", () => {
   });
 
   it("deletes nothing on a second execute", async () => {
+    expect(await runPruneNoopReconciliationChangesCli(["--execute", "--batch-size", "2"],
+      { write: () => {}, sql })).toBe(0);
     const before = await allRows();
     const lines: string[] = [];
     const exit = await runPruneNoopReconciliationChangesCli(["--execute", "--batch-size", "5"],
