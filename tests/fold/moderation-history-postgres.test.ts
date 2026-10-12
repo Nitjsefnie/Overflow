@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import postgres, { type Sql } from "postgres";
+import { writeSync } from "node:fs";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { foldRepository, type RepositoryFoldIssue } from "@/lib/fold/repository-fold";
+import { moderationInstantToIso } from "@/lib/fold/moderation-history";
 
 vi.hoisted(() => { vi.resetModules(); });
 afterAll(() => { vi.resetModules(); });
@@ -160,6 +162,75 @@ async function assertDatabaseHistory(targetId: string, decisionId: string, liftI
 }
 
 describe("real store moderation history at database precision", () => {
+  it.each([
+    { zone: "America/New_York", input: "1880-01-01T00:00:00.123100Z", rendered: "1879-12-31T19:03:58.1231-04:56:02", canonical: "1880-01-01T00:00:00.123100Z" },
+    { zone: "Asia/Kolkata", input: "1900-01-01T00:00:00.123100Z", rendered: "1900-01-01T05:21:10.1231+05:21:10", canonical: "1900-01-01T00:00:00.123100Z" },
+    { zone: "UTC", input: "10000-01-01T00:00:00.123100Z", rendered: "10000-01-01T00:00:00.1231+00:00", canonical: "+010000-01-01T00:00:00.123100Z" },
+    { zone: "UTC", input: "294000-01-01T00:00:00.123100Z", rendered: "294000-01-01T00:00:00.1231+00:00", canonical: "+294000-01-01T00:00:00.123100Z" },
+    { zone: "UTC", input: "0001-01-01 00:00:00.123100+00 BC", rendered: "0001-01-01T00:00:00.1231+00:00 BC", canonical: "0000-01-01T00:00:00.123100Z" },
+    { zone: "America/New_York", input: "0001-01-01 00:00:00.123100+00 BC", rendered: "0002-12-31T19:03:58.1231-04:56:02 BC", canonical: "0000-01-01T00:00:00.123100Z" },
+    { zone: "UTC", input: "0002-01-01 00:00:00.123100+00 BC", rendered: "0002-01-01T00:00:00.1231+00:00 BC", canonical: "-000001-01-01T00:00:00.123100Z" },
+  ])("loads PostgreSQL's $input rendering in $zone", async ({ zone, input, rendered, canonical }) => {
+    await sql.begin(async (transaction) => {
+      await transaction`select set_config('TimeZone', ${zone}, true)`;
+      if (zone === "America/New_York") {
+        const [special] = await transaction`
+          select jsonb_build_object(
+            'bc', timestamptz '0001-01-01 00:00:00.123100+00 BC',
+            'infinity', timestamptz 'infinity', 'negativeInfinity', timestamptz '-infinity'
+          ) as renderings
+        `;
+        writeSync(1, `PostgreSQL BC/infinity probe: ${JSON.stringify(special!.renderings)}\n`);
+        expect(special!.renderings.infinity).toBe("infinity");
+        expect(special!.renderings.negativeInfinity).toBe("-infinity");
+        for (const value of [special!.renderings.infinity, special!.renderings.negativeInfinity]) {
+          expect(() => moderationInstantToIso(value)).toThrow("Timestamp was invalid.");
+        }
+      }
+      const [row] = await transaction<{ event: { t: string } }[]>`
+        select jsonb_build_object('t', ${input}::text::timestamptz) as event
+      `;
+      expect(row!.event.t).toBe(rendered);
+      expect(moderationInstantToIso(row!.event.t)).toBe(canonical);
+      await transaction`
+        insert into moderation_events (id, target_user_id, actor_id, prior_state, new_state, reason, created_at)
+        values
+          (${lowId}, ${contributorId}, ${moderatorId}, 'RECALIBRATING', 'ACTIVE', 'Lift', ${input}::text::timestamptz),
+          (${highId}, ${sponsorId}, ${moderatorId}, 'RECALIBRATING', 'ACTIVE', 'Lift', ${input}::text::timestamptz)
+      `;
+      const localStore = new PostgresFoldStore(transaction as unknown as Sql);
+      const users = await localStore.findUsersByGitHubUserIds([2001]);
+      const repository = await localStore.getRepository(repositoryId);
+      const identities = await localStore.findForgeIdentitiesByForgeUserIds(forgeRepositoryId, [2001]);
+      for (const user of [users[0]!, repository!.sponsor, identities[0]!.user]) {
+        expect(user.moderationEvents![0]!.occurredAt).toBe(canonical);
+      }
+    });
+  });
+
+  it.each([
+    { role: "sponsor", targetId: sponsorId },
+    { role: "contributor", targetId: contributorId },
+  ])("rejects participation before the $role-only later lift", async ({ targetId }) => {
+    await sql`
+      insert into moderation_events (id, target_user_id, actor_id, prior_state, new_state, reason, created_at)
+      values (${lowId}, ${targetId}, ${moderatorId}, 'RECALIBRATING', 'ACTIVE', 'Later lift',
+        timestamptz '2026-10-12T00:00:01.000009Z')
+    `;
+    const [authority] = await sql`
+      select participation_eligible_at(${targetId}, ${queryAt}::timestamptz) as eligible
+    `;
+    expect(authority!.eligible).toBe(false);
+    const repository = await store.getRepository(repositoryId);
+    const users = await store.findUsersByGitHubUserIds([1001, 2001]);
+    expect(repository!.sponsor.enforcementState).toBe("ACTIVE");
+    expect(users.find((candidate) => candidate.id === contributorId)!.enforcementState).toBe("ACTIVE");
+    const folded = foldRepository({ repository: repository!, users, issues: [issue()] });
+    expect(folded.issues[0]!.settledPoints).toBe(6);
+    expect(folded.settlements).toEqual([]);
+    expect(folded.ledgerEntries).toEqual([]);
+  });
+
   it.each([
     { role: "contributor", targetId: contributorId },
     { role: "sponsor", targetId: sponsorId },
