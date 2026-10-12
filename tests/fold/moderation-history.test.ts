@@ -10,6 +10,28 @@ function lift(occurredAt: string, id = lowId): FoldModerationEvent {
 }
 
 describe("moderation history instants", () => {
+  it.each([
+    ["1879-12-31T19:03:58.1231-04:56:02", "1880-01-01T00:00:00.123100Z"],
+    ["1900-01-01T05:21:10.1231+05:21:10", "1900-01-01T00:00:00.123100Z"],
+    ["10000-01-01T00:00:00.1231+00:00", "+010000-01-01T00:00:00.123100Z"],
+    ["294000-01-01T00:00:00.1231+00:00", "+294000-01-01T00:00:00.123100Z"],
+    ["0002-12-31T19:03:58.1231-04:56:02 BC", "0000-01-01T00:00:00.123100Z"],
+    ["0002-01-01T00:00:00.1231+00:00 BC", "-000001-01-01T00:00:00.123100Z"],
+    ["10000-02-29T00:00:00.1231+02:00", "+010000-02-28T22:00:00.123100Z"],
+    ["9999-12-31T23:59:59.1231-00:00:02", "+010000-01-01T00:00:01.123100Z"],
+  ])("normalizes %s exactly", (input, expected) => {
+    expect(moderationInstantToIso(input)).toBe(expected);
+    expect(moderationInstantToIso(expected)).toBe(expected);
+    expect(isParticipationEligibleAt({ ...user, moderationEvents: [lift(input)] }, expected)).toBe(true);
+    expect(isParticipationEligibleAt({ ...user, moderationEvents: [lift(input)] }, expected.replace("123100", "123099"))).toBe(false);
+  });
+
+  it("distinguishes a one-microsecond lift at a large positive epoch", () => {
+    const event = lift("9999-12-31T00:00:00.123101Z");
+    expect(isParticipationEligibleAt({ ...user, moderationEvents: [event] }, "9999-12-31T00:00:00.123100Z")).toBe(false);
+    expect(isParticipationEligibleAt({ ...user, moderationEvents: [event] }, event.occurredAt)).toBe(true);
+  });
+
   it("orders distinct microseconds chronologically in both UUID assignments", () => {
     for (const [decisionId, liftId] of [[highId, lowId], [lowId, highId]]) {
       const events = [
