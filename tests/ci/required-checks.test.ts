@@ -66,6 +66,43 @@ beforeAll(async () => {
 });
 
 describe(".github/required-checks.json", () => {
+  it("keeps every privileged checkout on the trusted base without persisted credentials", async () => {
+    let checked = 0;
+    for (const file of workflowFiles) {
+      const workflow = parse(await readFile(resolve(workflowsDir, file), "utf8")) as {
+        on?: unknown;
+        jobs?: Record<string, {
+          steps?: Array<{ uses?: string; with?: Record<string, unknown> }>;
+        }>;
+      };
+      const events = Array.isArray(workflow.on)
+        ? workflow.on.map(String)
+        : typeof workflow.on === "string"
+          ? [workflow.on]
+          : Object.keys((workflow.on ?? {}) as Record<string, unknown>);
+      if (!events.some((event) => event !== "pull_request")) continue;
+      const readsPrData = events.includes("pull_request_target");
+      for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
+        for (const [index, step] of (job.steps ?? []).entries()) {
+          if (!step.uses?.startsWith("actions/checkout@")) continue;
+          checked += 1;
+          const scope = `${file}/${jobId}/step ${index + 1}`;
+          if (readsPrData) {
+            expect(step.with ?? {}, `${scope} must use the trusted default ref`).not.toHaveProperty("ref");
+          }
+          expect(step.with ?? {}, `${scope} must use the trusted repository`).not.toHaveProperty("repository");
+          expect(step.with?.["persist-credentials"], `${scope} must not persist a privileged token`).toBe(false);
+          // These judges walk ancestry or full history. A shallow checkout
+          // cannot represent the data their scripts are required to inspect.
+          if (["verify", "ratchet-guard", "secret-scan", "dependency-audit"].includes(jobId)) {
+            expect(step.with?.["fetch-depth"], `${scope} must carry full history`).toBe(0);
+          }
+        }
+      }
+    }
+    expect(checked, "the checkout boundary must inspect actual privileged checkouts").toBeGreaterThan(0);
+  });
+
   it("pins at least the checks branch protection on main requires", () => {
     expect(Object.keys(pins)).toEqual(
       expect.arrayContaining([
