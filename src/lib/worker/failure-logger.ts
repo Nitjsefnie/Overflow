@@ -29,6 +29,8 @@ export type FailureLoggerOptions = {
    * capture the lines; console.error in production.
    */
   error?: (...args: unknown[]) => void;
+  /** Recovery is a state change, emitted through console.info by default. */
+  info?: (...args: unknown[]) => void;
 };
 
 /**
@@ -47,11 +49,13 @@ type FailureLogState = {
 export class FailureLogger {
   #now: () => number;
   #error: (...args: unknown[]) => void;
+  #info: (...args: unknown[]) => void;
   readonly #states: Map<string, FailureLogState> = new Map();
 
   constructor(options: FailureLoggerOptions = {}) {
     this.#now = options.now ?? Date.now;
     this.#error = options.error ?? ((...args: unknown[]) => console.error(...args));
+    this.#info = options.info ?? ((...args: unknown[]) => console.info(...args));
   }
 
   /**
@@ -107,7 +111,7 @@ export class FailureLogger {
     }
     const recoveredAt = this.#now();
     const durationSeconds = Math.round((recoveredAt - state.outageStartedAt) / 1_000);
-    this.#error(`recovered: ${key} after ${state.totalFailures} failures over ${durationSeconds} s`);
+    this.#info(`recovered: ${key} after ${state.totalFailures} failures over ${durationSeconds} s`);
     this.#states.delete(key);
   }
 }

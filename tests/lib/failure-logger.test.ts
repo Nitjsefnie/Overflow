@@ -13,11 +13,35 @@ import { FailureLogger } from "@/lib/worker/failure-logger";
 const DRAIN_KEY = "reconciliation-drain";
 const HEARTBEAT_KEY = "reconciliation-lease-heartbeat";
 
-function testLogger(clockMs: { value: number }, error: (...args: unknown[]) => void): FailureLogger {
-  return new FailureLogger({ now: () => clockMs.value, error });
+function testLogger(
+  clockMs: { value: number },
+  error: (...args: unknown[]) => void,
+  info: (...args: unknown[]) => void = vi.fn(),
+): FailureLogger {
+  return new FailureLogger({ now: () => clockMs.value, error, info });
 }
 
 describe("the failure logger's state machine", () => {
+  it("keeps failure detail and summary on error and emits recovery only on info", () => {
+    const error = vi.fn();
+    const info = vi.fn();
+    const clock = { value: 0 };
+    const logger = new FailureLogger({ now: () => clock.value, error, info });
+    const failure = new Error("unavailable");
+    logger.failure(DRAIN_KEY, failure);
+    expect(error.mock.calls).toEqual([[failure]]);
+    expect(info).not.toHaveBeenCalled();
+    clock.value = 60_000;
+    logger.failure(DRAIN_KEY, failure);
+    expect(error.mock.calls).toEqual([[failure], [expect.any(String)]]);
+    expect(info).not.toHaveBeenCalled();
+    logger.success(DRAIN_KEY);
+    expect(error).toHaveBeenCalledTimes(2);
+    expect(info.mock.calls).toEqual([[expect.any(String)]]);
+    logger.success(DRAIN_KEY);
+    expect(info).toHaveBeenCalledTimes(1);
+  });
+
   it("logs the first failure of a key in full, as the unbounded sites did", () => {
     const error = vi.fn();
     const logger = testLogger({ value: 1_000 }, error);
@@ -93,10 +117,11 @@ describe("the failure logger's state machine", () => {
     ]);
   });
 
-  it("prints one recovery line on success after failures, with the count and the duration", () => {
+  it("emits one recovery line on info after multiple failures", () => {
     const error = vi.fn();
+    const info = vi.fn();
     const clock = { value: 0 };
-    const logger = testLogger(clock, error);
+    const logger = testLogger(clock, error, info);
     logger.failure(DRAIN_KEY, "drain failed", new Error("down"));
     clock.value += 10_000;
     logger.failure(DRAIN_KEY, "drain failed", new Error("down"));
@@ -104,26 +129,28 @@ describe("the failure logger's state machine", () => {
 
     logger.success(DRAIN_KEY);
 
-    expect(error).toHaveBeenCalledTimes(2);
-    expect(error.mock.calls[1]).toEqual([
-      "recovered: reconciliation-drain after 2 failures over 65 s",
-    ]);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info.mock.calls[0]).toEqual([expect.any(String)]);
   });
 
   it("prints no recovery line when no failure preceded the success", () => {
     const error = vi.fn();
-    const logger = testLogger({ value: 0 }, error);
+    const info = vi.fn();
+    const logger = testLogger({ value: 0 }, error, info);
 
     logger.success(DRAIN_KEY);
     logger.success(HEARTBEAT_KEY);
 
     expect(error).not.toHaveBeenCalled();
+    expect(info).not.toHaveBeenCalled();
   });
 
   it("keeps keys independent", () => {
     const error = vi.fn();
+    const info = vi.fn();
     const clock = { value: 0 };
-    const logger = testLogger(clock, error);
+    const logger = testLogger(clock, error, info);
     const drainFailure = new Error("drain");
     const heartbeatFailure = new Error("heartbeat");
 
@@ -140,19 +167,18 @@ describe("the failure logger's state machine", () => {
 
     // Recovering the heartbeat says nothing about the drain, whose outage runs on.
     logger.success(HEARTBEAT_KEY);
-    expect(error.mock.calls[2]).toEqual([
-      "recovered: reconciliation-lease-heartbeat after 2 failures over 1 s",
-    ]);
+    expect(info.mock.calls[0]).toEqual([expect.any(String)]);
     logger.success(DRAIN_KEY);
-    expect(error.mock.calls[3]).toEqual([
-      "recovered: reconciliation-drain after 1 failures over 1 s",
-    ]);
+    expect(error).toHaveBeenCalledTimes(2);
+    expect(info).toHaveBeenCalledTimes(2);
+    expect(info.mock.calls[1]).toEqual([expect.any(String)]);
   });
 
-  it("counts a whole outage on the recovery line, across still-failing summaries", () => {
+  it("emits recovery on info after multiple still-failing summaries", () => {
     const error = vi.fn();
+    const info = vi.fn();
     const clock = { value: 0 };
-    const logger = testLogger(clock, error);
+    const logger = testLogger(clock, error, info);
     logger.failure(DRAIN_KEY, "drain failed", new Error("down"));
     for (let cycle = 0; cycle < 3; cycle += 1) {
       for (let index = 0; index < 12; index += 1) {
@@ -168,7 +194,8 @@ describe("the failure logger's state machine", () => {
 
     // Twelve failures per five-second step lands each cycle's twelfth failure
     // exactly on its window boundary, so every cycle prints one summary.
-    expect(error).toHaveBeenCalledTimes(5);
+    expect(error).toHaveBeenCalledTimes(4);
+    expect(info).toHaveBeenCalledTimes(1);
     expect(error.mock.calls[1]).toEqual([
       "still failing: reconciliation-drain: 12 failures since last detail",
     ]);
@@ -178,8 +205,6 @@ describe("the failure logger's state machine", () => {
     expect(error.mock.calls[3]).toEqual([
       "still failing: reconciliation-drain: 12 failures since last detail",
     ]);
-    expect(error.mock.calls[4]).toEqual([
-      "recovered: reconciliation-drain after 37 failures over 180 s",
-    ]);
+    expect(info.mock.calls[0]).toEqual([expect.any(String)]);
   });
 });

@@ -1,7 +1,6 @@
 import {
   drainReconciliationJobs,
   startReconciliationWorker,
-  type ReconciliationJobOutcome,
 } from "@/lib/fold/reconciliation-worker";
 import {
   shouldStartReconciliationBackground,
@@ -9,6 +8,7 @@ import {
   sweepReconciliations,
 } from "@/lib/fold/sweep";
 import { FailureLogger } from "@/lib/worker/failure-logger";
+import { DrainSummaryLogger } from "@/lib/logging/drain-summary-logger";
 import { appInstallationTokenResolverFromEnv } from "@/lib/github/app-installation-auth";
 import { errorLogToken } from "@/lib/webhooks/log-field";
 import { installJournalLevels } from "@/lib/logging/journal-levels";
@@ -76,6 +76,7 @@ export async function registerNodejs(): Promise<void> {
   // worker. Shared so both sites' quiet windows run on one clock, separate
   // keys so neither site's outage suppresses the other's first failure.
   const failureLogger = new FailureLogger();
+  const drainSummaryLogger = new DrainSummaryLogger();
 
   startReconciliationWorker({
     drain: async () => {
@@ -112,7 +113,7 @@ export async function registerNodejs(): Promise<void> {
       // A drain that resolves is the drain site's positive signal: after a
       // failed drain it ends the outage with the recovery line (issue 661).
       failureLogger.success(RECONCILIATION_DRAIN_FAILURE_KEY);
-      if (outcomes.length > 0) console.info("Reconciliation drain", countOutcomes(outcomes));
+      drainSummaryLogger.record(outcomes);
       return outcomes;
     },
     onFailure: (error) => {
@@ -153,13 +154,4 @@ export async function registerNodejs(): Promise<void> {
       return summary;
     },
   });
-}
-
-/** Counts a drain's outcomes by kind, so one line says what the pass actually did. */
-function countOutcomes(outcomes: readonly ReconciliationJobOutcome[]): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const outcome of outcomes) {
-    counts[outcome] = (counts[outcome] ?? 0) + 1;
-  }
-  return counts;
 }
