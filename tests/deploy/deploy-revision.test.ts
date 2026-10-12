@@ -828,8 +828,8 @@ exit 0
     const foreignJobs = path.join(fixture.dir, "dispatch-jobs.json");
     await writeFile(foreignJobs, JSON.stringify({ jobs: [{ id: 1001, name: "verify", run_attempt: 1,
       status: "completed", conclusion: "success", head_sha: "d".repeat(40) }] }));
-    // The actual jobs JSON is projected by jq, including the different SHA
-    // the gate's job query does not read. A rejected dispatch must never read it.
+    // The JSON carries a different SHA. Excluded jobs are read for attribution,
+    // while their success cannot become main's decision evidence.
     await writeFile(path.join(fixture.bins, "gh"), shimBody("gh", [], `
 if [[ "$2" == */actions/runs/100/jobs* ]]; then
   jq -r "\${!#}" "\${GH_SHIM_DISPATCH_JOBS:?}"
@@ -842,7 +842,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain("verify (absent)");
     const entries = await readLog(fixture.shimLog);
-    expect(entries.some((entry) => entry.cmd === "gh" && entry.args[1]?.includes("/runs/100/jobs?"))).toBe(false);
+    expect(entries.some((entry) => entry.cmd === "gh" && entry.args[1]?.includes("/runs/100/jobs?"))).toBe(true);
     expectGateRefused(entries);
   });
 
@@ -876,6 +876,27 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     const entries = await readLog(fixture.shimLog);
     expect(entries.some((entry) => entry.cmd === "gh" && entry.args[1]?.includes("/runs/100/jobs?"))).toBe(false);
     expectGateRefused(entries);
+  });
+
+  it.each([
+    ["id", { event: "push", headBranch: "main", id: null }],
+    ["path", { event: "push", headBranch: "main", path: "" }],
+    ["event", { event: "", headBranch: "push" }],
+    ["event", { event: "", headBranch: "schedule" }],
+    ["head_branch", { event: "push", headBranch: "" }],
+    ["head_branch", { event: "workflow_dispatch", headBranch: "" }],
+  ])("refuses empty %s through real JSON, jq and Bash (%j)", async (field, metadata) => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-empty-metadata", [
+      { id: 100, path: FIXTURE_PINS.verify!, ...(metadata as { event: string; headBranch: string }),
+        jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "success" }] },
+      { id: 200, path: FIXTURE_PINS["deploy-gate"]!,
+        jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "0" });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toMatch(new RegExp(`Workflow run .*${field}`));
+    expectGateRefused(await readLog(fixture.shimLog));
   });
 
   it("refuses when a same-named job in another workflow succeeded while the pinned job failed", async () => {

@@ -3,7 +3,7 @@
 // tests/deploy/deploy-revision.test.ts — shared fixture in
 // tests/support/deploy-revision-harness.ts — so each measured module stays
 // under the tests family ceiling (scripts/check-module-size.ts).
-import { rm } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ACTIONS_APP_ID,
@@ -34,6 +34,85 @@ describe("scripts/deploy-revision.sh — the ledger App as a required-check prod
       { id: 200, path: FIXTURE_PINS["deploy-gate"]!, jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
     ];
   }
+
+  it.each([
+    ["success", false], ["failure", false], ["success", true], ["failure", true],
+  ] as const)("deploys main success beside workflow_run %s with ledger=%s", async (conclusion, ledger) => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-main-and-pr", [
+      ...happyPinnedRuns(),
+      { id: 300, path: ".github/workflows/ci-pr.yml", event: "workflow_run",
+        jobs: [{ id: 3001, name: "verify", status: "completed", conclusion }] },
+    ], ledger ? [{ id: 5001, name: "verify", app: LEDGER_APP_ID, status: "completed", conclusion: "success" }] : []);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "0" });
+    expect(result.status, result.stderr).toBe(0);
+    expect((await readLog(fixture.shimLog)).some((entry) => entry.args[0] === "release:switch")).toBe(true);
+  });
+
+  it.each([
+    ["pull_request", "feature"], ["pull_request_target", "feature"], ["workflow_dispatch", "feature"],
+    ["pull_request", "(missing)"],
+  ])("ignores known excluded %s jobs on %s beside main success", async (event, headBranch) => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-other-excluded", [
+      ...happyPinnedRuns(), { id: 300, path: FIXTURE_PINS.verify!, event, headBranch,
+        jobs: [{ id: 3001, name: "verify", status: "completed", conclusion: "failure" }] },
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "0" });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.each(["failure", "in_progress"])("lets main %s evidence hold deployment beside excluded success", async (status) => {
+    const fixture = await makeFixture();
+    const main = happyPinnedRuns(status === "failure" ? "failure" : "success");
+    if (status === "in_progress") main[0]!.jobs[0]!.status = status;
+    const state = await writeGateState(fixture, "gate-main-not-green", [
+      ...main, { id: 300, path: ".github/workflows/ci-pr.yml", event: "workflow_run",
+        jobs: [{ id: 3001, name: "verify", status: "completed", conclusion: "success" }] },
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "0" });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(status === "failure" ? "verify concluded failure" : "verify (in_progress)");
+    expectGateRefused(await readLog(fixture.shimLog));
+  });
+
+  it("keeps a check with no matching listed job unattributed beside excluded jobs", async () => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-excluded-and-unknown", [
+      ...happyPinnedRuns(), { id: 300, path: ".github/workflows/ci-pr.yml", event: "workflow_run",
+        jobs: [{ id: 3001, name: "verify", status: "completed", conclusion: "success" }] },
+    ], [{ id: 9999, name: "verify", status: "completed", conclusion: "success" }]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "0" });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("verify (unattributed check-run 9999)");
+    expect(result.stderr).not.toContain("unattributed check-run 3001");
+    expectGateRefused(await readLog(fixture.shimLog));
+  });
+
+  it("refuses a missing excluded job ID before attributing its check", async () => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-missing-excluded-id", [
+      ...happyPinnedRuns(), { id: 300, path: ".github/workflows/ci-pr.yml", event: "workflow_run",
+        jobs: [{ id: 3001, name: "verify", status: "completed", conclusion: "success" }] },
+    ]);
+    await writeFile(`${state}/jobs-300.json`, JSON.stringify({ jobs: [
+      { id: "", name: "verify", run_attempt: 1, status: "completed", conclusion: "success" },
+    ] }));
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "0" });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("run 300 has a job with no id");
+    expectGateRefused(await readLog(fixture.shimLog));
+  });
+
+  it("refuses a failed check-run JSON projection before reading main job evidence", async () => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-invalid-check-json", happyPinnedRuns());
+    await writeFile(`${state}/check-runs.json`, "{");
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "0" });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("Could not read check runs");
+    expectGateRefused(await readLog(fixture.shimLog));
+  });
 
   it("lets the ledger App's check-run decide a required context over the pinned job record, whichever way they split", async () => {
     for (const [label, job, ledger, expected] of [

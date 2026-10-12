@@ -88,9 +88,9 @@ export const FIXTURE_HASH = "abc1234";
 export const FIXTURE_REPO = "overflow-fixture/overflow-fixture";
 export const FIXTURE_REMOTE_URL = `git@github.com:${FIXTURE_REPO}.git`;
 export const JQ_PROTECTION = `([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]`;
-export const JQ_CHECKRUNS = `.check_runs[] | [.id, .name, (.app.id // 0), (.status // "unknown"), (.conclusion // "")] | @tsv`;
-export const JQ_RUNS = `.workflow_runs[] | [.id, .path, (.event // "(missing)"), (.head_branch // "(missing)")] | @tsv`;
-export const JQ_JOBS = `.jobs[] | [.id, (if (.name // "") == "" then "(unnamed)" else .name end), (.run_attempt // 0), (.status // "unknown"), (.conclusion // "")] | @tsv`;
+export const JQ_CHECKRUNS = `.check_runs[] | [.id, .name, (.app.id // 0), (.status // "unknown"), (.conclusion // "")] | map(if . == null or . == "" then "[missing]" else . end) | @tsv`;
+export const JQ_RUNS = `.workflow_runs[] | [.id, .path, .event, .head_branch] | map(if . == null or . == "" then "[missing]" else . end) | @tsv`;
+export const JQ_JOBS = `.jobs[] | [.id, (if (.name // "") == "" then "(unnamed)" else .name end), (.run_attempt // 0), (.status // "unknown"), (.conclusion // "")] | map(if . == null or . == "" then "[missing]" else . end) | @tsv`;
 export const MAP_PATH = ".github/required-checks.json";
 /** The fixture's pin map: protection requires verify and deploy-gate. */
 export const FIXTURE_PINS: Record<string, string> = {
@@ -161,8 +161,7 @@ export interface GateCheckRun {
 }
 
 /**
- * Writes one poll iteration's GitHub state as the gh shim serves it: each file
- * holds what gh prints after the script's --jq program for that endpoint. A
+ * Writes one poll iteration's GitHub JSON for the gh shim to project with jq. A
  * job's check-run shares its id, as on GitHub; `extraCheckRuns` are check-runs
  * no job produced (created through the Checks API or by an App).
  */
@@ -174,15 +173,15 @@ export async function writeGateState(
 ): Promise<string> {
   const directory = path.join(fixture.dir, name);
   await mkdir(directory);
-  const tsv = (rows: Array<Array<string | number>>) => rows.map((row) => row.join("\t") + "\n").join("");
-  await writeFile(path.join(directory, "runs.tsv"), tsv(runs.map((run) => [
-    run.id, run.path, run.event === null ? "(missing)" : run.event ?? "push",
-    run.headBranch === null ? "(missing)" : run.headBranch ?? "main",
-  ])));
+  await writeFile(path.join(directory, "runs.json"), JSON.stringify({ workflow_runs: runs.map((run) => ({
+    id: run.id, path: run.path, event: run.event === undefined ? "push" : run.event,
+    head_branch: run.headBranch === undefined ? "main" : run.headBranch,
+  })) }));
   for (const run of runs) {
     await writeFile(
-      path.join(directory, `jobs-${run.id}.tsv`),
-      tsv(run.jobs.map((job) => [job.id, job.name, job.attempt ?? 1, job.status, job.conclusion ?? ""])),
+      path.join(directory, `jobs-${run.id}.json`),
+      JSON.stringify({ jobs: run.jobs.map((job) => ({ id: job.id, name: job.name,
+        run_attempt: job.attempt ?? 1, status: job.status, conclusion: job.conclusion ?? null })) }),
     );
   }
   const jobCheckRun = (job: GateJob): GateCheckRun => ({
@@ -194,19 +193,17 @@ export async function writeGateState(
   });
   const checkRuns = [...runs.flatMap((run) => run.jobs.map(jobCheckRun)), ...extraCheckRuns];
   await writeFile(
-    path.join(directory, "check-runs.tsv"),
-    tsv(
-      checkRuns.map((cr) => {
+    path.join(directory, "check-runs.json"),
+    JSON.stringify({ check_runs: checkRuns.map((cr) => {
         const status = cr.status ?? "completed";
         // GitHub leaves a non-completed check-run's conclusion null; the
-        // projection's `// ""` guard prints it empty. Deliberate fixture
+        // deploy query maps missing outcomes to its sentinel. Deliberate fixture
         // shape: a completed job with no explicit conclusion is written as ""
-        // in the jobs TSV but as success in its check-run row, so the fixture
+        // in the jobs JSON but as success in its check-run body, so the fixture
         // does not silently assert a disagreement the real API never produces.
         const conclusion = cr.conclusion ?? (status === "completed" ? "success" : "");
-        return [cr.id, cr.name, cr.app ?? ACTIONS_APP_ID, status, conclusion];
-      }),
-    ),
+        return { id: cr.id, name: cr.name, app: { id: cr.app ?? ACTIONS_APP_ID }, status, conclusion };
+      }) }),
   );
   return directory;
 }
@@ -344,10 +341,8 @@ export async function makeFixture(options: {
   const bins = path.join(dir, "bins");
   await mkdir(logDir);
   await mkdir(bins);
-  // The gh shim cats these files verbatim, so each holds what gh prints after
-  // applying the script's --jq program for that API path: the protection call
-  // yields one required-check name per line, and each gate state directory
-  // (writeGateState) holds the TSV the check-runs, runs and jobs calls yield.
+  // The protection shim yields required-check names; each gate state directory
+  // holds JSON projected by real jq with the deploy script's actual query.
   // The argv-shape assertions below still pin that the script passes those
   // exact --jq programs. The git shim serves requiredChecks as the pin map.
   const protectionJson = path.join(dir, "protection.txt");
@@ -490,22 +485,15 @@ case "\$path" in
     IFS=':' read -r -a seq_dirs <<< "\${GH_SHIM_GATE_SEQUENCE:?}"
     if [ "\$idx" -ge \${#seq_dirs[@]} ]; then idx=\$((\${#seq_dirs[@]} - 1)); fi
     printf '%s' "\${seq_dirs[\$idx]}" > "\$state_file"
-    cat "\${seq_dirs[\$idx]}/check-runs.tsv"
+    jq -r "\${!#}" "\${seq_dirs[\$idx]}/check-runs.json" || exit "$?"
     printf '%s' "\$((idx + 1))" > "\$idx_file"
     ;;
   */actions/runs/*/jobs*)
     run_id="\${path#*/actions/runs/}"
-    cat "\$(cat "\$state_file")/jobs-\${run_id%%/*}.tsv"
+    jq -r "\${!#}" "\$(cat "\$state_file")/jobs-\${run_id%%/*}.json"
     ;;
   */actions/runs"?"*)
-    # Serve exactly the columns requested by this version of the gate.
-    if [[ "\${!#}" == *".head_branch"* ]]; then
-      cat "\$(cat "\$state_file")/runs.tsv"
-    elif [[ "\${!#}" == *".event"* ]]; then
-      cut -f1-3 "\$(cat "\$state_file")/runs.tsv"
-    else
-      cut -f1-2 "\$(cat "\$state_file")/runs.tsv"
-    fi
+    jq -r "\${!#}" "\$(cat "\$state_file")/runs.json"
     ;;
   *)
     exit 1
