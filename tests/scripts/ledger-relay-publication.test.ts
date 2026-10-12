@@ -976,4 +976,22 @@ describe("trigger validation still recovers displaced completions", () => {
     expect((error as AggregateError).message).toContain("the repository's workflow-run listing for the orphan sweep");
     expect(w.state.requests.filter((url) => url === `${ROOT}/actions/runs?per_page=100`)).toHaveLength(3);
   });
+
+  it.each([
+    ["malformed head", { GITHUB_WORKFLOW_RUN_HEAD_SHA: "invalid-head" }],
+    ["ambiguous dispatch mode", { LEDGER_SWEEP_ONLY: "true", GITHUB_WORKFLOW_RUN_ID: "", LEDGER_DISPATCH_RUN_ID: "9001" }],
+  ] as const)("recovers a producer sharing the raw trigger id after %s using its API identity", async (_name, over) => {
+    const w = world("pr-gates");
+    const producer = { ...gate(9001, "failure"), head_sha: "d".repeat(40),
+      html_url: `https://github.com/${REPO}/actions/runs/9001?from=api` };
+    w.state.producers = [producer];
+
+    await expect(w.relay("mirror", gate(9001, "success"), over)).rejects.toThrow();
+
+    expect(w.state.checks).toHaveLength(4);
+    for (const context of GATE_CONTEXTS) expect(w.state.checks.find((check) => check.name === context))
+      .toMatchObject({ head_sha: producer.head_sha, details_url: producer.html_url,
+        external_id: "9001:1", status: "completed", conclusion: "failure", app: { id: 5118623 } });
+    expect(w.state.checks.some((check) => check.head_sha === HEAD)).toBe(false);
+  });
 });
