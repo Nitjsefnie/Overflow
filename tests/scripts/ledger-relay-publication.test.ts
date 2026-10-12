@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { renderRelayResult, runRelay } from "../../scripts/ledger-relay.ts";
+import { SWEEP_RUN_LIMIT } from "../../scripts/ledger-relay-producers.ts";
 import { resolveSuitePullRequest } from "../../scripts/resolve-suite-pull-request.ts";
 
 const REPO = "Nitjsefnie/Overflow";
@@ -304,7 +305,7 @@ describe("fix round 1 sequential safety probes", () => {
     const newer = gate(9002, "failure");
     w.state.producers = [newer, older];
     await w.relay("mirror", newer);
-    const otherHeadRuns = Array.from({ length: mode === "mirror" ? 20 : 19 }, (_, i) => ({
+    const otherHeadRuns = Array.from({ length: mode === "mirror" ? SWEEP_RUN_LIMIT : SWEEP_RUN_LIMIT - 1 }, (_, i) => ({
       ...gate(10020 - i, "success"), head_sha: "c".repeat(40),
     }));
     // The mirror retains its omitted trigger; the sweep must actually select
@@ -528,6 +529,43 @@ describe("serialized supersession publication", () => {
 });
 
 describe("history-bound publication direction", () => {
+  it.each(["mirror", "sweep"] as const)("retries the %s's uncommitted timed-out bound certificate over an ordinary same-identity failure", async (mode) => {
+    const w = world();
+    const failed = verify(9001, 8001, "failure");
+    w.state.producers = [failed];
+    await w.relay("sweep");
+    expect((w.state.checks.at(-1)?.output as Body).summary).not.toContain("1000 runs");
+    w.state.oversized = true;
+    let writes = 0;
+    const env = {
+      LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
+      GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456",
+      ...(mode === "sweep" ? { LEDGER_SWEEP_ONLY: "true" } : {
+        GITHUB_WORKFLOW_RUN_ID: "9001", GITHUB_WORKFLOW_RUN_HEAD_SHA: String(failed.head_sha),
+        GITHUB_WORKFLOW_RUN_PATH: String(failed.path), GITHUB_WORKFLOW_RUN_CONCLUSION: "failure",
+        GITHUB_WORKFLOW_RUN_HTML_URL: String(failed.html_url), GITHUB_WORKFLOW_RUN_EVENT: "workflow_run",
+        GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main", GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
+      }),
+    };
+    const result = await runRelay({
+      env, fetchFn: (async (input, init) => {
+        if (String(input) === `${ROOT}/check-runs` && init?.method === "POST" && ++writes === 1)
+          throw new DOMException("request timed out before commit", "TimeoutError");
+        return w.fetchFn(input, init);
+      }) as typeof fetch,
+      delayFn: async () => {}, readPinMap: async () => pins,
+    });
+
+    expect((w.state.checks.at(-1)?.output as Body).summary).toContain("1000 runs");
+    expect(writes).toBe(2);
+    expect(w.state.checks).toHaveLength(2);
+    expect(w.state.checks.at(-1)).toMatchObject({ external_id: "9001:1", status: "completed", conclusion: "failure" });
+    if (mode === "sweep") expect(result.sweep.relayed).toEqual([{ context: "verify", runId: "9001" }]);
+    else expect(result.posted).toEqual(["verify"]);
+    await w.relay(mode, failed);
+    expect(w.state.checks).toHaveLength(2);
+  });
+
   it.each(["mirror", "sweep"] as const)("replaces a seeded green with verify failure at the deterministic bound, %s", async (mode) => {
     const w = world();
     await w.relay("mirror");

@@ -24,7 +24,7 @@ export interface SweepCandidate {
 
 export interface SweepApi {
   get<T>(url: string, what: string, retryTransient?: boolean): Promise<T>;
-  postCheckRun(body: Record<string, unknown>, what: string): Promise<CheckRunPostResult>;
+  postCheckRun(body: Record<string, unknown>, what: string, historyBound?: string): Promise<CheckRunPostResult>;
 }
 
 /** An acknowledged/committed write, or a newer identity that blocks its retry. */
@@ -124,6 +124,18 @@ export function identityFromExternalId(value: unknown): ProducerIdentity | undef
   return { runId: match[1], runAttempt: BigInt(match[2]) };
 }
 
+/** Equal identities attest a concluded decision only with its required certificate evidence. */
+export function attestsConcludedCheck(
+  check: { status?: unknown; conclusion?: unknown; output?: { summary?: unknown } | null },
+  intended: { status: unknown; conclusion?: unknown; historyBound?: string },
+): boolean {
+  if (check.status !== "completed" || intended.status !== "completed") return false;
+  if ("conclusion" in intended && check.conclusion !== intended.conclusion) return false;
+  const bound = intended.historyBound;
+  return bound === undefined || (check.conclusion === "failure" &&
+    typeof check.output?.summary === "string" && check.output.summary.includes(bound));
+}
+
 /** Newer identities block; equal identities attest only completed checks and any required bound certificate. */
 export async function publicationBlockedContexts(
   deps: ProducerDeps,
@@ -150,10 +162,10 @@ export async function publicationBlockedContexts(
     if (producer === undefined || identity === undefined) continue;
     const ordering = compareProducerIdentities(identity, producer);
     if (ordering < 0) continue;
-    if (ordering === 0 && checkRun.status !== "completed") continue;
     const bound = historyBounds?.get(checkRun.name);
-    if (ordering === 0 && bound !== undefined && (checkRun.conclusion !== "failure" ||
-      typeof checkRun.output?.summary !== "string" || !checkRun.output.summary.includes(bound))) continue;
+    if (ordering === 0 && !attestsConcludedCheck(checkRun, {
+      status: "completed", ...(bound === undefined ? {} : { conclusion: "failure", historyBound: bound }),
+    })) continue;
     blocked.add(checkRun.name);
   }
   return blocked;
