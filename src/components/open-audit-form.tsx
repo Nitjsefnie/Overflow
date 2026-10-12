@@ -197,7 +197,7 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
             <option value="">Choose an account</option>
             {candidates.map((candidate) => (
               <option key={candidate.id} value={candidate.id}>
-                {describeCandidate(candidate)}
+                {describeCandidate(candidate, candidates)}
               </option>
             ))}
           </select>
@@ -378,8 +378,8 @@ function describeSelection(
   candidates: AuditCandidateProjection[],
   repositories: ModerationRepositoryProjection[],
 ): string {
-  const login =
-    candidates.find((candidate) => candidate.id === selection.targetAccountId)?.githubLogin ?? "the chosen account";
+  const candidate = candidates.find((candidate) => candidate.id === selection.targetAccountId);
+  const login = candidate === undefined ? "the chosen account" : describeLogin(candidate, candidates);
   const scope =
     selection.repositoryId.length === 0
       ? "all repositories"
@@ -387,7 +387,12 @@ function describeSelection(
   return `${login} · ${scope} · ${selection.sampleStartedAt} to ${selection.sampleEndedAt}`;
 }
 
-function describeCandidate(candidate: AuditCandidateProjection): string {
-  const summary = `${candidate.githubLogin} · ${candidate.selfWorkPairCount} self-work · ${candidate.outsiderPairCount} outsider ${plural(candidate.outsiderPairCount, "settlement")}`;
+function describeCandidate(candidate: AuditCandidateProjection, candidates: AuditCandidateProjection[]): string {
+  const summary = `${describeLogin(candidate, candidates)} · ${candidate.selfWorkPairCount} self-work · ${candidate.outsiderPairCount} outsider ${plural(candidate.outsiderPairCount, "settlement")}`;
   return candidate.openAuditId === null ? summary : `${summary} · audit already open`;
+}
+
+function describeLogin(candidate: AuditCandidateProjection, candidates: AuditCandidateProjection[]): string {
+  const sharedLogin = candidates.some((other) => other.id !== candidate.id && other.githubLogin === candidate.githubLogin);
+  return sharedLogin ? `${candidate.githubLogin} (GitHub id ${candidate.githubUserId})` : candidate.githubLogin;
 }

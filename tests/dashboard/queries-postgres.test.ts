@@ -54,6 +54,7 @@ describe("audit targeting against PostgreSQL", () => {
       {
         id: seeded.aliceId,
         githubLogin: "alice",
+        githubUserId: 70003,
         enforcementState: "WARNED",
         selfWorkPairCount: 0,
         outsiderPairCount: 0,
@@ -62,6 +63,7 @@ describe("audit targeting against PostgreSQL", () => {
       {
         id: seeded.bobId,
         githubLogin: "bob",
+        githubUserId: 70002,
         enforcementState: "RECALIBRATING",
         selfWorkPairCount: 0,
         outsiderPairCount: 0,
@@ -70,6 +72,7 @@ describe("audit targeting against PostgreSQL", () => {
       {
         id: seeded.carolId,
         githubLogin: "carol",
+        githubUserId: 70001,
         enforcementState: "UNDER_AUDIT",
         selfWorkPairCount: 3,
         outsiderPairCount: 1,
@@ -78,6 +81,7 @@ describe("audit targeting against PostgreSQL", () => {
       {
         id: seeded.daveId,
         githubLogin: "dave",
+        githubUserId: 70004,
         enforcementState: "BANNED",
         selfWorkPairCount: 0,
         outsiderPairCount: 0,
@@ -86,6 +90,7 @@ describe("audit targeting against PostgreSQL", () => {
       {
         id: seeded.erinId,
         githubLogin: "erin",
+        githubUserId: 70005,
         enforcementState: "ACTIVE",
         selfWorkPairCount: 0,
         outsiderPairCount: 0,
@@ -287,6 +292,34 @@ describe("audit targeting against PostgreSQL", () => {
       await sql`delete from calibration_audits where id = ${daveAudit.id}`;
     }
   });
+});
+
+it("offers a live account but excludes two distinct deleted accounts with the same tombstone login", async () => {
+  const started = await startPostgresContainer({
+    database: "overflow_deleted_audit_targets_test",
+    user: "overflow_deleted_audit_targets_test",
+  });
+  process.env.DATABASE_URL = started.databaseUrl;
+  try {
+    sql = getSql();
+    await runMigrations();
+    const liveId = await insertUser("live-audit-target");
+    const firstDeletedId = await insertUser("(deleted account)");
+    const secondDeletedId = await insertUser("(deleted account)");
+    await sql`update users set deleted_at = now() where id in (${firstDeletedId}, ${secondDeletedId})`;
+
+    const candidates = await listAuditCandidates();
+
+    expect(candidates.map((candidate) => candidate.id)).toEqual([liveId]);
+  } finally {
+    await closeSql();
+    await started.container.stop();
+    if (originalDatabaseUrl === undefined) {
+      delete process.env.DATABASE_URL;
+    } else {
+      process.env.DATABASE_URL = originalDatabaseUrl;
+    }
+  }
 });
 
 /** The lease columns travel with RUNNING to satisfy repository_reconciliation_jobs_lease_check. */

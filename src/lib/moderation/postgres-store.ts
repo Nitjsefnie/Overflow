@@ -57,7 +57,7 @@ export class PostgresModerationStore implements ModerationStore {
     sampleEndedAt: string;
   }): Promise<LoadedCalibrationCohort | null> {
     const [target] = await this.sql<{ id: string }[]>`
-      select id from users where id = ${input.targetAccountId} limit 1
+      select id from users where id = ${input.targetAccountId} and deleted_at is null limit 1
     `;
     if (target === undefined) {
       return null;
@@ -80,7 +80,7 @@ export class PostgresModerationStore implements ModerationStore {
       const [target] = await transaction<UserRow[]>`
         select id, enforcement_state, confirmed_miscalibration_count
         from users
-        where id = ${input.targetAccountId}
+        where id = ${input.targetAccountId} and deleted_at is null
         for update
       `;
       if (target === undefined) {

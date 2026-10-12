@@ -249,6 +249,7 @@ export type RecalibratingAccountProjection = {
 export type AuditCandidateProjection = {
   id: string;
   githubLogin: string;
+  githubUserId: number;
   enforcementState: string;
   selfWorkPairCount: number;
   outsiderPairCount: number;
@@ -483,6 +484,7 @@ type RecalibratingAccountRow = {
 type AuditCandidateRow = {
   id: string;
   github_login: string;
+  github_user_id: number | string;
   enforcement_state: string;
   self_work_pair_count: number | string;
   outsider_pair_count: number | string;
@@ -1303,15 +1305,12 @@ export async function listAuditCandidates(
   dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
 ): Promise<AuditCandidateProjection[]> {
   const sql = resolveSql(dependencies);
-  // These cohort predicates are shared with loadCalibrationCohorts above and with
-  // listSelfWorkPairs/listOutsiderSettlementPairs in src/lib/moderation/postgres-store.ts; change all three together.
-  // Each side aggregates once and joins on the account, rather than re-aggregating per account row:
-  // neither self_work_calibrations.user_id nor settlements.debtor_id is indexed. Inside the outsider
-  // group the comparison's creditor_id <> account test is spelled against settlements.debtor_id, which
-  // the join then binds to users.id.
+  // Pair predicates match loadCalibrationCohorts and the moderation store's pair readers; change all three together.
+  // Aggregate each side once: neither self_work_calibrations.user_id nor settlements.debtor_id is indexed.
+  // Comparing creditor_id <> debtor_id binds the outsider group to users.id through the join.
   const rows = await sql<AuditCandidateRow[]>`
     select
-      users.id,
+      users.id, users.github_user_id,
       users.github_login,
       users.enforcement_state::text,
       coalesce(self_work.pair_count, 0) as self_work_pair_count,
@@ -1338,11 +1337,12 @@ export async function listAuditCandidates(
     left join calibration_audits
       on calibration_audits.account_id = users.id
       and calibration_audits.state = 'OPEN'
-    order by users.github_login, users.id
+    where users.deleted_at is null order by users.github_login, users.id
   `;
   return rows.map((row) => ({
     id: readText(row.id, "Audit candidate identifier"),
     githubLogin: readText(row.github_login, "Audit candidate login"),
+    githubUserId: readNumber(row.github_user_id, "Audit candidate GitHub user identifier"),
     enforcementState: readText(row.enforcement_state, "Audit candidate enforcement state"),
     selfWorkPairCount: readNumber(row.self_work_pair_count, "Self-work pair count"),
     outsiderPairCount: readNumber(row.outsider_pair_count, "Outsider pair count"),

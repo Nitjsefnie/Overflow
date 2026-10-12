@@ -2013,6 +2013,7 @@ describe("audit targeting", () => {
         {
           id: "account-1",
           github_login: "mira",
+          github_user_id: "101",
           enforcement_state: "ACTIVE",
           self_work_pair_count: "12",
           outsider_pair_count: "11",
@@ -2021,6 +2022,7 @@ describe("audit targeting", () => {
         {
           id: "account-2",
           github_login: "quinn",
+          github_user_id: 102,
           enforcement_state: "RECALIBRATING",
           self_work_pair_count: 0,
           outsider_pair_count: 3,
@@ -2035,6 +2037,7 @@ describe("audit targeting", () => {
       {
         id: "account-1",
         githubLogin: "mira",
+        githubUserId: 101,
         enforcementState: "ACTIVE",
         selfWorkPairCount: 12,
         outsiderPairCount: 11,
@@ -2043,6 +2046,7 @@ describe("audit targeting", () => {
       {
         id: "account-2",
         githubLogin: "quinn",
+        githubUserId: 102,
         enforcementState: "RECALIBRATING",
         selfWorkPairCount: 0,
         outsiderPairCount: 3,
@@ -2082,6 +2086,7 @@ describe("audit targeting", () => {
         {
           id: "account-1",
           github_login: "mira",
+          github_user_id: "101",
           enforcement_state: "ACTIVE",
           self_work_pair_count: "many",
           outsider_pair_count: 11,
