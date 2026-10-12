@@ -5,16 +5,15 @@ name: ci
 # production-build check.
 #
 # THE PULL-REQUEST LEG IS NOT HERE (issue 1090). It is
-# .github/workflows/ci-pr.yml, whose only trigger is `pull_request_target`,
-# because it fetches a pull request's merge commit and reads its number, head
-# and base, and a privileged trigger would run those steps with the default
-# branch's privileges. What is left here — push to main and workflow_dispatch —
-# tests main itself and reads no pull-request data at all: no `refs/pull`
+# .github/workflows/ci-pr.yml, whose only trigger is pr suite's workflow_run
+# completion. Its default-branch scripts API-bind the upstream run to a PR and
+# judge its merge tree as data, without executing the pull request's code.
+# What is left here — push to main and workflow_dispatch — tests main itself and reads no pull-request data at all: no `refs/pull`
 # fetch, no `pull_request.*` value in any step's `run` or `env`.
 # tests/ci/pr-data-triggers.test.ts decides that from the workflow text rather
 # than from this comment, and refuses any job that both runs a
 # checkout/fetch/pull and names a pull-request-derived value outside a
-# pull_request_target-only workflow.
+# pull_request_target-only workflow, or ci-pr.yml's admitted workflow_run.
 #
 # Both files produce the `verify` job name, and
 # .github/required-checks.json pins that context to BOTH paths, so a
@@ -31,7 +30,8 @@ name: ci
 # output: the push leg's verify job must be in the same workflow. No secret is
 # referenced anywhere in this file — the App key lives only in the ledger
 # relay's environment, and the relay posts the required contexts only from
-# trusted runs (pull_request_target, or push/dispatch/schedule on main), never
+# trusted runs (API-validated ci-pr workflow_run, pull_request_target, or
+# push/dispatch/schedule on main), never
 # from a pull_request run.
 on:
   push:
@@ -55,16 +55,17 @@ concurrency:
   # shares a group: GitHub keeps one PENDING run per group and cancels the
   # superseded one even with cancel-in-progress false, and a cancelled
   # conclusion on a merged SHA makes the deploy gate refuse immediately (issue
-  # 474). There is no pull-request leg in this file to bound — the one
-  # repository-level group is ci-pr-repo-wide, in the sibling.
+  # 474). The sibling ci-pr.yml also isolates heads by SHA, using its
+  # triggering suite's head rather than the workflow_run's default-branch SHA.
   #
   # cancel-in-progress is false so no in-flight run is destroyed; on a per-SHA
   # group the run it could destroy is this SHA's own earlier attempt, and
   # `verify` is a required context ledger-relay mirrors the conclusion onto.
   # It does NOT stop GitHub cancelling the group's PENDING run — that happens
   # by default, and the flag is the boolean false rather than an event
-  # expression because nothing here needs the two halves apart. The full
-  # argument, and the measured rates, are in ci-pr.yml's concurrency block.
+  # expression because nothing here needs the two halves apart. ci-pr.yml
+  # preserves its in-flight work too, even if suite completions arrive out of
+  # head order.
   group: ci-${{ github.sha }}
   cancel-in-progress: false
 

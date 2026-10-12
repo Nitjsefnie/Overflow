@@ -80,48 +80,25 @@ jobs:
           SUITE_RUN_ID: ${{ github.event.workflow_run.id }}
         run: node "${GITHUB_WORKSPACE}/scripts/resolve-suite-pull-request.ts"
 
-      # The pull request enters as git objects only: this event's head, fetched
-      # by its SHA, and this event's base, which the full-history checkout above
-      # normally already holds and which the step fetches by SHA when it does
-      # not. No refs/pull/<number> refspec is used and the head is never checked
-      # out, installed or executed from — the checkout analysers read a fetch
-      # whose command or env names the pull request's NUMBER or a head REF as
-      # pulling untrusted history, which is why nothing here is named like a
-      # pull-request ref. What is fetched is a SHA value, and what carries the
-      # trust is not the name but the two-parent bind below: what gets
-      # materialised must be a two-parent merge whose parents are exactly this
-      # event's base and this event's head, or the step fails closed. That bind
-      # is the security boundary and it is unchanged; it is checked even though
-      # the commit below is built here from those two SHAs, because it is the
-      # tripwire against a future edit that builds the merge from anything else.
+      # The pull request enters as git objects only: the suite's head SHA and
+      # the current PR base SHA from the resolver. Fetch each by SHA, never a
+      # refs/pull/<number> refspec or head ref. The head is never checked out
+      # in the workspace, installed or executed. The two-parent bind is the
+      # trust boundary: the materialised commit must merge exactly the
+      # resolved base and suite head, or the step fails closed.
       #
-      # The merge tree is BUILT here rather than read out of the event payload.
-      # GitHub computes pull_request.merge_commit_sha asynchronously, so on a
-      # synchronize event it still names the merge commit of the pull request's
-      # PREVIOUS head; judging that tree is judging a tree this event is not
-      # about, and the bind correctly refuses it — which is why every pull
-      # request's push was failing. A local merge of this event's own two SHAs
-      # cannot be stale. merge-tree exits non-zero on a conflict, and there is
-      # no remote merge to fall back to.
-      #
-      # The merge commit is then materialised as a detached worktree under
-      # RUNNER_TEMP, outside the workspace, as data: nothing is installed,
-      # built or executed there. Later steps receive its path and SHA as this
-      # step's outputs, through their own env: as PR_TREE and MERGE_SHA — never
-      # through the job-wide environment file. Values from the event reach the
-      # shell through env:, never through ${{ }} in run:.
+      # Build the merge here: GitHub's merge preview is asynchronous and can
+      # still name an earlier head's merge. A local merge of these exact SHAs
+      # cannot substitute that old head. A conflict fails, with no fallback.
+      # Materialise the merge as a detached worktree under RUNNER_TEMP, outside
+      # the base workspace. Later steps receive path and SHA through env: as
+      # PR_TREE and MERGE_SHA. Only base copies of scripts execute over it.
       - name: Materialise the pull request's merge tree as data
         id: pr-tree
         env:
-          # The head this event is about: the commit the pull request carries
-          # NOW, and the one the merge below is built from. Deliberately not
-          # the event's merge_commit_sha, which is computed asynchronously and
-          # can name the previous head's merge.
+          # The API-bound suite head and current PR base, not the workflow_run
+          # producer's own default-branch SHA or an asynchronous merge preview.
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
-          # The base this event is about — the same commit GitHub's own merge
-          # preview merges into, and the same value the base-freshness gate
-          # receives as BASE_SHA, so the tree judged and the freshness
-          # certificate describe one merge.
           BASE_SHA: ${{ steps.pr.outputs.base_sha }}
           # actions/checkout's default: checking the tree out fetches no LFS
           # object the pull request's attributes point at.
@@ -256,7 +233,7 @@ jobs:
       # endpoints — the legal-revision gate walks EVERY commit of base..head:
       # a legal page edited in one commit and its revision record bumped in
       # the next still violates, so a reordered pair cannot slip through. The
-      # checkout's full history plus the fetched merge ref carry the range's
+      # checkout's full history plus the fetched head carry the range's
       # whole ancestry.
       - name: Legal revision currency
         env:

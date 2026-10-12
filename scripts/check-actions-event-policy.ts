@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Verify the repository's active Actions policy admits every event used by its
 // pull-request gates and ledger relay: pull_request for the pr suite whose
-// run ci-pr.yml's verify awaits, pull_request_target for the required gates,
-// and workflow_run for the relay.
+// run ci-pr.yml's verify judges, pull_request_target for pr gates, and
+// workflow_run for completion-triggered verify and the relay.
 
 import { pathToFileURL } from "node:url";
 
