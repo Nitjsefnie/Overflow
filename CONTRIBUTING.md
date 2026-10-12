@@ -165,12 +165,18 @@ manual dispatch, and a separate `calibrate` job handles eligible `main` pushes
 and the manual refusal self-test. On a push or dispatch `verify` starts
 PostgreSQL 17, installs the pinned toolchain, applies migrations, and runs
 tests, lint, module-size, typecheck, build and page-geometry checks, with
-coverage. `ci-pr.yml` is the pull-request leg, and `pull_request_target` is
-its only trigger: its `verify` checks out `main`, runs main's copies of the
+coverage. `ci-pr.yml` is the pull-request leg: its only trigger is
+`workflow_run` completion of `pr suite`, so no runner polls for the suite.
+Its `verify` checks out `main`, API-validates the exact triggering run, and
+resolves the open PR by head repository, branch and SHA (forks included),
+failing on a missing, ambiguous or moved head. It runs main's copies of the
 integrity gates — conflict markers, docs-only detection, module size,
 migration immutability, legal revisions, commit scopes, the coverage floor and
 base freshness — over the pull request's merge tree as data, and requires the
-`pr suite` run for the head commit to have succeeded. The pull request's own
+exact triggering `pr suite` run for the resolved head to have succeeded.
+The final Base freshness step judges the base SHA read during resolution.
+The relay publishes `verify` on the upstream suite's PR head SHA, rather than
+this default-branch workflow's own head SHA. The pull request's own
 code — its install, migrations, tests, lint, typecheck, build and page
 geometry — runs only in `.github/workflows/pr-suite.yml` (`pr suite`), on the
 pull request's own code with no trust. Ratchet documents are judged by the

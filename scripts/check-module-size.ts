@@ -82,7 +82,7 @@ export const MEASURED_FAMILIES: readonly PathClass[] = [
 
 // Recorded exclusions: tracked files deliberately left unmeasured.
 //
-// Landing order (issue 1113): ci-pr.yml's pull_request_target checkout runs
+// Landing order (issue 1113): ci-pr.yml's default-branch workflow_run checkout runs
 // base main's copy of this classifier against the materialised merge tree, so
 // an admission for a brand-new tracked file shape must land on main in its
 // own PR before the PR adding the admitted file; a same-PR admission cannot

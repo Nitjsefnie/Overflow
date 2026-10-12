@@ -119,7 +119,7 @@ describe("the verify workflow's page-geometry step", () => {
     // out and executes it; this file receives only push and workflow_dispatch,
     // which is exactly that set, so the closed trigger set IS the gate and an
     // `if` here would be dead code. A pull request's geometry runs in
-    // pr-suite.yml, whose outcome verify awaits as data.
+    // pr-suite.yml, whose completed outcome verify reads as data.
     expect(
       step.if,
       "the geometry step must carry no event gate: ci.yml admits nothing but push and " +
@@ -357,13 +357,8 @@ describe("the verify workflows' concurrency groups", () => {
       ).toBe("boolean");
       expect(
         concurrency["cancel-in-progress"],
-        `${file}: cancel-in-progress must be false — a true destroys a RUNNING run that may ` +
-          "belong to a different pull request, and verify is a required context ledger-relay " +
-          "mirrors the conclusion onto. It cannot tighten the bound: GitHub cancels the group's " +
-          "pending run by default either way. Note what it does NOT buy either: a pending run is " +
-          "still cancelled when a newer arrival claims the single pending slot, and in ci-pr.yml " +
-          "that run can be a peer's live head with no replacement, so its author is blocked until " +
-          "they push again. That residual is inherent to the shared group.",
+        `${file}: cancel-in-progress must be false to preserve running verify attempts; ` +
+          "head-SHA isolation prevents out-of-order suite completions from cancelling another head",
       ).toBe(false);
     }
   });
@@ -432,7 +427,7 @@ describe("the required workflows' base-freshness step", () => {
     ).toHaveLength(1);
   });
 
-  it("lives in a file whose only trigger is pull_request_target, so it needs no event gate", () => {
+  it("lives in its producer file with exactly the admitted trigger, so it needs no event gate", () => {
     for (const [label, triggers, steps] of [
       ["verify", ciPrTriggers, verifySteps],
       ["actionlint", actionlintPrTriggers, actionlintSteps],
@@ -442,7 +437,7 @@ describe("the required workflows' base-freshness step", () => {
       expect(
         Object.keys((triggers ?? {}) as Record<string, unknown>),
         `${label}: the Base freshness step is ungated, which is only correct while this file ` +
-          "receives nothing but pull_request_target. An added push or workflow_dispatch trigger " +
+          "receives only its admitted trigger. An added push or workflow_dispatch trigger " +
           "here would make the step run on main's own pushes, where github.event.pull_request.* " +
           "resolves to nothing.",
       ).toEqual(label === "verify" ? ["workflow_run"] : ["pull_request_target"]);
@@ -524,7 +519,7 @@ describe("the required workflows' base-freshness step", () => {
     ).toBe(false);
   });
 
-  it("wires its inputs from the pull_request base through env", () => {
+  it("wires verify from resolver outputs and actionlint from its PR event, through env", () => {
     const [verifyStep] = freshness(verifySteps);
     const [actionlintStep] = freshness(actionlintSteps);
 
@@ -628,7 +623,7 @@ describe("the verify workflows' untrusted-code boundary", () => {
 
     expect(
       secretRefs,
-      "ci-pr.yml runs pull_request_target and must therefore reference no secret — " +
+      "ci-pr.yml runs workflow_run and must therefore reference no secret — " +
         "a `${{ secrets.… }}` in any with:/env: value would hand PR-authored input " +
         "the run's secret context; only the ledger relay holds the App key. ci.yml is " +
         "asserted on the same terms: it is the sibling that keeps the push-recalibration " +
@@ -642,7 +637,7 @@ describe("the verify workflows' untrusted-code boundary", () => {
       expect(
         parsed.permissions,
         `${label}: the workflow-level permissions must be exactly { contents: read } — the ` +
-          "token a pull_request_target run carries must stay read-only over contents, with no " +
+          "token a base-defined run carries must stay read-only over contents, with no " +
           "extra scope added anywhere",
       ).toEqual({ contents: "read" });
     }
@@ -663,7 +658,7 @@ describe("the verify workflows' untrusted-code boundary", () => {
     expect(
       prCheckout?.if,
       "the base checkout must carry no event gate: this file's whole `on:` set is " +
-        "{pull_request_target}",
+        "{workflow_run}",
     ).toBeUndefined();
 
     const [pushCheckout] = checkouts(workflow);
@@ -690,7 +685,7 @@ describe("the verify workflows' untrusted-code boundary", () => {
     ).toEqual(["push-recalibration"]);
 
     // ci-pr.yml keeps verify's read-only actions: read — the base copy of the
-    // suite awaiter lists the pull request suite's runs and downloads its
+    // suite awaiter reads the triggering run and downloads its
     // coverage summary — and nothing that writes.
     expect(
       Object.entries(prWorkflow.jobs ?? {})
@@ -754,7 +749,7 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
     const step = steps.find((step) => step.name === markerName);
     expect(step).toBeDefined();
     expect(step?.run).toContain("git grep -nI -E '^(<{7}( |$)|>{7}( |$)|={7}$)' -- .");
-    // This file receives nothing but pull_request_target, so the tree searched
+    // This file receives nothing but workflow_run, so the tree searched
     // is always the pull request's and its path is the materialise step's
     // output — the step no longer branches on the event to decide that.
     expect(step?.env).toEqual({ PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
@@ -802,7 +797,7 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
     expect(
       step?.if,
       "the step carries no event gate: an `if` naming a sibling event would be dead here, and the " +
-        "file's closed pull_request_target trigger set is what keeps it off a push",
+        "file's closed workflow_run trigger set is what keeps it off a push",
     ).toBeUndefined();
     expect(Boolean(step?.["continue-on-error"])).toBe(false);
   });
