@@ -64,6 +64,7 @@ function world(kind: "verify" | "pr-gates" = "verify") {
     oldCommitted: false, afterOldCommitReads: [] as string[],
     onCommit: undefined as ((body: Body) => void | Promise<void>) | undefined,
     onJobs: undefined as (() => void) | undefined,
+    jobsStatus: undefined as "queued" | "in_progress" | undefined,
   };
   const blocked = deferred();
   const released = deferred();
@@ -118,7 +119,8 @@ function world(kind: "verify" | "pr-gates" = "verify") {
         state.onJobs?.();
         const contexts = run.path === ".github/workflows/pr-gates.yml" ? GATE_CONTEXTS : ["verify"];
         return response({ jobs: contexts.map((name) => ({ name, run_attempt: run.run_attempt,
-          status: run.status, conclusion: run.conclusion })) });
+          status: state.jobsStatus ?? run.status,
+          conclusion: state.jobsStatus === undefined ? run.conclusion : null })) });
       }
     }
     throw new Error(`unexpected request ${url}`);
@@ -359,6 +361,84 @@ describe("fix round 1 sequential safety probes", () => {
     await w.relay(mode, lowerId);
     expect(w.state.checks.map((check) => `${check.external_id}=${check.conclusion}`))
       .toEqual(GATE_CONTEXTS.map(() => "9002:1=failure"));
+  });
+});
+
+describe("fix round 2 pending recovery and malformed identity probes", () => {
+  it.each(["queued", "in_progress"] as const)("completes a mirror-created %s check after the job concludes", async (status) => {
+    const w = world("pr-gates");
+    let jobsPending = true;
+    const fetchFn = (async (input: unknown, init: RequestInit = {}) => {
+      if (String(input) === `${ROOT}/actions/runs/9001/jobs?filter=latest&per_page=100` && jobsPending) {
+        w.state.requests.push(String(input));
+        return response({ jobs: GATE_CONTEXTS.map((name) => ({ name, run_attempt: 1, status, conclusion: null })) });
+      }
+      return w.fetchFn(input as RequestInfo, init);
+    }) as typeof fetch;
+    const producer = w.state.producers[0];
+    const baseEnv = {
+      LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
+      GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456",
+    };
+    const mirrorEnv = {
+      ...baseEnv, GITHUB_WORKFLOW_RUN_ID: String(producer.id),
+      GITHUB_WORKFLOW_RUN_HEAD_SHA: String(producer.head_sha), GITHUB_WORKFLOW_RUN_PATH: String(producer.path),
+      GITHUB_WORKFLOW_RUN_CONCLUSION: String(producer.conclusion), GITHUB_WORKFLOW_RUN_HTML_URL: String(producer.html_url),
+      GITHUB_WORKFLOW_RUN_EVENT: String(producer.event), GITHUB_WORKFLOW_RUN_HEAD_BRANCH: String(producer.head_branch),
+      GITHUB_WORKFLOW_RUN_ATTEMPT: String(producer.run_attempt),
+    };
+    const start = (mode: "mirror" | "sweep") => runRelay({
+      env: mode === "mirror" ? mirrorEnv : { ...baseEnv, LEDGER_SWEEP_ONLY: "true" },
+      fetchFn, delayFn: async () => {}, readPinMap: async () => pins,
+    });
+    await start("mirror");
+    expect(w.state.checks).toHaveLength(4);
+    expect(w.state.checks.every((check) => check.external_id === "9001:1" && check.status === status && check.conclusion === undefined)).toBe(true);
+    jobsPending = false;
+    const recovery = await start("sweep");
+    await start("mirror");
+    await start("sweep");
+    for (const context of GATE_CONTEXTS) {
+      expect(w.state.checks.filter((check) => check.name === context).at(-1))
+        .toMatchObject({ external_id: "9001:1", status: "completed", conclusion: "success" });
+    }
+    expect(recovery.sweep.relayed).toEqual(GATE_CONTEXTS.map((context) => ({ context, runId: "9001" })));
+    expect(w.state.checks).toHaveLength(8);
+  });
+
+  it.each(["mirror", "sweep"] as const)("treats nonempty malformed external identities as no floor, %s", async (mode) => {
+    for (const externalId of ["legacy-producer", "9002", "9002:bad", "9002:1:extra", "9002:1\n"]) {
+      const w = world();
+      await w.relay("mirror");
+      w.state.checks[0].external_id = externalId;
+      await w.relay(mode);
+      expect(w.state.checks.at(-1), externalId)
+        .toMatchObject({ external_id: "9001:1", status: "completed", conclusion: "success" });
+      expect(w.state.checks, externalId).toHaveLength(2);
+      await w.relay(mode);
+      expect(w.state.checks, externalId).toHaveLength(2);
+    }
+  });
+
+  it.each(["mirror", "sweep"] as const)("preserves a strictly newer identity floor even when the App check is pending, %s", async (mode) => {
+    for (const status of ["queued", "in_progress"] as const) {
+      const w = world("pr-gates");
+      const older = gate(9001, "success");
+      const newer = gate(9002, "success");
+      w.state.producers = [newer, older];
+      w.state.jobsStatus = status;
+      await w.relay("mirror", newer);
+      expect(w.state.checks).toHaveLength(4);
+      expect(w.state.checks.every((check) => check.external_id === "9002:1" && check.status === status)).toBe(true);
+      w.state.jobsStatus = undefined;
+      w.state.producers = [{ ...newer, status: "queued", conclusion: null, run_attempt: 2 }, older];
+      await w.relay(mode, older);
+      expect(w.state.checks).toHaveLength(4);
+      for (const context of GATE_CONTEXTS) {
+        expect(w.state.checks.filter((check) => check.name === context).at(-1))
+          .toMatchObject({ external_id: "9002:1", status });
+      }
+    }
   });
 });
 
