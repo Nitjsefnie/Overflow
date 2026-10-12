@@ -525,17 +525,9 @@ describe("sweepOrphans", () => {
   });
 
   it("posts nothing for a candidate whose jobs listing is unfinished, and the next sweep posts the conclusion once", async () => {
-    // The defect this pins, end to end across two sweeps. A completed
-    // producer run whose jobs listing reports an unfinished job is decided as
-    // PENDING, and the sweep used to POST that pending check-run — a
-    // placeholder, not attestation, which wedged merge evidence: only a later
-    // sweep could complete it (issue 1116). The non-completed decision is now
-    // DROPPED — no POST, not relayed this sweep, the candidate stays a
-    // candidate — and the next sweep, facing a concluded job, posts the real
-    // conclusion exactly once. The second half still pins issue 885's guard:
-    // the pending placeholder the mirror may hold is not read back as an
-    // attestation.
-    const pending = { check_runs: [appCheckRun("actionlint", { status: "queued" })] };
+    // An unfinished producing job gets no POST. Once it concludes, the
+    // producer can replace an older App identity even if that check is pending.
+    const pending = { check_runs: [appCheckRun("actionlint", { status: "queued", external_id: "9001:1" })] };
     const jobsPending = {
       jobs: [{ name: "actionlint", run_attempt: 1, status: "queued", conclusion: null }],
     };
@@ -553,8 +545,7 @@ describe("sweepOrphans", () => {
     expect(firstOutcome).toEqual({ examined: 1, relayed: [] });
     expect(first.requests.filter((request) => request.method === "POST")).toEqual([]);
 
-    // Sweep #2: the job has concluded, and the App holds only the mirror's
-    // pending placeholder. It must not be read as an attestation.
+    // Sweep #2: the job has concluded; the pending App check is an older identity.
     const second = fakeApi({
       [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
       [checkRunsAt(HEAD_SHA)]: pending,
@@ -569,17 +560,18 @@ describe("sweepOrphans", () => {
     });
   });
 
-  it("reads an in_progress App check-run as a placeholder too, not an attestation", async () => {
+  it.each(["queued", "in_progress"])("skips a %s App check already carrying the selected producer identity", async (status) => {
     const { api, requests } = fakeApi({
       [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
       [checkRunsAt(HEAD_SHA)]: {
-        check_runs: [appCheckRun("actionlint", { status: "in_progress" })],
+        check_runs: [appCheckRun("actionlint", { status })],
       },
       [jobsUrl("9002")]: { jobs: [] },
     });
     const outcome = await sweepOrphans(deps(api));
-    expect(outcome.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
-    expect(requests.filter((request) => request.method === "POST").at(-1)?.body).toMatchObject({ name: "actionlint", conclusion: "success" });
+    expect(outcome.relayed).toEqual([]);
+    expect(requests.filter((request) => request.method === "POST")).toEqual([]);
+    expect(requests.some((request) => request.url === jobsUrl("9002"))).toBe(false);
   });
 
   it("still skips a candidate whose contexts hold a CONCLUDED App check-run", async () => {

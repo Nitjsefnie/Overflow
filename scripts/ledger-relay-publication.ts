@@ -5,7 +5,7 @@
 
 import { decideContexts, pinsFor, type ContextDecision } from "./ledger-relay-decisions.ts";
 import {
-  attestedContexts, checkRunBody, newestProducersFor, selectSweepCandidates,
+  publicationBlockedContexts, checkRunBody, newestProducersFor, selectSweepCandidates,
   validateJobs, type ProducerDeps, type SweepCandidate,
 } from "./ledger-relay-producers.ts";
 import { resolveWorkflowRunHead, type UpstreamPublicationCheck } from "./ledger-relay-upstream.ts";
@@ -124,8 +124,9 @@ export async function publishProducerContexts(
       run: { ...run, status: run.status ?? "completed" }, check, historyBound: bound,
     });
     if (newest === undefined) continue;
-    const attested = await attestedContexts(deps, run.headSha, new Map([[context, newest.run]]));
-    if (attested.has(context)) continue;
+    const blocked = await publicationBlockedContexts(deps, run.headSha, new Map([[context, newest.run]]),
+      new Map(newest.historyBound === undefined ? [] : [[context, newest.historyBound]]));
+    if (blocked.has(context)) continue;
     const selectedJobs = newest.run.runId === run.runId && newest.run.runAttempt === run.runAttempt
       ? jobs : newest.historyBound !== undefined ? [] : validateJobs(
         await deps.api.get<Record<string, unknown>>(

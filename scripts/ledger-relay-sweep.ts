@@ -37,7 +37,7 @@ import { readSuiteRuns, suiteRunsUrl, supersessionMessage } from "./pr-suite-sup
 import { resolveWorkflowRunHead, type UpstreamPublicationCheck } from "./ledger-relay-upstream.ts";
 
 import {
-  attestedContexts, idOf, newestProducersFor,
+  publicationBlockedContexts, idOf, newestProducersFor,
   selectSweepCandidates, validateJobs, type ProducerDeps, type SweepCandidate,
 } from "./ledger-relay-producers.ts";
 import { historyBoundDecision, postProducerCheck, publicationState } from "./ledger-relay-publication.ts";
@@ -60,25 +60,25 @@ export interface SweepDeps extends ProducerDeps {
 
 /**
  * The missing-context computation, pure. The contexts one of whose pinned paths
- * is the candidate's path, minus the names whose latest App checks attest the
- * selected newest producer attempt at that commit, minus the contexts this same sweep
+ * is the candidate's path, minus contexts blocked by newer App identities or
+ * an attestation of the selected producer, minus the contexts this same sweep
  * has already relayed at that commit.
  *
  * The caller restricts each context to its newest eligible producer before
- * reading jobs. `attested` holds the producer-bound evidence GitHub returned;
+ * reading jobs. `blocked` holds the producer-bound evidence GitHub returned;
  * `relayedThisSweep` records successful writes by this invocation. They stay
  * separate so a successful POST cannot be mistaken for an API attestation.
  */
 export function missingContextsFor(
   pinMap: PinMap,
   candidate: SweepCandidate,
-  attested: ReadonlySet<string>,
+  blocked: ReadonlySet<string>,
   relayedThisSweep: ReadonlySet<string>,
 ): string[] {
   const missing: string[] = [];
   for (const [context, pins] of Object.entries(pinMap)) {
     if (!pinsFor(pins).includes(candidate.path)) continue;
-    if (attested.has(context) || relayedThisSweep.has(context)) continue;
+    if (blocked.has(context) || relayedThisSweep.has(context)) continue;
     missing.push(context);
   }
   return missing;
@@ -171,11 +171,16 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
     const newest = newestProducersFor(deps.pinMap, [
       ...atHead, ...(triggerRun?.headSha === headSha ? [triggerRun] : []),
     ]);
-    const attested = await attestedContexts(deps, headSha, newest);
+    const historyBounds = new Map<string, string>();
+    for (const [context, producer] of newest) {
+      const bound = bounds.get(producer.runId);
+      if (bound !== undefined) historyBounds.set(context, bound);
+    }
+    const blocked = await publicationBlockedContexts(deps, headSha, newest, historyBounds);
     const relayedThisSweep = new Set<string>();
     for (const candidate of atHead) {
       const missing = new Set(
-        missingContextsFor(deps.pinMap, candidate, attested, relayedThisSweep)
+        missingContextsFor(deps.pinMap, candidate, blocked, relayedThisSweep)
           .filter((context) => newest.get(context) === candidate),
       );
       if (missing.size === 0) continue;
@@ -195,13 +200,8 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
         ? deps.decide(deps.pinMap, candidate.path, candidate.conclusion, jobs)
         : [historyBoundDecision(bound)]).filter((decision) => missing.has(decision.context));
       for (const decision of decisions) {
-        // A non-completed decision is a PLACEHOLDER, not attestation (issue
-        // 1116): the sweep used to post it as an in_progress check-run, which
-        // wedged merge evidence — only a later sweep could complete it, and
-        // relay starts in the stall window refused without sweeping. Dropped
-        // this round: no POST, not relayed, the candidate stays a candidate
-        // for the next sweep, which posts the concluded decision once. The
-        // mirror's pending behavior is unchanged (residual, PM-accepted).
+        // Only completed decisions are attested. An unfinished decision gets
+        // no POST and remains eligible for a later sweep once it concludes.
         if (decision.status !== "completed") continue;
         const posted = await postProducerCheck(deps, decision, candidate, rechecks.get(candidate.runId));
         if (posted === undefined) continue;
