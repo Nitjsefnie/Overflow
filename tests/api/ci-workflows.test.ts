@@ -1287,7 +1287,9 @@ exit 1
     const requirements = (await readFile(resolve(file), "utf8")).split("\n")
       .filter((line) => line.trim() !== "" && !line.trim().startsWith("#"));
     expect(requirements.length).toBeGreaterThan(0);
+    expect(requirements.some((line) => line.startsWith("zizmor=="))).toBe(true);
     expect(checkIgnore(file)).toBe(1);
+    expect(checkIgnore(".github/junk.txt")).toBe(0);
   });
   it("tracks the nonempty pyyaml requirements file", async () => {
     const file = ".github/requirements-pyyaml.txt";
