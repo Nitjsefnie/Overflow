@@ -35,6 +35,7 @@ describe("the required verify suite chain", () => {
     for (const step of verify.steps) expect(step.run ?? "").not.toContain("${{");
     const awaiter = verify.steps.find((step: { id?: string }) => step.id === "suite");
     expect(awaiter.env.SUITE_RUN_ID).toBe("${{ github.event.workflow_run.id }}");
+    expect(awaiter.env.SUITE_RUN_ATTEMPT).toBe("${{ github.event.workflow_run.run_attempt }}");
     expect(awaiter.env.HEAD_SHA).toBe("${{ steps.pr.outputs.head_sha }}");
   });
 });
