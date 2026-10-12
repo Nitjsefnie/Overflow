@@ -805,16 +805,61 @@ exit 0
     expectGateRefused(await readLog(fixture.shimLog));
   });
 
-  it.each(["push", "schedule", "workflow_dispatch"])("accepts a ci.yml verify job from %s", async (event) => {
+  it.each(["push", "schedule", "workflow_dispatch"])("accepts a ci.yml verify job from %s on main", async (event) => {
     const fixture = await makeFixture();
     const state = await writeGateState(fixture, "gate-main-event", [
-      { id: 100, path: FIXTURE_PINS.verify!, event,
+      { id: 100, path: FIXTURE_PINS.verify!, event, headBranch: "main",
         jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "success" }] },
       { id: 200, path: FIXTURE_PINS["deploy-gate"]!,
         jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
     ]);
     const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "0" });
     expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("ignores dispatch from another ref whose verify job lands on a different SHA", async () => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-dispatch-other-ref", [
+      { id: 100, path: FIXTURE_PINS.verify!, event: "workflow_dispatch", headBranch: "feature/dispatch",
+        jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "success" }] },
+      { id: 200, path: FIXTURE_PINS["deploy-gate"]!,
+        jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
+    ]);
+    const foreignJobs = path.join(fixture.dir, "dispatch-jobs.json");
+    await writeFile(foreignJobs, JSON.stringify({ jobs: [{ id: 1001, name: "verify", run_attempt: 1,
+      status: "completed", conclusion: "success", head_sha: "d".repeat(40) }] }));
+    // The actual jobs JSON is projected by jq, including the different SHA
+    // the gate's job query does not read. A rejected dispatch must never read it.
+    await writeFile(path.join(fixture.bins, "gh"), shimBody("gh", [], `
+if [[ "$2" == */actions/runs/100/jobs* ]]; then
+  jq -r "\${!#}" "\${GH_SHIM_DISPATCH_JOBS:?}"
+  exit "$?"
+fi
+${SHIM_DISPATCH.gh!.dispatch}`));
+    await chmod(path.join(fixture.bins, "gh"), 0o755);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state,
+      GH_SHIM_DISPATCH_JOBS: foreignJobs, OVERFLOW_DEPLOY_CI_TIMEOUT: "0" }, { omitShims: ["gh"] });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("verify (absent)");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "gh" && entry.args[1]?.includes("/runs/100/jobs?"))).toBe(false);
+    expectGateRefused(entries);
+  });
+
+  it.each([null, ""])("refuses a dispatch run with missing head_branch (%s)", async (headBranch) => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-dispatch-missing-branch", [
+      { id: 100, path: FIXTURE_PINS.verify!, event: "workflow_dispatch", headBranch,
+        jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "success" }] },
+      { id: 200, path: FIXTURE_PINS["deploy-gate"]!,
+        jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "0" });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toMatch(/run 100.*head_branch/);
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "gh" && entry.args[1]?.includes("/runs/100/jobs?"))).toBe(false);
+    expectGateRefused(entries);
   });
 
   it("refuses a pinned workflow run with no API event before reading its jobs", async () => {
