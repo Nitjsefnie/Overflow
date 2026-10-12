@@ -173,7 +173,9 @@ failing on a missing, ambiguous or moved head. It runs main's copies of the
 integrity gates — conflict markers, docs-only detection, module size,
 migration immutability, legal revisions, commit scopes, the coverage floor and
 base freshness — over the pull request's merge tree as data, and requires the
-exact triggering `pr suite` run for the resolved head to have succeeded.
+exact triggering `pr suite` run for the resolved head to have succeeded,
+with no newer run at that SHA or a later attempt. The relay rechecks
+supersession before publication and skips older results without posting.
 The final Base freshness step starts at the head/current-base merge-base,
 a conservative bound on the suite's tested base on main's linear history;
 static gates still use the current PR base.

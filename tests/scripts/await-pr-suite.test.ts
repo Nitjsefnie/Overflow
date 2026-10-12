@@ -30,6 +30,7 @@ const LISTING_URL =
   `?head_sha=${SHA}&event=pull_request&per_page=100`;
 
 interface FakeRun {
+  run_attempt?: number;
   id: number;
   path: string;
   head_sha: string;
@@ -42,6 +43,7 @@ interface FakeRun {
 function suiteRun(over: Partial<FakeRun> = {}): FakeRun {
   return {
     id: 100,
+    run_attempt: 1,
     path: SUITE_WORKFLOW_PATH,
     head_sha: SHA,
     event: "pull_request",
@@ -603,21 +605,23 @@ describe("the CLI, as a spawned process", () => {
 
 
 describe("awaitPrSuite — exact triggering run", () => {
-  function exact(run = suiteRun(), status = 200) {
-    const h = harness([], { SUITE_RUN_ID: "100" });
+  function exact(run = suiteRun(), status = 200, newer: FakeRun[] = [], listStatus = 200) {
+    const h = harness([], { SUITE_RUN_ID: "100", SUITE_RUN_ATTEMPT: "1" });
     h.deps.fetchFn = (async (input: string | URL | Request) => {
       h.calls.push({ url: String(input), headers: {}, signal: undefined });
-      return new Response(JSON.stringify(run), { status });
+      return String(input).includes("/actions/workflows/")
+        ? new Response(JSON.stringify({ total_count: newer.length + 1, workflow_runs: [run, ...newer] }), { status: listStatus })
+        : new Response(JSON.stringify(run), { status });
     }) as typeof fetch;
     return h;
   }
 
-  it("judges the named run once without listing runs or polling", async () => {
+  it("judges the named run with one supersession listing, without polling", async () => {
     const h = exact();
     const outcome = await awaitPrSuite(h.deps);
     expect(outcome.exitCode).toBe(0);
     expect(outcome.runId).toBe(100);
-    expect(h.calls.map((call) => call.url)).toEqual([`https://api.github.com/repos/${REPO}/actions/runs/100`]);
+    expect(h.calls.map((call) => call.url)).toEqual([`https://api.github.com/repos/${REPO}/actions/runs/100`, LISTING_URL]);
     expect(h.sleeps).toEqual([]);
   });
 
@@ -637,6 +641,40 @@ describe("awaitPrSuite — exact triggering run", () => {
     expect(errorLines(outcome.lines)).toHaveLength(1);
     expect(h.calls).toHaveLength(1);
     expect(h.sleeps).toEqual([]);
+  });
+
+  it.each(["failure", "in_progress"])("a newer same-SHA %s run supersedes an older success", async (state) => {
+    const newer = suiteRun({ id: 101, status: state === "in_progress" ? state : "completed", conclusion: state === "failure" ? state : null });
+    const h = exact(suiteRun(), 200, [newer]);
+    const result = await awaitPrSuite(h.deps);
+    expect(result.exitCode).toBe(1);
+    expect(result.lines.join("\n")).toMatch(/::error::.*superseded by run 101/);
+    expect(result.runId).toBeUndefined();
+    expect(h.sleeps).toEqual([]);
+  });
+
+  it("a later attempt of the same run supersedes the attempt verify judged", async () => {
+    const h = exact(suiteRun({ run_attempt: 2 }));
+    const result = await awaitPrSuite(h.deps);
+    expect(result.exitCode).toBe(1);
+    expect(result.lines.join("\n")).toMatch(/::error::.*superseded by run 100/);
+    expect(result.runId).toBeUndefined();
+  });
+
+  it("a supersession listing read failure fails without sleeping or certifying", async () => {
+    const h = exact(suiteRun(), 200, [], 503);
+    const result = await awaitPrSuite(h.deps);
+    expect(result.exitCode).toBe(1);
+    expect(errorLines(result.lines)).toHaveLength(1);
+    expect(h.calls).toHaveLength(2);
+    expect(h.sleeps).toEqual([]);
+  });
+
+  it.each([undefined, "", "0", "bad"])("an invalid judged attempt %s cannot certify", async (attempt) => {
+    const h = exact();
+    h.deps.env.SUITE_RUN_ATTEMPT = attempt;
+    expect((await awaitPrSuite(h.deps)).exitCode).toBe(2);
+    expect(h.calls).toEqual([]);
   });
 
   it("fails a read error immediately without sleeping", async () => {

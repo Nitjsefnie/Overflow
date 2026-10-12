@@ -348,6 +348,7 @@ scripts/*
 !scripts/upgrade-webhooks.ts
 !scripts/ledger-relay-upstream.ts
 !scripts/resolve-suite-pull-request.ts
+!scripts/pr-suite-supersession.ts
 !scripts/measure-header-geometry.mjs
 !scripts/check-page-geometry.mjs
 !scripts/owned-processes.mjs

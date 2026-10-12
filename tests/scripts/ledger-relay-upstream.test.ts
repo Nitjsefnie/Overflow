@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { isTrustedProducerRun, runRelay } from "../../scripts/ledger-relay.ts";
+import { isTrustedProducerRun, renderRelayResult, runRelay } from "../../scripts/ledger-relay.ts";
 
 const REPO = "Nitjsefnie/Overflow";
 const REPO_ID = "123456";
@@ -13,6 +13,7 @@ const PR_SHA = "b".repeat(40);
 const OTHER_PR_SHA = "c".repeat(40);
 const PIN_MAP = { verify: [".github/workflows/ci.yml", VERIFY_PATH] };
 const runsUrl = `${API}/actions/runs?per_page=100`;
+const suiteRunsUrl = (sha = PR_SHA) => `${API}/actions/workflows/pr-suite.yml/runs?head_sha=${sha}&event=pull_request&per_page=100`;
 const runUrl = (id: number) => `${API}/actions/runs/${id}`;
 const jobsUrl = (id: number) => `${runUrl(id)}/jobs?filter=latest&per_page=100`;
 const checksUrl = (sha: string) =>
@@ -27,6 +28,7 @@ beforeAll(() => {
 function producer(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 9001,
+    created_at: "2026-10-12T09:00:00Z",
     path: VERIFY_PATH,
     event: "workflow_run",
     repository: { id: Number(REPO_ID), full_name: REPO },
@@ -45,6 +47,7 @@ function producer(over: Record<string, unknown> = {}): Record<string, unknown> {
 function suite(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 8001,
+    run_started_at: "2026-10-12T08:00:00Z",
     path: SUITE_PATH,
     event: "pull_request",
     status: "completed",
@@ -75,6 +78,8 @@ function harness(over: {
       jobs: [{ name: "verify", run_attempt: 1, status: "completed", conclusion: "success" }],
     },
     [runsUrl]: { workflow_runs: [] },
+    [suiteRunsUrl()]: { total_count: 1, workflow_runs: [suite()] },
+    [suiteRunsUrl(OTHER_PR_SHA)]: { total_count: 1, workflow_runs: [suite({ id: 8002, head_sha: OTHER_PR_SHA })] },
     [checksUrl(MAIN_SHA)]: { check_runs: [] },
     [checksUrl(PR_SHA)]: { check_runs: [] },
     [checksUrl(OTHER_PR_SHA)]: { check_runs: [] },
@@ -96,6 +101,7 @@ function harness(over: {
     if (!(url in handlers)) throw new Error(`unexpected fetch: ${url}`);
     const result = handlers[url];
     if (result instanceof Error) throw result;
+    if (typeof result === "function") return new Response(JSON.stringify(result()));
     if (typeof result === "object" && result !== null && "httpStatus" in result) {
       return new Response("upstream unavailable", { status: Number(result.httpStatus) });
     }
@@ -322,5 +328,71 @@ describe("workflow_run orphan sweep", () => {
     } });
     await expect(h.run()).rejects.toThrow(/producer.*repository/);
     expect(h.posts).toEqual([]);
+  });
+});
+
+
+describe("superseded verification never publishes", () => {
+  it.each(["failure", "in_progress"])("newer same-SHA suite %s skips old mirror and orphan", async (state) => {
+    const newer = suite({ id: 8002, status: state === "in_progress" ? state : "completed", conclusion: state === "failure" ? state : null });
+    for (const orphan of [false, true]) {
+      const h = harness({
+        env: orphan ? { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" } : {},
+        handlers: {
+          [suiteRunsUrl()]: { total_count: 2, workflow_runs: [suite(), newer] },
+          ...(orphan ? { [runsUrl]: { workflow_runs: [producer()] } } : {}),
+        },
+      });
+      const result = await h.run();
+      expect(h.posts).toEqual([]);
+      expect(renderRelayResult(result).join("\n")).toContain("superseded by run 8002; that run's verify attests");
+    }
+  });
+
+  it("a rerun begun after verify was created skips mirror and orphan", async () => {
+    for (const orphan of [false, true]) {
+      const h = harness({
+        upstream: suite({ run_attempt: 2, run_started_at: "2026-10-12T10:00:00Z" }),
+        env: orphan ? { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" } : {},
+        handlers: orphan ? { [runsUrl]: { workflow_runs: [producer()] } } : {},
+      });
+      const result = await h.run();
+      expect(h.posts).toEqual([]);
+      expect(renderRelayResult(result).join("\n")).toContain("superseded by run 8001; that run's verify attests");
+    }
+  });
+
+  it.each([false, true])("supersession read failure throws, orphan=%s", async (orphan) => {
+    const h = harness({
+      env: orphan ? { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" } : {},
+      handlers: {
+        [suiteRunsUrl()]: { httpStatus: 404 },
+        ...(orphan ? { [runsUrl]: { workflow_runs: [producer()] } } : {}),
+      },
+    });
+    await expect(h.run()).rejects.toThrow(/suite.*failed/);
+    expect(h.posts).toEqual([]);
+  });
+});
+
+
+describe("publication rechecks supersession after reading job results", () => {
+  it.each([false, true])("a newer failure appearing just before POST suppresses publication, orphan=%s", async (orphan) => {
+    let reads = 0;
+    const h = harness({
+      env: orphan ? { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" } : {},
+      handlers: {
+        [suiteRunsUrl()]: () => {
+          reads += 1;
+          return reads === 1 ? { total_count: 1, workflow_runs: [suite()] }
+            : { total_count: 2, workflow_runs: [suite(), suite({ id: 8002, conclusion: "failure" })] };
+        },
+        ...(orphan ? { [runsUrl]: { workflow_runs: [producer()] } } : {}),
+      },
+    });
+    const result = await h.run();
+    expect(h.requests).toContain(jobsUrl(9001));
+    expect(h.posts).toEqual([]);
+    expect(renderRelayResult(result).join("\n")).toContain("superseded by run 8002");
   });
 });

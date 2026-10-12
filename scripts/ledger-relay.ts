@@ -38,6 +38,7 @@
 // LEDGER_APP_KEY secret and is never logged; every failure exits nonzero so a
 // dead relay is visible as a red job, never as silence.
 
+import { suiteRunsUrl, supersessionMessage } from "./pr-suite-supersession.ts";
 import { createSign } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -112,6 +113,7 @@ const API_ROOT = "https://api.github.com";
 const API_HEADERS = {
   accept: "application/vnd.github+json",
   "x-github-api-version": "2022-11-28",
+  "cache-control": "no-cache",
 };
 // Bounded retry: three attempts total, 1s then 2s between them. Only
 // plausibly transient failures retry — a network error, a 5xx, a 429; any
@@ -146,6 +148,8 @@ export interface RelayDeps {
 }
 
 export interface RelayResult {
+  /** Superseded workflow_run certification is an exit-0 no-op, never a POST. */
+  supersededBy?: number;
   decisions: ContextDecision[];
   /** The contexts whose check-run POST succeeded, in posting order. */
   posted: string[];
@@ -245,6 +249,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   }
 
   let attestationRun = run;
+  let recheckSupersession: (() => Promise<number | undefined>) | undefined;
   if (run.event === "workflow_run") {
     const api = sweepApi(deps, repo, auth);
     const resolved = await resolveWorkflowRunHead(
@@ -252,7 +257,10 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
       env.GITHUB_REPOSITORY_ID,
       (id) => api.get(`${API_ROOT}/repos/${repo}/actions/runs/${id}`, `the workflow run ${id}`),
       fetchedProducer,
+      (sha) => api.get(suiteRunsUrl(API_ROOT, repo, sha), "the suite supersession listing"),
     );
+    if (resolved.supersededBy !== undefined) return skippedSuperseded(resolved.supersededBy);
+    recheckSupersession = resolved.recheckSupersession;
     run = resolved.run;
     attestationRun = { ...run, headSha: resolved.headSha };
   }
@@ -276,6 +284,8 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   );
   const jobs = validateJobs(jobsBody);
 
+  const newer = await recheckSupersession?.();
+  if (newer !== undefined) return skippedSuperseded(newer);
   const decisions = decideContexts(pinMap, run.path, run.conclusion, jobs);
   const posted: string[] = [];
   for (const decision of decisions) {
@@ -322,6 +332,11 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   if (sweepError !== undefined) throw sweepError;
 
   return { decisions, posted, rerunDispatched, sweep };
+}
+
+/** A late older verification must not replace either a newer failure or success. */
+function skippedSuperseded(supersededBy: number): RelayResult {
+  return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP, supersededBy };
 }
 
 /**
@@ -710,6 +725,7 @@ function required(env: Record<string, string | undefined>, name: string): string
  * living undrivable in main().
  */
 export function renderRelayResult(result: RelayResult): string[] {
+  if (result.supersededBy !== undefined) return [`[ledger-relay] ${supersessionMessage(result.supersededBy)}`];
   if (result.sweepOnly === true) {
     // Issue 1116: the sweep's summary is the whole output; there is no
     // triggering run to name and no mirror to report.

@@ -34,6 +34,7 @@ import {
   type PinMap,
   type RelayJob,
 } from "./ledger-relay-decisions.ts";
+import { suiteRunsUrl, supersessionMessage } from "./pr-suite-supersession.ts";
 import { resolveWorkflowRunHead } from "./ledger-relay-upstream.ts";
 
 /**
@@ -64,6 +65,7 @@ export interface SweepCandidate {
 }
 
 export interface SweepOutcome {
+  readonly superseded?: ReadonlyArray<{ runId: string; supersededBy: number }>;
   /** Candidates considered after filtering and the SWEEP_RUN_LIMIT cap. */
   readonly examined: number;
   /** Contexts the sweep posted, in posting order. */
@@ -238,23 +240,34 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
   // so a consumer cannot push into a result it was handed, but this function
   // is the one place that accumulates.
   const relayed: Array<{ context: string; runId: string }> = [];
+  const superseded: Array<{ runId: string; supersededBy: number }> = [];
+  const active: SweepCandidate[] = [];
+  const rechecks = new Map<string, () => Promise<number | undefined>>();
 
   // Resolve BEFORE grouping: both attestation and this sweep's dedupe key are
   // the upstream PR SHA. A refusal propagates, never falling back to main.
   for (const candidate of candidates) {
-    if (candidate.workflowRun !== true) continue;
+    if (candidate.workflowRun !== true) { active.push(candidate); continue; }
     const resolved = await resolveWorkflowRunHead(
       candidate.runId,
       deps.repositoryId,
       (id) => deps.api.get(`${deps.apiRoot}/repos/${deps.repo}/actions/runs/${id}`, `the workflow run ${id}`),
+      undefined,
+      (sha) => deps.api.get(suiteRunsUrl(deps.apiRoot, deps.repo, sha), "the suite supersession listing"),
     );
+    if (resolved.supersededBy !== undefined) {
+      superseded.push({ runId: candidate.runId, supersededBy: resolved.supersededBy });
+      continue;
+    }
+    active.push(candidate);
+    rechecks.set(candidate.runId, resolved.recheckSupersession);
     candidate.headSha = resolved.headSha;
     candidate.path = resolved.run.path;
     candidate.conclusion = resolved.run.conclusion;
     candidate.htmlUrl = resolved.run.htmlUrl;
   }
 
-  for (const [headSha, atHead] of groupByHeadSha(candidates)) {
+  for (const [headSha, atHead] of groupByHeadSha(active)) {
     const attested = await attestedContexts(deps, headSha);
     const relayedThisSweep = new Set<string>();
     for (const candidate of atHead) {
@@ -268,6 +281,11 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
           `the job listing of run ${candidate.runId}`,
         ),
       );
+      const newer = await rechecks.get(candidate.runId)?.();
+      if (newer !== undefined) {
+        superseded.push({ runId: candidate.runId, supersededBy: newer });
+        continue;
+      }
       const decisions = deps
         .decide(deps.pinMap, candidate.path, candidate.conclusion, jobs)
         .filter((decision) => missing.has(decision.context));
@@ -289,7 +307,7 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
       }
     }
   }
-  return { examined: candidates.length, relayed };
+  return { examined: candidates.length, relayed, ...(superseded.length > 0 ? { superseded } : {}) };
 }
 
 /** Candidates grouped by head SHA, in the listing order of first appearance. */
@@ -452,6 +470,9 @@ export function renderSweepLines(outcome: SweepOutcome): string[] {
     `[ledger-relay] orphan-sweep: examined ${outcome.examined} completed run(s), ` +
       `relayed ${outcome.relayed.length} context(s)`,
   ];
+  for (const entry of outcome.superseded ?? []) {
+    lines.push(`[ledger-relay] orphan-sweep: run ${entry.runId} ${supersessionMessage(entry.supersededBy)}`);
+  }
   for (const entry of outcome.relayed) {
     lines.push(
       `[ledger-relay] orphan-sweep: relayed ${entry.context} from run ${entry.runId} ` +

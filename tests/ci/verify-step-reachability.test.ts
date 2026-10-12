@@ -715,7 +715,7 @@ const PUSH_BEFORE = "3".repeat(40);
 function contextFor(scenario: Scenario): ActionsContext {
   const event =
     scenario.event === "workflow_run"
-      ? { workflow_run: { id: 123, head_sha: MERGE_SHA } }
+      ? { workflow_run: { id: 123, run_attempt: 1, head_sha: MERGE_SHA } }
       : scenario.event === "push"
         ? { before: PUSH_BEFORE }
         : {};
