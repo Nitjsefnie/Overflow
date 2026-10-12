@@ -197,21 +197,23 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
 
   const pinMap = validatePinMap(await (deps.readPinMap ?? readRawPinMap)());
 
-  const trigger = parseTrigger(env);
   const [, repoName] = repo.split("/");
   const token = await mintInstallationToken(deps, appId, appKey, installationId, repoName);
   const auth = { authorization: `Bearer ${token}` };
   const api = sweepApi(deps, repo, auth);
+  let triggerRunId = "";
   let attestationRun: SweepCandidate | undefined;
   let triggerJobs: Record<string, unknown> | undefined;
   let result: RelayResult = { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
   let primaryError: unknown;
   let failed = false;
   try {
+    const trigger = parseTrigger(env);
     if (trigger.kind === "sweep-only") {
       result.sweepOnly = true;
       return result;
     }
+    triggerRunId = trigger.kind === "dispatch" ? trigger.runId : trigger.run.runId;
     let fetchedProducer: Record<string, unknown> | undefined;
     let run: TriggeringRun;
     if (trigger.kind === "workflow_run") {
@@ -271,7 +273,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
       result.sweep = await sweepOrphans({
         api, decide: decideContexts, pinMap, apiRoot: API_ROOT, repo, appId,
         repositoryId: env.GITHUB_REPOSITORY_ID,
-        triggerRunId: trigger.kind === "sweep-only" ? "" : trigger.kind === "dispatch" ? trigger.runId : trigger.run.runId,
+        triggerRunId,
         triggerRun: attestationRun, triggerJobs,
         // A refused trigger has no proven producer identity. Do not resolve it
         // again inside the sweep and strand unrelated eligible completions.

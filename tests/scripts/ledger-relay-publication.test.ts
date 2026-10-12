@@ -920,3 +920,60 @@ it("a refused start heals each newest cancelled orphan once across distinct head
   await expect(w.relay("mirror", refused)).rejects.toThrow("did not execute the base branch's workflow definition");
   expect(w.state.reruns.map((run) => run.id)).toEqual(["9002", "9001"]);
 });
+
+describe("trigger validation still recovers displaced completions", () => {
+  const ambiguous = "LEDGER_SWEEP_ONLY=true is a sweep-only relay: no triggering run may be named alongside it " +
+    "(GITHUB_WORKFLOW_RUN_ID or LEDGER_DISPATCH_RUN_ID); unset one of the two";
+  const absent = "no triggering run in the environment: expected GITHUB_WORKFLOW_RUN_* (workflow_run) " +
+    "or LEDGER_DISPATCH_RUN_ID (workflow_dispatch recovery)";
+  const cases: Array<[string, Record<string, string | undefined>, string]> = [
+    ["invalid sweep-only value", { LEDGER_SWEEP_ONLY: "yes" },
+      'LEDGER_SWEEP_ONLY must be exactly "true" or "false" (got "yes")'],
+    ["sweep-only with workflow_run id", { LEDGER_SWEEP_ONLY: "true" }, ambiguous],
+    ["sweep-only with dispatch id", { LEDGER_SWEEP_ONLY: "true", GITHUB_WORKFLOW_RUN_ID: "", LEDGER_DISPATCH_RUN_ID: "9001" }, ambiguous],
+    ["malformed workflow_run id", { GITHUB_WORKFLOW_RUN_ID: "not-a-run-id" },
+      'GITHUB_WORKFLOW_RUN_ID must be a workflow-run id (got "not-a-run-id")'],
+    ["missing workflow_run head", { GITHUB_WORKFLOW_RUN_HEAD_SHA: undefined },
+      'GITHUB_WORKFLOW_RUN_HEAD_SHA must be a 40-hex SHA (got "")'],
+    ["malformed workflow_run head", { GITHUB_WORKFLOW_RUN_HEAD_SHA: "invalid-head" },
+      'GITHUB_WORKFLOW_RUN_HEAD_SHA must be a 40-hex SHA (got "invalid-head")'],
+    ["missing workflow_run path", { GITHUB_WORKFLOW_RUN_PATH: undefined },
+      'GITHUB_WORKFLOW_RUN_PATH must be a workflow path (got "")'],
+    ["malformed workflow_run path", { GITHUB_WORKFLOW_RUN_PATH: "workflows/other.yml" },
+      'GITHUB_WORKFLOW_RUN_PATH must be a workflow path (got "workflows/other.yml")'],
+    ["missing workflow_run URL", { GITHUB_WORKFLOW_RUN_HTML_URL: undefined },
+      "GITHUB_WORKFLOW_RUN_HTML_URL is required for the check-run's details_url"],
+    ["malformed dispatch id (review probe)", { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_DISPATCH_RUN_ID: "not-a-run-id" },
+      'LEDGER_DISPATCH_RUN_ID must be a workflow-run id (got "not-a-run-id")'],
+    ["no triggering identity", { GITHUB_WORKFLOW_RUN_ID: "" }, absent],
+    ["explicit false without a triggering identity", { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "false" }, absent],
+  ];
+
+  it.each(cases)("sweeps after %s and rejects with the original message", async (_name, over, message) => {
+    const w = world("pr-gates");
+    w.state.producers = [gate(9002, "failure")];
+    const error = await w.relay("mirror", gate(9001, "success"), over).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(message);
+    for (const context of GATE_CONTEXTS) expect(w.state.checks.filter((check) => check.name === context).at(-1))
+      .toMatchObject({ head_sha: HEAD, external_id: "9002:1", conclusion: "failure", app: { id: 5118623 } });
+    expect(w.state.requests.filter((url) => url.endsWith("/access_tokens"))).toHaveLength(1);
+    expect(w.state.requests.filter((url) => url === `${ROOT}/actions/runs?per_page=100`)).toHaveLength(1);
+    expect(w.state.requests.some((url) => url.includes("/actions/runs/9001"))).toBe(false);
+  });
+
+  it("preserves the trigger validation error when the sweep also fails", async () => {
+    const w = world("pr-gates");
+    w.state.listingReadFails = true;
+    const error = await w.relay("sweep", undefined, {
+      LEDGER_SWEEP_ONLY: "false", LEDGER_DISPATCH_RUN_ID: "not-a-run-id",
+    }).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(((error as AggregateError).errors[0] as Error).message).toBe(
+      'LEDGER_DISPATCH_RUN_ID must be a workflow-run id (got "not-a-run-id")',
+    );
+    expect((error as AggregateError).message).toContain('LEDGER_DISPATCH_RUN_ID must be a workflow-run id (got "not-a-run-id")');
+    expect((error as AggregateError).message).toContain("the repository's workflow-run listing for the orphan sweep");
+    expect(w.state.requests.filter((url) => url === `${ROOT}/actions/runs?per_page=100`)).toHaveLength(3);
+  });
+});

@@ -879,8 +879,8 @@ describe("runRelay", () => {
     expect(bodiesOf(fetchStub.requests).every((body) => body.head_sha === HEAD_SHA)).toBe(true);
   });
 
-  it("rejects before any network call when the triggering-run env is absent", async () => {
-    const fetchStub = makeFetch([]);
+  it("sweeps before rejecting when the triggering-run env is absent", async () => {
+    const fetchStub = makeFetch([token(), noSweepRuns()]);
     await expect(
       runRelay({
         env: relayEnv({
@@ -896,11 +896,11 @@ describe("runRelay", () => {
         readPinMap: async () => PIN_MAP,
       }),
     ).rejects.toThrow(/LEDGER_DISPATCH_RUN_ID/);
-    expect(fetchStub.requests).toHaveLength(0);
+    expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, SWEEP_RUNS_URL]);
   });
 
-  it("rejects before any network call on a malformed head SHA", async () => {
-    const fetchStub = makeFetch([]);
+  it("sweeps before rejecting on a malformed head SHA", async () => {
+    const fetchStub = makeFetch([token(), noSweepRuns()]);
     await expect(
       runRelay({
         env: relayEnv({ GITHUB_WORKFLOW_RUN_HEAD_SHA: "deadbeef" }),
@@ -909,7 +909,7 @@ describe("runRelay", () => {
         readPinMap: async () => PIN_MAP,
       }),
     ).rejects.toThrow(/GITHUB_WORKFLOW_RUN_HEAD_SHA/);
-    expect(fetchStub.requests).toHaveLength(0);
+    expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, SWEEP_RUNS_URL]);
   });
 
   it("rejects before any network call when a pin is not a workflow path", async () => {
