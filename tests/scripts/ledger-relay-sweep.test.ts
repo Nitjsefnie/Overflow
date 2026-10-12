@@ -348,7 +348,7 @@ function fakeApi(handlers: Record<string, unknown>): {
       if (!(url in handlers)) throw new Error(`unexpected fetch: ${url}`);
       return handlers[url] as T;
     },
-    postCheckRun: async (body: Record<string, unknown>): Promise<unknown> => {
+    postCheckRun: async (body: Record<string, unknown>): Promise<{ id: number }> => {
       record(null, "POST", body);
       const url = checkRunsAt(String(body.head_sha));
       const checks = (handlers[url] as { check_runs: Record<string, unknown>[] }).check_runs;

@@ -39,13 +39,14 @@ import { resolveWorkflowRunHead, type UpstreamPublicationCheck } from "./ledger-
 
 import {
   publicationBlockedContexts, idOf, newestProducersFor,
-  selectSweepCandidates, validateJobs, type ProducerDeps, type SweepCandidate,
+  selectSweepCandidates, validateJobs, type CheckRunSuppression, type ProducerDeps, type SweepCandidate,
 } from "./ledger-relay-producers.ts";
 import { historyBoundDecision, postProducerCheck, publicationState } from "./ledger-relay-publication.ts";
 export { checkRunBody, selectSweepCandidates, validateJobs, SWEEP_RUN_LIMIT } from "./ledger-relay-producers.ts";
 export type { SweepApi, SweepCandidate } from "./ledger-relay-producers.ts";
 
 export interface SweepOutcome {
+  readonly suppressed?: readonly CheckRunSuppression[];
   readonly superseded?: ReadonlyArray<{ runId: string; supersededBy: number }>;
   /** Producer run ids whose rerun POSTs succeeded, in dispatch order. */
   readonly rerunDispatched?: readonly string[];
@@ -138,6 +139,7 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
   // so a consumer cannot push into a result it was handed, but this function
   // is the one place that accumulates.
   const relayed: Array<{ context: string; runId: string }> = [];
+  const suppressed: CheckRunSuppression[] = [];
   const superseded: Array<{ runId: string; supersededBy: number }> = [];
   const active: SweepCandidate[] = [];
   const rerunDispatched: string[] = [];
@@ -225,6 +227,11 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
         if (decision.status !== "completed") continue;
         const posted = await postProducerCheck(deps, decision, candidate, rechecks.get(candidate.runId));
         if (posted === undefined) continue;
+        if ("suppressedBy" in posted) {
+          suppressed.push(posted);
+          blocked.add(decision.context);
+          continue;
+        }
         relayed.push({ context: decision.context, runId: candidate.runId });
         relayedThisSweep.add(decision.context);
       }
@@ -236,6 +243,7 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
     }
   }
   return { examined: candidates.length, relayed, ...(superseded.length > 0 ? { superseded } : {}),
+    ...(suppressed.length > 0 ? { suppressed } : {}),
     ...(rerunDispatched.length > 0 ? { rerunDispatched } : {}) };
 }
 

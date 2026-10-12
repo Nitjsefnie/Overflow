@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { runRelay, type RelayDeps } from "../../scripts/ledger-relay.ts";
+import { renderRelayResult, runRelay, type RelayDeps } from "../../scripts/ledger-relay.ts";
 
 const REPO = "Nitjsefnie/Overflow";
 const ROOT = `https://api.github.com/repos/${REPO}`;
@@ -173,7 +173,7 @@ describe("ledger relay request lifetime", () => {
 
   it.each([
     ["another producer", { external_id: "9000:1" }],
-    ["another attempt", { external_id: "9001:2" }],
+    ["an unparseable attempt", { external_id: "9001:invalid" }],
     ["unfinished status", { status: "in_progress", conclusion: null }],
     ["another conclusion", { conclusion: "failure" }],
     ["another context", { name: "actionlint" }],
@@ -191,6 +191,42 @@ describe("ledger relay request lifetime", () => {
     expect(w.state.posts).toBe(2);
     expect(w.state.checks.at(-1)).toMatchObject({ name: "verify", external_id: "9001:1",
       status: "completed", conclusion: "success", app: { id: 5118623 } });
+  });
+
+  it.each([
+    ["sweep", "higher run", "9002:1"],
+    ["sweep", "higher attempt", "9001:2"],
+    ["mirror", "higher run", "9002:1"],
+    ["mirror", "higher attempt", "9001:2"],
+  ])("preserves the %s's newer failure (%s) after an ambiguous older success POST", async (mode, _order, newerId) => {
+    const w = world();
+    w.state.intercept = async (url, init) => {
+      if (url !== `${ROOT}/check-runs` || w.state.posts !== 1) return;
+      w.state.checks.push({ ...JSON.parse(String(init.body)), app: { id: 5118623 },
+        external_id: newerId, status: "completed", conclusion: "failure" });
+      throw new DOMException("request timed out", "TimeoutError");
+    };
+    const env = mode === "sweep" ? w.deps.env : {
+      ...w.deps.env, LEDGER_SWEEP_ONLY: "false", GITHUB_WORKFLOW_RUN_ID: "9001",
+      GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD, GITHUB_WORKFLOW_RUN_PATH: ".github/workflows/ci.yml",
+      GITHUB_WORKFLOW_RUN_CONCLUSION: "success", GITHUB_WORKFLOW_RUN_EVENT: "push",
+      GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main", GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
+      GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/${REPO}/actions/runs/9001`,
+    };
+
+    const result = await w.run({ env });
+
+    expect(w.state.posts).toBe(1);
+    expect(w.state.checks).toHaveLength(1);
+    expect(w.state.checks.at(-1)).toMatchObject({ external_id: newerId, conclusion: "failure" });
+    expect(result.posted).toEqual([]);
+    expect(result.decisions).toEqual([]);
+    expect(result.sweep.relayed).toEqual([]);
+    expect(result).toMatchObject({ suppressed: [{ context: "verify", headSha: HEAD,
+      externalId: "9001:1", suppressedBy: newerId }] });
+    if (mode === "sweep") expect(result.sweep).toMatchObject({ suppressed: result.suppressed });
+    expect(renderRelayResult(result).join("\n")).toContain(`suppressed by newer App identity ${newerId}`);
+    expect(w.state.delays).toEqual([]);
   });
 
   it("exhausts three ambiguous write attempts and re-reads even the last attempt", async () => {
@@ -311,6 +347,7 @@ describe("ledger relay request lifetime", () => {
   it("keeps rerun-heal's retry on a timed-out rerun POST without a check-run read-back", async () => {
     const w = world();
     let reruns = 0;
+    let firstRerunSignal: AbortSignal | null | undefined;
     w.state.intercept = async (url, init) => {
       if (url === LISTING) return response({ workflow_runs: [{
         id: 9001, run_attempt: 1, head_sha: HEAD, path: ".github/workflows/ci.yml",
@@ -324,7 +361,10 @@ describe("ledger relay request lifetime", () => {
       if (url.includes("/actions/runs?head_sha=")) return response({ workflow_runs: [] });
       if (url.endsWith("/9001/rerun")) {
         reruns++;
-        if (reruns === 1) return stalled(init.signal);
+        if (reruns === 1) {
+          firstRerunSignal = init.signal;
+          return stalled(init.signal);
+        }
         return new Response(null, { status: 202 });
       }
     };
@@ -335,6 +375,9 @@ describe("ledger relay request lifetime", () => {
 
     expect(result.rerunDispatched).toBe(true);
     expect(reruns).toBe(2);
+    expect(firstRerunSignal).toBeInstanceOf(AbortSignal);
+    expect(firstRerunSignal?.aborted).toBe(true);
+    expect(firstRerunSignal?.reason.name).toBe("TimeoutError");
     const first = w.state.requests.findIndex(({ url }) => url.endsWith("/9001/rerun"));
     expect(w.state.requests.slice(first).map(({ url }) => url)).toEqual([
       `${ROOT}/actions/runs/9001/rerun`, `${ROOT}/actions/runs/9001/rerun`,

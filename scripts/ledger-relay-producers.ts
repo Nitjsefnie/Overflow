@@ -24,7 +24,17 @@ export interface SweepCandidate {
 
 export interface SweepApi {
   get<T>(url: string, what: string, retryTransient?: boolean): Promise<T>;
-  postCheckRun(body: Record<string, unknown>, what: string): Promise<unknown>;
+  postCheckRun(body: Record<string, unknown>, what: string): Promise<CheckRunPostResult>;
+}
+
+/** An acknowledged/committed write, or a newer identity that blocks its retry. */
+export type CheckRunPostResult = { id: number } | { suppressedBy: string } | undefined;
+
+export interface CheckRunSuppression {
+  context: string;
+  headSha: string;
+  externalId: string;
+  suppressedBy: string;
 }
 
 export interface ProducerDeps {
@@ -100,14 +110,14 @@ export function newestProducersFor(pinMap: PinMap, candidates: readonly SweepCan
 type ProducerIdentity = { runId: string; runAttempt: number | bigint };
 
 /** Numeric run id takes precedence; attempts order reruns of that same run. */
-function compareProducerIdentities(first: ProducerIdentity, second: ProducerIdentity): number {
+export function compareProducerIdentities(first: ProducerIdentity, second: ProducerIdentity): number {
   const firstId = BigInt(first.runId), secondId = BigInt(second.runId);
   if (firstId !== secondId) return firstId > secondId ? 1 : -1;
   const firstAttempt = BigInt(first.runAttempt), secondAttempt = BigInt(second.runAttempt);
   return firstAttempt === secondAttempt ? 0 : firstAttempt > secondAttempt ? 1 : -1;
 }
 
-function identityFromExternalId(value: unknown): ProducerIdentity | undefined {
+export function identityFromExternalId(value: unknown): ProducerIdentity | undefined {
   if (typeof value !== "string") return;
   const match = /^([1-9][0-9]*):([1-9][0-9]*)$/.exec(value);
   if (match === null || match[0] !== value) return;

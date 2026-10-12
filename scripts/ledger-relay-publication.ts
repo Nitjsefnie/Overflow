@@ -6,7 +6,8 @@
 import { decideContexts, pinsFor, type ContextDecision } from "./ledger-relay-decisions.ts";
 import {
   publicationBlockedContexts, checkRunBody, newestProducersFor, selectSweepCandidates,
-  validateJobs, type ProducerDeps, type SweepCandidate,
+  validateJobs, producerExternalId, type CheckRunPostResult, type CheckRunSuppression,
+  type ProducerDeps, type SweepCandidate,
 } from "./ledger-relay-producers.ts";
 import { resolveWorkflowRunHead, type UpstreamPublicationCheck } from "./ledger-relay-upstream.ts";
 import { readSuiteRuns, SuiteHistoryBoundError, suiteRunsUrl } from "./pr-suite-supersession.ts";
@@ -31,16 +32,19 @@ export function historyBoundDecision(bound: string): ContextDecision {
   };
 }
 
-/** Recheck before every write; return the posted decision, or undefined when suppressed. */
+/** Return the posted decision, a newer App floor, or no decision after an upstream refusal. */
 export async function postProducerCheck(
   deps: ProducerDeps,
   decision: ContextDecision,
   run: SweepCandidate,
   check?: UpstreamPublicationCheck,
-): Promise<ContextDecision | undefined> {
+): Promise<ContextDecision | CheckRunSuppression | undefined> {
   const checked = publicationDecision(decision, await publicationState(check), run);
   if (checked === undefined) return;
-  await writeCheck(deps, checked, run);
+  const posted = await writeCheck(deps, checked, run);
+  if (posted !== undefined && "suppressedBy" in posted) return {
+    context: checked.context, headSha: run.headSha, externalId: producerExternalId(run), suppressedBy: posted.suppressedBy,
+  };
   return checked;
 }
 
@@ -55,8 +59,8 @@ function publicationDecision(decision: ContextDecision, state: PublicationState,
   return decision;
 }
 
-async function writeCheck(deps: ProducerDeps, decision: ContextDecision, run: SweepCandidate): Promise<void> {
-  await deps.api.postCheckRun(checkRunBody(decision, run), `the check-run for ${decision.context}`);
+async function writeCheck(deps: ProducerDeps, decision: ContextDecision, run: SweepCandidate): Promise<CheckRunPostResult> {
+  return deps.api.postCheckRun(checkRunBody(decision, run), `the check-run for ${decision.context}`);
 }
 
 interface ResolvedCandidate { run: SweepCandidate; check?: UpstreamPublicationCheck; historyBound?: string }
@@ -110,7 +114,7 @@ export async function publishProducerContexts(
   jobsBody: Record<string, unknown>,
   check?: UpstreamPublicationCheck,
   initialBound?: string,
-): Promise<{ decisions: ContextDecision[]; posted: string[]; supersededBy?: number }> {
+): Promise<{ decisions: ContextDecision[]; posted: string[]; suppressed?: CheckRunSuppression[]; supersededBy?: number }> {
   const jobs = initialBound === undefined ? validateJobs(jobsBody) : [];
   const state = await publicationState(check);
   const bound = state.historyBound ?? initialBound;
@@ -119,6 +123,7 @@ export async function publishProducerContexts(
     .filter(([, pins]) => pinsFor(pins).includes(run.path)).map(([context]) => context);
   const decisions: ContextDecision[] = [];
   const posted: string[] = [];
+  const suppressed: CheckRunSuppression[] = [];
   for (const context of contexts) {
     const newest = await newestCandidate(deps, run.headSha, context, {
       run: { ...run, status: run.status ?? "completed" }, check, historyBound: bound,
@@ -141,8 +146,12 @@ export async function publishProducerContexts(
     if (proposed === undefined) throw new Error("the newest producer has no pinned context");
     const decision = await postProducerCheck(deps, proposed, newest.run, newest.check);
     if (decision === undefined) continue;
+    if ("suppressedBy" in decision) {
+      suppressed.push(decision);
+      continue;
+    }
     posted.push(context);
     decisions.push(decision);
   }
-  return { decisions, posted };
+  return { decisions, posted, ...(suppressed.length > 0 ? { suppressed } : {}) };
 }
