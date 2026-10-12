@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -66,7 +66,7 @@ async function historyRows() {
   return rows;
 }
 
-beforeAll(async () => {
+beforeEach(async () => {
   const started = await startPostgresContainer({
     database: "overflow_credentials_migration",
     user: "overflow_credentials_migration",
@@ -87,7 +87,7 @@ beforeAll(async () => {
   await runMigrations();
 });
 
-afterAll(async () => {
+afterEach(async () => {
   await closeSql();
   await container?.stop();
   if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
