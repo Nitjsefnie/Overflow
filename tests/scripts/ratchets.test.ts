@@ -8,6 +8,8 @@ import { calibration } from "../../scripts/calibrate-coverage.ts";
 import {
   COVERAGE_PATH,
   MODULE_SIZE_PATH,
+  PERF_BUDGET_PATH,
+  perfBudgetRelaxations,
   type MergeBaseEntry,
   checkRatchets,
   coverageRelaxations,
@@ -35,6 +37,40 @@ const moduleSize = (
   ceilings: Record<string, unknown> = { src: 800, tests: 2500 },
   baseline: Record<string, unknown> = { "src/big.ts": 900, "tests/big.test.ts": 2600 },
 ): Json => ({ ceilings, module_size_baseline: baseline });
+
+describe("performance budget ratchet", () => {
+  it("refuses a raised statement budget with file, workload and both values", () => {
+    const findings = perfBudgetRelaxations({ board: 2 }, { board: 3 });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toContain(PERF_BUDGET_PATH);
+    expect(findings[0]).toContain("board");
+    expect(findings[0]).toContain("merge base 2, head 3");
+  });
+
+  it("accepts a lower statement count", () => {
+    expect(perfBudgetRelaxations({ board: 2 }, { board: 1 })).toEqual([]);
+  });
+
+  it("accepts a new workload's positive initial budget without relaxing old workloads", () => {
+    expect(perfBudgetRelaxations({ board: 2 }, { board: 2, fold: 20 })).toEqual([]);
+  });
+
+  it("refuses removing a workload key or its entire document", () => {
+    expect(perfBudgetRelaxations({ board: 2, fold: 20 }, { board: 2 })).toEqual([
+      expect.stringContaining("fold"),
+    ]);
+    expect(perfBudgetRelaxations({ board: 2 }, null)).toEqual([expect.stringContaining("deleted")]);
+  });
+
+  it("accepts initial budgets when the document is absent at the merge base", () => {
+    expect(perfBudgetRelaxations(null, { board: 2 })).toEqual([]);
+  });
+
+  it.each([0, -1, 1.5, "2", Number.MAX_SAFE_INTEGER + 1])("refuses invalid added or changed budgets %j", (value) => {
+    expect(perfBudgetRelaxations({ board: 2 }, { board: value }).length).toBeGreaterThan(0);
+    expect(perfBudgetRelaxations({ board: 2 }, { board: 2, fold: value }).length).toBeGreaterThan(0);
+  });
+});
 
 describe("coverage ratchet relaxations", () => {
   it("accepts an unchanged document", () => {
@@ -405,6 +441,7 @@ describe("ratchet check against a real git repository", () => {
     git("config", "commit.gpgsign", "false");
     writeDoc(COVERAGE_PATH, coverage());
     writeDoc(MODULE_SIZE_PATH, moduleSize());
+    writeDoc(PERF_BUDGET_PATH, { board: 2, fold: 20 });
     commit("base documents");
     git("checkout", "-q", "-b", "feature");
     onFeature();
@@ -414,6 +451,19 @@ describe("ratchet check against a real git repository", () => {
     writeDoc(MODULE_SIZE_PATH, moduleSize(undefined, { "src/big.ts": 850 }));
     commit("calibrate raises the floor and the baseline tightens");
   };
+
+  it.each([
+    ["raise", { board: 3, fold: 20 }, 1],
+    ["lower", { board: 1, fold: 20 }, 0],
+    ["add", { board: 2, fold: 20, webhook: 10 }, 0],
+    ["remove", { board: 2 }, 1],
+  ])("registers performance budgets as git documents: %s", (_label, document, status) => {
+    seed(() => writeDoc(PERF_BUDGET_PATH, document));
+    const result = run("main", "feature");
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(status);
+    if (status === 1) expect(result.stdout).toContain(PERF_BUDGET_PATH);
+  });
 
   it("compares against the merge base, not the advanced base tip", () => {
     seed(() => writeFileSync(join(root, "unrelated.txt"), "change\n"));
@@ -755,6 +805,7 @@ describe("ratchet check against a real git repository", () => {
     git("checkout", "-q", "-b", "feature");
     writeDoc(COVERAGE_PATH, coverage({ floor: 0 }));
     writeDoc(MODULE_SIZE_PATH, moduleSize({ src: 99999, tests: 99999 }));
+    writeDoc(PERF_BUDGET_PATH, { board: 2 });
     commit("introduce documents");
     const result = run("main", "feature");
     expect(result.status).toBe(0);
