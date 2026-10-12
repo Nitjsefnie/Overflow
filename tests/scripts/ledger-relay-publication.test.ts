@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { runRelay } from "../../scripts/ledger-relay.ts";
 import { resolveSuitePullRequest } from "../../scripts/resolve-suite-pull-request.ts";
@@ -124,6 +124,68 @@ function world(kind: "verify" | "pr-gates" = "verify") {
   });
   return { state, blocked, released, fetchFn, relay };
 }
+
+describe("unsuccessful upstream suites cannot receive App success", () => {
+  it.each(["mirror", "sweep"] as const)("suppresses and logs %s success for cancelled or failed upstream suites", async (mode) => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      for (const conclusion of ["cancelled", "failure"]) {
+        const w = world();
+        w.state.suites = [suite(8001, conclusion)];
+        const result = await w.relay(mode);
+        expect(w.state.checks, conclusion).toEqual([]);
+        expect(result.posted).toEqual([]);
+        expect(result.sweep.relayed).toEqual([]);
+        expect(log.mock.calls.flat().join("\n")).toMatch(new RegExp(`9001.*upstream.*${conclusion}.*success`));
+      }
+    } finally { log.mockRestore(); }
+  });
+
+  it.each(["mirror", "sweep"] as const)("preserves %s failure for a cancelled upstream", async (mode) => {
+    const w = world();
+    const failed = verify(9001, 8001, "failure");
+    w.state.suites = [suite(8001, "cancelled")];
+    w.state.producers = [failed];
+    await w.relay(mode, failed);
+    expect(w.state.checks).toHaveLength(1);
+    expect(w.state.checks[0]).toMatchObject({ head_sha: HEAD, conclusion: "failure", external_id: "9001:1" });
+  });
+
+  it.each(["mirror", "sweep"] as const)("suppresses %s success when upstream changes after the initial read", async (mode) => {
+    const w = world();
+    let reads = 0;
+    const result = await runRelay({
+      env: mode === "sweep" ? {
+        LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
+        GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", LEDGER_SWEEP_ONLY: "true",
+      } : {
+        LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
+        GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", LEDGER_DISPATCH_RUN_ID: "9001",
+      },
+      fetchFn: (async (input, init) => {
+        if (String(input) === `${ROOT}/actions/runs/8001` && ++reads > 1) {
+          w.state.suites = [suite(8001, "cancelled")];
+        }
+        return w.fetchFn(input, init);
+      }) as typeof fetch,
+      delayFn: async () => {}, readPinMap: async () => pins,
+    });
+    expect(w.state.checks).toEqual([]);
+    expect(result.posted).toEqual([]);
+    expect(result.sweep.relayed).toEqual([]);
+  });
+
+  it.each(["cancelled", "failure"])("does not correct an older post to success for a %s upstream", async (conclusion) => {
+    const w = world();
+    w.state.onCommit = (body) => {
+      if (body.external_id !== "9001:1") return;
+      w.state.suites = [suite(8002, conclusion), oldSuite];
+      w.state.producers = [verify(9002, 8002, "success"), oldVerify];
+    };
+    await w.relay("sweep");
+    expect(w.state.checks.map((check) => check.external_id)).toEqual(["9001:1"]);
+  });
+});
 
 describe("post-write supersession repair", () => {
   it.each(["sweep", "mirror"] as const)("repairs a delayed older %s success after the newer failure relay completes", async (mode) => {

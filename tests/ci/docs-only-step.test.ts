@@ -28,8 +28,9 @@ type WorkflowStep = {
  * `workflow_run`) runs the BASE checkout's copy with the materialised
  * merge tree (PR_TREE) as its working directory and nothing else. The
  * push/dispatch leg (ci.yml) keeps the `before`-SHA and validated-dispatch-base
- * branches. Neither carries an event gate any more: each file's closed trigger
- * set is the gate, which is why the pull-request run block has no
+ * branches. Each file's closed trigger set is the event gate; the pull-request
+ * step skips a superseded cancellation, whose later steps read no outputs.
+ * The pull-request run block has no
  * `if [ "${EVENT_NAME}" = ... ]` arm to select it.
  *
  * The wiring is pinned on the parsed YAML, and each leg's own run script is
@@ -72,14 +73,10 @@ describe("the verify workflow's docs-only detection step", () => {
         "both steps must carry the id `detect-docs` — the test and coverage steps in each file " +
           "read its output by that id",
       ).toBe("detect-docs");
-      expect(
-        found.if,
-        "neither step may carry a condition: each file's closed trigger set is the gate, and a " +
-          "condition on the producer means the output its own file's steps read may never be " +
-          "written at all",
-      ).toBeUndefined();
       expect(Boolean(found["continue-on-error"])).toBe(false);
     }
+    expect(prStep?.if, "only superseded cancellations skip PR docs detection").toBe("${{ steps.pr.outputs.superseded != 'true' }}");
+    expect(pushStep?.if, "main docs detection always writes the output its later steps read").toBeUndefined();
   });
 
   it("takes each leg's inputs through env, never interpolated into run", () => {

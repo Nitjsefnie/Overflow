@@ -15,6 +15,14 @@ describe("the required verify suite chain", () => {
     expect(verify.if).toBeUndefined();
   });
 
+  it("skips every step after the resolver when it reports superseded", () => {
+    const resolverIndex = verify.steps.findIndex((step: { id?: string }) => step.id === "pr");
+    expect(resolverIndex).toBeGreaterThan(-1);
+    for (const step of verify.steps.slice(resolverIndex + 1)) {
+      expect(step.if, step.name).toMatch(/steps\.pr\.outputs\.superseded != 'true'/);
+    }
+  });
+
   it("issues base freshness only after the coverage floor, as the final step", () => {
     const names = verify.steps.map((step: { name?: string }) => step.name);
     expect(names.at(-1)).toBe("Base freshness");

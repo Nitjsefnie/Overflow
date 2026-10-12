@@ -12,7 +12,7 @@ const REPO = "Nitjsefnie/Overflow";
 function suite(headRepo = REPO, branch = "feature") {
   return {
     id: 123, path: ".github/workflows/pr-suite.yml", event: "pull_request",
-    status: "completed", conclusion: "success", head_sha: HEAD, head_branch: branch,
+    status: "completed", conclusion: "success", head_sha: HEAD, head_branch: branch, run_attempt: 1,
     head_repository: { full_name: headRepo, owner: { login: headRepo.split("/")[0] } },
   };
 }
@@ -35,6 +35,9 @@ function harness(run = suite(), candidates: unknown[] = [pr()], current: unknown
     if (url.pathname.endsWith("/actions/runs/123")) return Response.json(run);
     if (url.pathname.endsWith("/pulls")) return Response.json(candidates);
     if (url.pathname.endsWith("/pulls/1183")) return Response.json(current);
+    if (url.pathname.endsWith("/actions/workflows/pr-suite.yml/runs")) {
+      return Response.json({ total_count: 1, workflow_runs: [run] });
+    }
     throw new Error(`unexpected API request ${url}`);
   }) as typeof fetch;
   return {
@@ -95,7 +98,6 @@ describe("suite run PR resolution", () => {
     ["wrong event", { event: "push" }, /event/i],
     ["privileged PR event", { event: "pull_request_target" }, /event/i],
     ["upstream failure", { conclusion: "failure" }, /success/i],
-    ["upstream cancellation", { conclusion: "cancelled" }, /success/i],
     ["unfinished run", { status: "in_progress" }, /completed/i],
     ["wrong id", { id: 124 }, /id/i],
     ["invalid SHA", { head_sha: "bad" }, /SHA/i],
@@ -117,6 +119,64 @@ describe("suite run PR resolution", () => {
     expect(result.exitCode).toBe(1);
     expect(result.lines.join("\n")).toContain("::error::");
     expect(result.outputs).toBeUndefined();
+  });
+
+  it.each(["listing", "fresh read"])("accepts a cancelled suite superseded by a moved head in the %s", async (phase) => {
+    const moved = { ...pr(), head: { ...pr().head, sha: "c".repeat(40) } };
+    const h = harness({ ...suite(), conclusion: "cancelled" }, phase === "listing" ? [moved] : [pr()], moved);
+    const dir = mkdtempSync(join(tmpdir(), "suite-cancelled-outputs-"));
+    const output = join(dir, "output");
+    writeFileSync(output, "earlier=true\n");
+    const result = await resolveSuitePullRequest({ ...h.deps, env: { ...h.deps.env, GITHUB_OUTPUT: output } });
+    expect(result.exitCode).toBe(0);
+    expect(result.outputs).toEqual({ superseded: "true" });
+    expect(readFileSync(output, "utf8")).toBe("earlier=true\nsuperseded=true\n");
+    expect(result.lines.join("\n")).toContain("::notice::");
+    expect(result.lines.join("\n")).toContain(moved.head.sha);
+  });
+
+  it("accepts a cancelled suite superseded by a higher-id pull_request suite at the same SHA", async () => {
+    const h = harness({ ...suite(), conclusion: "cancelled" });
+    const original = h.deps.fetchFn;
+    h.deps.fetchFn = async (input, init) => {
+      const url = new URL(String(input));
+      if (!url.pathname.endsWith("/actions/workflows/pr-suite.yml/runs")) return original(input, init);
+      expect(url.searchParams.get("head_sha")).toBe(HEAD);
+      expect(url.searchParams.get("event")).toBe("pull_request");
+      expect(new Headers(init?.headers).get("cache-control")).toBe("no-cache");
+      return Response.json({ total_count: 2, workflow_runs: [suite(), { ...suite(), id: 124, status: "queued", conclusion: null }] });
+    };
+    const result = await resolveSuitePullRequest(h.deps);
+    expect(result.exitCode).toBe(0);
+    expect(result.outputs).toEqual({ superseded: "true" });
+    expect(result.lines.join("\n")).toMatch(/::notice::.*run 124/);
+  });
+
+  it("fails a cancelled suite at the live head without a newer suite", async () => {
+    const result = await resolveSuitePullRequest(harness({ ...suite(), conclusion: "cancelled" }).deps);
+    expect(result.exitCode).toBe(1);
+    expect(result.outputs).toBeUndefined();
+    expect(result.lines.join("\n")).toMatch(/::error::.*success/);
+  });
+
+  it.each([
+    ["missing", []], ["ambiguous", [pr(), { ...pr(), number: 1184 }]],
+  ] as const)("fails a cancelled suite without an unambiguous PR binding (%s)", async (_label, candidates) => {
+    const result = await resolveSuitePullRequest(harness({ ...suite(), conclusion: "cancelled" }, [...candidates]).deps);
+    expect(result.exitCode).toBe(1);
+    expect(result.outputs).toBeUndefined();
+    expect(result.lines.join("\n")).toMatch(/no open pull request|ambiguous/);
+  });
+
+  it("fails closed on an API read failure during cancelled-suite supersession", async () => {
+    const h = harness({ ...suite(), conclusion: "cancelled" });
+    const original = h.deps.fetchFn;
+    h.deps.fetchFn = async (input, init) => new URL(String(input)).pathname.endsWith("/actions/workflows/pr-suite.yml/runs")
+      ? new Response("unavailable", { status: 503 }) : original(input, init);
+    const result = await resolveSuitePullRequest(h.deps);
+    expect(result.exitCode).toBe(1);
+    expect(result.outputs).toBeUndefined();
+    expect(result.lines.join("\n")).toMatch(/::error::.*HTTP 503/);
   });
 
   it("checks every page so an ambiguous PR on a later page cannot pass", async () => {

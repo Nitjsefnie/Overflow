@@ -3,12 +3,14 @@
 // Mirrors coverage-comment.yml's issue-656 binding: query open PRs using
 // head=owner:branch, then select the exact head repository and SHA (forks
 // included). Keep the two bindings in step. Unlike the comment workflow,
-// missing, ambiguous or stale destinations fail the required verify check.
+// missing or ambiguous destinations fail the required verify check. Only an
+// API-proven superseded cancellation is a successful no-op.
 // Inputs: GITHUB_REPOSITORY, GH_TOKEN, SUITE_RUN_ID, optional GITHUB_OUTPUT.
 
 import { realpathSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { readSuiteRuns, suiteRunsUrl, supersedingSuiteRunId } from "./pr-suite-supersession.ts";
 
 export interface ResolveDeps {
   env: Record<string, string | undefined>;
@@ -18,7 +20,7 @@ export interface ResolveDeps {
 export interface ResolveOutcome {
   exitCode: 0 | 1;
   lines: string[];
-  outputs?: { pr_number: string; head_sha: string; base_sha: string; base_ref: string };
+  outputs?: { pr_number: string; head_sha: string; base_sha: string; base_ref: string } | { superseded: "true" };
 }
 
 type RecordValue = Record<string, unknown>;
@@ -67,7 +69,8 @@ export async function resolveSuitePullRequest(deps: ResolveDeps): Promise<Resolv
     if (run.path !== ".github/workflows/pr-suite.yml") throw new Error("the upstream path must be .github/workflows/pr-suite.yml");
     if (run.event !== "pull_request") throw new Error("the upstream event must be pull_request");
     if (run.status !== "completed") throw new Error("the upstream run must be completed");
-    if (run.conclusion !== "success") throw new Error("the upstream run must conclude success");
+    const cancelled = run.conclusion === "cancelled";
+    if (run.conclusion !== "success" && !cancelled) throw new Error("the upstream run must conclude success");
     if (typeof run.head_sha !== "string" || !SHA.test(run.head_sha)) {
       throw new Error("the upstream head SHA must be a 40-hex SHA");
     }
@@ -80,11 +83,12 @@ export async function resolveSuitePullRequest(deps: ResolveDeps): Promise<Resolv
     if (typeof run.head_branch !== "string" || run.head_branch === "") {
       throw new Error("the upstream head branch is missing");
     }
-    const matchesHead = (pr: RecordValue): boolean => {
+    const matchesBranch = (pr: RecordValue): boolean => {
       const head = record(pr.head);
       return record(head.repo).full_name === headRepo.full_name &&
-        head.ref === run.head_branch && head.sha === run.head_sha;
+        head.ref === run.head_branch;
     };
+    const matchesHead = (pr: RecordValue): boolean => matchesBranch(pr) && record(pr.head).sha === run.head_sha;
     const matches: RecordValue[] = [];
     for (let page = 1; ; page += 1) {
       const url = new URL(`${root}/pulls`);
@@ -94,7 +98,7 @@ export async function resolveSuitePullRequest(deps: ResolveDeps): Promise<Resolv
       url.searchParams.set("page", String(page));
       const prs = await apiGet(deps, url);
       if (!Array.isArray(prs)) throw new Error("the open pull request listing is not an array");
-      matches.push(...prs.map(record).filter(matchesHead));
+      matches.push(...prs.map(record).filter(cancelled ? matchesBranch : matchesHead));
       if (matches.length > 1) throw new Error("more than one open pull request matches the upstream head; refusing an ambiguous destination");
       if (prs.length < 100) break;
     }
@@ -105,9 +109,25 @@ export async function resolveSuitePullRequest(deps: ResolveDeps): Promise<Resolv
     // The listing may race a synchronize or close. Re-read the PR's current
     // head before emitting anything, and retain the repository/branch bind.
     const current = record(await apiGet(deps, new URL(`${root}/pulls/${selected.number}`)));
-    if (current.number !== selected.number || current.state !== "open" || !matchesHead(current)) {
+    if (current.number !== selected.number || current.state !== "open" || !matchesBranch(current)) {
       throw new Error("the matched pull request closed or its head moved; stale suite run refused");
     }
+    if (cancelled) {
+      const head = record(current.head).sha;
+      if (typeof head !== "string" || !SHA.test(head)) throw new Error("the matched pull request has no usable head SHA");
+      let reason = head !== run.head_sha ? `superseded by pull request ${current.number} head ${head}` : undefined;
+      if (reason === undefined) {
+        const listing = await readSuiteRuns((page) => apiGet(deps,
+          new URL(suiteRunsUrl("https://api.github.com", repo, head, page))));
+        const newer = supersedingSuiteRunId(run, listing, { judgedAttempt: Number(run.run_attempt) });
+        if (newer !== undefined) reason = `superseded by run ${newer}`;
+      }
+      if (reason === undefined) throw new Error("the upstream run must conclude success; cancelled suite is not superseded");
+      const outputs = { superseded: "true" as const };
+      if (deps.env.GITHUB_OUTPUT) await appendFile(deps.env.GITHUB_OUTPUT, "superseded=true\n", "utf8");
+      return { exitCode: 0, lines: [`::notice::Cancelled suite run ${idText} ${reason}; verify is a no-op`], outputs };
+    }
+    if (!matchesHead(current)) throw new Error("the matched pull request closed or its head moved; stale suite run refused");
     const base = record(current.base);
     if (typeof base.sha !== "string" || !SHA.test(base.sha) ||
         typeof base.ref !== "string" || base.ref === "" || /[\s\x00-\x1f\x7f]/.test(base.ref)) {

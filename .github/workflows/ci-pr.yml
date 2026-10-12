@@ -5,9 +5,10 @@ run-name: verify for pr suite run ${{ github.event.workflow_run.id }}
 # uses the default branch's definition and checkout, whose scripts judge the PR
 # merge tree as data; no pull-request code executes here (issues 822, 1090, 1183).
 # The base-copy resolver API-validates the triggering run's path, event and
-# successful completion, then binds exactly one open PR to its head repository,
-# branch and SHA using coverage-comment's issue-656 binding, forks included.
-# Stale or ambiguous heads fail verify; the job is never skippable.
+# completion, then binds exactly one open PR to its head repository and branch,
+# forks included. Success requires the exact head SHA. An API-proven superseded
+# cancellation skips later steps; every other non-success or ambiguous head
+# fails verify. The job itself is never skippable.
 #
 # The pull request's own install, migrations, tests, lint, typecheck, build and
 # page geometry run only in pr-suite.yml under pull_request. The base checkout's
@@ -73,7 +74,8 @@ jobs:
 
       # Reuse coverage-comment's owner:branch + exact repository/SHA binding.
       # Read the triggering run from the API and re-read the selected PR so a
-      # moved head fails closed. This is always the base checkout's script.
+      # moved successful head fails closed; a superseded cancellation is a no-op.
+      # This is always the base checkout's script.
       - name: Resolve the suite's pull request
         id: pr
         env:
@@ -95,6 +97,7 @@ jobs:
       # the base workspace. Later steps receive path and SHA through env: as
       # PR_TREE and MERGE_SHA. Only base copies of scripts execute over it.
       - name: Materialise the pull request's merge tree as data
+        if: ${{ steps.pr.outputs.superseded != 'true' }}
         id: pr-tree
         env:
           # The API-bound suite head and current PR base, not the workflow_run
@@ -181,6 +184,7 @@ jobs:
       # nothing but workflow_run, so the tree searched is always the
       # pull request's materialised merge tree.
       - name: Check no tracked file carries a merge-conflict marker
+        if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
           PR_TREE: ${{ steps.pr-tree.outputs.path }}
         run: |
@@ -209,6 +213,7 @@ jobs:
       # (issue 646). The base checkout's copy over a push or a dispatch is in
       # ci.yml; both write this same output, which the three steps below read.
       - name: Detect docs-only change
+        if: ${{ steps.pr.outputs.superseded != 'true' }}
         id: detect-docs
         env:
           PR_TREE: ${{ steps.pr-tree.outputs.path }}
@@ -224,6 +229,7 @@ jobs:
       # check-ratchets.ts on every pull request, holds tighten-only against the
       # merge base.
       - name: Module size ceilings
+        if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
           PR_TREE: ${{ steps.pr-tree.outputs.path }}
         run: |
@@ -241,6 +247,7 @@ jobs:
       # comparison false-positives such a migration as "deleted" (issue 841).
       # The base checkout's script reads both revisions as git objects.
       - name: Migration immutability
+        if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
           MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
         run: node "${GITHUB_WORKSPACE}/scripts/check-migration-edits.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"
@@ -252,6 +259,7 @@ jobs:
       # checkout's full history plus the fetched head carry the range's
       # whole ancestry.
       - name: Legal revision currency
+        if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
           MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
         run: node "${GITHUB_WORKSPACE}/scripts/check-legal-revisions.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"
@@ -262,6 +270,7 @@ jobs:
       # the merge tree's outgoing range against freshly fetched main, and
       # derives the workflow-name set from the merge tree's workflows.
       - name: Refuse a commit whose scope names a workflow outside the ci type
+        if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
           PR_TREE: ${{ steps.pr-tree.outputs.path }}
         run: python3 "${GITHUB_WORKSPACE}/scripts/commit_scopes.py" --root "${PR_TREE:?}"
@@ -287,6 +296,7 @@ jobs:
       # `zizmor==<version> --hash=...` line. The step maps MERGE_SHA and
       # nothing else: no token is mapped, and PyPI is anonymous.
       - name: Verify the zizmor pin's hashes match its version
+        if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
           MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
         run: |
@@ -413,7 +423,7 @@ jobs:
       # argument, and it is pinned in the reachability suite so it cannot be
       # mutated into unreachability silently.
       - name: Refuse a pull request that changes the audit suppression list
-        if: github.event_name == 'workflow_run'
+        if: ${{ steps.pr.outputs.superseded != 'true' && (github.event_name == 'workflow_run') }}
         env:
           MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
           BASE_SHA: ${{ steps.pr.outputs.base_sha }}
@@ -773,6 +783,7 @@ jobs:
       # triggering completion exactly; one same-head listing refuses a newer
       # run, and the judged attempt refuses a rerun. Neither check polls.
       - name: Await the pull request suite
+        if: ${{ steps.pr.outputs.superseded != 'true' }}
         id: suite
         env:
           GH_TOKEN: ${{ github.token }}
@@ -785,6 +796,7 @@ jobs:
       # failure: without the awaited run's id there is no run whose outcome
       # was read.
       - name: Require the awaited suite run's id
+        if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
           RUN_ID: ${{ steps.suite.outputs.run_id }}
         run: |
@@ -803,7 +815,7 @@ jobs:
       # above, not the suite's own.
       - name: Create the suite coverage directory
         id: suite-coverage
-        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        if: ${{ steps.pr.outputs.superseded != 'true' && (steps.detect-docs.outputs.docs_only != 'true') }}
         run: |
           dir="${RUNNER_TEMP}/suite-coverage"
           if [ -e "${dir}" ] || [ -L "${dir}" ]; then
@@ -815,7 +827,7 @@ jobs:
 
       # A missing artifact fails the download.
       - name: Download the suite's coverage summary
-        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        if: ${{ steps.pr.outputs.superseded != 'true' && (steps.detect-docs.outputs.docs_only != 'true') }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: coverage-summary
@@ -828,7 +840,7 @@ jobs:
       # request's, held tighten-only by ratchet-guard.yml, and nothing under
       # the tree's own coverage/ is consulted.
       - name: Coverage floor over the suite's summary
-        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        if: ${{ steps.pr.outputs.superseded != 'true' && (steps.detect-docs.outputs.docs_only != 'true') }}
         env:
           PR_TREE: ${{ steps.pr-tree.outputs.path }}
           SUMMARY_DIR: ${{ steps.suite-coverage.outputs.dir }}
@@ -858,6 +870,7 @@ jobs:
       # workflow_dispatch runs that test main itself are in ci.yml and never
       # reach this gate; this file's only trigger is workflow_run.
       - name: Base freshness
+        if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO_SLUG: ${{ github.repository }}

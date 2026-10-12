@@ -8,17 +8,16 @@ import {
   attestedContexts, checkRunBody, newestProducersFor, selectSweepCandidates,
   validateJobs, type ProducerDeps, type SweepCandidate,
 } from "./ledger-relay-producers.ts";
-import { resolveWorkflowRunHead } from "./ledger-relay-upstream.ts";
+import { resolveWorkflowRunHead, type UpstreamPublicationCheck } from "./ledger-relay-upstream.ts";
 import { readSuiteRuns, SuiteHistoryBoundError, suiteRunsUrl } from "./pr-suite-supersession.ts";
 
-export type SupersessionCheck = () => Promise<number | undefined>;
-export interface PublicationState { supersededBy?: number; historyBound?: string }
+export interface PublicationState { supersededBy?: number; historyBound?: string; upstreamConclusion?: string | null }
 export interface Correction { runId: string; decision: ContextDecision }
 
 /** Classify only deterministic history exhaustion; never convert a read error to a result. */
-export async function publicationState(check?: SupersessionCheck): Promise<PublicationState> {
+export async function publicationState(check?: UpstreamPublicationCheck): Promise<PublicationState> {
   try {
-    return { supersededBy: await check?.() };
+    return await check?.() ?? {};
   } catch (error) {
     if (!(error instanceof SuiteHistoryBoundError)) throw error;
     return { historyBound: error.message };
@@ -33,15 +32,29 @@ export function historyBoundDecision(bound: string): ContextDecision {
   };
 }
 
-/** Every write gets a fresh producer selection; workflow_run also rechecks supersession. */
+/** Recheck before every write; null means suppressed, undefined means posted without correction. */
 export async function postProducerCheck(
   deps: ProducerDeps,
   decision: ContextDecision,
   run: SweepCandidate,
-  check?: SupersessionCheck,
-): Promise<Correction | undefined> {
-  await writeCheck(deps, decision, run);
-  return repairAfterPost(deps, decision, run, check, await publicationState(check));
+  check?: UpstreamPublicationCheck,
+): Promise<Correction | undefined | null> {
+  const checked = publicationDecision(decision, await publicationState(check), run);
+  if (checked === undefined) return null;
+  await writeCheck(deps, checked, run);
+  const correction = await repairAfterPost(deps, checked, run, check, await publicationState(check));
+  return correction ?? (checked === decision ? undefined : { runId: run.runId, decision: checked });
+}
+
+/** A successful verify job may be a cancellation no-op, never an App certificate. */
+function publicationDecision(decision: ContextDecision, state: PublicationState, run: SweepCandidate): ContextDecision | undefined {
+  if (state.historyBound !== undefined) return historyBoundDecision(state.historyBound);
+  if (state.supersededBy !== undefined) return undefined;
+  if (decision.conclusion === "success" && "upstreamConclusion" in state && state.upstreamConclusion !== "success") {
+    console.log(`[ledger-relay] run ${run.runId}: upstream ${state.upstreamConclusion ?? "unknown"}; no success posted`);
+    return undefined;
+  }
+  return decision;
 }
 
 async function writeCheck(deps: ProducerDeps, decision: ContextDecision, run: SweepCandidate): Promise<void> {
@@ -53,7 +66,7 @@ async function repairAfterPost(
   deps: ProducerDeps,
   original: ContextDecision,
   run: SweepCandidate,
-  check: SupersessionCheck | undefined,
+  check: UpstreamPublicationCheck | undefined,
   state: PublicationState,
 ): Promise<Correction | undefined> {
   const newest = await newestCandidate(deps, run.headSha, original.context,
@@ -76,7 +89,7 @@ async function repairAfterPost(
     && original.summary.includes(newest.historyBound);
   // Identity alone cannot preserve a green certificate when history is exhausted.
   if (attested.has(original.context) && (newest.historyBound === undefined || boundAlreadyPublished)) return;
-  const decision = newest.historyBound === undefined
+  const proposed = newest.historyBound === undefined
     ? decideContexts(deps.pinMap, newest.run.path, newest.run.conclusion, validateJobs(
       await deps.api.get<Record<string, unknown>>(
         `${deps.apiRoot}/repos/${deps.repo}/actions/runs/${newest.run.runId}/jobs?filter=latest&per_page=100`,
@@ -84,7 +97,9 @@ async function repairAfterPost(
       ),
     )).find((entry) => entry.context === original.context)
     : historyBoundDecision(newest.historyBound);
-  if (decision === undefined) throw new Error("the newest producer has no pinned corrective context");
+  if (proposed === undefined) throw new Error("the newest producer has no pinned corrective context");
+  const decision = publicationDecision(proposed, await publicationState(newest.check), newest.run);
+  if (decision === undefined) return;
   await writeCheck(deps, decision, newest.run);
   const afterCorrection = await publicationState(newest.check);
   // A deterministic bound must leave its negative certificate, even after a correction.
@@ -99,7 +114,7 @@ async function repairAfterPost(
   return { runId: newest.run.runId, decision };
 }
 
-interface ResolvedCandidate { run: SweepCandidate; check?: SupersessionCheck; historyBound?: string }
+interface ResolvedCandidate { run: SweepCandidate; check?: UpstreamPublicationCheck; historyBound?: string }
 
 /** Resolve completed eligible producers in the sweep's id/attempt order; unfinished runs are ignored. */
 async function newestCandidate(
@@ -132,7 +147,7 @@ async function newestCandidate(
         path: upstream.run.path, conclusion: upstream.run.conclusion,
         htmlUrl: upstream.run.htmlUrl, status: upstream.producerStatus,
       });
-      entry = { run: candidate, check: upstream.recheckSupersession, historyBound: upstream.historyBound };
+      entry = { run: candidate, check: upstream.recheckPublication, historyBound: upstream.historyBound };
     }
     if (candidate.status !== "completed" || candidate.headSha !== headSha) continue;
     eligible.push(candidate);
@@ -147,22 +162,23 @@ export async function publishProducerContexts(
   deps: ProducerDeps,
   run: SweepCandidate,
   jobsBody: Record<string, unknown>,
-  check?: SupersessionCheck,
+  check?: UpstreamPublicationCheck,
   initialBound?: string,
 ): Promise<{ decisions: ContextDecision[]; posted: string[]; supersededBy?: number }> {
   const jobs = initialBound === undefined ? validateJobs(jobsBody) : [];
   const state = await publicationState(check);
   const bound = state.historyBound ?? initialBound;
   if (state.supersededBy !== undefined && bound === undefined) return { decisions: [], posted: [], supersededBy: state.supersededBy };
-  const decisions = bound === undefined
+  const proposed = bound === undefined
     ? decideContexts(deps.pinMap, run.path, run.conclusion, jobs)
     : [historyBoundDecision(bound)];
+  const decisions: ContextDecision[] = [];
   const posted: string[] = [];
-  for (let index = 0; index < decisions.length; index += 1) {
-    const decision = decisions[index];
+  for (const decision of proposed) {
     const correction = await postProducerCheck(deps, decision, run, check);
+    if (correction === null) continue;
     posted.push(decision.context);
-    if (correction !== undefined) decisions[index] = correction.decision;
+    decisions.push(correction?.decision ?? decision);
   }
   return { decisions, posted };
 }
