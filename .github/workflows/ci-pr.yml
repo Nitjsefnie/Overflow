@@ -114,6 +114,18 @@ jobs:
               exit 1
             fi
           fi
+          # Main's linear history makes this fork point no newer than the base
+          # the suite tested. Freshness must cover the entire potentially
+          # untested advance; static gates still merge the current PR base.
+          if ! freshness_base=$(git merge-base --all "${BASE_SHA:?}" "${HEAD_SHA:?}"); then
+            echo "::error::could not compute the freshness merge-base; refusing to certify"
+            exit 1
+          fi
+          if [[ ! "$freshness_base" =~ ^[0-9a-f]{40}$ ]] \
+            || ! git cat-file -e "${freshness_base}^{commit}"; then
+            echo "::error::freshness requires exactly one merge-base commit; refusing to certify"
+            exit 1
+          fi
           if merged_tree=$(git merge-tree --write-tree "${BASE_SHA:?}" "${HEAD_SHA:?}" 2>&1); then
             :
           else
@@ -149,8 +161,11 @@ jobs:
           fi
           pr_tree="${RUNNER_TEMP}/pr-tree"
           git worktree add --detach "${pr_tree}" "${merge_sha}"
-          echo "path=${pr_tree}" >> "$GITHUB_OUTPUT"
-          echo "merge_sha=${merge_sha}" >> "$GITHUB_OUTPUT"
+          {
+            echo "path=${pr_tree}"
+            echo "merge_sha=${merge_sha}"
+            echo "freshness_base_sha=${freshness_base}"
+          } >> "$GITHUB_OUTPUT"
 
       # Issue 988 ports this mechanical check: in the claim repository,
       # claim#56 shipped a conflict marker through three review rounds.
@@ -818,8 +833,11 @@ jobs:
           cd "${PR_TREE:?the pull request tree was not materialised}"
           node "${GITHUB_WORKSPACE}/scripts/check-coverage-floor.ts" --summary "${SUMMARY_DIR:?}/coverage-summary.json"
 
-      # This run judges the resolved head merged with the PR's base as it stood
-      # at resolution time — and branch protection keeps strict
+      # Static gates judge the current PR base, but the suite may have tested
+      # an older base. Freshness begins at the head/current-base merge-base:
+      # on main's linear history it is no newer than the suite's tested base,
+      # so the advance checked includes every potentially untested advance.
+      # Branch protection keeps strict
       # up-to-date checking disabled, so a run that went green against an older
       # main stays green after main advances: the tree GitHub actually lands
       # (its rebase onto current main) was never tested by a required check
@@ -840,7 +858,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO_SLUG: ${{ github.repository }}
-          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          BASE_SHA: ${{ steps.pr-tree.outputs.freshness_base_sha }}
           BASE_REF: ${{ steps.pr.outputs.base_ref }}
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
