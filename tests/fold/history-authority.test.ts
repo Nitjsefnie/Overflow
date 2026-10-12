@@ -175,6 +175,28 @@ describe("repository fold history authority", () => {
     },
   );
 
+  it("orders sub-millisecond moderation events before consulting their ids", () => {
+    for (const ids of [["z", "a"], ["a", "z"]]) {
+      const snapshot = historySnapshot();
+      snapshot.users[1]!.moderationEvents = [
+        { id: ids[0]!, priorState: "RECALIBRATING", newState: "RECALIBRATING", occurredAt: "2026-09-01T11:59:59.123100Z" },
+        { id: ids[1]!, priorState: "RECALIBRATING", newState: "ACTIVE", occurredAt: "2026-09-01T11:59:59.123900Z" },
+      ];
+      const result = foldRepository(snapshot);
+      expect(result.settlements).toHaveLength(1);
+      expect(result.settlements[0]!.credits).toBe(6);
+      expect(result.ledgerEntries).toHaveLength(2);
+    }
+  });
+
+  it("uses the prior state when moderation is after merge within the same millisecond", () => {
+    const snapshot = historySnapshot();
+    snapshot.users[1]!.moderationEvents = [
+      { id: "later", priorState: "RECALIBRATING", newState: "ACTIVE", occurredAt: "2026-09-01T12:00:00.000900Z" },
+    ];
+    expect(foldRepository(snapshot).settlements).toEqual([]);
+  });
+
   it("rejects a merged closing PR without an exact 40-hex merge commit proof", () => {
     const snapshot = historySnapshot();
     historyPullRequest(snapshot).mergeCommitOid = "not-a-merge-oid";

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { isParticipationEligible, type EnforcementState, type IssueState, type PullRequestState } from "@/lib/db/types";
+import type { EnforcementState, IssueState, PullRequestState } from "@/lib/db/types";
+import { isParticipationEligibleAt } from "@/lib/fold/moderation-history";
 import { difficultySchemeInForceAt, type DifficultyScheme, type DifficultySchemeVersion } from "@/lib/domain/difficulty-scheme";
 import { foldLedger, type LedgerEntry } from "@/lib/domain/ledger";
 import { calculateSettlement, type SettlementDecision } from "@/lib/domain/settlement";
@@ -1447,22 +1448,6 @@ function findDuplicatedDatabaseId(comments: GitHubIssueComment[]): number | unde
     .map(([id]) => id)
     .sort((left, right) => left - right);
   return duplicated[0];
-}
-
-function isParticipationEligibleAt(user: FoldUser, timestamp: string): boolean {
-  if (!validTimestamp(timestamp)) {
-    return false;
-  }
-  const targetTime = Date.parse(timestamp);
-  const events = [...(user.moderationEvents ?? [])]
-    .filter((event) => typeof event.id === "string" && event.id.length > 0 && validTimestamp(event.occurredAt))
-    .sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt) || left.id.localeCompare(right.id));
-  const latestAtEvent = events.filter((event) => Date.parse(event.occurredAt) <= targetTime).at(-1);
-  if (latestAtEvent !== undefined) {
-    return isParticipationEligible(latestAtEvent.newState);
-  }
-  const firstLaterEvent = events.find((event) => Date.parse(event.occurredAt) > targetTime);
-  return isParticipationEligible(firstLaterEvent?.priorState ?? user.enforcementState);
 }
 
 function validTimestamp(value: string | null): value is string {
