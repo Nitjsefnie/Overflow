@@ -107,6 +107,14 @@ describe("the committed pin drives runRelay end to end (issue 1149)", () => {
       requests.push({ url: rendered, init: init ?? {} });
       const outcome = outcomes.shift();
       if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
+      if (rendered.endsWith("/check-runs") && init?.method === "POST" && outcome.status === 201) {
+        const posted = JSON.parse(String(init.body)) as Record<string, unknown>;
+        // Post-write snapshots see this write; pending producers block attestation reads.
+        outcomes.unshift({ status: 200, body: { workflow_runs: [] } },
+          ...(posted.status === "completed" ? [{ status: 200, body: {
+            check_runs: [{ ...posted, app: { id: 5118623 } }],
+          } }] : []));
+      }
       return new Response(JSON.stringify(outcome.body), {
         status: outcome.status,
         headers: { "content-type": "application/json" },
@@ -166,7 +174,8 @@ describe("the committed pin drives runRelay end to end (issue 1149)", () => {
     expect(fetchStub.requests.map((request) => request.url)).toEqual([
       TOKEN_URL,
       JOBS_URL,
-      ...contexts.map(() => CHECK_RUNS_URL),
+      ...contexts.flatMap(() => [CHECK_RUNS_URL, SWEEP_RUNS_URL,
+        `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${HEAD_SHA}/check-runs?app_id=5118623&filter=latest&per_page=100`]),
       SWEEP_RUNS_URL,
     ]);
     const checkRuns = fetchStub.requests.filter((request) => request.url === CHECK_RUNS_URL);

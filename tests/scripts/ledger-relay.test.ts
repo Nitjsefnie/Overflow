@@ -572,6 +572,14 @@ describe("runRelay", () => {
       const outcome = outcomes.shift();
       if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
       if ("fail" in outcome) throw outcome.fail;
+      if (rendered.endsWith("/check-runs") && init?.method === "POST" && outcome.status === 201) {
+        const posted = JSON.parse(String(init.body)) as Record<string, unknown>;
+        // Post-write snapshots see this write; pending producers block attestation reads.
+        outcomes.unshift({ status: 200, body: { workflow_runs: [] } },
+          ...(posted.status === "completed" ? [{ status: 200, body: {
+            check_runs: [{ ...posted, app: { id: 5118623 } }],
+          } }] : []));
+      }
       return new Response(JSON.stringify(outcome.body), {
         status: outcome.status,
         headers: { "content-type": "application/json" },
@@ -640,6 +648,7 @@ describe("runRelay", () => {
       TOKEN_URL,
       JOBS_URL,
       CHECK_RUNS_URL,
+      SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
       SWEEP_RUNS_URL,
     ]);
 
@@ -857,6 +866,7 @@ describe("runRelay", () => {
       RUN_URL,
       JOBS_URL,
       CHECK_RUNS_URL,
+      SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
       SWEEP_RUNS_URL,
     ]);
     expect(bodiesOf(fetchStub.requests).every((body) => body.head_sha === HEAD_SHA)).toBe(true);
@@ -1170,6 +1180,7 @@ describe("runRelay", () => {
         TOKEN_URL,
         JOBS_URL,
         CHECK_RUNS_URL,
+        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
         SWEEP_RUNS_URL,
       ]);
     });
@@ -1192,6 +1203,7 @@ describe("runRelay", () => {
         RUN_URL,
         JOBS_URL,
         CHECK_RUNS_URL,
+        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
         SWEEP_RUNS_URL,
       ]);
     });
@@ -1251,6 +1263,7 @@ describe("runRelay", () => {
           TOKEN_URL,
           JOBS_URL,
           CHECK_RUNS_URL,
+          SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
           SWEEP_RUNS_URL,
         ]);
         const [body] = bodiesOf(fetchStub.requests);
@@ -1480,6 +1493,7 @@ describe("runRelay", () => {
         TOKEN_URL,
         JOBS_URL,
         CHECK_RUNS_URL,
+        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
         SWEEP_RUNS_URL,
         PULLS_URL,
       ]);
@@ -1644,6 +1658,7 @@ describe("runRelay", () => {
         TOKEN_URL,
         JOBS_URL,
         CHECK_RUNS_URL,
+        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
         SWEEP_RUNS_URL,
       ]);
     });
@@ -1687,6 +1702,7 @@ describe("runRelay", () => {
         TOKEN_URL,
         JOBS_URL,
         CHECK_RUNS_URL,
+        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
         SWEEP_RUNS_URL,
       ]);
     });
@@ -1820,6 +1836,7 @@ describe("runRelay", () => {
         RUN_URL,
         JOBS_URL,
         CHECK_RUNS_URL,
+        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
         SWEEP_RUNS_URL,
         PULLS_URL,
         RUNS_AT_HEAD_URL,
@@ -2164,11 +2181,12 @@ describe("runRelay", () => {
       expect(result.posted).toEqual(["verify"]);
       expect(result.sweep).toEqual({ examined: 0, relayed: [] });
       // Nothing to dedupe against: with no candidate at all the sweep issues no
-      // check-runs GET, so the mirror's own request set grows by exactly one.
+      // check-runs GET during selection; publication separately refreshes its own attestation.
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
         CHECK_RUNS_URL,
+        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
         SWEEP_RUNS_URL,
       ]);
     });
@@ -2234,6 +2252,7 @@ describe("runRelay", () => {
         TOKEN_URL,
         JOBS_URL,
         CHECK_RUNS_URL,
+        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
         SWEEP_RUNS_URL,
         CHECK_RUNS_AT_HEAD_URL,
       ]);
@@ -2274,13 +2293,13 @@ describe("runRelay", () => {
         { context: "actionlint", runId: "9003" },
         { context: "actionlint", runId: "9005" },
       ]);
-      expect(requestsTo(fetchStub.requests, CHECK_RUNS_AT_HEAD_URL)).toHaveLength(1);
+      expect(requestsTo(fetchStub.requests, CHECK_RUNS_AT_HEAD_URL)).toHaveLength(3);
       expect(
         requestsTo(
           fetchStub.requests,
           `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${otherSha}/check-runs?app_id=${APP_ID}&filter=latest&per_page=100`,
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(2);
     });
 
     it("never sweeps a run nothing is pinned to, a run that has not completed, or the triggering run itself", async () => {
@@ -2315,6 +2334,7 @@ describe("runRelay", () => {
         TOKEN_URL,
         JOBS_URL,
         CHECK_RUNS_URL,
+        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
         SWEEP_RUNS_URL,
         CHECK_RUNS_AT_HEAD_URL,
       ]);
@@ -2348,6 +2368,7 @@ describe("runRelay", () => {
         TOKEN_URL,
         JOBS_URL,
         CHECK_RUNS_URL,
+        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
         SWEEP_RUNS_URL,
       ]);
     });

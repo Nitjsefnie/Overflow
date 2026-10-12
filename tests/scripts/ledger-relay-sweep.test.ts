@@ -345,6 +345,11 @@ function fakeApi(handlers: Record<string, unknown>): {
     },
     postCheckRun: async (body: Record<string, unknown>): Promise<unknown> => {
       record(null, "POST", body);
+      const url = checkRunsAt(String(body.head_sha));
+      const checks = (handlers[url] as { check_runs: Record<string, unknown>[] }).check_runs;
+      handlers[url] = { check_runs: [
+        ...checks.filter((entry) => entry?.name !== body.name), { ...body, app: { id: Number(APP_ID) } },
+      ] };
       return { id: 1 };
     },
   };
@@ -438,7 +443,7 @@ describe("sweepOrphans", () => {
     // head_sha and the CANDIDATE's html_url — never the triggering run's.
     // `url` is null on a POST by construction: this seam never sees the
     // endpoint, and the endpoint is pinned at the runRelay level instead.
-    expect(requests.at(-1)).toEqual({
+    expect(requests.filter((request) => request.method === "POST").at(-1)).toEqual({
       url: null,
       method: "POST",
       body: {
@@ -479,7 +484,7 @@ describe("sweepOrphans", () => {
     const outcome = await sweepOrphans(deps(api));
 
     expect(outcome.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
-    expect(requests.at(-1)?.body).toMatchObject({
+    expect(requests.filter((request) => request.method === "POST").at(-1)?.body).toMatchObject({
       name: "actionlint",
       head_sha: HEAD_SHA,
       status: "completed",
@@ -501,7 +506,7 @@ describe("sweepOrphans", () => {
     const outcome = await sweepOrphans(deps(api));
 
     expect(outcome.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
-    expect(requests.at(-1)?.body).toMatchObject({ name: "actionlint", conclusion: "success" });
+    expect(requests.filter((request) => request.method === "POST").at(-1)?.body).toMatchObject({ name: "actionlint", conclusion: "success" });
   });
 
   it("skips a candidate whose contexts are all attested, without reading its jobs", async () => {
@@ -557,7 +562,7 @@ describe("sweepOrphans", () => {
     });
     const secondOutcome = await sweepOrphans(deps(second.api));
     expect(secondOutcome.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
-    expect(second.requests.at(-1)?.body).toMatchObject({
+    expect(second.requests.filter((request) => request.method === "POST").at(-1)?.body).toMatchObject({
       name: "actionlint",
       status: "completed",
       conclusion: "success",
@@ -574,7 +579,7 @@ describe("sweepOrphans", () => {
     });
     const outcome = await sweepOrphans(deps(api));
     expect(outcome.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
-    expect(requests.at(-1)?.body).toMatchObject({ name: "actionlint", conclusion: "success" });
+    expect(requests.filter((request) => request.method === "POST").at(-1)?.body).toMatchObject({ name: "actionlint", conclusion: "success" });
   });
 
   it("still skips a candidate whose contexts hold a CONCLUDED App check-run", async () => {
@@ -613,7 +618,7 @@ describe("sweepOrphans", () => {
     expect(requests.some((request) => request.url === jobsUrl("9002"))).toBe(true);
   });
 
-  it("reads the check-runs once per distinct head SHA, however many candidates sit at it", async () => {
+  it("reads each head once for selection and again after its newest producer is posted", async () => {
     const { api, requests } = fakeApi({
       [RUNS_URL]: {
         workflow_runs: [
@@ -644,8 +649,8 @@ describe("sweepOrphans", () => {
       (request) => request.url?.startsWith(`https://api.github.com/repos/${REPO}/commits/`) ?? false,
     );
     expect(headsRead.map((request) => request.url)).toEqual([
-      checkRunsAt(HEAD_SHA),
-      checkRunsAt(OTHER_SHA),
+      checkRunsAt(HEAD_SHA), checkRunsAt(HEAD_SHA),
+      checkRunsAt(OTHER_SHA), checkRunsAt(OTHER_SHA),
     ]);
     // Two jobs listings, four candidates.
     expect(requests.filter((request) => request.url?.includes("/jobs?") ?? false)).toHaveLength(2);
@@ -800,7 +805,7 @@ describe("producer-bound sweep attestation", () => {
     });
     const outcome = await sweepOrphans(deps(api, { pinMap: TWO_PATH_PIN_MAP }));
     expect(outcome.relayed).toEqual([{ context: "verify", runId: "10" }]);
-    expect(requests.at(-1)?.body).toMatchObject({ conclusion: "failure", details_url: details("10") });
+    expect(requests.filter((request) => request.method === "POST").at(-1)?.body).toMatchObject({ conclusion: "failure", details_url: details("10") });
     expect(requests.some((request) => request.url === jobsUrl("9"))).toBe(false);
   });
 
@@ -814,7 +819,7 @@ describe("producer-bound sweep attestation", () => {
       });
       const outcome = await sweepOrphans(deps(api));
       expect(outcome.relayed).toEqual([{ context: "verify", runId: "9002" }]);
-      expect(requests.at(-1)?.body).toMatchObject({ conclusion: "failure", details_url: details("9002") });
+      expect(requests.filter((request) => request.method === "POST").at(-1)?.body).toMatchObject({ conclusion: "failure", details_url: details("9002") });
     },
   );
 });
