@@ -109,7 +109,7 @@ function identityFromExternalId(value: unknown): ProducerIdentity | undefined {
   return { runId: match[1], runAttempt: BigInt(match[2]) };
 }
 
-/** Newer App identities block publication; equal identities require a bound certificate when applicable. */
+/** Newer identities block; equal identities attest only completed checks and any required bound certificate. */
 export async function publicationBlockedContexts(
   deps: ProducerDeps,
   headSha: string,
@@ -125,7 +125,7 @@ export async function publicationBlockedContexts(
   for (const entry of body.check_runs) {
     if (typeof entry !== "object" || entry === null) continue;
     const checkRun = entry as {
-      name?: unknown; external_id?: unknown; app?: { id?: unknown };
+      name?: unknown; status?: unknown; external_id?: unknown; app?: { id?: unknown };
       conclusion?: unknown; output?: { summary?: unknown } | null;
     };
     if (typeof checkRun.name !== "string") continue;
@@ -135,6 +135,7 @@ export async function publicationBlockedContexts(
     if (producer === undefined || identity === undefined) continue;
     const ordering = compareProducerIdentities(identity, producer);
     if (ordering < 0) continue;
+    if (ordering === 0 && checkRun.status !== "completed") continue;
     const bound = historyBounds?.get(checkRun.name);
     if (ordering === 0 && bound !== undefined && (checkRun.conclusion !== "failure" ||
       typeof checkRun.output?.summary !== "string" || !checkRun.output.summary.includes(bound))) continue;

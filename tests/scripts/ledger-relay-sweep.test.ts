@@ -526,8 +526,8 @@ describe("sweepOrphans", () => {
 
   it("posts nothing for a candidate whose jobs listing is unfinished, and the next sweep posts the conclusion once", async () => {
     // An unfinished producing job gets no POST. Once it concludes, the
-    // producer can replace an older App identity even if that check is pending.
-    const pending = { check_runs: [appCheckRun("actionlint", { status: "queued", external_id: "9001:1" })] };
+    // sweep completes a pending App check carrying that producer's identity.
+    const pending = { check_runs: [appCheckRun("actionlint", { status: "queued" })] };
     const jobsPending = {
       jobs: [{ name: "actionlint", run_attempt: 1, status: "queued", conclusion: null }],
     };
@@ -545,7 +545,7 @@ describe("sweepOrphans", () => {
     expect(firstOutcome).toEqual({ examined: 1, relayed: [] });
     expect(first.requests.filter((request) => request.method === "POST")).toEqual([]);
 
-    // Sweep #2: the job has concluded; the pending App check is an older identity.
+    // Sweep #2: the job has concluded; its own pending App check is not attestation.
     const second = fakeApi({
       [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
       [checkRunsAt(HEAD_SHA)]: pending,
@@ -560,7 +560,7 @@ describe("sweepOrphans", () => {
     });
   });
 
-  it.each(["queued", "in_progress"])("skips a %s App check already carrying the selected producer identity", async (status) => {
+  it.each(["queued", "in_progress"])("completes a %s App check carrying the selected producer identity", async (status) => {
     const { api, requests } = fakeApi({
       [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
       [checkRunsAt(HEAD_SHA)]: {
@@ -569,9 +569,10 @@ describe("sweepOrphans", () => {
       [jobsUrl("9002")]: { jobs: [] },
     });
     const outcome = await sweepOrphans(deps(api));
-    expect(outcome.relayed).toEqual([]);
-    expect(requests.filter((request) => request.method === "POST")).toEqual([]);
-    expect(requests.some((request) => request.url === jobsUrl("9002"))).toBe(false);
+    expect(outcome.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
+    expect(requests.filter((request) => request.method === "POST").at(-1)?.body)
+      .toMatchObject({ name: "actionlint", external_id: "9002:1", status: "completed", conclusion: "success" });
+    expect(requests.some((request) => request.url === jobsUrl("9002"))).toBe(true);
   });
 
   it("still skips a candidate whose contexts hold a CONCLUDED App check-run", async () => {
