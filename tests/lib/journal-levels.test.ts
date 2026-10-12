@@ -21,7 +21,7 @@ beforeEach(() => {
     },
   });
   vi.stubGlobal("console", new Console({ stdout, stderr: process.stderr, colorMode: false }));
-  vi.stubEnv("JOURNAL_STREAM", "test-journal-stream");
+  vi.stubEnv("JOURNAL_STREAM", "8:123");
 });
 
 afterEach(() => {
@@ -31,12 +31,57 @@ afterEach(() => {
   vi.resetModules();
 });
 
-async function install() {
+async function install(readStderrStat = () => ({ dev: 8n, ino: 123n })) {
   const { installJournalLevels } = await import("@/lib/logging/journal-levels");
-  installJournalLevels();
+  installJournalLevels(readStderrStat);
 }
 
 describe("journal console levels", () => {
+  it.each(["8:123", "0008:000123"])("checks a matching decimal stderr identity once at install (%s)", async (identity) => {
+    vi.stubEnv("JOURNAL_STREAM", identity);
+    const readStat = vi.fn(() => ({ dev: 8n, ino: 123n }));
+    await install(readStat);
+    console.error("error");
+    console.warn("warning");
+    await install(readStat);
+    expect(errors.join("")).toBe("<3>error\n<4>warning\n");
+    expect(readStat).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["8:12345", "9:123", "8:124"])("keeps output byte-identical for inherited/mismatching identity %s", async (identity) => {
+    console.error("error\ncontinuation", { value: 7 });
+    console.warn("warning");
+    const baseline = errors.join("");
+    errors.length = 0;
+    vi.stubEnv("JOURNAL_STREAM", identity);
+    await install();
+    console.error("error\ncontinuation", { value: 7 });
+    console.warn("warning");
+    expect(errors.join("")).toBe(baseline);
+  });
+
+  it.each(["not-a-stream", "8", "8:", ":123", "-8:123", "8:123:4", "8:1.5", "8:123\n", " 8:123", "8:0x7b"])("ignores malformed journal identity %j", async (identity) => {
+    vi.stubEnv("JOURNAL_STREAM", identity);
+    await install();
+    console.error("error");
+    console.warn("warning");
+    expect(errors.join("")).toBe("error\nwarning\n");
+  });
+
+  it("compares inode identities without losing integer precision", async () => {
+    const ino = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+    vi.stubEnv("JOURNAL_STREAM", `8:${ino + 1n}`);
+    await install(() => ({ dev: 8n, ino }));
+    console.error("error");
+    expect(errors.join("")).toBe("error\n");
+  });
+
+  it("retains console output when stderr identity cannot be read", async () => {
+    await install(() => { throw new Error("stderr unavailable"); });
+    console.error("error");
+    expect(errors.join("")).toBe("error\n");
+  });
+
   it("prefixes every error line, including blank lines and the final newline", async () => {
     await install();
     console.error("first\n\nlast\n");
@@ -116,6 +161,9 @@ describe("journal console levels", () => {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
       import { createRequire } from 'node:module';
       const require = createRequire(import.meta.url);
+      const { fstatSync } = require('node:fs');
+      const { dev, ino } = fstatSync(2, { bigint: true });
+      process.env.JOURNAL_STREAM = dev + ':' + ino;
       require('next/dist/server/node-environment-baseline');
       require('next/dist/server/node-environment-extensions/console-file');
       require('next/dist/server/node-environment-extensions/console-exit');
@@ -135,7 +183,7 @@ describe("journal console levels", () => {
       process.stdout.write(JSON.stringify(descriptors));
     `], {
       cwd: process.cwd(),
-      env: { ...process.env, NODE_ENV: "production", NO_COLOR: "", FORCE_COLOR: "1", JOURNAL_STREAM: "test-journal-stream" },
+      env: { ...process.env, NODE_ENV: "production", NO_COLOR: "", FORCE_COLOR: "1", JOURNAL_STREAM: undefined },
       encoding: "utf8",
       timeout: 10_000,
     });
@@ -156,6 +204,9 @@ describe("journal console levels", () => {
       import { createRequire } from 'node:module';
       import { inspect } from 'node:util';
       const require = createRequire(import.meta.url);
+      const { fstatSync } = require('node:fs');
+      const { dev, ino } = fstatSync(2, { bigint: true });
+      process.env.JOURNAL_STREAM = dev + ':' + ino;
       require('next/dist/server/node-environment-baseline');
       require('next/dist/server/node-environment-extensions/console-exit');
       require('next/dist/server/node-environment-extensions/console-dim.external');
@@ -187,7 +238,7 @@ describe("journal console levels", () => {
       process.stdout.write(JSON.stringify(observations));
     `], {
       cwd: process.cwd(),
-      env: { ...process.env, NODE_ENV: "production", NO_COLOR: "1", FORCE_COLOR: undefined, JOURNAL_STREAM: "test-journal-stream" },
+      env: { ...process.env, NODE_ENV: "production", NO_COLOR: "1", FORCE_COLOR: undefined, JOURNAL_STREAM: undefined },
       encoding: "utf8",
       timeout: 10_000,
     });
