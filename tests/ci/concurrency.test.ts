@@ -5,87 +5,36 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 /**
- * Each repository-wide workflow in BOUNDED used to
- * key its concurrency group on `github.event.pull_request.number ||
- * github.ref`. That bounds ONE contributor's parallelism and nothing else: N
- * open pull requests produce N concurrent runs, so the repository's aggregate
- * Actions spend scaled with the number of open pull requests rather than with
- * any budget. Measured over the 4.24 days ending 2026-09-30 that was ~470 runs
- * a day and ~13 runner-hours a day, and nothing in the repository capped it.
+ * Every workflow is classified in BOUNDED or UNBOUNDED_BY_CHOICE, and both
+ * tables pin the concurrency policy read from parsed YAML.
  *
- * The bound is a per-workflow split by EVENT CLASS in one expression: a pull
- * request lands in a single repository-level group, so at most one run of that
- * workflow is in flight repository-wide and the aggregate stops tracking the
- * open-pull-request count; every other leg keys on its own `github.sha`, so a
- * push to main gets a private group and nothing the deploy gate reads is ever
- * cancelled by a later event. A `schedule` tick and a `workflow_dispatch` land
- * in the same non-PR arm but do NOT get a private group: on a schedule event
- * `github.sha` is the default branch's tip, which is the very SHA a push run for
- * that tip carries, so the two share a group. Harmless at one scheduled tick.
+ * BOUNDED workflows share one repository-level group per workflow across pull
+ * requests. Their other event legs key on github.sha, so different commits
+ * have separate groups. Literal cancel-in-progress false preserves every
+ * running attempt. It does not preserve the pending attempt: GitHub keeps one
+ * pending run per group by default and replaces it on a newer arrival, which
+ * can drop another pull request's current head without a replacement.
  *
- * The shared group is paired with `cancel-in-progress: false`, and the flag is
- * what a reader is most likely to get wrong in either direction. GitHub's own
- * documentation: "By default, any existing pending job or workflow in the same
- * concurrency group will be canceled and the new queued job or workflow will
- * take its place. To also cancel any currently running job or workflow in the
- * same concurrency group, specify cancel-in-progress: true." The PENDING run is
- * therefore cancelled whatever the flag says, and the group holds at most one
- * running plus one pending job either way — so the flag buys no additional
- * bound, it only decides whether the RUNNING job is destroyed too.
+ * UNBOUNDED_BY_CHOICE records a reason and the exact group, cancellation flag
+ * and queue for each exception. Groups isolate the units of work named in
+ * their reasons; queue is pinned where preserving pending arrivals needs it.
+ * For PR-reachable exceptions, the unreproducible premise requires literal
+ * false to preserve running work. The superseded-attempt premise permits
+ * cancellation within one pull request, whose newer push supplies the
+ * replacement, and excludes required contexts.
+ * Code scanning and event policy use this premise: their per-PR groups cancel
+ * older runs only on pull_request; their SHA-keyed non-PR legs never cancel
+ * running work. A pull_request-only workflow may use literal true.
  *
- * What `false` guarantees: no in-flight run is ever cancelled, so no required
- * context concludes `cancelled` because a peer pushed while it was running.
- * `verify`, `actionlint` and `ratchet-guard` are the required contexts in
- * `.github/required-checks.json`, which `ledger-relay` mirrors a run conclusion
- * onto, so that is a peer's blocked pull request.
+ * The directory-wide structural rule also covers job-level concurrency:
+ * any PR-reachable block that can enable cancellation must include
+ * github.event.pull_request.number in its group and never the literal
+ * repo-wide. Expressions are conservatively treated as potentially enabling
+ * cancellation, so a shared group cannot cancel another pull request's run.
  *
- * What it does NOT prevent, and what this design cannot remove: the PENDING run
- * is still cancelled when a newer arrival claims the single pending slot. Under
- * a per-pull-request group that run is always the same pull request's superseded
- * head and the push that superseded it created a replacement, so it is
- * self-healing. Here it can be a DIFFERENT pull request's current head with no
- * replacement, and the bounded workflows trigger on opened/synchronize/reopened
- * with no `edited`, so that pull request stays blocked until its author pushes
- * again. `false` is strictly better than `true`, never a cure.
- *
- * The rates. Of the 483 `ci` runs in the 6.13 days ending 2026-09-30, only
- * the 370 pull-request arrivals ever enter `ci-pr-repo-wide` (ci-pr.yml's group since
- * issue 1090's split; it was `ci-repo-wide` while the leg shared ci.yml); the 106 `push` and 7
- * `workflow_dispatch` runs key their own `github.sha` and cannot contend with
- * anything, so counting them inflated both the arrival rate and rho. Load is
- * also not steady — per-day all-event arrivals were 5, 0, 215, 122, 78, 17, 46.
- * M/M/1 with one waiting place over the PR arrivals, mean PR-leg service 6.44
- * min, where pending-cancelled is n*pi2 and running-cancelled-if-`true` is
- * n*(pi1+pi2):
- *
- * | date | PR arrivals | rho | pending-cancelled | running-cancelled if `true` |
- * |---|---:|---:|---:|---:|
- * | 2026-09-26 | 171 | 0.76 | ~43/day | ~98/day |
- * | 2026-09-27 | 95 | 0.42 | ~11/day | ~36/day |
- * | 2026-09-28 | 59 | 0.26 | ~3/day | ~15/day |
- * | window mean | 60 | 0.27 | ~3/day | ~15/day |
- *
- * These are a LOWER bound, because a Poisson fit understates a bursty arrival
- * process. Replaying the real arrival timestamps instead produced materially
- * higher figures (97 and 134 pending cancellations per window, depending on
- * which arrival set and service-time treatment was used), and neither replay
- * reproduced stably, so no single replayed number is quoted here. On `main` the
- * mechanism already fires inside per-PR groups: 9 of 482 completed `ci` runs
- * concluded cancelled, every one a same-PR self-supersede.
- *
- * On runner minutes the direction is counter-intuitive and stated here so it is
- * not misremembered: `true` would bill FEWER minutes, because a destroyed run
- * stops accruing. `false` costs minutes relative to `true` and is bought
- * deliberately. The bound is unaffected either way — one running slot per group
- * caps concurrency at 1 — and a run dropped from the pending slot never started,
- * so the cheap kind of cancellation is the one that remains.
- *
- * Assertions are made on the parsed YAML data, never on the raw bytes, so
- * reformatting the block does not disturb them while a change to a key one of
- * the tables below pins fails loudly here: `group` and `cancel-in-progress` for
- * every bounded workflow, and — for each exception — the `queue` recorded beside
- * its reason. The bounded table carries only the first two because none of the
- * bounded workflows ships a `queue`; the key is pinned where one exists.
+ * Exact table pins, classification coverage, trigger reachability and group
+ * collision checks complement that rule. Assertions use parsed YAML so
+ * formatting changes do not alter the guarantees.
  */
 
 type Workflow = {
