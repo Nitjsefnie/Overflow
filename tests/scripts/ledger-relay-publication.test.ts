@@ -42,6 +42,11 @@ const oldVerify = verify(9001, 8001, "success");
 const failedSuite = suite(8002, "failure");
 const failedVerify = verify(9002, 8002, "failure");
 const response = (body: unknown) => new Response(JSON.stringify(body));
+const GATE_CONTEXTS = ["actionlint", "ratchet-guard", "secret-scan", "dependency-audit"];
+function gate(id: number, conclusion: string): Body {
+  return { ...verify(id, 8001, conclusion), path: ".github/workflows/pr-gates.yml",
+    event: "pull_request_target", head_branch: "feature/repro", head_sha: HEAD };
+}
 
 function deferred() {
   let resolve!: () => void;
@@ -50,10 +55,12 @@ function deferred() {
 }
 
 /** Adapted from the adversary probe; only HTTP is replaced, and all relays share a check store. */
-function world() {
+function world(kind: "verify" | "pr-gates" = "verify") {
+  const initial = kind === "verify" ? oldVerify : gate(9001, "success");
   const state = {
-    suites: [oldSuite], producers: [oldVerify], checks: [] as Body[], requests: [] as string[],
+    suites: [oldSuite], producers: [initial], checks: [] as Body[], requests: [] as string[],
     oversized: false, historyReadFails: false, blockOldWrite: false,
+    listingReadFails: false,
     oldCommitted: false, afterOldCommitReads: [] as string[],
     onCommit: undefined as ((body: Body) => void | Promise<void>) | undefined,
   };
@@ -64,10 +71,10 @@ function world() {
     LEDGER_APP_KEY: key, GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456",
   };
   const mirrorEnv = (run: Body) => ({
-    ...baseEnv, GITHUB_WORKFLOW_RUN_ID: String(run.id), GITHUB_WORKFLOW_RUN_HEAD_SHA: MAIN,
+    ...baseEnv, GITHUB_WORKFLOW_RUN_ID: String(run.id), GITHUB_WORKFLOW_RUN_HEAD_SHA: String(run.head_sha),
     GITHUB_WORKFLOW_RUN_PATH: String(run.path), GITHUB_WORKFLOW_RUN_CONCLUSION: String(run.conclusion),
     GITHUB_WORKFLOW_RUN_HTML_URL: String(run.html_url), GITHUB_WORKFLOW_RUN_EVENT: String(run.event),
-    GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main", GITHUB_WORKFLOW_RUN_ATTEMPT: String(run.run_attempt),
+    GITHUB_WORKFLOW_RUN_HEAD_BRANCH: String(run.head_branch), GITHUB_WORKFLOW_RUN_ATTEMPT: String(run.run_attempt),
   });
   const fetchFn = (async (input: unknown, init: RequestInit = {}) => {
     const url = String(input);
@@ -92,18 +99,26 @@ function world() {
         ? { total_count: 1001, workflow_runs: Array.from({ length: 100 }, (_, i) => suite(8002 - i, "failure")) }
         : { total_count: state.suites.length, workflow_runs: state.suites });
     }
-    if (url === `${ROOT}/actions/runs?per_page=100`) return response({ workflow_runs: state.producers });
-    if (url.includes(`/commits/${HEAD}/check-runs?`)) return response({ check_runs: state.checks.slice(-1) });
+    if (url === `${ROOT}/actions/runs?per_page=100`) {
+      if (state.listingReadFails) return new Response("producer listing unavailable", { status: 503 });
+      return response({ workflow_runs: state.producers });
+    }
+    if (url.includes(`/commits/${HEAD}/check-runs?`)) {
+      const latest = new Map<string, Body>();
+      for (const check of state.checks) latest.set(String(check.name), check);
+      return response({ check_runs: [...latest.values()] });
+    }
     for (const run of [...state.suites, ...state.producers]) {
       if (url === `${ROOT}/actions/runs/${run.id}`) return response(run);
       if (url === `${ROOT}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`) {
-        return response({ jobs: [{ name: "verify", run_attempt: run.run_attempt,
-          status: run.status, conclusion: run.conclusion }] });
+        const contexts = run.path === ".github/workflows/pr-gates.yml" ? GATE_CONTEXTS : ["verify"];
+        return response({ jobs: contexts.map((name) => ({ name, run_attempt: run.run_attempt,
+          status: run.status, conclusion: run.conclusion })) });
       }
     }
     throw new Error(`unexpected request ${url}`);
   }) as typeof fetch;
-  const relay = (mode: "mirror" | "sweep", run = oldVerify) => runRelay({
+  const relay = (mode: "mirror" | "sweep", run = initial) => runRelay({
     env: mode === "mirror" ? mirrorEnv(run) : { ...baseEnv, LEDGER_SWEEP_ONLY: "true" },
     fetchFn, delayFn: async () => {}, readPinMap: async () => pins,
   });
@@ -206,5 +221,87 @@ describe("history-bound publication direction", () => {
     w.state.historyReadFails = true;
     await expect(w.relay(mode)).rejects.toThrow(/suite.*failed/);
     expect(w.state.checks).toEqual([]);
+  });
+});
+
+describe("every-producer post-write correction", () => {
+  it.each(["mirror", "sweep"] as const)("refreshes producer selection after a %s history-bound failure write", async (mode) => {
+    const w = world();
+    w.state.oversized = true;
+    w.state.onCommit = () => { w.state.listingReadFails = true; };
+    await expect(w.relay(mode)).rejects.toThrow(/post-write producer listing.*failed/);
+    expect(w.state.checks).toHaveLength(1);
+    expect(w.state.checks[0]).toMatchObject({ name: "verify", conclusion: "failure" });
+  });
+
+  it("corrects a history-bound sweep certificate to the newest producer identity", async () => {
+    const w = world();
+    w.state.oversized = true;
+    w.state.onCommit = (body) => {
+      if (body.external_id !== "9001:1") return;
+      w.state.suites = [failedSuite, oldSuite];
+      w.state.producers = [failedVerify, oldVerify];
+    };
+    await w.relay("sweep");
+    expect(w.state.checks.map((check) => check.external_id)).toEqual(["9001:1", "9002:1"]);
+    expect(w.state.checks.every((check) => check.conclusion === "failure")).toBe(true);
+    expect((w.state.checks.at(-1)?.output as Body).summary).toMatch(/1000 runs/);
+  });
+
+  it("repairs issue 1191's delayed pr-gates sweep write for all four contexts", async () => {
+    const w = world("pr-gates");
+    const olderRun = gate(9001, "success");
+    const newerRun = gate(9002, "failure");
+    w.state.blockOldWrite = true;
+    const older = w.relay("sweep");
+    await Promise.race([w.blocked.promise, older.then(() => { throw new Error("old sweep missed its held write"); })]);
+    try {
+      w.state.producers = [newerRun, olderRun];
+      const failure = await w.relay("mirror", newerRun);
+      expect(failure.posted).toEqual(GATE_CONTEXTS);
+      expect(w.state.checks.map((check) => check.conclusion)).toEqual(GATE_CONTEXTS.map(() => "failure"));
+    } finally { w.released.resolve(); }
+    await older;
+    for (const context of GATE_CONTEXTS) {
+      const atContext = w.state.checks.filter((check) => check.name === context);
+      expect(atContext.map((check) => `${check.external_id}=${check.conclusion}`))
+        .toEqual(["9002:1=failure", "9001:1=success", "9002:1=failure"]);
+      expect(atContext.at(-1)).toMatchObject({ head_sha: HEAD, external_id: "9002:1", conclusion: "failure" });
+    }
+    expect(w.state.afterOldCommitReads[0]).toBe(`${ROOT}/actions/runs?per_page=100`);
+    const before = w.state.checks.length;
+    w.state.blockOldWrite = false;
+    await w.relay("sweep");
+    expect(w.state.checks).toHaveLength(before);
+  });
+
+  it.each(["mirror", "sweep"] as const)("does not correct a pr-gates %s write to an unfinished newest producer", async (mode) => {
+    const w = world("pr-gates");
+    w.state.onCommit = (body) => {
+      if (body.external_id !== "9001:1") return;
+      w.state.producers = [{ ...gate(9002, "failure"), status: "queued", conclusion: null }, gate(9001, "success")];
+    };
+    await w.relay(mode);
+    expect(w.state.checks.map((check) => check.external_id)).toEqual(GATE_CONTEXTS.map(() => "9001:1"));
+    expect(w.state.requests).not.toContain(`${ROOT}/actions/runs/9002/jobs?filter=latest&per_page=100`);
+  });
+
+  it("bounds the pr-gates correction to one per original context write", async () => {
+    const w = world("pr-gates");
+    w.state.onCommit = (body) => {
+      if (body.name !== "actionlint") return;
+      if (body.external_id === "9001:1") w.state.producers = [gate(9002, "success"), gate(9001, "success")];
+      if (body.external_id === "9002:1") w.state.producers = [gate(9003, "failure"), gate(9002, "success"), gate(9001, "success")];
+    };
+    await w.relay("sweep");
+    expect(w.state.checks.filter((check) => check.name === "actionlint").map((check) => check.external_id))
+      .toEqual(["9001:1", "9002:1"]);
+  });
+
+  it.each(["mirror", "sweep"] as const)("throws on the fresh pr-gates %s correction-listing read failure", async (mode) => {
+    const w = world("pr-gates");
+    w.state.onCommit = () => { w.state.listingReadFails = true; };
+    await expect(w.relay(mode)).rejects.toThrow(/producer.*failed/);
+    expect(w.state.checks).toHaveLength(1);
   });
 });

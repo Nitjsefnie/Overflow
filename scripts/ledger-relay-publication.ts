@@ -1,6 +1,6 @@
-// Workflow-run publication has two supersession boundaries: before POST and
-// after the server has committed it. The latter repairs a delayed stale write
-// with at most one corrective POST; ordinary API failures still throw.
+// Every producer refreshes recency after its App write commits and can make
+// one corrective POST. Workflow-run producers also retain the suite checks
+// before/after publication; ordinary API failures still throw.
 
 import { decideContexts, type ContextDecision } from "./ledger-relay-decisions.ts";
 import {
@@ -32,7 +32,7 @@ export function historyBoundDecision(bound: string): ContextDecision {
   };
 }
 
-/** All workflow_run writes, including a cap failure, get a fresh post-write read. */
+/** Every write gets a fresh producer selection; workflow_run also rechecks supersession. */
 export async function postProducerCheck(
   deps: ProducerDeps,
   decision: ContextDecision,
@@ -40,7 +40,6 @@ export async function postProducerCheck(
   check?: SupersessionCheck,
 ): Promise<Correction | undefined> {
   await writeCheck(deps, decision, run);
-  if (check === undefined) return;
   return repairAfterPost(deps, decision, run, check, await publicationState(check));
 }
 
@@ -53,25 +52,29 @@ async function repairAfterPost(
   deps: ProducerDeps,
   original: ContextDecision,
   run: SweepCandidate,
-  check: SupersessionCheck,
+  check: SupersessionCheck | undefined,
   state: PublicationState,
 ): Promise<Correction | undefined> {
-  if (state.historyBound !== undefined) {
-    // The original negative cap certificate already names this bound.
+  const newest = await newestCandidate(deps, run.headSha, original.context,
+    state.supersededBy === undefined ? {
+      run: { ...run, status: run.status ?? original.status }, check, historyBound: state.historyBound,
+    } : undefined);
+  if (state.historyBound !== undefined && (newest === undefined || newest.run.status !== "completed")) {
+    // Keep the bound's negative direction even if a replacement is still running.
     if (original.conclusion === "failure" && original.summary.includes(state.historyBound)) return;
     const decision = historyBoundDecision(state.historyBound);
     await writeCheck(deps, decision, run);
-    await publicationState(check); // The cap certificate remains failure; read errors still throw.
+    await publicationState(check);
     return { runId: run.runId, decision };
   }
-  if (state.supersededBy === undefined) return;
-  const newest = await newestCandidate(deps, run.headSha, original.context);
   // A queued/running or not-yet-created replacement is attested by its own completion relay.
   if (newest === undefined || newest.run.status !== "completed") return;
-  if (newest.historyBound === undefined) {
-    const attested = await attestedContexts(deps, run.headSha, new Map([[original.context, newest.run]]));
-    if (attested.has(original.context)) return;
-  }
+  const attested = await attestedContexts(deps, run.headSha, new Map([[original.context, newest.run]]));
+  const boundAlreadyPublished = newest.historyBound !== undefined && newest.run.runId === run.runId
+    && newest.run.runAttempt === run.runAttempt && original.conclusion === "failure"
+    && original.summary.includes(newest.historyBound);
+  // Identity alone cannot preserve a green certificate when history is exhausted.
+  if (attested.has(original.context) && (newest.historyBound === undefined || boundAlreadyPublished)) return;
   const decision = newest.historyBound === undefined
     ? decideContexts(deps.pinMap, newest.run.path, newest.run.conclusion, validateJobs(
       await deps.api.get<Record<string, unknown>>(
@@ -94,14 +97,17 @@ async function repairAfterPost(
 interface ResolvedCandidate { run: SweepCandidate; check?: SupersessionCheck; historyBound?: string }
 
 /** Resolve the same eligible producer class and id/attempt order as the sweep, including live blockers. */
-async function newestCandidate(deps: ProducerDeps, headSha: string, context: string): Promise<ResolvedCandidate | undefined> {
+async function newestCandidate(
+  deps: ProducerDeps, headSha: string, context: string, posted?: ResolvedCandidate,
+): Promise<ResolvedCandidate | undefined> {
   const listing = await deps.api.get<Record<string, unknown>>(
     `${deps.apiRoot}/repos/${deps.repo}/actions/runs?per_page=100`, "the post-write producer listing",
   );
   if (!Array.isArray(listing?.workflow_runs)) throw new Error("the post-write producer listing returned no runs array");
   const contextPins = { [context]: deps.pinMap[context] };
-  const eligible: SweepCandidate[] = [];
-  const resolved = new Map<SweepCandidate, ResolvedCandidate>();
+  // Keep the just-posted producer in recency even if the listing omits it.
+  const eligible: SweepCandidate[] = posted === undefined ? [] : [posted.run];
+  const resolved = new Map<SweepCandidate, ResolvedCandidate>(posted === undefined ? [] : [[posted.run, posted]]);
   for (const candidate of selectSweepCandidates(listing.workflow_runs, contextPins, "", true)) {
     let entry: ResolvedCandidate = { run: candidate };
     if (candidate.workflowRun === true) {

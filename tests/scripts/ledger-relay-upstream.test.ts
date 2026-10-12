@@ -97,7 +97,14 @@ function harness(over: {
       return new Response(JSON.stringify({ token: "installation-token" }), { status: 201 });
     }
     if (url === `${API}/check-runs` && init?.method === "POST") {
-      posts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      posts.push(body);
+      const checkUrl = checksUrl(String(body.head_sha));
+      const snapshot = handlers[checkUrl];
+      const checks = (typeof snapshot === "function" ? snapshot() : snapshot) as { check_runs: Record<string, unknown>[] };
+      handlers[checkUrl] = { check_runs: [
+        ...checks.check_runs.filter((entry) => entry.name !== body.name), { ...body, app: { id: 5118623 } },
+      ] };
       return new Response(JSON.stringify({ id: posts.length }), { status: 201 });
     }
     if (!(url in handlers)) throw new Error(`unexpected fetch: ${url}`);
@@ -300,7 +307,7 @@ describe("workflow_run orphan sweep", () => {
     expect(result.sweep.examined).toBe(2);
     expect(h.posts).toHaveLength(1);
     expect(h.posts[0]?.head_sha).toBe(PR_SHA);
-    expect(h.requests.filter((url) => url === checksUrl(PR_SHA))).toHaveLength(1);
+    expect(h.requests.filter((url) => url === checksUrl(PR_SHA))).toHaveLength(2);
   });
 
   it("keeps distinct PR heads separate even when verify runs have the same own main SHA", async () => {
