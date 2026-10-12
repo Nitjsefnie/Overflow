@@ -34,7 +34,7 @@ jobs:
       && (contains(github.event.comment.body, '/claim')
           || contains(github.event.comment.body, '/unclaim')
           || contains(github.event.comment.body, '/release'))
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.nonexistent_property }}
     timeout-minutes: 5
 
     # Narrowest token: nothing reads the tree, so no checkout and no contents: read. Scoped to the
