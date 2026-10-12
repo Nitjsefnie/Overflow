@@ -25,7 +25,7 @@ type WorkflowStep = {
  * Issue 1090 split ci.yml, and the step with it, into two legs that both
  * produce `steps.detect-docs.outputs.docs_only` for their own file's gated
  * steps. The pull-request leg (ci-pr.yml, reachable only by
- * `pull_request_target`) runs the BASE checkout's copy with the materialised
+ * `workflow_run`) runs the BASE checkout's copy with the materialised
  * merge tree (PR_TREE) as its working directory and nothing else. The
  * push/dispatch leg (ci.yml) keeps the `before`-SHA and validated-dispatch-base
  * branches. Neither carries an event gate any more: each file's closed trigger
@@ -106,7 +106,7 @@ describe("the verify workflow's docs-only detection step", () => {
     // is the detached worktree at PR_TREE. The base copy of the script judges
     // it against its first parent; nothing is fetched or deepened here, and
     // there is no event arm to select, because the file receives nothing but
-    // pull_request_target.
+    // workflow_run.
     expect(run).toBe(
       'cd "${PR_TREE:?the pull request tree was not materialised}"\n' +
         'changed=$(node "${GITHUB_WORKSPACE}/scripts/docs-only.ts" HEAD^1)\n' +
@@ -134,7 +134,7 @@ describe("the verify workflow's docs-only detection step", () => {
     // And this leg must not carry the pull-request branch: it has no
     // materialise step, so PR_TREE would be an unset variable.
     expect(run).not.toContain("PR_TREE");
-    expect(run).not.toContain("pull_request_target");
+    expect(run).not.toContain("workflow_run");
   });
 
   it("hands the base to the docs-only CLI instead of piping a diff into it", () => {
@@ -189,7 +189,7 @@ describe("the verify workflow's docs-only detection step", () => {
      * way the runner would: a depth-1 checkout of `sha` fetched from the
      * origin, bash -e, and a GITHUB_OUTPUT file. `options.githubSha` overrides
      * the runner's GITHUB_SHA for events where it differs from the checked-out
-     * commit (pull_request_target points it at the base tip while the checkout
+     * commit (workflow_run points it at the base tip while the checkout
      * is the merge ref).
      */
     async function runStep(
@@ -206,9 +206,9 @@ describe("the verify workflow's docs-only detection step", () => {
       // The event picks the file, and therefore the run block: after issue
       // 1090's split the pull-request leg lives in ci-pr.yml and the push and
       // dispatch legs in ci.yml, and no single step answers both any more.
-      const leg = env.EVENT_NAME === "pull_request_target" ? prStep : pushStep;
+      const leg = env.EVENT_NAME === "workflow_run" ? prStep : pushStep;
       let prTree: Record<string, string> = {};
-      if (env.EVENT_NAME === "pull_request_target") {
+      if (env.EVENT_NAME === "workflow_run") {
         // The runner state the materialise step leaves: a full-history
         // checkout of the base tip, and the merge commit `sha` as a detached
         // worktree outside it.
@@ -309,7 +309,7 @@ describe("the verify workflow's docs-only detection step", () => {
       return merge;
     }
 
-    it("classifies a pull_request_target run's rename by its source path", async () => {
+    it("classifies a workflow_run run's rename by its source path", async () => {
       const origin = await upstream();
       const merge = await mergeRef(origin, async (repo) => {
         git(repo, "mv", "src/lib/format-signed.ts", "src/lib/format-signed.md");
@@ -319,7 +319,7 @@ describe("the verify workflow's docs-only detection step", () => {
       const result = await runStep(
         origin,
         merge,
-        { EVENT_NAME: "pull_request_target", PUSH_BEFORE: "", PR_NUMBER: "1" },
+        { EVENT_NAME: "workflow_run", PUSH_BEFORE: "", PR_NUMBER: "1" },
         // The real event's runner state: the checkout is the merge ref while
         // GITHUB_SHA points at the base tip (fix round 1, finding B).
         { githubSha: git(origin, "rev-parse", `${merge}^1`) },
@@ -328,7 +328,7 @@ describe("the verify workflow's docs-only detection step", () => {
       expect(result.output).toBe("docs_only=false\n");
     });
 
-    it("diffs a pull_request_target run against its first parent, with GITHUB_SHA at the base tip", async () => {
+    it("diffs a workflow_run run against its first parent, with GITHUB_SHA at the base tip", async () => {
       const origin = await upstream();
       const before = git(origin, "rev-parse", "HEAD");
       await commitFiles(origin, { "src/lib/format-signed.ts": "export const formatSigned = 1;\n" }, "code on main");
@@ -339,12 +339,12 @@ describe("the verify workflow's docs-only detection step", () => {
       const result = await runStep(
         origin,
         merge,
-        { EVENT_NAME: "pull_request_target", PUSH_BEFORE: before, PR_NUMBER: "1" },
+        { EVENT_NAME: "workflow_run", PUSH_BEFORE: before, PR_NUMBER: "1" },
         { githubSha: git(origin, "rev-parse", `${merge}^1`) },
       );
       expect(result.status, result.stderr).toBe(0);
       // The failing witness for finding B: docs_only=true must survive the
-      // pull_request_target branch when the runner state models the real
+      // workflow_run branch when the runner state models the real
       // event (base-tip GITHUB_SHA, merge-ref checkout).
       expect(result.output).toBe("docs_only=true\n");
     });

@@ -80,6 +80,13 @@ const PR_NEEDLES = [
 
 const ALLOWED_TRIGGERS = new Set(["pull_request_target"]);
 
+// workflow_run is admitted only for the API-bound, base-only verify producer.
+function admits(file: string, workflow: Workflow): boolean {
+  const keys = new Set(triggerKeys(workflow.on));
+  return (keys.size === ALLOWED_TRIGGERS.size && [...keys].every((key) => ALLOWED_TRIGGERS.has(key))) ||
+    (file === "ci-pr.yml" && keys.size === 1 && keys.has("workflow_run"));
+}
+
 const DEFERRED: Record<string, string> = {};
 
 /** The `on:` block's event names, whatever shape it is written in. */
@@ -276,11 +283,10 @@ describe("every job that reads pull-request data", () => {
     ).not.toEqual([]);
   });
 
-  it("lives in a workflow whose only trigger is pull_request_target", () => {
+  it("lives in a workflow whose only trigger is pull_request_target or the admitted ci-pr workflow_run", () => {
     const offenders = offences
       .filter((offence) => {
-        const keys = new Set(triggerKeys(workflows.get(offence.file)?.on));
-        return keys.size !== ALLOWED_TRIGGERS.size || [...keys].some((key) => !ALLOWED_TRIGGERS.has(key));
+        return !admits(offence.file, workflows.get(offence.file)!);
       })
       .map((offence) => verdict(offence, workflows.get(offence.file)!));
     expect(offenders.join("\n\n") || "(none)", offenders.length === 0 ? "(none)" : "").toBe("(none)");
@@ -579,5 +585,42 @@ describe("the workflows deferred to a later task of issue 1090", () => {
         "weight that exempts a workflow the rule would already pass. Remove the entry so the " +
         "suite judges the file.",
     ).toEqual([]);
+  });
+});
+
+
+describe("the narrowly admitted workflow_run PR-data class", () => {
+  const text = `on:
+  workflow_run:
+    workflows: [pr suite]
+    types: [completed]
+jobs:
+  verify:
+    steps:
+      - run: git fetch origin "$HEAD_SHA"
+        env:
+          HEAD_SHA: "\${{ github.event.workflow_run.head_sha }}"
+`;
+  it("admits ci-pr alone, and rejects the same PR-reading workflow under another path", () => {
+    const candidate = parse(text) as Workflow;
+    expect(judgeWorkflow("ci-pr.yml", candidate)).toHaveLength(1);
+    expect(admits("ci-pr.yml", candidate)).toBe(true);
+    expect(judgeWorkflow("other.yml", candidate)).toHaveLength(1);
+    expect(admits("other.yml", candidate)).toBe(false);
+  });
+  it("refuses a mixed trigger even on ci-pr", () => {
+    const candidate = parse(text) as Workflow;
+    expect(admits("ci-pr.yml", { ...candidate, on: { workflow_run: {}, push: {} } })).toBe(false);
+  });
+  it("keeps every ci-pr PR-data job on the default base checkout", () => {
+    const workflow = workflows.get("ci-pr.yml")!;
+    expect(judgeWorkflow("ci-pr.yml", workflow)).not.toEqual([]);
+    for (const offence of judgeWorkflow("ci-pr.yml", workflow)) {
+      const checkouts = workflow.jobs![offence.job]!.steps!.filter((step) => /actions\/checkout/.test(step.uses ?? ""));
+      expect(checkouts).toHaveLength(1);
+      // Security binding, not a copied action input: a PR ref or repository
+      // override would let the untrusted tree replace the judge.
+      expect(checkouts.some((step) => Object.hasOwn(step.with ?? {}, "ref") || Object.hasOwn(step.with ?? {}, "repository"))).toBe(false);
+    }
   });
 });

@@ -193,14 +193,14 @@ describe("the verify workflow's migration immutability step", () => {
     expect(migrationIndex).toBeGreaterThan(materialiseIndex);
   });
 
-  it("runs in a file whose only trigger is pull_request_target, so it needs no event gate", () => {
+  it("runs in a file whose only trigger is workflow_run, so it needs no event gate", () => {
     const [step] = migrationImmutability();
     expect(step, "the verify job must contain the Migration immutability step").toBeDefined();
     expect(
       Object.keys((triggers ?? {}) as Record<string, unknown>),
       "the merge-range gates read the pull request's merge commit, so the file holding them must " +
-        "be reachable by pull_request_target alone (issue 1090)",
-    ).toEqual(["pull_request_target"]);
+        "be reachable by workflow_run alone (issue 1090)",
+    ).toEqual(["workflow_run"]);
     expect(
       step?.if,
       "the step carries no event gate: its file's closed trigger set is the gate",
@@ -325,11 +325,11 @@ describe("the verify workflows' concurrency groups", () => {
     pr = await read(".github/workflows/ci-pr.yml");
   });
 
-  it("puts every pull request in one repository-level group, in the pull-request file", () => {
+  it("isolates each triggering suite head so stale completions cannot cancel a current head", () => {
     expect(
       pr.group,
-      "ci-pr.yml's concurrency group must be ci-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }} — one repository-level group for every pull request, whose keys must be parenthesised because && binds tighter than ||",
-    ).toBe("ci-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}");
+      "ci-pr.yml's concurrency group must be ci-pr-${{ github.event.workflow_run.head_sha }} — each triggering head has its own group",
+    ).toBe("ci-pr-${{ github.event.workflow_run.head_sha }}");
   });
 
   it("keys every push and dispatch leg on its own SHA, in the push file", () => {
@@ -445,7 +445,7 @@ describe("the required workflows' base-freshness step", () => {
           "receives nothing but pull_request_target. An added push or workflow_dispatch trigger " +
           "here would make the step run on main's own pushes, where github.event.pull_request.* " +
           "resolves to nothing.",
-      ).toEqual(["pull_request_target"]);
+      ).toEqual(label === "verify" ? ["workflow_run"] : ["pull_request_target"]);
       expect(
         step.if,
         `${label}: the step carries no event gate: its file's closed trigger set is the gate, and ` +
@@ -546,7 +546,12 @@ describe("the required workflows' base-freshness step", () => {
     expect(
       verifyStep.env,
       "Base freshness must take exactly these six inputs from these sources — a rewired BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source, and missing PR_NUMBER or HEAD_SHA leaves the script unable to fetch the PR's file list or to name the head on the certificate it issues",
-    ).toEqual(expectedEnv);
+    ).toEqual({ ...expectedEnv,
+      BASE_SHA: "${{ steps.pr.outputs.base_sha }}",
+      BASE_REF: "${{ steps.pr.outputs.base_ref }}",
+      PR_NUMBER: "${{ steps.pr.outputs.pr_number }}",
+      HEAD_SHA: "${{ steps.pr.outputs.head_sha }}",
+    });
     expect(
       actionlintStep.env,
       "Base freshness must take exactly these six inputs from these sources — a rewired BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source, and missing PR_NUMBER or HEAD_SHA leaves the script unable to fetch the PR's file list or to name the head on the certificate it issues",
@@ -695,9 +700,8 @@ describe("the verify workflows' untrusted-code boundary", () => {
     ).toEqual(["verify"]);
     expect(
       prWorkflow.jobs?.verify?.permissions,
-      "verify may add exactly actions: read — to read the pull request suite's runs and " +
-        "artifact — and nothing that writes",
-    ).toEqual({ contents: "read", actions: "read" });
+      "verify adds actions: read for the suite and artifact, pull-requests: read for binding, and no write grant",
+    ).toEqual({ contents: "read", actions: "read", "pull-requests": "read" });
   });
 });
 
@@ -730,14 +734,18 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
     expect(pushSteps.filter((step) => step.name === markerName)).toHaveLength(1);
   });
 
-  it("checks markers immediately after the checkout and the merge tree, before setup-node", () => {
+  it("sets up Node before resolving the PR, then materialises and immediately checks markers", () => {
     const checkouts = steps.flatMap((step, index) =>
       step.uses?.startsWith("actions/checkout@") ? [index] : [],
     );
     const materialiseIndex = steps.findIndex((step) => (step.run ?? "").includes("git worktree add"));
+    const resolverIndex = steps.findIndex((step) => (step.run ?? "").includes("/scripts/resolve-suite-pull-request.ts"));
+    const nodeIndex = steps.findIndex((step) => step.uses?.startsWith("actions/setup-node@"));
     const markerIndex = steps.findIndex((step) => step.name === markerName);
     expect(checkouts).toHaveLength(1);
-    expect(materialiseIndex).toBe(checkouts[0] + 1);
+    expect(nodeIndex).toBe(checkouts[0]! + 1);
+    expect(resolverIndex).toBe(nodeIndex + 1);
+    expect(materialiseIndex).toBe(resolverIndex + 1);
     expect(markerIndex).toBeGreaterThan(-1);
     expect(markerIndex).toBe(materialiseIndex + 1);
   });
