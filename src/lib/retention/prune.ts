@@ -35,8 +35,9 @@ export interface RetentionPruneResult {
  * only through its run's expiry, never by its own age.
  *
  * Idempotent: a second pass on unchanged data deletes nothing. Every delete
- * is bounded, and each arm drains its backlog before proceeding. Each run
- * batch locks one fixed set of expired runs and deletes their changes first
+ * is bounded, and each arm drains its backlog before proceeding. Receipt and
+ * run cursors advance across batches, and child scans advance with server
+ * cursors. Each run batch locks one fixed set of expired runs and deletes their changes first
  * in the same transaction, so a boundary crossing cannot split membership
  * and a failed run delete rolls back that batch's change deletions.
  */
@@ -48,78 +49,80 @@ export async function pruneExpiredMaintenanceRows(sql: SqlClient): Promise<Reten
 
   // Receipt dedup reads only PROCESSED rows; a pruned late redelivery
   // reprocesses safely because reconciliation is idempotent from the forge.
-  for (;;) {
-    const deleted = await sql`
-      delete from webhook_deliveries where id in (
-        select id from webhook_deliveries
-        where processing_state = 'PROCESSED'
-          and processed_at < now() - ${RECEIPT_PROCESSED_RETENTION_DAYS} * interval '1 day'
-        order by id limit ${RETENTION_PRUNE_BATCH_SIZE} for update
-      )
-    `;
-    result.processedReceipts += deleted.count;
-    if (deleted.count === 0) break;
-  }
+  result.processedReceipts = await pruneReceipts(sql, "PROCESSED", RECEIPT_PROCESSED_RETENTION_DAYS);
+  result.failedReceipts = await pruneReceipts(sql, "FAILED", RECEIPT_FAILED_RETENTION_DAYS);
+  result.abandonedPendingReceipts = await pruneReceipts(sql, "PENDING", RECEIPT_PENDING_RETENTION_DAYS);
 
-  for (;;) {
-    const deleted = await sql`
-      delete from webhook_deliveries where id in (
-        select id from webhook_deliveries
-        where processing_state = 'FAILED'
-          and processed_at < now() - ${RECEIPT_FAILED_RETENTION_DAYS} * interval '1 day'
-        order by id limit ${RETENTION_PRUNE_BATCH_SIZE} for update
-      )
-    `;
-    result.failedReceipts += deleted.count;
-    if (deleted.count === 0) break;
-  }
-
-  // A live lease always protects a PENDING receipt, regardless of its age.
-  for (;;) {
-    const deleted = await sql`
-      delete from webhook_deliveries where id in (
-        select id from webhook_deliveries
-        where processing_state = 'PENDING'
-          and received_at < now() - ${RECEIPT_PENDING_RETENTION_DAYS} * interval '1 day'
-          and coalesce(lease_expires_at, received_at) < now()
-        order by id limit ${RETENTION_PRUNE_BATCH_SIZE} for update
-      )
-    `;
-    result.abandonedPendingReceipts += deleted.count;
-    if (deleted.count === 0) break;
-  }
-
+  // Advance past each fixed run set rather than rescanning retained prefixes.
+  let runCursor: string | undefined;
   for (;;) {
     const batch = await sql.begin(async (tx) => {
       const runs = await tx<{ id: string }[]>`
         select id from reconciliation_runs
         where status in ('COMPLETED', 'FAILED')
           and completed_at < now() - ${RUN_TERMINAL_RETENTION_DAYS} * interval '1 day'
+          ${runCursor === undefined ? tx`` : tx`and id > ${runCursor}`}
         order by id limit ${RETENTION_PRUNE_BATCH_SIZE} for update
       `;
-      if (runs.length === 0) return { runs: 0, changes: 0 };
+      if (runs.length === 0) return { runs: 0, changes: 0, lastId: undefined };
       const ids = runs.map((run) => run.id);
       let changes = 0;
-      // A single run can have more changes than the batch bound. Delete only
-      // this fixed run set's changes, in bounded statements, before its runs.
-      for (;;) {
-        const deleted = await tx`
-          delete from reconciliation_changes where id in (
-            select id from reconciliation_changes
-            where reconciliation_run_id in ${tx(ids)}
-            order by id limit ${RETENTION_PRUNE_BATCH_SIZE}
-          )
-        `;
-        changes += deleted.count;
-        if (deleted.count === 0) break;
+      // Each cursor advances its actual scan, even for a large run whose
+      // children make a sequential scan cheaper than the FK index. Fetching
+      // bounded IDs avoids restarting a scan over retained or deleted tuples.
+      for (const run of runs) {
+        await tx`declare retention_changes_cursor no scroll cursor for
+          select id from reconciliation_changes where reconciliation_run_id = ${run.id}`;
+        for (;;) {
+          // FETCH's count grammar accepts an integer literal, not a parameter.
+          const rows = await tx.unsafe<{ id: string }[]>(
+            `fetch forward ${RETENTION_PRUNE_BATCH_SIZE} from retention_changes_cursor`,
+          );
+          if (rows.length === 0) break;
+          const deleted = await tx`delete from reconciliation_changes
+            where reconciliation_run_id = ${run.id} and id in ${tx(rows.map((row) => row.id))}`;
+          changes += deleted.count;
+        }
+        await tx`close retention_changes_cursor`;
       }
       const deleted = await tx`delete from reconciliation_runs where id in ${tx(ids)}`;
-      return { runs: deleted.count, changes };
+      return { runs: deleted.count, changes, lastId: runs.at(-1)!.id };
     });
     result.expiredRuns += batch.runs;
     result.changesOfExpiredRuns += batch.changes;
     if (batch.runs === 0) break;
+    runCursor = batch.lastId;
   }
 
   return result;
+}
+
+/** One bounded cursor pass per state, with receipt claim guards held under row locks. */
+async function pruneReceipts(
+  sql: SqlClient,
+  state: "PROCESSED" | "FAILED" | "PENDING",
+  retentionDays: number,
+): Promise<number> {
+  let cursor: string | undefined;
+  let count = 0;
+  for (;;) {
+    const batch = await sql.begin(async (tx) => {
+      const age = state === "PENDING"
+        ? tx`received_at < now() - ${retentionDays} * interval '1 day'
+            and coalesce(lease_expires_at, received_at) < now()`
+        : tx`processed_at < now() - ${retentionDays} * interval '1 day'`;
+      const receipts = await tx<{ id: string }[]>`
+        select id from webhook_deliveries
+        where processing_state = ${state}::webhook_processing_state and ${age}
+          ${cursor === undefined ? tx`` : tx`and id > ${cursor}`}
+        order by id limit ${RETENTION_PRUNE_BATCH_SIZE} for update
+      `;
+      if (receipts.length === 0) return { count: 0, lastId: undefined };
+      const deleted = await tx`delete from webhook_deliveries where id in ${tx(receipts.map((row) => row.id))}`;
+      return { count: deleted.count, lastId: receipts.at(-1)!.id };
+    });
+    count += batch.count;
+    if (batch.count === 0) return count;
+    cursor = batch.lastId;
+  }
 }
