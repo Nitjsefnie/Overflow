@@ -244,8 +244,8 @@ const LIVE_RUN_STATUSES = new Set(["queued", "in_progress", "pending", "waiting"
 /** Heal only newest producers, preserving the cheap guards and query order. */
 async function healCandidate(deps: SweepDeps, run: SweepCandidate, jobsBody?: Record<string, unknown>): Promise<boolean> {
   if (run.conclusion !== "cancelled" || !isHealableEvent(run.event ?? "")) return false;
-  // As on the original heal path, require the workflow credential before the
-  // cap and queries, but never for a non-cancelled or non-healable producer.
+  // Require the workflow credential before the cap and queries, but never for
+  // a non-cancelled or non-healable producer.
   const token = deps.rerunToken ?? "";
   if (token === "") throw new Error("RELAY_RERUN_TOKEN is required");
   if (run.runAttempt >= RERUN_ATTEMPT_CAP) return false;
