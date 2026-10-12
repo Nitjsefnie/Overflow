@@ -425,6 +425,15 @@ describe("the pull request suite workflow", () => {
     expect((step as { "continue-on-error"?: unknown })["continue-on-error"]).toBeFalsy();
   });
 
+  it("runs page geometry unconditionally and propagates its failure", () => {
+    const checks = suite.steps.filter((step) => step.name === "Page geometry check");
+    expect(checks).toHaveLength(1);
+    const step = checks[0]!;
+    expect(step.run).toBe("node scripts/check-page-geometry.mjs");
+    expect(step.if).toBeUndefined();
+    expect((step as { "continue-on-error"?: unknown })["continue-on-error"]).toBeFalsy();
+  });
+
   it("runs every code check verify ran for a pull request, in order", () => {
     const order = [
       "corepack install --global pnpm@",

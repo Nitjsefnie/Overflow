@@ -186,6 +186,7 @@ pnpm lint
 node scripts/check-module-size.ts
 pnpm typecheck
 pnpm build
+node scripts/check-prerendered-routes.ts
 node scripts/check-page-geometry.mjs
 node scripts/check-perf-budget.ts
 ```

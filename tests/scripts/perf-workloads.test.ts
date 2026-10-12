@@ -19,7 +19,6 @@ beforeAll(async () => {
   const password = randomBytes(24).toString("hex");
   const options = { database: "overflow_ci", user: "perf_test" };
   const built = new GenericContainer(POSTGRES_IMAGE)
-    .withName(`overflow-1144-perf-test-${randomBytes(4).toString("hex")}`)
     .withEnvironment({ POSTGRES_DB: options.database, POSTGRES_USER: options.user, POSTGRES_PASSWORD: password })
     .withExposedPorts(5432)
     .withWaitStrategy(postgresWaitStrategy(options));
