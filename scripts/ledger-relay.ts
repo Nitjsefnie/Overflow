@@ -46,9 +46,10 @@ import { pathToFileURL } from "node:url";
 import {
   renderSweepLines,
   sweepOrphans,
-  type SweepApi,
   type SweepOutcome,
 } from "./ledger-relay-sweep.ts";
+import { API_ROOT, API_HEADERS, RUN_DEADLINE_MS, apiCall, sweepApi, assertRunDeadline,
+  type RelayHttpOptions } from "./ledger-relay-http.ts";
 import { publishProducerContexts } from "./ledger-relay-publication.ts";
 import { type SweepCandidate } from "./ledger-relay-producers.ts";
 import { LEDGER_APP_MINT_PERMISSIONS } from "./ledger-app-mint-permissions.ts";
@@ -105,21 +106,6 @@ import {
 
 export type { TriggeringRun };
 
-const API_ROOT = "https://api.github.com";
-// On every call: the media type GitHub's REST documentation names and the
-// api-version header, so a response-shape change fails loudly instead of
-// parsing wrongly.
-const API_HEADERS = {
-  accept: "application/vnd.github+json",
-  "x-github-api-version": "2022-11-28",
-  "cache-control": "no-cache",
-};
-// Bounded retry: three attempts total, 1s then 2s between them. Only
-// plausibly transient failures retry — a network error, a 5xx, a 429; any
-// other 4xx fails immediately, because it will not heal within this job's
-// lifetime.
-const BACKOFF_MS = [1_000, 2_000];
-
 /**
  * The App JWT: RS256 over base64url(header).base64url(payload), signed with
  * the App's private key. iat is backed up a minute and exp held under ten
@@ -138,13 +124,13 @@ function encodeSegment(value: string): string {
   return Buffer.from(value, "utf8").toString("base64url");
 }
 
-export interface RelayDeps {
+export interface RelayDeps extends RelayHttpOptions {
   env: Record<string, string | undefined>;
-  fetchFn: typeof fetch;
-  delayFn: (ms: number) => Promise<void>;
   /** Defaults to reading and validating .github/required-checks.json from the working directory. */
   readPinMap?: () => Promise<PinMap>;
 }
+
+type RunDeps = RelayDeps & { deadlineMs: number };
 
 export interface RelayResult {
   /** Superseded workflow_run certification is an exit-0 no-op, never a POST. */
@@ -185,7 +171,9 @@ const NO_SWEEP: SweepOutcome = Object.freeze({ examined: 0, relayed: Object.free
  * pinned context. Throws on any failure; main() turns a throw into a nonzero
  * exit.
  */
-export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
+export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
+  const nowFn = inputDeps.nowFn ?? Date.now;
+  const deps: RunDeps = { ...inputDeps, nowFn, deadlineMs: nowFn() + RUN_DEADLINE_MS };
   const { env } = deps;
   const appId = required(env, "LEDGER_APP_ID");
   const installationId = required(env, "LEDGER_INSTALLATION_ID");
@@ -200,7 +188,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   const [, repoName] = repo.split("/");
   const token = await mintInstallationToken(deps, appId, appKey, installationId, repoName);
   const auth = { authorization: `Bearer ${token}` };
-  const api = sweepApi(deps, repo, auth);
+  const api = sweepApi(deps, repo, appId, auth);
   let triggerRunId = "";
   let attestationRun: SweepCandidate | undefined;
   let triggerJobs: Record<string, unknown> | undefined;
@@ -285,6 +273,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
         }, `the rerun of run ${id}`),
       });
       result.rerunDispatched = (result.sweep.rerunDispatched?.length ?? 0) > 0;
+      assertRunDeadline(deps, "completion of the relay run");
     } catch (sweepError) {
       if (!failed) throw sweepError;
       const message = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -301,7 +290,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
  * sweep-only start (issue 1116) mints the same credential for the same reason.
  */
 async function mintInstallationToken(
-  deps: RelayDeps,
+  deps: RunDeps,
   appId: string,
   appKey: string,
   installationId: string,
@@ -329,35 +318,12 @@ async function mintInstallationToken(
 }
 
 /**
- * The sweep's HTTP, over the relay's own bounded-retry call under the App
- * installation token minted above, so it inherits the backoff, the API headers
- * and the red-on-failure direction rather than needing its own.
- */
-function sweepApi(deps: RelayDeps, repo: string, auth: Record<string, string>): SweepApi {
-  const headers = { ...API_HEADERS, ...auth };
-  return {
-    get: <T,>(url: string, what: string, retryTransient = true) => apiCall<T>(deps, { url, method: "GET", headers }, what, retryTransient),
-    postCheckRun: (body, what) =>
-      apiCall<unknown>(
-        deps,
-        {
-          url: `${API_ROOT}/repos/${repo}/check-runs`,
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-        },
-        what,
-      ),
-  };
-}
-
-/**
  * Condition (d): the open PRs whose tips match the run's head SHA. The
  * commit's associated PRs are filtered client-side; a superseded PR does not
  * match.
  */
 async function findOpenPullRequestsAtHead(
-  deps: RelayDeps,
+  deps: RunDeps,
   repo: string,
   headSha: string,
   auth: Record<string, string>,
@@ -372,61 +338,6 @@ async function findOpenPullRequestsAtHead(
     `the pull requests associated with commit ${headSha}`,
   );
   return openPullRequestsAtHead(body, headSha);
-}
-
-interface ApiRequest {
-  url: string;
-  method: "GET" | "POST";
-  headers: Record<string, string>;
-  body?: string;
-}
-
-/**
- * One GitHub API call with the bounded retry. A network error, a 5xx or a 429
- * retries through the backoff; any other non-2xx fails at once. The error
- * messages carry the endpoint, the status and GitHub's message — never a
- * header, so no key or token can reach the log.
- */
-async function apiCall<T>(deps: RelayDeps, request: ApiRequest, what: string, retryTransient = true): Promise<T> {
-  let lastMessage = "";
-  const retryCount = retryTransient ? BACKOFF_MS.length : 0;
-  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
-    if (attempt > 0) {
-      await deps.delayFn(BACKOFF_MS[attempt - 1] ?? 0);
-    }
-    let response: Response;
-    try {
-      response = await deps.fetchFn(request.url, {
-        method: request.method,
-        headers: request.headers,
-        ...(request.body === undefined ? {} : { body: request.body }),
-      });
-    } catch (error) {
-      lastMessage = error instanceof Error ? error.message : String(error);
-      continue;
-    }
-    const text = await response.text();
-    if (response.ok) {
-      // The rerun endpoint (issue 861) answers 202 with an empty body; an
-      // empty success body parses as no data rather than a shape failure.
-      if (text === "") return undefined as T;
-      try {
-        return JSON.parse(text) as T;
-      } catch {
-        throw new Error(`${what} returned a body that is not JSON`);
-      }
-    }
-    lastMessage = `HTTP ${response.status}: ${truncate(text)}`;
-    if (response.status < 500 && response.status !== 429) {
-      throw new Error(`${what} failed: ${lastMessage}`);
-    }
-  }
-  throw new Error(`${what} failed after ${retryCount + 1} attempts: ${lastMessage}`);
-}
-
-function truncate(text: string): string {
-  const trimmed = text.trim();
-  return trimmed.length <= 300 ? trimmed : `${trimmed.slice(0, 300)}…`;
 }
 
 /**
@@ -444,7 +355,7 @@ function truncate(text: string): string {
  * or any read failure throws (fail closed).
  */
 async function refuseUntrustedProducer(
-  deps: RelayDeps,
+  deps: RunDeps,
   repo: string,
   run: TriggeringRun,
   auth: Record<string, string>,
