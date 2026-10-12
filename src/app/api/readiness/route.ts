@@ -13,13 +13,12 @@ import { describeErrorCause } from "@/lib/repositories/register";
  *   not ready too: the probe query is raced onto a
  *   READINESS_QUERY_TIMEOUT_MS budget, so a database that accepts the
  *   connection and never answers still fails the probe in time.
- * - The probe reads the applied migration names out of `schema_migrations`
+ * - The probe reads applied names and compatibility flags from `schema_migrations`
  *   and answers 200 only when every migration this build bundles is recorded
  *   applied (issue 692). A schema behind the build — an empty ledger, or one
- *   missing a migration this build carries — is not ready. A schema AHEAD of
- *   the build is ready: it holds every name this build needs plus rows from
- *   a newer migration set, which is exactly the state a rollback to an older
- *   release runs against, so the check is one-sided on purpose.
+ *   missing a migration this build carries — is not ready. An ahead schema
+ *   is ready only when no extra migration is flagged for mixed-version review:
+ *   a flagged migration may break this older build's reads or writes.
  * - Beneath the per-query timeout sits a structural hard cap
  *   (READINESS_HARD_CAP_MS) raced against the probe, so even a probe that
  *   never settles cannot hold a response open past the cap. The race's loser
@@ -80,16 +79,16 @@ export type ReadinessRouteDependencies = {
 };
 
 /**
- * The real probe: read the applied migration names and refuse a schema this
- * build is ahead of.
+ * The real probe: refuse a schema behind this build or past a flagged migration
+ * this build does not bundle.
  *
- * Readiness is one-sided (issue 692): ready iff every migration the bundled
- * manifest names is recorded applied. A missing table or a failed query
+ * The behind-schema check is one-sided (issue 692): every migration the bundled
+ * manifest names must be recorded applied. A missing table or a failed query
  * rejects, landing in the existing error mapping as 503; an empty
  * `schema_migrations` is behind, and answers 503 through the same predicate.
- * An ahead schema carries the bundled names plus rows this build does not
- * know, and stays ready — the state a rollback to an older release runs
- * against.
+ * Extra applied names are accepted only when their recorded compatibility flag
+ * is false. Reading each ledger row as JSON tolerates older ledgers without the
+ * flag column in the same query: their absent flag defaults to false.
  *
  * The 2000 ms budget is raced onto the query by hand: the pinned postgres
  * client (3.4.9, the `_patch_hash` build) exposes no per-query `.timeout()`,
@@ -101,15 +100,27 @@ export type ReadinessRouteDependencies = {
 async function probeDatabase(): Promise<ReadinessProbeOutcome> {
   const sql = getSql();
   const appliedRows = await raceTimeout(
-    sql<{ name: string }[]>`select name from schema_migrations`,
+    sql<{ name: string; review: boolean }[]>`
+      select name, coalesce((to_jsonb(m) ->> 'mixed_version_review')::boolean, false) as review
+      from schema_migrations m order by name
+    `,
     READINESS_QUERY_TIMEOUT_MS,
   );
   const missing = missingMigrations(appliedRows.map((row) => row.name));
-  return missing.length === 0
+  if (missing.length > 0) {
+    return {
+      status: "unavailable",
+      reason: `database: schema is behind the build; missing migrations: ${missing.join(", ")}`,
+    };
+  }
+  const incompatible = appliedRows
+    .filter((row) => row.review && !bundledMigrationNames.includes(row.name))
+    .map((row) => row.name);
+  return incompatible.length === 0
     ? { status: "ready" }
     : {
         status: "unavailable",
-        reason: `database: schema is behind the build; missing migrations: ${missing.join(", ")}`,
+        reason: `database: schema has moved past migrations this build predates and cannot run against: ${incompatible.join(", ")}`,
       };
 }
 

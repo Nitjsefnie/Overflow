@@ -110,6 +110,39 @@ describe("scripts/deploy-revision.sh", () => {
     expect(atSmoke, "the smoke runs after readiness").toBeGreaterThan(atReadiness);
   });
 
+  it("completes when old-release readiness is 503 until restart, probing only after switch and restart", async () => {
+    const fixture = await makeFixture();
+    const restarted = path.join(fixture.dir, "restarted");
+    await writeFile(path.join(fixture.bins, "systemctl"), shimBody("systemctl", [], `
+if [ "$1" = restart ]; then touch "${restarted}"; fi
+exit 0
+`));
+    await writeFile(path.join(fixture.bins, "curl"), shimBody("curl", [], `
+if [ "\${!#}" = "${fixture.url}" ] && [ ! -f "${restarted}" ]; then
+  printf '503\\n'
+  exit 22
+fi
+printf '200\\n'
+exit 0
+`));
+    await chmod(path.join(fixture.bins, "curl"), 0o755);
+    await chmod(path.join(fixture.bins, "systemctl"), 0o755);
+
+    const result = await runDeploy(fixture, {}, { omitShims: ["curl", "systemctl"] });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    const entries = await readLog(fixture.shimLog);
+    const switchAt = entries.findIndex((entry) => entry.cmd === "pnpm" && entry.args[0] === "release:switch");
+    const restartAt = entries.findIndex((entry) => entry.cmd === "systemctl" && entry.args[0] === "restart");
+    const readinessProbes = entries.flatMap((entry, index) =>
+      entry.cmd === "curl" && entry.args.at(-1) === fixture.url ? [index] : [],
+    );
+    expect(switchAt).toBeGreaterThan(-1);
+    expect(restartAt).toBeGreaterThan(switchAt);
+    expect(readinessProbes.length).toBeGreaterThan(0);
+    for (const index of readinessProbes) expect(index).toBeGreaterThan(restartAt);
+  });
+
   it("refuses at the fence without invoking git, pnpm or node when the lock is taken", async () => {
     const fixture = await makeFixture();
     const result = await runDeploy(fixture, { FLOCK_STATUS: "1" });

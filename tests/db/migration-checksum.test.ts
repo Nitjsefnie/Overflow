@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -127,6 +129,84 @@ describe("migration checksums", () => {
     });
   });
 });
+
+describe("recorded migration compatibility", () => {
+  const cases = [
+    { name: "drop_column", ddl: "alter table items drop column note;", review: true },
+    { name: "drop_table", ddl: "drop table items;", review: true },
+    { name: "rename", ddl: "alter table items rename column note to memo;", review: true },
+    { name: "type", ddl: "alter table items alter column note type varchar(50);", review: true },
+    { name: "optional_column_type", ddl: "alter table items alter note type varchar(50);", review: true },
+    { name: "set_data_type", ddl: "alter table items alter note set data type varchar(50);", review: true },
+    { name: "set_not_null", ddl: "alter table items alter column note set not null;", review: true },
+    { name: "add_not_null", ddl: "alter table items add column required text not null;", review: true },
+    { name: "safe", ddl: "-- overflow: mixed-version safe: retained releases stopped using note\nalter table items drop column note;", review: false },
+    { name: "empty_safe", ddl: "-- overflow: mixed-version safe:\nalter table items drop column note;", review: true },
+    { name: "review_beats_safe", ddl: "-- overflow: mixed-version safe: retained releases stopped using note\n-- overflow: mixed-version review\nalter table items drop column note;", review: true },
+    { name: "additive", ddl: "alter table items add column extra text;", review: false },
+    { name: "default", ddl: "alter table items add column required text not null default '';", review: false },
+    { name: "line_comment", ddl: "-- alter table items drop column note;\nselect 1;", review: false },
+    { name: "block_comment", ddl: "/* drop table items; alter table items set not null; */ select 1;", review: false },
+  ];
+
+  it.each(cases)("records $name from a real migration file", async ({ name, ddl, review }) => {
+    await onNewDatabase(`compat_${name}`, async (sql) => {
+      const directory = await fixtureDirectory("001_compat.sql", `create table items (note text);\n${ddl}`);
+      await runMigrations({ directory });
+
+      const rows = await sql<{ name: string; mixed_version_review: boolean }[]>`
+        select name, mixed_version_review from schema_migrations order by name
+      `;
+      expect(rows).toEqual([{ name: "001_compat.sql", mixed_version_review: review }]);
+      await expect(runMigrations({ directory })).resolves.toEqual([]);
+    });
+  });
+
+  it("upgrades an old ledger without reclassifying an already-applied dangerous migration", async () => {
+    await onNewDatabase("compat_legacy", async (sql) => {
+      const contents = "create table items (note text); drop table items;";
+      const directory = await fixtureDirectory("001_legacy.sql", contents);
+      await sql.unsafe(contents);
+      await sql`create table schema_migrations (name text primary key, applied_at timestamptz not null default now())`;
+      await sql`insert into schema_migrations (name) values ('001_legacy.sql')`;
+
+      await expect(runMigrations({ directory })).resolves.toEqual([]);
+
+      const rows = await sql<{ checksum: string; mixed_version_review: boolean }[]>`
+        select checksum, mixed_version_review from schema_migrations
+      `;
+      expect(rows).toEqual([{ checksum: checksumContents(contents), mixed_version_review: false }]);
+    });
+  });
+
+  it("rolls back migration DDL when recording its verdict fails", async () => {
+    await onNewDatabase("compat_atomic", async (sql) => {
+      const directory = await fixtureDirectory("001_setup.sql", "create table items (note text);");
+      await runMigrations({ directory });
+      await sql.unsafe(`
+        create function refuse_flag() returns trigger language plpgsql as $$
+        begin
+          if new.mixed_version_review then raise exception 'fixture refuses flagged row'; end if;
+          return new;
+        end $$;
+        create trigger refuse_flag before insert on schema_migrations
+          for each row execute function refuse_flag();
+      `);
+      await writeFile(path.join(directory, "002_drop.sql"), "alter table items drop column note;");
+
+      await expect(runMigrations({ directory })).rejects.toThrow("fixture refuses flagged row");
+
+      await expect(appliedMigrationNames(sql)).resolves.toEqual(["001_setup.sql"]);
+      await expect(sql`select note from items`).resolves.toEqual([]);
+    });
+  });
+});
+
+async function fixtureDirectory(name: string, contents: string): Promise<string> {
+  const directory = await mkdtemp(path.join(tmpdir(), "overflow-1055-migration-"));
+  await writeFile(path.join(directory, name), contents);
+  return directory;
+}
 
 function checksumFor(migrationName: string): string {
   return checksumContents(readFileSync(path.join(migrationsDirectory, migrationName), "utf8"));
