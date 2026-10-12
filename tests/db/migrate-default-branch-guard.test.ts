@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertMigrationsOnDefaultBranch,
   listDefaultBranchMigrationNames,
@@ -224,7 +224,7 @@ describe("the CLI against a real database", () => {
     return privateWorktreeRoot;
   }
 
-  beforeAll(async () => {
+  beforeEach(async () => {
     const started = await startPostgresContainer({
       database: "migrate_guard",
       user: "migrate_guard",
@@ -270,7 +270,7 @@ describe("the CLI against a real database", () => {
     );
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     if (privateWorktreeRoot !== undefined) {
       // Proper removal first, tolerating its failure so the fallbacks still run: the raw delete
       // keeps a crashed add from stranding the directory, and the prune keeps a half-removed
@@ -354,6 +354,8 @@ describe("the CLI against a real database", () => {
   });
 
   it("runs clean once the tree carries nothing foreign", async () => {
+    const applied = runCli("skip");
+    expect(applied.status, applied.stderr).toBe(0);
     rmSync(path.join(worktreeRoot(), "db/migrations", fakeMigrationName), { force: true });
 
     const clean = runCli(undefined);
