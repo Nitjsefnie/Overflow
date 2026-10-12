@@ -82,11 +82,6 @@ function drainFailureLines(logged: ConsoleCapture): unknown[][] {
   return logged.mock.calls.filter((call) => call[0] === DRAIN_FAILURE_MESSAGE);
 }
 
-/** The captured calls announcing a drain-site recovery. */
-function recoveryLines(logged: ConsoleCapture): unknown[][] {
-  return logged.mock.calls.filter((call) => String(call[0]).startsWith("recovered: reconciliation-drain"));
-}
-
 describe("the reconciliation worker's drain failure logging during a database outage", () => {
   const databaseUrlOriginal = process.env.DATABASE_URL;
   let started: StartedPostgres;
@@ -143,6 +138,7 @@ describe("the reconciliation worker's drain failure logging during a database ou
     vi.stubEnv("NEXT_PHASE", "");
     vi.stubEnv("OVERFLOW_DISABLE_RECONCILIATION_SWEEP", "");
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
     try {
       const { register } = await import("@/instrumentation");
       await register();
@@ -172,21 +168,21 @@ describe("the reconciliation worker's drain failure logging during a database ou
       expect(drainFailureLines(logged)[0]![1]).toBeInstanceOf(Error);
 
       // The database returns; the next poll that gets through is the recovery.
+      const errorsBeforeRecovery = logged.mock.calls.length;
       await exec("docker", ["start", started.container.getId()]);
       await waitForDatabaseAnswers(databaseUrl);
-      await waitFor(() => recoveryLines(logged).length >= 1, "the recovery line to be logged");
-
-      const recovery = String(recoveryLines(logged)[0]![0]);
-      const match = /^recovered: reconciliation-drain after (\d+) failures over (\d+) s$/.exec(recovery);
-      expect(match).not.toBeNull();
-      // At minimum the first failure plus the two further polls.
-      expect(Number(match![1])).toBeGreaterThanOrEqual(3);
-      expect(Number(match![2])).toBeGreaterThanOrEqual(5);
-      // The bound held to the end: still one full trace for the whole outage.
+      await waitFor(
+        () => info.mock.calls.length >= 1 || logged.mock.calls.length > errorsBeforeRecovery,
+        "the recovery line to be logged",
+      );
+      expect(info.mock.calls).toEqual([[expect.any(String)]]);
+      // Recovery never adds an error call; the outage's only error is its full detail.
+      expect(logged).toHaveBeenCalledTimes(errorsBeforeRecovery);
       expect(drainFailureLines(logged)).toHaveLength(1);
     } finally {
       vi.unstubAllEnvs();
       logged.mockRestore();
+      info.mockRestore();
     }
   });
 });

@@ -117,6 +117,47 @@ afterEach(() => {
 afterAll(() => { vi.resetModules(); });
 
 describe("server instrumentation", () => {
+  it("carries routine drain counts into the next state change on the info sink", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv("NEXT_PHASE", "");
+    vi.stubEnv("OVERFLOW_DISABLE_RECONCILIATION_SWEEP", "");
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { register } = await import("@/instrumentation");
+    await register();
+    const schedule = startWorker.mock.calls[0]![0] as ReconciliationWorkerSchedule;
+    drain.mockResolvedValueOnce(["DEFERRED", "IDLE", "DEFERRED"]);
+    await expect(schedule.drain()).resolves.toEqual(["DEFERRED", "IDLE", "DEFERRED"]);
+    expect(info).not.toHaveBeenCalled();
+    drain.mockResolvedValueOnce(["FAILED", "RETRY_SCHEDULED", "DEFERRED"]);
+    await schedule.drain();
+    expect(info.mock.calls).toEqual([
+      ["Reconciliation drain", { DEFERRED: 3, IDLE: 1, FAILED: 1, RETRY_SCHEDULED: 1 }],
+    ]);
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("routes a drain failure to error and its recovery to info", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv("NEXT_PHASE", "");
+    vi.stubEnv("OVERFLOW_DISABLE_RECONCILIATION_SWEEP", "");
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { register } = await import("@/instrumentation");
+    await register();
+    const schedule = startWorker.mock.calls[0]![0] as ReconciliationWorkerSchedule;
+    const failure = new Error("unavailable");
+    await schedule.onFailure!(failure);
+    expect(error.mock.calls).toEqual([[expect.any(String), failure]]);
+    expect(info).not.toHaveBeenCalled();
+    drain.mockResolvedValueOnce([]);
+    await schedule.drain();
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(info.mock.calls).toEqual([[expect.any(String)]]);
+  });
+
   it("installs journal levels on nodejs even when background work is disabled", async () => {
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
     vi.stubEnv("JOURNAL_STREAM", "test-journal-stream");

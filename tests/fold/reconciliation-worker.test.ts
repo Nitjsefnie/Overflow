@@ -821,6 +821,7 @@ describe("reconciliation lease heartbeat", () => {
     };
     const rejections = captureUnhandledRejections();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const recovered = vi.spyOn(console, "info").mockImplementation(() => {});
     const running = runNextReconciliationJob({ store, reconcile: () => fold.promise, ...timer.dependencies });
     try {
       await timer.armed;
@@ -831,11 +832,10 @@ describe("reconciliation lease heartbeat", () => {
       expect(rejections.seen).toEqual([]);
       // The rejected renewal prints the site's full line; the renewal that
       // answers ends the outage with its recovery line (issue 661).
-      expect(logged).toHaveBeenCalledTimes(2);
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(recovered).toHaveBeenCalledTimes(1);
       expect(logged.mock.calls[0]?.slice(1)).toEqual(["job-1", failure]);
-      expect(logged.mock.calls[1]?.[0]).toMatch(
-        /^recovered: reconciliation-lease-heartbeat after 1 failures over \d+ s$/,
-      );
+      expect(recovered.mock.calls).toEqual([[expect.any(String)]]);
       expect(timer.cancellations).toBe(0);
       fold.resolve();
       await expect(running).resolves.toBe("RECONCILED");
@@ -845,6 +845,7 @@ describe("reconciliation lease heartbeat", () => {
       fold.resolve();
       await running;
       logged.mockRestore();
+      recovered.mockRestore();
       rejections.restore();
     }
   });
@@ -1035,6 +1036,7 @@ describe("reconciliation lease heartbeat", () => {
       return true;
     };
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const recovered = vi.spyOn(console, "info").mockImplementation(() => {});
     const running = runNextReconciliationJob({
       store, ...timer.dependencies,
       reconcile: async () => { enteredFold.resolve(); await fold.promise; },
@@ -1060,12 +1062,11 @@ describe("reconciliation lease heartbeat", () => {
       // the fold goes on and a later renewal answers, it ends the outage with
       // the recovery line (issue 661). stopFirst ends the job before any
       // renewal can answer, so only the rejection's line exists.
-      expect(logged).toHaveBeenCalledTimes(rejects && !stopFirst ? 2 : rejects ? 1 : 0);
+      expect(logged).toHaveBeenCalledTimes(rejects ? 1 : 0);
+      expect(recovered).toHaveBeenCalledTimes(rejects && !stopFirst ? 1 : 0);
       if (rejects) expect(logged.mock.calls[0]?.slice(1)).toEqual(["job-1", failure]);
       if (rejects && !stopFirst) {
-        expect(logged.mock.calls[1]?.[0]).toMatch(
-          /^recovered: reconciliation-lease-heartbeat after 1 failures over \d+ s$/,
-        );
+        expect(recovered.mock.calls).toEqual([[expect.any(String)]]);
       }
     } finally {
       releaseRenewal.resolve();
@@ -1073,6 +1074,7 @@ describe("reconciliation lease heartbeat", () => {
       await pendingTick;
       await running;
       logged.mockRestore();
+      recovered.mockRestore();
     }
   });
 });
@@ -1942,14 +1944,17 @@ describe("the bounded lease-heartbeat failure site", () => {
 
   function heartbeatLoggerOn(clockMs: { value: number }) {
     const lines: unknown[][] = [];
+    const recovery: unknown[][] = [];
     return {
       logger: new FailureLogger({
         now: () => clockMs.value,
         error: (...args: unknown[]) => {
           lines.push(args);
         },
+        info: (...args: unknown[]) => { recovery.push(args); },
       }),
       lines,
+      recovery,
     };
   }
 
@@ -1989,7 +1994,7 @@ describe("the bounded lease-heartbeat failure site", () => {
     const fold = signal();
     const failure = new Error("the lease write could not reach the database");
     const clock = { value: Date.parse("2030-01-01T12:00:00Z") };
-    const { logger, lines } = heartbeatLoggerOn(clock);
+    const { logger, lines, recovery } = heartbeatLoggerOn(clock);
 
     const running = runNextReconciliationJob({
       store,
@@ -2012,10 +2017,8 @@ describe("the bounded lease-heartbeat failure site", () => {
       clock.value += 3_000;
       await timer.tick(); // the database answers: the recovery line
 
-      expect(lines).toEqual([
-        [HEARTBEAT_MESSAGE, "job-1", failure],
-        [`recovered: ${HEARTBEAT_KEY} after 1 failures over 3 s`],
-      ]);
+      expect(lines).toEqual([[HEARTBEAT_MESSAGE, "job-1", failure]]);
+      expect(recovery).toEqual([[expect.any(String)]]);
     } finally {
       fold.resolve();
       await running;
