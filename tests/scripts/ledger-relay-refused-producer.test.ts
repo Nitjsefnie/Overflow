@@ -81,6 +81,7 @@ describe("untrusted runs whose SHA is an open pull request head", () => {
         body: pullRequests ?? [{ state: "open", head: { sha: HEAD_SHA, ref: PULL_REQUEST_BRANCH } }],
       },
     ];
+    outcomes.push({ status: 200, body: { workflow_runs: [] } });
     const fetchFn = vi.fn(async (input: unknown, init?: RequestInit) => {
       const url = typeof input === "string" ? input : String(input);
       requests.push({ url, init: init ?? {} });
@@ -118,6 +119,7 @@ describe("untrusted runs whose SHA is an open pull request head", () => {
       expect(relayResult.decisions).toEqual([]);
     }
 
+    expect(requests.filter((request) => request.url.endsWith("/actions/runs?per_page=100"))).toHaveLength(1);
     expect(
       requests.filter((request) => request.url.endsWith("/check-runs") && request.init.method === "POST"),
     ).toEqual([]);

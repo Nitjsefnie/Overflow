@@ -2,7 +2,7 @@
 // The ledger relay (issue 708): re-posts the three required checks as
 // check-runs owned by the Overflow Ledger GitHub App, so branch protection can
 // pin each required context to the App instead of the github-actions app.
-// As its second duty (issue 861) it heals a run that GitHub cancelled out of
+// As its second duty (issue 861) the sweep heals runs GitHub cancelled out of
 // the shared pending concurrency slot while its pull request's head is still
 // live: the relay re-dispatches that run, so a cancelled pending run does not
 // strand the PR.
@@ -10,7 +10,7 @@
 // whose own relay instance was itself cancelled out of that same pending slot
 // before it could post anything. Nothing else ever notices such a run: that
 // relay instance was the only thing that would have attested it, so the
-// completion sits unattested forever and branch protection refuses the merge
+// completion stays unattested and branch protection refuses the merge
 // with a message reading as a misconfiguration. The sweep lives in
 // scripts/ledger-relay-sweep.ts.
 //
@@ -60,13 +60,11 @@ import {
   decideContexts,
   decideRerun,
   hasPullRequestProducerAtHead,
-  isHealableEvent,
   isTrustedProducerRun,
   openPullRequestsAtHead,
   PIN_SHAPE,
   pinsFor,
   RERUN_ATTEMPT_CAP,
-  runNeverStarted,
   validatePinMap,
   type ContextDecision,
   type HealPullRequest,
@@ -167,15 +165,15 @@ export interface RelayResult {
   refusedDeadHead?: string;
   /**
    * Issue 1116: the start was sweep-only — no triggering run, so the mirror
-   * and the rerun-heal were skipped and the sweep's own summary lines are the
-   * whole output. Undefined on every other path.
+   * is skipped and the sweep's own summary and heal lines are the whole
+   * output. Undefined on every other path.
    */
   sweepOnly?: boolean;
 }
 
 /**
- * Nothing examined, nothing relayed — what every path that skips the sweep
- * reports. Frozen because both early returns hand back this one object into a
+ * The empty result used until the finally sweep completes. Frozen because
+ * early returns hand back this one object into a
  * public result type, so a consumer pushing into `sweep.relayed` would corrupt
  * every later result in the process.
  */
@@ -201,137 +199,97 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
 
   const trigger = parseTrigger(env);
   const [, repoName] = repo.split("/");
-  if (trigger.kind === "sweep-only") {
-    // Sweep-only (issue 1116): the scheduled start exists to sweep — there is
-    // no triggering run, so the mirror is skipped and the rerun-heal has
-    // nothing to heal. A thrown sweep exits nonzero (red), the unchanged
-    // direction, and the renderer prints the sweep's own summary lines.
-    const token = await mintInstallationToken(deps, appId, appKey, installationId, repoName);
-    const sweep = await sweepOrphans({
-      api: sweepApi(deps, repo, { authorization: `Bearer ${token}` }),
-      decide: decideContexts,
-      pinMap,
-      apiRoot: API_ROOT,
-      repo,
-      appId,
-      repositoryId: env.GITHUB_REPOSITORY_ID,
-      triggerRunId: "",
-    });
-    return { decisions: [], posted: [], rerunDispatched: false, sweep, sweepOnly: true };
-  }
-  if (
-    trigger.kind === "workflow_run" && trigger.run.event !== "workflow_run" &&
-    contextsFor(pinMap, trigger.run.path).length === 0
-  ) {
-    // Nothing is pinned to this run's workflow; there is nothing to relay and
-    // no reason to mint a token. A run nothing is pinned to never had a
-    // check-run to orphan either, so the sweep has no part in this path.
-    return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
-  }
-
   const token = await mintInstallationToken(deps, appId, appKey, installationId, repoName);
   const auth = { authorization: `Bearer ${token}` };
-
-  let run: TriggeringRun;
-  let fetchedProducer: Record<string, unknown> | undefined;
-  if (trigger.kind === "workflow_run") {
-    run = trigger.run;
-  } else {
-    fetchedProducer = await apiCall<Record<string, unknown>>(
-      deps,
-      {
-        url: `${API_ROOT}/repos/${repo}/actions/runs/${trigger.runId}`,
-        method: "GET",
-        headers: { ...API_HEADERS, ...auth },
-      },
-      `the workflow run ${trigger.runId}`,
-    );
-    run = triggeringRunFromApi(fetchedProducer);
-  }
-
-  let attestationRun: SweepCandidate = {
-    ...run, status: trigger.kind === "dispatch" ? String(fetchedProducer?.status ?? "") : "completed",
-  };
-  const runSweep = () => sweepOrphans({
-    api: sweepApi(deps, repo, auth),
-    decide: decideContexts,
-    pinMap,
-    apiRoot: API_ROOT,
-    repo,
-    appId,
-    repositoryId: env.GITHUB_REPOSITORY_ID,
-    triggerRunId: run.runId,
-    triggerRun: attestationRun,
-  });
-
-  let recheckPublication: UpstreamPublicationCheck | undefined;
-  let historyBound: string | undefined;
-  if (run.event === "workflow_run") {
-    const api = sweepApi(deps, repo, auth);
-    const resolved = await resolveWorkflowRunHead(
-      trigger.kind === "dispatch" ? trigger.runId : run.runId,
-      env.GITHUB_REPOSITORY_ID,
-      (id) => api.get(`${API_ROOT}/repos/${repo}/actions/runs/${id}`, `the workflow run ${id}`),
-      fetchedProducer,
-      (sha) => readSuiteRuns((page) => api.get(suiteRunsUrl(API_ROOT, repo, sha, page), "the suite supersession listing", false)),
-    );
-    run = resolved.run;
-    attestationRun = { ...run, headSha: resolved.headSha, status: resolved.producerStatus };
-    if (resolved.supersededBy !== undefined) return skippedSuperseded(resolved.supersededBy, runSweep);
-    recheckPublication = resolved.recheckPublication;
-    historyBound = resolved.historyBound;
-  }
-  if (contextsFor(pinMap, run.path).length === 0) {
-    return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
-  }
-  // Legacy refusals retain the dead-head no-op (issue 1115). Every
-  // workflow_run refusal above throws regardless of head liveness.
-  if (run.event !== "workflow_run" && !isTrustedProducerRun(run.event, run.headBranch)) {
-    return await refuseUntrustedProducer(deps, repo, run, auth);
-  }
-
-  const jobsBody = historyBound !== undefined ? { jobs: [] } : await apiCall<Record<string, unknown>>(
-    deps,
-    {
-      url: `${API_ROOT}/repos/${repo}/actions/runs/${run.runId}/jobs?filter=latest&per_page=100`,
-      method: "GET",
-      headers: { ...API_HEADERS, ...auth },
-    },
-    `the job listing of run ${run.runId}`,
-  );
-  const publication = await publishProducerContexts({
-    api: sweepApi(deps, repo, auth), pinMap, apiRoot: API_ROOT, repo, appId,
-    repositoryId: env.GITHUB_REPOSITORY_ID,
-  }, attestationRun, jobsBody, recheckPublication, historyBound);
-  if (publication.supersededBy !== undefined) return skippedSuperseded(publication.supersededBy, runSweep);
-  const { decisions, posted } = publication;
-
-  // The sweep and the heal both follow the mirrored decisions, so the mirror —
-  // the relay's primary duty — lands whatever they do, and a failure in either
-  // still exits nonzero rather than passing quietly. But both following the
-  // mirror does NOT make them independent: awaiting the sweep first held the
-  // heal hostage to a far larger failure surface (a repository-wide listing
-  // plus up to SWEEP_RUN_LIMIT check-runs GETs on EVERY start, against the
-  // heal's three queries on a rare path). So the heal runs exactly once
-  // whatever the sweep does, and the sweep's failure is rethrown after it.
-  let sweep: SweepOutcome;
-  let sweepError: unknown = undefined;
+  const api = sweepApi(deps, repo, auth);
+  let attestationRun: SweepCandidate | undefined;
+  let triggerJobs: Record<string, unknown> | undefined;
+  let result: RelayResult = { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
+  let primaryError: unknown;
+  let failed = false;
   try {
-    sweep = await runSweep();
+    if (trigger.kind === "sweep-only") {
+      result.sweepOnly = true;
+      return result;
+    }
+    let fetchedProducer: Record<string, unknown> | undefined;
+    let run: TriggeringRun;
+    if (trigger.kind === "workflow_run") {
+      run = trigger.run;
+    } else {
+      fetchedProducer = await api.get<Record<string, unknown>>(
+        `${API_ROOT}/repos/${repo}/actions/runs/${trigger.runId}`, `the workflow run ${trigger.runId}`,
+      );
+      run = triggeringRunFromApi(fetchedProducer);
+    }
+    let recheckPublication: UpstreamPublicationCheck | undefined;
+    let historyBound: string | undefined;
+    if (run.event === "workflow_run") {
+      const resolved = await resolveWorkflowRunHead(
+        trigger.kind === "dispatch" ? trigger.runId : run.runId,
+        env.GITHUB_REPOSITORY_ID,
+        (id) => api.get(`${API_ROOT}/repos/${repo}/actions/runs/${id}`, `the workflow run ${id}`),
+        fetchedProducer,
+        (sha) => readSuiteRuns((page) => api.get(suiteRunsUrl(API_ROOT, repo, sha, page), "the suite supersession listing", false)),
+      );
+      run = resolved.run;
+      attestationRun = { ...run, headSha: resolved.headSha, status: resolved.producerStatus };
+      if (resolved.supersededBy !== undefined) {
+        result.supersededBy = resolved.supersededBy;
+        return result;
+      }
+      recheckPublication = resolved.recheckPublication;
+      historyBound = resolved.historyBound;
+    }
+    if (contextsFor(pinMap, run.path).length === 0) return result;
+    // Legacy refusals retain their exact throw or dead-head exit-0 result.
+    // The finally below runs for either direction and for API-backed refusals.
+    if (run.event !== "workflow_run" && !isTrustedProducerRun(run.event, run.headBranch)) {
+      result = await refuseUntrustedProducer(deps, repo, run, auth);
+      return result;
+    }
+    attestationRun ??= {
+      ...run, status: trigger.kind === "dispatch" ? String(fetchedProducer?.status ?? "") : "completed",
+    };
+    triggerJobs = historyBound !== undefined ? { jobs: [] } : await api.get<Record<string, unknown>>(
+      `${API_ROOT}/repos/${repo}/actions/runs/${run.runId}/jobs?filter=latest&per_page=100`,
+      `the job listing of run ${run.runId}`,
+    );
+    const publication = await publishProducerContexts({
+      api, pinMap, apiRoot: API_ROOT, repo, appId, repositoryId: env.GITHUB_REPOSITORY_ID,
+    }, attestationRun, triggerJobs, recheckPublication, historyBound);
+    result.decisions = publication.decisions;
+    result.posted = publication.posted;
+    if (publication.supersededBy !== undefined) result.supersededBy = publication.supersededBy;
+    return result;
   } catch (error) {
-    sweep = NO_SWEEP;
-    sweepError = error;
+    failed = true;
+    primaryError = error;
+    throw error;
+  } finally {
+    try {
+      result.sweep = await sweepOrphans({
+        api, decide: decideContexts, pinMap, apiRoot: API_ROOT, repo, appId,
+        repositoryId: env.GITHUB_REPOSITORY_ID,
+        triggerRunId: trigger.kind === "sweep-only" ? "" : trigger.kind === "dispatch" ? trigger.runId : trigger.run.runId,
+        triggerRun: attestationRun, triggerJobs,
+        // A refused trigger has no proven producer identity. Do not resolve it
+        // again inside the sweep and strand unrelated eligible completions.
+        skipTrigger: attestationRun === undefined,
+        rerunToken: env.RELAY_RERUN_TOKEN,
+        rerun: (id, rerunToken) => apiCall<unknown>(deps, {
+          url: `${API_ROOT}/repos/${repo}/actions/runs/${id}/rerun`, method: "POST",
+          headers: { ...API_HEADERS, authorization: `Bearer ${rerunToken}` },
+        }, `the rerun of run ${id}`),
+      });
+      result.rerunDispatched = (result.sweep.rerunDispatched?.length ?? 0) > 0;
+    } catch (sweepError) {
+      if (!failed) throw sweepError;
+      const message = (error: unknown) => error instanceof Error ? error.message : String(error);
+      throw new AggregateError([primaryError, sweepError],
+        `${message(primaryError)}; orphan sweep also failed: ${message(sweepError)}`);
+    }
   }
-
-  const rerunDispatched = await healWithRerun(deps, env, repo, run, jobsBody, auth);
-  if (sweepError !== undefined) throw sweepError;
-
-  return { decisions, posted, rerunDispatched, sweep };
-}
-
-/** A late older verification must not replace either a newer failure or success. */
-async function skippedSuperseded(supersededBy: number, runSweep: () => Promise<SweepOutcome>): Promise<RelayResult> {
-  return { decisions: [], posted: [], rerunDispatched: false, sweep: await runSweep(), supersededBy };
 }
 
 /**
@@ -392,71 +350,6 @@ function sweepApi(deps: RelayDeps, repo: string, auth: Record<string, string>): 
 }
 
 /**
- * The rerun-heal (issue 861). When the triggering run was cancelled out of the
- * shared pending concurrency slot while its pull request's head is still live,
- * dispatch a fresh run of it, so the cancelled conclusion — mirrored above —
- * is replaced when the rerun's own completion event arrives. The heal runs
- * only for a cancelled pull_request_target run that NEVER STARTED (issue
- * 1037): a cancellation caused by supersession is healed, a deliberate
- * cancellation stays cancelled. Its conditions are evaluated in order and each
- * query is issued only when every earlier condition already holds.
- * Returns true exactly when the rerun was dispatched.
- */
-async function healWithRerun(
-  deps: RelayDeps,
-  env: Record<string, string | undefined>,
-  repo: string,
-  run: TriggeringRun,
-  jobsBody: Record<string, unknown>,
-  auth: Record<string, string>,
-): Promise<boolean> {
-  // The rerun token is required whenever a cancelled PR run is on the table —
-  // checked before any heal API call, so a missing token is a visible red
-  // relay job, never silent degradation.
-  if (run.conclusion !== "cancelled" || !isHealableEvent(run.event)) return false;
-  const rerunToken = required(env, "RELAY_RERUN_TOKEN");
-  // The attempt cap precedes the queries.
-  if (run.runAttempt >= RERUN_ATTEMPT_CAP) return false;
-
-  // The never-started evidence (issue 1037): the run body's run_started_at is
-  // the primary signal — read from the fetched body on the dispatch path, null
-  // on the workflow_run path whose workflow passes no started-at through the
-  // environment — and the job listing the mirror already fetched is the
-  // fallback when the primary names nothing. The gate sits with the cheap
-  // guards, BEFORE the heal's queries: a run that had started was cancelled
-  // deliberately, and querying for a heal that must never happen would ask
-  // GitHub for permission to repeat a maintainer's cancellation.
-  //
-  // Boundary (fix-round proven): a deliberate cancellation of a STARTED run
-  // stays cancelled; a cancellation of a never-started run is
-  // indistinguishable from supersession — GitHub's data carries no
-  // discriminator — and heals up to the attempt cap. Full statement on
-  // runNeverStarted in scripts/ledger-relay-decisions.ts.
-  const startedEvidence: RerunStartedEvidence = {
-    runStartedAt: run.runStartedAt,
-    anyJobStarted: anyJobStartedOf(jobsBody),
-  };
-  if (!runNeverStarted(startedEvidence)) return false;
-  const pr = (await findOpenPullRequestsAtHead(deps, repo, run.headSha, auth))[0] ?? null;
-  const liveRunExists =
-    pr === null ? false : await hasLiveRunOfPath(deps, repo, run.headSha, run.path, auth);
-  if (!decideRerun(run, pr, liveRunExists, startedEvidence)) return false;
-
-  // The rerun authenticates as the workflow's own repo-scoped token, not the
-  // App token: the rerun needs actions: write, which the App does not hold.
-  await apiCall<unknown>(
-    deps,
-    {
-      url: `${API_ROOT}/repos/${repo}/actions/runs/${run.runId}/rerun`,
-      method: "POST",
-      headers: { ...API_HEADERS, authorization: `Bearer ${rerunToken}` },
-    },
-    `the rerun of run ${run.runId}`,
-  );
-  return true;
-}
-
-/**
  * Condition (d): the open PRs whose tips match the run's head SHA. The
  * commit's associated PRs are filtered client-side; a superseded PR does not
  * match.
@@ -477,55 +370,6 @@ async function findOpenPullRequestsAtHead(
     `the pull requests associated with commit ${headSha}`,
   );
   return openPullRequestsAtHead(body, headSha);
-}
-
-/**
- * Every status in which GitHub's workflow-run `status` enum reports a run that
- * has not finished: it is on the board, so a rerun of the same workflow at the
- * same head would duplicate it — and GitHub refuses the POST while it is
- * there. `pending`, `waiting` and `requested` are the statuses a run waits in
- * for a runner, so all five are live for this check (issue 952: a cancelled
- * attempt healed into a `pending` successor, which GitHub refused with 403
- * "This workflow is already running").
- */
-const LIVE_RUN_STATUSES = new Set(["queued", "in_progress", "pending", "waiting", "requested"]);
-
-/**
- * Condition (e): whether any run of the SAME workflow at the head SHA is live
- * — queued, in_progress, pending, waiting or requested. The runs listing is
- * filtered client-side for the workflow's path and the live statuses.
- *
- * A malformed listing reads as "no live run" rather than throwing — the
- * deliberate asymmetry with findOpenPullRequestsAtHead, which throws: the
- * failure direction is bounded by GitHub's own rerun guard, which refuses a
- * live run with a 4xx that apiCall throws, so the worst case is a visible red
- * relay job, never a duplicate dispatch.
- */
-async function hasLiveRunOfPath(
-  deps: RelayDeps,
-  repo: string,
-  headSha: string,
-  path: string,
-  auth: Record<string, string>,
-): Promise<boolean> {
-  const body = await apiCall<Record<string, unknown>>(
-    deps,
-    {
-      url: `${API_ROOT}/repos/${repo}/actions/runs?head_sha=${headSha}&per_page=100`,
-      method: "GET",
-      headers: { ...API_HEADERS, ...auth },
-    },
-    `the workflow-run listing at ${headSha}`,
-  );
-  const runs = Array.isArray(body.workflow_runs) ? body.workflow_runs : [];
-  for (const entry of runs) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const candidate = entry as { path?: unknown; status?: unknown };
-    if (candidate.path === path && LIVE_RUN_STATUSES.has(String(candidate.status))) {
-      return true;
-    }
-  }
-  return false;
 }
 
 interface ApiRequest {
@@ -734,17 +578,19 @@ export function renderRelayResult(result: RelayResult): string[] {
     return [
       `[ledger-relay] ${result.refusedDeadHead}`,
       "[ledger-relay] no open pull request is waiting at this head",
+      ...renderSweepLines(result.sweep),
     ];
   }
   if (result.posted.length === 0) {
     return [
       "[ledger-relay] nothing to relay: no required context is pinned to the triggering run's workflow",
+      ...renderSweepLines(result.sweep),
     ];
   }
   const lines = result.decisions.map(
     (decision) => `[ledger-relay] ${decision.context}: ${decision.conclusion ?? decision.status}`,
   );
-  if (result.rerunDispatched) {
+  if (result.rerunDispatched && result.sweep.rerunDispatched === undefined) {
     lines.push(
       "[ledger-relay] rerun-heal: the cancelled run was re-dispatched; " +
         "its completion event will mirror the real conclusion",

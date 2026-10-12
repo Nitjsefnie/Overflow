@@ -182,6 +182,7 @@ describe("API-backed workflow_run verify", () => {
   ] as const)("throws for %s before posting", async (_name, changes, error) => {
     const h = harness({ producer: producer(changes) });
     await expect(h.run()).rejects.toThrow(error);
+    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
     expect(h.requests).not.toContain(runUrl(8001));
   });
@@ -192,6 +193,7 @@ describe("API-backed workflow_run verify", () => {
       head_repository: { id: 654321, full_name: "contributor/Overflow", owner: { login: "contributor" } },
     }) });
     await expect(h.run()).rejects.toThrow(/producer.*event/);
+    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
   });
 
@@ -201,6 +203,7 @@ describe("API-backed workflow_run verify", () => {
       env: { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_DISPATCH_RUN_ID: "9001" },
     });
     await expect(h.run()).rejects.toThrow(/producer.*id/);
+    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
     expect(h.requests).not.toContain(runUrl(8001));
   });
@@ -211,6 +214,7 @@ describe("API-backed workflow_run verify", () => {
       producer: producer({ path: ".github/workflows/other.yml" }),
     });
     await expect(h.run()).rejects.toThrow(/producer.*path/);
+    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
   });
 
@@ -219,6 +223,7 @@ describe("API-backed workflow_run verify", () => {
   ])("throws when the relay's repository id is %s", async (_name, id) => {
     const h = harness({ env: { GITHUB_REPOSITORY_ID: id } });
     await expect(h.run()).rejects.toThrow(/GITHUB_REPOSITORY_ID/);
+    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
   });
 
@@ -231,6 +236,7 @@ describe("API-backed workflow_run verify", () => {
   ] as const)("throws for %s before posting", async (_name, changes, error) => {
     const h = harness({ upstream: suite(changes) });
     await expect(h.run()).rejects.toThrow(error);
+    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
     expect(h.requests).not.toContain(jobsUrl(9001));
   });
@@ -240,12 +246,14 @@ describe("API-backed workflow_run verify", () => {
   ])("throws on upstream %s read failure", async (_name, failure) => {
     const h = harness({ upstream: failure });
     await expect(h.run()).rejects.toThrow(/workflow run 8001.*failed/);
+    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
   });
 
   it("throws on a producer API read failure", async () => {
     const h = harness({ producer: { httpStatus: 404 } });
     await expect(h.run()).rejects.toThrow(/workflow run 9001.*failed/);
+    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
   });
 
@@ -331,6 +339,7 @@ describe("workflow_run orphan sweep", () => {
       [runsUrl]: { workflow_runs: [producer()] },
     } });
     await expect(h.run()).rejects.toThrow(error);
+    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
     expect(h.requests).not.toContain(checksUrl(MAIN_SHA));
   });
@@ -340,6 +349,7 @@ describe("workflow_run orphan sweep", () => {
       [runsUrl]: { workflow_runs: [producer()] },
     } });
     await expect(h.run()).rejects.toThrow(/producer.*repository/);
+    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
   });
 });
@@ -384,6 +394,7 @@ describe("superseded verification never publishes", () => {
       },
     });
     await expect(h.run()).rejects.toThrow(/suite.*failed/);
+    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
   });
 });
@@ -453,6 +464,7 @@ describe("complete listing for mirror and orphan supersession", () => {
     for (const orphan of [false, true]) {
       const h = paged(orphan, second);
       await expect(h.run()).rejects.toThrow(message as RegExp);
+      expect(h.requests).toContain(runsUrl);
       expect(h.posts).toEqual([]);
       expect(h.requests.filter((url) => url === pageUrl(2))).toHaveLength(1);
     }

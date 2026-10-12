@@ -210,6 +210,7 @@ describe("the committed pin drives runRelay end to end (issue 1149)", () => {
         },
       },
       { status: 200, body: [] },
+      { status: 200, body: { workflow_runs: [] } },
     ]);
     const result = await runRelay({
       env: relayEnv({

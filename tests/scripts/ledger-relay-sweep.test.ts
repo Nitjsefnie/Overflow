@@ -90,8 +90,11 @@ function candidate(over: Partial<SweepCandidate> = {}): SweepCandidate {
 }
 
 describe("SWEEP_RUN_LIMIT", () => {
-  it("is 20 — the bound on candidates examined per relay start", () => {
-    expect(SWEEP_RUN_LIMIT).toBe(20);
+  it("retains 50 recent candidates and excludes the fifty-first", () => {
+    const many = Array.from({ length: 51 }, (_, index) => runEntry({ id: 9100 - index }));
+    const selected = selectSweepCandidates(many, PIN_MAP, "");
+    expect(selected).toHaveLength(50);
+    expect(selected.at(-1)?.runId).toBe("9051");
   });
 });
 
@@ -115,6 +118,8 @@ describe("selectSweepCandidates", () => {
     expect(selected[0]).toEqual({
       runId: "9002",
       runAttempt: 1,
+      event: "pull_request_target",
+      runStartedAt: null,
       headSha: HEAD_SHA,
       path: PATH_ACTIONLINT,
       conclusion: "success",

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The orphan sweep (issue 885), the ledger relay's THIRD duty, called from
-// scripts/ledger-relay.ts after the mirror has posted its own decisions and
-// before the rerun-heal.
+// scripts/ledger-relay.ts in a finally after every mirror path, including
+// refusals. The sweep also carries the rerun-heal for displaced starts.
 //
 // GitHub keeps at most one PENDING run per concurrency group and cancels the
 // previous pending run whenever a newer one arrives — whatever
@@ -28,6 +28,7 @@
 // import the other and no runtime cycle can form between them.
 
 import {
+  anyJobStartedOf, decideRerun, isHealableEvent, openPullRequestsAtHead, RERUN_ATTEMPT_CAP,
   pinsFor,
   type ContextDecision,
   type PinMap,
@@ -46,6 +47,8 @@ export type { SweepApi, SweepCandidate } from "./ledger-relay-producers.ts";
 
 export interface SweepOutcome {
   readonly superseded?: ReadonlyArray<{ runId: string; supersededBy: number }>;
+  /** Producer run ids whose rerun POSTs succeeded, in dispatch order. */
+  readonly rerunDispatched?: readonly string[];
   readonly examined: number;
   readonly relayed: ReadonlyArray<{ context: string; runId: string }>;
 }
@@ -56,6 +59,11 @@ export interface SweepDeps extends ProducerDeps {
   ) => ContextDecision[];
   triggerRunId: string;
   triggerRun?: SweepCandidate;
+  triggerJobs?: Record<string, unknown>;
+  /** A refused trigger cannot participate in producer selection or healing. */
+  skipTrigger?: boolean;
+  rerunToken?: string;
+  rerun?: (runId: string, token: string) => Promise<unknown>;
 }
 
 /**
@@ -85,9 +93,9 @@ export function missingContextsFor(
 }
 
 /**
- * The sweep. One repository-wide listing, then one check-runs GET per DISTINCT
- * candidate commit, then one jobs GET and at most one POST per candidate that
- * still has something missing. Recency includes the trigger and orders by run
+ * The sweep. One repository-wide listing, API-backed workflow_run resolution,
+ * then one check-runs GET per distinct orphan commit, one jobs GET per missing
+ * producer, and one POST per missing completed context. Recency includes the trigger and orders by run
  * id then attempt. A winning trigger is never reposted, and blocks older runs
  * even when its mirror posted nothing. Superseded non-trigger workflow_run
  * candidates remain excluded.
@@ -96,10 +104,10 @@ export function missingContextsFor(
  * one pull request head costs one check-runs GET and one post per context
  * rather than one per run.
  *
- * A candidate with nothing missing is skipped entirely — no jobs GET, no POST.
- * That is the common case on a healthy repository, and it is why the sweep is
- * cheap enough to run on every start: with nothing orphaned it costs one
- * listing plus one GET per distinct commit.
+ * An attested candidate needs no publication jobs GET or POST. A newest
+ * cancelled pull_request_target candidate can still need the jobs fallback
+ * and heal queries, so attestation never suppresses the rerun-heal. Other
+ * candidates incur no heal requests.
  */
 export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
   const listing = await deps.api.get<Record<string, unknown>>(
@@ -118,7 +126,7 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
   // The mirror supplies resolved identity even if the trigger is absent from
   // this bounded listing. Other callers can recover a listed trigger through
   // the same validation/resolution path as orphans, without posting it.
-  const listedTrigger = triggerRun === undefined && deps.triggerRunId !== ""
+  const listedTrigger = deps.skipTrigger !== true && deps.triggerRunId !== ""
     ? selectSweepCandidates(
       Array.isArray(listing?.workflow_runs) ? listing.workflow_runs.filter((entry: unknown) =>
         typeof entry === "object" && entry !== null &&
@@ -132,13 +140,21 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
   const relayed: Array<{ context: string; runId: string }> = [];
   const superseded: Array<{ runId: string; supersededBy: number }> = [];
   const active: SweepCandidate[] = [];
+  const rerunDispatched: string[] = [];
   const rechecks = new Map<string, UpstreamPublicationCheck>();
   const bounds = new Map<string, string>();
 
   // Resolve BEFORE grouping: both attestation and this sweep's dedupe key are
   // the upstream PR SHA. A refusal propagates, never falling back to main.
   for (const candidate of [...candidates, ...(listedTrigger === undefined ? [] : [listedTrigger])]) {
-    const isTrigger = candidate.runId === deps.triggerRunId;
+    const isTrigger = candidate.runId === deps.triggerRunId &&
+      (triggerRun === undefined || candidate.runAttempt === triggerRun.runAttempt);
+    if (isTrigger && triggerRun !== undefined) {
+      // The resolved trigger identity stays authoritative. Use the listing's
+      // primary started-at evidence only for that same attempt.
+      triggerRun.runStartedAt = candidate.runStartedAt ?? triggerRun.runStartedAt;
+      continue;
+    }
     if (candidate.workflowRun !== true) {
       if (isTrigger) triggerRun = candidate;
       else active.push(candidate);
@@ -167,29 +183,33 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
     if (resolved.historyBound !== undefined) bounds.set(candidate.runId, resolved.historyBound);
   }
 
-  for (const [headSha, atHead] of groupByHeadSha(active)) {
-    const newest = newestProducersFor(deps.pinMap, [
-      ...atHead, ...(triggerRun?.headSha === headSha ? [triggerRun] : []),
-    ]);
+  for (const [headSha, atHead] of groupByHeadSha([
+    ...active, ...(triggerRun === undefined ? [] : [triggerRun]),
+  ])) {
+    const newest = newestProducersFor(deps.pinMap, atHead);
     const historyBounds = new Map<string, string>();
     for (const [context, producer] of newest) {
       const bound = bounds.get(producer.runId);
       if (bound !== undefined) historyBounds.set(context, bound);
     }
-    const blocked = await publicationBlockedContexts(deps, headSha, newest, historyBounds);
+    const hasOrphans = atHead.some((candidate) => candidate !== triggerRun);
+    const blocked = hasOrphans ? await publicationBlockedContexts(deps, headSha, newest, historyBounds) : new Set<string>();
     const relayedThisSweep = new Set<string>();
+    const jobsBodies = new Map<SweepCandidate, Record<string, unknown>>();
+    if (triggerRun !== undefined && deps.triggerJobs !== undefined) jobsBodies.set(triggerRun, deps.triggerJobs);
     for (const candidate of atHead) {
+      if (candidate === triggerRun) continue;
       const missing = new Set(
         missingContextsFor(deps.pinMap, candidate, blocked, relayedThisSweep)
           .filter((context) => newest.get(context) === candidate),
       );
       if (missing.size === 0) continue;
-      const jobs = bounds.has(candidate.runId) ? [] : validateJobs(
-        await deps.api.get<Record<string, unknown>>(
-          `${deps.apiRoot}/repos/${deps.repo}/actions/runs/${candidate.runId}/jobs?filter=latest&per_page=100`,
-          `the job listing of run ${candidate.runId}`,
-        ),
+      const jobsBody = bounds.has(candidate.runId) ? { jobs: [] } : await deps.api.get<Record<string, unknown>>(
+        `${deps.apiRoot}/repos/${deps.repo}/actions/runs/${candidate.runId}/jobs?filter=latest&per_page=100`,
+        `the job listing of run ${candidate.runId}`,
       );
+      jobsBodies.set(candidate, jobsBody);
+      const jobs = validateJobs(jobsBody);
       const state = await publicationState(rechecks.get(candidate.runId));
       const bound = state.historyBound ?? bounds.get(candidate.runId);
       if (state.supersededBy !== undefined && bound === undefined) {
@@ -209,8 +229,53 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
         relayedThisSweep.add(decision.context);
       }
     }
+    // Attestation does not suppress healing: an already-attested cancellation
+    // can still be the newest producer whose pending relay start was displaced.
+    for (const candidate of new Set(newest.values())) {
+      if (await healCandidate(deps, candidate, jobsBodies.get(candidate))) rerunDispatched.push(candidate.runId);
+    }
   }
-  return { examined: candidates.length, relayed, ...(superseded.length > 0 ? { superseded } : {}) };
+  return { examined: candidates.length, relayed, ...(superseded.length > 0 ? { superseded } : {}),
+    ...(rerunDispatched.length > 0 ? { rerunDispatched } : {}) };
+}
+
+const LIVE_RUN_STATUSES = new Set(["queued", "in_progress", "pending", "waiting", "requested"]);
+
+/** Heal only newest producers, preserving the cheap guards and query order. */
+async function healCandidate(deps: SweepDeps, run: SweepCandidate, jobsBody?: Record<string, unknown>): Promise<boolean> {
+  if (run.conclusion !== "cancelled" || !isHealableEvent(run.event ?? "")) return false;
+  // As on the original heal path, require the workflow credential before the
+  // cap and queries, but never for a non-cancelled or non-healable producer.
+  const token = deps.rerunToken ?? "";
+  if (token === "") throw new Error("RELAY_RERUN_TOKEN is required");
+  if (run.runAttempt >= RERUN_ATTEMPT_CAP) return false;
+  if (run.runStartedAt != null) return false;
+  const evidence = { runStartedAt: null, anyJobStarted: anyJobStartedOf(jobsBody ?? await deps.api.get(
+    `${deps.apiRoot}/repos/${deps.repo}/actions/runs/${run.runId}/jobs?filter=latest&per_page=100`,
+    `the job listing of run ${run.runId}`,
+  )) };
+  if (evidence.anyJobStarted) return false;
+  const pulls = await deps.api.get<unknown>(
+    `${deps.apiRoot}/repos/${deps.repo}/commits/${run.headSha}/pulls?per_page=100`,
+    `the pull requests associated with commit ${run.headSha}`,
+  );
+  const pr = openPullRequestsAtHead(pulls, run.headSha)[0] ?? null;
+  if (pr === null) return false;
+  const listing = await deps.api.get<Record<string, unknown>>(
+    `${deps.apiRoot}/repos/${deps.repo}/actions/runs?head_sha=${run.headSha}&per_page=100`,
+    `the workflow-run listing at ${run.headSha}`,
+  );
+  // A malformed live-run listing reads as absent; GitHub's own rerun guard
+  // bounds this direction by refusing a live duplicate with a visible 4xx.
+  const live = (Array.isArray(listing.workflow_runs) ? listing.workflow_runs : []).some((entry: unknown) => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const candidate = entry as { path?: unknown; status?: unknown };
+    return candidate.path === run.path && LIVE_RUN_STATUSES.has(String(candidate.status));
+  });
+  if (!decideRerun({ ...run, event: run.event ?? "" }, pr, live, evidence)) return false;
+  if (deps.rerun === undefined) throw new Error("the rerun transport is required");
+  await deps.rerun(run.runId, token);
+  return true;
 }
 
 /** Candidates grouped by head SHA, in the listing order of first appearance. */
@@ -241,8 +306,10 @@ function groupByHeadSha(candidates: readonly SweepCandidate[]): Array<[string, S
  * operator learns to skip.
  */
 export function renderSweepLines(outcome: SweepOutcome): string[] {
-  if (outcome.examined === 0) return [];
-  const lines = [
+  const healLines = (outcome.rerunDispatched ?? []).map((id) =>
+    `[ledger-relay] rerun-heal: cancelled run ${id} was re-dispatched; its completion event will mirror the real conclusion`);
+  if (outcome.examined === 0) return healLines;
+  const lines = [...healLines,
     `[ledger-relay] orphan-sweep: examined ${outcome.examined} completed run(s), ` +
       `relayed ${outcome.relayed.length} context(s)`,
   ];

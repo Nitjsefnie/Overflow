@@ -44,6 +44,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
   const FORK_PULLS_URL =
     "https://api.github.com/repos/Nitjsefnie/Overflow/pulls?state=open" +
     "&head=v01dst%3Afix%2F117-env-file-migrate&per_page=100";
+  const SWEEP_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs?per_page=100";
   const CHECK_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/check-runs";
   const REFUSAL =
     `run ${RUN_ID} (event "pull_request", head branch "${HEAD_BRANCH}") ` +
@@ -57,6 +58,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
   type Outcome = { status: number; body: unknown } | { fail: Error };
 
   function makeFetch(outcomes: Outcome[]) {
+    outcomes.push({ status: 200, body: { workflow_runs: [] } });
     const requests: Recorded[] = [];
     const fn = vi.fn(async (url: unknown, init?: RequestInit) => {
       const rendered = typeof url === "string" ? url : String(url);
@@ -187,7 +189,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
     expect(fetchStub.requests.map((request) => request.url)).toEqual([
       TOKEN_URL,
       RUN_URL,
-      FORK_PULLS_URL,
+      FORK_PULLS_URL, SWEEP_RUNS_URL,
     ]);
     expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
     expect(renderRelayResult(result)).toEqual([
@@ -220,7 +222,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
     expect(fetchStub.requests.map((request) => request.url)).toEqual([
       TOKEN_URL,
       RUN_URL,
-      FORK_PULLS_URL,
+      FORK_PULLS_URL, SWEEP_RUNS_URL,
     ]);
     expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
   });
@@ -240,7 +242,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
     expect(fetchStub.requests.map((request) => request.url)).toEqual([
       TOKEN_URL,
       RUN_URL,
-      FORK_PULLS_URL,
+      FORK_PULLS_URL, SWEEP_RUNS_URL,
     ]);
   });
 
@@ -266,7 +268,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
       TOKEN_URL,
       RUN_URL,
       RUN_URL,
-      FORK_PULLS_URL,
+      FORK_PULLS_URL, SWEEP_RUNS_URL,
     ]);
     expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
   });
@@ -339,7 +341,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
       RUN_URL,
       FORK_PULLS_URL,
       FORK_PULLS_URL,
-      FORK_PULLS_URL,
+      FORK_PULLS_URL, SWEEP_RUNS_URL,
     ]);
     expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
   });
@@ -353,7 +355,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
 
     expect(error, "a deleted fork must keep the refusal visible").toBeInstanceOf(Error);
     expect(error?.message).toBe(REFUSAL);
-    expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL]);
+    expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, SWEEP_RUNS_URL]);
     expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
   });
 });
