@@ -7,6 +7,14 @@ const PATH = ".github/workflows/pr-suite.yml";
 type Body = Record<string, unknown>;
 type Certificate = { judgedAttempt: number } | { verifyCreatedAt: unknown };
 
+/** Deterministic exhaustion, distinct from API or malformed-history failures. */
+export class SuiteHistoryBoundError extends Error {
+  constructor() {
+    super("suite history exceeds 10 pages / 1000 runs");
+    this.name = "SuiteHistoryBoundError";
+  }
+}
+
 export function suiteRunsUrl(apiRoot: string, repo: string, headSha: string, page = 1): string {
   return `${apiRoot}/repos/${repo}/actions/workflows/pr-suite.yml/runs` +
     `?head_sha=${headSha}&event=pull_request&per_page=100&page=${page}`;
@@ -27,7 +35,7 @@ export async function readSuiteRuns(readPage: (page: number) => Promise<unknown>
     }
     if (total !== undefined && count !== total) throw new Error("suite total_count changed between pages");
     total = count;
-    if (total > 1000) throw new Error("suite history exceeds 10 pages / 1000 runs");
+    if (total > 1000) throw new SuiteHistoryBoundError();
     const expected = Math.min(100, total - runs.length);
     if (entries.length !== expected) throw new Error(`suite page ${page} expected ${expected} entries; short or oversized page refused`);
     for (const entry of entries) {
@@ -39,7 +47,7 @@ export async function readSuiteRuns(readPage: (page: number) => Promise<unknown>
     }
     if (runs.length === total) return { total_count: total, workflow_runs: runs };
   }
-  throw new Error("suite history exceeds 10 pages / 1000 runs");
+  throw new SuiteHistoryBoundError();
 }
 
 function positive(value: unknown): value is number {

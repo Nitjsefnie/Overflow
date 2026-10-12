@@ -453,8 +453,10 @@ describe("complete listing for mirror and orphan supersession", () => {
 
   it.each([false, true])("page cap fails closed, orphan=%s", async (orphan) => {
     const h = paged(orphan, undefined, { total_count: 1001, workflow_runs: history.slice(0, 100) });
-    await expect(h.run()).rejects.toThrow(/1000|10 pages/);
-    expect(h.posts).toEqual([]);
+    await h.run();
+    expect(h.posts).toHaveLength(1);
+    expect(h.posts[0]).toMatchObject({ name: "verify", head_sha: PR_SHA, conclusion: "failure", external_id: "9101:1" });
+    expect((h.posts[0].output as Record<string, unknown>).summary).toMatch(/1000 runs/);
   });
 });
 

@@ -3,7 +3,7 @@
 // a fork PR can name its branch main. Mirror and sweep use this same gate
 // before any check-run or attestation lookup can target a commit.
 
-import { supersedingSuiteRunId } from "./pr-suite-supersession.ts";
+import { SuiteHistoryBoundError, supersedingSuiteRunId } from "./pr-suite-supersession.ts";
 import { PIN_SHAPE } from "./ledger-relay-decisions.ts";
 import { assertShape, normalizedAttempt, SHA_40, type TriggeringRun } from "./ledger-relay-trigger.ts";
 
@@ -17,7 +17,7 @@ export async function resolveWorkflowRunHead(
   // Only the dispatch path supplies this, reusing its already-fetched API body.
   fetchedProducer?: unknown,
   getSuiteRuns?: (headSha: string) => Promise<unknown>,
-): Promise<{ run: TriggeringRun; headSha: string; supersededBy?: number; recheckSupersession: () => Promise<number | undefined> }> {
+): Promise<{ run: TriggeringRun; headSha: string; producerStatus: string; historyBound?: string; supersededBy?: number; recheckSupersession: () => Promise<number | undefined> }> {
   assertShape(repositoryId ?? "", /^[1-9][0-9]*$/, "GITHUB_REPOSITORY_ID must be the repository's numeric id");
   const body = runBody(fetchedProducer ?? (await getRun(runId)), "producer");
   if (body.path !== ".github/workflows/ci-pr.yml") {
@@ -62,8 +62,18 @@ export async function resolveWorkflowRunHead(
     if (newer === undefined && current.status !== "completed") throw new Error("the upstream run must be completed");
     return newer;
   };
-  const supersededBy = await check(upstream);
-  return { run, headSha, supersededBy,
+  let supersededBy: number | undefined;
+  let historyBound: string | undefined;
+  try {
+    supersededBy = await check(upstream);
+  } catch (error) {
+    // Identity and SHA are already API-proven. Only deterministic exhaustion
+    // becomes negative verify evidence; transient/shape failures still throw.
+    if (!(error instanceof SuiteHistoryBoundError)) throw error;
+    historyBound = error.message;
+  }
+  return { run, headSha, supersededBy, historyBound,
+    producerStatus: typeof body.status === "string" ? body.status : "",
     // Reuse only the immutable, API-proven producer identity. Re-read the
     // upstream and its listing immediately before POST to catch late reruns.
     recheckSupersession: async () => check(await readUpstream()),
