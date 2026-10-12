@@ -4,6 +4,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { closeSql, withTransaction } from "../src/lib/db/client.ts";
+import { migrationFilename } from "../src/lib/db/migration-manifest.ts";
 import { classifyMigrationCompatibility } from "./migration-compatibility.ts";
 
 const migrationsDirectory = path.resolve(
@@ -18,16 +19,6 @@ const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
-
-/**
- * What a migration file is, for the runner and for the numbering guards alike.
- *
- * One expression rather than one per caller, because a runner and a guard that disagree about
- * this is the failure they exist to prevent: a `013_reconciliation_cooldown.sql.orig` left behind
- * by a conflicted merge would otherwise be a second migration numbered 013 to the guard and no
- * migration at all to the runner.
- */
-const migrationFilename = /^(\d+)_.+\.sql$/;
 
 /** The checksum recorded for a migration: sha256 of the file's utf8 bytes, lowercase hex. */
 export function migrationChecksum(contents: string): string {

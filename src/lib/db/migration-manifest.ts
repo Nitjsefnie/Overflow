@@ -20,6 +20,16 @@
  * may break an older release's reads or writes during rollback.
  */
 
+/**
+ * What a migration file is, for the runner and for the numbering guards alike.
+ *
+ * One expression rather than one per caller, because a runner and a guard that disagree about
+ * this is the failure they exist to prevent: a `013_reconciliation_cooldown.sql.orig` left behind
+ * by a conflicted merge would otherwise be a second migration numbered 013 to the guard and no
+ * migration at all to the runner.
+ */
+export const migrationFilename = /^(\d+)_.+\.sql$/;
+
 export const bundledMigrationNames: readonly string[] = [
   "001_initial.sql",
   "002_repository_difficulty_scheme.sql",
