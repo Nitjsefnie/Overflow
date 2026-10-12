@@ -108,4 +108,16 @@ describe("the shared postgres globalSetup starts nothing for a run that needs no
     expect(scanMock).toHaveBeenCalledWith([], expect.any(Function));
     expect(project.provide).not.toHaveBeenCalled();
   });
+
+  it("does not throw during setup for a mocked helper with deep valid syntax", async () => {
+    const actual = await vi.importActual<typeof import("./shared-postgres-need")>("./shared-postgres-need");
+    scanMock.mockImplementation(actual.runNeedsSharedPostgres);
+    const testPath = join(probeDirectory, "solo.test.ts");
+    await writeFile(testPath, 'vi.mock("./deep", () => ({ result: 0 }));\nimport { result } from "./deep";', "utf8");
+    await writeFile(join(probeDirectory, "deep.ts"), `export const result = ${Array(6000).fill("1").join(" + ")};`, "utf8");
+    const project = fakeProject({ specs: [{ moduleId: testPath }] });
+
+    await expect(callSetup(project)).resolves.toBeUndefined();
+    expect(project.provide).not.toHaveBeenCalled();
+  });
 });

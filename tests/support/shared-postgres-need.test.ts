@@ -83,6 +83,38 @@ describe("runNeedsSharedPostgres", () => {
     expect(runNeedsSharedPostgres([...sources.keys()], (path) => sources.get(path)!)).toBe(false);
   });
 
+  it.each([false, true])("scans deep valid syntax and its later dependency with database need=%s", (needsDatabase) => {
+    const sources = new Map([
+      ["tests/unit/solo.test.ts", 'import "./deep";'],
+      ["tests/unit/deep.ts", `export const result = ${Array(6000).fill("1").join(" + ")};\nimport "./writes";`],
+      ["tests/unit/writes.ts", needsDatabase ? "startPostgresContainer();" : "export const value = 1;"],
+    ]);
+    const warnings: string[] = [];
+    expect(runNeedsSharedPostgres(["tests/unit/solo.test.ts"], (path) => {
+      const source = sources.get(path);
+      if (source === undefined) throw new Error("ENOENT");
+      return source;
+    }, (message) => warnings.push(message))).toBe(needsDatabase);
+    expect(warnings).toEqual([]);
+  });
+
+  it.each([false, true])("warns on parser failure and continues scanning other files with database need=%s", (needsDatabase) => {
+    const sources = new Map([
+      ["tests/unit/solo.test.ts", 'import "./unparsable";'],
+      ["tests/unit/unparsable.ts", `export const result = ${"(".repeat(6000)}1${")".repeat(6000)};`],
+      ["tests/unit/other.test.ts", needsDatabase ? "startPostgresContainer();" : "export const value = 1;"],
+    ]);
+    const warnings: string[] = [];
+    expect(runNeedsSharedPostgres(["tests/unit/solo.test.ts", "tests/unit/other.test.ts"], (path) => {
+      const source = sources.get(path);
+      if (source === undefined) throw new Error("ENOENT");
+      return source;
+    }, (message) => warnings.push(message))).toBe(needsDatabase);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("tests/unit/unparsable.ts");
+    expect(warnings[0]).toContain("Maximum call stack size exceeded");
+  });
+
   it("keeps a database-free helper graph database-free, including cycles and type-only edges", () => {
     const sources = new Map([
       ["tests/fold/solo.test.ts", 'import "../support/plain";\nimport type { Write } from "../support/writes";'],
@@ -143,10 +175,14 @@ describe("runNeedsSharedPostgres", () => {
     expect(warnings[0]).toContain("tests/db/gone.test.ts");
   });
 
-  it("does not throw on the default stderr warning path", () => {
+  it("does not throw when reporting an unreadable file to the warning sink", () => {
+    const warnings: string[] = [];
     expect(runNeedsSharedPostgres(["tests/db/gone.test.ts"], () => {
       throw new Error("ENOENT: no such file");
-    })).toBe(false);
+    }, (message) => warnings.push(message))).toBe(false);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("tests/db/gone.test.ts");
+    expect(warnings[0]).toContain("ENOENT: no such file");
   });
 
   it("matches the marker as a substring of any content, including a comment", () => {
