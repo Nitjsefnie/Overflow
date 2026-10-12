@@ -542,7 +542,7 @@ describe("the required workflows' base-freshness step", () => {
       verifyStep.env,
       "Base freshness must take exactly these six inputs from these sources — a rewired BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source, and missing PR_NUMBER or HEAD_SHA leaves the script unable to fetch the PR's file list or to name the head on the certificate it issues",
     ).toEqual({ ...expectedEnv,
-      BASE_SHA: "${{ steps.pr.outputs.base_sha }}",
+      BASE_SHA: "${{ steps.pr-tree.outputs.freshness_base_sha }}",
       BASE_REF: "${{ steps.pr.outputs.base_ref }}",
       PR_NUMBER: "${{ steps.pr.outputs.pr_number }}",
       HEAD_SHA: "${{ steps.pr.outputs.head_sha }}",

@@ -267,7 +267,7 @@ async function runStep(
       GITHUB_WORKSPACE: fx.workspace,
       GITHUB_EVENT_NAME: "workflow_run",
       GITHUB_OUTPUT: output,
-      PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
+      PATH: given.PATH ?? `${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
     },
   });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr, output: await readFile(output, "utf8") };
@@ -878,5 +878,77 @@ describe("the awaited suite run's id the workflow_run leg requires", () => {
   it("accepts a positive integer id", async () => {
     const result = await runWith("123");
     expect(result.status, result.stdout + result.stderr).toBe(0);
+  });
+});
+
+
+describe("freshness against the suite's conservatively bounded base", () => {
+  it.each([
+    ["overlapping", "src/shared.ts", false],
+    ["disjoint", "src/unrelated.ts", true],
+    ["unchanged", null, true],
+  ] as const)("%s base after the suite cannot hide an untested advance", async (_label, advance, certified) => {
+    counter += 1;
+    const origin = join(root, `fresh-origin-${counter}`);
+    await mkdir(join(origin, "scripts"), { recursive: true });
+    git(origin, "init", "--quiet", "--initial-branch=main");
+    git(origin, "config", "uploadpack.allowAnySHA1InWant", "true");
+    await copyFile(resolve("scripts/ci-base-freshness.sh"), join(origin, "scripts/ci-base-freshness.sh"));
+    const lines = Array.from({ length: 100 }, (_, n) => `line ${n}`).join("\n") + "\n";
+    const fork = await commitFiles(origin, { "src/shared.ts": lines }, "fork point");
+    git(origin, "checkout", "--quiet", "-b", "feature");
+    const head = await commitFiles(origin, { "src/shared.ts": lines.replace("line 0\n", "PR change\n") }, "PR head");
+    git(origin, "checkout", "--quiet", "main");
+    if (advance !== null) {
+      await commitFiles(origin, { "CHANGELOG.md": "suite-time base\n" }, "suite tested this base");
+      await commitFiles(origin, { [advance]: advance === "src/shared.ts"
+        ? lines.replace("line 99\n", "untested main change\n") : "unrelated main change\n" }, "main advances after suite");
+    }
+    const base = git(origin, "rev-parse", "HEAD");
+    const workspace = join(root, `fresh-workspace-${counter}`);
+    git(root, "clone", "--quiet", "--no-local", `file://${origin}`, workspace);
+    const fx: Fixture = { origin, workspace, merge: "", head, base };
+    const made = await materialise(fx);
+    expect(made.result.status, made.result.stdout + made.result.stderr).toBe(0);
+    // Static gates still inspect H + current base, while freshness must begin
+    // at the fork point, never at the later base the suite did not exercise.
+    expect(parents(made.outputs.path!, "HEAD")).toEqual([base, head]);
+    const bin = join(root, `fresh-bin-${counter}`);
+    await mkdir(bin);
+    await writeFile(join(bin, "gh"), `#!/bin/sh
+case "$*" in
+*commits/main*) printf '%s\\n' "$CURRENT_BASE" ;;
+*pulls/1/files*) printf '%s\\n' 'src/shared.ts' ;;
+*total_commits*) printf '%s\\n' '2' ;;
+*'files | length'*) printf '%s\\n' '2' ;;
+*compare/*) printf '%s\\n' "$ADVANCE_FILES" ;;
+*) exit 97 ;;
+esac
+`, { mode: 0o755 });
+    const fresh = await runStep(stepRunning("/scripts/ci-base-freshness.sh"), fx, {
+      GH_TOKEN: "fixture", REPO_SLUG: "Nitjsefnie/Overflow", BASE_REF: "main", PR_NUMBER: "1",
+      CURRENT_BASE: base, ADVANCE_FILES: `CHANGELOG.md\n${advance ?? ""}`,
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    }, made.outputs);
+    expect(fresh.status, fresh.stdout + fresh.stderr).toBe(certified ? 0 : 1);
+    expect(fresh.stdout).toContain(certified ? "CERTIFIED" : "REFUSED");
+    expect(made.outputs.freshness_base_sha).toBe(fork);
+  });
+
+  it.each(["", `${"a".repeat(40)}\n${"b".repeat(40)}`])("refuses an empty or multiple merge-base result", async (answer) => {
+    const fx = await fixture({ "src/a.ts": "export const a = 1;\n" });
+    const bin = join(root, `merge-base-bin-${counter}`);
+    await mkdir(bin);
+    const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+    await writeFile(join(bin, "git"), `#!/bin/sh
+if [ "$1" = merge-base ]; then printf '%s\\n' "$MERGE_BASE_REPLY"; exit 0; fi
+exec "$REAL_GIT" "$@"
+`, { mode: 0o755 });
+    const made = await materialise(fx, { env: {
+      PATH: `${bin}:${process.env.PATH ?? ""}`, REAL_GIT: realGit, MERGE_BASE_REPLY: answer,
+    } });
+    expect(made.result.status).not.toBe(0);
+    expect(made.result.stdout).toContain("::error::");
+    expect(made.outputs).toEqual({});
   });
 });

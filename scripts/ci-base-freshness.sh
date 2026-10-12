@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # LAST step of ci-pr.yml's verify job and pr-gates.yml's actionlint job.
-# Both workflows admit only pull_request_target. Certify an unchanged base
+# Verify admits workflow_run, actionlint pull_request_target. Verify supplies
+# the head/current-base fork point, a conservative bound on the suite's tested
+# base; actionlint supplies its event base. Certify an unchanged baseline
 # or an advance disjoint from the PR's files; incomplete API reads fail closed.
 set -euo pipefail
 export LC_ALL=C
