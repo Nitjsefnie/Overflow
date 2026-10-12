@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SHARED_POSTGRES_MARKER, runNeedsSharedPostgres } from "./shared-postgres-need";
 
@@ -13,12 +15,104 @@ describe("runNeedsSharedPostgres", () => {
     expect(runNeedsSharedPostgres([...sources.keys()], (path) => sources.get(path)!)).toBe(true);
   });
 
+  it.each([
+    ['import { write } from "../support/writes";', "tests/support/writes.ts"],
+    ['export { write } from "../support/writes";', "tests/support/writes.ts"],
+    ['const helper = import("../support/writes");', "tests/support/writes.ts"],
+    ['const helper = require("../support/writes");', "tests/support/writes.ts"],
+    ['import "../support/writes.ts";', "tests/support/writes.ts"],
+    ['import "../support/writes.js";', "tests/support/writes.ts"],
+    ['import "../support/writes";', "tests/support/writes/index.ts"],
+    ['import "../support/writes.helper";', "tests/support/writes.helper.ts"],
+    ['import "@/lib/writes";', resolve("src/lib/writes.ts")],
+  ])("follows a database helper dependency: %s", (source, helperPath) => {
+    const sources = new Map([
+      ["tests/fold/solo.test.ts", source],
+      [helperPath, 'import { write } from "./nested";'],
+      [join(dirname(helperPath), "nested.ts"), "startPostgresContainer();"],
+    ]);
+    expect(runNeedsSharedPostgres(["tests/fold/solo.test.ts"], (path) => {
+      const contents = sources.get(path);
+      if (contents === undefined) throw new Error("ENOENT");
+      return contents;
+    })).toBe(true);
+  });
+
+  it("finds a database dependency after an import cycle without reading a module twice", () => {
+    const sources = new Map([
+      ["tests/fold/solo.test.ts", 'import "../support/cycle";'],
+      ["tests/support/cycle.ts", 'import "../fold/solo.test.ts";\nexport * from "./writes";'],
+      ["tests/support/writes.ts", "startPostgresContainer();"],
+    ]);
+    const reads = new Map<string, number>();
+    expect(runNeedsSharedPostgres(["tests/fold/solo.test.ts"], (path) => {
+      reads.set(path, (reads.get(path) ?? 0) + 1);
+      if (reads.get(path)! > 1) throw new Error("module read twice");
+      const contents = sources.get(path);
+      if (contents === undefined) throw new Error("ENOENT");
+      return contents;
+    })).toBe(true);
+    expect(reads.get("tests/fold/solo.test.ts")).toBe(1);
+    expect(reads.get("tests/support/cycle.ts")).toBe(1);
+  });
+
+  it("detects a helper calling the startup API through namespace bracket access", () => {
+    const sources = new Map([
+      ["tests/fold/solo.test.ts", 'import "../support/writes";'],
+      ["tests/support/writes.ts", 'import * as db from "./postgres-container";\nawait db["startPostgresContainer"]();'],
+    ]);
+    expect(runNeedsSharedPostgres(["tests/fold/solo.test.ts"], (path) => {
+      const contents = sources.get(path);
+      if (contents === undefined) throw new Error("ENOENT");
+      return contents;
+    })).toBe(true);
+  });
+
+  it.each(["tests/fold/reconcile.test.ts", "tests/webhooks/processor.test.ts"])(
+    "detects the real indirect database consumer %s when run alone",
+    (path) => {
+      expect(runNeedsSharedPostgres([resolve(path)], (dependency) => readFileSync(dependency, "utf8"))).toBe(true);
+    },
+  );
+
   it("returns false when no file contains the marker", () => {
     const sources = new Map([
       ["tests/github/plain.test.ts", `import { expect } from "vitest";\n`],
       ["tests/lib/other.test.ts", `describe("unit", () => {});\n`],
     ]);
     expect(runNeedsSharedPostgres([...sources.keys()], (path) => sources.get(path)!)).toBe(false);
+  });
+
+  it("keeps a database-free helper graph database-free, including cycles and type-only edges", () => {
+    const sources = new Map([
+      ["tests/fold/solo.test.ts", 'import "../support/plain";\nimport type { Write } from "../support/writes";'],
+      ["tests/support/plain.ts", 'import "../fold/solo.test.ts";\nexport { type Write } from "./writes";'],
+      ["tests/support/writes.ts", "startPostgresContainer();"],
+    ]);
+    expect(runNeedsSharedPostgres(["tests/fold/solo.test.ts"], (path) => {
+      const contents = sources.get(path);
+      if (contents === undefined) throw new Error("ENOENT");
+      return contents;
+    })).toBe(false);
+  });
+
+  it.each(["tests/support/postgres-endpoint.test.ts", "tests/deploy/compose-file.test.ts", "tests/config/vitest-max-workers.test.ts"])(
+    "does not mistake the shared helper's utility exports for a database request in %s",
+    (path) => {
+      expect(runNeedsSharedPostgres([resolve(path)], (dependency) => readFileSync(dependency, "utf8"))).toBe(false);
+    },
+  );
+
+  it("does not scan packages imported through a relative node_modules path", () => {
+    const reads: string[] = [];
+    const warnings: string[] = [];
+    expect(runNeedsSharedPostgres(["tests/unit/solo.test.ts"], (path) => {
+      reads.push(path);
+      if (path !== "tests/unit/solo.test.ts") throw new Error("package must not be scanned");
+      return 'import "../../node_modules/package";';
+    }, (message) => warnings.push(message))).toBe(false);
+    expect(reads).toEqual(["tests/unit/solo.test.ts"]);
+    expect(warnings).toEqual([]);
   });
 
   it("returns true on a match after an unreadable file", () => {

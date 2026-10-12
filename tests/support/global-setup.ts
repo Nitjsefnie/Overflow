@@ -9,7 +9,7 @@ import { runNeedsSharedPostgres } from "./shared-postgres-need";
  * shares (issue 626): setup() starts it once and provides its connection
  * facts, teardown() stops it. Since issue 1070 the start is lazy: setup()
  * resolves the run's test files and starts the server only when one of them
- * imports startPostgresContainer — a run with no database suite starts no
+ * reaches startPostgresContainer through its local imports — a run with no database suite starts no
  * container at all. Local facts use the IPv4 loopback literal and
  * its published port, so socket address-family fallback cannot reach another
  * port. IPv6-only publication is rejected because the pinned postgres client
@@ -55,8 +55,8 @@ let container: StartedTestContainer | undefined;
 
 export async function setup(vitest: GlobalSetupVitest): Promise<void> {
   // Lazy start (issue 1070): the run's own file list decides whether the
-  // shared server is needed. A run with no file that imports
-  // startPostgresContainer starts nothing, provides nothing, and touches no
+  // shared server is needed. A run whose files and local dependencies never
+  // request startPostgresContainer starts nothing, provides nothing, and touches no
   // Docker client at all; its DB-less suites cannot ask for the facts, and if
   // one did, resolveSharedPostgresFacts's existing "no shared postgres was
   // provided" error names the misconfiguration loudly.
