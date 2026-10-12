@@ -86,40 +86,61 @@ export function newestProducersFor(pinMap: PinMap, candidates: readonly SweepCan
     for (const [context, pins] of Object.entries(pinMap)) {
       if (!pinsFor(pins).includes(candidate.path)) continue;
       const previous = newest.get(context);
-      if (
-        previous === undefined || BigInt(candidate.runId) > BigInt(previous.runId) ||
-        (BigInt(candidate.runId) === BigInt(previous.runId) && candidate.runAttempt > previous.runAttempt)
-      ) newest.set(context, candidate);
+      if (previous === undefined || compareProducerIdentities(candidate, previous) > 0) newest.set(context, candidate);
     }
   }
   return newest;
 }
 
-/** Latest concluded App checks must carry the selected producer's exact id:attempt identity. */
-export async function attestedContexts(
+type ProducerIdentity = { runId: string; runAttempt: number | bigint };
+
+/** Numeric run id takes precedence; attempts order reruns of that same run. */
+function compareProducerIdentities(first: ProducerIdentity, second: ProducerIdentity): number {
+  const firstId = BigInt(first.runId), secondId = BigInt(second.runId);
+  if (firstId !== secondId) return firstId > secondId ? 1 : -1;
+  const firstAttempt = BigInt(first.runAttempt), secondAttempt = BigInt(second.runAttempt);
+  return firstAttempt === secondAttempt ? 0 : firstAttempt > secondAttempt ? 1 : -1;
+}
+
+function identityFromExternalId(value: unknown): ProducerIdentity | undefined {
+  if (typeof value !== "string") return;
+  const match = /^([1-9][0-9]*):([1-9][0-9]*)$/.exec(value);
+  if (match === null || match[0] !== value) return;
+  return { runId: match[1], runAttempt: BigInt(match[2]) };
+}
+
+/** Newer App identities block publication; equal identities require a bound certificate when applicable. */
+export async function publicationBlockedContexts(
   deps: ProducerDeps,
   headSha: string,
   newest: ReadonlyMap<string, SweepCandidate>,
+  historyBounds?: ReadonlyMap<string, string>,
 ): Promise<Set<string>> {
   const body = await deps.api.get<Record<string, unknown>>(
     `${deps.apiRoot}/repos/${deps.repo}/commits/${headSha}/check-runs?app_id=${deps.appId}&filter=latest&per_page=100`,
     `the ledger App's check-runs at ${headSha}`,
   );
-  const attested = new Set<string>();
-  if (!Array.isArray(body.check_runs)) return attested;
+  const blocked = new Set<string>();
+  if (!Array.isArray(body.check_runs)) return blocked;
   for (const entry of body.check_runs) {
     if (typeof entry !== "object" || entry === null) continue;
     const checkRun = entry as {
-      name?: unknown; status?: unknown; external_id?: unknown; app?: { id?: unknown };
+      name?: unknown; external_id?: unknown; app?: { id?: unknown };
+      conclusion?: unknown; output?: { summary?: unknown } | null;
     };
     if (typeof checkRun.name !== "string") continue;
     if (String(checkRun.app?.id ?? "") !== deps.appId) continue;
-    if (checkRun.status === "queued" || checkRun.status === "in_progress") continue;
     const producer = newest.get(checkRun.name);
-    if (producer === undefined || checkRun.external_id !== producerExternalId(producer)) continue;
-    attested.add(checkRun.name);
+    const identity = identityFromExternalId(checkRun.external_id);
+    if (producer === undefined || identity === undefined) continue;
+    const ordering = compareProducerIdentities(identity, producer);
+    if (ordering < 0) continue;
+    const bound = historyBounds?.get(checkRun.name);
+    if (ordering === 0 && bound !== undefined && (checkRun.conclusion !== "failure" ||
+      typeof checkRun.output?.summary !== "string" || !checkRun.output.summary.includes(bound))) continue;
+    blocked.add(checkRun.name);
   }
-  return attested;
+  return blocked;
 }
 
 /** Both duties pass the resolved PR SHA for workflow_run; never the producer's main tip. */

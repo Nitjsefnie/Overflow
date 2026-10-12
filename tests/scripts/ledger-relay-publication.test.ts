@@ -104,9 +104,12 @@ function world(kind: "verify" | "pr-gates" = "verify") {
       if (state.listingReadFails) return new Response("producer listing unavailable", { status: 503 });
       return response({ workflow_runs: state.producers });
     }
-    if (url.includes(`/commits/${HEAD}/check-runs?`)) {
+    const checksHead = /\/commits\/([^/]+)\/check-runs\?/.exec(url)?.[1];
+    if (checksHead !== undefined) {
       const latest = new Map<string, Body>();
-      for (const check of state.checks) latest.set(String(check.name), check);
+      for (const check of state.checks) {
+        if (check.head_sha === checksHead) latest.set(String(check.name), check);
+      }
       return response({ check_runs: [...latest.values()] });
     }
     for (const run of [...state.suites, ...state.producers]) {
@@ -276,6 +279,86 @@ describe("issue 1195 newest-completed publication regressions", () => {
     expect(w.state.checks.at(-1)).toMatchObject({ head_sha: HEAD, external_id: "9002:1", conclusion: "failure" });
     const failureIndex = w.state.checks.findIndex((check) => check.external_id === "9002:1");
     expect(w.state.checks.slice(failureIndex).every((check) => check.conclusion === "failure")).toBe(true);
+  });
+});
+
+describe("fix round 1 sequential safety probes", () => {
+  it.each(["mirror", "sweep"] as const)("preserves a newer attested failure outside the bounded producer window, %s", async (mode) => {
+    const w = world("pr-gates");
+    const older = gate(9001, "success");
+    const newer = gate(9002, "failure");
+    w.state.producers = [newer, older];
+    await w.relay("mirror", newer);
+    const otherHeadRuns = Array.from({ length: mode === "mirror" ? 20 : 19 }, (_, i) => ({
+      ...gate(10020 - i, "success"), head_sha: "c".repeat(40),
+    }));
+    // The mirror retains its omitted trigger; the sweep must actually select
+    // the older candidate inside its window while the newer one is outside.
+    w.state.producers = mode === "mirror"
+      ? [...otherHeadRuns, newer, older] : [...otherHeadRuns, older, newer];
+    const before = w.state.checks.length;
+    await w.relay(mode, older);
+    for (const context of GATE_CONTEXTS) {
+      expect(w.state.checks.filter((check) => check.head_sha === HEAD && check.name === context).at(-1))
+        .toMatchObject({ external_id: "9002:1", conclusion: "failure" });
+    }
+    expect(w.state.checks.slice(before).filter((check) => check.head_sha === HEAD)).toEqual([]);
+  });
+
+  it.each(["mirror", "sweep"] as const)("preserves a newer attested failure while its next attempt is queued, %s", async (mode) => {
+    const w = world("pr-gates");
+    const older = gate(9001, "success");
+    const newer = gate(9002, "failure");
+    w.state.producers = [newer, older];
+    await w.relay("mirror", newer);
+    w.state.producers = [{ ...newer, run_attempt: 2, status: "queued", conclusion: null }, older];
+    const before = w.state.checks.length;
+    await w.relay(mode, older);
+    for (const context of GATE_CONTEXTS) {
+      expect(w.state.checks.filter((check) => check.name === context).at(-1))
+        .toMatchObject({ external_id: "9002:1", conclusion: "failure" });
+    }
+    expect(w.state.checks.slice(before)).toEqual([]);
+  });
+
+  it.each(["mirror", "sweep"] as const)("keeps the bound certificate when the same identity was green, %s", async (mode) => {
+    const w = world();
+    await w.relay("mirror");
+    w.state.oversized = true;
+    await w.relay(mode);
+    expect(w.state.checks.at(-1)).toMatchObject({ external_id: "9001:1", conclusion: "failure" });
+    expect((w.state.checks.at(-1)?.output as Body).summary).toMatch(/1000 runs/);
+    expect(w.state.checks).toHaveLength(2);
+    await w.relay(mode);
+    expect(w.state.checks).toHaveLength(2);
+  });
+
+  it.each(["mirror", "sweep"] as const)("requires failure and bound evidence before skipping a same-identity certificate, %s", async (mode) => {
+    const bound = "suite history exceeds 10 pages / 1000 runs";
+    for (const [conclusion, output] of [
+      ["success", { summary: bound }],
+      ["failure", { summary: "the producing job failed" }],
+      ["failure", {}],
+    ] as const) {
+      const w = world();
+      await w.relay("mirror");
+      Object.assign(w.state.checks[0], { conclusion, output });
+      w.state.oversized = true;
+      await w.relay(mode);
+      expect(w.state.checks, `${conclusion}: ${JSON.stringify(output)}`).toHaveLength(2);
+      expect(w.state.checks.at(-1)).toMatchObject({ external_id: "9001:1", conclusion: "failure" });
+      expect((w.state.checks.at(-1)?.output as Body).summary).toContain(bound);
+    }
+  });
+
+  it.each(["mirror", "sweep"] as const)("orders run ID before attempt when the producer keys oppose each other, %s", async (mode) => {
+    const w = world("pr-gates");
+    const lowerId = { ...gate(9001, "success"), run_attempt: 7 };
+    const higherId = gate(9002, "failure");
+    w.state.producers = [lowerId, higherId];
+    await w.relay(mode, lowerId);
+    expect(w.state.checks.map((check) => `${check.external_id}=${check.conclusion}`))
+      .toEqual(GATE_CONTEXTS.map(() => "9002:1=failure"));
   });
 });
 
