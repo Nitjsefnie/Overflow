@@ -66,6 +66,7 @@ COPY --from=build /app/next.config.ts ./next.config.ts
 COPY --from=build /app/db ./db
 COPY --from=build /app/src/lib/db ./src/lib/db
 COPY --from=build /app/scripts/migrate.ts ./scripts/migrate.ts
+COPY --from=build /app/scripts/migration-compatibility.ts ./scripts/migration-compatibility.ts
 COPY --from=build /app/LICENSE ./LICENSE
 # Next.js writes its cache (.next/cache) at runtime, and the unprivileged
 # server cannot create it under the root-owned .next the build stage copied.

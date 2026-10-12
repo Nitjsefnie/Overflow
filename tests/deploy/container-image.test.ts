@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { createDockerImageSuite } from "../support/docker-images";
 
@@ -66,7 +68,60 @@ describe("Dockerfile", () => {
   it("ships the migration step's database client into the runtime stage", () => {
     expect(dockerfile).toContain("COPY --from=build /app/src/lib/db ./src/lib/db");
   });
+
+  it("copies the migration runner's relative-import closure into the runtime stage", () => {
+    const repoRoot = realpathSync(fileURLToPath(new URL("../..", import.meta.url)));
+    const lines = dockerfile.replace(/\\\r?\n/g, " ").split("\n");
+    const runtimeAt = lines.findIndex((line) => line.includes("AS runtime"));
+    expect(runtimeAt, "the runtime stage").toBeGreaterThanOrEqual(0);
+    const nextStageAt = lines.findIndex((line, index) => index > runtimeAt && /^FROM\s/i.test(line));
+    const runtime = lines.slice(runtimeAt + 1, nextStageAt < 0 ? undefined : nextStageAt);
+    const copies = runtime.flatMap((line) => {
+      const match = /^COPY\s+--from=build\s+\/app\/(\S+)\s+(\S+)\s*$/i.exec(line);
+      return match ? [{ source: match[1], destination: match[2] }] : [];
+    });
+    const missing = relativeImportClosure(repoRoot, "scripts/migrate.ts").filter((file) =>
+      !copies.some(({ source, destination }) => {
+        const sourcePath = path.join(repoRoot, source);
+        const suffix = path.relative(sourcePath, path.join(repoRoot, file));
+        if (suffix === ".." || suffix.startsWith(`..${path.sep}`) || path.isAbsolute(suffix)) return false;
+        const directory = suffix !== "";
+        const target = path.posix.resolve("/app", destination,
+          directory ? suffix : destination.endsWith("/") ? path.basename(file) : "");
+        return target === `/app/${file}`;
+      }),
+    );
+    expect(missing, "migration modules missing from their runtime import paths").toEqual([]);
+  });
 });
+
+/** Follow source imports, re-exports and literal import() calls without executing the runner. */
+function relativeImportClosure(repoRoot: string, entry: string): string[] {
+  const visited = new Set<string>();
+  function follow(filename: string): void {
+    const resolved = realpathSync(filename);
+    const relative = path.relative(repoRoot, resolved);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error(`Migration import escapes the repository: ${filename}`);
+    }
+    if (visited.has(relative)) return;
+    visited.add(relative);
+    const source = ts.createSourceFile(resolved, readFileSync(resolved, "utf8"), ts.ScriptTarget.Latest);
+    function visit(node: ts.Node): void {
+      const specifier = ts.isImportDeclaration(node) || ts.isExportDeclaration(node)
+        ? node.moduleSpecifier
+        : ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword
+          ? node.arguments[0] : undefined;
+      if (specifier && ts.isStringLiteral(specifier) && /^\.\.?\//.test(specifier.text)) {
+        follow(path.resolve(path.dirname(resolved), specifier.text));
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(source);
+  }
+  follow(path.join(repoRoot, entry));
+  return [...visited].sort();
+}
 
 // Issue 688: the runtime image must ship production dependencies only,
 // declare its health against the readiness endpoint, and be able to write
