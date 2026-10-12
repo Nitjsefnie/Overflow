@@ -900,12 +900,19 @@ The deploy script still reads field 2 only.
 Classification denies these shapes by default, ignoring SQL comments and
 matching case-insensitively after normalizing whitespace:
 
-- `DROP COLUMN` and `DROP TABLE`;
+- `ALTER TABLE ... DROP [COLUMN] [IF EXISTS] <column>` and `DROP TABLE`;
 - any `ALTER ... RENAME` form;
 - `ALTER [COLUMN] <column> [SET DATA] TYPE` (the `COLUMN` keyword is optional);
 - `SET NOT NULL`;
-- `ADD COLUMN ... NOT NULL` without `DEFAULT` in the same top-level column
+- `ALTER TABLE ... ADD [COLUMN] [IF NOT EXISTS] <column> ... NOT NULL`
+  without `DEFAULT` in the same top-level column
   definition.
+
+Unicode-escaped `U&` identifiers and strings (including `UESCAPE`) are decoded
+before matching. String constants continued across a newline are concatenated
+before their contents are scanned. Lexical forms the classifier cannot decode
+confidently require `review`, labelled `unsupported lexical form`; the safe
+marker cannot override that failure.
 
 The contents of every SQL string literal are classified too: a shape inside
 a literal still requires review, even if that literal is data rather than
@@ -916,7 +923,8 @@ The literal substring `overflow: mixed-version review` anywhere
 in the raw file, comments included, also forces `review`. A real SQL line
 comment `-- overflow: mixed-version safe: <reason>` downgrades a shape hit to
 `-` only with a non-empty reason explaining why retained releases are safe;
-an empty reason does not count. The review marker beats the safe marker when
+an empty reason does not count, and marker-looking text inside a block comment
+never authorizes a migration. The review marker beats the safe marker when
 both occur. Adding or dropping constraints and dropping a column default are
 not classified; use the voluntary review marker for those risks too.
 
@@ -926,7 +934,11 @@ target, then rerun with the unchanged `OVERFLOW_DEPLOY_MIGRATION_ACK=1` to
 confirm that review. The acknowledgment has no effect when the status command
 fails, and any value other than `1` is refused. The runner records the verdict
 in `schema_migrations.mixed_version_review` in the same transaction as the
-migration; already-applied legacy rows are not reclassified.
+migration; already-applied legacy rows are not reclassified. Readiness renders
+only ledger names matching the runner's migration filename grammar. An invalid
+flagged name still refuses readiness, but the body and journal show only
+`<unrecognised migration name>`. Only an actual boolean true flags a row; a
+legacy missing flag or a drifted non-boolean flag is treated as unflagged.
 
 Use expand/contract releases: drop or rename a column only one release after
 the code stopped reading and writing it. Change a type or add `NOT NULL` only

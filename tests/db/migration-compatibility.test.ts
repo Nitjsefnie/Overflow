@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { pendingMigrationLines, readMigrationTree } from "../../scripts/deploy-migration-status";
-import { migrationCompatibilityFixtures } from "../fixtures/migration-compatibility";
+import { migrationCompatibilityFixtures, finalFixMigrationFixtures, lexicalCompatibilityFixtures } from "../fixtures/migration-compatibility";
 
 let fixturesDirectory: string;
 const migrationsDirectory = fileURLToPath(new URL("../../db/migrations/", import.meta.url));
 
 beforeAll(async () => {
   fixturesDirectory = await mkdtemp(path.join(tmpdir(), "overflow-1055-migration-fixtures-"));
-  for (const { name, contents } of migrationCompatibilityFixtures) {
+  for (const { name, contents } of [...migrationCompatibilityFixtures, ...finalFixMigrationFixtures, ...lexicalCompatibilityFixtures]) {
     await writeFile(path.join(fixturesDirectory, name), contents);
   }
 });
@@ -21,6 +21,18 @@ afterAll(async () => {
 });
 
 describe("migration compatibility fixtures", () => {
+  it.each(finalFixMigrationFixtures)("final fix flags $name", async ({ name, shape }) => {
+    const tree = await readMigrationTree(fixturesDirectory);
+    expect(pendingMigrationLines(new Map([[name, tree.get(name)!]]), new Set())).toEqual([
+      `${name}\treview\t${shape}`,
+    ]);
+  });
+
+  it.each(lexicalCompatibilityFixtures)("final fix lexical/control $name", async ({ name, status }) => {
+    const tree = await readMigrationTree(fixturesDirectory);
+    expect(pendingMigrationLines(new Map([[name, tree.get(name)!]]), new Set())).toEqual([`${name}\t${status}`]);
+  });
+
   it.each([
     ["001_drop_column.sql", "drop column"],
     ["002_drop_table.sql", "drop table"],

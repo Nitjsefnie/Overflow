@@ -1,5 +1,5 @@
 import { getSql } from "@/lib/db/client";
-import { bundledMigrationNames } from "@/lib/db/migration-manifest";
+import { bundledMigrationNames, migrationFilename } from "@/lib/db/migration-manifest";
 import { describeErrorCause } from "@/lib/repositories/register";
 
 /**
@@ -88,7 +88,9 @@ export type ReadinessRouteDependencies = {
  * `schema_migrations` is behind, and answers 503 through the same predicate.
  * Extra applied names are accepted only when their recorded compatibility flag
  * is false. Reading each ledger row as JSON tolerates older ledgers without the
- * flag column in the same query: their absent flag defaults to false.
+ * flag column in the same query: their absent flag defaults to false. Only a
+ * JSON boolean true flags a row; drifted text/numeric values are ignored without
+ * casting database text. Invalid ledger names render a fixed placeholder.
  *
  * The 2000 ms budget is raced onto the query by hand: the pinned postgres
  * client (3.4.9, the `_patch_hash` build) exposes no per-query `.timeout()`,
@@ -101,7 +103,7 @@ async function probeDatabase(): Promise<ReadinessProbeOutcome> {
   const sql = getSql();
   const appliedRows = await raceTimeout(
     sql<{ name: string; review: boolean }[]>`
-      select name, coalesce((to_jsonb(m) ->> 'mixed_version_review')::boolean, false) as review
+      select name, coalesce(to_jsonb(m) -> 'mixed_version_review' = 'true'::jsonb, false) as review
       from schema_migrations m order by name
     `,
     READINESS_QUERY_TIMEOUT_MS,
@@ -114,8 +116,8 @@ async function probeDatabase(): Promise<ReadinessProbeOutcome> {
     };
   }
   const incompatible = appliedRows
-    .filter((row) => row.review && !bundledMigrationNames.includes(row.name))
-    .map((row) => row.name);
+    .filter((row) => row.review === true && !bundledMigrationNames.includes(row.name))
+    .map((row) => migrationFilename.test(row.name) ? row.name : "<unrecognised migration name>");
   return incompatible.length === 0
     ? { status: "ready" }
     : {

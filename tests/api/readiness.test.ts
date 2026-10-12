@@ -1,5 +1,5 @@
 import net from "node:net";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { StartedTestContainer } from "testcontainers";
@@ -13,6 +13,8 @@ import {
 } from "@/app/api/readiness/route";
 import { bundledMigrationNames } from "@/lib/db/migration-manifest";
 import { runMigrations } from "../../scripts/migrate";
+import { finalFixMigrationFixtures } from "../fixtures/migration-compatibility";
+import { pendingMigrationLines, readMigrationTree } from "../../scripts/deploy-migration-status";
 import { startPostgresContainer } from "../support/postgres-container";
 
 /**
@@ -454,6 +456,74 @@ describe("readiness endpoint against real databases", () => {
     }
   });
 
+  it.each(finalFixMigrationFixtures)("final fix real chain $name", async ({ name, contents, shape, writerCode }) => {
+    const sql = getSql();
+    const directory = await mkdtemp(path.join(tmpdir(), "overflow-1055-final-fix-"));
+    await sql`create table items (note text)`;
+    await writeFile(path.join(directory, name), contents);
+    const errorSpy = spyOnProbeJournal();
+    try {
+      const lines = pendingMigrationLines(await readMigrationTree(directory), new Set());
+      await runMigrations({ directory });
+      const flags = await sql`select mixed_version_review from schema_migrations where name = ${name}`;
+      const response = await createReadinessGetHandler()();
+      const reason = `database: schema has moved past migrations this build predates and cannot run against: ${name}`;
+      const oldValue = writerCode === "23502" ? null : "old writer value";
+      await expect(sql.unsafe(oldValue === null
+        ? "insert into items (note) values (NULL)"
+        : "insert into items (note) values ('old writer value')")).rejects.toMatchObject({ code: writerCode });
+      expect.soft(lines).toEqual([`${name}\treview\t${shape}`]);
+      expect.soft(flags).toEqual([{ mixed_version_review: true }]);
+      expect.soft(response.status).toBe(503);
+      expect.soft(await response.json()).toEqual({ status: "unavailable", reason });
+      expect.soft(errorSpy.mock.calls).toEqual([[`Readiness probe failed: ${reason}`]]);
+    } finally {
+      vi.restoreAllMocks();
+      await sql`drop table items`;
+      await sql`delete from schema_migrations where name = ${name}`;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["private customer note\nforged journal line", "900_private customer payload", "not_numbered.sql", "900_trailing.sql\n"])(
+    "final fix conceals invalid flagged ledger name %s", async (name) => {
+      const sql = getSql();
+      await sql`insert into schema_migrations (name, mixed_version_review) values (${name}, true)`;
+      const errorSpy = spyOnProbeJournal();
+      try {
+        const response = await createReadinessGetHandler()();
+        const reason = "database: schema has moved past migrations this build predates and cannot run against: <unrecognised migration name>";
+        expect(response.status).toBe(503);
+        expect.soft(await response.json()).toEqual({ status: "unavailable", reason });
+        expect.soft(errorSpy.mock.calls).toEqual([[`Readiness probe failed: ${reason}`]]);
+      } finally {
+        vi.restoreAllMocks();
+        await sql`delete from schema_migrations where name = ${name}`;
+      }
+    },
+  );
+
+  it.each(["private customer payload", "true", "yes", "1"])(
+    "final fix ignores drifted text flag %s without exposing cast inputs", async (flag) => {
+      const sql = getSql();
+      await sql`alter table schema_migrations rename column mixed_version_review to saved_review`;
+      await sql`alter table schema_migrations add column mixed_version_review text`;
+      await sql`insert into schema_migrations (name, mixed_version_review) values ('900_drifted.sql', ${flag})`;
+      const errorSpy = spyOnProbeJournal();
+      try {
+        const response = await createReadinessGetHandler()();
+        expect.soft(response.status).toBe(200);
+        expect.soft(await response.json()).toEqual({ status: "ready" });
+        expect.soft(errorSpy.mock.calls).toEqual([]);
+      } finally {
+        vi.restoreAllMocks();
+        await sql`delete from schema_migrations where name = '900_drifted.sql'`;
+        await sql`alter table schema_migrations drop column mixed_version_review`;
+        await sql`alter table schema_migrations rename column saved_review to mixed_version_review`;
+      }
+    },
+  );
+
   it("answers 200 against an actual old ledger without the verdict column", async () => {
     const sql = getSql();
     // Preserve the fully migrated schema, but replace its ledger with the
@@ -469,6 +539,34 @@ describe("readiness endpoint against real databases", () => {
       await sql`drop table schema_migrations`;
       await sql`alter table saved_schema_migrations rename to schema_migrations`;
     }
+  });
+
+  it("settles the real probe query at 2000 ms and not before", async () => {
+    const sql = getSql();
+    const holder = await sql.reserve();
+    await holder`begin`;
+    await holder`lock table schema_migrations in access exclusive mode`;
+    const errorSpy = spyOnProbeJournal();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let settled = false;
+      const response = createReadinessGetHandler()().then((value) => { settled = true; return value; });
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      const result = await response;
+      const reason = "database: Error: probe query exceeded its 2000 ms budget";
+      expect(result.status).toBe(503);
+      await expect(result.json()).resolves.toEqual({ status: "unavailable", reason });
+      expect(errorSpy.mock.calls).toEqual([[`Readiness probe failed: ${reason}`]]);
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      await holder`rollback`;
+      holder.release();
+    }
+    expect((await createReadinessGetHandler()()).status).toBe(200);
   });
 
   it("answers 503 against a black-holed socket and bounds concurrent probes to one connection", async () => {
