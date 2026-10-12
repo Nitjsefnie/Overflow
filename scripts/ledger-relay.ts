@@ -51,7 +51,7 @@ import {
 import { API_ROOT, API_HEADERS, RUN_DEADLINE_MS, apiCall, sweepApi, assertRunDeadline,
   type RelayHttpOptions } from "./ledger-relay-http.ts";
 import { publishProducerContexts } from "./ledger-relay-publication.ts";
-import { type SweepCandidate } from "./ledger-relay-producers.ts";
+import { type CheckRunSuppression, type SweepCandidate } from "./ledger-relay-producers.ts";
 import { LEDGER_APP_MINT_PERMISSIONS } from "./ledger-app-mint-permissions.ts";
 // The pure decision layer. Re-exported below, with `.ts` specifiers, so the
 // surface this entry has always presented is unchanged: a caller importing
@@ -138,6 +138,8 @@ export interface RelayResult {
   decisions: ContextDecision[];
   /** The contexts whose check-run POST succeeded, in posting order. */
   posted: string[];
+  /** Writes stopped by a newer App identity during reconciliation, across both duties. */
+  suppressed?: CheckRunSuppression[];
   /** True when the rerun-heal dispatched a fresh run (issue 861). */
   rerunDispatched: boolean;
   /** What the orphan sweep found and healed (issue 885). */
@@ -250,6 +252,7 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
     }, attestationRun, triggerJobs, recheckPublication, historyBound);
     result.decisions = publication.decisions;
     result.posted = publication.posted;
+    if (publication.suppressed !== undefined) result.suppressed = publication.suppressed;
     if (publication.supersededBy !== undefined) result.supersededBy = publication.supersededBy;
     return result;
   } catch (error) {
@@ -273,6 +276,9 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
         }, `the rerun of run ${id}`),
       });
       result.rerunDispatched = (result.sweep.rerunDispatched?.length ?? 0) > 0;
+      if (result.sweep.suppressed !== undefined) result.suppressed = [
+        ...(result.suppressed ?? []), ...result.sweep.suppressed,
+      ];
       assertRunDeadline(deps, "completion of the relay run");
     } catch (sweepError) {
       if (!failed) throw sweepError;
@@ -478,17 +484,21 @@ function required(env: Record<string, string | undefined>, name: string): string
  * living undrivable in main().
  */
 export function renderRelayResult(result: RelayResult): string[] {
+  const suppressed = (result.suppressed ?? []).map((entry) =>
+    `[ledger-relay] ${entry.context} at ${entry.headSha}: ${entry.externalId} suppressed by newer App identity ${entry.suppressedBy}`);
   if (result.supersededBy !== undefined) return [
+    ...suppressed,
     `[ledger-relay] ${supersessionMessage(result.supersededBy)}`,
     ...renderSweepLines(result.sweep),
   ];
   if (result.sweepOnly === true) {
     // Issue 1116: the sweep's summary is the whole output; there is no
     // triggering run to name and no mirror to report.
-    return renderSweepLines(result.sweep);
+    return [...suppressed, ...renderSweepLines(result.sweep)];
   }
   if (result.refusedDeadHead !== undefined) {
     return [
+      ...suppressed,
       `[ledger-relay] ${result.refusedDeadHead}`,
       "[ledger-relay] no open pull request is waiting at this head",
       ...renderSweepLines(result.sweep),
@@ -496,13 +506,14 @@ export function renderRelayResult(result: RelayResult): string[] {
   }
   if (result.posted.length === 0) {
     return [
-      "[ledger-relay] nothing to relay: no required context is pinned to the triggering run's workflow",
+      ...suppressed,
+      ...(suppressed.length > 0 ? [] : ["[ledger-relay] nothing to relay: no required context is pinned to the triggering run's workflow"]),
       ...renderSweepLines(result.sweep),
     ];
   }
-  const lines = result.decisions.map(
+  const lines = [...suppressed, ...result.decisions.map(
     (decision) => `[ledger-relay] ${decision.context}: ${decision.conclusion ?? decision.status}`,
-  );
+  )];
   if (result.rerunDispatched && result.sweep.rerunDispatched === undefined) {
     lines.push(
       "[ledger-relay] rerun-heal: the cancelled run was re-dispatched; " +

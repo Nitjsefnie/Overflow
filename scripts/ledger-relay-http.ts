@@ -1,6 +1,7 @@
 // All relay requests share a run deadline, per-attempt timeout and bounded
 // retries. An ambiguous check-run write is read back before another write.
-import { type SweepApi } from "./ledger-relay-producers.ts";
+import { compareProducerIdentities, identityFromExternalId,
+  type CheckRunPostResult, type SweepApi } from "./ledger-relay-producers.ts";
 
 export const API_ROOT = "https://api.github.com";
 export const API_HEADERS = {
@@ -41,7 +42,7 @@ interface ApiRequest {
 /** Three attempts, 1s then 2s backoff; other 4xx responses fail immediately. */
 export async function apiCall<T>(
   deps: RelayHttpDeps, request: ApiRequest, what: string, retryTransient = true,
-  committed?: () => Promise<boolean>,
+  reconcile?: () => Promise<{ retry: true } | { retry: false; value: T }>,
 ): Promise<T> {
   let lastMessage = "";
   const retryCount = retryTransient ? BACKOFF_MS.length : 0;
@@ -64,7 +65,10 @@ export async function apiCall<T>(
       text = await response.text();
     } catch (error) {
       lastMessage = error instanceof Error ? error.message : String(error);
-      if (request.method === "POST" && committed !== undefined && await committed()) return undefined as T;
+      if (request.method === "POST" && reconcile !== undefined) {
+        const outcome = await reconcile();
+        if (!outcome.retry) return outcome.value;
+      }
       continue;
     }
     if (response.ok) {
@@ -89,7 +93,7 @@ export function sweepApi(deps: RelayHttpDeps, repo: string, appId: string, auth:
     apiCall(deps, { url, method: "GET", headers }, what, retryTransient);
   return {
     get,
-    postCheckRun: (body, what) => apiCall<unknown>(deps, {
+    postCheckRun: (body, what) => apiCall<CheckRunPostResult>(deps, {
       url: `${API_ROOT}/repos/${repo}/check-runs`, method: "POST", headers, body: JSON.stringify(body),
     }, what, true, async () => {
       const latest = await get<{ check_runs?: unknown }>(
@@ -97,14 +101,23 @@ export function sweepApi(deps: RelayHttpDeps, repo: string, appId: string, auth:
         `the ledger App's latest check-runs after an ambiguous write of ${body.name}`,
       );
       if (!Array.isArray(latest?.check_runs)) throw new Error("the ambiguous-write re-read returned no check_runs array");
-      return latest.check_runs.some((entry: unknown) => {
-        if (typeof entry !== "object" || entry === null) return false;
+      const intended = identityFromExternalId(body.external_id);
+      if (intended === undefined) throw new Error("the ambiguous write has no intended producer identity");
+      let committed = false;
+      for (const entry of latest.check_runs) {
+        if (typeof entry !== "object" || entry === null) continue;
         const check = entry as {
           name?: unknown; external_id?: unknown; status?: unknown; conclusion?: unknown; app?: { id?: unknown };
         };
-        return String(check.app?.id ?? "") === appId && check.name === body.name &&
-          check.external_id === body.external_id && check.status === body.status && check.conclusion === body.conclusion;
-      });
+        if (String(check.app?.id ?? "") !== appId || check.name !== body.name) continue;
+        const identity = identityFromExternalId(check.external_id);
+        if (identity === undefined) continue;
+        const ordering = compareProducerIdentities(identity, intended);
+        if (ordering > 0) return { retry: false, value: { suppressedBy: String(check.external_id) } };
+        if (ordering === 0 && check.status === "completed" && check.status === body.status &&
+          check.conclusion === body.conclusion) committed = true;
+      }
+      return committed ? { retry: false, value: undefined } : { retry: true };
     }),
   };
 }
