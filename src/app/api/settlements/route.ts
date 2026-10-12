@@ -1,10 +1,10 @@
+import { errorResponse } from "@/lib/http/error-response";
 import {
   listSettlementHistory,
   type SettlementHistoryProjection,
 } from "@/lib/dashboard/queries";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import {
-  errorResponse,
   getProductionSession,
   requiredMemberSession,
   type MemberRouteDependencies,

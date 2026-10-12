@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import { z } from "zod";
 import {
   GitHubScopeProbeError,
@@ -651,8 +652,4 @@ function registrationErrorResponse(error: RepositoryRegistrationError): Response
     case "ROLLBACK_INCOMPLETE":
       return errorResponse(503, error.code, error.message);
   }
-}
-
-function errorResponse(status: number, code: string, message: string): Response {
-  return Response.json({ error: { code, message } }, { status });
 }

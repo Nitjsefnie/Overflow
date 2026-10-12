@@ -1,5 +1,5 @@
 import { SanctionContestError } from "@/lib/moderation/sanction-contest-service";
-import { errorResponse } from "@/lib/security/member-route-auth";
+import { errorResponse } from "@/lib/http/error-response";
 
 /**
  * Maps a sanction-contest failure onto the member routes' shared error

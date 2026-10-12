@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import type {
   CalibrationComparison,
   RepositoryCalibrationEntry,
@@ -12,7 +13,6 @@ import {
 } from "@/lib/dashboard/queries";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import {
-  errorResponse,
   getProductionSession,
   requiredMemberSession,
   type MemberRouteDependencies,

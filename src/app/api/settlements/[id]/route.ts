@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import {
   getSettlementProof,
   type SettlementProofProjection,
@@ -9,7 +10,6 @@ import {
   type SettlementOverrideRequest,
 } from "@/lib/overrides/service";
 import {
-  errorResponse,
   getProductionSession,
   requiredMemberSession,
   type MemberRouteDependencies,

@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import { z } from "zod";
 import { getSql } from "@/lib/db/client";
 import {
@@ -286,10 +287,6 @@ function identityErrorResponse(error: unknown): Response {
     }
   }
   return errorResponse(502, "UPSTREAM_FAILURE", "The forge identity operation could not complete.");
-}
-
-function errorResponse(status: number, code: string, message: string): Response {
-  return Response.json({ error: { code, message } }, { status });
 }
 
 export const GET = createForgeIdentitiesGetHandler(createForgeIdentitiesRouteDependencies());

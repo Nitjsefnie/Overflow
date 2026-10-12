@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import type { UserRole } from "@/lib/db/types";
 import {
   resolveRouteCredential,
@@ -27,10 +28,6 @@ export type ModerationSessionDependencies = {
   findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string; tokenId: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
 };
-
-function errorResponse(status: number, code: string, message: string): Response {
-  return Response.json({ error: { code, message } }, { status });
-}
 
 /**
  * The one moderator authorization gate behind every moderation route, and

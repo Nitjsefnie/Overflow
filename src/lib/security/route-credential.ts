@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import { hashApiToken, readApiTokenCredential } from "@/lib/security/api-token";
 import {
   rejectUnsupportedMediaType,
@@ -100,13 +101,5 @@ export async function resolveRouteCredential(
 }
 
 function credentialRejection(): Response {
-  return Response.json(
-    {
-      error: {
-        code: "UNAUTHENTICATED",
-        message: "The supplied API token was not accepted.",
-      },
-    },
-    { status: 401 },
-  );
+  return errorResponse(401, "UNAUTHENTICATED", "The supplied API token was not accepted.");
 }

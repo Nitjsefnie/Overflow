@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import { z } from "zod";
 import type { UserRole } from "@/lib/db/types";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
@@ -155,10 +156,6 @@ async function parseDecisionInput(
   } catch {
     return null;
   }
-}
-
-function errorResponse(status: number, code: string, message: string): Response {
-  return Response.json({ error: { code, message } }, { status });
 }
 
 // One dependency set for both exports: the two handlers take the same shape,

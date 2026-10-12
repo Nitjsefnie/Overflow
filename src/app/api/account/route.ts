@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import { deleteAccount, type AccountDeletionOutcome } from "@/lib/accounts/deletion";
 import { findLiveAccountIdentity } from "@/lib/accounts/self-service";
 import { isRecentSignIn } from "@/lib/auth/recent-sign-in";
@@ -94,7 +95,9 @@ export function createAccountDeleteHandler(dependencies: AccountDeleteRouteDepen
     }
     switch (outcome.kind) {
       case "SPONSOR_BLOCKED":
-        return Response.json({ error: { code: "SPONSOR_BLOCKED", message: "Unregister your sponsored repositories before deleting your account.", repositories: outcome.repositories } }, { status: 409 });
+        return errorResponse(409, "SPONSOR_BLOCKED", "Unregister your sponsored repositories before deleting your account.", {
+          extra: { repositories: outcome.repositories },
+        });
       case "UNKNOWN_ACCOUNT":
         return errorResponse(403, "FORBIDDEN", "A member account is required.");
       case "PLANNED":
@@ -119,10 +122,6 @@ export function createAccountDeleteHandler(dependencies: AccountDeleteRouteDepen
 
 function upstreamFailure(): Response {
   return errorResponse(502, "UPSTREAM_FAILURE", "Unable to delete account.");
-}
-
-function errorResponse(status: number, code: string, message: string): Response {
-  return Response.json({ error: { code, message } }, { status });
 }
 
 export const DELETE = createAccountDeleteHandler({

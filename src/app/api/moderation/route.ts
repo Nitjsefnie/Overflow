@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import { z } from "zod";
 import type { UserRole } from "@/lib/db/types";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
@@ -234,8 +235,4 @@ export function moderationErrorResponse(error: unknown): Response {
     }
   }
   return errorResponse(500, "INTERNAL_ERROR", "Unable to process moderation request.");
-}
-
-export function errorResponse(status: number, code: string, message: string): Response {
-  return Response.json({ error: { code, message } }, { status });
 }

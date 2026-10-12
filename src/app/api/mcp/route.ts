@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import { readBodyWithinLimit } from "@/lib/http/request-body";
 import { dispatchJsonRpc } from "@/lib/mcp/protocol";
 import {
@@ -11,7 +12,6 @@ import { AccountModerationService } from "@/lib/moderation/service";
 import { PostgresSettlementOverrideStore } from "@/lib/overrides/postgres-store";
 import { SettlementOverrideService } from "@/lib/overrides/service";
 import {
-  errorResponse,
   getProductionSession,
   requiredMemberSession,
   type MemberRouteDependencies,
@@ -226,15 +226,9 @@ export function createMcpPostHandler(dependencies: McpRouteDependencies) {
       if (refusal.status === 403 && request.headers.get("cookie") === null) {
         const origin = readTrustedOrigin();
         if (origin !== null) {
-          return Response.json(
-            {
-              error: {
-                code: "UNAUTHENTICATED",
-                message: "Provide a bearer API token.",
-              },
-            },
-            { status: 401, headers: discoveryHeaders(origin) },
-          );
+          return errorResponse(401, "UNAUTHENTICATED", "Provide a bearer API token.", {
+            headers: discoveryHeaders(origin),
+          });
         }
       }
       return refusal;

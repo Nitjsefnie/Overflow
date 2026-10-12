@@ -14,6 +14,7 @@
 // key is the acting credential identity, never a raw request IP or other
 // request-derived text.
 
+import { errorResponse } from "@/lib/http/error-response";
 import { logField } from "@/lib/webhooks/log-field";
 import type { RateLimiter } from "@/lib/webhooks/rate-limit";
 import type { RouteCredentialReference } from "@/lib/security/route-credential";
@@ -122,10 +123,12 @@ export function createRouteRateGate(options: RouteRateGateOptions): RouteRateGat
     if (outcome.firstDecline) {
       console.warn(`Rate limit: the ${className} bound is spent for ${logField(identityKey)}; declining until the next token refills.`);
     }
-    return new Response(
-      JSON.stringify({ error: { code: "RATE_LIMITED", message: RATE_LIMITED_MESSAGE } }),
-      { status: 429, headers: { "retry-after": String(outcome.retryAfterSeconds) } },
-    );
+    return errorResponse(429, "RATE_LIMITED", RATE_LIMITED_MESSAGE, {
+      headers: {
+        "content-type": "text/plain;charset=UTF-8",
+        "retry-after": String(outcome.retryAfterSeconds),
+      },
+    });
   };
 }
 
