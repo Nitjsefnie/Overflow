@@ -285,6 +285,9 @@ jobs:
         env:
           NEXT_TELEMETRY_DISABLED: "1"
 
+      - name: Prerendered routes check
+        run: node scripts/check-prerendered-routes.ts
+
       - name: Page geometry check
         run: node scripts/check-page-geometry.mjs
 
