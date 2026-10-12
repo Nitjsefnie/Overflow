@@ -844,7 +844,6 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
       },
       "root",
     );
-    const base = git(baseRepo, "rev-parse", "HEAD");
     const target = await blobFile(baseRepo, `planted ${MARKER}`);
     git(baseRepo, "update-index", "--add", "--cacheinfo", `120000,${target},.github/requirements-pyyaml.txt`);
     const baseTree = git(baseRepo, "write-tree");
