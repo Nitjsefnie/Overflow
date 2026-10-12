@@ -179,6 +179,20 @@ describe("recorded migration compatibility", () => {
     });
   });
 
+  it("rolls back the verdict and earlier DDL when a later migration statement fails", async () => {
+    await onNewDatabase("compat_mid_apply_failure", async (sql) => {
+      const directory = await fixtureDirectory("001_setup.sql", "create table items (note text);");
+      await runMigrations({ directory });
+      await writeFile(path.join(directory, "002_failure.sql"),
+        "alter table items drop column note; select a_function_that_does_not_exist();");
+
+      await expect(runMigrations({ directory })).rejects.toThrow("a_function_that_does_not_exist");
+
+      await expect(appliedMigrationNames(sql)).resolves.toEqual(["001_setup.sql"]);
+      await expect(sql`select note from items`).resolves.toEqual([]);
+    });
+  });
+
   it("rolls back migration DDL when recording its verdict fails", async () => {
     await onNewDatabase("compat_atomic", async (sql) => {
       const directory = await fixtureDirectory("001_setup.sql", "create table items (note text);");
