@@ -251,7 +251,7 @@ describe("the CLI against a real database", () => {
     // the ref carries — a branch-only file is left behind (tested, issue 522) — and the
     // default branch's set is checked out over the emptied directory. The CLI under test
     // remains the branch's own scripts/migrate.ts; only the database-facing tree moves. The
-    // swap stages a diff in the private worktree — harmless, afterAll force-removes the tree.
+    // swap stages a diff in the private worktree — harmless, afterEach force-removes the tree.
     if (resolvedDefaultBranchRef !== undefined) {
       git(privateWorktreeRoot, "rm", "-q", "-r", "db/migrations");
       git(privateWorktreeRoot, "checkout", resolvedDefaultBranchRef, "--", "db/migrations");
