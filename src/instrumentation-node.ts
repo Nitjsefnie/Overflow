@@ -11,6 +11,7 @@ import {
 import { FailureLogger } from "@/lib/worker/failure-logger";
 import { appInstallationTokenResolverFromEnv } from "@/lib/github/app-installation-auth";
 import { errorLogToken } from "@/lib/webhooks/log-field";
+import { installJournalLevels } from "@/lib/logging/journal-levels";
 
 /**
  * The drain site's failure key (issue 661): the whole-drain hook the schedule
@@ -29,6 +30,7 @@ export const RECONCILIATION_DRAIN_FAILURE_KEY = "reconciliation-drain";
  * as it was before the split.
  */
 export async function registerNodejs(): Promise<void> {
+  installJournalLevels();
   if (!shouldStartReconciliationBackground(process.env)) {
     return;
   }

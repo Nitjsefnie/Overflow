@@ -1,3 +1,4 @@
+import { Console } from "node:console";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReconciliationDependencies, ReconciliationRepository } from "@/lib/fold/reconcile";
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
@@ -116,6 +117,33 @@ afterEach(() => {
 afterAll(() => { vi.resetModules(); });
 
 describe("server instrumentation", () => {
+  it("installs journal levels on nodejs even when background work is disabled", async () => {
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv("JOURNAL_STREAM", "test-journal-stream");
+    vi.stubEnv("OVERFLOW_DISABLE_RECONCILIATION_SWEEP", "1");
+    vi.stubGlobal("console", new Console({ stdout: process.stdout, stderr: process.stderr, colorMode: false }));
+    const methods = {
+      error: Object.getOwnPropertyDescriptor(console, "error")!,
+      warn: Object.getOwnPropertyDescriptor(console, "warn")!,
+    };
+    const chunks: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      chunks.push(String(chunk));
+      return true;
+    });
+    try {
+      const { register } = await import("@/instrumentation");
+      await register();
+      console.error("error\ncontinuation");
+      console.warn("warning");
+      expect(chunks.join("")).toBe("<3>error\n<3>continuation\n<4>warning\n");
+      expect(startWorker).not.toHaveBeenCalled();
+      expect(startSweep).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperties(console, methods);
+    }
+  });
+
   it("finalizes on startup even when startup enqueue is skipped, and keeps background work on failure", async () => {
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
     vi.stubEnv("NEXT_PHASE", "");
