@@ -117,26 +117,14 @@ describe("the ledger relay workflow's pinned App identity", () => {
     ).toMatchObject({ required: false, default: "" });
   });
 
-  it("keys the concurrency group with the same predicate the sweep-only env carries", () => {
-    // The predicate is read from the workflow's OWN env value, not restated:
-    // the drift this catches is one copy edited and its literal pin updated to
-    // match, which leaves every restated pin green while the group and the env
-    // diverge.
-    const envExpression = String(envValues("LEDGER_SWEEP_ONLY")[0] ?? "");
-    const predicate = envExpression.replace(/^\$\{\{/, "").replace(/\}\}$/, "").trim();
-    const group = String(workflow.concurrency?.group ?? "").replace(/^\$\{\{/, "").replace(/\}\}$/, "").trim();
-    expect(predicate, "the premise: the step carries a sweep-only predicate").not.toBe("");
-    // Containment alone is too weak to be the witness: the group legitimately
-    // holds each arm of the predicate, so a SHRUNKEN env copy would still be
-    // contained. The relation pinned is the design's exact pairing — the group
-    // is the env predicate, parenthesized, between the two group names.
+  it("serializes every relay trigger in one literal concurrency group", () => {
+    const group = workflow.concurrency?.group;
+    expect(group, "the relay group must not vary with the event or run_id").not.toContain("${{");
     expect(
       group,
-      "the concurrency group must decide the sweep-only case from the SAME " +
-        "predicate the LEDGER_SWEEP_ONLY env carries: one copy changed without " +
-        "the other puts a sweep-only start in the relay group (it displaces a " +
-        "PENDING workflow_run relay) or a healing dispatch in the sweep group",
-    ).toEqual(`(${predicate}) && 'ledger-relay-sweep' || 'ledger-relay'`);
+      "schedule, workflow_dispatch with or without run_id, and workflow_run " +
+        "must share one repository-wide group so relay writes cannot overlap",
+    ).toBe("ledger-relay");
   });
 
   it("passes the sweep-only predicate as LEDGER_SWEEP_ONLY exactly once, as the pinned expression", () => {
@@ -144,8 +132,8 @@ describe("the ledger relay workflow's pinned App identity", () => {
       envValues("LEDGER_SWEEP_ONLY"),
       "the relay step must carry LEDGER_SWEEP_ONLY exactly once — the event " +
         "predicate that makes a scheduled start (or a workflow_dispatch without " +
-        "a run_id) sweep-only, which the script fails closed on: the same " +
-        "predicate keys the concurrency group, so the two cannot drift",
+        "a run_id) sweep-only, which the script fails closed on; every mode " +
+        "still shares the literal ledger-relay concurrency group",
     ).toEqual([
       "${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_id == '') }}",
     ]);
