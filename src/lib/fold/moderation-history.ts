@@ -32,14 +32,13 @@ function parseInstant(value: string | Date): bigint {
   const second = BigInt(parts[6]!);
   const fraction = BigInt((parts[7] ?? "").padEnd(6, "0"));
   if (month < 1n || month > 12n || day < 1n || day > monthLength(year, month) ||
-      hour > 24n || minute > 59n || second > 59n ||
-      (hour === 24n && (minute !== 0n || second !== 0n || fraction !== 0n))) {
+      hour > 23n || minute > 59n || second > 59n) {
     throw new Error("Timestamp was invalid.");
   }
   let offset = 0n;
   if (parts[8]!.toUpperCase() !== "Z") {
     const [offsetHour, offsetMinute, offsetSecond] = parts[8]!.slice(1).split(":").map(BigInt);
-    if (offsetHour! > 23n || offsetMinute! > 59n || (offsetSecond ?? 0n) > 59n) {
+    if (offsetHour! > 15n || offsetMinute! > 59n || (offsetSecond ?? 0n) > 59n) {
       throw new Error("Timestamp was invalid.");
     }
     offset = (offsetHour! * 3600n + offsetMinute! * 60n + (offsetSecond ?? 0n)) *

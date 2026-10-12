@@ -10,6 +10,32 @@ function lift(occurredAt: string, id = lowId): FoldModerationEvent {
 }
 
 describe("moderation history instants", () => {
+  it.each(["+16:00", "-16:00", "+23:59"])("rejects offset %s outside PostgreSQL's range", (offset) => {
+    expect(moderationInstantToIso("2026-01-01T00:00:00+15:59:59")).toBe("2025-12-31T08:00:01.000000Z");
+    expect(moderationInstantToIso("2026-01-01T00:00:00-15:59:59")).toBe("2026-01-01T15:59:59.000000Z");
+    expect(() => moderationInstantToIso(`2026-01-01T00:00:00${offset}`)).toThrow("Timestamp was invalid.");
+  });
+
+  it("rejects hour 24 in a timestamp rendering", () => {
+    expect(() => moderationInstantToIso("2026-01-01T24:00:00Z")).toThrow("Timestamp was invalid.");
+  });
+
+  it("rejects a non-leap century while accepting a Gregorian leap century", () => {
+    expect(() => moderationInstantToIso("1900-02-29T00:00:00Z")).toThrow("Timestamp was invalid.");
+    expect(moderationInstantToIso("2000-02-29T00:00:00Z")).toBe("2000-02-29T00:00:00.000000Z");
+  });
+
+  it.each([
+    ["extended year", "10000-01-01T00:00:00+00:00", "9999-12-31T23:59:59.999999Z"],
+    ["negative year", "0002-01-01T00:00:00+00:00 BC", "-000002-12-31T23:59:59.999999Z"],
+  ])("orders the %s boundary by instant rather than canonical string", (_name, occurredAt, before) => {
+    const history = { ...user, moderationEvents: [lift(occurredAt)] };
+    expect(isParticipationEligibleAt(history, before)).toBe(false);
+    expect(isParticipationEligibleAt(history, occurredAt)).toBe(true);
+    // Crossing BC/AD also keeps a lift after participation ineligible.
+    expect(isParticipationEligibleAt({ ...user, moderationEvents: [lift("0001-01-01T00:00:00Z")] }, "0000-12-31T23:59:59.999999Z")).toBe(false);
+  });
+
   it.each([
     ["1879-12-31T19:03:58.1231-04:56:02", "1880-01-01T00:00:00.123100Z"],
     ["1900-01-01T05:21:10.1231+05:21:10", "1900-01-01T00:00:00.123100Z"],
