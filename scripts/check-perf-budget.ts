@@ -86,6 +86,7 @@ function main(): void {
     // Production modules use TS parameter properties and @/ imports. Keep the
     // workflow command plain Node; run that import graph with the repo's loader.
     const result = spawnSync(process.execPath, [
+      "--import", fileURLToPath(new URL("./perf-node-setup.mjs", import.meta.url)),
       "--experimental-transform-types", "--import",
       fileURLToPath(new URL("./register-path-aliases.ts", import.meta.url)),
       fileURLToPath(new URL("./perf-workloads.ts", import.meta.url)),
