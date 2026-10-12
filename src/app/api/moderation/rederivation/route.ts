@@ -1,6 +1,6 @@
+import { errorResponse } from "@/lib/http/error-response";
 import { z } from "zod";
 import {
-  errorResponse,
   getProductionSession,
   moderationErrorResponse,
 } from "@/app/api/moderation/route";

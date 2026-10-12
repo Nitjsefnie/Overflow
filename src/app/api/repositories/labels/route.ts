@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import { getSql } from "@/lib/db/client";
 import type { UserRole } from "@/lib/db/types";
 import { ForgeIdentityError, normalizeInstanceUrl } from "@/lib/forge/identities";
@@ -408,7 +409,3 @@ export const GET = createLabelsGetHandler({
   createGitHubGateway: (accessToken, owner) => new GitHubGateway({ accessToken, owner }),
   createForgeIdentityStore: (tokenEncryptionKey) => new PostgresForgeIdentityStore(getSql(), tokenEncryptionKey),
 });
-
-function errorResponse(status: number, code: string, message: string): Response {
-  return Response.json({ error: { code, message } }, { status });
-}

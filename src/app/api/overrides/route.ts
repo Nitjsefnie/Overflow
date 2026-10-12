@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import { z } from "zod";
 import type { UserRole } from "@/lib/db/types";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
@@ -13,7 +14,6 @@ import {
 } from "@/lib/overrides/service";
 import { guardByCredential } from "@/lib/security/route-credential";
 import {
-  errorResponse,
   getProductionSession,
   requiredMemberSession,
 } from "@/lib/security/member-route-auth";

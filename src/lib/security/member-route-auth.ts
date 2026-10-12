@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import type { UserRole } from "@/lib/db/types";
 import {
   resolveRouteCredential,
@@ -23,14 +24,6 @@ export type MemberRouteDependencies = {
   findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string; tokenId: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
 };
-
-/**
- * The one error envelope every member-gated route answers with, so a client
- * meets a single error shape across the API.
- */
-export function errorResponse(status: number, code: string, message: string): Response {
-  return Response.json({ error: { code, message } }, { status });
-}
 
 /**
  * The NextAuth session a production route wiring reads, narrowed to the user

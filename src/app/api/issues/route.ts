@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import {
   listEligibleIssues,
   type EligibleIssueFilters,
@@ -5,7 +6,6 @@ import {
 } from "@/lib/dashboard/eligible-issues";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import {
-  errorResponse,
   getProductionSession,
   requiredMemberSession,
   type MemberRouteDependencies,

@@ -1,3 +1,5 @@
+import { errorResponse } from "@/lib/http/error-response";
+
 /**
  * Cookie-authenticated mutation routes are reachable from any page a browser
  * loads: the session cookie rides along on a cross-site form post or fetch. The
@@ -85,8 +87,4 @@ function isJsonMediaType(contentType: string): boolean {
   const mediaType = contentType.split(";", 1)[0].trim().toLowerCase();
 
   return mediaType === jsonMediaType;
-}
-
-function errorResponse(status: number, code: string, message: string): Response {
-  return Response.json({ error: { code, message } }, { status });
 }

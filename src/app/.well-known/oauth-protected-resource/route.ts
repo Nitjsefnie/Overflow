@@ -1,4 +1,4 @@
-import { errorResponse } from "@/lib/security/member-route-auth";
+import { errorResponse } from "@/lib/http/error-response";
 import { protectedResourceMetadata } from "@/lib/security/protected-resource-metadata";
 
 /**

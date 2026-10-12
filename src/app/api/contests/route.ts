@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import { z } from "zod";
 import type { UserRole } from "@/lib/db/types";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
@@ -9,7 +10,6 @@ import {
 import { PostgresSanctionContestStore } from "@/lib/moderation/sanction-contest-store";
 import { guardByCredential } from "@/lib/security/route-credential";
 import {
-  errorResponse,
   getProductionSession,
   requiredMemberSession,
   type MemberRouteSession,

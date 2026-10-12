@@ -1,10 +1,10 @@
+import { errorResponse } from "@/lib/http/error-response";
 import { z } from "zod";
 import {
   settlementOverrideErrorResponse,
   type SettlementOverrideRouteSession,
 } from "@/app/api/overrides/route";
 import {
-  errorResponse,
   getProductionSession,
 } from "@/lib/security/member-route-auth";
 import { requiredModeratorSession } from "@/lib/moderation/route-auth";

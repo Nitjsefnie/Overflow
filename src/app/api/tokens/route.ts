@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import type { UserRole } from "@/lib/db/types";
 import { mintApiToken } from "@/lib/security/api-token";
 import {
@@ -176,7 +177,3 @@ export const POST = createApiTokenPostHandler({
     return new PostgresApiTokenStore();
   },
 });
-
-function errorResponse(status: number, code: string, message: string): Response {
-  return Response.json({ error: { code, message } }, { status });
-}

@@ -1,5 +1,5 @@
+import { errorResponse } from "@/lib/http/error-response";
 import {
-  errorResponse,
   getProductionSession,
 } from "@/app/api/moderation/route";
 import type { UserRole } from "@/lib/db/types";

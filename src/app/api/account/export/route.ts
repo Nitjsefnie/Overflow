@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/http/error-response";
 import { exportAccount, formatAccountExport, type AccountExport } from "@/lib/accounts/export";
 import { findLiveAccountIdentity } from "@/lib/accounts/self-service";
 import { getSql } from "@/lib/db/client";
@@ -82,10 +83,6 @@ export function createAccountExportPostHandler(dependencies: AccountExportRouteD
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to export account data.");
     }
   };
-}
-
-function errorResponse(status: number, code: string, message: string): Response {
-  return Response.json({ error: { code, message } }, { status });
 }
 
 export const POST = createAccountExportPostHandler({
