@@ -22,20 +22,22 @@ const moduleExtensions = [".ts", ".tsx", ".js", ".jsx", ".mts", ".mjs", ".cts", 
 function runtimeDependencies(path: string, contents: string): { imports: string[]; requestsPostgres: boolean } {
   const imports: string[] = [];
   let requestsPostgres = false;
-  const visit = (node: ts.Node): void => {
-    if (ts.isTypeNode(node) || ((ts.isImportSpecifier(node) || ts.isExportSpecifier(node)) && node.isTypeOnly)) return;
+  const pending: ts.Node[] = [ts.createSourceFile(path, contents, ts.ScriptTarget.Latest)];
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    if (ts.isTypeNode(node) || ((ts.isImportSpecifier(node) || ts.isExportSpecifier(node)) && node.isTypeOnly)) continue;
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       const clause = node.importClause;
       const bindings = clause?.namedBindings;
       const onlyTypes = clause?.isTypeOnly || (!clause?.name && bindings && ts.isNamedImports(bindings)
         && bindings.elements.length > 0 && bindings.elements.every((element) => element.isTypeOnly));
-      if (onlyTypes) return;
+      if (onlyTypes) continue;
       imports.push(node.moduleSpecifier.text);
     } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
       const clause = node.exportClause;
       const onlyTypes = node.isTypeOnly || (clause && ts.isNamedExports(clause)
         && clause.elements.length > 0 && clause.elements.every((element) => element.isTypeOnly));
-      if (onlyTypes) return;
+      if (onlyTypes) continue;
       imports.push(node.moduleSpecifier.text);
     } else if (ts.isCallExpression(node)
       && (node.expression.kind === ts.SyntaxKind.ImportKeyword
@@ -44,9 +46,10 @@ function runtimeDependencies(path: string, contents: string): { imports: string[
       imports.push(node.arguments[0].text);
     }
     if ((ts.isIdentifier(node) || ts.isStringLiteral(node)) && node.text === SHARED_POSTGRES_MARKER) requestsPostgres = true;
-    ts.forEachChild(node, visit);
-  };
-  visit(ts.createSourceFile(path, contents, ts.ScriptTarget.Latest));
+    const children: ts.Node[] = [];
+    ts.forEachChild(node, (child) => { children.push(child); });
+    for (let index = children.length - 1; index >= 0; index -= 1) pending.push(children[index]!);
+  }
   return { imports, requestsPostgres };
 }
 
@@ -71,7 +74,7 @@ function dependencyPaths(path: string, specifier: string): string[] {
  * (issues 1070, 1146): checks the test files and their local runtime import
  * graph for the marker. Type-only imports do not request a database. The
  * provider module itself is a leaf: its definition of the startup API is not
- * a request to call it (it also exports database-free utilities). Read errors
+ * a request to call it (it also exports database-free utilities). Read or scan errors
  * on an individual file are no-match for that file plus a stderr warning —
  * a vanished file between spec resolution and the scan must not crash the
  * run, and must not silently decide a DB run needs no server. The empty list
@@ -112,7 +115,13 @@ export function runNeedsSharedPostgres(
       resolved = true;
       visited.add(identity);
       if (testFiles.has(identity) && contents.includes(SHARED_POSTGRES_MARKER)) return true;
-      const dependencies = runtimeDependencies(path, contents);
+      let dependencies: ReturnType<typeof runtimeDependencies>;
+      try {
+        dependencies = runtimeDependencies(path, contents);
+      } catch (error) {
+        warn(`shared-postgres need scan: could not scan ${path} (${String(error)}); treating it as not needing the shared postgres`);
+        break;
+      }
       if (dependencies.requestsPostgres) return true;
       for (const specifier of dependencies.imports.reverse()) {
         const paths = dependencyPaths(path, specifier);
