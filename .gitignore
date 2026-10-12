@@ -346,6 +346,7 @@ scripts/*
 !scripts/overflow-bounce.sh
 !scripts/*.ts
 !scripts/upgrade-webhooks.ts
+!scripts/ledger-relay-upstream.ts
 !scripts/measure-header-geometry.mjs
 !scripts/check-page-geometry.mjs
 !scripts/owned-processes.mjs
@@ -440,6 +441,7 @@ tests/repositories/*
 !tests/scripts/
 tests/scripts/*
 !tests/scripts/*.ts
+!tests/scripts/ledger-relay-upstream.test.ts
 !tests/security/
 tests/security/*
 !tests/security/*.ts

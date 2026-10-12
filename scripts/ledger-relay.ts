@@ -93,12 +93,15 @@ export type { ContextDecision, HealPullRequest, PinMap, RelayJob, RerunRun, Reru
 import {
   assertShape,
   DIGITS,
-  normalizedAttempt,
   parseTrigger,
-  SHA_40,
   type TriggeringRun,
 } from "./ledger-relay-trigger.ts";
 import { forkOwnerLoginOf, openPullAtForkHead } from "./ledger-relay-fork.ts";
+import {
+  headRepositoryFullNameOf,
+  resolveWorkflowRunHead,
+  triggeringRunFromApi,
+} from "./ledger-relay-upstream.ts";
 
 export type { TriggeringRun };
 
@@ -206,11 +209,15 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
       apiRoot: API_ROOT,
       repo,
       appId,
+      repositoryId: env.GITHUB_REPOSITORY_ID,
       triggerRunId: "",
     });
     return { decisions: [], posted: [], rerunDispatched: false, sweep, sweepOnly: true };
   }
-  if (trigger.kind === "workflow_run" && contextsFor(pinMap, trigger.run.path).length === 0) {
+  if (
+    trigger.kind === "workflow_run" && trigger.run.event !== "workflow_run" &&
+    contextsFor(pinMap, trigger.run.path).length === 0
+  ) {
     // Nothing is pinned to this run's workflow; there is nothing to relay and
     // no reason to mint a token. A run nothing is pinned to never had a
     // check-run to orphan either, so the sweep has no part in this path.
@@ -221,10 +228,11 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   const auth = { authorization: `Bearer ${token}` };
 
   let run: TriggeringRun;
+  let fetchedProducer: Record<string, unknown> | undefined;
   if (trigger.kind === "workflow_run") {
     run = trigger.run;
   } else {
-    const fetched = await apiCall<Record<string, unknown>>(
+    fetchedProducer = await apiCall<Record<string, unknown>>(
       deps,
       {
         url: `${API_ROOT}/repos/${repo}/actions/runs/${trigger.runId}`,
@@ -233,16 +241,27 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
       },
       `the workflow run ${trigger.runId}`,
     );
-    run = triggeringRunFromApi(fetched);
-    if (contextsFor(pinMap, run.path).length === 0) {
-      return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
-    }
+    run = triggeringRunFromApi(fetchedProducer);
   }
 
-  // The trust gate, both paths, after the mint (issue 1115): an untrusted run
-  // is thrown out byte-identically unless its head is provably dead (then the
-  // refusal exits 0 visibly).
-  if (!isTrustedProducerRun(run.event, run.headBranch)) {
+  let attestationRun = run;
+  if (run.event === "workflow_run") {
+    const api = sweepApi(deps, repo, auth);
+    const resolved = await resolveWorkflowRunHead(
+      trigger.kind === "dispatch" ? trigger.runId : run.runId,
+      env.GITHUB_REPOSITORY_ID,
+      (id) => api.get(`${API_ROOT}/repos/${repo}/actions/runs/${id}`, `the workflow run ${id}`),
+      fetchedProducer,
+    );
+    run = resolved.run;
+    attestationRun = { ...run, headSha: resolved.headSha };
+  }
+  if (contextsFor(pinMap, run.path).length === 0) {
+    return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
+  }
+  // Legacy refusals retain the dead-head no-op (issue 1115). Every
+  // workflow_run refusal above throws regardless of head liveness.
+  if (run.event !== "workflow_run" && !isTrustedProducerRun(run.event, run.headBranch)) {
     return await refuseUntrustedProducer(deps, repo, run, auth);
   }
 
@@ -266,7 +285,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
         url: `${API_ROOT}/repos/${repo}/check-runs`,
         method: "POST",
         headers: { ...API_HEADERS, ...auth },
-        body: JSON.stringify(checkRunBody(decision, run)),
+        body: JSON.stringify(checkRunBody(decision, attestationRun)),
       },
       `the check-run for ${decision.context}`,
     );
@@ -291,6 +310,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
       apiRoot: API_ROOT,
       repo,
       appId,
+      repositoryId: env.GITHUB_REPOSITORY_ID,
       triggerRunId: run.runId,
     });
   } catch (error) {
@@ -550,53 +570,6 @@ async function apiCall<T>(deps: RelayDeps, request: ApiRequest, what: string): P
 function truncate(text: string): string {
   const trimmed = text.trim();
   return trimmed.length <= 300 ? trimmed : `${trimmed.slice(0, 300)}…`;
-}
-
-function triggeringRunFromApi(body: Record<string, unknown>): TriggeringRun {
-  const headSha = typeof body.head_sha === "string" ? body.head_sha : "";
-  assertShape(headSha, SHA_40, "the fetched run's head_sha must be a 40-hex SHA");
-  const path = typeof body.path === "string" ? body.path : "";
-  assertShape(path, PIN_SHAPE, "the fetched run's path must be a workflow path");
-  const htmlUrl = typeof body.html_url === "string" ? body.html_url : "";
-  if (htmlUrl === "") {
-    throw new Error("the fetched run's html_url is empty; cannot set the check-run's details_url");
-  }
-  return {
-    runId: typeof body.id === "number" ? String(body.id) : "",
-    headSha,
-    path,
-    conclusion: typeof body.conclusion === "string" ? body.conclusion : null,
-    htmlUrl,
-    event: typeof body.event === "string" ? body.event : "",
-    headBranch: typeof body.head_branch === "string" ? body.head_branch : "",
-    runAttempt: normalizedAttempt(
-      typeof body.run_attempt === "number" || typeof body.run_attempt === "string"
-        ? body.run_attempt
-        : undefined,
-    ),
-    // Issue 1037's primary never-started signal: the time the run began
-    // executing, or null when the body names none — absent, null and empty all
-    // read as absent, and the job-listing fallback decides in their place.
-    runStartedAt:
-      typeof body.run_started_at === "string" && body.run_started_at !== ""
-        ? body.run_started_at
-        : null,
-    headRepository: headRepositoryFullNameOf(body),
-  };
-}
-
-/**
- * The run body's `head_repository.full_name`, or the empty string when the
- * body carries no readable repository name. Never a guess: an empty value
- * means unknown, and the gate learns the name by fetching the run body — a
- * name still missing keeps the throw.
- */
-function headRepositoryFullNameOf(body: Record<string, unknown>): string {
-  const headRepository =
-    typeof body.head_repository === "object" && body.head_repository !== null
-      ? (body.head_repository as { full_name?: unknown })
-      : undefined;
-  return typeof headRepository?.full_name === "string" ? headRepository.full_name : "";
 }
 
 /**
