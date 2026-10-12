@@ -92,8 +92,8 @@ describe("the verify job's git fetches", () => {
     // not PR_NUMBER, not a head REF: the trust lives in the bind below, not
     // in the spelling. Nothing is named merge_commit_sha either, because that
     // field is computed asynchronously and can name the previous head's merge.
-    expect(step.env?.HEAD_SHA).toBe("${{ github.event.pull_request.head.sha }}");
-    expect(step.env?.BASE_SHA).toBe("${{ github.event.pull_request.base.sha }}");
+    expect(step.env?.HEAD_SHA).toBe("${{ steps.pr.outputs.head_sha }}");
+    expect(step.env?.BASE_SHA).toBe("${{ steps.pr.outputs.base_sha }}");
     expect(step.run).toContain('git fetch --no-tags origin "${HEAD_SHA:?}"');
     expect(step.run).not.toContain("merge_commit_sha");
     expect(step.run).not.toContain("PR_NUMBER");

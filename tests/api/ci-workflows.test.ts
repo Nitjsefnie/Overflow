@@ -467,16 +467,16 @@ fi
     // report. Asserted whole rather than by objectContaining, which would
     // tolerate a second event sitting beside the one this leg needs.
     expect(workflow.on).toEqual({
-      pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
+      workflow_run: { workflows: ["pr suite"], types: ["completed"] },
     });
-    expect(workflow.on.pull_request_target).not.toHaveProperty("paths");
+    expect(workflow.on.workflow_run).not.toHaveProperty("paths");
     expect(workflow.on, "a pull_request trigger would execute the PR's own workflow files").not.toHaveProperty("pull_request");
     expect(workflow.permissions).toEqual({ contents: "read" });
     // Concurrency group names are repository-global, so this one must not be
     // ci.yml's: a collision would let a pull request cancel a merged SHA's
     // pending push run, which the deploy gate refuses on (issue 474).
     expect(workflow.concurrency).toEqual({
-      group: "ci-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+      group: "ci-pr-${{ github.event.workflow_run.head_sha }}",
       "cancel-in-progress": false,
     });
     const verify = workflow.jobs.verify!;
@@ -485,7 +485,7 @@ fi
     // in pr-suite.yml under `pull_request`.
     expect(verify.services, "the pull-request leg must not pay for a database it never connects to")
       .toEqual(undefined);
-    expect(verify.permissions).toEqual({ contents: "read", actions: "read" });
+    expect(verify.permissions).toEqual({ contents: "read", actions: "read", "pull-requests": "read" });
     // One download — the awaited pull request suite run's coverage summary —
     // and no upload: the artifacts a pull request's coverage report is built
     // from are pr-suite.yml's, not this job's.
@@ -495,7 +495,7 @@ fi
     expect(uploads).toHaveLength(0);
     expect(downloads).toHaveLength(1);
     // Exactly one checkout, and it is the base branch's tip with full history
-    // and no ref input: under pull_request_target that is actions/checkout's
+    // and no ref input: under workflow_run that is actions/checkout's
     // default, which is what makes the pull request's own edit to a gated
     // script unable to change the judge (issue 822). It carries no event gate
     // because this file admits nothing else.

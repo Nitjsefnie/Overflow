@@ -1,135 +1,47 @@
 name: ci pull request
+run-name: verify for pr suite run ${{ github.event.workflow_run.id }}
 
-# The pull-request leg of the release gate, in a file of its own so that the
-# only trigger it can be started by is `pull_request_target` (issue 1090).
+# The required verify producer starts only after pr suite completes. workflow_run
+# uses the default branch's definition and checkout, whose scripts judge the PR
+# merge tree as data; no pull-request code executes here (issues 822, 1090, 1183).
+# The base-copy resolver API-validates the triggering run's path, event and
+# successful completion, then binds exactly one open PR to its head repository,
+# branch and SHA using coverage-comment's issue-656 binding, forks included.
+# Stale or ambiguous heads fail verify; the job is never skippable.
 #
-# WHY THE SPLIT. This job fetches a pull request's merge commit and reads the
-# pull request's number, head SHA and base SHA. `push`, `schedule` and
-# `workflow_dispatch` all run a workflow from the default branch with the
-# default branch's privileges, so a step reading pull-request content under one
-# of them is untrusted content entering a privileged job — exactly what CodeQL's
-# `actions/cache-poisoning/poisonable-step` and `actions/untrusted-checkout`
-# alerts report. The `if: github.event_name == 'pull_request_target'` gates
-# that used to hold the shapes apart made the paths SAFE, not STRUCTURAL: one
-# guard edit reopened the class. One file per leg is the structure, and
-# tests/ci/pr-data-triggers.test.ts decides which jobs read pull-request data
-# from the workflow text rather than from this comment, and requires this
-# file's whole `on:` set to be {pull_request_target}.
-#
-# The other half — the push and workflow_dispatch legs, which test main itself
-# and read no pull-request data — is .github/workflows/ci.yml, together with
-# the calibrate job. Both workflows produce the `verify` job name, and
-# .github/required-checks.json pins that context to BOTH paths, so a
-# required-context conclusion arrives on a pull-request head and on a main push
-# alike.
-#
-# THE TRUST BOUNDARY. A pull request's own code — its install, migrations,
-# tests, lint, typecheck, build and page geometry — runs only in pr-suite.yml,
-# under `pull_request`: the pull request's own definition, a read-only token,
-# no secret, and no required context of its own. This workflow runs under
-# pull_request_target, so its definition is the base branch's (issue 822), and
-# under that event the verify job executes NO pull-request code. It checks out
-# the base branch, materialises the pull request's merge commit as a detached
-# worktree outside the workspace, and runs the BASE checkout's copies of the
-# integrity gates over that tree as data — conflict markers, docs-only
-# classification, module size ceilings, migration immutability, legal revision
-# currency, commit scopes, the coverage floor over the awaited suite run — plus
-# the suite run's outcome, read as data through the base copy of
-# scripts/await-pr-suite.ts. Base freshness runs last. A pull request's tree
-# can therefore never judge itself: replacing a gate script in the pull request
-# changes the tree being judged, not the judge.
-#
-# Because this file receives nothing but pull_request_target, no step here
-# carries an event gate: the closed trigger set IS the gate. tests/ci/
-# verify-step-reachability.test.ts still selects these steps per scenario and
-# asserts that no pull-request package manager, script or write is reachable.
+# The pull request's own install, migrations, tests, lint, typecheck, build and
+# page geometry run only in pr-suite.yml under pull_request. The base checkout's
+# integrity gates judge the materialised merge tree. The exact triggering suite
+# run is read once by await-pr-suite.ts; no runner polls for it. Coverage floor
+# reads that run's summary as data, and Base freshness stays last. The relay
+# resolves the upstream id from run-name and publishes verify on its head SHA,
+# never this default-branch workflow_run run's own head SHA. ci.yml separately
+# produces verify for main pushes and dispatches.
 on:
-  pull_request_target:  # zizmor: ignore[dangerous-triggers]
-    branches: [main]
-    types: [opened, synchronize, reopened]
+  workflow_run:  # zizmor: ignore[dangerous-triggers] — default-branch checkout only, API-bound head repository/branch/SHA, PR tree and artifacts read only as data; base scripts execute, never PR code
+    workflows: [pr suite]
+    types: [completed]
 
 permissions:
   contents: read
 
+# Completions can arrive out of head order: a per-PR cancelling group could
+# let a stale head's verify destroy the current head's. Isolate each head SHA
+# and preserve running work, including retries of the same head.
 concurrency:
-  # One group for every pull request, so the repository's Actions minutes stop
-  # scaling with the number of open pull requests: a per-pull-request group
-  # bounds one contributor's parallelism and nothing else, and N open pull
-  # requests produced N concurrent runs. GitHub keeps one PENDING run per group
-  # and cancels the superseded one, so `ci-pr-repo-wide` is a single slot.
-  # The parentheses are load-bearing; && binds tighter than || in a GitHub
-  # expression, and without them the pull_request arm falls through to
-  # github.sha and the bound is gone.
-  #
-  # cancel-in-progress is false, and NOT an event test gating on the pull
-  # request. GitHub's documented behaviour: "By default, any existing pending job
-  # or workflow in the same concurrency group will be canceled and the new queued
-  # job or workflow will take its place. To also cancel any currently running job
-  # or workflow in the same concurrency group, specify cancel-in-progress: true."
-  # Read that carefully: the PENDING run is cancelled whatever this flag says.
-  # The flag decides only whether the RUNNING job is destroyed as well.
-  #
-  # WHAT `false` GUARANTEES: no in-flight run is ever cancelled, so no required
-  # context concludes `cancelled` because a peer pushed while it was running.
-  # `verify` is a required context in .github/required-checks.json and
-  # ledger-relay mirrors a run conclusion onto it, so a running run destroyed
-  # here is a peer's blocked pull request. That is worth avoiding, and it is
-  # common: see the rates below.
-  #
-  # WHAT `false` DOES NOT PREVENT — the residual this design cannot remove:
-  # GitHub still cancels the PENDING run when a newer arrival claims the single
-  # pending slot. Under a per-pull-request group that pending run is always the
-  # SAME pull request's superseded head, and the push that superseded it created
-  # a replacement, so it heals itself. Under this shared group the pending run
-  # can be a DIFFERENT pull request's current head, and nothing creates a
-  # replacement: the relay mirrors the cancelled conclusion onto `verify`, and
-  # this workflow triggers on opened/synchronize/reopened with no `edited`, so a
-  # retitle or relabel produces no new run. That pull request stays blocked until
-  # its author pushes again. This is inherent to sharing one group — no value of
-  # this flag removes it, and a `true` makes it strictly worse by also
-  # destroying in-flight runs.
-  #
-  # RATES, from the 483 ci runs of the 6.13 days ending 2026-09-30. Only the
-  # 370 pull-request arrivals ever enter this group; the 106 push and 7
-  # workflow_dispatch runs key their own github.sha in ci.yml and cannot contend
-  # with anything, so counting them inflated both the arrival rate and rho. Load
-  # is also not steady - per-day all-event arrivals were 5, 0, 215, 122, 78, 17, 46.
-  # M/M/1 with one waiting place over the PR arrivals (mean PR-leg service 6.44
-  # min), where pending-cancelled is n*pi2 and running-cancelled-if-true is
-  # n*(pi1+pi2) - the flag is what adds the second, so it is the larger figure:
-  #   date        PR arrivals   rho   pending-cancelled   running-cancelled-if-true
-  #   09-26               171  0.76             ~43/day                 ~98/day
-  #   09-27                95  0.42             ~11/day                 ~36/day
-  #   09-28                59  0.26              ~3/day                 ~15/day
-  #   window mean           60  0.27              ~3/day                 ~15/day
-  # These are a LOWER bound: a Poisson fit understates a bursty arrival process.
-  # Replaying the real arrival timestamps instead gave materially higher figures
-  # (97 and 134 pending cancellations per window, depending on arrival set and
-  # service-time treatment) and neither replay reproduced stably, so no single
-  # replayed number is quoted. For reference, main already shows the mechanism
-  # inside per-PR groups: 9 of 482 completed ci runs concluded cancelled, every
-  # one a same-PR self-supersede.
-  #
-  # ON RUNNER MINUTES, stated plainly because the direction is counter-intuitive:
-  # `true` would bill FEWER minutes, not more — a destroyed run stops accruing.
-  # So `false` costs minutes relative to `true`; it is bought deliberately, as the
-  # price of not destroying a check someone is waiting on. The bound itself is
-  # unaffected either way: one running slot per group caps concurrency at 1 no
-  # matter what this flag says, and that cap is the whole point of the change. A
-  # run dropped from the pending slot never started and costs 0 minutes, so the
-  # cheap kind of cancellation is the one that remains.
-  group: ci-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
+  group: ci-pr-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
 jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # actions: read lets the base copy of the suite awaiter list the pull
-    # request suite's runs and download its coverage summary.
+    # Read the triggering suite run, bind its open PR, and download its summary.
+    # The resolver needs pull-requests: read; no step receives a write grant.
     permissions:
       contents: read
       actions: read
+      pull-requests: read
 
     # Placeholders satisfy configuration validation without carrying production
     # credentials or granting access to an external system. There is no
@@ -147,16 +59,26 @@ jobs:
       MODERATOR_GITHUB_USER_IDS: "1"
 
     steps:
-      # Under pull_request_target no ref input at all: GitHub points GITHUB_REF
-      # at the base branch and GITHUB_SHA at its tip when the event fired, so
-      # the default checkout is the trusted base — the copy of every gate
-      # script that executes below — and actions/checkout's fork guard exempts
-      # exactly that. Full history, because the migration and legal-revision
-      # gates walk the pull request's range and commit scopes reads main's.
+      # workflow_run defaults to the trusted default branch's checkout, not
+      # the triggering run's head. Full history serves the integrity gates.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.17.0"
+
+      # Reuse coverage-comment's owner:branch + exact repository/SHA binding.
+      # Read the triggering run from the API and re-read the selected PR so a
+      # moved head fails closed. This is always the base checkout's script.
+      - name: Resolve the suite's pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUITE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: node "${GITHUB_WORKSPACE}/scripts/resolve-suite-pull-request.ts"
 
       # The pull request enters as git objects only: this event's head, fetched
       # by its SHA, and this event's base, which the full-history checkout above
@@ -195,12 +117,12 @@ jobs:
           # NOW, and the one the merge below is built from. Deliberately not
           # the event's merge_commit_sha, which is computed asynchronously and
           # can name the previous head's merge.
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           # The base this event is about — the same commit GitHub's own merge
           # preview merges into, and the same value the base-freshness gate
           # receives as BASE_SHA, so the tree judged and the freshness
           # certificate describe one merge.
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
           # actions/checkout's default: checking the tree out fetches no LFS
           # object the pull request's attributes point at.
           GIT_LFS_SKIP_SMUDGE: "1"
@@ -263,7 +185,7 @@ jobs:
       # characters, and the separator is exactly seven `=`; diff3's extra
       # `||||||| base` line changes nothing, because the other three are
       # still written. The step carries no event gate: this file receives
-      # nothing but pull_request_target, so the tree searched is always the
+      # nothing but workflow_run, so the tree searched is always the
       # pull request's materialised merge tree.
       - name: Check no tracked file carries a merge-conflict marker
         env:
@@ -283,10 +205,6 @@ jobs:
             echo "A merge-conflict marker is committed. Resolve the conflict, rebase onto the target branch and push again."
             exit 1
           fi
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.17.0"
 
       # A change that touched only documentation cannot move coverage, so the
       # measurement below would compare the same tree against itself. Detect
@@ -498,14 +416,14 @@ jobs:
       # Every refusal is a FIXED constant: no pull-request-controlled bytes ever
       # reach the log. Identical lists exit 0 silently. The step carries the
       # event gate the leg itself implies — this file receives nothing but
-      # pull_request_target, so the gate is redundant by the closed-trigger-set
+      # workflow_run, so the gate is redundant by the closed-trigger-set
       # argument, and it is pinned in the reachability suite so it cannot be
       # mutated into unreachability silently.
       - name: Refuse a pull request that changes the audit suppression list
-        if: github.event_name == 'pull_request_target'
+        if: github.event_name == 'workflow_run'
         env:
           MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
         run: |
           file=package.json
           ws_file=pnpm-workspace.yaml
@@ -858,14 +776,14 @@ jobs:
       # under `pull_request`. This step reads that run's outcome as data: the
       # base copy of the awaiter succeeds only for a completed, successful
       # pull_request run of exactly .github/workflows/pr-suite.yml at exactly
-      # the event's head SHA, and writes that run's id. Its run listing is
-      # .../actions/workflows/pr-suite.yml/runs, which exists once pr-suite.yml
-      # is on main — it lands in the same merge as this step.
+      # resolved head SHA, and writes that run's id. SUITE_RUN_ID names the
+      # triggering completion exactly: one read, no listing or polling.
       - name: Await the pull request suite
         id: suite
         env:
           GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SUITE_RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: node "${GITHUB_WORKSPACE}/scripts/await-pr-suite.ts"
 
       # Success must be a positive signal here too, not the absence of a
@@ -923,8 +841,8 @@ jobs:
           cd "${PR_TREE:?the pull request tree was not materialised}"
           node "${GITHUB_WORKSPACE}/scripts/check-coverage-floor.ts" --summary "${SUMMARY_DIR:?}/coverage-summary.json"
 
-      # A pull_request_target run judges refs/pull/N/merge — the head merged with the
-      # base as it stood at event time — and branch protection keeps strict
+      # This run judges the resolved head merged with the PR's base as it stood
+      # at resolution time — and branch protection keeps strict
       # up-to-date checking disabled, so a run that went green against an older
       # main stays green after main advances: the tree GitHub actually lands
       # (its rebase onto current main) was never tested by a required check
@@ -940,13 +858,13 @@ jobs:
       # the first version demanded main frozen for the whole run, which no run
       # could satisfy at the repository's merge cadence). The push and
       # workflow_dispatch runs that test main itself are in ci.yml and never
-      # reach this gate; this file's only trigger is pull_request_target.
+      # reach this gate; this file's only trigger is workflow_run.
       - name: Base freshness
         env:
           GH_TOKEN: ${{ github.token }}
           REPO_SLUG: ${{ github.repository }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: bash "${GITHUB_WORKSPACE}/scripts/ci-base-freshness.sh"

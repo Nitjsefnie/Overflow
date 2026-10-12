@@ -65,13 +65,10 @@ type Workflow = {
  * default — so read the header before concluding that `false` means nothing is
  * cancelled.
  */
-const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = {
-  "ci-pr.yml": {
-    group: "ci-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": false,
-  },
-
-};
+// No current producer retains a repository-wide PR group. The legacy bound
+// checks below still guard any future entry; completion-driven verify is
+// explicitly classified and checked per head SHA below.
+const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = {};
 
 /** Required PR gates cancel only an older run of the same pull request. */
 const PER_PR_REQUIRED = {
@@ -201,6 +198,12 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
    */
   premise?: Premise;
 }>([
+  ["ci-pr.yml", {
+    reason: "Suite completions can arrive out of head order. Each triggering head SHA gets its own non-cancelling group, so a stale completion cannot destroy the current head's required verify. workflow_run is the only trigger; no runner polls for the suite.",
+    group: "ci-pr-${{ github.event.workflow_run.head_sha }}",
+    "cancel-in-progress": false,
+    queue: undefined,
+  }],
   [
     "code-scanning.yml",
     {
@@ -447,6 +450,7 @@ const ALLOWED_TOP_LEVEL_KEYS = [
   "name",
   "on",
   "permissions",
+  "run-name",
 ];
 
 /**
