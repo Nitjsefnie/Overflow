@@ -26,7 +26,9 @@ export function classifyMigrationCompatibility(contents: string): MigrationCompa
     for (const [shape, matched] of matchShapes(body.tokens, false)) {
       if (matched) matches.set(shape, true);
     }
-    literals.push(...body.tokens.filter((token) => token.kind === "literal"));
+    for (const token of body.tokens) {
+      if (token.kind === "literal") literals.push(token);
+    }
   }
   const shapes = [...matches].filter(([, matched]) => matched).map(([shape]) => shape);
 
