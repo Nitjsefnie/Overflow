@@ -392,14 +392,30 @@ describe("readiness endpoint against real databases", () => {
       // Put data that must never reach the public response into the database.
       await sql`create table readiness_private (payload text)`;
       await sql`insert into readiness_private values (${"private fixture payload"})`;
-      const response = await createReadinessGetHandler()();
+      const errorSpy = spyOnProbeJournal();
+      const previousDebug = sql.options.debug;
+      const queries: string[] = [];
+      // Observe statements emitted by the real client, without replacing SQL
+      // or timing the response. Count only this fresh handler's probe.
+      sql.options.debug = (_connection, query) => { queries.push(query); };
+      let response: Response;
+      try {
+        response = await createReadinessGetHandler()();
+      } finally {
+        sql.options.debug = previousDebug;
+      }
       expect(response.status).toBe(status);
       expect(response.headers.get("cache-control")).toBe("no-store");
       await expect(response.json()).resolves.toEqual(status === 200 ? { status: "ready" } : {
         status: "unavailable",
         reason: "database: schema has moved past migrations this build predates and cannot run against: 900_readiness_fixture.sql",
       });
+      expect(errorSpy.mock.calls).toEqual(status === 200 ? [] : [[
+        "Readiness probe failed: database: schema has moved past migrations this build predates and cannot run against: 900_readiness_fixture.sql",
+      ]]);
+      expect(queries).toHaveLength(1);
     } finally {
+      vi.restoreAllMocks();
       await sql`delete from schema_migrations where name = ${filename}`;
       await sql`drop table if exists readiness_items, readiness_private`;
     }
