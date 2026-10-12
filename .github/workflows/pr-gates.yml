@@ -27,10 +27,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # The Nitjsefnie-OSC fork accepts concurrency.queue, which claim.yml
-      # needs to preserve pending claims. The archive is checksum-verified.
-      # Keep the repository, version and checksum identical in both
-      # actionlint jobs: actionlint.yml and pr-gates.yml.
+      # actionlint from the Nitjsefnie-OSC fork, not from rhysd/actionlint.
+      # Stock actionlint 1.7.12's workflow schema has no
+      # `queue` key under `concurrency` — the key claim.yml needs so a second
+      # /claim arriving mid-run is queued rather than dropped unanswered. Stock
+      # 1.7.12 fails that file as an unexpected key, which would leave the gate
+      # unable to lint the workflow it exists to lint.
+      #
+      # RETURN TO UPSTREAM as soon as an upstream release accepts `queue` under
+      # `concurrency`: set ACTIONLINT_REPO back to rhysd/actionlint, take the
+      # version and the sha256 from that release's own checksums file, and
+      # re-verify .github/workflows/ with the stock binary.
+      # tests/api/ci-workflows.test.ts checks that all three values agree across
+      # both actionlint jobs; a one-leg bump fails naming the mismatched key.
+      # The fork release is the same upstream code plus
+      # that one schema key. Keep these three in step with actionlint.yml, which
+      # installs the same gate on the push and dispatch legs.
       ACTIONLINT_REPO: Nitjsefnie-OSC/actionlint
       ACTIONLINT_VERSION: 1.7.12-queue.1
       # sha256 of actionlint_1.7.12-queue.1_linux_amd64.tar.gz from the fork's
@@ -97,9 +109,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: zizmor --no-progress .github/workflows-pr/*.yml
 
-      # LAST step: certify as late as possible. Main may advance only over
-      # files disjoint from this PR's changes; overlap, failed API reads and
-      # unrepresentative comparisons fail closed in ci-base-freshness.sh.
+      # A pull_request_target run tests refs/pull/N/merge — the head merged with
+      # the base as it stood at event time — and branch protection keeps strict
+      # up-to-date checking disabled, so a run that went green against an older
+      # main stays green after main advances: the tree GitHub actually lands
+      # (its rebase onto current main) was never tested by a required check
+      # (issue 441). LAST step, deliberately: the freshness certificate is
+      # issued as late as the workflow can issue it, because an earlier step
+      # re-opens the whole run duration as the stale-base window. The step runs
+      # scripts/ci-base-freshness.sh, which certifies when the base is
+      # unchanged OR advanced only disjointly from the files this pull request
+      # changes — an advance that touched none of them carried its own required
+      # checks, and only cross-file interaction goes unverified — and refuses
+      # on everything else: an overlapping advance, a failed or empty API
+      # response or an unrepresentative compare (issue 510).
       - name: Base freshness
         env:
           GH_TOKEN: ${{ github.token }}
@@ -211,10 +234,9 @@ jobs:
       # runner's, NOT this step's working directory, so a binary extracted
       # anywhere in this step is invisible to the next one — and the next step
       # resolves `gitleaks` by bare name, through
-      # scripts/secret-scan.sh's `command -v`. Without that line this job
-      # failed every run with "no gitleaks on PATH", and because the header
-      # above tells the reader that a version message means a drifted scanner,
-      # the real cause pointed somewhere else. Extracting into $RUNNER_TEMP
+      # scripts/secret-scan.sh's `command -v`. Appending the install directory
+      # to GITHUB_PATH is what lets that later shell resolve the scanner.
+      # Extracting into $RUNNER_TEMP
       # rather than the workspace is a second, smaller choice with the same
       # reason behind it: the checkout above just fetched a full history with
       # fetch-depth: 0, and a downloaded executable does not belong in that

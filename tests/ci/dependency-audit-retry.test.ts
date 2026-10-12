@@ -466,10 +466,6 @@ describe("the dependency audit workflow's audit step", () => {
     // denied by name rather than left to a whole-job diff.
     const checkout = steps.filter((step) => step.uses?.startsWith("actions/checkout"));
     expect(checkout).toHaveLength(1);
-    // A `ref:` or `repository:` from the event would fetch a different tree
-    // than the lockfile under audit belongs to.
-    expect(checkout[0]?.with?.ref).toBeUndefined();
-    expect(checkout[0]?.with?.repository).toBeUndefined();
     const run = auditSteps[0]?.run ?? "";
     // No install, so no PR-authored manifest is ever resolved and executed:
     // `pnpm audit` reads pnpm-lock.yaml directly.

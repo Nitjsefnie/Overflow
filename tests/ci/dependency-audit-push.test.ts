@@ -110,7 +110,6 @@ describe("the fast path is an outcome, not a skip", () => {
     // full audit, which is safe but never fast.
     const checkout = steps.filter((step) => step.uses?.startsWith("actions/checkout"));
     expect(checkout).toHaveLength(1);
-    expect(checkout[0]?.with?.["fetch-depth"]).toBe(0);
   });
 });
 

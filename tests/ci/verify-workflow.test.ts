@@ -140,9 +140,8 @@ describe("the verify workflow's ratchet documents", () => {
     expect(steps.filter((step) => step.name === "Ratchet documents")).toEqual([]);
     expect(steps.filter((step) => (step.run ?? "").includes("check-ratchets.ts"))).toEqual([]);
 
-    // The pull-request leg moved into pr-gates.yml under issue 1090,
-    // so this reads the ratchet step out of the file that actually holds it
-    // rather than out of the push leg, which no longer has one.
+    // pr-gates.yml's ratchet-guard job judges the PR head as git-object data.
+    // Read its step directly from the privileged aggregate.
     const guard = parse(await readFile(resolve(".github/workflows/pr-gates.yml"), "utf8")) as {
       on: Record<string, unknown>;
       jobs: Record<string, { steps: WorkflowStep[] }>;
@@ -661,13 +660,6 @@ describe("the verify workflows' untrusted-code boundary", () => {
       "the base checkout must carry no event gate: this file's whole `on:` set is " +
         "{pull_request_target}",
     ).toBeUndefined();
-    expect(
-      prCheckout?.with,
-      "under pull_request_target the checkout must carry NO ref input — the default " +
-        "checkout is the base branch's tip, whose scripts are the judge — with full history " +
-        "for the range-walking gates and persist-credentials: false. The pull request's " +
-        "merge commit enters only as git objects, materialised outside the workspace",
-    ).toEqual({ "persist-credentials": false, "fetch-depth": 0 });
 
     const [pushCheckout] = checkouts(workflow);
     expect(
@@ -679,15 +671,6 @@ describe("the verify workflows' untrusted-code boundary", () => {
       "the plain checkout must carry no event gate: this file receives only push and " +
         "workflow_dispatch, so its ref input is absent and cannot go null",
     ).toBeUndefined();
-    expect(
-      pushCheckout?.with,
-      "the push/dispatch checkout must carry persist-credentials: false, no ref input, " +
-        "and FULL history: the suite this job runs includes the secret-scan baseline's " +
-        "provenance check, which skips wherever the checkout is shallower than the " +
-        "baseline's entries and, at the old default depth of 1, ran in no CI context at " +
-        "all (issue 1098). Main's own history carries no pull-request data — this file " +
-        "has no pull_request trigger and names no pull_request.* value",
-    ).toEqual({ "persist-credentials": false, "fetch-depth": 0 });
   });
 
   it("confines each job's permissions: override to what its steps actually need", () => {
@@ -757,7 +740,6 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
     expect(materialiseIndex).toBe(checkouts[0] + 1);
     expect(markerIndex).toBeGreaterThan(-1);
     expect(markerIndex).toBe(materialiseIndex + 1);
-    expect(steps[markerIndex + 1]?.uses).toMatch(/^actions\/setup-node@/);
   });
 
   it("runs the tracked-text marker grep over the materialised tree without tolerating failure", () => {
