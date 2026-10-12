@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { pendingMigrationLines, readMigrationTree } from "../../scripts/deploy-migration-status";
 
 import {
   ALL_SHIMS,
@@ -1686,6 +1687,80 @@ describe("scripts/deploy-revision.sh", () => {
 describe("deploy-revision.sh pending-migration gate", () => {
   const unmarkedMigration = "052_unmarked.sql";
   const markedMigration = "053_mixed_version_review.sql";
+
+  async function fixtureStatus(name: string): Promise<string> {
+    const directory = fileURLToPath(new URL("../fixtures/migration-compatibility/", import.meta.url));
+    const tree = await readMigrationTree(directory);
+    return pendingMigrationLines(new Map([[name, tree.get(name)!]]), new Set()).join("\n") + "\n";
+  }
+
+  it("refuses a shape-classified review with a third column before applying migrations", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, {
+      OVERFLOW_DEPLOY_MIGRATION_STATUS_TEST_OUTPUT: await fixtureStatus("001_drop_column.sql"),
+    });
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
+    expect(result.stdout).toContain("001_drop_column.sql\treview\tdrop column");
+    expect(result.stderr).toContain("001_drop_column.sql");
+    expect((await readLog(fixture.shimLog)).some(
+      (entry) => entry.cmd === "pnpm" && entry.args[0] === "db:migrate",
+    )).toBe(false);
+  });
+
+  it("applies a shape-classified review with a third column after acknowledgment", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, {
+      OVERFLOW_DEPLOY_MIGRATION_STATUS_TEST_OUTPUT: await fixtureStatus("001_drop_column.sql"),
+      OVERFLOW_DEPLOY_MIGRATION_ACK: "1",
+    });
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.stdout).toContain("001_drop_column.sql\treview\tdrop column");
+    expect((await readLog(fixture.shimLog)).some(
+      (entry) => entry.cmd === "pnpm" && entry.args[0] === "db:migrate",
+    )).toBe(true);
+  });
+
+  it("applies a safe-marker verdict with a third column without acknowledgment", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, {
+      OVERFLOW_DEPLOY_MIGRATION_STATUS_TEST_OUTPUT: await fixtureStatus("015_safe_marker.sql"),
+    });
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.stdout).toContain("015_safe_marker.sql\t-\toverflow: mixed-version safe:");
+    expect((await readLog(fixture.shimLog)).some(
+      (entry) => entry.cmd === "pnpm" && entry.args[0] === "db:migrate",
+    )).toBe(true);
+  });
+
+  it("completes when readiness is 503 until restart and probes only after switch and restart", async () => {
+    const fixture = await makeFixture();
+    const restarted = path.join(fixture.dir, "restarted");
+    await writeFile(path.join(fixture.bins, "systemctl"), shimBody("systemctl", [], `
+if [ "$1" = restart ]; then touch "${restarted}"; fi
+exit 0
+`));
+    await writeFile(path.join(fixture.bins, "curl"), shimBody("curl", [], `
+if [ ! -f "${restarted}" ]; then printf '503\\n'; exit 22; fi
+printf '200\\n'
+`));
+    await chmod(path.join(fixture.bins, "systemctl"), 0o755);
+    await chmod(path.join(fixture.bins, "curl"), 0o755);
+    const readinessUrl = "http://127.0.0.1:39999/api/readiness";
+    const result = await runDeploy(fixture, {
+      OVERFLOW_DEPLOY_URL: readinessUrl,
+      OVERFLOW_DEPLOY_MIGRATION_STATUS_TEST_OUTPUT: await fixtureStatus("001_drop_column.sql"),
+      OVERFLOW_DEPLOY_MIGRATION_ACK: "1",
+    }, { omitShims: ["systemctl", "curl"] });
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    const entries = await readLog(fixture.shimLog);
+    const switchAt = entries.findIndex((entry) => entry.cmd === "pnpm" && entry.args[0] === "release:switch");
+    const restartAt = entries.findIndex((entry) => entry.cmd === "systemctl" && entry.args[0] === "restart");
+    const readiness = entries.filter((entry) => entry.cmd === "curl" && entry.args.at(-1) === readinessUrl);
+    expect(switchAt).toBeGreaterThan(-1);
+    expect(restartAt).toBeGreaterThan(switchAt);
+    expect(readiness).toHaveLength(1);
+    for (const probe of readiness) expect(entries.indexOf(probe)).toBeGreaterThan(restartAt);
+  });
 
   it("lists a pending unmarked migration and proceeds to migrate", async () => {
     const fixture = await makeFixture();

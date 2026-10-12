@@ -3,12 +3,12 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { closeSql, withTransaction } from "../src/lib/db/client.ts";
 import { listMigrationNames } from "./migrate.ts";
+import { classifyMigrationCompatibility } from "./migration-compatibility.ts";
 
 const migrationsDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../db/migrations",
 );
-const reviewMarker = "overflow: mixed-version review";
 
 export function pendingMigrationLines(
   tree: ReadonlyMap<string, string>,
@@ -16,16 +16,25 @@ export function pendingMigrationLines(
 ): string[] {
   return [...tree.entries()]
     .filter(([name]) => !applied.has(name))
-    .map(([name, contents]) => `${name}\t${contents.includes(reviewMarker) ? "review" : "-"}`);
+    .map(([name, contents]) => {
+      const { verdict, shapes, note } = classifyMigrationCompatibility(contents);
+      const detail = note ?? shapes.join(", ");
+      return `${name}\t${verdict}${detail ? `\t${detail}` : ""}`;
+    });
+}
+
+/** The CLI's file-reading path, also usable with a fixture directory. */
+export async function readMigrationTree(directory = migrationsDirectory): Promise<Map<string, string>> {
+  const migrationNames = listMigrationNames(await readdir(directory));
+  const tree = new Map<string, string>();
+  for (const name of migrationNames) {
+    tree.set(name, await readFile(path.join(directory, name), "utf8"));
+  }
+  return tree;
 }
 
 async function listPendingMigrationLines(): Promise<string[]> {
-  const migrationNames = listMigrationNames(await readdir(migrationsDirectory));
-  const tree = new Map<string, string>();
-  for (const name of migrationNames) {
-    tree.set(name, await readFile(path.join(migrationsDirectory, name), "utf8"));
-  }
-
+  const tree = await readMigrationTree();
   const applied = await withTransaction(async (sql) => {
     const rows = await sql<{ name: string }[]>`select name from schema_migrations`;
     return new Set(rows.map(({ name }) => name));
