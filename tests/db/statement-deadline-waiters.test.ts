@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import postgres from "postgres";
@@ -67,6 +67,10 @@ describe("statement deadline waiter paths", () => {
     process.env.TOKEN_ENCRYPTION_KEY = tokenKey;
     sql = getSql() as unknown as Sql;
     await runMigrations();
+  });
+
+  beforeEach(async () => {
+    await sql`truncate repository_reconciliation_jobs`;
   });
 
   afterAll(async () => {
