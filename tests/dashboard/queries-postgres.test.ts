@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -34,6 +34,11 @@ describe("audit targeting against PostgreSQL", () => {
     process.env.DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
+  });
+
+  beforeEach(async () => {
+    await sql`truncate users cascade`;
+    externalId = 70_000;
     await seedAuditTargetingWorld();
   });
 
