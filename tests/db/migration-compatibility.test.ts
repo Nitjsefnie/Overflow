@@ -56,6 +56,21 @@ describe("migration compatibility fixtures", () => {
     ["047_nested_do_language.sql", "drop column"],
     ["048_do_named_function_data.sql", "drop column"],
     ["049_nested_quoted_language.sql", "drop column"],
+    ["039_ordinary_literal_shapes.sql", "drop column"],
+    ["040_dollar_literal_shapes.sql", "drop column"],
+    ["043_safe_comment_in_do.sql", "drop column"],
+    ["050_ordinary_do_body.sql", "drop column"],
+    ["051_e_do_body.sql", "drop column"],
+    ["052_ordinary_function_body.sql", "drop column"],
+    ["053_fixed_execute_literal.sql", "drop column"],
+    ["054_insert_shape_data.sql", "drop column"],
+    ["055_nested_ordinary_execute.sql", "drop column"],
+    ["056_nested_e_execute.sql", "drop column"],
+    ["057_literal_default_clause.sql", "add column not null without default"],
+    ["058_e_hex_space.sql", "drop column"],
+    ["059_e_octal_space.sql", "drop column"],
+    ["060_e_unicode_space.sql", "drop column"],
+    ["061_e_long_unicode_space.sql", "drop column"],
   ])("flags %s with its matched shapes", async (name, shapes) => {
     const tree = await readMigrationTree(fixturesDirectory);
     expect(tree.has(name), `disk-backed fixture ${name}`).toBe(true);
@@ -68,13 +83,12 @@ describe("migration compatibility fixtures", () => {
     "010_create_table.sql", "011_add_default.sql", "012_add_nullable.sql",
     "013_create_index.sql", "014_drop_not_null.sql", "018_line_comment.sql",
     "019_block_comment.sql", "022_drop_default.sql", "027_nested_comment.sql",
-    "039_ordinary_literal_shapes.sql", "040_dollar_literal_shapes.sql",
   ])("does not flag %s", async (name) => {
     const tree = await readMigrationTree(fixturesDirectory);
     expect(pendingMigrationLines(new Map([[name, tree.get(name)!]]), new Set())).toEqual([`${name}\t-`]);
   });
 
-  it.each(["015_safe_marker.sql", "043_safe_comment_in_do.sql"])("downgrades a shape hit with a reasoned safe comment in %s", async (name) => {
+  it.each(["015_safe_marker.sql"])("downgrades a shape hit with a reasoned safe comment in %s", async (name) => {
     const tree = await readMigrationTree(fixturesDirectory);
     expect(pendingMigrationLines(new Map([[name, tree.get(name)!]]), new Set())).toEqual([
       `${name}\t-\toverflow: mixed-version safe: retained releases stopped using note`,

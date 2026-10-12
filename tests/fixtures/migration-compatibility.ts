@@ -195,4 +195,52 @@ export const migrationCompatibilityFixtures = [
     name: "049_nested_quoted_language.sql",
     contents: "DO $outer$ BEGIN DO LANGUAGE 'plpgsql' $inner$ BEGIN ALTER TABLE items DROP COLUMN note; END; $inner$; END; $outer$;\n",
   },
+  {
+    name: "050_ordinary_do_body.sql",
+    contents: "DO 'BEGIN ALTER TABLE items DROP COLUMN note; END';\n",
+  },
+  {
+    name: "051_e_do_body.sql",
+    contents: "DO E'BEGIN ALTER TABLE items DROP COLUMN note; END';\n",
+  },
+  {
+    name: "052_ordinary_function_body.sql",
+    contents: "CREATE FUNCTION change_items() RETURNS void LANGUAGE plpgsql\nAS 'BEGIN ALTER TABLE items DROP COLUMN note; END';\nSELECT change_items();\n",
+  },
+  {
+    name: "053_fixed_execute_literal.sql",
+    contents: "DO $$ BEGIN EXECUTE 'ALTER TABLE items DROP COLUMN note;'; END $$;\n",
+  },
+  {
+    name: "054_insert_shape_data.sql",
+    contents: "INSERT INTO messages (body) VALUES ('alter table x drop column y');\n",
+  },
+  {
+    name: "055_nested_ordinary_execute.sql",
+    contents: "DO 'BEGIN EXECUTE ''ALTER TABLE items DROP COLUMN note;''; END';\n",
+  },
+  {
+    name: "056_nested_e_execute.sql",
+    contents: "DO E'BEGIN EXECUTE \\'ALTER TABLE items DROP COLUMN note;\\'; END';\n",
+  },
+  {
+    name: "057_literal_default_clause.sql",
+    contents: "DO $$ BEGIN ALTER TABLE items ADD COLUMN note text NOT NULL DEFAULT 'text'; END $$;\n",
+  },
+  {
+    name: "058_e_hex_space.sql",
+    contents: "DO E'BEGIN ALTER TABLE items DROP\\x20COLUMN note; END';\n",
+  },
+  {
+    name: "059_e_octal_space.sql",
+    contents: "DO E'BEGIN ALTER TABLE items DROP\\040COLUMN note; END';\n",
+  },
+  {
+    name: "060_e_unicode_space.sql",
+    contents: "DO E'BEGIN ALTER TABLE items DROP\\u0020COLUMN note; END';\n",
+  },
+  {
+    name: "061_e_long_unicode_space.sql",
+    contents: "DO E'BEGIN ALTER TABLE items DROP\\U00000020COLUMN note; END';\n",
+  },
 ] as const;
