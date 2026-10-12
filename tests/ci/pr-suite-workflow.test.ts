@@ -399,6 +399,19 @@ describe("the pull request suite workflow", () => {
     expect(suite["timeout-minutes"]).toBe(45);
   });
 
+  it("runs the SQL statement budget gate beside geometry after database migration", () => {
+    const checks = suite.steps.filter((step) => step.name === "SQL statement budget check");
+    expect(checks).toHaveLength(1);
+    const step = checks[0]!;
+    expect(step.run).toBe("node scripts/check-perf-budget.ts");
+    const migration = suite.steps.findIndex((entry) => entry.name === "Apply PostgreSQL migrations");
+    expect(migration).toBeGreaterThan(-1);
+    expect(suite.steps.indexOf(step)).toBeGreaterThan(migration);
+    expect(Math.abs(suite.steps.indexOf(step) - suite.steps.findIndex((entry) => entry.name === "Page geometry check"))).toBe(1);
+    expect(step.if).toBeUndefined();
+    expect((step as { "continue-on-error"?: unknown })["continue-on-error"]).toBeFalsy();
+  });
+
   it("runs the prerender check after the production build, beside geometry, as a required gate", () => {
     const checks = suite.steps.filter((step) => step.name === "Prerendered routes check");
     expect(checks).toHaveLength(1);
@@ -425,6 +438,7 @@ describe("the pull request suite workflow", () => {
       "pnpm build",
       "node scripts/check-prerendered-routes.ts",
       "node scripts/check-page-geometry.mjs",
+      "node scripts/check-perf-budget.ts",
     ];
     const indices = order.map((command) => suite.steps.indexOf(stepRunning(command)));
     expect(indices).toEqual([...indices].sort((a, b) => a - b));

@@ -291,6 +291,9 @@ jobs:
       - name: Page geometry check
         run: node scripts/check-page-geometry.mjs
 
+      - name: SQL statement budget check
+        run: node scripts/check-perf-budget.ts
+
   # Raises the committed coverage floor when a main push measured higher
   # than the record by more than the hysteresis, and doubles as the calibrate
   # self-test: a workflow_dispatch carrying simulate-refused-raise fabricates
