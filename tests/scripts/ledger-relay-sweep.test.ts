@@ -354,7 +354,10 @@ function fakeApi(handlers: Record<string, unknown>): {
  * status silently means "concluded" for the wrong reason.
  */
 function appCheckRun(name: string, over: Record<string, unknown> = {}): Record<string, unknown> {
-  return { name, status: "completed", app: { id: Number(APP_ID) }, ...over };
+  return {
+    name, status: "completed", app: { id: Number(APP_ID) },
+    details_url: `https://github.com/${REPO}/actions/runs/9002`, ...over,
+  };
 }
 
 const RUNS_URL = `https://api.github.com/repos/${REPO}/actions/runs?per_page=100`;
@@ -591,8 +594,8 @@ describe("sweepOrphans", () => {
       [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
       [checkRunsAt(HEAD_SHA)]: {
         check_runs: [
-          { name: "actionlint", status: "completed", app: { id: 15368 } },
-          { name: "actionlint", status: "completed" },
+          { name: "actionlint", status: "completed", app: { id: 15368 }, details_url: candidate().htmlUrl },
+          { name: "actionlint", status: "completed", details_url: candidate().htmlUrl },
           { name: "other", status: "completed", app: { id: Number(APP_ID) } },
           null,
         ],
@@ -617,17 +620,18 @@ describe("sweepOrphans", () => {
       [checkRunsAt(HEAD_SHA)]: { check_runs: [] },
       [checkRunsAt(OTHER_SHA)]: { check_runs: [] },
       [jobsUrl("9002")]: { jobs: [] },
+      [jobsUrl("9003")]: { jobs: [] },
       [jobsUrl("9004")]: { jobs: [] },
+      [jobsUrl("9005")]: { jobs: [] },
     });
     const outcome = await sweepOrphans(deps(api));
 
-    // One post per head SHA, not one per candidate: the second candidate at
-    // each SHA finds the context already relayed by this same sweep run.
+    // One post per head SHA: only its newest eligible producer is considered.
     expect(outcome).toEqual({
       examined: 4,
       relayed: [
-        { context: "actionlint", runId: "9002" },
-        { context: "actionlint", runId: "9004" },
+        { context: "actionlint", runId: "9003" },
+        { context: "actionlint", runId: "9005" },
       ],
     });
     const headsRead = requests.filter(
@@ -689,4 +693,122 @@ describe("sweepOrphans", () => {
     expect(outcome).toEqual({ examined: 0, relayed: [] });
     expect(requests.map((request) => request.url)).toEqual([RUNS_URL]);
   });
+});
+
+describe("producer-bound sweep attestation", () => {
+  const details = (id: string) => `https://github.com/${REPO}/actions/runs/${id}`;
+
+  it.each(["newest first", "oldest first"])(
+    "replaces an older green pull_request_target check with the newest orphan's failure, %s",
+    async (order) => {
+      const older = runEntry({ id: 9001, path: PATH_CI_PR });
+      const newer = runEntry({ id: 9002, path: PATH_CI_PR, conclusion: "failure" });
+      const { api, requests } = fakeApi({
+        [RUNS_URL]: { workflow_runs: order === "newest first" ? [newer, older] : [older, newer] },
+        [checkRunsAt(HEAD_SHA)]: { check_runs: [appCheckRun("verify", {
+          details_url: details("9001"), conclusion: "success",
+        })] },
+        [jobsUrl("9001")]: {
+          jobs: [{ name: "verify", run_attempt: 1, status: "completed", conclusion: "success" }],
+        },
+        [jobsUrl("9002")]: {
+          jobs: [{ name: "verify", run_attempt: 1, status: "completed", conclusion: "failure" }],
+        },
+      });
+      const outcome = await sweepOrphans(deps(api, { triggerRunId: "", pinMap: TWO_PATH_PIN_MAP }));
+      expect(outcome.relayed).toEqual([{ context: "verify", runId: "9002" }]);
+      expect(requests.filter((request) => request.method === "POST").map((request) => request.body))
+        .toEqual([expect.objectContaining({
+          name: "verify", head_sha: HEAD_SHA, conclusion: "failure", details_url: details("9002"),
+        })]);
+      expect(requests.some((request) => request.url === jobsUrl("9001"))).toBe(false);
+    },
+  );
+
+  it("skips jobs and posting when the newest candidate is already attested by its details URL", async () => {
+    const { api, requests } = fakeApi({
+      [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002 })] },
+      [checkRunsAt(HEAD_SHA)]: { check_runs: [appCheckRun("verify", { details_url: details("9002") })] },
+      [jobsUrl("9002")]: { jobs: [] },
+    });
+    const outcome = await sweepOrphans(deps(api));
+    expect(outcome).toEqual({ examined: 1, relayed: [] });
+    expect(requests.map((request) => request.url)).toEqual([RUNS_URL, checkRunsAt(HEAD_SHA)]);
+  });
+
+  it("never reposts an older unattested candidate over a newer attested one at the same head", async () => {
+    const { api, requests } = fakeApi({
+      [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002 }), runEntry({ id: 9003 })] },
+      [checkRunsAt(HEAD_SHA)]: { check_runs: [appCheckRun("verify", { details_url: details("9003") })] },
+      [jobsUrl("9002")]: { jobs: [] },
+      [jobsUrl("9003")]: { jobs: [] },
+    });
+    const outcome = await sweepOrphans(deps(api));
+    expect(outcome).toEqual({ examined: 2, relayed: [] });
+    expect(requests.map((request) => request.url)).toEqual([RUNS_URL, checkRunsAt(HEAD_SHA)]);
+  });
+
+  it.each(["verify", "actionlint"])(
+    "binds pr-gates and verify at one SHA independently when %s has a stale attestation",
+    async (stale) => {
+      const gatePath = ".github/workflows/pr-gates.yml";
+      const pinMap = { verify: PATH_CI, actionlint: gatePath, "secret-scan": gatePath };
+      const { api, requests } = fakeApi({
+        [RUNS_URL]: { workflow_runs: [
+          runEntry({ id: 9002, path: gatePath }), runEntry({ id: 9003 }),
+        ] },
+        [checkRunsAt(HEAD_SHA)]: { check_runs: [
+          appCheckRun("actionlint", { details_url: details(stale === "actionlint" ? "9001" : "9002") }),
+          appCheckRun("secret-scan", { details_url: details("9002") }),
+          appCheckRun("verify", { details_url: details(stale === "verify" ? "9001" : "9003") }),
+        ] },
+        [jobsUrl("9002")]: { jobs: [
+          { name: "actionlint", run_attempt: 1, status: "completed", conclusion: "failure" },
+          { name: "secret-scan", run_attempt: 1, status: "completed", conclusion: "success" },
+        ] },
+        [jobsUrl("9003")]: {
+          jobs: [{ name: "verify", run_attempt: 1, status: "completed", conclusion: "failure" }],
+        },
+      });
+      const outcome = await sweepOrphans(deps(api, { pinMap }));
+      const wantedId = stale === "verify" ? "9003" : "9002";
+      expect(outcome.relayed).toEqual([{ context: stale, runId: wantedId }]);
+      expect(requests.filter((request) => request.method === "POST").map((request) => request.body))
+        .toEqual([expect.objectContaining({
+          name: stale, head_sha: HEAD_SHA, conclusion: "failure", details_url: details(wantedId),
+        })]);
+      expect(requests.filter((request) => request.url?.includes("/jobs?")).map((request) => request.url))
+        .toEqual([jobsUrl(wantedId)]);
+    },
+  );
+
+  it("selects the highest numeric id across alternative pinned paths even if the listing starts with the older one", async () => {
+    const { api, requests } = fakeApi({
+      [RUNS_URL]: { workflow_runs: [
+        runEntry({ id: "9", path: PATH_CI }),
+        runEntry({ id: "10", path: PATH_CI_PR, conclusion: "failure" }),
+      ] },
+      [checkRunsAt(HEAD_SHA)]: { check_runs: [] },
+      [jobsUrl("9")]: { jobs: [] },
+      [jobsUrl("10")]: { jobs: [] },
+    });
+    const outcome = await sweepOrphans(deps(api, { pinMap: TWO_PATH_PIN_MAP }));
+    expect(outcome.relayed).toEqual([{ context: "verify", runId: "10" }]);
+    expect(requests.at(-1)?.body).toMatchObject({ conclusion: "failure", details_url: details("10") });
+    expect(requests.some((request) => request.url === jobsUrl("9"))).toBe(false);
+  });
+
+  it.each([undefined, "", "https://github.com/someone/other/actions/runs/9002"])(
+    "does not attest the newest candidate with missing, empty, or different details URL %s",
+    async (url) => {
+      const { api, requests } = fakeApi({
+        [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, conclusion: "failure" })] },
+        [checkRunsAt(HEAD_SHA)]: { check_runs: [appCheckRun("verify", { details_url: url })] },
+        [jobsUrl("9002")]: { jobs: [] },
+      });
+      const outcome = await sweepOrphans(deps(api));
+      expect(outcome.relayed).toEqual([{ context: "verify", runId: "9002" }]);
+      expect(requests.at(-1)?.body).toMatchObject({ conclusion: "failure", details_url: details("9002") });
+    },
+  );
 });

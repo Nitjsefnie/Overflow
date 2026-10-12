@@ -2047,12 +2047,15 @@ describe("runRelay", () => {
   }
 
   /** The App's own check-runs at a commit, as the filtered listing returns them. */
-  function checkRunsListing(names: Array<string>): Outcome {
+  function checkRunsListing(names: Array<string>, runId = 9002): Outcome {
     return {
       status: 200,
       body: {
         total_count: names.length,
-        check_runs: names.map((name) => ({ name, app: { id: Number(APP_ID) } })),
+        check_runs: names.map((name) => ({
+          name, status: "completed", app: { id: Number(APP_ID) },
+          details_url: `https://github.com/Nitjsefnie/Overflow/actions/runs/${runId}`,
+        })),
       },
     };
   }
@@ -2251,8 +2254,7 @@ describe("runRelay", () => {
         checkRunsListing([]),
         jobsListing([job({ name: "actionlint" })]),
         { status: 201, body: { id: 2 } },
-        // The first candidate at HEAD_SHA already relayed actionlint there, so
-        // the second is skipped without a second jobs GET.
+        // Only the newest candidate at each SHA reads jobs and posts.
         { status: 200, body: { total_count: 0, check_runs: [] } },
         jobsListing([job({ name: "actionlint" })]),
         { status: 201, body: { id: 3 } },
@@ -2265,11 +2267,10 @@ describe("runRelay", () => {
       });
 
       expect(result.sweep.examined).toBe(4);
-      // Two posts: one per head SHA, not one per candidate. The second
-      // candidate at each SHA finds its context already relayed by the first.
+      // Two posts: the newest producer at each head SHA.
       expect(result.sweep.relayed).toEqual([
-        { context: "actionlint", runId: "9002" },
-        { context: "actionlint", runId: "9004" },
+        { context: "actionlint", runId: "9003" },
+        { context: "actionlint", runId: "9005" },
       ]);
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_AT_HEAD_URL)).toHaveLength(1);
       expect(
@@ -2297,7 +2298,7 @@ describe("runRelay", () => {
           sweepRun(9004, { path: PATH_ACTIONLINT, head_sha: "", html_url: "" }),
           sweepRun(9005, { path: PATH_ACTIONLINT }),
         ]),
-        checkRunsListing(["actionlint"]),
+        checkRunsListing(["actionlint"], 9005),
       ]);
       const result = await runRelay({
         env: relayEnv(),

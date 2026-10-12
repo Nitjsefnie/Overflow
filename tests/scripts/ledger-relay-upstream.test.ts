@@ -26,6 +26,7 @@ beforeAll(() => {
 });
 
 function producer(over: Record<string, unknown> = {}): Record<string, unknown> {
+  const id = over.id ?? 9001;
   return {
     id: 9001,
     created_at: "2026-10-12T09:00:00Z",
@@ -38,7 +39,7 @@ function producer(over: Record<string, unknown> = {}): Record<string, unknown> {
     display_title: "verify for pr suite run 8001",
     status: "completed",
     conclusion: "success",
-    html_url: `https://github.com/${REPO}/actions/runs/9001`,
+    html_url: `https://github.com/${REPO}/actions/runs/${id}`,
     run_attempt: 1,
     ...over,
   };
@@ -273,7 +274,10 @@ describe("workflow_run orphan sweep", () => {
     const h = harness({ env: sweepEnv, handlers: {
       [runsUrl]: { workflow_runs: [producer()] },
       [checksUrl(PR_SHA)]: {
-        check_runs: [{ name: "verify", status: "completed", app: { id: 5118623 } }],
+        check_runs: [{
+          name: "verify", status: "completed", app: { id: 5118623 },
+          details_url: `https://github.com/${REPO}/actions/runs/9001`,
+        }],
       },
     } });
     const result = await h.run();
@@ -493,5 +497,46 @@ describe("superseded mirror keeps orphan recovery available", () => {
     expect(result.sweep.relayed).toEqual([{ context: "verify", runId: "9002" }]);
     expect(h.posts).toHaveLength(1);
     expect(h.posts[0]).toMatchObject({ head_sha: PR_SHA, details_url: `https://github.com/${REPO}/actions/runs/9002` });
+  });
+});
+
+describe("producer-bound workflow_run sweep attestation", () => {
+  it("replaces the real older green with an orphaned newer failed verify on the same PR head", async () => {
+    const initial = harness();
+    await initial.run();
+    const green = { ...initial.posts[0], app: { id: 5118623 } };
+    expect(green).toMatchObject({ name: "verify", head_sha: PR_SHA, conclusion: "success" });
+    const failedSuite = suite({
+      id: 8002, conclusion: "failure", run_started_at: "2026-10-12T10:00:00Z",
+    });
+    const failedVerify = producer({
+      id: 9002, created_at: "2026-10-12T10:01:00Z", conclusion: "failure",
+      display_title: "verify for pr suite run 8002",
+      html_url: `https://github.com/${REPO}/actions/runs/9002`,
+    });
+    const recovery = harness({
+      env: { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" },
+      handlers: {
+        [runsUrl]: { workflow_runs: [failedVerify, producer()] },
+        [runUrl(9002)]: failedVerify,
+        [runUrl(8002)]: failedSuite,
+        [suiteRunsUrl()]: { total_count: 2, workflow_runs: [failedSuite, suite()] },
+        [jobsUrl(9002)]: {
+          jobs: [{ name: "verify", run_attempt: 1, status: "completed", conclusion: "failure" }],
+        },
+        [checksUrl(PR_SHA)]: { check_runs: [green] },
+      },
+    });
+    const result = await recovery.run();
+    expect(result.sweep.examined).toBe(2);
+    expect(result.sweep.relayed).toEqual([{ context: "verify", runId: "9002" }]);
+    expect(recovery.posts).toHaveLength(1);
+    expect(recovery.posts[0]).toMatchObject({
+      name: "verify", head_sha: PR_SHA, conclusion: "failure",
+      details_url: `https://github.com/${REPO}/actions/runs/9002`,
+    });
+    expect(recovery.requests).toContain(jobsUrl(9002));
+    expect(recovery.requests).not.toContain(jobsUrl(9001));
+    expect(result.sweep.superseded).toContainEqual({ runId: "9001", supersededBy: 8002 });
   });
 });
