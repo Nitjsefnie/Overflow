@@ -1,4 +1,5 @@
 import { Console } from "node:console";
+import { fstatSync } from "node:fs";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReconciliationDependencies, ReconciliationRepository } from "@/lib/fold/reconcile";
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
@@ -214,7 +215,8 @@ describe("server instrumentation", () => {
 
   it("installs journal levels on nodejs even when background work is disabled", async () => {
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
-    vi.stubEnv("JOURNAL_STREAM", "test-journal-stream");
+    const { dev, ino } = fstatSync(2, { bigint: true });
+    vi.stubEnv("JOURNAL_STREAM", `${dev}:${ino}`);
     vi.stubEnv("OVERFLOW_DISABLE_RECONCILIATION_SWEEP", "1");
     vi.stubGlobal("console", new Console({ stdout: process.stdout, stderr: process.stderr, colorMode: false }));
     const methods = {
