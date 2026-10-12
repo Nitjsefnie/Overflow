@@ -6,6 +6,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { pendingMigrationLines, readMigrationTree } from "../../scripts/deploy-migration-status";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql } from "@/lib/db/client";
+import { migrationCompatibilityFixtures } from "../fixtures/migration-compatibility";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 let container: StartedTestContainer | undefined;
@@ -26,6 +27,25 @@ afterAll(async () => {
 });
 
 describe("pending deploy migration status", () => {
+  it.each(["046_nested_do_body.sql", "047_nested_do_language.sql", "048_do_named_function_data.sql", "049_nested_quoted_language.sql"])("confirms %s executes its schema change in scratch PostgreSQL", async (name) => {
+    const migration = migrationCompatibilityFixtures.find((fixture) => fixture.name === name)!;
+    const sql = postgres(databaseUrl);
+    try {
+      await sql`create table items (note text)`;
+      if (name === "048_do_named_function_data.sql") {
+        await sql.unsafe('create function public."do"(text) returns text language sql as $$ select $1 $$');
+      }
+      await sql.unsafe(migration.contents);
+      await expect(sql`select note from items`).rejects.toMatchObject({ code: "42703" });
+    } finally {
+      await sql`drop table if exists items`;
+      if (name === "048_do_named_function_data.sql") {
+        await sql.unsafe('drop function if exists public."do"(text)');
+      }
+      await sql.end();
+    }
+  });
+
   it("omits applied migrations and preserves the legacy review marker", () => {
     const tree = new Map([
       ["052_unmarked.sql", "alter table items add column note text;\n"],

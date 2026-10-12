@@ -124,7 +124,13 @@ function lexSql(sql: string): { tokens: SqlToken[]; comments: string[] } {
 }
 
 function isExecutableBody(statement: readonly SqlToken[]): boolean {
-  return wordIs(statement[0], "do") ||
+  const doAt = statement.findIndex((token, at) => wordIs(token, "do") &&
+    (at === 0 || ["begin", "then", "else", "loop"].some((word) => wordIs(statement[at - 1], word))),
+  );
+  const prefix = statement.slice(doAt + 1);
+  const doBody = doAt >= 0 && (prefix.length === 0 ||
+    (prefix.length === 2 && wordIs(prefix[0], "language") && prefix[1].kind !== "symbol"));
+  return doBody ||
     (statement.some((token) => wordIs(token, "create")) &&
       statement.some((token) => wordIs(token, "function") || wordIs(token, "procedure")) &&
       wordIs(statement.at(-1), "as"));

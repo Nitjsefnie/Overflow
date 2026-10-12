@@ -52,6 +52,10 @@ describe("migration compatibility fixtures", () => {
     ["041_executable_do_body.sql", "drop column"],
     ["042_executable_function_body.sql", "drop column"],
     ["045_doubled_identifier_quote.sql", "alter type"],
+    ["046_nested_do_body.sql", "drop column"],
+    ["047_nested_do_language.sql", "drop column"],
+    ["048_do_named_function_data.sql", "drop column"],
+    ["049_nested_quoted_language.sql", "drop column"],
   ])("flags %s with its matched shapes", async (name, shapes) => {
     const tree = await readMigrationTree(fixturesDirectory);
     expect(tree.has(name), `disk-backed fixture ${name}`).toBe(true);
