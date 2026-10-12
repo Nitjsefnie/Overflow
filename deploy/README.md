@@ -909,7 +909,10 @@ matching case-insensitively after normalizing whitespace:
 
 The contents of every SQL string literal are classified too: a shape inside
 a literal still requires review, even if that literal is data rather than
-executed SQL. The literal substring `overflow: mixed-version review` anywhere
+executed SQL. Statements inside literals (including `DO` or function bodies
+and `EXECUTE` text) get no `DEFAULT` exemption: `ADD COLUMN ... NOT NULL
+DEFAULT ...` inside a literal is flagged too.
+The literal substring `overflow: mixed-version review` anywhere
 in the raw file, comments included, also forces `review`. A real SQL line
 comment `-- overflow: mixed-version safe: <reason>` downgrades a shape hit to
 `-` only with a non-empty reason explaining why retained releases are safe;
