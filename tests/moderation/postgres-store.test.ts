@@ -55,6 +55,45 @@ describe("PostgreSQL account moderation transitions", () => {
     }
   });
 
+  it("refuses to load a calibration cohort for a deleted target", async () => {
+    const targetId = await insertUser("MEMBER");
+    const repositoryId = await insertRepository(targetId);
+    await insertCalibrationPairs({ targetId, repositoryId, count: 10 });
+    await sql`update users set deleted_at = now(), github_login = ${"(deleted account)"} where id = ${targetId}`;
+
+    await expect(new PostgresModerationStore(sql).loadCalibrationCohort({
+      targetAccountId: targetId,
+      repositoryId,
+      sampleStartedAt: "2020-01-01T00:00:00.000Z",
+      sampleEndedAt: "2030-01-01T00:00:00.000Z",
+    })).resolves.toBeNull();
+  });
+
+  it("refuses to open an audit for a target deleted after its cohort was loaded and inserts no audit", async () => {
+    const actorId = await insertUser("MODERATOR");
+    const targetId = await insertUser("MEMBER");
+    const repositoryId = await insertRepository(targetId);
+    await insertCalibrationPairs({ targetId, repositoryId, count: 10 });
+    const store = new PostgresModerationStore(sql);
+    const window = {
+      targetAccountId: targetId,
+      repositoryId,
+      sampleStartedAt: "2020-01-01T00:00:00.000Z",
+      sampleEndedAt: "2030-01-01T00:00:00.000Z",
+    };
+    const loaded = await store.loadCalibrationCohort(window);
+    expect(loaded).not.toBeNull();
+    const input = auditInput({ ...window, actorId, ...loaded! });
+    await sql`update users set deleted_at = now(), github_login = ${"(deleted account)"} where id = ${targetId}`;
+
+    await expect(store.openAccountAudit(input)).resolves.toEqual({ kind: "not_found" });
+    const [audits] = await sql<{ count: number }[]>`
+      select count(*)::integer as count from calibration_audits where account_id = ${targetId}
+    `;
+    expect(audits.count).toBe(0);
+    expect(await targetState(targetId)).toEqual({ state: "ACTIVE", confirmedCount: 0 });
+  });
+
   it("locks account and audit transitions, preserves evidence, and applies the account-level enforcement ladder", async () => {
     const moderatorId = await insertUser("MODERATOR");
     const targetId = await insertUser("MEMBER");

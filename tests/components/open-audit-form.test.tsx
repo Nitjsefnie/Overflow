@@ -32,6 +32,7 @@ const candidates: AuditCandidateProjection[] = [
   {
     id: miraId,
     githubLogin: "mira",
+    githubUserId: 101,
     enforcementState: "ACTIVE",
     selfWorkPairCount: 12,
     outsiderPairCount: 30,
@@ -40,6 +41,7 @@ const candidates: AuditCandidateProjection[] = [
   {
     id: nilsId,
     githubLogin: "nils",
+    githubUserId: 102,
     enforcementState: "ACTIVE",
     selfWorkPairCount: 4,
     outsiderPairCount: 6,
@@ -110,6 +112,42 @@ afterEach(() => {
 });
 
 describe("open audit form", () => {
+  it("distinguishes shared logins by GitHub id while leaving a unique login unchanged", () => {
+    const offered = [
+      { ...candidates[0]!, githubLogin: "shared" },
+      { ...candidates[0]!, id: nilsId, githubLogin: "shared", githubUserId: 102 },
+      { ...candidates[0]!, id: repositoryId, githubLogin: "unique", githubUserId: 103 },
+    ];
+    render(<OpenAuditForm candidates={offered} repositories={repositories} />);
+
+    expect(screen.getByRole("option", { name: "shared (GitHub id 101) · 12 self-work · 30 outsider settlements" }))
+      .toHaveValue(miraId);
+    expect(screen.getByRole("option", { name: "shared (GitHub id 102) · 12 self-work · 30 outsider settlements" }))
+      .toHaveValue(nilsId);
+    expect(screen.getByRole("option", { name: "unique · 12 self-work · 30 outsider settlements" }))
+      .toHaveValue(repositoryId);
+  });
+
+  it.each([[miraId, 101], [nilsId, 102]] as const)(
+    "identifies a preview for shared-login account %s by its GitHub id",
+    async (targetId, githubUserId) => {
+      vi.stubGlobal("fetch", vi.fn(async () => cohortResponse(accountWidePreview())));
+      const offered = [
+        { ...candidates[0]!, githubLogin: "shared" },
+        { ...candidates[0]!, id: nilsId, githubLogin: "shared", githubUserId: 102 },
+      ];
+      render(<OpenAuditForm candidates={offered} repositories={repositories} />);
+      chooseTarget(targetId);
+      chooseWindow();
+      fireEvent.click(screen.getByRole("button", { name: "Preview cohort" }));
+
+      await waitFor(() => {
+        expect(screen.getByText(`Previewed shared (GitHub id ${githubUserId}) · all repositories · ${startedAt} to ${endedAt}`))
+          .toBeVisible();
+      });
+    },
+  );
+
   it("lists every candidate with its cohort counts and marks the accounts already under audit", () => {
     vi.stubGlobal("fetch", vi.fn());
     render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
@@ -127,6 +165,7 @@ describe("open audit form", () => {
     const singlePairCandidate: AuditCandidateProjection = {
       id: miraId,
       githubLogin: "single",
+      githubUserId: 101,
       enforcementState: "ACTIVE",
       selfWorkPairCount: 3,
       outsiderPairCount: 1,
@@ -684,7 +723,7 @@ describe("moderation page open-audit section", () => {
       if (query.includes("as self_work_pair_count")) {
         return [{
           id: miraId,
-          github_login: "mira",
+          github_login: "mira", github_user_id: 101,
           enforcement_state: "ACTIVE",
           self_work_pair_count: 12,
           outsider_pair_count: 30,
@@ -754,7 +793,7 @@ describe("moderation page open-audit section", () => {
 
 function populatedModerationRows(query: string) {
   if (query.includes("as self_work_pair_count")) {
-    return [{ id: miraId, github_login: "mira", enforcement_state: "ACTIVE", self_work_pair_count: 12, outsider_pair_count: 30, open_audit_id: null }];
+    return [{ id: miraId, github_login: "mira", github_user_id: 101, enforcement_state: "ACTIVE", self_work_pair_count: 12, outsider_pair_count: 30, open_audit_id: null }];
   }
   if (query.includes("from registered_repositories")) {
     return [{ id: repositoryId, owner_name: "overflow/ledger" }];
