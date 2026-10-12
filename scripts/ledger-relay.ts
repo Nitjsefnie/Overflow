@@ -44,13 +44,12 @@ import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 import {
-  checkRunBody,
   renderSweepLines,
   sweepOrphans,
-  validateJobs,
   type SweepApi,
   type SweepOutcome,
 } from "./ledger-relay-sweep.ts";
+import { publishProducerContexts } from "./ledger-relay-publication.ts";
 import { LEDGER_APP_MINT_PERMISSIONS } from "./ledger-app-mint-permissions.ts";
 // The pure decision layer. Re-exported below, with `.ts` specifiers, so the
 // surface this entry has always presented is unchanged: a caller importing
@@ -262,6 +261,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   });
 
   let recheckSupersession: (() => Promise<number | undefined>) | undefined;
+  let historyBound: string | undefined;
   if (run.event === "workflow_run") {
     const api = sweepApi(deps, repo, auth);
     const resolved = await resolveWorkflowRunHead(
@@ -275,6 +275,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     attestationRun = { ...run, headSha: resolved.headSha };
     if (resolved.supersededBy !== undefined) return skippedSuperseded(resolved.supersededBy, runSweep);
     recheckSupersession = resolved.recheckSupersession;
+    historyBound = resolved.historyBound;
   }
   if (contextsFor(pinMap, run.path).length === 0) {
     return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
@@ -285,7 +286,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     return await refuseUntrustedProducer(deps, repo, run, auth);
   }
 
-  const jobsBody = await apiCall<Record<string, unknown>>(
+  const jobsBody = historyBound !== undefined ? { jobs: [] } : await apiCall<Record<string, unknown>>(
     deps,
     {
       url: `${API_ROOT}/repos/${repo}/actions/runs/${run.runId}/jobs?filter=latest&per_page=100`,
@@ -294,25 +295,12 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     },
     `the job listing of run ${run.runId}`,
   );
-  const jobs = validateJobs(jobsBody);
-
-  const newer = await recheckSupersession?.();
-  if (newer !== undefined) return skippedSuperseded(newer, runSweep);
-  const decisions = decideContexts(pinMap, run.path, run.conclusion, jobs);
-  const posted: string[] = [];
-  for (const decision of decisions) {
-    await apiCall(
-      deps,
-      {
-        url: `${API_ROOT}/repos/${repo}/check-runs`,
-        method: "POST",
-        headers: { ...API_HEADERS, ...auth },
-        body: JSON.stringify(checkRunBody(decision, attestationRun)),
-      },
-      `the check-run for ${decision.context}`,
-    );
-    posted.push(decision.context);
-  }
+  const publication = await publishProducerContexts({
+    api: sweepApi(deps, repo, auth), pinMap, apiRoot: API_ROOT, repo, appId,
+    repositoryId: env.GITHUB_REPOSITORY_ID,
+  }, attestationRun, jobsBody, recheckSupersession, historyBound);
+  if (publication.supersededBy !== undefined) return skippedSuperseded(publication.supersededBy, runSweep);
+  const { decisions, posted } = publication;
 
   // The sweep and the heal both follow the mirrored decisions, so the mirror —
   // the relay's primary duty — lands whatever they do, and a failure in either
