@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -677,12 +677,23 @@ describe("sanction contest decision path", () => {
 
     // The grant lifted the live sanction in the decision's transaction: the
     // reversal event moved the account RECALIBRATING → ACTIVE, so eligibility
-    // resumes with the already-decided test's shape — at the lift event, not
-    // at the same-state decision event.
-    const afterNow = await eligibilityAt(accountId, new Date());
-    expect(afterNow).toBe(true);
-    const afterFuture = await eligibilityAt(accountId, new Date(Date.now() + 60_000));
-    expect(afterFuture).toBe(true);
+    // resumes at the lift event, not at the same-state decision event. Read
+    // its timestamp as text so Postgres microseconds survive the round trip.
+    const [lift] = await sql<{ created_at: string }[]>`
+      select created_at::text from moderation_events
+      where contest_request_id = ${requestId} and new_state = 'ACTIVE'
+    `;
+    expect(lift).toBeDefined();
+    const liftedAt = lift!.created_at;
+    // A JS clock behind the DB must not choose the post-grant probe's time.
+    vi.setSystemTime(new Date(liftedAt).getTime() - 1);
+    try {
+      expect(await eligibilityAt(accountId, liftedAt)).toBe(true);
+      const afterFuture = await eligibilityAt(accountId, new Date(new Date(liftedAt).getTime() + 60_000));
+      expect(afterFuture).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
 
     const listed = await store().listRequestsForAccount(accountId);
     expect(listed).toHaveLength(1);
@@ -785,8 +796,18 @@ describe("sanction contest grant lifts the sanction (issue 1134)", () => {
       recalibration_plan: null,
     });
 
-    // Eligibility resumes with the lift event, not the same-state decision.
-    expect(await eligibilityAt(accountId, new Date())).toBe(true);
+    // Eligibility resumes at the lift, independent of the JS clock.
+    const [lift] = await sql<{ created_at: string }[]>`
+      select created_at::text from moderation_events
+      where contest_request_id = ${requestId} and new_state = 'ACTIVE'
+    `;
+    expect(lift).toBeDefined();
+    vi.setSystemTime(new Date(lift!.created_at).getTime() - 1);
+    try {
+      expect(await eligibilityAt(accountId, lift!.created_at)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   }, 60_000);
 
   it("grants a contest on a live RECALIBRATING sanction through closeRecalibration's reactivation scope", async () => {
@@ -1135,9 +1156,12 @@ async function insertSubstantiatedAudit(accountId: string): Promise<string> {
   return row!.id;
 }
 
-async function eligibilityAt(accountId: string, at: Date): Promise<boolean> {
+async function eligibilityAt(accountId: string, at: Date | string): Promise<boolean> {
+  // Bind text explicitly: postgres.js's timestamptz serializer truncates to
+  // JS milliseconds even when passed a string with PostgreSQL microseconds.
+  const timestamp = at instanceof Date ? at.toISOString() : at;
   const [row] = await sql<{ eligible: boolean }[]>`
-    select participation_eligible_at(${accountId}, ${at}) as eligible
+    select participation_eligible_at(${accountId}, ${timestamp}::text::timestamptz) as eligible
   `;
   if (row === undefined) {
     throw new Error("Eligibility probe returned no row.");
