@@ -1,4 +1,7 @@
 import net from "node:net";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { StartedTestContainer } from "testcontainers";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { closeSql, getSql } from "@/lib/db/client";
@@ -325,7 +328,7 @@ describe("readiness endpoint against real databases", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
-  it("answers 503 when the schema is behind the build and 200 when equal or ahead", async () => {
+  it("answers 503 when behind and 200 when equal or ahead without flags", async () => {
     const sql = getSql();
     const newestBundled = bundledMigrationNames[bundledMigrationNames.length - 1];
     const appliedNames = async (): Promise<string[]> =>
@@ -361,8 +364,7 @@ describe("readiness endpoint against real databases", () => {
     expect(equal.status).toBe(200);
     expect(equal.body).toEqual({ status: "ready" });
 
-    // Ahead: a row this build has never bundled is not staleness — this is
-    // the state a rollback to an older release runs against.
+    // An extra unflagged row keeps a rollback ready.
     const futureName = "9999_ahead_of_this_build.sql";
     await sql`insert into schema_migrations (name) values (${futureName})`;
     expect(await appliedNames()).toContain(futureName);
@@ -374,6 +376,83 @@ describe("readiness endpoint against real databases", () => {
     // equal case proved, not one row ahead of it.
     await sql`delete from schema_migrations where name = ${futureName}`;
     expect(await appliedNames()).not.toContain(futureName);
+  });
+
+  it.each([
+    { label: "dangerous", marker: "", ddl: "alter table readiness_items drop column note;", status: 503 },
+    { label: "safe-marked", marker: "-- overflow: mixed-version safe: retained releases stopped using note\n", ddl: "alter table readiness_items drop column note;", status: 200 },
+    { label: "additive", marker: "", ddl: "alter table readiness_items add column extra text;", status: 200 },
+  ])("answers $status after the real runner applies an extra $label migration", async ({ marker, ddl, status }) => {
+    const sql = getSql();
+    const filename = "900_readiness_fixture.sql";
+    const directory = await mkdtemp(path.join(tmpdir(), "overflow-1055-readiness-"));
+    await writeFile(path.join(directory, filename), `${marker}create table readiness_items (note text);\n${ddl}`);
+    try {
+      await runMigrations({ directory });
+      // Put data that must never reach the public response into the database.
+      await sql`create table readiness_private (payload text)`;
+      await sql`insert into readiness_private values (${"private fixture payload"})`;
+      const response = await createReadinessGetHandler()();
+      expect(response.status).toBe(status);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      await expect(response.json()).resolves.toEqual(status === 200 ? { status: "ready" } : {
+        status: "unavailable",
+        reason: "database: schema has moved past migrations this build predates and cannot run against: 900_readiness_fixture.sql",
+      });
+    } finally {
+      await sql`delete from schema_migrations where name = ${filename}`;
+      await sql`drop table if exists readiness_items, readiness_private`;
+    }
+  });
+
+  it("names only ahead flagged filenames in applied-name order, with behind taking precedence", async () => {
+    const sql = getSql();
+    const directory = await mkdtemp(path.join(tmpdir(), "overflow-1055-readiness-order-"));
+    const later = "902_later.sql";
+    const earlier = "901_earlier.sql";
+    const unflagged = "903_unflagged.sql";
+    const newestBundled = bundledMigrationNames[bundledMigrationNames.length - 1];
+    try {
+      await writeFile(path.join(directory, later), "create table readiness_later (note text); alter table readiness_later drop column note;");
+      await runMigrations({ directory });
+      await writeFile(path.join(directory, earlier), "create table readiness_earlier (note text); alter table readiness_earlier rename column note to memo;");
+      await writeFile(path.join(directory, unflagged), "select 1;");
+      await runMigrations({ directory });
+      const ahead = await createReadinessGetHandler()();
+      expect(ahead.status).toBe(503);
+      await expect(ahead.json()).resolves.toEqual({
+        status: "unavailable",
+        reason: "database: schema has moved past migrations this build predates and cannot run against: 901_earlier.sql, 902_later.sql",
+      });
+      await sql`delete from schema_migrations where name = ${newestBundled}`;
+      const behind = await createReadinessGetHandler()();
+      expect(behind.status).toBe(503);
+      await expect(behind.json()).resolves.toEqual({
+        status: "unavailable",
+        reason: `database: schema is behind the build; missing migrations: ${newestBundled}`,
+      });
+    } finally {
+      await sql`insert into schema_migrations (name) values (${newestBundled}) on conflict do nothing`;
+      await sql`delete from schema_migrations where name in (${earlier}, ${later}, ${unflagged})`;
+      await sql`drop table if exists readiness_earlier, readiness_later`;
+    }
+  });
+
+  it("answers 200 against an actual old ledger without the verdict column", async () => {
+    const sql = getSql();
+    // Preserve the fully migrated schema, but replace its ledger with the
+    // pre-change shape rather than stubbing the query's result.
+    await sql`alter table schema_migrations rename to saved_schema_migrations`;
+    try {
+      await sql`create table schema_migrations (name text primary key, applied_at timestamptz not null default now())`;
+      await sql`insert into schema_migrations (name) select name from saved_schema_migrations`;
+      const response = await createReadinessGetHandler()();
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ status: "ready" });
+    } finally {
+      await sql`drop table schema_migrations`;
+      await sql`alter table saved_schema_migrations rename to schema_migrations`;
+    }
   });
 
   it("answers 503 against a black-holed socket and bounds concurrent probes to one connection", async () => {

@@ -14,11 +14,10 @@
  * `isSchemaUpToDate` is deliberately ONE-SIDED. The readiness probe refuses a
  * schema BEHIND the build — a bundled migration missing from
  * `schema_migrations` means the running code may meet tables and columns that
- * do not exist yet. A schema EQUAL to the build is ready, and a schema AHEAD
- * of it — extra rows from a newer migration set, the state a rollback to an
- * older release runs against — is ready too: an older build never needs a
- * migration it does not bundle, so refusing ahead schemas would fail every
- * rollback at its moment of use.
+ * do not exist yet. A schema EQUAL to the build passes this names-only check;
+ * extra rows also pass it. Readiness separately refuses an ahead schema when
+ * an extra migration carries a recorded mixed-version review flag, because it
+ * may break an older release's reads or writes during rollback.
  */
 
 export const bundledMigrationNames: readonly string[] = [
@@ -89,8 +88,8 @@ export const bundledMigrationNames: readonly string[] = [
 
 /**
  * True iff every migration this build bundles is recorded applied. Extra
- * applied names are ignored: the probe refuses a schema behind the build and
- * accepts one equal to it or ahead of it.
+ * applied names are ignored here; readiness also checks their compatibility
+ * flags before accepting an ahead schema.
  */
 export function isSchemaUpToDate(applied: readonly string[]): boolean {
   const appliedNames = new Set(applied);

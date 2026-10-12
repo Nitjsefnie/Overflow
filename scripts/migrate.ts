@@ -4,6 +4,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { closeSql, withTransaction } from "../src/lib/db/client.ts";
+import { classifyMigrationCompatibility } from "./migration-compatibility.ts";
 
 const migrationsDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -55,12 +56,14 @@ export function listMigrationNames(entries: readonly string[]): string[] {
 
 export async function runMigrations(
   options: {
+    directory?: string;
     upTo?: string;
     onMigrationApplied?: (migrationName: string) => void;
     onMigrationFailed?: (migrationName: string) => void;
   } = {},
 ): Promise<string[]> {
-  const numberedNames = listMigrationNames(await readdir(migrationsDirectory));
+  const directory = options.directory ?? migrationsDirectory;
+  const numberedNames = listMigrationNames(await readdir(directory));
 
   // The whole directory is checked, not just the part `upTo` selects: bad numbering is a property
   // of the directory, and an upgrade test that stops halfway must not be the run that misses it.
@@ -72,13 +75,13 @@ export async function runMigrations(
   );
 
   const appliedChecksums = await readAppliedMigrations();
-  await backfillLegacyMigrationChecksums(appliedChecksums, numberedNames);
+  await backfillLegacyMigrationChecksums(appliedChecksums, numberedNames, directory);
   const appliedMigrationNames: string[] = [];
 
   for (const migrationName of migrationNames) {
     try {
       if (appliedChecksums.has(migrationName)) {
-        const migration = await readFile(path.join(migrationsDirectory, migrationName), "utf8");
+        const migration = await readFile(path.join(directory, migrationName), "utf8");
         const recordedChecksum = appliedChecksums.get(migrationName);
         const currentChecksum = migrationChecksum(migration);
 
@@ -96,8 +99,9 @@ export async function runMigrations(
         continue;
       }
 
-      const migration = await readFile(path.join(migrationsDirectory, migrationName), "utf8");
+      const migration = await readFile(path.join(directory, migrationName), "utf8");
       const checksum = migrationChecksum(migration);
+      const mixedVersionReview = classifyMigrationCompatibility(migration).verdict === "review";
 
       // One transaction per migration, not one for the whole run. A migration may only build on
       // catalogue state an earlier migration committed: PostgreSQL refuses to read an enum label
@@ -120,8 +124,8 @@ export async function runMigrations(
           await sql`set local statement_timeout = 0`;
           await sql.unsafe(migration);
           await sql`
-            insert into schema_migrations (name, checksum)
-            values (${migrationName}, ${checksum})
+            insert into schema_migrations (name, checksum, mixed_version_review)
+            values (${migrationName}, ${checksum}, ${mixedVersionReview})
           `;
         }),
       );
@@ -371,6 +375,9 @@ async function readAppliedMigrations(): Promise<Map<string, string | null>> {
     await sql.unsafe(`
       alter table schema_migrations add column if not exists checksum text
     `);
+    await sql.unsafe(`
+      alter table schema_migrations add column if not exists mixed_version_review boolean not null default false
+    `);
 
     const appliedRows = await sql<{ name: string; checksum: string | null }[]>`
       select name, checksum from schema_migrations
@@ -384,6 +391,7 @@ async function readAppliedMigrations(): Promise<Map<string, string | null>> {
 async function backfillLegacyMigrationChecksums(
   appliedChecksums: Map<string, string | null>,
   migrationNames: readonly string[],
+  directory: string,
 ): Promise<void> {
   const legacyMigrationNames = migrationNames.filter(
     (name) => appliedChecksums.get(name) === null,
@@ -395,7 +403,7 @@ async function backfillLegacyMigrationChecksums(
   const adoptedChecksums = new Map<string, string>();
   await withTransaction(async (sql) => {
     for (const migrationName of legacyMigrationNames) {
-      const contents = await readFile(path.join(migrationsDirectory, migrationName), "utf8");
+      const contents = await readFile(path.join(directory, migrationName), "utf8");
       const checksum = migrationChecksum(contents);
       await sql`
         update schema_migrations
