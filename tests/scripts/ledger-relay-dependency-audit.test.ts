@@ -177,6 +177,7 @@ describe("the committed pin drives runRelay end to end (issue 1149)", () => {
         status: "completed",
         conclusion: context === CONTEXT ? "failure" : "success",
         details_url: HTML_URL,
+        external_id: `${RUN_ID}:1`,
         output: { title: expect.any(String), summary: expect.any(String) },
       })),
     );

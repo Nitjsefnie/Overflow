@@ -670,6 +670,7 @@ describe("runRelay", () => {
         status: "completed",
         conclusion: "success",
         details_url: HTML_URL,
+        external_id: "9001:1",
         output: { title: expect.any(String), summary: expect.any(String) },
       },
     ]);
@@ -2055,6 +2056,7 @@ describe("runRelay", () => {
         check_runs: names.map((name) => ({
           name, status: "completed", app: { id: Number(APP_ID) },
           details_url: `https://github.com/Nitjsefnie/Overflow/actions/runs/${runId}`,
+          external_id: `${runId}:1`,
         })),
       },
     };

@@ -69,6 +69,7 @@ function harness(over: {
   upstream?: ResponseSpec;
   env?: Record<string, string | undefined>;
   handlers?: Record<string, ResponseSpec>;
+  pinMap?: Record<string, string | readonly string[]>;
 } = {}) {
   const requests: string[] = [];
   const posts: Record<string, unknown>[] = [];
@@ -126,7 +127,7 @@ function harness(over: {
   return {
     requests,
     posts,
-    run: () => runRelay({ env, fetchFn, delayFn: async () => {}, readPinMap: async () => PIN_MAP }),
+    run: () => runRelay({ env, fetchFn, delayFn: async () => {}, readPinMap: async () => over.pinMap ?? PIN_MAP }),
   };
 }
 
@@ -277,6 +278,7 @@ describe("workflow_run orphan sweep", () => {
         check_runs: [{
           name: "verify", status: "completed", app: { id: 5118623 },
           details_url: `https://github.com/${REPO}/actions/runs/9001`,
+          external_id: "9001:1",
         }],
       },
     } });
@@ -538,5 +540,85 @@ describe("producer-bound workflow_run sweep attestation", () => {
     expect(recovery.requests).toContain(jobsUrl(9002));
     expect(recovery.requests).not.toContain(jobsUrl(9001));
     expect(result.sweep.superseded).toContainEqual({ runId: "9001", supersededBy: 8002 });
+  });
+});
+
+describe("trigger recency and attempt attestation", () => {
+  it.each([true, false])("does not overwrite the mirror's 9003 actionlint failure with 9002 success, trigger listed=%s", async (listed) => {
+    const path = ".github/workflows/actionlint.yml";
+    const older = producer({ id: 9002, path, event: "pull_request_target", head_sha: PR_SHA });
+    const current = producer({ id: 9003, path, event: "pull_request_target", head_sha: PR_SHA, conclusion: "failure" });
+    const h = harness({
+      pinMap: { actionlint: path },
+      env: {
+        GITHUB_WORKFLOW_RUN_ID: "9003", GITHUB_WORKFLOW_RUN_PATH: path,
+        GITHUB_WORKFLOW_RUN_EVENT: "pull_request_target", GITHUB_WORKFLOW_RUN_HEAD_SHA: PR_SHA,
+        GITHUB_WORKFLOW_RUN_CONCLUSION: "failure", GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
+        GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/${REPO}/actions/runs/9003`,
+      },
+      handlers: {
+        [runsUrl]: { workflow_runs: listed ? [current, older] : [older] },
+        [jobsUrl(9003)]: { jobs: [{ name: "actionlint", run_attempt: 1, status: "completed", conclusion: "failure" }] },
+        [jobsUrl(9002)]: { jobs: [{ name: "actionlint", run_attempt: 1, status: "completed", conclusion: "success" }] },
+        [checksUrl(PR_SHA)]: (): Record<string, unknown> => ({ check_runs: [{ ...h.posts[0], app: { id: 5118623 } }] }),
+      },
+    });
+    const result = await h.run();
+    expect(h.posts.map((post) => post.conclusion)).toEqual(["failure"]);
+    expect(h.posts[0]).toMatchObject({ name: "actionlint", head_sha: PR_SHA, external_id: "9003:1" });
+    expect(result.sweep.relayed).toEqual([]);
+    expect(h.requests).not.toContain(jobsUrl(9002));
+  });
+
+  it.each(["initial", "after-jobs"])("a newest superseded trigger blocks older verify even without a mirror post, %s", async (phase) => {
+    let reads = 0;
+    const trigger = producer({ id: 9003 });
+    const older = producer({ id: 9002, event: "pull_request_target", head_sha: PR_SHA });
+    const h = harness({
+      env: { GITHUB_WORKFLOW_RUN_ID: "9003" },
+      handlers: {
+        [runUrl(9003)]: trigger,
+        [jobsUrl(9003)]: { jobs: [{ name: "verify", run_attempt: 1, status: "completed", conclusion: "success" }] },
+        [jobsUrl(9002)]: { jobs: [{ name: "verify", run_attempt: 1, status: "completed", conclusion: "success" }] },
+        [runsUrl]: { workflow_runs: [trigger, older] },
+        [suiteRunsUrl()]: () => {
+          reads += 1;
+          return phase === "after-jobs" && reads === 1
+            ? { total_count: 1, workflow_runs: [suite()] }
+            : { total_count: 2, workflow_runs: [suite(), suite({ id: 8002, conclusion: "failure" })] };
+        },
+      },
+    });
+    const result = await h.run();
+    expect(result.supersededBy).toBe(8002);
+    expect(result.posted).toEqual([]);
+    expect(h.posts).toEqual([]);
+    expect(h.requests).not.toContain(jobsUrl(9002));
+  });
+
+  it("replaces attempt 1's real green at the same URL with orphaned attempt 2's failure", async () => {
+    const first = producer({ id: 9002 });
+    const initial = harness({ env: { GITHUB_WORKFLOW_RUN_ID: "9002" }, handlers: {
+      [runUrl(9002)]: first,
+      [jobsUrl(9002)]: { jobs: [{ name: "verify", run_attempt: 1, status: "completed", conclusion: "success" }] },
+    } });
+    await initial.run();
+    const green = { ...initial.posts[0], external_id: "9002:1", app: { id: 5118623 } };
+    const rerun = producer({ id: 9002, run_attempt: 2, conclusion: "failure" });
+    const recovery = harness({
+      env: { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" },
+      handlers: {
+        [runsUrl]: { workflow_runs: [rerun] }, [runUrl(9002)]: rerun,
+        [jobsUrl(9002)]: { jobs: [{ name: "verify", run_attempt: 2, status: "completed", conclusion: "failure" }] },
+        [checksUrl(PR_SHA)]: { check_runs: [green] },
+      },
+    });
+    const result = await recovery.run();
+    expect(result.sweep.relayed).toEqual([{ context: "verify", runId: "9002" }]);
+    expect(recovery.posts).toHaveLength(1);
+    expect(recovery.posts[0]).toMatchObject({
+      name: "verify", head_sha: PR_SHA, conclusion: "failure", external_id: "9002:2",
+      details_url: `https://github.com/${REPO}/actions/runs/9002`,
+    });
   });
 });

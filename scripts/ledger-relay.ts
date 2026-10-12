@@ -248,6 +248,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     run = triggeringRunFromApi(fetchedProducer);
   }
 
+  let attestationRun = run;
   const runSweep = () => sweepOrphans({
     api: sweepApi(deps, repo, auth),
     decide: decideContexts,
@@ -257,9 +258,9 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     appId,
     repositoryId: env.GITHUB_REPOSITORY_ID,
     triggerRunId: run.runId,
+    triggerRun: attestationRun,
   });
 
-  let attestationRun = run;
   let recheckSupersession: (() => Promise<number | undefined>) | undefined;
   if (run.event === "workflow_run") {
     const api = sweepApi(deps, repo, auth);
@@ -270,10 +271,10 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
       fetchedProducer,
       (sha) => readSuiteRuns((page) => api.get(suiteRunsUrl(API_ROOT, repo, sha, page), "the suite supersession listing", false)),
     );
-    if (resolved.supersededBy !== undefined) return skippedSuperseded(resolved.supersededBy, runSweep);
-    recheckSupersession = resolved.recheckSupersession;
     run = resolved.run;
     attestationRun = { ...run, headSha: resolved.headSha };
+    if (resolved.supersededBy !== undefined) return skippedSuperseded(resolved.supersededBy, runSweep);
+    recheckSupersession = resolved.recheckSupersession;
   }
   if (contextsFor(pinMap, run.path).length === 0) {
     return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
