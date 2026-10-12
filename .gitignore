@@ -354,6 +354,7 @@ scripts/*
 !scripts/http-surface-snapshot.json
 !scripts/coverage.json
 !scripts/perf-budget.json
+!scripts/perf-node-setup.mjs
 
 !tests/
 tests/*

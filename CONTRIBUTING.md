@@ -233,7 +233,10 @@ server, migrates it with `DATABASE_URL=<scratch> pnpm db:migrate`, then drops
 it after closing its clients, including on measurement failure. It preserves
 the caller's database for later CI steps. Run locally only against a disposable
 Postgres server. The gate needs the migrated database and installed dependencies;
-it requires no production build or remote forge access. Both CI code jobs run
+it refuses routing overrides in URL query parameters and verifies each client's
+actual database before migration or seeding. All counting connections are
+initialized before the operation, so driver setup cannot enter the budget.
+It requires no production build or remote forge access. Both CI code jobs run
 it immediately beside `Page geometry check`.
 
 On pull requests the job ends with a Base freshness step that certifies the

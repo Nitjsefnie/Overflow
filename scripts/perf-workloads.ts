@@ -89,7 +89,7 @@ type Workload = {
 
 const workloads: Record<string, Workload> = {
   "board-load": {
-    seed: async (databaseUrl) => { await seedBoardBenchmark({ ...BOARD_WORLD, databaseUrl }); },
+    seed: async (databaseUrl, sql) => { await seedBoardBenchmark({ ...BOARD_WORLD, databaseUrl }, sql); },
     run: async (sql) => {
       // Default-size first and second pages, through the same data function
       // /issues and /api/issues call. The world has over 400 eligible rows.
@@ -161,20 +161,46 @@ const workloads: Record<string, Workload> = {
   },
 };
 
+/** Reserve the whole pool so every connection is initialized and checked. */
+async function prepareClient(sql: Sql, expectedDatabase: string): Promise<void> {
+  const held: Awaited<ReturnType<Sql["reserve"]>>[] = [];
+  try {
+    for (let index = 0; index < sql.options.max; index += 1) {
+      const connection = await sql.reserve();
+      held.push(connection);
+      const [row] = await connection<{ database: string }[]>`select current_database() as database`;
+      if (row?.database !== expectedDatabase) {
+        throw new Error(`database target mismatch: expected ${expectedDatabase}, got ${row?.database ?? "absent"}`);
+      }
+    }
+  } finally {
+    for (const connection of held) connection.release();
+  }
+}
+
+/** Count operation SQL after all work/coordination connections are ready. */
+export async function countOperationStatements(sql: Sql, expectedDatabase: string, operation: () => Promise<void>): Promise<number> {
+  await prepareClient(sql, expectedDatabase);
+  let count = 0;
+  const previous = sql.options.debug;
+  sql.options.debug = () => { count += 1; };
+  try {
+    await operation();
+    return count;
+  } finally {
+    sql.options.debug = previous;
+  }
+}
+
 /** Fresh seed and fresh counting client for each repeat; count only the operation. */
 async function measureTwice(url: string, workload: Workload): Promise<number[]> {
   const samples: number[] = [];
   for (let repeat = 0; repeat < 2; repeat += 1) {
-    let count = 0;
-    let measuring = false;
-    const sql = postgres(url, { max: 4, onnotice: () => {},
-      debug: () => { if (measuring) count += 1; },
-    });
+    const sql = postgres(url, { max: 4, onnotice: () => {} });
     try {
+      await prepareClient(sql, new URL(url).pathname.slice(1));
       await workload.seed(url, sql);
-      await sql`select 1`; // Warm the driver's connection/type discovery outside the operation.
-      measuring = true;
-      try { await workload.run(sql); } finally { measuring = false; }
+      const count = await countOperationStatements(sql, new URL(url).pathname.slice(1), () => workload.run(sql));
       await workload.verify(sql);
       samples.push(count);
     } finally {
@@ -184,23 +210,53 @@ async function measureTwice(url: string, workload: Workload): Promise<number[]> 
   return samples;
 }
 
+/** Rebuild a connection from explicit fields; never inherit routing overrides. */
+export function scratchDatabaseUrl(databaseUrl: string, name: string): URL {
+  const parent = new URL(databaseUrl);
+  if (!["postgres:", "postgresql:"].includes(parent.protocol) || !parent.hostname
+    || /[,/%]/.test(parent.hostname) || !parent.username || parent.pathname.length < 2 || parent.hash
+    || decodeURIComponent(parent.username).includes("\0") || decodeURIComponent(parent.password).includes("\0")) {
+    throw new Error("DATABASE_URL must explicitly name one PostgreSQL host, user and database");
+  }
+  // postgres.js passes unknown query fields through the startup packet, where
+  // database/user can override the URL. Admit only non-routing TLS/diagnostics.
+  const safe = new Set(["ssl", "sslmode", "sslrootcert", "sslnegotiation", "connect_timeout", "client_min_messages", "application_name"]);
+  for (const [field, value] of parent.searchParams) {
+    if (!safe.has(field) || value.includes("\0")) {
+      throw new Error(`DATABASE_URL routing query parameter refused: ${field}`);
+    }
+  }
+  const scratch = new URL(`${parent.protocol}//${parent.hostname}`);
+  scratch.port = parent.port || "5432";
+  scratch.username = parent.username;
+  scratch.password = parent.password;
+  scratch.pathname = `/${encodeURIComponent(name)}`;
+  for (const [field, value] of parent.searchParams) scratch.searchParams.append(field, value);
+  return scratch;
+}
+
 /** Requires CREATEDB, available to both CI service users and scratch test roles. */
 export async function measurePerfWorkloads(databaseUrl: string): Promise<Measurements> {
-  const parent = new URL(databaseUrl);
+  const parentName = new URL(databaseUrl).pathname.slice(1);
   const name = `overflow_perf_${randomUUID().replaceAll("-", "")}`;
-  const scratch = new URL(parent);
-  scratch.pathname = `/${name}`;
+  const scratch = scratchDatabaseUrl(databaseUrl, name);
+  const parent = scratchDatabaseUrl(databaseUrl, parentName);
   const admin = postgres(parent.href, { max: 1, onnotice: () => {} });
   let created = false;
   try {
+    await prepareClient(admin, parentName);
     await admin.unsafe(`create database "${name}" template template0`);
     created = true;
     const migration = spawnSync("pnpm", ["db:migrate"], {
       cwd: fileURLToPath(new URL("../", import.meta.url)), encoding: "utf8",
-      env: { ...process.env, DATABASE_URL: scratch.href },
+      env: { ...process.env, DATABASE_URL: scratch.href, PERF_EXPECTED_DATABASE: name,
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${new URL("./perf-node-setup.mjs", import.meta.url).href}` },
     });
     if (migration.error) throw migration.error;
     if (migration.status !== 0) throw new Error(`scratch migration failed: ${migration.stderr}`);
+    if (!migration.stderr.includes(`performance migration verified database: ${name}`)) {
+      throw new Error("scratch migration did not verify its actual database client");
+    }
     const measurements: Measurements = {};
     for (const [id, workload] of Object.entries(workloads)) {
       measurements[id] = await measureTwice(scratch.href, workload);

@@ -24,7 +24,7 @@
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { encode } from "next-auth/jwt";
-import postgres from "postgres";
+import postgres, { type Sql } from "postgres";
 
 /** The benchmark world's scale. Defaults match the issue 691 baseline brief. */
 export interface SeedOptions {
@@ -435,12 +435,14 @@ export function planSeedWorld(options: SeedOptions): SeedWorld {
  * Truncates everything the migrations created (the ledger table itself is how
  * a rerun stays idempotent) and inserts the planned world in one transaction.
  */
-export async function seedBoardBenchmark(options: SeedOptions): Promise<SeedResult> {
-  const databaseUrl = options.databaseUrl ?? requireDatabaseUrl();
+export async function seedBoardBenchmark(options: SeedOptions, suppliedSql?: Sql): Promise<SeedResult> {
+  const databaseUrl = suppliedSql === undefined ? options.databaseUrl ?? requireDatabaseUrl() : undefined;
   const world = planSeedWorld(options);
   // The truncate-cascade NOTICEs are expected on every reseed; dropping them
   // keeps the stdout contract (seed line, member id, credentials) parseable.
-  const sql = postgres(databaseUrl, { max: 4, onnotice: () => {} });
+  // An injected client belongs to its caller, who may already have verified
+  // its target before allowing this destructive fixture setup.
+  const sql = suppliedSql ?? postgres(databaseUrl!, { max: 4, onnotice: () => {} });
   let memberSessionEpoch: number;
 
   try {
@@ -587,7 +589,7 @@ export async function seedBoardBenchmark(options: SeedOptions): Promise<SeedResu
     }
     memberSessionEpoch = member.session_epoch;
   } finally {
-    await sql.end();
+    if (suppliedSql === undefined) await sql.end();
   }
 
   return {
