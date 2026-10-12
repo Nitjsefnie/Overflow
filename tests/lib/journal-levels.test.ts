@@ -149,4 +149,52 @@ describe("journal console levels", () => {
     expect(probe).toMatch(/^\u001b/);
     expect(lines).toEqual(["<3>first", "<3>second", "<4>warning", "<4>continuation"]);
   });
+
+  it.each(["error", "warn"] as const)("keeps prerender live while inspecting and writing console.%s", (method) => {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import assert from 'node:assert/strict';
+      import { createRequire } from 'node:module';
+      import { inspect } from 'node:util';
+      const require = createRequire(import.meta.url);
+      require('next/dist/server/node-environment-baseline');
+      require('next/dist/server/node-environment-extensions/console-exit');
+      require('next/dist/server/node-environment-extensions/console-dim.external');
+      require('next/dist/server/node-environment-extensions/date');
+      const { workAsyncStorage } = require('next/dist/server/app-render/work-async-storage.external');
+      const { workUnitAsyncStorage } = require('next/dist/server/app-render/work-unit-async-storage.external');
+      assert.equal(typeof workUnitAsyncStorage.exit, 'function', 'Next work-unit exit export must exist');
+      const observations = [];
+      const input = { [inspect.custom]() { Date.now(); return 'inspected\\ncontinuation'; } };
+      function logInPrerender() {
+        const controller = new AbortController();
+        const store = { type: 'prerender', controller, renderSignal: controller.signal,
+          cacheSignal: null, dynamicTracking: null };
+        workAsyncStorage.run({ route: '/journal-probe' }, () => {
+          workUnitAsyncStorage.run(store, () => {
+            console.${method}(input);
+            assert.equal(workUnitAsyncStorage.getStore(), store, 'logging must restore the caller store');
+          });
+        });
+        observations.push(controller.signal.aborted);
+      }
+      logInPrerender();
+      const { installJournalLevels } = await import('./src/lib/logging/journal-levels.ts');
+      installJournalLevels();
+      // A sink that reads the clock must be isolated as well as the inspector.
+      const write = process.stderr.write.bind(process.stderr);
+      process.stderr.write = (...args) => { Date.now(); return write(...args); };
+      logInPrerender();
+      process.stdout.write(JSON.stringify(observations));
+    `], {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_ENV: "production", NO_COLOR: "1", FORCE_COLOR: undefined, JOURNAL_STREAM: "test-journal-stream" },
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([false, false]);
+    const prefix = method === "error" ? "<3>" : "<4>";
+    expect(result.stderr).toBe(`inspected\ncontinuation\n${prefix}inspected\n${prefix}continuation\n`);
+  });
 });

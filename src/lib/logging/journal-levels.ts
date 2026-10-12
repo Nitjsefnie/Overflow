@@ -1,4 +1,5 @@
 import { formatWithOptions } from "node:util";
+import { workUnitAsyncStorage } from "next/dist/server/app-render/work-unit-async-storage.external.js";
 
 let installed = false;
 
@@ -15,7 +16,11 @@ export function installJournalLevels(): void {
 }
 
 function writeJournalLine(priority: 3 | 4, args: unknown[]): void {
-  const prefix = `<${priority}>`;
-  const rendered = formatWithOptions({ colors: false }, ...args);
-  process.stderr.write(rendered.split("\n").map((line) => prefix + line).join("\n") + "\n");
+  // Next 16.3.8's console-exit uses this shared store to isolate inspection and
+  // output from prerender sync-I/O tracking. Preserve it without console-dim.
+  workUnitAsyncStorage.exit(() => {
+    const prefix = `<${priority}>`;
+    const rendered = formatWithOptions({ colors: false }, ...args);
+    process.stderr.write(rendered.split("\n").map((line) => prefix + line).join("\n") + "\n");
+  });
 }
