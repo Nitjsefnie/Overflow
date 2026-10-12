@@ -597,12 +597,16 @@ readiness unknown rather than confirmed — and that is the intended fail-safe:
 never report a rollback healthy on a signal that cannot see the database. The
 caveat goes moot once every retained release postdates the endpoint.
 
-The endpoint is also one-sided about the schema, which is what makes it a
-usable rollback signal: a database migrated past the retained release answers
-`200` — a rollback never undoes migrations, and an older build needs no
-migration it does not bundle — while a database missing a migration the
-release bundles answers `503`. A `200` after a rollback certifies the release
-against the schema as it stands, not the schema against the release.
+The endpoint refuses a database missing a migration the release bundles with
+`503`. A rollback never undoes migrations, so the database can also be ahead
+of the retained release. Releases built from the mixed-version review change
+onward answer `503` when an applied migration recorded as `review` is absent
+from their bundled list; extra unflagged migrations still allow `200`.
+Releases built before this change cannot see the flag and still answer `200`
+against an ahead schema, even after a flagged migration. That older readiness
+signal cannot establish compatibility. The classifier's limits below also
+mean that a `200` does not replace review of the retained release against the
+schema as it stands.
 
 This rolls back the build, not the revision. The checkout and `node_modules`
 are shared with the current revision, and database migrations are not undone.
@@ -888,13 +892,53 @@ path — `settlements` has carried `settlements_issue_unique` since migration
 
 After loading the environment and before `pnpm db:migrate`, the deploy script
 runs `node scripts/deploy-migration-status.ts` and lists every migration not
-yet recorded in `schema_migrations`. Each line ends in `-`, or `review` when
-the file contains the literal substring `overflow: mixed-version review`. A
-pending migration with that marker makes the script refuse before migration;
-review every listed marked migration against the previous release's write
-path, then rerun with `OVERFLOW_DEPLOY_MIGRATION_ACK=1` to confirm that review.
-The acknowledgment has no effect when the status command fails, and any value
-other than `1` is refused.
+yet recorded in `schema_migrations`. Each line is tab-separated:
+`<name>\t<verdict>[\t<shapes or safe note>]`. Field 2 is `-` or `review`;
+the optional third field names the matched shapes or the safe-marker note.
+The deploy script still reads field 2 only.
+
+Classification denies these shapes by default, ignoring SQL comments and
+matching case-insensitively after normalizing whitespace:
+
+- `DROP COLUMN` and `DROP TABLE`;
+- any `ALTER ... RENAME` form;
+- `ALTER [COLUMN] <column> [SET DATA] TYPE` (the `COLUMN` keyword is optional);
+- `SET NOT NULL`;
+- `ADD COLUMN ... NOT NULL` without `DEFAULT` in the same top-level column
+  definition.
+
+The contents of every SQL string literal are classified too: a shape inside
+a literal still requires review, even if that literal is data rather than
+executed SQL. The literal substring `overflow: mixed-version review` anywhere
+in the raw file, comments included, also forces `review`. A real SQL line
+comment `-- overflow: mixed-version safe: <reason>` downgrades a shape hit to
+`-` only with a non-empty reason explaining why retained releases are safe;
+an empty reason does not count. The review marker beats the safe marker when
+both occur. Adding or dropping constraints and dropping a column default are
+not classified; use the voluntary review marker for those risks too.
+
+A pending `review` entry makes the script refuse before migration. Review
+each entry against the still-serving release and every retained rollback
+target, then rerun with the unchanged `OVERFLOW_DEPLOY_MIGRATION_ACK=1` to
+confirm that review. The acknowledgment has no effect when the status command
+fails, and any value other than `1` is refused. The runner records the verdict
+in `schema_migrations.mixed_version_review` in the same transaction as the
+migration; already-applied legacy rows are not reclassified.
+
+Use expand/contract releases: drop or rename a column only one release after
+the code stopped reading and writing it. Change a type or add `NOT NULL` only
+after every retained release writes compatible values. Otherwise acknowledge
+the migration knowingly: the still-serving release and every retained
+rollback target older than it will fail against the changed schema.
+
+During a flagged migration's build window, the still-serving old release
+reports not-ready at `/api/readiness`, provided it was built from this change
+onward. On the container route, the image `HEALTHCHECK` and the
+`docker-compose.yml` healthcheck mark the old container unhealthy; compose
+does not restart it on that by itself. Releases predating this change still
+report `200` and leave that window unprotected. Acknowledge the migration
+knowingly. The deploy script probes readiness only after the release switch
+and restart, so this old-release `503` does not block the switch.
 
 Before running the standing block below, read every migration the run will
 apply for the first time — anything `schema_migrations` does not yet record —
