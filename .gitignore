@@ -353,6 +353,7 @@ scripts/*
 !scripts/mcp-surface-snapshot.json
 !scripts/http-surface-snapshot.json
 !scripts/coverage.json
+!scripts/perf-budget.json
 
 !tests/
 tests/*

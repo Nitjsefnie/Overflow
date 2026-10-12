@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Ratchet document guard (issue 647): refuses a change that relaxes the
-// documents the coverage floor and module size checks compare against.
+// documents the coverage floor, module size and SQL statement checks compare against.
 //
 //   node scripts/check-ratchets.ts <base-rev> <head-rev>
 //
-// Both documents are read as data with `git show <rev>:<path>` at the merge
+// All documents are read as data with `git show <rev>:<path>` at the merge
 // base of the two revisions and at the head — never from the working tree,
 // and no head code is executed. The merge base, not the base tip, is the
 // reference: calibration raises the floor on the base branch after a branch
@@ -36,6 +36,37 @@ import { countLines } from "./check-module-size.ts";
 
 export const COVERAGE_PATH = "scripts/coverage.json";
 export const MODULE_SIZE_PATH = "scripts/module-size.json";
+export const PERF_BUDGET_PATH = "scripts/perf-budget.json";
+
+// Workloads are a closed set. No existing cap may rise or disappear. A new
+// positive integer key caps a new workload without changing any existing cap;
+// the measurement gate refuses keys without real measured workloads.
+export function perfBudgetRelaxations(base: unknown, head: unknown): string[] {
+  if (base === null || base === undefined) return [];
+  if (head === null || head === undefined) return [deleted(PERF_BUDGET_PATH)];
+  if (!isObject(base) || !isObject(head)) {
+    return [finding(PERF_BUDGET_PATH, "(document)", base, head, "not an object")];
+  }
+  const out: string[] = [];
+  for (const [key, was] of Object.entries(base)) {
+    if (!Object.hasOwn(head, key)) {
+      out.push(finding(PERF_BUDGET_PATH, keyPath([key]), was, undefined, "key removed"));
+    }
+  }
+  for (const [key, now] of Object.entries(head)) {
+    const was = base[key];
+    if (!Number.isSafeInteger(now) || (now as number) <= 0) {
+      out.push(finding(PERF_BUDGET_PATH, keyPath([key]), was, now, "not a positive safe integer"));
+    } else if (Object.hasOwn(base, key)) {
+      if (!Number.isSafeInteger(was) || (was as number) <= 0) {
+        out.push(finding(PERF_BUDGET_PATH, keyPath([key]), was, now, "merge-base value is not a positive safe integer"));
+      } else if ((now as number) > (was as number)) {
+        out.push(finding(PERF_BUDGET_PATH, keyPath([key]), was, now, "raised; it may only fall"));
+      }
+    }
+  }
+  return out;
+}
 
 type Json = Record<string, unknown>;
 
@@ -404,6 +435,7 @@ export function checkRatchets(
   const atMergeBase: MergeBaseLookup = (path) => mergeBaseEntry(cwd, fork, path);
   const documents = [
     [COVERAGE_PATH, coverageRelaxations],
+    [PERF_BUDGET_PATH, perfBudgetRelaxations],
     [
       MODULE_SIZE_PATH,
       (before: unknown, after: unknown) => moduleSizeRelaxations(before, after, atMergeBase),
@@ -438,7 +470,7 @@ function main(): void {
   }
   if (result.findings.length === 0) {
     console.log(
-      `ratchet check: ${COVERAGE_PATH} and ${MODULE_SIZE_PATH} not relaxed ` +
+      `ratchet check: ${COVERAGE_PATH}, ${MODULE_SIZE_PATH} and ${PERF_BUDGET_PATH} not relaxed ` +
         `against merge base ${result.mergeBase} — ok`,
     );
     return;
