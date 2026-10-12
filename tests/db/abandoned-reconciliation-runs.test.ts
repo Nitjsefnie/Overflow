@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -20,6 +20,10 @@ beforeAll(async () => {
   process.env.DATABASE_URL = databaseUrl;
   sql = getSql();
   await runMigrations();
+});
+
+beforeEach(async () => {
+  await sql`truncate reconciliation_runs cascade`;
 });
 
 afterAll(async () => {
