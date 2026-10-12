@@ -14,7 +14,7 @@ import {
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -109,7 +109,12 @@ describe("the backup and restore procedure", () => {
     process.env.DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
+  });
+
+  beforeEach(async () => {
+    await sql`truncate users cascade`;
     backupDir = mkdtempSync(join(tmpdir(), "overflow-backup-test-"));
+    dumpPath = undefined;
     await seed();
     await snapshot();
   });
@@ -127,6 +132,8 @@ describe("the backup and restore procedure", () => {
   // whenever the case finished its own runs, which is every green run.
   afterEach(async () => {
     await reapBackupRuns();
+    await drill?.end();
+    drill = undefined;
   });
 
   it("refuses to back up without DATABASE_URL", () => {
@@ -167,9 +174,7 @@ describe("the backup and restore procedure", () => {
     expect(existsSync(staleDump)).toBe(false);
     expect(existsSync(keptFile)).toBe(true);
 
-    // The dump must describe the database as it was, because the source is
-    // about to be mutated: what db-restore.sh returns later is the dump, not
-    // the live rows.
+    // This test's directory contains exactly its own newly installed dump.
     expect(
       dumpsIn(backupDir),
     ).toEqual([dumpPath!.split("/").pop()]);
@@ -292,9 +297,7 @@ describe("the backup and restore procedure", () => {
   });
 
   it("restores the dump into a scratch database reproducing the seeded rows", async () => {
-    // The dump must predate the mutations below: what comes back is the
-    // archive's seed, not the live rows. When the whole file runs, this
-    // reuses test 2's dump; alone, it produces one here first.
+    // Arrange this test's dump before mutating the source database.
     const dump = await ensureDump();
     await sql`update users set github_login = ${"mutated-owner"} where github_user_id = ${7_300_002}`;
     await sql`delete from issues where github_issue_id = ${7_500_004}`;
@@ -345,7 +348,7 @@ describe("the backup and restore procedure", () => {
     // A successful run removes its own partial as it installs, and this is the
     // only place that is visible: the sweep would reclaim one after a day, so
     // a dropped cleanup here is silent. Compared against the directory as it
-    // stands, because an earlier case's young partial is meant to be in it.
+    // stands before these runs start.
     const partialsBefore = incompleteNames(backupDir);
 
     const firstRun = runScript(backupScript, ["--output-dir", backupDir, "--retention-days", "14"], stampedEnv(stamp));
@@ -360,8 +363,8 @@ describe("the backup and restore procedure", () => {
     expect(secondPath, `stdout was: ${secondRun.stdout}`).toBeDefined();
     expect(existsSync(secondPath!), "the second run's dump").toBe(true);
     // The invariant the defect broke: two runs, two dumps. Counted over this
-    // stamp's names only, so the dumps earlier cases left in the directory do
-    // not stand in for the second run's.
+    // stamp's names only, so unrelated dump names cannot stand in for the
+    // second run's.
     expect(dumpsForStamp(backupDir, stamp), "one dump per run, neither replaced").toHaveLength(2);
     expect(existsSync(join(backupDir, firstName)), "the first run's dump, after the second run").toBe(true);
     expect(secondPath, `stdout was: ${secondRun.stdout}`).toBe(join(backupDir, secondName));
@@ -615,11 +618,7 @@ describe("the backup and restore procedure", () => {
   }, 60_000);
 });
 
-/**
- * Tests 3 and 4 consume the dump test 2 produces, and each must also pass
- * alone under a filtered -t run, so a missing dump is produced here on
- * demand instead of assumed.
- */
+/** Produce a dump of this test's seeded source before any mutations. */
 async function ensureDump(): Promise<string> {
   if (dumpPath !== undefined) {
     return dumpPath;
