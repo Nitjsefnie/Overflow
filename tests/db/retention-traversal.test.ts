@@ -52,6 +52,9 @@ it("examines changes linearly across interleaved history and multiple run batche
     expect(result.changesOfExpiredRuns).toBe(expired * 20);
     observations.push(examined);
     runObservations.push(runExamined);
+    expect(probe.candidates.some((query) => query.source === "fetch" && query.examined > 0)).toBe(true);
+    expect(examined).toBeGreaterThanOrEqual(result.changesOfExpiredRuns);
+    expect(runExamined).toBeGreaterThanOrEqual(result.expiredRuns);
     // Twenty changes/run: examine those rows, without rewalking retained prefixes.
     expect.soft(examined).toBeLessThanOrEqual(expired * 40);
     expect.soft(runExamined).toBeLessThanOrEqual(expired * 4);
@@ -75,6 +78,7 @@ it("advances receipt selection past retained UUID prefixes", async () => {
   const examined = selections.reduce((sum, query) => sum + query.examined, 0);
   process.stdout.write(`RETENTION_RECEIPT_TRAVERSAL ${JSON.stringify({ examined, probes: selections.length })}\n`);
   expect(selections.length).toBeGreaterThan(10);
+  expect(examined).toBeGreaterThanOrEqual(1000);
   // At most three complete state-specific passes over these 2,000 rows.
   expect(examined).toBeLessThanOrEqual(6000);
 });
@@ -96,6 +100,8 @@ it("advances within a large run even when its children require a sequential scan
     const rows = probe.candidates.reduce((sum, plan) => sum + plan.examined, 0);
     process.stdout.write(`RETENTION_LARGE_RUN ${JSON.stringify({ changes, deleted: result.changesOfExpiredRuns, examined: rows })}\n`);
     expect(result.changesOfExpiredRuns).toBe(changes / 2);
+    expect(probe.candidates.some((query) => query.source === "fetch" && query.examined > 0)).toBe(true);
+    expect(rows).toBeGreaterThanOrEqual(result.changesOfExpiredRuns);
     examined.push(rows);
     expect.soft(rows).toBeLessThanOrEqual(changes);
   }
