@@ -449,3 +449,9 @@ tests/support/*
 !tests/webhooks/
 tests/webhooks/*
 !tests/webhooks/*.ts
+
+!tests/fixtures/
+tests/fixtures/*
+!tests/fixtures/migration-compatibility/
+tests/fixtures/migration-compatibility/*
+!tests/fixtures/migration-compatibility/*.sql
