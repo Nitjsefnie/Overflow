@@ -108,4 +108,17 @@ describe("migration compatibility fixtures", () => {
       "057_fold_evidence_facts.sql\treview\tdrop column",
     );
   });
+
+  it.each([
+    ["062_wide_literal.sql", "", "-"],
+    ["063_wide_literal_shape.sql", "SELECT 'ALTER TABLE items DROP COLUMN note;';\n", "review\tdrop column"],
+  ])("classifies %s with 150000 child literals without overflowing or skipping the last child", async (name, suffix, status) => {
+    const contents = "SELECT $data$" + "SELECT 'a';\n".repeat(150000) + suffix + "$data$;";
+    await writeFile(path.join(fixturesDirectory, name), contents);
+    const tree = await readMigrationTree(fixturesDirectory);
+    expect(tree.get(name)).toBe(contents);
+    expect(pendingMigrationLines(new Map([[name, tree.get(name)!]]), new Set())).toEqual([
+      `${name}\t${status}`,
+    ]);
+  });
 });
