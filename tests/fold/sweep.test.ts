@@ -689,6 +689,8 @@ describe("scheduled reconciliation sweep", () => {
       // process, so the second tick is the harness's doing, not the module's.
       await timer.tick();
       expect(sweeps).toBe(2);
+      expect(unhandled).toHaveLength(2);
+      expect(unhandled[1]).toBeInstanceOf(TypeError);
     } finally {
       logged.mockRestore();
       restore();
@@ -725,15 +727,10 @@ describe("scheduled reconciliation sweep", () => {
 
   it("costs neither the sweep nor the report when a repository hook rejects", async () => {
     const unqueued = new Error("Queueing the repository failed");
-    const unhandled: unknown[] = [];
     // The hook's rejection settles one of two ways — contained and reported, or
     // escaped to Node — and either resolves the wait below.
     const settled = signal();
-    const listener = (reason: unknown) => {
-      unhandled.push(reason);
-      settled.resolve();
-    };
-    process.on("unhandledRejection", listener);
+    const { seen: unhandled, restore } = captureUnhandledRejections(() => { settled.resolve(); });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {
       settled.resolve();
     });
@@ -770,7 +767,7 @@ describe("scheduled reconciliation sweep", () => {
       ]);
     } finally {
       logged.mockRestore();
-      process.off("unhandledRejection", listener);
+      restore();
     }
   });
 
@@ -1058,15 +1055,10 @@ describe("scheduled reconciliation sweep", () => {
     const enqueued: string[] = [];
     // The same broken console, reached from a handler the loop is no longer
     // inside: there is nothing left to abort, so the throw escapes to Node
-    // instead and the sweep runs to its end. The listener resolves the wait
+    // instead and the sweep runs to its end. The probe resolves the wait
     // below, so the escape is waited on rather than timed.
-    const unhandled: unknown[] = [];
     const escaped = signal();
-    const listener = (reason: unknown) => {
-      unhandled.push(reason);
-      escaped.resolve();
-    };
-    process.on("unhandledRejection", listener);
+    const { seen: unhandled, restore } = captureUnhandledRejections(() => { escaped.resolve(); });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {
       throw new TypeError("The console cannot report at all");
     });
@@ -1099,7 +1091,7 @@ describe("scheduled reconciliation sweep", () => {
       expect(unhandled[0]).toBeInstanceOf(TypeError);
     } finally {
       logged.mockRestore();
-      process.off("unhandledRejection", listener);
+      restore();
     }
   });
 
