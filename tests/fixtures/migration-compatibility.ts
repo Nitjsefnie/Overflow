@@ -179,4 +179,20 @@ export const migrationCompatibilityFixtures = [
     name: "045_doubled_identifier_quote.sql",
     contents: "ALTER TABLE items ALTER COLUMN \"no\"\" te\" TYPE bigint;\n",
   },
+  {
+    name: "046_nested_do_body.sql",
+    contents: "DO $outer$ BEGIN DO $inner$ BEGIN ALTER TABLE items DROP COLUMN note; END; $inner$; END; $outer$;\n",
+  },
+  {
+    name: "047_nested_do_language.sql",
+    contents: "DO $outer$ BEGIN DO LANGUAGE plpgsql $inner$ BEGIN ALTER TABLE items DROP COLUMN note; END; $inner$; END; $outer$;\n",
+  },
+  {
+    name: "048_do_named_function_data.sql",
+    contents: "SELECT public.do($data$\n-- overflow: mixed-version safe: this is SQL data\n$data$); ALTER TABLE items DROP COLUMN note;\n",
+  },
+  {
+    name: "049_nested_quoted_language.sql",
+    contents: "DO $outer$ BEGIN DO LANGUAGE 'plpgsql' $inner$ BEGIN ALTER TABLE items DROP COLUMN note; END; $inner$; END; $outer$;\n",
+  },
 ] as const;
