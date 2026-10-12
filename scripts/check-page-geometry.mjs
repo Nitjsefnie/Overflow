@@ -35,12 +35,13 @@
 
 import { spawn } from "node:child_process";
 import { createCipheriv, createHash, createHmac, hkdfSync, randomBytes, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdtemp, open, readFile } from "node:fs/promises";
+import { existsSync, mkdtempSync } from "node:fs";
+import { open, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { OwnedProcesses } from "./owned-processes.mjs";
 import { seedBoardFixtureCard, seedFixtureUsers } from "./page-geometry-fixtures.mjs";
 
 const USAGE = `usage: node scripts/check-page-geometry.mjs [--base-url URL] [--help]
@@ -62,6 +63,7 @@ to launch anything without it.
 Chrome is discovered from LAYOUT_CHECK_CHROME, then google-chrome-stable,
 google-chrome, chromium, chromium-browser (PATH and /usr/bin).
 LAYOUT_CHECK_PORT overrides the spawned server's port (default 3219).
+LAYOUT_CHECK_KEEP_WORKDIR=1 keeps the work directory and prints its path.
 `;
 
 if (process.argv.includes("--help")) {
@@ -798,7 +800,7 @@ function stderrTail(text) {
  * while attempts remain (issue 447): a slow Chrome start on a loaded runner
  * used to get one flat 20s budget and fail the required check, so the budget
  * is now per attempt and each failed attempt is retried with a fresh one. A
- * failed attempt's child is killed (SIGKILL) before relaunching so nothing
+ * failed attempt's child is stopped before relaunching so nothing
  * leaks. Every rejection carries the captured stderr tail, so a genuine
  * launch failure is diagnosable from the CI log alone, and the three failure
  * classes — an early exit, a spawn failure, an alive-but-silent start — are
@@ -809,6 +811,7 @@ export async function launchChromeWithRetry({
   command,
   args,
   spawnChild = spawn,
+  stopChild = (child) => child.kill("SIGKILL"),
   attempts = 3,
   budgetMs = 20000,
 }) {
@@ -834,7 +837,7 @@ export async function launchChromeWithRetry({
     } catch (error) {
       // A failed attempt must not leak its child, and its stderr listener is
       // retired with it; chunks captured so far stay in stderrChunks.
-      child.kill("SIGKILL");
+      await stopChild(child);
       child.stderr.off("data", collect);
       lastFailure = error.silentStart
         ? { kind: "silent" }
@@ -890,17 +893,6 @@ export function spawnedServerEnv(env = process.env) {
   };
 }
 
-/** SIGTERM, then SIGKILL once a grace elapses. */
-async function stopServer(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  child.kill("SIGTERM");
-  for (let waited = 0; waited < 5000; waited += 100) {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    await new Promise((resolveTick) => setTimeout(resolveTick, 100));
-  }
-  child.kill("SIGKILL");
-}
-
 /**
  * Spawn `next start` from the production build and wait for readiness, or
  * return null when --base-url was given. Readiness is this child's own
@@ -909,7 +901,7 @@ async function stopServer(child) {
  * this run's build. Any throw kills the child before propagating — a failed
  * start must not leak a server.
  */
-async function startServer(workDir) {
+async function startServer(workDir, owner) {
   const dotNext = join(repoRoot, ".next");
   if (!existsSync(dotNext)) {
     console.error(`${dotNext} not found — run pnpm build first`);
@@ -919,7 +911,7 @@ async function startServer(workDir) {
   const logPath = join(workDir, "next-start.log");
   const logFile = await open(logPath, "a");
   try {
-    const child = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "-p", String(PORT)], {
+    const child = owner.spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "-p", String(PORT)], {
       cwd: repoRoot,
       env: spawnedServerEnv(process.env),
       stdio: ["ignore", logFile.fd, logFile.fd],
@@ -987,7 +979,7 @@ async function startServer(workDir) {
       }
       return child;
     } catch (error) {
-      await stopServer(child);
+      await owner.stop(child);
       throw error;
     }
   } finally {
@@ -1159,7 +1151,7 @@ async function main() {
   // --env-file-if-exists behavior; .env at the repo root only.
   await loadRepoEnvFile();
 
-  const spawned = BASE_URL === `http://127.0.0.1:${PORT}`;
+  const spawned = !process.argv.includes("--base-url");
 
   // The environment preflight (issue 471) runs only when this run spawns its
   // own server, and before mkdtemp, startServer and launchChromeWithRetry, so
@@ -1174,13 +1166,13 @@ async function main() {
   }
 
   const chrome = discoverChrome();
-  const workDir = await mkdtemp(join(tmpdir(), "page-geometry-"));
-  let server = null;
+  const workDir = mkdtempSync(join(tmpdir(), "page-geometry-"));
+  const owner = new OwnedProcesses(workDir);
   let failed = false;
   let hardFailure = null;
 
   try {
-    if (spawned) server = await startServer(workDir);
+    if (spawned) await startServer(workDir, owner);
 
     // The session fixture (issue 453) seeds before any contract runs — in
     // --base-url mode too: the database is whatever DATABASE_URL names.
@@ -1212,6 +1204,8 @@ async function main() {
     // the child is alive and its DevTools endpoint is known.
     const { child, browserUrl } = await launchChromeWithRetry({
       command: chrome,
+      spawnChild: owner.spawn.bind(owner),
+      stopChild: owner.stop.bind(owner),
       args: [
         "--headless=new",
         "--remote-debugging-port=0",
@@ -1363,10 +1357,10 @@ async function main() {
         console.log(`\n${rows.length} page/viewport checks: ${passed} pass, ${rows.length - passed} fail`);
       }
     } finally {
-      child.kill("SIGKILL");
+      await owner.stop(child);
     }
   } finally {
-    await stopServer(server);
+    await owner.cleanup();
   }
 
   if (hardFailure) {
