@@ -4,7 +4,7 @@ type PlanNode = { [key: string]: unknown; Plans?: PlanNode[] };
 export interface DeleteProbe { table: string; deleted: number; returned: number }
 export interface FkProbe { deleted: number; seq: number; idx: number }
 export interface SelectionProbe { table: string; examined: number }
-export interface CandidateProbe { examined: number; deleteSharedHits: number; source: "delete" | "fetch" }
+export interface CandidateProbe { examined: number; deleteExamined: number; deleteSharedHits: number; source: "delete" | "fetch" }
 
 /** Observe actual statements/transactions while retaining the real postgres driver. */
 export function observeRetentionSql(raw: Sql, options: {
@@ -52,9 +52,16 @@ export function observeRetentionSql(raw: Sql, options: {
           const limits = walk(root).filter((node) => node["Node Type"] === "Limit");
           const scans = limits.flatMap(walk).filter((node) => /Scan/.test(String(node["Node Type"]))
             && node["Node Type"] !== "Bitmap Index Scan");
+          // Budget every DELETE-side scan, separately from FETCH/candidate work.
+          // Bitmap index nodes describe the same tuples as their heap parent.
+          const deleteScans = walk(root).filter((node) => node["Relation Name"] === "reconciliation_changes"
+            && /Scan/.test(String(node["Node Type"])) && node["Node Type"] !== "Bitmap Index Scan");
           candidates.push({
             examined: scans.reduce((sum, node) => sum + (Number(node["Actual Rows"] ?? 0)
               + Number(node["Rows Removed by Filter"] ?? 0)) * Number(node["Actual Loops"] ?? 1), 0),
+            deleteExamined: deleteScans.reduce((sum, node) => sum + (Number(node["Actual Rows"] ?? 0)
+              + Number(node["Rows Removed by Filter"] ?? 0) + Number(node["Rows Removed by Index Recheck"] ?? 0))
+              * Number(node["Actual Loops"] ?? 1), 0),
             deleteSharedHits: Number(root["Shared Hit Blocks"] ?? 0), source: "delete",
           });
           rows = Object.assign([], { count: deleted });
@@ -91,7 +98,7 @@ export function observeRetentionSql(raw: Sql, options: {
             const before = await readExaminedRows(getTarget, "reconciliation_changes");
             const rows = await Reflect.apply(unsafe, getTarget, args);
             const after = await readExaminedRows(getTarget, "reconciliation_changes");
-            candidates.push({ examined: after - before, deleteSharedHits: 0, source: "fetch" });
+            candidates.push({ examined: after - before, deleteExamined: 0, deleteSharedHits: 0, source: "fetch" });
             return rows;
           })();
         };

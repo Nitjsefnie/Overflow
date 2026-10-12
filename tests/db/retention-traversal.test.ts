@@ -29,6 +29,7 @@ afterAll(async () => {
 it("examines changes linearly across interleaved history and multiple run batches", async () => {
   const observations: number[] = [];
   const runObservations: number[] = [];
+  const deleteObservations: number[] = [];
   for (const expired of [100, 200]) {
     await sql`truncate reconciliation_changes, reconciliation_runs`;
     // Runtime-built ordered UUIDs make retained and expired history alternate.
@@ -45,13 +46,18 @@ it("examines changes linearly across interleaved history and multiple run batche
     const result = await pruneExpiredMaintenanceRows(probe.client);
     const examined = probe.candidates.reduce((sum, plan) => sum + plan.examined, 0);
     const runExamined = probe.selections.reduce((sum, query) => sum + query.examined, 0);
+    const deleteExamined = probe.candidates.reduce((sum, plan) => sum + plan.deleteExamined, 0);
     const deleteSharedHits = probe.candidates.reduce((sum, plan) => sum + plan.deleteSharedHits, 0);
     process.stdout.write(`RETENTION_TRAVERSAL ${JSON.stringify({ expired, deleted: result.changesOfExpiredRuns,
-      examined, runExamined, deleteSharedHits, probes: probe.candidates.length })}\n`);
+      examined, runExamined, deleteExamined, deleteSharedHits, probes: probe.candidates.length })}\n`);
     expect(result.expiredRuns).toBe(expired);
     expect(result.changesOfExpiredRuns).toBe(expired * 20);
     observations.push(examined);
     runObservations.push(runExamined);
+    deleteObservations.push(deleteExamined);
+    expect(probe.candidates.some((query) => query.source === "delete" && query.deleteExamined > 0)).toBe(true);
+    expect(deleteExamined).toBeGreaterThanOrEqual(result.changesOfExpiredRuns);
+    expect.soft(deleteExamined).toBeLessThanOrEqual(expired * 40);
     expect(probe.candidates.some((query) => query.source === "fetch" && query.examined > 0)).toBe(true);
     expect(examined).toBeGreaterThanOrEqual(result.changesOfExpiredRuns);
     expect(runExamined).toBeGreaterThanOrEqual(result.expiredRuns);
@@ -61,6 +67,7 @@ it("examines changes linearly across interleaved history and multiple run batche
   }
   expect.soft(observations[1]).toBeLessThanOrEqual(observations[0] * 2);
   expect.soft(runObservations[1]).toBeLessThanOrEqual(runObservations[0] * 2);
+  expect.soft(deleteObservations[1]).toBeLessThanOrEqual(deleteObservations[0] * 2);
 });
 
 it("advances receipt selection past retained UUID prefixes", async () => {
@@ -85,6 +92,7 @@ it("advances receipt selection past retained UUID prefixes", async () => {
 
 it("advances within a large run even when its children require a sequential scan", async () => {
   const examined: number[] = [];
+  const deleteObservations: number[] = [];
   for (const changes of [4000, 8000]) {
     await sql`truncate reconciliation_changes, reconciliation_runs`;
     await sql`insert into reconciliation_runs (id, status, completed_at)
@@ -98,12 +106,18 @@ it("advances within a large run even when its children require a sequential scan
     const probe = observeRetentionSql(sql, { measureChanges: true });
     const result = await pruneExpiredMaintenanceRows(probe.client);
     const rows = probe.candidates.reduce((sum, plan) => sum + plan.examined, 0);
-    process.stdout.write(`RETENTION_LARGE_RUN ${JSON.stringify({ changes, deleted: result.changesOfExpiredRuns, examined: rows })}\n`);
+    const deleteExamined = probe.candidates.reduce((sum, plan) => sum + plan.deleteExamined, 0);
+    process.stdout.write(`RETENTION_LARGE_RUN ${JSON.stringify({ changes, deleted: result.changesOfExpiredRuns, examined: rows, deleteExamined })}\n`);
     expect(result.changesOfExpiredRuns).toBe(changes / 2);
     expect(probe.candidates.some((query) => query.source === "fetch" && query.examined > 0)).toBe(true);
     expect(rows).toBeGreaterThanOrEqual(result.changesOfExpiredRuns);
+    expect(probe.candidates.some((query) => query.source === "delete" && query.deleteExamined > 0)).toBe(true);
+    expect(deleteExamined).toBeGreaterThanOrEqual(result.changesOfExpiredRuns);
+    expect.soft(deleteExamined).toBeLessThanOrEqual(changes);
+    deleteObservations.push(deleteExamined);
     examined.push(rows);
     expect.soft(rows).toBeLessThanOrEqual(changes);
   }
   expect.soft(examined[1]).toBeLessThanOrEqual(examined[0] * 2);
+  expect.soft(deleteObservations[1]).toBeLessThanOrEqual(deleteObservations[0] * 2);
 });
