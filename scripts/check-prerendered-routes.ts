@@ -3,9 +3,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 export const PRERENDER_ALLOWLIST: Readonly<Record<string, string>> = {
-  // This client component lives outside the root layout and is rendered
-  // client-side when that layout fails; it is not a nonce-bearing document route.
-  "/_global-error": "Client-side root layout error fallback, outside the root layout",
+  // Next copies this static terminal error document to server/pages/500.html,
+  // serving it for /_global-error and as /500. Its nonce-less scripts are blocked
+  // by CSP, so it does not hydrate; the native GET Reload form remains usable.
+  "/_global-error": "Static terminal error document for /_global-error and /500; CSP blocks scripts, native GET Reload works",
 };
 
 type Decision = { unexpectedRoutes: string[]; staleAllowlist: string[] };
