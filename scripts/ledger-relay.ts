@@ -38,18 +38,18 @@
 // LEDGER_APP_KEY secret and is never logged; every failure exits nonzero so a
 // dead relay is visible as a red job, never as silence.
 
-import { readSuiteRuns, suiteRunsUrl, supersessionMessage } from "./pr-suite-supersession.ts";
 import { createSign } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 import {
+  checkRunBody,
   renderSweepLines,
   sweepOrphans,
+  validateJobs,
   type SweepApi,
   type SweepOutcome,
 } from "./ledger-relay-sweep.ts";
-import { publishProducerContexts } from "./ledger-relay-publication.ts";
 import { LEDGER_APP_MINT_PERMISSIONS } from "./ledger-app-mint-permissions.ts";
 // The pure decision layer. Re-exported below, with `.ts` specifiers, so the
 // surface this entry has always presented is unchanged: a caller importing
@@ -93,15 +93,12 @@ export type { ContextDecision, HealPullRequest, PinMap, RelayJob, RerunRun, Reru
 import {
   assertShape,
   DIGITS,
+  normalizedAttempt,
   parseTrigger,
+  SHA_40,
   type TriggeringRun,
 } from "./ledger-relay-trigger.ts";
 import { forkOwnerLoginOf, openPullAtForkHead } from "./ledger-relay-fork.ts";
-import {
-  headRepositoryFullNameOf,
-  resolveWorkflowRunHead,
-  triggeringRunFromApi,
-} from "./ledger-relay-upstream.ts";
 
 export type { TriggeringRun };
 
@@ -112,7 +109,6 @@ const API_ROOT = "https://api.github.com";
 const API_HEADERS = {
   accept: "application/vnd.github+json",
   "x-github-api-version": "2022-11-28",
-  "cache-control": "no-cache",
 };
 // Bounded retry: three attempts total, 1s then 2s between them. Only
 // plausibly transient failures retry — a network error, a 5xx, a 429; any
@@ -147,8 +143,6 @@ export interface RelayDeps {
 }
 
 export interface RelayResult {
-  /** Superseded workflow_run certification is an exit-0 no-op, never a POST. */
-  supersededBy?: number;
   decisions: ContextDecision[];
   /** The contexts whose check-run POST succeeded, in posting order. */
   posted: string[];
@@ -212,15 +206,11 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
       apiRoot: API_ROOT,
       repo,
       appId,
-      repositoryId: env.GITHUB_REPOSITORY_ID,
       triggerRunId: "",
     });
     return { decisions: [], posted: [], rerunDispatched: false, sweep, sweepOnly: true };
   }
-  if (
-    trigger.kind === "workflow_run" && trigger.run.event !== "workflow_run" &&
-    contextsFor(pinMap, trigger.run.path).length === 0
-  ) {
+  if (trigger.kind === "workflow_run" && contextsFor(pinMap, trigger.run.path).length === 0) {
     // Nothing is pinned to this run's workflow; there is nothing to relay and
     // no reason to mint a token. A run nothing is pinned to never had a
     // check-run to orphan either, so the sweep has no part in this path.
@@ -231,11 +221,10 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   const auth = { authorization: `Bearer ${token}` };
 
   let run: TriggeringRun;
-  let fetchedProducer: Record<string, unknown> | undefined;
   if (trigger.kind === "workflow_run") {
     run = trigger.run;
   } else {
-    fetchedProducer = await apiCall<Record<string, unknown>>(
+    const fetched = await apiCall<Record<string, unknown>>(
       deps,
       {
         url: `${API_ROOT}/repos/${repo}/actions/runs/${trigger.runId}`,
@@ -244,49 +233,20 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
       },
       `the workflow run ${trigger.runId}`,
     );
-    run = triggeringRunFromApi(fetchedProducer);
+    run = triggeringRunFromApi(fetched);
+    if (contextsFor(pinMap, run.path).length === 0) {
+      return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
+    }
   }
 
-  let attestationRun = run;
-  const runSweep = () => sweepOrphans({
-    api: sweepApi(deps, repo, auth),
-    decide: decideContexts,
-    pinMap,
-    apiRoot: API_ROOT,
-    repo,
-    appId,
-    repositoryId: env.GITHUB_REPOSITORY_ID,
-    triggerRunId: run.runId,
-    triggerRun: attestationRun,
-  });
-
-  let recheckSupersession: (() => Promise<number | undefined>) | undefined;
-  let historyBound: string | undefined;
-  if (run.event === "workflow_run") {
-    const api = sweepApi(deps, repo, auth);
-    const resolved = await resolveWorkflowRunHead(
-      trigger.kind === "dispatch" ? trigger.runId : run.runId,
-      env.GITHUB_REPOSITORY_ID,
-      (id) => api.get(`${API_ROOT}/repos/${repo}/actions/runs/${id}`, `the workflow run ${id}`),
-      fetchedProducer,
-      (sha) => readSuiteRuns((page) => api.get(suiteRunsUrl(API_ROOT, repo, sha, page), "the suite supersession listing", false)),
-    );
-    run = resolved.run;
-    attestationRun = { ...run, headSha: resolved.headSha };
-    if (resolved.supersededBy !== undefined) return skippedSuperseded(resolved.supersededBy, runSweep);
-    recheckSupersession = resolved.recheckSupersession;
-    historyBound = resolved.historyBound;
-  }
-  if (contextsFor(pinMap, run.path).length === 0) {
-    return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
-  }
-  // Legacy refusals retain the dead-head no-op (issue 1115). Every
-  // workflow_run refusal above throws regardless of head liveness.
-  if (run.event !== "workflow_run" && !isTrustedProducerRun(run.event, run.headBranch)) {
+  // The trust gate, both paths, after the mint (issue 1115): an untrusted run
+  // is thrown out byte-identically unless its head is provably dead (then the
+  // refusal exits 0 visibly).
+  if (!isTrustedProducerRun(run.event, run.headBranch)) {
     return await refuseUntrustedProducer(deps, repo, run, auth);
   }
 
-  const jobsBody = historyBound !== undefined ? { jobs: [] } : await apiCall<Record<string, unknown>>(
+  const jobsBody = await apiCall<Record<string, unknown>>(
     deps,
     {
       url: `${API_ROOT}/repos/${repo}/actions/runs/${run.runId}/jobs?filter=latest&per_page=100`,
@@ -295,12 +255,23 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     },
     `the job listing of run ${run.runId}`,
   );
-  const publication = await publishProducerContexts({
-    api: sweepApi(deps, repo, auth), pinMap, apiRoot: API_ROOT, repo, appId,
-    repositoryId: env.GITHUB_REPOSITORY_ID,
-  }, attestationRun, jobsBody, recheckSupersession, historyBound);
-  if (publication.supersededBy !== undefined) return skippedSuperseded(publication.supersededBy, runSweep);
-  const { decisions, posted } = publication;
+  const jobs = validateJobs(jobsBody);
+
+  const decisions = decideContexts(pinMap, run.path, run.conclusion, jobs);
+  const posted: string[] = [];
+  for (const decision of decisions) {
+    await apiCall(
+      deps,
+      {
+        url: `${API_ROOT}/repos/${repo}/check-runs`,
+        method: "POST",
+        headers: { ...API_HEADERS, ...auth },
+        body: JSON.stringify(checkRunBody(decision, run)),
+      },
+      `the check-run for ${decision.context}`,
+    );
+    posted.push(decision.context);
+  }
 
   // The sweep and the heal both follow the mirrored decisions, so the mirror —
   // the relay's primary duty — lands whatever they do, and a failure in either
@@ -313,7 +284,15 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   let sweep: SweepOutcome;
   let sweepError: unknown = undefined;
   try {
-    sweep = await runSweep();
+    sweep = await sweepOrphans({
+      api: sweepApi(deps, repo, auth),
+      decide: decideContexts,
+      pinMap,
+      apiRoot: API_ROOT,
+      repo,
+      appId,
+      triggerRunId: run.runId,
+    });
   } catch (error) {
     sweep = NO_SWEEP;
     sweepError = error;
@@ -323,11 +302,6 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   if (sweepError !== undefined) throw sweepError;
 
   return { decisions, posted, rerunDispatched, sweep };
-}
-
-/** A late older verification must not replace either a newer failure or success. */
-async function skippedSuperseded(supersededBy: number, runSweep: () => Promise<SweepOutcome>): Promise<RelayResult> {
-  return { decisions: [], posted: [], rerunDispatched: false, sweep: await runSweep(), supersededBy };
 }
 
 /**
@@ -372,7 +346,7 @@ async function mintInstallationToken(
 function sweepApi(deps: RelayDeps, repo: string, auth: Record<string, string>): SweepApi {
   const headers = { ...API_HEADERS, ...auth };
   return {
-    get: <T,>(url: string, what: string, retryTransient = true) => apiCall<T>(deps, { url, method: "GET", headers }, what, retryTransient),
+    get: <T,>(url: string, what: string) => apiCall<T>(deps, { url, method: "GET", headers }, what),
     postCheckRun: (body, what) =>
       apiCall<unknown>(
         deps,
@@ -537,10 +511,9 @@ interface ApiRequest {
  * messages carry the endpoint, the status and GitHub's message — never a
  * header, so no key or token can reach the log.
  */
-async function apiCall<T>(deps: RelayDeps, request: ApiRequest, what: string, retryTransient = true): Promise<T> {
+async function apiCall<T>(deps: RelayDeps, request: ApiRequest, what: string): Promise<T> {
   let lastMessage = "";
-  const retryCount = retryTransient ? BACKOFF_MS.length : 0;
-  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+  for (let attempt = 0; attempt <= BACKOFF_MS.length; attempt += 1) {
     if (attempt > 0) {
       await deps.delayFn(BACKOFF_MS[attempt - 1] ?? 0);
     }
@@ -571,12 +544,59 @@ async function apiCall<T>(deps: RelayDeps, request: ApiRequest, what: string, re
       throw new Error(`${what} failed: ${lastMessage}`);
     }
   }
-  throw new Error(`${what} failed after ${retryCount + 1} attempts: ${lastMessage}`);
+  throw new Error(`${what} failed after ${BACKOFF_MS.length + 1} attempts: ${lastMessage}`);
 }
 
 function truncate(text: string): string {
   const trimmed = text.trim();
   return trimmed.length <= 300 ? trimmed : `${trimmed.slice(0, 300)}…`;
+}
+
+function triggeringRunFromApi(body: Record<string, unknown>): TriggeringRun {
+  const headSha = typeof body.head_sha === "string" ? body.head_sha : "";
+  assertShape(headSha, SHA_40, "the fetched run's head_sha must be a 40-hex SHA");
+  const path = typeof body.path === "string" ? body.path : "";
+  assertShape(path, PIN_SHAPE, "the fetched run's path must be a workflow path");
+  const htmlUrl = typeof body.html_url === "string" ? body.html_url : "";
+  if (htmlUrl === "") {
+    throw new Error("the fetched run's html_url is empty; cannot set the check-run's details_url");
+  }
+  return {
+    runId: typeof body.id === "number" ? String(body.id) : "",
+    headSha,
+    path,
+    conclusion: typeof body.conclusion === "string" ? body.conclusion : null,
+    htmlUrl,
+    event: typeof body.event === "string" ? body.event : "",
+    headBranch: typeof body.head_branch === "string" ? body.head_branch : "",
+    runAttempt: normalizedAttempt(
+      typeof body.run_attempt === "number" || typeof body.run_attempt === "string"
+        ? body.run_attempt
+        : undefined,
+    ),
+    // Issue 1037's primary never-started signal: the time the run began
+    // executing, or null when the body names none — absent, null and empty all
+    // read as absent, and the job-listing fallback decides in their place.
+    runStartedAt:
+      typeof body.run_started_at === "string" && body.run_started_at !== ""
+        ? body.run_started_at
+        : null,
+    headRepository: headRepositoryFullNameOf(body),
+  };
+}
+
+/**
+ * The run body's `head_repository.full_name`, or the empty string when the
+ * body carries no readable repository name. Never a guess: an empty value
+ * means unknown, and the gate learns the name by fetching the run body — a
+ * name still missing keeps the throw.
+ */
+function headRepositoryFullNameOf(body: Record<string, unknown>): string {
+  const headRepository =
+    typeof body.head_repository === "object" && body.head_repository !== null
+      ? (body.head_repository as { full_name?: unknown })
+      : undefined;
+  return typeof headRepository?.full_name === "string" ? headRepository.full_name : "";
 }
 
 /**
@@ -717,10 +737,6 @@ function required(env: Record<string, string | undefined>, name: string): string
  * living undrivable in main().
  */
 export function renderRelayResult(result: RelayResult): string[] {
-  if (result.supersededBy !== undefined) return [
-    `[ledger-relay] ${supersessionMessage(result.supersededBy)}`,
-    ...renderSweepLines(result.sweep),
-  ];
   if (result.sweepOnly === true) {
     // Issue 1116: the sweep's summary is the whole output; there is no
     // triggering run to name and no mirror to report.

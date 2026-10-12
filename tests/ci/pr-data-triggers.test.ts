@@ -5,6 +5,103 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { parse } from "yaml";
 
+/**
+ * Issue 1090: no job that fetches or reads pull-request data may live in a
+ * workflow a PRIVILEGED trigger can start.
+ *
+ * `workflow_dispatch`, `schedule` and `push` run a workflow from the default
+ * branch with the default branch's privileges, so a pull request's content
+ * entering one of those jobs is untrusted content running with privileges a
+ * contributor does not hold. CodeQL says so out loud: the
+ * `actions/cache-poisoning/poisonable-step` and `actions/untrusted-checkout`
+ * alerts on ci.yml, actionlint.yml, ratchet-guard.yml and secret-scan.yml are
+ * that shape. Step-level `if: github.event_name == 'pull_request_target'`
+ * gates made the paths SAFE, not STRUCTURAL — one guard edit reopened the
+ * class, which is why the fix is one file per leg and this test.
+ *
+ * "Reads pull-request data" is decided from the WORKFLOW TEXT, not from a
+ * hand-maintained list of steps or files, because a hand-maintained list is
+ * the thing this test exists to replace: it goes stale silently and a new
+ * pull-request step lands in no list at all. The rule is the one the analysers
+ * apply — a step that both performs a checkout/fetch/pull AND names a
+ * PR-derived value.
+ *
+ * WHAT A STEP CAN SEE. A step's effective text is not only its own `run:`, its
+ * `env:` and its `with:`. It also inherits, and each of these is a channel a
+ * reviewer found carrying a real violation past the first version of this file:
+ *
+ *  - the WORKFLOW-level `env:`, and the JOB-level `env:`, both of which apply
+ *    to every step of the job;
+ *  - the needles of every job reachable through `needs:`, because a value one
+ *    job computes from the pull request and exports is readable by the next.
+ *
+ * Reading only a step's own blocks was the uncontrolled limb: a job-level
+ * `env: { PR_NUM: ${{ github.event.pull_request.number }} }` plus a step
+ * `run: git fetch … "+refs/${PR_NUM}/head:…"` passed this suite, because the
+ * needle was one level above where the rule looked. Both channels are now
+ * scanned, and `tests the false-positive direction` below plants the exact
+ * shapes so neither can silently stop being read.
+ *
+ * THE TRIGGER SET IS A CLOSED SET — `set(on) === {pull_request_target}` — not a
+ * denylist of privileged events. A denylist passes today and re-arms the class
+ * the moment someone adds `repository_dispatch`, `issue_comment` or
+ * `workflow_call`, none of which anyone would think to add to a list of the
+ * three events that happened to be a problem.
+ *
+ * THE NEEDLE LIST IS BROAD ON PURPOSE, and a match is not always a real
+ * violation. `head_sha`, `head_ref`, `head_branch`, `head.sha` and `head.ref`
+ * match a push-only workflow comparing against `github.event.before`, where
+ * nothing about the value is pull-request-derived. Narrowing them would let
+ * genuine cases through and stop matching the analyser, which is the whole
+ * point of reading the analysers' rule. So the list stays broad and the
+ * FAILURE MESSAGE names the needle and where it was found, and states both
+ * ways to satisfy the rule — move the job into a `pull_request_target`-only
+ * workflow, or show that the value is not actually pull-request-derived. The
+ * message does not assume a pull-request leg exists, because for a benign
+ * workflow there is none to split.
+ *
+ * SCOPE. This suite reads every workflow in `.github/workflows/` except the
+ * ones named in `DEFERRED`. The exclusion is a `Record`, not a `Set`, and it is
+ * checked in BOTH directions: a deferred entry that no longer covers a
+ * violating file fails this suite, and an exclusion widened past a file that
+ * still violates it fails the assertion below it.
+ *
+ * `DEFERRED` is EMPTY, and that is the end state of issue 1090 rather than a
+ * hole: ci.yml was the last workflow a privileged trigger could start a
+ * pull-request job in, and Task 3 split it. The empty list is the goal here,
+ * which is the opposite of the empty-list failure mode the FORWARD_WIRED sweep
+ * below guards against — there an empty control silently stopped being a
+ * control, here an empty record means there is nothing left to defer. Re-adding
+ * an entry is what would need a reason: the two assertions at the bottom of this
+ * file then require it to name a file that exists AND still carries a violation,
+ * so an entry can only be re-created against a file the rule would otherwise
+ * already refuse.
+ *
+ * WHAT THIS DETECTOR DOES NOT SEE — two limits, and they are not the same kind
+ * of boundary. Neither is fixed here, and the reasons are different, so they
+ * are stated separately rather than lumped together as "known gaps".
+ *
+ * 1. A COMPOSITE ACTION is invisible, and that hole is unreachable today. A
+ *    step reading `uses: ./.github/actions/<name>` runs steps whose text lives
+ *    in ANOTHER file; `stepText` sees only the `uses:` string. So a composite
+ *    that fetched a pull request would not be caught. `.github/actions/` does
+ *    not exist in this repository and no workflow uses a local `uses: ./`, so
+ *    there is nothing to catch, and the change that would close it is scope
+ *    expansion into a hazard this task did not introduce: a composite action
+ *    has no `on:` of its own, so the right control is a SEPARATE sweep over
+ *    `.github/actions/` keyed on the CALLER's `uses:` line, not a widening of a
+ *    trigger pin. If a composite is ever added here, that sweep is the thing
+ *    to write first.
+ *
+ * 2. A pull-request read with NO checkout, fetch or pull at all — `gh pr view`,
+ *    an HTTP GET of a diff — is outside this rule, and that is FIDELITY rather
+ *    than a gap. The rule is the analysers' own: a step is flagged when it both
+ *    performs a checkout/fetch/pull AND names a pull-request value, because
+ *    that conjunction is what `actions/cache-poisoning/poisonable-step` and
+ *    `actions/untrusted-checkout` describe. Detecting more than the analysers do
+ *    would report shapes those tools do not, which is a different (and
+ *    separately debatable) question from whether this pin tracks them.
+ */
 
 type Block = Record<string, unknown>;
 type Step = {
@@ -78,15 +175,22 @@ const PR_NEEDLES = [
   "pr_head_sha",
 ] as const;
 
+/** The trigger set the rule requires of any workflow holding a pull-request job. */
 const ALLOWED_TRIGGERS = new Set(["pull_request_target"]);
 
-// workflow_run is admitted only for the API-bound, base-only verify producer.
-function admits(file: string, workflow: Workflow): boolean {
-  const keys = new Set(triggerKeys(workflow.on));
-  return (keys.size === ALLOWED_TRIGGERS.size && [...keys].every((key) => ALLOWED_TRIGGERS.has(key))) ||
-    (file === "ci-pr.yml" && keys.size === 1 && keys.has("workflow_run"));
-}
-
+/**
+ * Workflows this suite does NOT judge, and why. Every entry is a workflow that
+ * TODAY violates the rule below and is split by a later task of issue 1090.
+ * The assertion "every deferred entry still covers a violation" is what keeps
+ * this list honest in both directions, and it is what made Task 3's removal of
+ * the ci.yml entry a step the split had to take rather than a cleanup somebody
+ * remembered.
+ *
+ * EMPTY since issue 1090 Task 3 split ci.yml: that was the last of the four
+ * workflows CodeQL reported a privileged-trigger path through. The two
+ * assertions at the bottom of this file are kept anyway — they are what a
+ * future entry has to satisfy, and they cost nothing while the record is empty.
+ */
 const DEFERRED: Record<string, string> = {};
 
 /** The `on:` block's event names, whatever shape it is written in. */
@@ -283,10 +387,11 @@ describe("every job that reads pull-request data", () => {
     ).not.toEqual([]);
   });
 
-  it("lives in a workflow whose only trigger is pull_request_target or the admitted ci-pr workflow_run", () => {
+  it("lives in a workflow whose only trigger is pull_request_target", () => {
     const offenders = offences
       .filter((offence) => {
-        return !admits(offence.file, workflows.get(offence.file)!);
+        const keys = new Set(triggerKeys(workflows.get(offence.file)?.on));
+        return keys.size !== ALLOWED_TRIGGERS.size || [...keys].some((key) => !ALLOWED_TRIGGERS.has(key));
       })
       .map((offence) => verdict(offence, workflows.get(offence.file)!));
     expect(offenders.join("\n\n") || "(none)", offenders.length === 0 ? "(none)" : "").toBe("(none)");
@@ -301,6 +406,10 @@ describe("the detector's own reading scope", () => {
   const judged = (workflow: Workflow) => judgeWorkflow("fixture.yml", workflow);
 
   it("reads the JOB's own env:, not only each step's", () => {
+    // The exact shape that passed the first version of this file: the needle is
+    // one level ABOVE the step, in the job's env:, and the step that uses it
+    // carries neither. A rule that looked only at `step.env` sees a `git fetch`
+    // with no pull-request data beside it and passes.
     const found = judged({
       on: { push: { branches: ["main"] } },
       jobs: {
@@ -454,10 +563,82 @@ describe("the detector's own reading scope", () => {
 });
 
 describe("the ledger relay's producer filter", () => {
-  // The filter matches producer names, so every pinned path must be listed.
-  // The aggregate declaration also checks the directory ships that name.
+  // The relay's `workflows:` filter matches the workflow `name:` FIELD, not the
+  // filename, so a producer file whose `name:` is missing from it is NEVER
+  // relayed — and nothing else notices, because the file exists, parses,
+  // lints, and produces its check context perfectly well. The only symptom is
+  // a required check that stops arriving on pull-request heads.
+  //
+  // This sweep reads the producers rather than listing names, because a list is
+  // exactly what a fourth producer would skip: the first version of this
+  // assertion lived in secret-scan-workflow.test.ts and covered the two
+  // secret-scan legs, and deleting `actionlint pull request` and
+  // `ratchet guard pull request` from the filter left every suite green.
+  //
+  // WHAT COUNTS AS A PRODUCER, and why it is two sets rather than one.
+  //
+  // The first version of this sweep derived its producers from
+  // .github/required-checks.json alone, and its header claimed it covered "the
+  // forward wiring for unpinned producers like secret scan". It did not: nothing
+  // in the pin map names secret-scan, so deleting `secret scan pull request`
+  // from the filter left every suite green. The claim was aspirational, and a
+  // doc that overstates a guard's reach is the same defect as a guard with a
+  // hole — it tells the next reader they are covered when they are not.
+  //
+  // So the producer set is the UNION of two explicit sets, and neither is
+  // inferred:
+  //
+  //  - PINNED: every workflow the pin map names (every path of every pin).
+  //  - FORWARD_WIRED: named here, explicitly, with the reason it is relayed at
+  //    all. A forward-wired producer is one nothing waits on today; the relay
+  //    runs for it so that the day its context IS pinned nothing else has to
+  //    change. The entry self-heals then — the name arrives through PINNED and
+  //    the declaration becomes redundant rather than wrong.
+  //
+  // BOTH DIRECTIONS ARE ASSERTED, and the second is inverted on purpose. The
+  // obvious form — "every declaration ships, and the filter names every
+  // declaration" — leaves the control removable by one coherent edit. So the
+  // second direction asserts over the FILTER as the enumerated surface: every
+  // name the relay lists that is not a PINNED producer must be DECLARED here.
+  // That is what makes the list a control rather than a record of what was once
+  // true — a new producer added to the filter with no declaration fails, which
+  // is the quiet direction, and the one that was open.
+  //
+  // WHAT THIS STILL DOES NOT CATCH, stated rather than implied. Dropping a
+  // declaration AND its filter line together still passes, leaving a workflow
+  // that is shipped, unpinned, undeclared and unforwarded. Within {FILTER,
+  // PINNED, FORWARD_WIRED} this sweep cannot separate that state from "this was
+  // never a producer": once the declaration and its filter line move together,
+  // the two sets still agree, and nothing else in the derivation changes.
+  //
+  // It is NOT true, though, that no derivation could — an earlier version of
+  // this paragraph said so, and it was wrong. A RELATIONAL rule separates the
+  // two: every SHIPPED workflow whose `name:` is a DECLARED producer plus a
+  // space-suffix must itself be declared. Measured, it is empty on today's
+  // tree and fires on exactly the coordinated deletion:
+  //
+  //   today                    -> []
+  //   "secret scan pull request" declared and filtered, then BOTH removed
+  //                            -> ["secret scan pull request"]
+  //
+  // because secret-scan-pr.yml still ships under that name while its
+  // declaration and its filter line are gone. It is not written here because it
+  // is a judgement about the relay's contract — a rule about which workflows
+  // MUST be relayed, which is the relay owner's call — not a silent change made
+  // by a trigger sweep. The cheap alternative is measurably wrong rather than
+  // merely weaker: "every shipped non-pinned workflow must be declared" fails
+  // on today's tree, where 8 of the 18 shipped workflows are unpinned and all
+  // 8 of those are deliberately NOT relayed (claim, pr-suite, pr-gate,
+  // scorecard, code-scanning, coverage-comment, event-policy, ledger-relay),
+  // so it would demand a declaration and a filter entry for each.
+  //
+  // The residual is unchanged from what this sweep replaced, and it is not the
+  // silent direction: removing a line from a tracked workflow is a reviewable
+  // diff, whereas adding a producer to the filter with no declaration was the
+  // quiet case, and that one now dies.
   const FORWARD_WIRED: Record<string, string> = {
-    "pr gates": "The privileged aggregate produces actionlint, ratchet-guard, secret-scan and dependency-audit for every pull request.",
+    "secret scan pull request": "the pull-request leg of the same workflow (issue 1090). " +
+      "Naming only the push leg would relay half of that workflow's runs.",
   };
 
   const relayNames = async (): Promise<string[]> => {
@@ -496,8 +677,19 @@ describe("the ledger relay's producer filter", () => {
     ).not.toEqual([]);
   });
 
-  it("declares the aggregate that relays all four PR gate contexts", () => {
-    expect(Object.keys(FORWARD_WIRED).sort()).toEqual(["pr gates"]);
+  it("holds exactly the post-1034 shape: one declaration, the pull-request leg's", () => {
+    // Issue 1034 pinned secret-scan, which made the push-leg declaration's
+    // reason ("is not a required context") false in the tree, so that entry is
+    // deleted. Equality, not containment, pins the shape from drifting in
+    // either direction: a re-added declaration whose reason the tree
+    // contradicts is a doc that overstates or misstates a guard's reach, and a
+    // brand-new unpinned producer in the relay filter must be declared here
+    // with its own true reason (the directional test below catches that too;
+    // this pins the list besides). The one remaining entry names a producer
+    // that is also PINNED — the redundant-rather-than-wrong state this file's
+    // header sanctions — and its reason stays true: both leg names are needed
+    // for both legs' completions to relay.
+    expect(Object.keys(FORWARD_WIRED).sort()).toEqual(["secret scan pull request"]);
   });
 
   it("names every PINNED and every FORWARD-WIRED producer's workflow name", async () => {
@@ -574,6 +766,12 @@ describe("the workflows deferred to a later task of issue 1090", () => {
   });
 
   it("still covers a violation — a split must remove its own exclusion", () => {
+    // The other direction. When Task 3 splits ci.yml, its pull-request job
+    // moves to a pull_request_target-only file and this exclusion would go on
+    // exempting a workflow that now satisfies the rule — quietly narrowing the
+    // suite's reach without any assertion changing. Requiring the exclusion to
+    // be still load-bearing is what makes that removal a step the split has to
+    // take, rather than a cleanup somebody remembers.
     const idle = [...Object.keys(DEFERRED)].filter((file) => {
       const workflow = workflows.get(file);
       if (workflow === undefined) return false;
@@ -585,42 +783,5 @@ describe("the workflows deferred to a later task of issue 1090", () => {
         "weight that exempts a workflow the rule would already pass. Remove the entry so the " +
         "suite judges the file.",
     ).toEqual([]);
-  });
-});
-
-
-describe("the narrowly admitted workflow_run PR-data class", () => {
-  const text = `on:
-  workflow_run:
-    workflows: [pr suite]
-    types: [completed]
-jobs:
-  verify:
-    steps:
-      - run: git fetch origin "$HEAD_SHA"
-        env:
-          HEAD_SHA: "\${{ github.event.workflow_run.head_sha }}"
-`;
-  it("admits ci-pr alone, and rejects the same PR-reading workflow under another path", () => {
-    const candidate = parse(text) as Workflow;
-    expect(judgeWorkflow("ci-pr.yml", candidate)).toHaveLength(1);
-    expect(admits("ci-pr.yml", candidate)).toBe(true);
-    expect(judgeWorkflow("other.yml", candidate)).toHaveLength(1);
-    expect(admits("other.yml", candidate)).toBe(false);
-  });
-  it("refuses a mixed trigger even on ci-pr", () => {
-    const candidate = parse(text) as Workflow;
-    expect(admits("ci-pr.yml", { ...candidate, on: { workflow_run: {}, push: {} } })).toBe(false);
-  });
-  it("keeps every ci-pr PR-data job on the default base checkout", () => {
-    const workflow = workflows.get("ci-pr.yml")!;
-    expect(judgeWorkflow("ci-pr.yml", workflow)).not.toEqual([]);
-    for (const offence of judgeWorkflow("ci-pr.yml", workflow)) {
-      const checkouts = workflow.jobs![offence.job]!.steps!.filter((step) => /actions\/checkout/.test(step.uses ?? ""));
-      expect(checkouts).toHaveLength(1);
-      // Security binding, not a copied action input: a PR ref or repository
-      // override would let the untrusted tree replace the judge.
-      expect(checkouts.some((step) => Object.hasOwn(step.with ?? {}, "ref") || Object.hasOwn(step.with ?? {}, "repository"))).toBe(false);
-    }
   });
 });

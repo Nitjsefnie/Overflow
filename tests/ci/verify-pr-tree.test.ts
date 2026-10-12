@@ -9,7 +9,7 @@ import { parse } from "yaml";
 import { commitFiles, git, hasCommit, scratchGitEnv } from "../support/scratch-git";
 
 /**
- * The verify job's workflow_run leg, EXECUTED rather than read.
+ * The verify job's pull_request_target leg, EXECUTED rather than read.
  *
  * Under that event the job checks out the base branch, materialises the pull
  * request's merge tree as a detached worktree outside the workspace, and
@@ -58,7 +58,7 @@ let counter = 0;
 
 beforeAll(async () => {
   // ci-pr.yml, not ci.yml: issue 1090 split the pull-request leg of the verify
-  // job into a file whose only trigger is `workflow_run`, and every step
+  // job into a file whose only trigger is `pull_request_target`, and every step
   // this suite executes — the materialise step and the tree gates that read its
   // outputs — is in that leg. Reading ci.yml after the split found none of them,
   // and every case below would have been a vacuous "the step I could not find is
@@ -223,11 +223,7 @@ function stepEnv(
   for (const [key, value] of Object.entries(step.env ?? {})) {
     const output = /^\$\{\{ steps\.([\w-]+)\.outputs\.([\w-]+) \}\}$/.exec(value);
     if (output) {
-      const source = output[1] === "pr-tree" ? outputs
-        : output[1] === "pr" ? {
-          head_sha: given.HEAD_SHA, base_sha: given.BASE_SHA,
-          base_ref: given.BASE_REF, pr_number: given.PR_NUMBER,
-        } : byStep[output[1]!] ?? {};
+      const source = output[1] === "pr-tree" ? outputs : byStep[output[1]!] ?? {};
       if (source[output[2]!] === undefined) throw new Error(`${key}: no ${output[1]} output ${output[2]}`);
       resolved[key] = source[output[2]!]!;
     } else if (key in given) {
@@ -263,11 +259,11 @@ async function runStep(
     encoding: "utf8",
     env: {
       ...scratchGitEnv,
-      ...stepEnv(step, outputs, { BASE_SHA: fx.base, HEAD_SHA: fx.head, ...given }, byStep),
+      ...stepEnv(step, outputs, given, byStep),
       GITHUB_WORKSPACE: fx.workspace,
-      GITHUB_EVENT_NAME: "workflow_run",
+      GITHUB_EVENT_NAME: "pull_request_target",
       GITHUB_OUTPUT: output,
-      PATH: given.PATH ?? `${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
+      PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
     },
   });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr, output: await readFile(output, "utf8") };
@@ -322,7 +318,7 @@ async function runStepOnOpenStdin(
         RUNNER_TEMP: runnerTemp,
       }, {}),
       GITHUB_WORKSPACE: fx.workspace,
-      GITHUB_EVENT_NAME: "workflow_run",
+      GITHUB_EVENT_NAME: "pull_request_target",
       GITHUB_OUTPUT: output,
       PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
     },
@@ -418,7 +414,7 @@ async function materialise(
   return { result, outputs: readOutputs(result.output), runnerTemp };
 }
 
-describe("the pull request tree the workflow_run leg judges", () => {
+describe("the pull request tree the pull_request_target leg judges", () => {
   it("is the two-parent merge of the event's head into the event's base, outside the workspace", async () => {
     const fx = await fixture({ "src/a.ts": "export const a = 1;\n" });
     const { result, outputs, runnerTemp } = await materialise(fx);
@@ -699,7 +695,7 @@ describe("a pull request that replaces the gate script guarding what it changed"
     const result = await runStep(
       detect,
       fx,
-      { EVENT_NAME: "workflow_run", PUSH_BEFORE: "", DISPATCH_BASE: "", PR_NUMBER: "1" },
+      { EVENT_NAME: "pull_request_target", PUSH_BEFORE: "", DISPATCH_BASE: "", PR_NUMBER: "1" },
       outputs,
     );
     expect(result.status, result.stderr).toBe(0);
@@ -713,7 +709,7 @@ describe("a pull request that replaces the gate script guarding what it changed"
     const result = await runStep(
       stepRunning("/scripts/docs-only.ts"),
       fx,
-      { EVENT_NAME: "workflow_run", PUSH_BEFORE: "", DISPATCH_BASE: "", PR_NUMBER: "1" },
+      { EVENT_NAME: "pull_request_target", PUSH_BEFORE: "", DISPATCH_BASE: "", PR_NUMBER: "1" },
       outputs,
     );
     expect(result.status, result.stderr).toBe(0);
@@ -844,7 +840,7 @@ describe("a pull request that replaces the gate script guarding what it changed"
   });
 });
 
-describe("the awaited suite run's id the workflow_run leg requires", () => {
+describe("the awaited suite run's id the pull_request_target leg requires", () => {
   /**
    * On a docs-only change nothing downstream reads the run id, so this step is
    * the only thing between an awaiter that exits 0 without writing one and a
@@ -878,77 +874,5 @@ describe("the awaited suite run's id the workflow_run leg requires", () => {
   it("accepts a positive integer id", async () => {
     const result = await runWith("123");
     expect(result.status, result.stdout + result.stderr).toBe(0);
-  });
-});
-
-
-describe("freshness against the suite's conservatively bounded base", () => {
-  it.each([
-    ["overlapping", "src/shared.ts", false],
-    ["disjoint", "src/unrelated.ts", true],
-    ["unchanged", null, true],
-  ] as const)("%s base after the suite cannot hide an untested advance", async (_label, advance, certified) => {
-    counter += 1;
-    const origin = join(root, `fresh-origin-${counter}`);
-    await mkdir(join(origin, "scripts"), { recursive: true });
-    git(origin, "init", "--quiet", "--initial-branch=main");
-    git(origin, "config", "uploadpack.allowAnySHA1InWant", "true");
-    await copyFile(resolve("scripts/ci-base-freshness.sh"), join(origin, "scripts/ci-base-freshness.sh"));
-    const lines = Array.from({ length: 100 }, (_, n) => `line ${n}`).join("\n") + "\n";
-    const fork = await commitFiles(origin, { "src/shared.ts": lines }, "fork point");
-    git(origin, "checkout", "--quiet", "-b", "feature");
-    const head = await commitFiles(origin, { "src/shared.ts": lines.replace("line 0\n", "PR change\n") }, "PR head");
-    git(origin, "checkout", "--quiet", "main");
-    if (advance !== null) {
-      await commitFiles(origin, { "CHANGELOG.md": "suite-time base\n" }, "suite tested this base");
-      await commitFiles(origin, { [advance]: advance === "src/shared.ts"
-        ? lines.replace("line 99\n", "untested main change\n") : "unrelated main change\n" }, "main advances after suite");
-    }
-    const base = git(origin, "rev-parse", "HEAD");
-    const workspace = join(root, `fresh-workspace-${counter}`);
-    git(root, "clone", "--quiet", "--no-local", `file://${origin}`, workspace);
-    const fx: Fixture = { origin, workspace, merge: "", head, base };
-    const made = await materialise(fx);
-    expect(made.result.status, made.result.stdout + made.result.stderr).toBe(0);
-    // Static gates still inspect H + current base, while freshness must begin
-    // at the fork point, never at the later base the suite did not exercise.
-    expect(parents(made.outputs.path!, "HEAD")).toEqual([base, head]);
-    const bin = join(root, `fresh-bin-${counter}`);
-    await mkdir(bin);
-    await writeFile(join(bin, "gh"), `#!/bin/sh
-case "$*" in
-*commits/main*) printf '%s\\n' "$CURRENT_BASE" ;;
-*pulls/1/files*) printf '%s\\n' 'src/shared.ts' ;;
-*total_commits*) printf '%s\\n' '2' ;;
-*'files | length'*) printf '%s\\n' '2' ;;
-*compare/*) printf '%s\\n' "$ADVANCE_FILES" ;;
-*) exit 97 ;;
-esac
-`, { mode: 0o755 });
-    const fresh = await runStep(stepRunning("/scripts/ci-base-freshness.sh"), fx, {
-      GH_TOKEN: "fixture", REPO_SLUG: "Nitjsefnie/Overflow", BASE_REF: "main", PR_NUMBER: "1",
-      CURRENT_BASE: base, ADVANCE_FILES: `CHANGELOG.md\n${advance ?? ""}`,
-      PATH: `${bin}:${process.env.PATH ?? ""}`,
-    }, made.outputs);
-    expect(fresh.status, fresh.stdout + fresh.stderr).toBe(certified ? 0 : 1);
-    expect(fresh.stdout).toContain(certified ? "CERTIFIED" : "REFUSED");
-    expect(made.outputs.freshness_base_sha).toBe(fork);
-  });
-
-  it.each(["", `${"a".repeat(40)}\n${"b".repeat(40)}`])("refuses an empty or multiple merge-base result", async (answer) => {
-    const fx = await fixture({ "src/a.ts": "export const a = 1;\n" });
-    const bin = join(root, `merge-base-bin-${counter}`);
-    await mkdir(bin);
-    const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
-    await writeFile(join(bin, "git"), `#!/bin/sh
-if [ "$1" = merge-base ]; then printf '%s\\n' "$MERGE_BASE_REPLY"; exit 0; fi
-exec "$REAL_GIT" "$@"
-`, { mode: 0o755 });
-    const made = await materialise(fx, { env: {
-      PATH: `${bin}:${process.env.PATH ?? ""}`, REAL_GIT: realGit, MERGE_BASE_REPLY: answer,
-    } });
-    expect(made.result.status).not.toBe(0);
-    expect(made.result.stdout).toContain("::error::");
-    expect(made.outputs).toEqual({});
   });
 });

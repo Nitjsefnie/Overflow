@@ -43,9 +43,12 @@ import { commitFiles, git, scratchGitEnv, tryGit } from "../support/scratch-git"
 // the workflow itself instead of repeating a literal here, so a
 // coordinated bump stays green and the refusal check below still proves
 // the scan script rejects anything the workflow does not name.
-const workflowVersion = String(parse(
+const workflowVersion = /GITLEAKS_VERSION:\s*(\d+\.\d+\.\d+)/.exec(
   readFileSync(resolve(".github/workflows/secret-scan.yml"), "utf8"),
-).jobs["secret-scan"].steps.find((step: { name?: string }) => step.name === "Install gitleaks").env.GITLEAKS_VERSION);
+)?.[1];
+if (!workflowVersion) {
+  throw new Error("secret-scan.yml must pin gitleaks through a GITLEAKS_VERSION env value");
+}
 
 /**
  * The version the fixture gitleaks in the step-boundary test reports. It has to
@@ -79,10 +82,18 @@ type Workflow = {
   >;
 };
 
-
+/**
+ * The two files issue 1090 split the single scan workflow into, and the job
+ * shape this suite pins. Every assertion below is stated over BOTH legs: the
+ * two files were one file before the split, and a pin that held for the whole
+ * of it must hold for each half of it, or the split quietly dropped coverage
+ * on the side nobody was looking at. The few assertions that genuinely differ
+ * between the legs — the `on:` set, the checkout, the fetch, the reachability
+ * root — are stated per file in their own `it`.
+ */
 const LEGS = [
   { file: ".github/workflows/secret-scan.yml", pr: false },
-  { file: ".github/workflows/pr-gates.yml", pr: true },
+  { file: ".github/workflows/secret-scan-pr.yml", pr: true },
 ] as const;
 
 /** The file that carries a given leg, as it is named inside `.github/workflows/`. */
@@ -101,7 +112,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     // Two workflows sharing one `name:` would make the ledger relay's
     // `workflows:` filter ambiguous, and GitHub's own UI would show two runs
     // under one heading with nothing to tell them apart.
-    expect(workflow.name).toBe(pr ? "pr gates" : "secret scan");
+    expect(workflow.name).toBe(pr ? "secret scan pull request" : "secret scan");
   });
 
   it(pr ? "runs on pull_request_target alone" : "runs on push, daily, and on dispatch", () => {
@@ -132,18 +143,20 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
   }
 
   it("produces exactly the secret-scan check context", () => {
-    expect(Object.keys(workflow.jobs)).toEqual(pr
-      ? ["actionlint", "ratchet-guard", "secret-scan", "dependency-audit"]
-      : ["secret-scan"]);
+    expect(Object.keys(workflow.jobs)).toEqual(["secret-scan"]);
     expect(scan.name ?? "secret-scan").toBe("secret-scan");
   });
 
   it(pr ? "uses main's checkout and fetches the PR head only as git objects" : "uses main's checkout, and fetches no pull-request ref", () => {
     const checkouts = scan.steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
+    // One checkout per file since the split: the event-name split that used to
+    // produce two checkouts in one job is the thing the split removed, and
+    // these workflows no longer need it.
     expect(checkouts).toHaveLength(1);
     // Ungated on both legs: each file has exactly one event class, so there is
     // nothing left to switch on.
     expect(checkouts[0].if).toBeUndefined();
+    expect(checkouts[0].with).toEqual({ "fetch-depth": 0, "persist-credentials": false });
     const fetch = scan.steps.find((step) => step.name === "Fetch the pull request head");
     if (pr) {
       expect(fetch?.if).toBeUndefined();
@@ -160,6 +173,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     }
     for (const step of scan.steps) {
       expect(step.run ?? "").not.toMatch(/git\s+(checkout|switch|reset|worktree)\b/);
+      expect(step.uses ?? "").not.toMatch(/^\.\//);
     }
     // Asserted on the parsed `on:` above and on the step list here, never on
     // the raw source: a file's comments legitimately name the leg that moved
@@ -178,7 +192,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     expect(scanStep?.if).toBeUndefined();
     expect(scanStep?.env).toEqual({ GITLEAKS_REPORT_PATH: "gitleaks-report.json" });
     expect(upload?.if).toBe("${{ always() }}");
-    expect(upload?.with?.path).toBe(scanStep?.env?.GITLEAKS_REPORT_PATH);
+    expect(upload?.with?.path).toBe("gitleaks-report.json");
     const checks = scan.steps.filter((step) => /scripts\/secret-scan-baseline\.sh/.test(step.run ?? ""));
     expect(checks.map((step) => [step.if, step.run])).toEqual([
       [undefined, pr ? "bash scripts/secret-scan-baseline.sh refs/remotes/pr/head" : "bash scripts/secret-scan-baseline.sh"],
@@ -205,21 +219,37 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     expect(workflow.permissions).toEqual({ contents: "read" });
   });
 
-  it("bounds the history scan's runtime", () => {
-    // A hung full-history scan must release its runner within a bounded time.
+  it("pins the job's runner and its budget", () => {
+    // `runs-on` unpinned means a silently different image — a different glibc,
+    // a different runner generation, a runner that no longer has the tools the
+    // install step needs. `timeout-minutes` unpinned is the one that matters
+    // most here: this job's only input is a full history walk, so the failure
+    // mode it is prone to is a scan that never finishes, and with no budget
+    // that scan holds a runner for the default six hours.
+    expect(scan["runs-on"]).toBe("ubuntu-latest");
     expect(scan["timeout-minutes"]).toBe(15);
   });
 
-  it("checks out the repository before scanning its history", () => {
+  it("checks out the FULL history, without credentials, because the history is the whole point", () => {
     const checkout = scan.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
     expect(checkout, "the workflow must check the repository out").toBeDefined();
+    expect(
+      checkout!.with?.["fetch-depth"],
+      "without fetch-depth: 0 the checkout is a shallow clone and the scan walks one commit — a green no-op",
+    ).toBe(0);
+    expect(checkout!.with?.["persist-credentials"], "the job's token is read-only and must not be left in the checkout").toBe(
+      false,
+    );
   });
 
-  it("verifies and extracts the scanner tarball without a package-manager install", () => {
+  it("installs gitleaks from the checksum-verified release tarball, not from an action or a package manager", () => {
     // No step may install gitleaks by reference. A `gitleaks/gitleaks-action@…`
     // step is pinned by SHA like any other action, but the ACTION decides the
     // scanner's version, so a bump inside it moves the rule set under a
     // committed baseline with nothing in this repository to change.
+    for (const step of scan.steps) {
+      expect(step.uses ?? "", "no step may install gitleaks from an action reference").not.toMatch(/gitleaks/i);
+    }
     for (const step of scan.steps) {
       const run = step.run ?? "";
       expect(run, "gitleaks must not be installed from a package manager").not.toMatch(
@@ -230,6 +260,13 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     const install = scan.steps.find((step) => /sha256sum -c/.test(step.run ?? ""));
     expect(install, "no step verifies a downloaded gitleaks tarball with sha256sum -c").toBeDefined();
     const run = install!.run ?? "";
+    // The checksum and the version live in the step's env:, not in run: — the
+    // same rule every other workflow here follows, and the reason the run block
+    // below carries no ${{ }} interpolation at all.
+    const env = { ...(install!.env ?? {}), ...Object.fromEntries(Object.entries(install!.with ?? {})) };
+    const named = Object.values(env).map(String).join("\n");
+    expect(named, "the install step must carry a sha256 checksum literal").toMatch(/\b[0-9a-f]{64}\b/);
+    expect(named, "the install step must name a release version").toMatch(/\b\d+\.\d+\.\d+\b/);
     expect(run, "the install step must extract the binary").toMatch(/tar\s+-xzf/);
     // Tolerates whatever path prefix the extraction is addressed by, because
     // that prefix is exactly what the step-boundary test below exercises and
@@ -265,6 +302,21 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     // behind, and the report is what a human reads to learn WHICH commit and
     // WHICH line carried the finding.
     expect(upload!.if, "the upload must run on a failed scan too").toMatch(/always\(\)/);
+    const path = upload!.with?.path;
+    const named = Array.isArray(path) ? path.join("\n") : String(path ?? "");
+    expect(named, "the uploaded artifact must be the gitleaks JSON report").toMatch(/\.json$/);
+    // `error`, not the default `warn`: the run already carries the real
+    // diagnosis in its log when the script refuses before gitleaks runs, so a
+    // silently-missing report costs a human nothing. What it would cost is the
+    // workflow's stated purpose — "a red run leaves the findings where a human
+    // can read them" — quietly becoming "a red run leaves nothing and says
+    // nothing", which is this branch's whole subject wearing a different hat.
+    expect(
+      upload!.with?.["if-no-files-found"],
+      "the upload must fail when the report is absent, so a missing report is a red run and not a " +
+        "silent one. `warn` — the default — makes an absent report invisible on a run that is " +
+        "already red for an unrelated reason.",
+    ).toBe("error");
   });
 
   it("keeps every event value out of run: interpolation", () => {
@@ -283,10 +335,8 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     // ratchet-guard. A job id or name that matched one of those would be a
     // required context this workflow's conclusions could silently satisfy.
     expect(workflow.jobs, "the job id must not be verify").not.toHaveProperty("verify");
-    if (!pr) {
-      expect(workflow.jobs, "the push scan must not produce actionlint").not.toHaveProperty("actionlint");
-      expect(workflow.jobs, "the push scan must not produce ratchet-guard").not.toHaveProperty("ratchet-guard");
-    }
+    expect(workflow.jobs, "the job id must not be actionlint").not.toHaveProperty("actionlint");
+    expect(workflow.jobs, "the job id must not be ratchet-guard").not.toHaveProperty("ratchet-guard");
     expect(scan.name ?? "", "a job name carrying an expression is a required-checks failure").not.toContain("${{");
   });
 
@@ -437,7 +487,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
         FAKE_GITLEAKS_VERSION: FAKE_GITLEAKS_VERSION,
         ...install!.env,
         // This fixture's real digest, so `sha256sum -c` is a real check. The
-        // fixture digest makes checksum validation execute on real bytes.
+        // workflow's literal is pinned by the install-step assertion above.
         GITLEAKS_SHA256: digest,
       };
       // `bash -e`, which is what a GitHub runner uses for a `run:` block on
@@ -563,7 +613,14 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
    */
   describe("the reachability step, executed against repositories this suite builds", () => {
     const SCRIPT = "scripts/secret-scan-baseline.sh";
-
+    /**
+     * The file's own reachability step. Since issue 1090 split this workflow,
+     * the step is found by its `run:` rather than by its `if:` — there is no
+     * longer an event-name split inside one job to select between, and a
+     * selector that expected one would quietly resolve to the PR leg's step on
+     * both files, executing one workflow's block and reporting it as the
+     * other's.
+     */
     const step = () => {
       const found = scan.steps.find((candidate) => /scripts\/secret-scan-baseline\.sh/.test(candidate.run ?? ""));
       expect(found, "no step runs the baseline-reachability check").toBeDefined();
@@ -726,7 +783,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     });
 
     it("fails, by name, on an entry whose commit this checkout does not carry at all", () => {
-      const absent = "0123456789abcdef".repeat(3).slice(0, 40);
+      const absent = "0123456789abcdef0123456789abcdef01234567";
       const orphan = finding(absent, "tests/security/never-committed.test.ts");
       const result = runStep(join(root, "checkout"), [finding(reachable, "tests/security/token-cipher.test.ts"), orphan]);
       expect(result.status, "an entry naming a commit absent from the checkout is the same defect").not.toBe(0);

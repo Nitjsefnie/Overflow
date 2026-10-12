@@ -1,9 +1,38 @@
 #!/usr/bin/env bash
-# LAST step of ci-pr.yml's verify job and pr-gates.yml's actionlint job.
-# Verify admits workflow_run, actionlint pull_request_target. Verify supplies
-# the head/current-base fork point, a conservative bound on the suite's tested
-# base; actionlint supplies its event base. Certify an unchanged baseline
-# or an advance disjoint from the PR's files; incomplete API reads fail closed.
+# Base freshness gate — the LAST step of both pull-request gate legs (ci-pr.yml
+# verify, actionlint-pr.yml actionlint), each a `pull_request_target`-only
+# workflow file. Issue 1090's split moved the legs out of ci.yml and
+# actionlint.yml into files no other trigger can start, so the privilege
+# boundary the first version of this header described as a per-step
+# `if: pull_request_target` guard is now structural: the guard itself is gone,
+# and the closed trigger set of the file that runs this script is the gate.
+#
+# What issue 441 needed: the tree that LANDS on main must be covered by a
+# required check. A pull_request_target run tests refs/pull/N/merge — the head merged
+# with the base as it stood at event time — and branch protection keeps strict
+# up-to-date checking disabled, so when main has advanced, the tree GitHub
+# actually lands (the branch rebased onto current main) was never tested.
+#
+# What the first version of this step enforced instead: main frozen for the
+# whole run — base SHA at event time vs current tip at step time. A verify run
+# takes ~40 minutes and main merged roughly every 10 minutes when this was
+# written, so every run spanned at least one merge and failed, whatever the
+# merge contained (issue 510): no pull request could certify at all.
+#
+# What this enforces instead — the relevant-advance condition, session rule
+# 10's final-gate discipline mechanized: the advance from the tested base to
+# main's current tip must be DISJOINT from the files this pull request changes.
+# Such an advance carried its own required checks; only cross-file interaction
+# goes unverified, which is the residual the manual final gate accepts by hand.
+#
+# The gate fails closed: an API failure, an empty response, an unrepresentative
+# compare (more than 200 commits, an empty file list, or exactly 300 files —
+# the compare API's truncation bound), or an empty pull-request file list is a
+# refusal, never a pass.
+#
+# A native MERGE QUEUE is the complete fix — it tests the exact merge preview
+# as a required check and makes this step deletable; it is a maintainer
+# repository setting (named in the PR that introduced this script).
 set -euo pipefail
 export LC_ALL=C
 
@@ -20,6 +49,9 @@ for required in REPO_SLUG BASE_SHA BASE_REF; do
   fi
 done
 
+# Step 1 — the unchanged-base fast path, identical to the first version's one
+# honest pass: nothing has moved, so the required checks ran against the base
+# GitHub will land.
 current=$(gh api "repos/$REPO_SLUG/commits/$BASE_REF" --jq .sha) || {
   fail_ "could not read the current head of $BASE_REF (gh api failed) — refusing to certify on a failed API call."
 }

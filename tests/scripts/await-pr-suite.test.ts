@@ -30,7 +30,6 @@ const LISTING_URL =
   `?head_sha=${SHA}&event=pull_request&per_page=100`;
 
 interface FakeRun {
-  run_attempt?: number;
   id: number;
   path: string;
   head_sha: string;
@@ -43,7 +42,6 @@ interface FakeRun {
 function suiteRun(over: Partial<FakeRun> = {}): FakeRun {
   return {
     id: 100,
-    run_attempt: 1,
     path: SUITE_WORKFLOW_PATH,
     head_sha: SHA,
     event: "pull_request",
@@ -600,166 +598,5 @@ describe("the CLI, as a spawned process", () => {
       expect(result.status).toBe(1);
       expect(result.stdout).toContain("waiting");
     });
-  });
-});
-
-
-describe("awaitPrSuite — exact triggering run", () => {
-  function exact(run = suiteRun(), status = 200, newer: FakeRun[] = [], listStatus = 200) {
-    const h = harness([], { SUITE_RUN_ID: "100", SUITE_RUN_ATTEMPT: "1" });
-    h.deps.fetchFn = (async (input: string | URL | Request) => {
-      h.calls.push({ url: String(input), headers: {}, signal: undefined });
-      return String(input).includes("/actions/workflows/")
-        ? new Response(JSON.stringify({ total_count: newer.length + 1, workflow_runs: [run, ...newer] }), { status: listStatus })
-        : new Response(JSON.stringify(run), { status });
-    }) as typeof fetch;
-    return h;
-  }
-
-  it("judges the named run with one supersession listing, without polling", async () => {
-    const h = exact();
-    const outcome = await awaitPrSuite(h.deps);
-    expect(outcome.exitCode).toBe(0);
-    expect(outcome.runId).toBe(100);
-    expect(h.calls.map((call) => call.url)).toEqual([`https://api.github.com/repos/${REPO}/actions/runs/100`, `${LISTING_URL}&page=1`]);
-    expect(h.sleeps).toEqual([]);
-  });
-
-  it.each([
-    ["wrong path", { path: ".github/workflows/ci.yml" }],
-    ["wrong event", { event: "push" }],
-    ["privileged PR event", { event: "pull_request_target" }],
-    ["wrong head", { head_sha: OTHER_SHA }],
-    ["wrong id", { id: 101 }],
-    ["unfinished", { status: "in_progress" }],
-    ["cancelled", { conclusion: "cancelled" }],
-    ["failed", { conclusion: "failure" }],
-  ])("fails closed on %s, without polling", async (_label, override) => {
-    const h = exact(suiteRun(override as Partial<FakeRun>));
-    const outcome = await awaitPrSuite(h.deps);
-    expect(outcome.exitCode).toBe(1);
-    expect(outcome.runId).toBeUndefined();
-    expect(errorLines(outcome.lines)).toHaveLength(1);
-    expect(h.calls).toHaveLength(1);
-    expect(h.sleeps).toEqual([]);
-  });
-
-  it.each(["failure", "in_progress"])("a newer same-SHA %s run supersedes an older success", async (state) => {
-    const newer = suiteRun({ id: 101, status: state === "in_progress" ? state : "completed", conclusion: state === "failure" ? state : null });
-    const h = exact(suiteRun(), 200, [newer]);
-    const result = await awaitPrSuite(h.deps);
-    expect(result.exitCode).toBe(1);
-    expect(result.lines.join("\n")).toMatch(/::error::.*superseded by run 101/);
-    expect(result.runId).toBeUndefined();
-    expect(h.sleeps).toEqual([]);
-  });
-
-  it("a later attempt of the same run supersedes the attempt verify judged", async () => {
-    const h = exact(suiteRun({ run_attempt: 2 }));
-    const result = await awaitPrSuite(h.deps);
-    expect(result.exitCode).toBe(1);
-    expect(result.lines.join("\n")).toMatch(/::error::.*superseded by run 100/);
-    expect(result.runId).toBeUndefined();
-  });
-
-  it("a supersession listing read failure fails without sleeping or certifying", async () => {
-    const h = exact(suiteRun(), 200, [], 503);
-    const result = await awaitPrSuite(h.deps);
-    expect(result.exitCode).toBe(1);
-    expect(errorLines(result.lines)).toHaveLength(1);
-    expect(h.calls).toHaveLength(2);
-    expect(h.sleeps).toEqual([]);
-  });
-
-  it.each([undefined, "", "0", "bad"])("an invalid judged attempt %s cannot certify", async (attempt) => {
-    const h = exact();
-    h.deps.env.SUITE_RUN_ATTEMPT = attempt;
-    expect((await awaitPrSuite(h.deps)).exitCode).toBe(2);
-    expect(h.calls).toEqual([]);
-  });
-
-  it("fails a read error immediately without sleeping", async () => {
-    const h = exact(suiteRun(), 503);
-    const outcome = await awaitPrSuite(h.deps);
-    expect(outcome.exitCode).toBe(1);
-    expect(errorLines(outcome.lines)).toHaveLength(1);
-    expect(h.calls).toHaveLength(1);
-    expect(h.sleeps).toEqual([]);
-  });
-
-  it.each(["", "0", "-1", "1x", "100\n"])("rejects invalid explicit run id %s", async (id) => {
-    const h = exact();
-    h.deps.env.SUITE_RUN_ID = id;
-    expect((await awaitPrSuite(h.deps)).exitCode).toBe(2);
-    expect(h.calls).toEqual([]);
-  });
-});
-
-
-describe("complete supersession pagination without waiting", () => {
-  const history = Array.from({ length: 101 }, (_, n) => suiteRun({ id: 2000 - n }));
-  function paged(replies: Array<unknown | Error>, run = history[0]!) {
-    const h = harness([], { SUITE_RUN_ID: String(run.id), SUITE_RUN_ATTEMPT: "1" });
-    h.deps.fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
-      h.calls.push({ url: String(input), headers: (init?.headers ?? {}) as Record<string, string>, signal: init?.signal });
-      const url = new URL(String(input));
-      if (url.pathname.includes("/actions/runs/")) return Response.json(run);
-      const page = Number(url.searchParams.get("page") ?? "1");
-      const reply = replies[page - 1];
-      if (reply instanceof Error) throw reply;
-      if (typeof reply === "object" && reply !== null && "httpStatus" in reply) return new Response("page failed", { status: Number(reply.httpStatus) });
-      return Response.json(reply);
-    }) as typeof fetch;
-    return h;
-  }
-
-  it("accepts the newest legitimate success in a 101-run history", async () => {
-    const h = paged([{ total_count: 101, workflow_runs: history.slice(0, 100) }, { total_count: 101, workflow_runs: history.slice(100) }]);
-    const result = await awaitPrSuite(h.deps);
-    expect(result.exitCode).toBe(0);
-    expect(result.runId).toBe(2000);
-    expect(h.calls.slice(1).map((call) => new URL(call.url).searchParams.get("page"))).toEqual(["1", "2"]);
-    expect(h.sleeps).toEqual([]);
-  });
-
-  it("finds a newer failed run even on page 2", async () => {
-    const newer = suiteRun({ id: 2001, conclusion: "failure" });
-    const h = paged([{ total_count: 101, workflow_runs: history.slice(0, 100) }, { total_count: 101, workflow_runs: [newer] }]);
-    const result = await awaitPrSuite(h.deps);
-    expect(result.exitCode).toBe(1);
-    expect(result.lines.join("\n")).toMatch(/superseded by run 2001/);
-    expect(h.sleeps).toEqual([]);
-  });
-
-  it.each([
-    ["changing total", { total_count: 102, workflow_runs: [history[100]] }, /total_count.*changed/],
-    ["short page", { total_count: 101, workflow_runs: [] }, /short|expected/],
-    ["duplicate id", { total_count: 101, workflow_runs: [history[0]] }, /duplicate/],
-    ["page failure", { httpStatus: 503 }, /HTTP 503/],
-  ])("fails closed on %s", async (_name, second, message) => {
-    const h = paged([{ total_count: 101, workflow_runs: history.slice(0, 100) }, second]);
-    const result = await awaitPrSuite(h.deps);
-    expect(result.exitCode).toBe(1);
-    expect(result.runId).toBeUndefined();
-    expect(result.lines.join("\n")).toMatch(message as RegExp);
-    expect(h.calls).toHaveLength(3);
-    expect(h.sleeps).toEqual([]);
-  });
-
-  it("refuses histories requiring more than 10 pages", async () => {
-    const h = paged([{ total_count: 1001, workflow_runs: history.slice(0, 100) }]);
-    const result = await awaitPrSuite(h.deps);
-    expect(result.exitCode).toBe(1);
-    expect(result.lines.join("\n")).toMatch(/1000|10 pages/);
-    expect(h.calls).toHaveLength(2);
-    expect(h.sleeps).toEqual([]);
-  });
-
-  it("accepts exactly 1000 runs in ten pages and never asks for page 11", async () => {
-    const all = Array.from({ length: 1000 }, (_, n) => suiteRun({ id: 2000 - n }));
-    const h = paged(Array.from({ length: 10 }, (_, n) => ({ total_count: 1000, workflow_runs: all.slice(n * 100, (n + 1) * 100) })));
-    expect((await awaitPrSuite(h.deps)).exitCode).toBe(0);
-    expect(h.calls).toHaveLength(11);
-    expect(h.sleeps).toEqual([]);
   });
 });

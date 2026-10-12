@@ -48,14 +48,6 @@ function makeFetch(outcomes: Outcome[]) {
     requests.push({ url: rendered, init: init ?? {} });
     const outcome = outcomes.shift();
     if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
-    if (rendered.endsWith("/check-runs") && init?.method === "POST" && outcome.status === 201) {
-      const posted = JSON.parse(String(init.body)) as Record<string, unknown>;
-      // Post-write snapshots see this write; pending producers block attestation reads.
-      outcomes.unshift({ status: 200, body: { workflow_runs: [] } },
-        ...(posted.status === "completed" ? [{ status: 200, body: {
-          check_runs: [{ ...posted, app: { id: 5118623 } }],
-        } }] : []));
-    }
     return new Response(JSON.stringify(outcome.body), {
       status: outcome.status,
       headers: { "content-type": "application/json" },

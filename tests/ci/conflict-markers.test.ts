@@ -8,7 +8,7 @@ import { parse } from "yaml";
 /**
  * The verify job's conflict-marker gate, executed. Issue 1090 split the
  * pull-request leg into ci-pr.yml, whose only trigger is
- * `workflow_run`, and both files still carry the gate — over different
+ * `pull_request_target`, and both files still carry the gate — over different
  * trees. In ci.yml (push and workflow_dispatch) it searches the checked-out
  * event commit; in ci-pr.yml it always searches the pull request's merge tree,
  * which an earlier step materialises outside the workspace and hands over as
@@ -101,7 +101,7 @@ describe("the verify workflow's conflict-marker shell gate", () => {
     expect(prStep?.env).toEqual({ PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
   });
 
-  it("takes no input at all in ci.yml, whose file receives no workflow_run", () => {
+  it("takes no input at all in ci.yml, whose file receives no pull_request_target", () => {
     // Structural, where the pre-split step was guarded by a branch: the
     // materialise step does not exist in ci.yml, so there is no PR_TREE to
     // name, and the run block never mentions one. The stray-value case below
@@ -143,11 +143,11 @@ describe("the verify workflow's conflict-marker shell gate", () => {
     });
   }
 
-  describe("on workflow_run, over the materialised pull request tree", () => {
+  describe("on pull_request_target, over the materialised pull request tree", () => {
     it.each(MARKERS)("rejects a marker the pull request tree tracks: %s", async (marker) => {
       const base = await repository("Ordinary base text\n");
       const prTree = await repository(`text\n${marker}\ntext\n`);
-      const result = await run(prStep!, "workflow_run", base, prTree);
+      const result = await run(prStep!, "pull_request_target", base, prTree);
       expect(result.status, result.stderr).toBe(1);
       expect(result.stdout).toContain("A merge-conflict marker is committed.");
       expect(result.stdout).toContain(marker);
@@ -156,7 +156,7 @@ describe("the verify workflow's conflict-marker shell gate", () => {
     it("passes a clean pull request tree", async () => {
       const base = await repository("Ordinary base text\n");
       const prTree = await repository("Ordinary tracked text\n");
-      const result = await run(prStep!, "workflow_run", base, prTree);
+      const result = await run(prStep!, "pull_request_target", base, prTree);
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).not.toContain("A merge-conflict marker is committed.");
     });
@@ -164,14 +164,14 @@ describe("the verify workflow's conflict-marker shell gate", () => {
     it("judges the pull request tree, not the base workspace it runs in", async () => {
       const base = await repository(`text\n${MARKERS[1]}\ntext\n`);
       const prTree = await repository("Ordinary tracked text\n");
-      const result = await run(prStep!, "workflow_run", base, prTree);
+      const result = await run(prStep!, "pull_request_target", base, prTree);
       expect(result.status, result.stderr).toBe(0);
     });
 
     it("fails closed when the pull request tree was not materialised", async () => {
       const base = await repository("Ordinary base text\n");
       for (const prTree of [undefined, ""]) {
-        const result = await run(prStep!, "workflow_run", base, prTree);
+        const result = await run(prStep!, "pull_request_target", base, prTree);
         expect(result.status, `PR_TREE ${JSON.stringify(prTree)}`).not.toBe(0);
         expect(result.stderr).toContain("the pull request tree was not materialised");
       }

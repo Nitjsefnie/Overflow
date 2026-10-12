@@ -1,7 +1,7 @@
 name: ratchet guard
 
 # THE PULL-REQUEST LEG IS NOT HERE (issue 1090). It is
-# .github/workflows/pr-gates.yml, job ratchet-guard, whose only trigger is
+# .github/workflows/ratchet-guard-pr.yml, whose only trigger is
 # `pull_request_target`, because it fetches a pull request's head ref and a
 # privileged trigger would run that step with the default branch's privileges.
 # What is left here — push to main and workflow_dispatch — reads no

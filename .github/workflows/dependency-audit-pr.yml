@@ -1,0 +1,341 @@
+name: dependency audit pull request
+
+# The pull-request leg of the dependency audit (issue 1149), in a file of its
+# own so that the only trigger it can be started by is `pull_request_target`
+# (the issue-1090 structural split). The other half — push to main, the daily
+# tick and dispatch — is .github/workflows/dependency-audit.yml.
+#
+# WHY THIS FILE EXISTS. The audit's `pull_request` leg runs the pull request's
+# own workflow copy — the checkout IS the pull request — so a pull request
+# that deletes or neuters dependency-audit.yml ran no audit at all while every
+# required check stayed green. Nothing relays a `pull_request` run:
+# isTrustedProducerRun refuses the event outright, so that leg can never
+# produce this context. Under pull_request_target this workflow executes MAIN'S
+# definition — these steps, this pnpm pin, this classifier — so the audit that
+# decides a merge runs from a definition the pull request cannot change, and
+# its completion is relayed onto the Ledger App check-run named
+# `dependency-audit`, which branch protection requires.
+#
+# TRUST ARGUMENT: NO PR CODE EXECUTES.
+#   - the SHA-pinned `actions/checkout` takes no ref or repository from the
+#     event: under pull_request_target it checks out the trusted base branch,
+#     and that copy of nothing else is ever executed — the only script steps
+#     are this file's own;
+#   - pnpm is pinned by the corepack commands below under the job-level env
+#     block, so the pull request's own `packageManager` field cannot choose the
+#     binary that audits it;
+#   - the pull request enters as GIT OBJECTS ONLY: this event's head, fetched
+#     by its SHA (never a refs/pull refspec), and this event's base. The merge
+#     tree is built locally by `git merge-tree --write-tree`, and each manifest
+#     is materialized with the ls-tree single-blob discipline — exactly one
+#     mode-100644 blob at the path, or the run refuses — into a sanitized
+#     RUNNER_TEMP directory. `pnpm audit` reads those two files as data. There
+#     is no install, no build, and no `node scripts/…`: on a checkout of the
+#     pull request that would execute the pull request's copy; here the
+#     checkout is main's, and the audit step is this file's own text.
+#
+# THE AUDIT RUNS ON EVERY PULL REQUEST — no paths filter. Branch protection
+# refuses a MISSING required context, so a leg that only fired on
+# manifest-touching pull requests would strand the others: a pull request that
+# touches no manifest would merge against a context that never reports. With
+# no filter, a no-manifest pull request's merge tree carries the base's
+# manifests unchanged, the audit runs on those bytes, and the context reports
+# the same verdict any clean run reports.
+#
+# SUPPRESSION COMPOSITION — the layers a reader needs to see together. pnpm's
+# audit honours suppression settings the pull request could arm:
+# `pnpm.auditConfig` inside package.json (one of the two manifests this leg
+# materializes and audits), the audit-affecting settings in pnpm-workspace.yaml,
+# and the transport/registry/audit-level keys in .npmrc. This leg does not
+# re-implement the suppression guard: it materializes ONLY the two manifests
+# (so no PR .npmrc or workspace file ever reaches the audit), and a pull
+# request that changes any suppression surface is refused by ci-pr.yml's
+# verify job — base-defined, required, un-deletable by the pull request, and
+# the load-bearing guard for exactly this comparison (issue 1035). The layers
+# are: this leg detects advisories in the merged manifests; ci-pr.yml's verify
+# guard refuses suppression divergence; branch protection (post-pin, plus the
+# maintainer's required-context change) blocks the merge on either; and
+# ledger-relay.yml mirrors this workflow's verdict onto the App check-run.
+#
+# Relay filter arithmetic: this file's `name:` is "dependency audit pull
+# request" and it is listed in ledger-relay.yml's `workflows:` filter — the
+# filter matches the `name:` field, not the filename.
+on:
+  pull_request_target:  # zizmor: ignore[dangerous-triggers]
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group for every pull request: `dependency-audit` is a required context
+  # in .github/required-checks.json, and tests/ci/concurrency.test.ts refuses
+  # a required context's pull-request leg a per-PR group — the repository's
+  # Actions minutes must not scale with the number of open pull requests (the
+  # issue-1034 precedent). The parentheses are load-bearing: && binds tighter
+  # than ||, and without them the pull-request arm falls through to github.sha
+  # and the bound is gone. The github.sha fallback arm is dead code on this
+  # file's only trigger and exists to keep the shape the sibling pull-request
+  # legs carry; on it a run would key its own SHA and nothing the deploy gate
+  # reads is ever cancelled by a later event.
+  #
+  # cancel-in-progress is false, so no in-flight audit is ever destroyed — a
+  # cancelled conclusion on a required context is the peer's blocked pull
+  # request. It does NOT stop GitHub cancelling the PENDING run when a newer
+  # arrival claims the single repo-wide slot; that pull request stays blocked
+  # until its author pushes again. See actionlint-pr.yml's concurrency block
+  # for the full argument and the measured rates.
+  group: dependency-audit-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # JOB level, and that is the whole point (the measured argument is
+    # recorded on the same block in dependency-audit.yml; GitHub Actions env:
+    # is step-scoped, so a variable pinned on the step that installs pnpm is
+    # simply absent from the step that executes `pnpm audit`). The five pins
+    # and their values are identical, and they are second-layer defence here
+    # rather than the primary control they are in the push-leg file: this
+    # workflow materializes ONLY package.json and pnpm-lock.yaml into the
+    # sanitized directory, so no pull-request .npmrc exists for them to
+    # outrank — the pins hold the audit at the registry, TLS store and
+    # severity bar main chose even if a future edit starts materializing more.
+    env:
+      # `corepack install --global pnpm@10.33.0` sets corepack's DEFAULT and
+      # nothing more: when the `pnpm` shim runs, corepack otherwise reads
+      # `packageManager` from the nearest package.json — which is one of the
+      # two manifests materialized into the sanitized directory this job's
+      # audit step runs in — and downloads THAT version. Without this pin the
+      # pull request picks the binary and "verified against pnpm 10.33.0"
+      # describes a version it chose.
+      COREPACK_ENABLE_PROJECT_SPEC: "0"
+      # The registry pin holds the advisory endpoint at npmjs even if a future
+      # edit materializes a pull-request .npmrc alongside the manifests; in
+      # dependency-audit.yml the same pin is the primary control against a
+      # project `.npmrc` registry=, where it is load-bearing today.
+      npm_config_registry: "https://registry.npmjs.org/"
+      # The transport half of the same attack; same second-layer note as the
+      # registry pin above. A pull request can still choose the network path
+      # the audit request takes (no proxy pin exists — an empty one loses to
+      # `.npmrc`), but what it cannot choose is what the audit TRUSTS at the
+      # end of that path: an intercepted connection fails closed against the
+      # runner's system bundle.
+      npm_config_strict_ssl: "true"
+      npm_config_cafile: "/etc/ssl/certs/ca-certificates.crt"
+      # The severity bar, held at pnpm's lowest reportable rung. The
+      # "info" hazard is recorded on dependency-audit.yml's copy: the ladder
+      # has no `info` key, so an "info" pin silently disables the audit.
+      npm_config_audit_level: "low"
+
+    steps:
+      # Under pull_request_target no ref input: the default checkout is the
+      # trusted base branch's tip — main's own files, none of the pull
+      # request's. Full history, because the merge tree below is built by
+      # `git merge-tree`, which needs the two commits' true merge base: a
+      # shallow pair of commits shares none, and the merge would read as
+      # unrelated histories and refuse edits that merge cleanly.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.17.0"
+
+      - name: Enable the pinned package manager
+        run: |
+          corepack enable
+          corepack install --global pnpm@10.33.0
+          pnpm --version
+
+      # ONE step, end to end: resolve this event's two SHAs, build the merge
+      # tree, materialize the two manifests as data, then audit them — the
+      # audit half is dependency-audit.yml's own audit step, verbatim, so the
+      # two files cannot drift (tests/ci/dependency-audit-pr.test.ts extracts
+      # both and requires byte equality).
+      - name: Audit the pull request's merge-tree manifests
+        env:
+          # The head this event is about — the commit the pull request carries
+          # NOW, and the one the merge below is built from. Deliberately not
+          # the event's merge_commit_sha, which GitHub computes asynchronously
+          # and can name the previous head's merge (the ci-pr.yml pr-tree
+          # step's documented reason).
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # The base this event is about — the same commit GitHub's own merge
+          # preview merges into.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # actions/checkout's default: checking the tree out fetches no LFS
+          # object the pull request's attributes point at.
+          GIT_LFS_SKIP_SMUDGE: "1"
+        run: |
+          # The pull request enters as git objects: this event's head, fetched
+          # by its SHA, and this event's base, fetched only when the checkout
+          # does not already hold it. A SHA fetch follows no ref the pull
+          # request could move; no refs/pull refspec is used anywhere.
+          if ! git fetch --quiet --no-tags origin "${HEAD_SHA:?}"; then
+            echo "::error::could not fetch the pull request's head ${HEAD_SHA} from origin; refusing to audit a tree this event is not about" >&2
+            exit 1
+          fi
+          if ! git cat-file -e "${BASE_SHA:?}^{commit}" 2>/dev/null; then
+            if ! git fetch --quiet --no-tags origin "${BASE_SHA:?}"; then
+              echo "::error::could not fetch the pull request's base commit; refusing to audit a tree this event is not about" >&2
+              exit 1
+            fi
+          fi
+          # The merge tree is BUILT here rather than read out of the event
+          # payload or a refs/pull/<number>/merge ref: both are about the pull
+          # request's state at GitHub's leisure, not this event's two SHAs.
+          # merge-tree exits 1 on a conflict, and there is no remote merge to
+          # fall back to — a pull request that does not merge cleanly cannot
+          # be audited, and a red here is fail-closed, the same direction
+          # ci-pr.yml's verify job takes a conflict.
+          if merged_tree=$(git merge-tree --write-tree "${BASE_SHA:?}" "${HEAD_SHA:?}" 2>&1); then
+            :
+          else
+            merge_status=$?
+            if [ "${merge_status}" -eq 1 ]; then
+              echo "::error::the pull request's head ${HEAD_SHA} does not merge cleanly into its base ${BASE_SHA}; rebase the branch onto the base and push again."
+            else
+              # git exits 1 on a merge-tree conflict and reserves everything
+              # else for its own failure: a git without --write-tree answers
+              # an unknown option with a usage error. Reporting that as a
+              # conflict would send the reader to rebase over a tool problem.
+              echo "${merged_tree}"
+              echo "::error::git merge-tree could not produce a merge tree for this pull request (exit ${merge_status}); this runner's git may not support 'git merge-tree --write-tree'"
+            fi
+            exit 1
+          fi
+          # The two manifests are materialized AS DATA into a sanitized
+          # RUNNER_TEMP directory: each must be exactly one mode-100644 blob
+          # entry at its path in the merge tree, or the run refuses — a
+          # symlink leaf, a wrong mode, a non-blob type and an absent file are
+          # all refusals, because what the audit reads from disk must be the
+          # bytes the tree names and nothing else (the 1035 ls-tree
+          # discipline). A manifest the pull request did not touch carries the
+          # base's blob here, so the audit runs on the base's bytes exactly
+          # when the pull request changed nothing.
+          sanitized="${RUNNER_TEMP}/audit-manifests"
+          if [ -e "${sanitized}" ] || [ -L "${sanitized}" ]; then
+            echo "::error::${sanitized} already exists; refusing to write the pull request's manifests into a directory this run did not create"
+            exit 1
+          fi
+          mkdir -- "${sanitized}"
+          manifest_blob_of() {
+            entries=$(git ls-tree "${1:?}" -- "${2:?}")
+            count=0
+            entry_mode=""
+            entry_type=""
+            entry_blob=""
+            while IFS=$'\t' read -r meta _path; do
+              [ -n "${meta}" ] || continue
+              count=$((count + 1))
+              entry_mode=${meta%% *}
+              rest=${meta#* }
+              entry_type=${rest%% *}
+              entry_blob=${rest#* }
+            done <<< "${entries}"
+            if [ "${count}" -ne 1 ] || [ "${entry_mode}" != "100644" ] || [ "${entry_type}" != "blob" ]; then
+              echo "::error::${2} must be exactly one mode-100644 blob entry in the merge tree; refusing. The manifests are read from git objects, never from the filesystem — a symlink leaf, a wrong mode, a non-blob type and an absent file are all refused." >&2
+              exit 1
+            fi
+            printf '%s\n' "${entry_blob}"
+          }
+          for manifest in package.json pnpm-lock.yaml; do
+            blob=$(manifest_blob_of "${merged_tree}" "${manifest}")
+            git cat-file blob "${blob}" > "${sanitized}/${manifest}"
+          done
+          # The audit half is byte-identical to dependency-audit.yml's audit
+          # step (extracted, never hand-copied; equality pinned by
+          # tests/ci/dependency-audit-pr.test.ts): same five-verdict
+          # classifier, same narrow transient retry. audit.json and audit.err
+          # are written relative to the working directory, which the cd above
+          # puts inside the sanitized directory.
+          cd -- "${sanitized}"
+          set -uo pipefail
+          attempts=3
+          delay="${DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS:-30}"
+          for attempt in $(seq 1 "$attempts"); do
+            code=0
+            pnpm audit --json > audit.json 2> audit.err || code=$?
+            result=$(AUDIT_EXIT="$code" node -e '
+          const fs = require("node:fs");
+          let report;
+          try {
+            report = JSON.parse(fs.readFileSync("audit.json", "utf8"));
+          } catch {
+            console.log("unreadable|the audit produced no JSON report");
+            process.exit(0);
+          }
+          if (report && report.error) {
+            const statuses = [...String(report.error.message ?? "").matchAll(/responded with (\d{3})/g)]
+              .map((match) => Number(match[1]));
+            const transient = statuses.length > 0
+              && statuses.every((status) => status === 429 || (status >= 500 && status < 600));
+            const first = (message) => String(message).split("\n")[0];
+            const reported = first(report.error.message ?? "the advisory endpoint did not answer");
+            console.log(String(report.error.code ?? "") === "ERR_PNPM_AUDIT_NO_LOCKFILE"
+              ? "unreadable|" + reported
+              : transient
+                ? "transient|" + first("the advisory endpoint answered " + statuses.join(" and "))
+                : "unreachable|" + reported);
+            process.exit(0);
+          }
+          const advisories = report && report.advisories ? Object.keys(report.advisories).length : -1;
+          if (advisories > 0) {
+            const counts = report.metadata?.vulnerabilities ?? {};
+            const summary = ["critical", "high", "moderate", "low", "info"]
+              .map((severity) => (counts[severity] ?? 0) + " " + severity)
+              .filter((entry) => !entry.startsWith("0 "))
+              .join(", ");
+            console.log("advisories|" + advisories + " advisories (" + (summary || "severities unreported") + ")");
+            process.exit(0);
+          }
+          console.log(advisories === 0
+            ? process.env.AUDIT_EXIT === "0"
+              ? "clean|no known vulnerabilities found"
+              : "unreadable|the audit report carried an empty advisories map and exited " + process.env.AUDIT_EXIT
+            : "unreadable|the audit report carried no advisories field and exited " + process.env.AUDIT_EXIT);
+          ')
+            verdict="${result%%|*}"
+            detail="${result#*|}"
+            echo "attempt $attempt of $attempts, pnpm audit --json exited $code: $verdict — $detail"
+            case "$verdict" in
+              clean)
+                echo "$detail"
+                exit 0
+                ;;
+              advisories)
+                echo "$detail"
+                echo "advisory ids and patched versions:"
+                node -e '
+          const report = JSON.parse(require("node:fs").readFileSync("audit.json", "utf8"));
+          for (const advisory of Object.values(report.advisories ?? {})) {
+            console.log("  " + advisory.module_name + " " + advisory.severity + ": " + advisory.title
+              + " (vulnerable " + advisory.vulnerable_versions + ", patched " + advisory.patched_versions + ")");
+          }
+          '
+                exit 1
+                ;;
+              transient)
+                cat audit.err
+                if [ "$attempt" -lt "$attempts" ]; then
+                  echo "$detail — a registry outage, not a finding; retrying"
+                  sleep "$delay"
+                  continue
+                fi
+                echo "$detail — the advisory endpoint was still unavailable after $attempts attempts"
+                exit 1
+                ;;
+              *)
+                cat audit.err
+                echo "$detail — the lockfile was NOT audited, so this run reports nothing about it"
+                exit 1
+                ;;
+            esac
+          done
+          exit 1

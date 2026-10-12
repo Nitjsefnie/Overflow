@@ -5,7 +5,28 @@ import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
-
+/**
+ * Issue 1035, defence in depth: the suppression-list divergence comparison in
+ * dependency-audit.yml is the same one the load-bearing gate in ci-pr.yml's
+ * verify job runs, so an audit never runs on a divergent list where the step
+ * fires.
+ *
+ * The step is RETAINED but no longer fires: issue 1149's fix round 2 removed
+ * the `pull_request` trigger that armed it (the issue-1090 split completed —
+ * the pull-request leg is dependency-audit-pr.yml, which materializes only
+ * the two manifests and audits them under main's definition, so no
+ * pull-request .npmrc or workspace file reaches an audit at all). The
+ * load-bearing guard is and was ci-pr.yml's — base-defined, required,
+ * un-deletable by the pull request. The step stays deliberately: its suites
+ * pin it structurally with the event gate this file no longer receives, and
+ * a future leg that audits a tree a pull request can shape through its
+ * configuration re-arms it.
+ *
+ * This suite EXECUTES the step's real `run:` text the way the runner does —
+ * bash with the runner's flags, BASE_SHA from the event, cwd a workspace
+ * holding the pull request's checked-out merge commit — against a scratch
+ * origin repository. There is NO NETWORK: the origin is a local git remote.
+ */
 
 type Step = {
   name?: string;

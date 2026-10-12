@@ -533,12 +533,12 @@ type Scenario = {
    * The workflow file that would receive this event, and therefore whose
    * verify job the scenario selects over. Issue 1090 split ci.yml into a file
    * per leg, so the event no longer determines the file: push and
-   * workflow_dispatch reach ci.yml and workflow_run reaches ci-pr.yml.
+   * workflow_dispatch reach ci.yml and pull_request_target reaches ci-pr.yml.
    */
   file: string;
   /** What `scripts/docs-only.ts` wrote into `detect-docs`'s output. */
   docsOnly: "true" | "false";
-  /** Whether this job itself runs the suite. Under workflow_run it
+  /** Whether this job itself runs the suite. Under pull_request_target it
    *  never does: the pull request's code runs only in pr-suite.yml, and verify
    *  awaits that run's outcome as data. */
   runsSuite: boolean;
@@ -556,7 +556,7 @@ type Scenario = {
 const SCENARIOS: Scenario[] = [
   {
     label: "a pull request carrying a code change",
-    event: "workflow_run",
+    event: "pull_request_target",
     file: "ci-pr.yml",
     docsOnly: "false",
     runsSuite: false,
@@ -565,7 +565,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     label: "a pull request carrying a docs-only change",
-    event: "workflow_run",
+    event: "pull_request_target",
     file: "ci-pr.yml",
     docsOnly: "true",
     runsSuite: false,
@@ -594,7 +594,7 @@ const SCENARIOS: Scenario[] = [
 
 const TEST_SUITE_COMMAND = "pnpm test --run";
 // The script's path, not its invocation: the push leg runs it relative to the
-// event commit's checkout, the workflow_run leg by absolute path into
+// event commit's checkout, the pull_request_target leg by absolute path into
 // the base checkout.
 const COVERAGE_FLOOR_COMMAND = "scripts/check-coverage-floor.ts";
 const AWAIT_SUITE_COMMAND = "scripts/await-pr-suite.ts";
@@ -708,21 +708,21 @@ const PUSH_BEFORE = "3".repeat(40);
 /**
  * The context GitHub would present for a scenario. It is deliberately complete
  * for the event — a push carries `github.event.before`, a pull request carries
- * `steps.pr.outputs.pr_number`, neither carries the other's — so that an
+ * `github.event.pull_request.number`, neither carries the other's — so that an
  * expression reading a key this event does not have resolves to null the way
  * the runner's would.
  */
 function contextFor(scenario: Scenario): ActionsContext {
   const event =
-    scenario.event === "workflow_run"
-      ? { workflow_run: { id: 123, run_attempt: 1, head_sha: MERGE_SHA } }
+    scenario.event === "pull_request_target"
+      ? { pull_request: { number: 849, base: { sha: BASE_SHA, ref: "main" }, head: { sha: MERGE_SHA } } }
       : scenario.event === "push"
         ? { before: PUSH_BEFORE }
         : {};
   return {
     github: {
       event_name: scenario.event,
-      sha: scenario.event === "workflow_run" ? BASE_SHA : MERGE_SHA,
+      sha: scenario.event === "pull_request_target" ? BASE_SHA : MERGE_SHA,
       ref: "refs/heads/main",
       repository: "Nitjsefnie/Overflow",
       run_id: "4242",
@@ -730,12 +730,7 @@ function contextFor(scenario: Scenario): ActionsContext {
       event,
     },
     inputs: { base: "", "simulate-refused-raise": false },
-    steps: {
-      [DETECT_STEP_ID]: { outputs: { docs_only: scenario.docsOnly } },
-      ...(scenario.event === "workflow_run" ? { pr: { outputs: {
-        pr_number: 849, base_sha: BASE_SHA, base_ref: "main", head_sha: MERGE_SHA,
-      } } } : {}),
-    },
+    steps: { [DETECT_STEP_ID]: { outputs: { docs_only: scenario.docsOnly } } },
     needs: {},
     env: {},
     job: { status: "success" },
@@ -870,7 +865,7 @@ describe("the workflow files this suite simulates", () => {
       ).toEqual([...legs.get(leg)!.events].sort());
     }
     // And the event/file pairing is itself the assertion: a scenario claiming a
-    // workflow_run run happens in ci.yml, or a push run in ci-pr.yml,
+    // pull_request_target run happens in ci.yml, or a push run in ci-pr.yml,
     // is exactly the split undone.
     for (const scenario of SCENARIOS) {
       expect(
@@ -892,7 +887,7 @@ describe("the step selector", () => {
 
   it("drops a step whose condition is false in this context, and keeps one whose condition holds", () => {
     const steps: WorkflowStep[] = [
-      { name: "held", if: "${{ github.event_name == 'workflow_run' }}" },
+      { name: "held", if: "${{ github.event_name == 'pull_request_target' }}" },
       { name: "dropped", if: "${{ github.event_name == 'push' }}" },
       { name: "bare boolean", if: false },
     ];
@@ -957,7 +952,7 @@ describe("the expression evaluator", () => {
     expect(evaluateExpression("true || 'b'")).toBe(true);
   });
 
-  it("binds && tighter than || in compound concurrency expressions", () => {
+  it("binds && tighter than ||, which is why ci-pr.yml's group parenthesises", () => {
     // The precedence shape the repo-wide groups arm on —
     // `(event test && 'repo-wide') || github.sha`, written with the push arm
     // here; ci.yml's own group is plain per-SHA and needs no parentheses.
@@ -984,15 +979,14 @@ describe("the expression evaluator", () => {
   });
 
   it("resolves the dotted paths ci.yml reads, event by event", () => {
-    expect(evaluateExpression("github.event_name", pullRequest)).toBe("workflow_run");
-    expect(evaluateExpression("github.event.pull_request", pullRequest)).toBeNull();
+    expect(evaluateExpression("github.event_name", pullRequest)).toBe("pull_request_target");
     expect(evaluateExpression("github.sha", pullRequest)).toBe(BASE_SHA);
-    expect(evaluateExpression("steps.pr.outputs.pr_number", pullRequest)).toBe(849);
+    expect(evaluateExpression("github.event.pull_request.number", pullRequest)).toBe(849);
     expect(evaluateExpression("github.event.before", pullRequest)).toBeNull();
     expect(evaluateExpression("github.event.before", push)).toBe(PUSH_BEFORE);
     expect(evaluateExpression("inputs.base", pullRequest)).toBe("");
     expect(evaluateExpression("inputs.simulate-refused-raise", pullRequest)).toBe(false);
-    expect(evaluateExpression("steps.pr.outputs.base_sha", pullRequest)).toBe(BASE_SHA);
+    expect(evaluateExpression("github.event.pull_request.base.sha", pullRequest)).toBe(BASE_SHA);
   });
 
   it("coerces the literal string 'false' to falsy, and every other string to truthy", () => {
@@ -1022,8 +1016,8 @@ describe("the expression evaluator", () => {
   });
 
   it("compares strings case-insensitively and casts across types", () => {
-    expect(evaluateExpression("github.event_name == 'WORKFLOW_RUN'", pullRequest)).toBe(true);
-    expect(evaluateExpression("steps.pr.outputs.pr_number == '849'", pullRequest)).toBe(true);
+    expect(evaluateExpression("github.event_name == 'PULL_REQUEST_TARGET'", pullRequest)).toBe(true);
+    expect(evaluateExpression("github.event.pull_request.number == '849'", pullRequest)).toBe(true);
     expect(evaluateExpression("inputs.simulate-refused-raise == true", pullRequest)).toBe(false);
   });
 
@@ -1062,7 +1056,7 @@ describe("the expression evaluator", () => {
       "(github.event_name == 'push'",
       "github..event_name",
       "hashFiles('**/package-lock.json')",
-      "steps.pr.outputs.pr_number = 1",
+      "github.event.pull_request.number = 1",
       "steps.detect-docs.outputs.docs_only > 'true'",
     ]) {
       const thrown = captureError(() => evaluateExpression(bad, pullRequest));
@@ -1086,7 +1080,7 @@ describe("the expression evaluator", () => {
 
   it("throws rather than coercing a mapping, which has no scalar meaning", () => {
     const thrown = captureError(() =>
-      evaluateExpression("steps.pr.outputs == 'x'", pullRequest),
+      evaluateExpression("github.event.pull_request == 'x'", pullRequest),
     );
     expect(thrown).toContain("mapping");
   });
@@ -1246,7 +1240,7 @@ for (const scenario of SCENARIOS) {
         // stays green while CI executes no tests. Two is a different bug — the
         // suite would run twice against the same database — and neither count
         // is acceptable, which is why this asserts the cardinality and not a
-        // substring. Under workflow_run the suite is the pull request's
+        // substring. Under pull_request_target the suite is the pull request's
         // own code, so it runs only in pr-suite.yml and this job awaits that
         // run's outcome instead: the awaiter is then the step whose absence
         // would stop the gate gating.
@@ -1365,11 +1359,11 @@ for (const scenario of SCENARIOS) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Half 3 — the trust boundary of the workflow_run leg                    */
+/* Half 3 — the trust boundary of the pull_request_target leg                    */
 /* -------------------------------------------------------------------------- */
 
 /**
- * Under workflow_run the executed definition is the base branch's and
+ * Under pull_request_target the executed definition is the base branch's and
  * the job's token is the base repository's, so nothing the pull request
  * carries may execute there: not its package manager, its install scripts,
  * its tests or build, and not its copies of the integrity gates. The pull
@@ -1378,12 +1372,12 @@ for (const scenario of SCENARIOS) {
  * as data, plus the suite run's outcome as data.
  *
  * These assertions are over the steps the selector picks for each
- * workflow_run scenario, so a step that becomes reachable under that
+ * pull_request_target scenario, so a step that becomes reachable under that
  * event is judged whatever its name, and a step that stops being reachable
  * stops satisfying the gate list below.
  */
 
-const PRT_SCENARIOS = SCENARIOS.filter((scenario) => scenario.event === "workflow_run");
+const PRT_SCENARIOS = SCENARIOS.filter((scenario) => scenario.event === "pull_request_target");
 
 /**
  * Issue 1099: the ONE sanctioned package-manager invocation on this leg. The
@@ -1476,7 +1470,7 @@ function isSanctionedZizmorPinStep(step: WorkflowStep): boolean {
 
 /**
  * Issue 1035: the suppression-list divergence gate is the second inline
- * `python3 -c` step sanctioned on the workflow_run leg. Like the zizmor
+ * `python3 -c` step sanctioned on the pull_request_target leg. Like the zizmor
  * gate, it reads the pull request's package.json as GIT OBJECTS on both the
  * merge tree and the base, and its behavioural contract is executed end to end
  * in tests/ci/verify-suppression-step.test.ts; this file pins only that the
@@ -1861,7 +1855,7 @@ const INTERPRETER_CALL =
 const BASE_SCRIPTS_DIR = /^(?:\$GITHUB_WORKSPACE|\$\{GITHUB_WORKSPACE\})\/scripts\/$/;
 const BASE_SCRIPT = /^(?:\$GITHUB_WORKSPACE|\$\{GITHUB_WORKSPACE\})\/scripts\/[\w-]+(\.[\w-]+)*$/;
 
-/** The actions a workflow_run step may use: none of them executes
+/** The actions a pull_request_target step may use: none of them executes
  *  anything from the tree they operate on. */
 const PRT_ACTIONS = ["actions/checkout@", "actions/setup-node@", "actions/download-artifact@"];
 
@@ -1900,7 +1894,7 @@ export function untrustedExecutions(run: string): string[] {
 }
 
 /**
- * Every write a run block makes outside the places a workflow_run step
+ * Every write a run block makes outside the places a pull_request_target step
  * may write: its own GITHUB_OUTPUT, stderr, and a directory it names through a
  * variable assigned from RUNNER_TEMP in the same block. File-moving commands
  * are refused outright; none belongs in this leg.
@@ -2012,7 +2006,7 @@ for (const scenario of SCENARIOS.filter((entry) => entry.file === COVERAGE_LEG))
 }
 
 for (const scenario of PRT_SCENARIOS) {
-  describe(`the workflow_run leg's trust boundary for ${scenario.label}`, () => {
+  describe(`the pull_request_target leg's trust boundary for ${scenario.label}`, () => {
     const selected = () => selectSteps(stepsFor(scenario), contextFor(scenario));
 
     it("runs no package manager and executes only the base checkout's scripts", () => {
@@ -2029,7 +2023,7 @@ for (const scenario of PRT_SCENARIOS) {
       });
       expect(
         offences,
-        "a step reachable under workflow_run executes with the base repository's token " +
+        "a step reachable under pull_request_target executes with the base repository's token " +
           "and definition, so it may run only the base checkout's gate scripts over the pull " +
           "request's tree as data — the pull request's own code runs in pr-suite.yml",
       ).toEqual([]);
@@ -2060,15 +2054,15 @@ for (const scenario of PRT_SCENARIOS) {
       const gates = selected().filter((step) => step.name === SUPPRESSION_STEP_NAME);
       expect(
         gates.map(label),
-        "the issue-1035 gate must be selected on every workflow_run run: verify is " +
+        "the issue-1035 gate must be selected on every pull_request_target run: verify is " +
           "base-defined and required, so a hostile pull request cannot delete the check, and an " +
           "`if:` that never fires would remove it while every other suite stays green",
       ).toHaveLength(1);
       expect(
         gates[0]!.if,
-        "the gate is gated on the workflow_run event — the only event this file receives, " +
+        "the gate is gated on the pull_request_target event — the only event this file receives, " +
           "and the only one on which the checkout is not main itself",
-      ).toBe("github.event_name == 'workflow_run'");
+      ).toBe("github.event_name == 'pull_request_target'");
     });
 
     it("sanctions the suppression-list gate only when its run text is byte-identical to the pin", () => {
@@ -2087,7 +2081,7 @@ for (const scenario of PRT_SCENARIOS) {
       for (const uses of used) {
         expect(
           PRT_ACTIONS.some((prefix) => uses.startsWith(prefix)),
-          `${uses} is reachable under workflow_run; only ${PRT_ACTIONS.join(", ")} may be`,
+          `${uses} is reachable under pull_request_target; only ${PRT_ACTIONS.join(", ")} may be`,
         ).toBe(true);
       }
     });
@@ -2113,7 +2107,7 @@ for (const scenario of PRT_SCENARIOS) {
       for (const { gate, needle } of gates) {
         expect(
           runsContaining(steps, needle).map(label),
-          `${gate} must be judged by exactly one step under workflow_run`,
+          `${gate} must be judged by exactly one step under pull_request_target`,
         ).toHaveLength(1);
       }
       expect(
@@ -2140,8 +2134,8 @@ for (const scenario of PRT_SCENARIOS) {
       expect(step.run).toContain('git fetch --no-tags origin "${HEAD_SHA:?}"');
       expect(step.run).not.toContain("merge_commit_sha");
       expect((step as { env?: Record<string, string> }).env).toEqual({
-        HEAD_SHA: "${{ steps.pr.outputs.head_sha }}",
-        BASE_SHA: "${{ steps.pr.outputs.base_sha }}",
+        HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+        BASE_SHA: "${{ github.event.pull_request.base.sha }}",
         // actions/checkout's default: the worktree checkout fetches no LFS
         // object the pull request's attributes point at.
         GIT_LFS_SKIP_SMUDGE: "1",
@@ -2246,7 +2240,7 @@ for (const scenario of PRT_SCENARIOS) {
       }
       expect(
         offences,
-        "under workflow_run the only places a step may write are its own outputs and a " +
+        "under pull_request_target the only places a step may write are its own outputs and a " +
           "fresh directory it created under RUNNER_TEMP",
       ).toEqual([]);
     });

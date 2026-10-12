@@ -5,7 +5,7 @@ name: actionlint
 # posture. Both are pinned, and actionlint's archive is checksum-verified.
 #
 # THE PULL-REQUEST LEG IS NOT HERE (issue 1090). It is
-# .github/workflows/pr-gates.yml, job actionlint, whose only trigger is
+# .github/workflows/actionlint-pr.yml, whose only trigger is
 # `pull_request_target`, because it fetches a pull request's head ref and a
 # privileged trigger would run that step with the default branch's privileges.
 # What is left here — push to main and workflow_dispatch — lints main's own
@@ -47,10 +47,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # The Nitjsefnie-OSC fork accepts concurrency.queue, which claim.yml
-      # needs to preserve pending claims. The archive is checksum-verified.
-      # Keep the repository, version and checksum identical in both
-      # actionlint jobs: actionlint.yml and pr-gates.yml.
+      # actionlint from the Nitjsefnie-OSC fork, not from rhysd/actionlint.
+      # Upstream's newest release is still 1.7.12, and its workflow schema has no
+      # `queue` key under `concurrency` — the key claim.yml needs so a second
+      # /claim arriving mid-run is queued rather than dropped unanswered. Stock
+      # 1.7.12 fails that file as an unexpected key, which would leave the gate
+      # unable to lint the workflow it exists to lint.
+      #
+      # RETURN TO UPSTREAM as soon as an upstream release accepts `queue` under
+      # `concurrency`: set ACTIONLINT_REPO back to rhysd/actionlint, take the
+      # version and the sha256 from that release's own checksums file, and
+      # re-verify .github/workflows/ with the stock binary.
+      # tests/api/ci-workflows.test.ts pins all three values by exact equality, so
+      # it goes red until the same change bumps them there; the failure names
+      # the mismatched key. Until then the fork release is the same upstream code plus
+      # that one schema key. Keep these three in step with actionlint-pr.yml, which
+      # installs the same gate on the pull-request leg.
       ACTIONLINT_REPO: Nitjsefnie-OSC/actionlint
       ACTIONLINT_VERSION: 1.7.12-queue.1
       # sha256 of actionlint_1.7.12-queue.1_linux_amd64.tar.gz from the fork's
@@ -85,7 +97,7 @@ jobs:
 
       # The lint target is the checked-out, trusted tree's own workflows. The
       # pull-request leg extracts the head ref's workflows with `git show`
-      # instead; it is pr-gates.yml, job actionlint that does that.
+      # instead; it is actionlint-pr.yml that does that.
       - name: Collect the workflow files to lint
         run: |
           mkdir -p .github/workflows-pr

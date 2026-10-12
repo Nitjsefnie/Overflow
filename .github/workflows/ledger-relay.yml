@@ -1,6 +1,6 @@
 name: ledger relay
 
-# Re-posts the five required contexts as check-runs owned by the Overflow
+# Re-posts the three required checks as check-runs owned by the Overflow
 # Ledger GitHub App (app id 5118623), so branch protection can pin each
 # required context to the App instead of the github-actions app. As its second
 # duty (issue 861) it heals a run that GitHub cancelled out of the shared
@@ -23,16 +23,25 @@ on:
   # executed, and every event value reaches the script through env:, never
   # through ${{ }} interpolation in run:.
   workflow_run:  # zizmor: ignore[dangerous-triggers]
-    # The filter matches name: fields. Main-push producers, verify's
-    # PR producer, and the four-job privileged PR aggregate all relay.
     workflows:
       - "ci"
       - "actionlint"
       - "ratchet guard"
+      # Issue 1090 split each required gate's pull-request leg into its own
+      # file so the only trigger it can be started by is `pull_request_target`.
+      # This filter matches the workflow `name:` FIELD, not the filename, so a
+      # new producer file whose `name:` is absent here is never relayed — the
+      # pull-request legs of the pinned contexts are listed beside their push
+      # legs, five of each after issue 1149 added the dependency audit.
+      - "actionlint pull request"
+      - "ratchet guard pull request"
       - "ci pull request"
       - "secret scan"
+      - "secret scan pull request"
+      # Issue 1149: `dependency-audit` is a required context, and both of its
+      # producer legs are listed the way every other pinned context's are.
       - "dependency audit"
-      - "pr gates"
+      - "dependency audit pull request"
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -55,12 +64,19 @@ permissions:
   # request's head is still live, the relay re-dispatches it. The rerun
   # authenticates as this workflow's own repo-scoped github.token, NOT the
   # ledger App's — the App keeps its narrow permission set — and a rerun
-  # re-enters pr-gates.yml's group for the same pull request and follows that
-  # group's cancellation policy. Other pull requests have separate groups.
+  # re-enters the producer workflow's repo-wide concurrency group as a new
+  # arrival, so the heal cannot jump any queue.
   contents: read
   actions: write
 
 concurrency:
+  # Issue 1116 splits the group by event: a scheduled start, or a
+  # workflow_dispatch without a run_id, is SWEEP-ONLY — it heals nothing, so it
+  # must never displace a PENDING workflow_run relay, the exact cancellation
+  # whose orphaned victim the sweep exists to heal (issue 885). It groups as
+  # ledger-relay-sweep; a dispatch WITH a run_id heals exactly as before in
+  # ledger-relay. The same predicate is the step's LEDGER_SWEEP_ONLY env, so
+  # the group and the script's mode cannot drift.
   group: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_id == '')) && 'ledger-relay-sweep' || 'ledger-relay' }}
   # `false` keeps this workflow's RUNNING instance alive when a newer arrival
   # joins the group. It does NOT keep a PENDING one: GitHub keeps at most one

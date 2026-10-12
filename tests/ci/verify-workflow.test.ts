@@ -119,7 +119,7 @@ describe("the verify workflow's page-geometry step", () => {
     // out and executes it; this file receives only push and workflow_dispatch,
     // which is exactly that set, so the closed trigger set IS the gate and an
     // `if` here would be dead code. A pull request's geometry runs in
-    // pr-suite.yml, whose completed outcome verify reads as data.
+    // pr-suite.yml, whose outcome verify awaits as data.
     expect(
       step.if,
       "the geometry step must carry no event gate: ci.yml admits nothing but push and " +
@@ -132,6 +132,13 @@ describe("the verify workflow's page-geometry step", () => {
   });
 });
 
+/**
+ * The verify job carries no ratchet-documents step. The ratchet-guard
+ * workflows run main's copy of scripts/check-ratchets.ts on every pull request
+ * (and every push to main) as its own required context, reading the head only as git
+ * objects, so a copy here would add no judge — and the copy that used to sit
+ * here executed the pull request's own script.
+ */
 describe("the verify workflow's ratchet documents", () => {
   it("are judged by the ratchet-guard workflows, not by a step of the verify job", async () => {
     const source = await readFile(resolve(".github/workflows/ci.yml"), "utf8");
@@ -140,9 +147,10 @@ describe("the verify workflow's ratchet documents", () => {
     expect(steps.filter((step) => step.name === "Ratchet documents")).toEqual([]);
     expect(steps.filter((step) => (step.run ?? "").includes("check-ratchets.ts"))).toEqual([]);
 
-    // pr-gates.yml's ratchet-guard job judges the PR head as git-object data.
-    // Read its step directly from the privileged aggregate.
-    const guard = parse(await readFile(resolve(".github/workflows/pr-gates.yml"), "utf8")) as {
+    // The pull-request leg moved into ratchet-guard-pr.yml under issue 1090,
+    // so this reads the ratchet step out of the file that actually holds it
+    // rather than out of the push leg, which no longer has one.
+    const guard = parse(await readFile(resolve(".github/workflows/ratchet-guard-pr.yml"), "utf8")) as {
       on: Record<string, unknown>;
       jobs: Record<string, { steps: WorkflowStep[] }>;
     };
@@ -168,6 +176,9 @@ describe("the verify workflow's migration immutability step", () => {
     steps.filter((step) => step.name === "Migration immutability");
 
   beforeAll(async () => {
+    // ci-pr.yml, not ci.yml: issue 1090 split the pull-request leg of the
+    // verify job into a file whose only trigger is `pull_request_target`, and
+    // the merge-range gates moved with it.
     const source = await readFile(resolve(".github/workflows/ci-pr.yml"), "utf8");
     const workflow = parse(source) as {
       on?: unknown;
@@ -193,14 +204,19 @@ describe("the verify workflow's migration immutability step", () => {
     expect(migrationIndex).toBeGreaterThan(materialiseIndex);
   });
 
-  it("runs in a file whose only trigger is workflow_run, so it needs no event gate", () => {
+  it("runs in a file whose only trigger is pull_request_target, so it needs no event gate", () => {
+    // The gate moved with the step. Where it used to need `if: github.event_name
+    // == 'pull_request_target'` to keep it off the push leg, the split achieves
+    // that structurally: the file it now lives in is reachable by nothing else.
+    // Asserting the ungated step on its own would be an unbacked licence, so
+    // the trigger set is asserted beside it.
     const [step] = migrationImmutability();
     expect(step, "the verify job must contain the Migration immutability step").toBeDefined();
     expect(
       Object.keys((triggers ?? {}) as Record<string, unknown>),
       "the merge-range gates read the pull request's merge commit, so the file holding them must " +
-        "be reachable by workflow_run alone (issue 1090)",
-    ).toEqual(["workflow_run"]);
+        "be reachable by pull_request_target alone (issue 1090)",
+    ).toEqual(["pull_request_target"]);
     expect(
       step?.if,
       "the step carries no event gate: its file's closed trigger set is the gate",
@@ -310,7 +326,78 @@ describe("the verify workflow's legal revision currency step", () => {
   });
 });
 
+/**
+ * Concurrency is the difference between a run that may be superseded and a
+ * merged SHA's run, which may not: the deploy gate in
+ * scripts/deploy-revision.sh reads the check conclusion for the SHA it deploys,
+ * and a run cancelled by the next push to main concludes `cancelled`, which the
+ * gate refuses. Under a per-pull-request group with a ref fallback every main
+ * push shared one group, so a literal `cancel-in-progress: true` cancelled the
+ * previous merged SHA's run on every merge (issue 474).
+ *
+ * The group is now split by event class instead: a pull request enters one
+ * repository-level group, and every other leg keys on its own `github.sha`, so
+ * no push to main shares a group with anything at all. The parentheses around
+ * the event-name test are load-bearing — `&&` binds tighter than `||` in a
+ * GitHub expression, and without them the pull_request arm falls through to
+ * `github.sha` and the group is per-SHA again.
+ *
+ * Issue 1090 then split that same expression across two FILES, because the
+ * pull-request arm is the half that reads a pull request's merge commit. The
+ * repository-level group moved to ci-pr.yml (`ci-pr-…`), whose only trigger is
+ * `pull_request_target`, and ci.yml keeps the plain per-SHA group (`ci-…`)
+ * with no event arm at all — nothing in that file receives a pull-request
+ * event, so an arm would be dead code pinning a promise no run exercises.
+ * Concurrency group names are repository-global, which is why both literals are
+ * asserted rather than one.
+ *
+ * `cancel-in-progress` is the literal boolean `false` on every leg, and the
+ * reason is the shared group rather than the deploy gate. GitHub's documented
+ * behaviour is that the PENDING run in a group is cancelled by default
+ * whatever this flag says, and that the flag's only effect is whether the
+ * RUNNING job is cancelled too — so it cannot tighten the bound at all. Under a
+ * per-pull-request group the running job belonged to the same pull request and
+ * destroying it was the benign self-supersede. Here it can belong to a
+ * DIFFERENT pull request, and `verify` is a required context in
+ * `.github/required-checks.json` that `ledger-relay` mirrors a run conclusion
+ * onto, so a cancelling flag would let one contributor's push knock down a
+ * peer's required check. Measured over the 370 pull-request arrivals of the
+ * 6.13-day window ending 2026-09-30 — the 106 push and 7 dispatch runs key their
+ * own SHA and never contend — that would be ~15 destroyed running runs a day at
+ * the window mean and ~98 on the busiest measured day.
+ *
+ * What `false` does NOT do, and this comment used to imply it did: it does not
+ * prevent cancellation. GitHub still cancels the group's PENDING run when a
+ * newer arrival claims the single pending slot, and on a shared group that run
+ * can be a peer's current head with no replacement — the relay mirrors the
+ * cancelled conclusion onto `verify`, and these workflows trigger on
+ * opened/synchronize/reopened with no `edited`, so that pull request is blocked
+ * until its author pushes again. That residual is inherent to sharing one
+ * group; `false` removes the in-flight half only, and `true` would add it back
+ * on top. The honest rates, from the same 483-run window (mean service 6.58
+ * min, load not steady — per-day arrivals 5, 0, 215, 122, 78, 17, 46):
+ * pending-cancelled ~3/day at the window mean, ~11 on 2026-09-27, ~43 on
+ * 2026-09-26's rho=0.76; against 9 such cancellations in the whole window on
+ * main, every one a same-PR self-supersede. Those are a lower bound: a Poisson
+ * fit understates a bursty arrival process, and replays of the real arrival
+ * timestamps ran materially higher, so the residual is not smaller than stated.
+ * On runner minutes the direction is
+ * counter-intuitive: `true` would bill FEWER minutes, because a destroyed run
+ * stops accruing, so `false` costs minutes and is bought deliberately. The bound
+ * is unaffected either way — one running slot caps concurrency at 1 — and a run
+ * dropped from the pending slot never started, so it costs 0 minutes.
+ *
+ * Assertions are made on the parsed YAML data (workflow.concurrency), never on
+ * the raw bytes, so reformatting the block does not disturb them and a change
+ * to either key fails loudly here instead of quietly changing what CI cancels.
+ */
 describe("the verify workflows' concurrency groups", () => {
+  // Issue 1090 split the workflow, so the group split by event class is now
+  // split by FILE: the repository-level arm lives in ci-pr.yml, which receives
+  // nothing but pull_request_target, and ci.yml's group is the plain per-SHA
+  // one. Both halves are pinned, because a group that names the other file's
+  // prefix would silently share a slot with it — concurrency group names are
+  // repository-global.
   let push: { group?: unknown; "cancel-in-progress"?: unknown } = {};
   let pr: { group?: unknown; "cancel-in-progress"?: unknown } = {};
 
@@ -325,11 +412,11 @@ describe("the verify workflows' concurrency groups", () => {
     pr = await read(".github/workflows/ci-pr.yml");
   });
 
-  it("isolates each triggering suite head so stale completions cannot cancel a current head", () => {
+  it("puts every pull request in one repository-level group, in the pull-request file", () => {
     expect(
       pr.group,
-      "ci-pr.yml's concurrency group must be ci-pr-${{ github.event.workflow_run.head_sha }} — each triggering head has its own group",
-    ).toBe("ci-pr-${{ github.event.workflow_run.head_sha }}");
+      "ci-pr.yml's concurrency group must be ci-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }} — one repository-level group for every pull request, whose keys must be parenthesised because && binds tighter than ||",
+    ).toBe("ci-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}");
   });
 
   it("keys every push and dispatch leg on its own SHA, in the push file", () => {
@@ -357,8 +444,13 @@ describe("the verify workflows' concurrency groups", () => {
       ).toBe("boolean");
       expect(
         concurrency["cancel-in-progress"],
-        `${file}: cancel-in-progress must be false to preserve running verify attempts; ` +
-          "head-SHA isolation prevents out-of-order suite completions from cancelling another head",
+        `${file}: cancel-in-progress must be false — a true destroys a RUNNING run that may ` +
+          "belong to a different pull request, and verify is a required context ledger-relay " +
+          "mirrors the conclusion onto. It cannot tighten the bound: GitHub cancels the group's " +
+          "pending run by default either way. Note what it does NOT buy either: a pending run is " +
+          "still cancelled when a newer arrival claims the single pending slot, and in ci-pr.yml " +
+          "that run can be a peer's live head with no replacement, so its author is blocked until " +
+          "they push again. That residual is inherent to the shared group.",
       ).toBe(false);
     }
   });
@@ -389,6 +481,11 @@ describe("the verify workflows' concurrency groups", () => {
 describe("the required workflows' base-freshness step", () => {
   let verifySteps: WorkflowStep[] = [];
   let actionlintSteps: WorkflowStep[] = [];
+  // Issue 1090 split actionlint and then ci into a file per leg. The freshness
+  // gate belongs to the pull-request leg, so it moved with it in both cases —
+  // reading it out of the push file after a split found nothing there, and
+  // every assertion below would have been a vacuous "the step I could not find
+  // is absent".
   let actionlintPrTriggers: unknown;
   let ciPrTriggers: unknown;
 
@@ -398,7 +495,7 @@ describe("the required workflows' base-freshness step", () => {
   beforeAll(async () => {
     const [ciPr, actionlintPr] = await Promise.all([
       readFile(resolve(".github/workflows/ci-pr.yml"), "utf8"),
-      readFile(resolve(".github/workflows/pr-gates.yml"), "utf8"),
+      readFile(resolve(".github/workflows/actionlint-pr.yml"), "utf8"),
     ]);
 
     const ciWorkflow = parse(ciPr) as {
@@ -427,7 +524,13 @@ describe("the required workflows' base-freshness step", () => {
     ).toHaveLength(1);
   });
 
-  it("lives in its producer file with exactly the admitted trigger, so it needs no event gate", () => {
+  it("lives in a file whose only trigger is pull_request_target, so it needs no event gate", () => {
+    // The gate moved with the step, in both files. Where the step used to need
+    // `if: github.event_name == 'pull_request_target'` to keep it off the push
+    // leg, the split achieves that structurally: the file it now lives in is
+    // reachable by nothing else. Asserting the ungated step on its own would
+    // be an unbacked licence, so the trigger set is asserted beside it — and
+    // the pairing is what makes "ungated" safe rather than a regression.
     for (const [label, triggers, steps] of [
       ["verify", ciPrTriggers, verifySteps],
       ["actionlint", actionlintPrTriggers, actionlintSteps],
@@ -437,10 +540,10 @@ describe("the required workflows' base-freshness step", () => {
       expect(
         Object.keys((triggers ?? {}) as Record<string, unknown>),
         `${label}: the Base freshness step is ungated, which is only correct while this file ` +
-          "receives only its admitted trigger. An added push or workflow_dispatch trigger " +
+          "receives nothing but pull_request_target. An added push or workflow_dispatch trigger " +
           "here would make the step run on main's own pushes, where github.event.pull_request.* " +
           "resolves to nothing.",
-      ).toEqual(label === "verify" ? ["workflow_run"] : ["pull_request_target"]);
+      ).toEqual(["pull_request_target"]);
       expect(
         step.if,
         `${label}: the step carries no event gate: its file's closed trigger set is the gate, and ` +
@@ -519,7 +622,7 @@ describe("the required workflows' base-freshness step", () => {
     ).toBe(false);
   });
 
-  it("wires verify from resolver outputs and actionlint from its PR event, through env", () => {
+  it("wires its inputs from the pull_request base through env", () => {
     const [verifyStep] = freshness(verifySteps);
     const [actionlintStep] = freshness(actionlintSteps);
 
@@ -541,12 +644,7 @@ describe("the required workflows' base-freshness step", () => {
     expect(
       verifyStep.env,
       "Base freshness must take exactly these six inputs from these sources — a rewired BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source, and missing PR_NUMBER or HEAD_SHA leaves the script unable to fetch the PR's file list or to name the head on the certificate it issues",
-    ).toEqual({ ...expectedEnv,
-      BASE_SHA: "${{ steps.pr-tree.outputs.freshness_base_sha }}",
-      BASE_REF: "${{ steps.pr.outputs.base_ref }}",
-      PR_NUMBER: "${{ steps.pr.outputs.pr_number }}",
-      HEAD_SHA: "${{ steps.pr.outputs.head_sha }}",
-    });
+    ).toEqual(expectedEnv);
     expect(
       actionlintStep.env,
       "Base freshness must take exactly these six inputs from these sources — a rewired BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source, and missing PR_NUMBER or HEAD_SHA leaves the script unable to fetch the PR's file list or to name the head on the certificate it issues",
@@ -581,6 +679,24 @@ describe("the required workflows' base-freshness step", () => {
   });
 });
 
+/**
+ * Issue 822 moved the required workflows' pull-request legs to
+ * pull_request_target so the executed definition is always main's. Under that
+ * event a workflow can reach repository secrets and runs with the caller's
+ * checkout context, so the move is only as good as the boundary it keeps:
+ * this suite pins ci-pr.yml's side of it — ci.yml no longer runs under
+ * pull_request_target at all (issue 1090) — with no secret, a read-only token,
+ * and a checkout of the base branch whose scripts judge the pull request's
+ * merge tree as data (tests/ci/verify-step-reachability.test.ts pins that no
+ * reachable step executes pull-request code). The contexts themselves are
+ * posted by the ledger relay alone; the App key exists only in that relay's
+ * environment, never here.
+ *
+ * ci.yml is asserted alongside it, because the split moved a permission with
+ * the steps: verify's `actions: read` existed only to read the pull request
+ * suite's runs and its coverage artifact, and no step left in ci.yml needs it.
+ * A pin on one file alone would let the other drift.
+ */
 describe("the verify workflows' untrusted-code boundary", () => {
   type Parsed = {
     permissions?: unknown;
@@ -623,7 +739,7 @@ describe("the verify workflows' untrusted-code boundary", () => {
 
     expect(
       secretRefs,
-      "ci-pr.yml runs workflow_run and must therefore reference no secret — " +
+      "ci-pr.yml runs pull_request_target and must therefore reference no secret — " +
         "a `${{ secrets.… }}` in any with:/env: value would hand PR-authored input " +
         "the run's secret context; only the ledger relay holds the App key. ci.yml is " +
         "asserted on the same terms: it is the sibling that keeps the push-recalibration " +
@@ -637,13 +753,19 @@ describe("the verify workflows' untrusted-code boundary", () => {
       expect(
         parsed.permissions,
         `${label}: the workflow-level permissions must be exactly { contents: read } — the ` +
-          "token a base-defined run carries must stay read-only over contents, with no " +
+          "token a pull_request_target run carries must stay read-only over contents, with no " +
           "extra scope added anywhere",
       ).toEqual({ contents: "read" });
     }
   });
 
   it("carries exactly one ungated checkout in each leg, each shaped for what it checks out", () => {
+    // One checkout per file, and neither carries an `if`: before the split both
+    // checkouts shared one job and the event test was the only thing telling
+    // them apart. Two ungated checkouts of different shapes in one job is
+    // impossible — the second would run against the first's working directory —
+    // so the file is now what tells them apart, and an `if` here would be dead
+    // or would re-open the class the split removed.
     const checkouts = (parsed: Parsed) =>
       (parsed.jobs?.verify?.steps ?? []).filter((step) =>
         step.uses?.startsWith("actions/checkout@"),
@@ -658,8 +780,15 @@ describe("the verify workflows' untrusted-code boundary", () => {
     expect(
       prCheckout?.if,
       "the base checkout must carry no event gate: this file's whole `on:` set is " +
-        "{workflow_run}",
+        "{pull_request_target}",
     ).toBeUndefined();
+    expect(
+      prCheckout?.with,
+      "under pull_request_target the checkout must carry NO ref input — the default " +
+        "checkout is the base branch's tip, whose scripts are the judge — with full history " +
+        "for the range-walking gates and persist-credentials: false. The pull request's " +
+        "merge commit enters only as git objects, materialised outside the workspace",
+    ).toEqual({ "persist-credentials": false, "fetch-depth": 0 });
 
     const [pushCheckout] = checkouts(workflow);
     expect(
@@ -671,9 +800,23 @@ describe("the verify workflows' untrusted-code boundary", () => {
       "the plain checkout must carry no event gate: this file receives only push and " +
         "workflow_dispatch, so its ref input is absent and cannot go null",
     ).toBeUndefined();
+    expect(
+      pushCheckout?.with,
+      "the push/dispatch checkout must carry persist-credentials: false, no ref input, " +
+        "and FULL history: the suite this job runs includes the secret-scan baseline's " +
+        "provenance check, which skips wherever the checkout is shallower than the " +
+        "baseline's entries and, at the old default depth of 1, ran in no CI context at " +
+        "all (issue 1098). Main's own history carries no pull-request data — this file " +
+        "has no pull_request trigger and names no pull_request.* value",
+    ).toEqual({ "persist-credentials": false, "fetch-depth": 0 });
   });
 
   it("confines each job's permissions: override to what its steps actually need", () => {
+    // Issue 1036 moved the write token out of calibrate — which runs
+    // repository scripts on Node built-ins — into push-recalibration, which
+    // runs none. verify there downloads no artifact and awaits no run, so it
+    // inherits the workflow's contents: read rather than adding a scope no
+    // step of it uses.
     expect(
       Object.entries(workflow.jobs ?? {})
         .filter(([, job]) => job !== undefined && "permissions" in job)
@@ -685,7 +828,7 @@ describe("the verify workflows' untrusted-code boundary", () => {
     ).toEqual(["push-recalibration"]);
 
     // ci-pr.yml keeps verify's read-only actions: read — the base copy of the
-    // suite awaiter reads the triggering run and downloads its
+    // suite awaiter lists the pull request suite's runs and downloads its
     // coverage summary — and nothing that writes.
     expect(
       Object.entries(prWorkflow.jobs ?? {})
@@ -695,8 +838,9 @@ describe("the verify workflows' untrusted-code boundary", () => {
     ).toEqual(["verify"]);
     expect(
       prWorkflow.jobs?.verify?.permissions,
-      "verify adds actions: read for the suite and artifact, pull-requests: read for binding, and no write grant",
-    ).toEqual({ contents: "read", actions: "read", "pull-requests": "read" });
+      "verify may add exactly actions: read — to read the pull request suite's runs and " +
+        "artifact — and nothing that writes",
+    ).toEqual({ contents: "read", actions: "read" });
   });
 });
 
@@ -729,27 +873,24 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
     expect(pushSteps.filter((step) => step.name === markerName)).toHaveLength(1);
   });
 
-  it("sets up Node before resolving the PR, then materialises and immediately checks markers", () => {
+  it("checks markers immediately after the checkout and the merge tree, before setup-node", () => {
     const checkouts = steps.flatMap((step, index) =>
       step.uses?.startsWith("actions/checkout@") ? [index] : [],
     );
     const materialiseIndex = steps.findIndex((step) => (step.run ?? "").includes("git worktree add"));
-    const resolverIndex = steps.findIndex((step) => (step.run ?? "").includes("/scripts/resolve-suite-pull-request.ts"));
-    const nodeIndex = steps.findIndex((step) => step.uses?.startsWith("actions/setup-node@"));
     const markerIndex = steps.findIndex((step) => step.name === markerName);
     expect(checkouts).toHaveLength(1);
-    expect(nodeIndex).toBe(checkouts[0]! + 1);
-    expect(resolverIndex).toBe(nodeIndex + 1);
-    expect(materialiseIndex).toBe(resolverIndex + 1);
+    expect(materialiseIndex).toBe(checkouts[0] + 1);
     expect(markerIndex).toBeGreaterThan(-1);
     expect(markerIndex).toBe(materialiseIndex + 1);
+    expect(steps[markerIndex + 1]?.uses).toMatch(/^actions\/setup-node@/);
   });
 
   it("runs the tracked-text marker grep over the materialised tree without tolerating failure", () => {
     const step = steps.find((step) => step.name === markerName);
     expect(step).toBeDefined();
     expect(step?.run).toContain("git grep -nI -E '^(<{7}( |$)|>{7}( |$)|={7}$)' -- .");
-    // This file receives nothing but workflow_run, so the tree searched
+    // This file receives nothing but pull_request_target, so the tree searched
     // is always the pull request's and its path is the materialise step's
     // output — the step no longer branches on the event to decide that.
     expect(step?.env).toEqual({ PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
@@ -797,7 +938,7 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
     expect(
       step?.if,
       "the step carries no event gate: an `if` naming a sibling event would be dead here, and the " +
-        "file's closed workflow_run trigger set is what keeps it off a push",
+        "file's closed pull_request_target trigger set is what keeps it off a push",
     ).toBeUndefined();
     expect(Boolean(step?.["continue-on-error"])).toBe(false);
   });

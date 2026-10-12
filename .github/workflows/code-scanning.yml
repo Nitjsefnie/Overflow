@@ -20,11 +20,37 @@ permissions:
   contents: read
 
 concurrency:
-  # A per-PR group lets a newer run cancel only the same PR's older scan.
-  # Other PRs have separate groups; push, schedule and dispatch runs key on
-  # their SHA and never cancel an in-flight run.
-  group: code-scanning-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Same event-class shape as ci-pr.yml: every pull request shares one
+  # repository-level group, so the repository's Actions minutes stop scaling
+  # with the number of open pull requests, and GitHub keeps one PENDING run per
+  # group so `code-scanning-repo-wide` is a single slot. A push to main keys on
+  # its own SHA, so no two commits share a group; note a `schedule` tick resolves
+  # github.sha to the default branch's tip and therefore DOES share a group with
+  # a push run for that same tip — harmless at one weekly tick, and the only
+  # thing `false` gives up there. The parentheses are load-bearing: && binds
+  # tighter than ||, and without them the pull_request arm falls through to
+  # github.sha and the bound is gone.
+  #
+  # cancel-in-progress is false here too, even though this workflow is NOT one
+  # of the required contexts in .github/required-checks.json — so a cancelled run
+  # blocks nobody, which is the whole argument for letting it cancel. It also
+  # does not stop GitHub cancelling the PENDING run when a newer arrival claims
+  # the single pending slot; the flag only decides whether the RUNNING job dies
+  # too. See ci-pr.yml's concurrency block for what that residual means for a
+  # required context; here it means only a lost scan, and this workflow's
+  # pull_request carries no types filter, so an edit re-fires it.
+  #
+  # This workflow's OWN rates, from its 484 runs over the same 6.15 days (mean
+  # service 1.86 min, mean 78.7 arrivals/day): rho = 0.10, so a `true` would
+  # destroy a running analyze job on ~8 a day and the pending slot would be
+  # claimed on ~0.7 a day — roughly five times below ci's ~15 and ~3 on the
+  # same pull-request arrivals, because the job is three times shorter. That is the trade: `true` would save the
+  # unused remainder of a 1.9 minute job on ~8 arrivals a day, and would cost the
+  # SARIF upload each time, since a scan cancelled mid-analysis is discarded and
+  # the author's next run may not come. One rule for all four bounded workflows is
+  # worth more than that, and it gives the next workflow one shape to follow.
+  group: code-scanning-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
+  cancel-in-progress: false
 
 jobs:
   analyze:

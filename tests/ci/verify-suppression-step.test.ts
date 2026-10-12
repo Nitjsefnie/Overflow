@@ -238,10 +238,10 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     const step = theStep();
     expect(step.env, "the step maps the merge SHA and the event's base SHA and nothing else").toEqual({
       MERGE_SHA: "${{ steps.pr-tree.outputs.merge_sha }}",
-      BASE_SHA: "${{ steps.pr.outputs.base_sha }}",
+      BASE_SHA: "${{ github.event.pull_request.base.sha }}",
     });
-    expect(step.if, "the step is gated on the workflow_run event").toBe(
-      "github.event_name == 'workflow_run'",
+    expect(step.if, "the step is gated on the pull_request_target event").toBe(
+      "github.event_name == 'pull_request_target'",
     );
     expect(step["continue-on-error"], "the gate must not tolerate its own failure").toBeFalsy();
     const names = steps.map((entry) => entry.name);

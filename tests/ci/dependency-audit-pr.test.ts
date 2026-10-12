@@ -10,7 +10,7 @@ import { parse } from "yaml";
  * Issue 1149: the dependency audit's pull-request leg is a required context
  * produced from a definition the pull request cannot change.
  *
- * `.github/workflows/pr-gates.yml` runs under `pull_request_target`
+ * `.github/workflows/dependency-audit-pr.yml` runs under `pull_request_target`
  * alone, so it always executes MAIN'S copy of itself; the pull request enters
  * only as git objects (this event's head and base SHAs), its merge tree is
  * built locally with `git merge-tree --write-tree`, and the two manifests are
@@ -24,8 +24,8 @@ import { parse } from "yaml";
  *  - STRUCTURAL: the trigger set is closed ({pull_request_target}), there is
  *    no paths filter (the leg must fire on EVERY pull request so the required
  *    context always reports — a missing context blocks a merge as surely as a
- *    red one), the concurrency block cancels superseded runs within one PR,
- *    as tests/ci/concurrency.test.ts requires of this aggregate, the
+ *    red one), the concurrency block is the repository-level shape
+ *    tests/ci/concurrency.test.ts requires of a required-context producer, the
  *    job is named `dependency-audit` (the context name the relay matches), the
  *    env pins ride at job level, and the audit portion is byte-identical to
  *    the push leg's.
@@ -61,7 +61,7 @@ type Workflow = {
   jobs?: Record<string, Job>;
 };
 
-const PR_FILE = ".github/workflows/pr-gates.yml";
+const PR_FILE = ".github/workflows/dependency-audit-pr.yml";
 const PUSH_FILE = ".github/workflows/dependency-audit.yml";
 const JOB_NAME = "dependency-audit";
 const AUDIT_STEP_NAME = "Audit the pull request's merge-tree manifests";
@@ -98,14 +98,14 @@ beforeAll(async () => {
   workflow = parse(await readFile(resolve(PR_FILE), "utf8")) as Workflow;
   pushWorkflow = parse(await readFile(resolve(PUSH_FILE), "utf8")) as Workflow;
   const job = workflow.jobs?.[JOB_NAME];
-  expect(job, `pr-gates.yml must carry a job named ${JOB_NAME}`).toBeDefined();
+  expect(job, `dependency-audit-pr.yml must carry a job named ${JOB_NAME}`).toBeDefined();
   steps = job?.steps ?? [];
   auditStep = steps.find((step) => step.name === AUDIT_STEP_NAME) as Step;
 });
 
-describe("pr-gates.yml's shape", () => {
+describe("dependency-audit-pr.yml's shape", () => {
   it("is named for the relay's filter, which matches the name: field", () => {
-    expect(workflow.name).toBe("pr gates");
+    expect(workflow.name).toBe("dependency audit pull request");
   });
 
   it("triggers on pull_request_target alone, with no paths filter", () => {
@@ -125,14 +125,20 @@ describe("pr-gates.yml's shape", () => {
     expect(workflow.permissions).toEqual({ contents: "read" });
   });
 
-  it("cancels only superseded runs of the same pull request", () => {
+  it("carries the repository-level required-producer concurrency shape", () => {
+    // One group per repository for pull-request arrivals, cancel false, and
+    // the parenthesised event-class form the bounded table pins — the shape
+    // tests/ci/concurrency.test.ts refuses to let a required context ship
+    // any other way.
     expect(workflow.concurrency).toEqual({
-      group: "pr-gates-${{ github.event.pull_request.number }}",
-      "cancel-in-progress": true,
+      group:
+        "dependency-audit-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+      "cancel-in-progress": false,
     });
   });
 
-  it("bounds the producing job's runtime", () => {
+  it("runs the one producing job on the pinned runner image and clock", () => {
+    expect(workflow.jobs?.[JOB_NAME]?.["runs-on"]).toBe("ubuntu-latest");
     expect(workflow.jobs?.[JOB_NAME]?.["timeout-minutes"]).toBe(10);
   });
 
@@ -151,14 +157,20 @@ describe("pr-gates.yml's shape", () => {
   it("checks out nothing from the pull request, and executes nothing of the pull request's", () => {
     const checkout = steps.filter((step) => step.uses?.startsWith("actions/checkout"));
     expect(checkout).toHaveLength(1);
+    expect(checkout[0]?.uses).toMatch(/^actions\/checkout@/);
+    expect(checkout[0]?.with?.ref).toBeUndefined();
+    expect(checkout[0]?.with?.repository).toBeUndefined();
+    expect(checkout[0]?.with?.["persist-credentials"]).toBe(false);
+    // Full history is what lets merge-tree below find the two commits' true
+    // merge base; a shallow pair reads as unrelated histories.
+    expect(checkout[0]?.with?.["fetch-depth"]).toBe(0);
 
     const setup = steps.filter((step) => step.uses?.startsWith("actions/setup-node"));
     expect(setup).toHaveLength(1);
+    expect(setup[0]?.uses).toMatch(/^actions\/setup-node@/);
 
     const enable = steps.find((step) => step.name === "Enable the pinned package manager");
-    expect(enable?.run).toContain("corepack enable");
-    expect(enable?.run).toContain("corepack install --global pnpm@");
-    expect(enable?.run).toContain("pnpm --version");
+    expect(enable?.run).toMatch(/^corepack enable\ncorepack install --global pnpm@\d+\.\d+\.\d+\npnpm --version\n$/);
 
     // No step may run anything out of a checkout: the only scripts that
     // execute are this file's own run blocks. And the PR's manifests are
@@ -172,9 +184,12 @@ describe("pr-gates.yml's shape", () => {
   });
 
   it("carries exactly the four steps, in the established order", () => {
-    expect(steps).toHaveLength(4);
-    expect(steps.filter((step) => step.name).map((step) => step.name)).toEqual([
-      "Enable the pinned package manager", AUDIT_STEP_NAME,
+    expect(steps.map((step) => step.name
+      ?? step.uses!.replace(/@[0-9a-f]{40}$/, "@"))).toEqual([
+      "actions/checkout@",
+      "actions/setup-node@",
+      "Enable the pinned package manager",
+      AUDIT_STEP_NAME,
     ]);
   });
 
@@ -505,6 +520,14 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   });
 
   it("audits the merge tree's bytes, not the head's, when main has advanced past the branch point", async () => {
+    // Fix round 1: every green-path fixture above builds a head whose
+    // merge-tree bytes EQUAL the head's, so a step that materialized
+    // "${HEAD_SHA}" instead of the merged tree passed all of them while
+    // auditing the wrong artifact on exactly the pull requests where the two
+    // diverge. Here main has ADVANCED past the branch point, and the two
+    // sides' lockfile edits sit in different regions of the file, so the
+    // merge is clean and its lockfile carries BOTH sides' lines — the head's
+    // carries only its own, the (advanced) base's only its own.
     cases += 1;
     const origin = join(root, `origin-advance-${cases}`);
     const workspace = join(root, `workspace-advance-${cases}`);

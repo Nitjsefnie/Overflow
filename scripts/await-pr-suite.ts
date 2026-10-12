@@ -8,26 +8,21 @@
 //   node scripts/await-pr-suite.ts
 //
 // Environment: GITHUB_REPOSITORY (OWNER/REPO), GH_TOKEN, HEAD_SHA (40-hex),
-// optional SUITE_RUN_ID (requires SUITE_RUN_ATTEMPT), SUITE_DEADLINE_SECONDS (default 2400) and
-// SUITE_POLL_SECONDS (default 30), optional GITHUB_OUTPUT.
+// optional SUITE_DEADLINE_SECONDS (default 2400) and SUITE_POLL_SECONDS
+// (default 30), optional GITHUB_OUTPUT.
 //
-// ci-pr.yml starts on the suite's completion and supplies SUITE_RUN_ID. That
-// mode reads exactly that run and one same-head run listing, never polls,
-// refuses newer runs or a newer attempt, and requires its path, event,
-// head SHA, completed status and success conclusion. Without SUITE_RUN_ID,
-// legacy callers poll the suite workflow's run listing at HEAD_SHA, keep only
+// It polls the suite workflow's run listing at HEAD_SHA, keeps only
 // pull_request runs of exactly the suite workflow at exactly that SHA, and
 // waits on the most recently created one (ties: the highest id). Exit 0 only
 // when that run completed with conclusion `success`, writing `run_id=<id>` to
 // GITHUB_OUTPUT so the caller can fetch the run's artifacts. Every other
 // outcome fails closed with exit 1 and one `::error::` line naming why;
-// malformed input exits 2. Only Node built-ins and the shared base rule load; nothing outside
+// malformed input exits 2. It imports only Node built-ins, so nothing outside
 // the base checkout's own file runs.
 
 import { realpathSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { readSuiteRuns, suiteRunsUrl, supersedingSuiteRunId, supersessionMessage } from "./pr-suite-supersession.ts";
 
 /** The suite workflow's file name, which names its per-workflow run listing. */
 const SUITE_WORKFLOW_FILE = "pr-suite.yml";
@@ -90,8 +85,6 @@ interface AwaitConfig {
   deadlineMs: number;
   pollMs: number;
   outputPath: string | undefined;
-  runId: number | undefined;
-  suiteRunAttempt: number | undefined;
 }
 
 interface SuiteRun {
@@ -120,9 +113,7 @@ export async function awaitPrSuite(deps: AwaitDeps): Promise<AwaitOutcome> {
   }
 
   try {
-    const run = config.runId === undefined
-      ? await waitForCompletedRun(deps, config, log)
-      : await exactCompletedRun(deps, config);
+    const run = await waitForCompletedRun(deps, config, log);
     if (run.conclusion !== "success") {
       throw new Error(
         `the suite run ${run.id} concluded ${run.conclusion ?? "with no conclusion"}, not success`,
@@ -137,44 +128,6 @@ export async function awaitPrSuite(deps: AwaitDeps): Promise<AwaitOutcome> {
     log(errorLine(messageOf(error)));
     return { exitCode: 1, lines };
   }
-}
-
-/** Bounded exact-run and supersession reads, with no polling or retry sleeps. */
-async function exactCompletedRun(deps: AwaitDeps, config: AwaitConfig): Promise<SuiteRun> {
-  const response = await deps.fetchFn(`${API_ROOT}/repos/${config.repo}/actions/runs/${config.runId}`, {
-    method: "GET",
-    headers: { ...API_HEADERS, authorization: `Bearer ${config.token}`, "cache-control": "no-cache" },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) throw new Error(`the suite run read failed: HTTP ${response.status}`);
-  const raw = await response.json() as Record<string, unknown> | null;
-  if (raw === null || typeof raw !== "object" ||
-      raw.id !== config.runId || raw.path !== SUITE_WORKFLOW_PATH ||
-      raw.event !== SUITE_EVENT || raw.head_sha !== config.headSha) {
-    throw new Error("the triggering suite run must match its id, path, pull_request event, head SHA and completed status");
-  }
-  // Non-success in the original attempt is already a refusal. A changed
-  // attempt must instead be classified as superseded, even while unfinished.
-  if (raw.run_attempt === config.suiteRunAttempt &&
-      (raw.status !== "completed" || raw.conclusion !== "success")) {
-    throw new Error("the triggering suite run must be completed with conclusion success");
-  }
-  const listing = await readSuiteRuns(async (page) => {
-    const listed = await deps.fetchFn(suiteRunsUrl(API_ROOT, config.repo, config.headSha, page), {
-      method: "GET",
-      headers: { ...API_HEADERS, authorization: `Bearer ${config.token}`, "cache-control": "no-cache" },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (!listed.ok) throw new Error(`the suite supersession listing failed: HTTP ${listed.status}`);
-    return listed.json();
-  });
-  const newer = supersedingSuiteRunId(raw, listing, { judgedAttempt: config.suiteRunAttempt! });
-  if (newer !== undefined) throw new Error(supersessionMessage(newer));
-  if (raw.status !== "completed") throw new Error("the triggering suite run must be completed");
-  return {
-    id: config.runId!, status: "completed", createdMs: 0,
-    conclusion: typeof raw.conclusion === "string" ? raw.conclusion : null,
-  };
 }
 
 /**
@@ -336,14 +289,6 @@ function parseConfig(env: Record<string, string | undefined>): AwaitConfig {
   if (!SHA_40.test(headSha)) {
     throw new Error(`HEAD_SHA must be a 40-hex SHA (got ${JSON.stringify(headSha)})`);
   }
-  const runId = env.SUITE_RUN_ID;
-  if (runId !== undefined && (!POSITIVE_INTEGER.test(runId) || !Number.isSafeInteger(Number(runId)))) {
-    throw new Error("SUITE_RUN_ID must be a positive safe integer");
-  }
-  const attempt = env.SUITE_RUN_ATTEMPT;
-  if (runId !== undefined && (attempt === undefined || !POSITIVE_INTEGER.test(attempt) || !Number.isSafeInteger(Number(attempt)))) {
-    throw new Error("SUITE_RUN_ATTEMPT must be the triggering run's positive safe attempt number");
-  }
   return {
     repo,
     token,
@@ -351,8 +296,6 @@ function parseConfig(env: Record<string, string | undefined>): AwaitConfig {
     deadlineMs: seconds(env, "SUITE_DEADLINE_SECONDS", DEFAULT_DEADLINE_SECONDS) * 1000,
     pollMs: seconds(env, "SUITE_POLL_SECONDS", DEFAULT_POLL_SECONDS) * 1000,
     outputPath: env.GITHUB_OUTPUT === "" ? undefined : env.GITHUB_OUTPUT,
-    runId: runId === undefined ? undefined : Number(runId),
-    suiteRunAttempt: attempt === undefined ? undefined : Number(attempt),
   };
 }
 

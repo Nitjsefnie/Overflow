@@ -67,7 +67,7 @@ const BASE_BRANCH = "main";
 const EVENTS_TRUSTED_ON_BASE_BRANCH = new Set(["push", "workflow_dispatch", "schedule"]);
 
 /**
- * Whether a producer run may attest using event and branch alone: trusted when the
+ * Whether a producer run may attest a required context: trusted when the
  * workflow definition the run EXECUTED is the base branch's, within the
  * write-access assumptions the bullets below state. A required context is
  * evidence about the job that judged the commit, so it is only worth relaying
@@ -93,12 +93,9 @@ const EVENTS_TRUSTED_ON_BASE_BRANCH = new Set(["push", "workflow_dispatch", "sch
  *   check compares the ref's short name, so a non-branch ref — a tag — named
  *   `main` passes it too; such a ref exists only through write access, the
  *   same accepted trust class as the target-branch case above.
- * - `workflow_run` is refused here even on main: fork PRs can name their head
- *   branch main. Only resolveWorkflowRunHead's API-backed ci-pr path, event,
- *   repository id and upstream checks can admit it and select the PR SHA.
  * - Every other event is refused — `pull_request` (which executes the
  *   definition the pull request carries), the comment and review events,
- *   `merge_group`, an empty event and any unknown value.
+ *   `merge_group`, `workflow_run`, an empty event and any unknown value.
  *
  * Both comparisons are exact: no prefix, no case folding, no `refs/heads/`
  * form, because a near match is a different ref.
@@ -421,3 +418,4 @@ export function validatePinMap(value: unknown): PinMap {
   }
   return pinMap;
 }
+

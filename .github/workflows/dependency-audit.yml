@@ -1,16 +1,124 @@
 name: dependency audit
 
-# Main's lockfile audit runs on push, daily and dispatch with no paths filter:
-# every merged SHA needs a dependency-audit conclusion for deployment.
-# The PR leg is pr-gates.yml's dependency-audit job. Both audit manifests as
-# data with no project install or build, under an explicit read-only grant.
-# pnpm's JSON report distinguishes advisories, clean reports, registry errors
-# and unreadable output. Only registry 429/5xx replies receive the bounded
-# retry; advisories and unreadable reports fail immediately. Job-level env
-# holds the package-manager choice, registry, TLS store and severity bar.
-
+# Lockfile-aware vulnerability audit: a detection signal, not a fix pipeline.
+# pnpm audit reads pnpm-lock.yaml and queries the registry's advisory
+# endpoint, so there is deliberately no project install and no build — which
+# is also what keeps it safe to run on a pull request (issue 985).
+#
+# THIS FILE'S LEGS ARE push TO MAIN, THE DAILY TICK AND DISPATCH — all of them
+# run MAIN'S OWN tree with main's own privileges. The pull-request leg is
+# .github/workflows/dependency-audit-pr.yml, the issue-1090 split's
+# pull_request_target file: it executes this repository's definition on every
+# pull request, builds the merge tree, and audits the pull request's manifests
+# as git-object data. This file's push trigger carries NO paths filter (issue
+# 1149 fix round 2): once branch protection requires `dependency-audit`, the
+# deploy gate derives its required set from protection, so a push whose diff
+# touched no manifest must still leave a green check-run — the audit step
+# itself classifies, and a push that changed neither manifest records a green
+# outcome without asking the registry (an outcome, not a skip). What this
+# workflow runs:
+#
+#   - the SHA-pinned `actions/checkout` and `actions/setup-node`, with no
+#     `ref:` and no `repository:` taken from the event, and full history for
+#     the audit step's fast-path ancestor check;
+#   - `corepack enable`, `corepack install --global pnpm@10.33.0` and
+#     `pnpm --version`, and later this file's `pnpm audit` — both under the
+#     JOB-level env below, which holds the audit at the measured 10.33.0
+#     whatever `packageManager` the checked-out package.json names;
+#   - this file's run script, and nothing else — no install, no build, no
+#     module out of the checked-out tree. That is why the classifier below is a
+#     run-script step rather than `scripts/dependency-audit.ts`:
+#     on the pull-request leg's `pull_request` trigger of issue-985's era,
+#     `node scripts/anything.ts` would have executed the pull request's copy;
+#     on this file's legs it stays a run-script for the same reason any gate
+#     keeps its logic where the trigger cannot substitute it.
+#
+# What it READS as data: pnpm-lock.yaml and package.json out of the checked-out
+# main tip, and whatever `.npmrc` main carries — the env pins below hold the
+# audit at the registry, TLS store and severity bar this repository chose even
+# if a future edit changes main's config. The permissions block stays at
+# `contents: read`.
+#
+# WHY THE OUTPUT IS MACHINE-READ. Captured against pnpm 10.33.0 — the version
+# every step that runs pnpm resolves to under the job-level env below, which is
+# what makes that claim hold rather than merely be written down — `pnpm audit`
+# exits 1 both when the lockfile carries advisories and when the registry could
+# not answer, so the exit code alone cannot tell a finding from an outage.
+# `pnpm audit --json` tells them apart, and each of these three writes its
+# whole report to stdout with stderr left empty:
+#
+#   clean       exit 0   {"advisories": {},      "metadata": {…}}
+#   advisories  exit 1   {"advisories": {"1106913": {…}}, "metadata": {…}}
+#   registry    exit 1   {"error": {"code": "ERR_PNPM_AUDIT_BAD_RESPONSE", …}}
+#
+# `error` and `advisories` are disjoint: a report carries one or the other, so
+# "the audit never completed" and "the lockfile has findings" cannot both be
+# true of one report. Anything else — empty stdout from an unusable invocation,
+# a report with no `advisories` key, an empty `advisories` map with a nonzero
+# exit — is neither, and is reported as unreadable rather than resolved. All
+# three are red and all three share the verdict word, so they are told apart by
+# the DETAIL, which names each of them for what it is: an unparseable report, a
+# report with no `advisories` key, and a report whose `advisories` map was empty
+# while pnpm exited nonzero. That last one is the case worth its own sentence —
+# it is the only one of the three that says the report parsed AND carried a
+# field, and a reader told it carried none goes hunting for a malformed report
+# that is not there.
+#
+# The registry row was captured against a local server answering the advisory
+# endpoint 503 and 429. pnpm tries `…/audits/quick`, falls back to `…/audits`,
+# and on any non-200 throws AUDIT_BAD_RESPONSE naming BOTH statuses in its
+# message — so the statuses are read back out of that message, and a retry is
+# spent only when EVERY one of them is a 429 or in 500–599. One transient leg
+# is not a transient answer: a 503 on the quick endpoint beside a 403 on the
+# fallback is a registry that answered "no", and re-asking cannot change it.
+#
+# A transport failure (ECONNREFUSED, ERR_SOCKET_TIMEOUT) arrives in the same
+# `error` shape with no status in it and is NOT retried. That is a coverage
+# choice, not a safety one: retrying it could not mask an advisory, because the
+# two branches are disjoint, so leaving it out buys no safety and costs a red
+# run per network blip. It is left out because the retry was scoped to
+# "registry 5xx/429", and holding an explicit line beats widening against one.
+#
+# One more `error` worth naming: a tree where pnpm-lock.yaml is missing — a
+# merged commit that deleted it — makes pnpm answer ERR_PNPM_AUDIT_NO_LOCKFILE.
+# That is reported red, which is right — there is no lockfile to audit and a
+# human should see that. It is routed to `unreadable` rather than `unreachable`
+# because no registry was ever asked: `unreachable` means an answered or
+# unconnected registry, and there was neither. `unreadable` says the one true
+# thing, which is that there is no report to read, and the detail carries
+# pnpm's own sentence.
+#
+# THE RETRY IS NARROW ON PURPOSE. It fires on a transient registry answer and
+# on nothing else — never on advisories, never on a 403 or a 404, never on
+# output that does not parse. Re-asking a lockfile that carries advisories
+# cannot change the answer, and a retry loop over every failure would turn a
+# real finding into a delayed one while masking a broken invocation as a slow
+# one. A finding fails on the first attempt. Three attempts, 30 seconds apart;
+# the budget is pinned by the suite because a larger one would overrun this
+# job's `timeout-minutes`.
+#
+# Do not add --audit-level to the command: it sets a severity bar, and findings
+# below the bar still print but exit 0 (captured: a critical bar over 3 moderate
+# + 3 high advisories printed all six and exited 0) — a bar on a detection
+# signal silently passes below-bar findings. The bar itself is pinned instead:
+# the job-level `npm_config_audit_level: "low"` below sets the severity bar at
+# pnpm's lowest reportable rung, which no `.npmrc` on the checked-out tree can
+# raise (measured; see that pin's comment). Do not add
+# --ignore-registry-errors: a
+# registry outage also exits 1, so a red run would mean only "advisories
+# found, or the registry could not answer" — either way a human looks, which is
+# what a detection signal is for. The retry does not change what a red run
+# MEANS and does not claim to: a sustained outage still ends red, exactly as
+# before. What it changes is that a blip gets a second chance first.
 on:
   push:
+    # No paths filter, deliberately (issue 1149 fix round 2): once branch
+    # protection requires `dependency-audit`, the deploy gate derives its
+    # required set from protection, so a push whose diff touched no manifest
+    # must STILL leave a green check-run — a filter would strand it with a
+    # MISSING context and the deploy gate would refuse the deploy. The audit
+    # step itself classifies: a push that changed neither manifest records a
+    # green outcome without asking the registry (an outcome, not a skip).
     branches:
       - main
   schedule:
@@ -28,9 +136,19 @@ permissions:
   contents: read
 
 concurrency:
-  # Main-push, daily and dispatch producers key on SHA and never cancel a
-  # running audit. PR arrivals use pr-gates.yml's dependency-audit job and
-  # its per-PR cancelling group; no PR trigger reaches this file.
+  # The issue-1090 split is complete: the pull-request leg is
+  # dependency-audit-pr.yml, the bounded one, and no pull_request or
+  # pull_request_target trigger reaches this file, so neither arm that would
+  # make it unbounded is reachable — it never keys its group on one
+  # contributor's pull request, and it never receives the event that would
+  # make a repository-level group contend. The group is per-SHA, so no push
+  # to main shares a group with another push or with the daily tick: a
+  # cancelled conclusion on a merged SHA makes the deploy gate refuse
+  # immediately (issue 474), and `cancel-in-progress: false` preserves every
+  # in-flight audit. A workflow with no pull-request trigger cannot be listed
+  # in BOUNDED at all — the repository-level arm would be dead code — which
+  # is why this block is recorded in tests/ci/concurrency.test.ts's
+  # UNBOUNDED_BY_CHOICE table with exactly this shape.
   group: dependency-audit-${{ github.sha }}
   cancel-in-progress: false
 
@@ -42,7 +160,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    # Job scope carries these controls through setup and audit alike.
+    # JOB level, and that is the whole point. GitHub Actions `env:` is
+    # step-scoped and does not carry forward, so a variable pinned on the step
+    # that INSTALLS pnpm is simply absent from the environment of the step that
+    # EXECUTES `pnpm audit` — which is how an earlier version of this file
+    # shipped a fix that did nothing. Measured on the Node 24.17.0 pinned
+    # below, replaying the two steps as separate processes against a
+    # `packageManager` of `pnpm@9.15.9`:
+    #
+    #   step 1, with this variable on the step:  `pnpm --version` -> 10.33.0
+    #   step 2, without it:                       `pnpm --version` -> 9.15.9
+    #
+    # At job level both variables are in effect for every step in the job,
+    # including a step added later, and there is no step left on which to
+    # forget one.
     env:
       # `corepack install --global pnpm@10.33.0` sets corepack's DEFAULT and
       # nothing more: when the `pnpm` shim runs, corepack otherwise reads
@@ -53,7 +184,7 @@ jobs:
       # 10.33.0" describes a version this repository chose, not one a manifest
       # edit picked. The pull-request-facing measurement (a pull request
       # picking the binary through its own packageManager) is recorded
-      # identically on pr-gates.yml, job dependency-audit's copy of this block.
+      # identically on dependency-audit-pr.yml's copy of this block.
       #
       # This has to reach the step that runs `pnpm audit` and not merely the
       # one that installs pnpm, which is why it is here rather than on either
@@ -65,7 +196,7 @@ jobs:
       # main's own tree, so the pin holds the audit at the registry this
       # repository chose even if a future edit to main's `.npmrc` names
       # another one; the pull-request-facing threat (a pull request pointing
-      # the audit at a registry it controls) lives on pr-gates.yml, job dependency-audit,
+      # the audit at a registry it controls) lives on dependency-audit-pr.yml,
       # which materializes no `.npmrc` at all and carries the same pin.
       # Measured on pnpm 10.33.0: a project `.npmrc` does redirect `pnpm
       # config get registry`, and this variable outranks it. corepack does not
@@ -92,7 +223,23 @@ jobs:
       # not empty strings.
       npm_config_strict_ssl: "true"
       npm_config_cafile: "/etc/ssl/certs/ca-certificates.crt"
-      # low is pnpm's lowest reportable severity; a higher bar hides findings.
+      # The severity bar, pinned for the same reason as the registry above: the
+      # audit reads it from the checked-out tree's `.npmrc`, and a
+      # `.npmrc audit-level=critical` filters a HIGH advisory out of
+      # `pnpm audit --json` — reported clean, exit 0 (measured
+      # on pnpm 10.33.0 with an advisory carrying its github_advisory_id; the
+      # earlier probe whose mock advisory lacked that field could never have
+      # seen this filter). The audit resolves the bar as
+      # `AUDIT_LEVEL_NUMBER[opts.auditLevel ?? "low"]` over the ladder
+      # `{low: 0, moderate: 1, high: 2, critical: 3}` (dist/pnpm.cjs:137290,
+      # :137504-137505), so `low` is the lowest bar the ladder defines and
+      # reports every advisory pnpm can report. There is no lower safe value:
+      # `npm_config_audit_level: "info"` was MEASURED filtering EVERY advisory —
+      # the ladder has no `info` key, `AUDIT_LEVEL_NUMBER[severity] >=
+      # undefined` is false for all four severities — so an "info" pin would
+      # silently disable the audit. And the env value outranks `.npmrc`:
+      # measured with `npm_config_audit_level=low` set, the same
+      # `audit-level=critical` no longer filters the high advisory.
       npm_config_audit_level: "low"
 
     steps:
@@ -106,9 +253,62 @@ jobs:
           # neither.
           fetch-depth: 0
 
-      # The PR-event suppression check is dormant on this file's trigger set.
-      # ci-pr.yml's required verify job judges suppression changes, while
-      # pr-gates.yml's dependency-audit job materializes only two manifests.
+      # Issue 1035, defence in depth. pnpm's audit honours the suppression
+      # list a tree's package.json carries (pnpm.auditConfig) AND, as the
+      # fix-round-3 measurement below records, pnpm-workspace.yaml; the
+      # severity bar and the transport settings it honours from .npmrc. This
+      # step deep-compares all three files against a pull request's BASE,
+      # fetched by its pinned event SHA, and refuses divergence — the audit
+      # then never runs on a divergent configuration, and a red here says it
+      # moved without a maintainer-reviewed merge.
+      #
+      # THIS STEP IS RETAINED AND NO LONGER FIRES. The `pull_request` trigger
+      # that armed it left this file when the issue-1090 split completed — the
+      # pull-request leg is dependency-audit-pr.yml, which materializes ONLY
+      # the two manifests into a sanitized directory and audits them under
+      # main's definition, so no pull-request .npmrc or workspace file reaches
+      # its audit at all. The LOAD-BEARING suppression guard was always the
+      # same comparison in ci-pr.yml's verify job: base-defined, required, and
+      # un-deletable by a pull request. The step is kept deliberately rather
+      # than deleted: its comparison is the 1035-measured discipline, its
+      # suites pin it structurally (with the event gate this file no longer
+      # receives), and on this file's remaining legs — push, schedule,
+      # dispatch of main's own reviewed tree — suppression divergence cannot
+      # occur, so a dormant comparison here is harmless. A future leg that
+      # audits a tree a pull request can shape through its configuration
+      # re-arms it. All three files are read as git
+      # objects on both sides (ls-tree single-blob discipline, 65536-byte cap,
+      # NUL and UTF-8 refusals, an inline python pre-parse emitting the
+      # canonical form of .pnpm.auditConfig and of the workspace file's and
+      # .npmrc's audit-affecting subset, structural comparison), and every
+      # refusal is a fixed constant carrying no pull-request bytes. Measured
+      # with the repository's other gates: identical configurations exit 0
+      # silently.
+      #
+      # WHY BOTH FILES, AND THE MEASUREMENT THAT FIRST SAID OTHERWISE. pnpm
+      # 10.33.0, the version the Enable the pinned package manager step pins,
+      # reads auditConfig from BOTH package.json and pnpm-workspace.yaml, so a
+      # pull request CAN move the suppression list to the workspace file, and
+      # guarding package.json alone is guarding half the list. Measured with
+      # this repository's lockfile against a local registry answering one
+      # advisory that carries its github_advisory_id: with the identical
+      # ignoreGhsas entry present only in pnpm-workspace.yaml, the advisory was
+      # suppressed end to end (clean, exit 0). The earlier comment here said
+      # the opposite, and the reason it was wrong is recorded because the
+      # failure mode is reusable: its probe's mock advisory carried NO
+      # github_advisory_id, and pnpm's filter matches on exactly that field, so
+      # no list from any source could have matched and "unsuppressed" was
+      # guaranteed regardless of where the list lived — the measurement
+      # measured its own broken fixture. pnpm's audit also reads auditLevel and
+      # the registries mapping from pnpm-workspace.yaml (measured: a critical
+      # auditLevel filters a high advisory, and the registries mapping BEATS a
+      # pinned npm_config_registry, so it redirects the advisory endpoint) —
+      # both are part of the workspace comparison below. THE OBLIGATION THIS
+      # MEASUREMENT CARRIES: re-measure all three files' key sets on any bump
+      # of the pnpm pin above. A version whose audit starts honouring a NEW
+      # file or key would let a pull request silence the audit from a surface
+      # neither guard reads, and nothing would go red — the re-measurement
+      # belongs in the upgrade checklist beside that pin.
       - name: Refuse a pull request that changes the audit suppression list
         if: github.event_name == 'pull_request'
         env:

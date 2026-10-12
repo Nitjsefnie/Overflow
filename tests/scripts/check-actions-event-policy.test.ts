@@ -55,9 +55,9 @@ function activePolicyDetail(id: number): Response {
   }), { status: 200 });
 }
 
-// pull_request is required because ci-pr.yml's verify starts from pr suite's
-// completion. A policy that blocks the suite must fail here: otherwise no
-// completion arrives and the PR never receives its required verify context.
+// pull_request is required because ci-pr.yml's verify awaits the pr suite's
+// pull_request run: a policy that blocks it must fail here, not surface as a
+// verify that times out waiting for a run that can never start.
 const events = ["pull_request", "pull_request_target", "workflow_run"];
 
 function listResponse(policyCount: number): ApiResponse {
