@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 /**
- * Every metered, pull-request-reachable workflow in this repository used to
+ * Each repository-wide workflow in BOUNDED used to
  * key its concurrency group on `github.event.pull_request.number ||
  * github.ref`. That bounds ONE contributor's parallelism and nothing else: N
  * open pull requests produce N concurrent runs, so the repository's aggregate
@@ -140,14 +140,6 @@ const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = 
     group: "secret-scan-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
   },
-  "code-scanning.yml": {
-    group: "code-scanning-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": false,
-  },
-  "event-policy.yml": {
-    group: "event-policy-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": false,
-  },
   // Issue 1149 pins `dependency-audit` as a required context, produced by two
   // files. Only the pull-request leg is pull-request-reachable, so only it
   // belongs here: one repository-level group for every pull request, cancel
@@ -280,6 +272,28 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
    */
   premise?: Premise;
 }>([
+  [
+    "code-scanning.yml",
+    {
+      reason:
+        "Each pull request has its own scan group, so cancellation drops only that pull request's superseded analysis and its newer push supplies the replacement. Different pull requests never share the group. Push, schedule and dispatch runs key on the SHA and never cancel an in-flight scan.",
+      group: "code-scanning-${{ github.event.pull_request.number || github.sha }}",
+      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+      queue: undefined,
+      premise: "superseded-attempt",
+    },
+  ],
+  [
+    "event-policy.yml",
+    {
+      reason:
+        "Each pull request has its own event-policy group, so cancellation drops only that pull request's superseded policy check and its newer push supplies the replacement. Different pull requests never share the group. Push and schedule runs key on the SHA and never cancel an in-flight check.",
+      group: "event-policy-${{ github.event.pull_request.number || github.sha }}",
+      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+      queue: undefined,
+      premise: "superseded-attempt",
+    },
+  ],
   [
     "claim.yml",
     {
@@ -755,6 +769,34 @@ describe("every workflow's jobs", () => {
 });
 
 describe("every workflow's concurrency block", () => {
+  it("keys any pull-request cancellation per pull request, never repo-wide", () => {
+    for (const [name, workflow] of workflows) {
+      if (!isPullRequestReachable(workflow.on)) continue;
+      const blocks = [
+        [name, workflow.concurrency],
+        ...Object.entries(workflow.jobs ?? {}).map(([jobName, job]) => [
+          `${name}/${jobName}`,
+          (job as { concurrency?: Workflow["concurrency"] }).concurrency,
+        ] as const),
+      ] as const;
+      for (const [scope, concurrency] of blocks) {
+        const cancellation = concurrency?.["cancel-in-progress"];
+        // Conservatively treat expressions as potentially cancelling a PR;
+        // only a literal false proves cancellation is disabled structurally.
+        if (cancellation === undefined || cancellation === false) continue;
+        const group = String(concurrency?.group ?? "");
+        expect(
+          group,
+          `${scope} can cancel a pull-request run, so its group must never contain repo-wide`,
+        ).not.toContain("repo-wide");
+        expect(
+          group,
+          `${scope} can cancel a pull-request run, so its group must key on github.event.pull_request.number`,
+        ).toContain("github.event.pull_request.number");
+      }
+    }
+  });
+
   it("declares both a group and a cancel-in-progress", () => {
     for (const [name, workflow] of workflows) {
       expect(workflow.concurrency, `${name} must declare a concurrency block`).toBeDefined();

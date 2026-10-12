@@ -12,8 +12,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: event-policy-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
-  cancel-in-progress: false
+  # A per-PR group lets a newer run cancel only the same PR's older check.
+  # Other PRs have separate groups; push and schedule runs key on their SHA
+  # and never cancel an in-flight run.
+  group: event-policy-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   event-policy:

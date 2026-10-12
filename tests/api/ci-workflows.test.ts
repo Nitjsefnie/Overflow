@@ -1828,8 +1828,8 @@ exit 1
     });
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.concurrency).toEqual({
-      group: "code-scanning-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-      "cancel-in-progress": false,
+      group: "code-scanning-${{ github.event.pull_request.number || github.sha }}",
+      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
     });
 
     const analyze = workflow.jobs.analyze! as typeof workflow.jobs.analyze & {
