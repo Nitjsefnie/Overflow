@@ -20,7 +20,7 @@ type WorkflowJob = {
 type ParsedWorkflow = {
   on?: Record<string, unknown>;
   permissions?: Record<string, string>;
-  concurrency?: { group?: string; "cancel-in-progress"?: boolean };
+  concurrency?: { group?: string; "cancel-in-progress"?: boolean | string };
   jobs?: Record<string, WorkflowJob>;
 };
 
@@ -85,11 +85,11 @@ describe("the event-policy workflow", () => {
     expect(workflow.permissions).toEqual({ contents: "read" });
   });
 
-  it("bounds concurrency using the repository event-class convention", () => {
+  it("cancels superseded runs only within the same pull request", () => {
     expect(workflow.concurrency).toEqual({
       group:
-        "event-policy-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-      "cancel-in-progress": false,
+        "event-policy-${{ github.event.pull_request.number || github.sha }}",
+      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
     });
   });
 
