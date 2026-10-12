@@ -511,7 +511,7 @@ const fixtureUnwritableClosure: UnwritableClosureProjection = {
 };
 
 const fixtureRederivationOverview: RederivationOverview = {
-  foldRevision: 4,
+  foldRevision: 5,
   repositories: [
     {
       repositoryId: fixtureTargetId,

@@ -43,6 +43,18 @@ describe("fold revision stamps", () => {
     expect(await store.hasDerivedRowsBelowFoldRevision(repositoryId, FOLD_REVISION)).toBe(false);
   });
 
+  it.each(tables)("reports persisted revision-4 %s output below the precision-corrected fold", async (table) => {
+    const { repositoryId, store } = await materializeRepositoryFixture(sql);
+    const [row] = await rowsFor(table, repositoryId);
+    await sql`update ${sql(table)} set fold_revision = 4 where id = ${row.id}`;
+    const counts = await store.listRepositoryFoldRevisionCounts(FOLD_REVISION);
+    expect.soft(counts.find((repository) => repository.repositoryId === repositoryId)).toMatchObject({
+      rowsAtRevision: 2,
+      rowsBelowRevision: 1,
+    });
+    expect.soft(await store.hasDerivedRowsBelowFoldRevision(repositoryId, FOLD_REVISION)).toBe(true);
+  });
+
   it.each([true, false, undefined])("records run rederivation=%s with an omitted option defaulting to false", async (rederivation) => {
     const { repositoryId, store } = await materializeRepositoryFixture(sql);
     const runId = await store.beginRun(repositoryId, rederivation === undefined ? undefined : { rederivation });
