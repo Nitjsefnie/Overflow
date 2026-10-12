@@ -93,6 +93,7 @@ describe("suite run PR resolution", () => {
   it.each([
     ["wrong path", { path: ".github/workflows/ci.yml" }, /path/i],
     ["wrong event", { event: "push" }, /event/i],
+    ["privileged PR event", { event: "pull_request_target" }, /event/i],
     ["upstream failure", { conclusion: "failure" }, /success/i],
     ["upstream cancellation", { conclusion: "cancelled" }, /success/i],
     ["unfinished run", { status: "in_progress" }, /completed/i],

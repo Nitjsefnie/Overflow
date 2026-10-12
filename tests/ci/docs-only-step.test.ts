@@ -135,6 +135,7 @@ describe("the verify workflow's docs-only detection step", () => {
     // materialise step, so PR_TREE would be an unset variable.
     expect(run).not.toContain("PR_TREE");
     expect(run).not.toContain("workflow_run");
+    expect(run).not.toContain("pull_request_target");
   });
 
   it("hands the base to the docs-only CLI instead of piping a diff into it", () => {
