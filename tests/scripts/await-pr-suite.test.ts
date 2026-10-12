@@ -621,7 +621,7 @@ describe("awaitPrSuite — exact triggering run", () => {
     const outcome = await awaitPrSuite(h.deps);
     expect(outcome.exitCode).toBe(0);
     expect(outcome.runId).toBe(100);
-    expect(h.calls.map((call) => call.url)).toEqual([`https://api.github.com/repos/${REPO}/actions/runs/100`, LISTING_URL]);
+    expect(h.calls.map((call) => call.url)).toEqual([`https://api.github.com/repos/${REPO}/actions/runs/100`, `${LISTING_URL}&page=1`]);
     expect(h.sleeps).toEqual([]);
   });
 
@@ -692,5 +692,74 @@ describe("awaitPrSuite — exact triggering run", () => {
     h.deps.env.SUITE_RUN_ID = id;
     expect((await awaitPrSuite(h.deps)).exitCode).toBe(2);
     expect(h.calls).toEqual([]);
+  });
+});
+
+
+describe("complete supersession pagination without waiting", () => {
+  const history = Array.from({ length: 101 }, (_, n) => suiteRun({ id: 2000 - n }));
+  function paged(replies: Array<unknown | Error>, run = history[0]!) {
+    const h = harness([], { SUITE_RUN_ID: String(run.id), SUITE_RUN_ATTEMPT: "1" });
+    h.deps.fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+      h.calls.push({ url: String(input), headers: (init?.headers ?? {}) as Record<string, string>, signal: init?.signal });
+      const url = new URL(String(input));
+      if (url.pathname.includes("/actions/runs/")) return Response.json(run);
+      const page = Number(url.searchParams.get("page") ?? "1");
+      const reply = replies[page - 1];
+      if (reply instanceof Error) throw reply;
+      if (typeof reply === "object" && reply !== null && "httpStatus" in reply) return new Response("page failed", { status: Number(reply.httpStatus) });
+      return Response.json(reply);
+    }) as typeof fetch;
+    return h;
+  }
+
+  it("accepts the newest legitimate success in a 101-run history", async () => {
+    const h = paged([{ total_count: 101, workflow_runs: history.slice(0, 100) }, { total_count: 101, workflow_runs: history.slice(100) }]);
+    const result = await awaitPrSuite(h.deps);
+    expect(result.exitCode).toBe(0);
+    expect(result.runId).toBe(2000);
+    expect(h.calls.slice(1).map((call) => new URL(call.url).searchParams.get("page"))).toEqual(["1", "2"]);
+    expect(h.sleeps).toEqual([]);
+  });
+
+  it("finds a newer failed run even on page 2", async () => {
+    const newer = suiteRun({ id: 2001, conclusion: "failure" });
+    const h = paged([{ total_count: 101, workflow_runs: history.slice(0, 100) }, { total_count: 101, workflow_runs: [newer] }]);
+    const result = await awaitPrSuite(h.deps);
+    expect(result.exitCode).toBe(1);
+    expect(result.lines.join("\n")).toMatch(/superseded by run 2001/);
+    expect(h.sleeps).toEqual([]);
+  });
+
+  it.each([
+    ["changing total", { total_count: 102, workflow_runs: [history[100]] }, /total_count.*changed/],
+    ["short page", { total_count: 101, workflow_runs: [] }, /short|expected/],
+    ["duplicate id", { total_count: 101, workflow_runs: [history[0]] }, /duplicate/],
+    ["page failure", { httpStatus: 503 }, /HTTP 503/],
+  ])("fails closed on %s", async (_name, second, message) => {
+    const h = paged([{ total_count: 101, workflow_runs: history.slice(0, 100) }, second]);
+    const result = await awaitPrSuite(h.deps);
+    expect(result.exitCode).toBe(1);
+    expect(result.runId).toBeUndefined();
+    expect(result.lines.join("\n")).toMatch(message as RegExp);
+    expect(h.calls).toHaveLength(3);
+    expect(h.sleeps).toEqual([]);
+  });
+
+  it("refuses histories requiring more than 10 pages", async () => {
+    const h = paged([{ total_count: 1001, workflow_runs: history.slice(0, 100) }]);
+    const result = await awaitPrSuite(h.deps);
+    expect(result.exitCode).toBe(1);
+    expect(result.lines.join("\n")).toMatch(/1000|10 pages/);
+    expect(h.calls).toHaveLength(2);
+    expect(h.sleeps).toEqual([]);
+  });
+
+  it("accepts exactly 1000 runs in ten pages and never asks for page 11", async () => {
+    const all = Array.from({ length: 1000 }, (_, n) => suiteRun({ id: 2000 - n }));
+    const h = paged(Array.from({ length: 10 }, (_, n) => ({ total_count: 1000, workflow_runs: all.slice(n * 100, (n + 1) * 100) })));
+    expect((await awaitPrSuite(h.deps)).exitCode).toBe(0);
+    expect(h.calls).toHaveLength(11);
+    expect(h.sleeps).toEqual([]);
   });
 });

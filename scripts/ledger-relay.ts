@@ -38,7 +38,7 @@
 // LEDGER_APP_KEY secret and is never logged; every failure exits nonzero so a
 // dead relay is visible as a red job, never as silence.
 
-import { suiteRunsUrl, supersessionMessage } from "./pr-suite-supersession.ts";
+import { readSuiteRuns, suiteRunsUrl, supersessionMessage } from "./pr-suite-supersession.ts";
 import { createSign } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -257,7 +257,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
       env.GITHUB_REPOSITORY_ID,
       (id) => api.get(`${API_ROOT}/repos/${repo}/actions/runs/${id}`, `the workflow run ${id}`),
       fetchedProducer,
-      (sha) => api.get(suiteRunsUrl(API_ROOT, repo, sha), "the suite supersession listing"),
+      (sha) => readSuiteRuns((page) => api.get(suiteRunsUrl(API_ROOT, repo, sha, page), "the suite supersession listing", false)),
     );
     if (resolved.supersededBy !== undefined) return skippedSuperseded(resolved.supersededBy);
     recheckSupersession = resolved.recheckSupersession;
@@ -381,7 +381,7 @@ async function mintInstallationToken(
 function sweepApi(deps: RelayDeps, repo: string, auth: Record<string, string>): SweepApi {
   const headers = { ...API_HEADERS, ...auth };
   return {
-    get: <T,>(url: string, what: string) => apiCall<T>(deps, { url, method: "GET", headers }, what),
+    get: <T,>(url: string, what: string, retryTransient = true) => apiCall<T>(deps, { url, method: "GET", headers }, what, retryTransient),
     postCheckRun: (body, what) =>
       apiCall<unknown>(
         deps,
@@ -546,9 +546,10 @@ interface ApiRequest {
  * messages carry the endpoint, the status and GitHub's message — never a
  * header, so no key or token can reach the log.
  */
-async function apiCall<T>(deps: RelayDeps, request: ApiRequest, what: string): Promise<T> {
+async function apiCall<T>(deps: RelayDeps, request: ApiRequest, what: string, retryTransient = true): Promise<T> {
   let lastMessage = "";
-  for (let attempt = 0; attempt <= BACKOFF_MS.length; attempt += 1) {
+  const retryCount = retryTransient ? BACKOFF_MS.length : 0;
+  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
     if (attempt > 0) {
       await deps.delayFn(BACKOFF_MS[attempt - 1] ?? 0);
     }
@@ -579,7 +580,7 @@ async function apiCall<T>(deps: RelayDeps, request: ApiRequest, what: string): P
       throw new Error(`${what} failed: ${lastMessage}`);
     }
   }
-  throw new Error(`${what} failed after ${BACKOFF_MS.length + 1} attempts: ${lastMessage}`);
+  throw new Error(`${what} failed after ${retryCount + 1} attempts: ${lastMessage}`);
 }
 
 function truncate(text: string): string {

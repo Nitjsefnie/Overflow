@@ -27,7 +27,7 @@
 import { realpathSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { suiteRunsUrl, supersedingSuiteRunId, supersessionMessage } from "./pr-suite-supersession.ts";
+import { readSuiteRuns, suiteRunsUrl, supersedingSuiteRunId, supersessionMessage } from "./pr-suite-supersession.ts";
 
 /** The suite workflow's file name, which names its per-workflow run listing. */
 const SUITE_WORKFLOW_FILE = "pr-suite.yml";
@@ -159,13 +159,16 @@ async function exactCompletedRun(deps: AwaitDeps, config: AwaitConfig): Promise<
       (raw.status !== "completed" || raw.conclusion !== "success")) {
     throw new Error("the triggering suite run must be completed with conclusion success");
   }
-  const listed = await deps.fetchFn(suiteRunsUrl(API_ROOT, config.repo, config.headSha), {
-    method: "GET",
-    headers: { ...API_HEADERS, authorization: `Bearer ${config.token}`, "cache-control": "no-cache" },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  const listing = await readSuiteRuns(async (page) => {
+    const listed = await deps.fetchFn(suiteRunsUrl(API_ROOT, config.repo, config.headSha, page), {
+      method: "GET",
+      headers: { ...API_HEADERS, authorization: `Bearer ${config.token}`, "cache-control": "no-cache" },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!listed.ok) throw new Error(`the suite supersession listing failed: HTTP ${listed.status}`);
+    return listed.json();
   });
-  if (!listed.ok) throw new Error(`the suite supersession listing failed: HTTP ${listed.status}`);
-  const newer = supersedingSuiteRunId(raw, await listed.json(), { judgedAttempt: config.suiteRunAttempt! });
+  const newer = supersedingSuiteRunId(raw, listing, { judgedAttempt: config.suiteRunAttempt! });
   if (newer !== undefined) throw new Error(supersessionMessage(newer));
   if (raw.status !== "completed") throw new Error("the triggering suite run must be completed");
   return {

@@ -13,7 +13,7 @@ const PR_SHA = "b".repeat(40);
 const OTHER_PR_SHA = "c".repeat(40);
 const PIN_MAP = { verify: [".github/workflows/ci.yml", VERIFY_PATH] };
 const runsUrl = `${API}/actions/runs?per_page=100`;
-const suiteRunsUrl = (sha = PR_SHA) => `${API}/actions/workflows/pr-suite.yml/runs?head_sha=${sha}&event=pull_request&per_page=100`;
+const suiteRunsUrl = (sha = PR_SHA) => `${API}/actions/workflows/pr-suite.yml/runs?head_sha=${sha}&event=pull_request&per_page=100&page=1`;
 const runUrl = (id: number) => `${API}/actions/runs/${id}`;
 const jobsUrl = (id: number) => `${runUrl(id)}/jobs?filter=latest&per_page=100`;
 const checksUrl = (sha: string) =>
@@ -394,5 +394,60 @@ describe("publication rechecks supersession after reading job results", () => {
     expect(h.requests).toContain(jobsUrl(9001));
     expect(h.posts).toEqual([]);
     expect(renderRelayResult(result).join("\n")).toContain("superseded by run 8002");
+  });
+});
+
+
+describe("complete listing for mirror and orphan supersession", () => {
+  const newest = suite({ id: 8101 });
+  const verify = producer({ id: 9101, display_title: "verify for pr suite run 8101" });
+  const history = Array.from({ length: 101 }, (_, n) => suite({ id: 8101 - n }));
+  const pageUrl = (page: number) => `${API}/actions/workflows/pr-suite.yml/runs?head_sha=${PR_SHA}&event=pull_request&per_page=100&page=${page}`;
+  function paged(orphan: boolean, second: unknown = { total_count: 101, workflow_runs: history.slice(100) }, first: unknown = { total_count: 101, workflow_runs: history.slice(0, 100) }) {
+    return harness({
+      env: orphan ? { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" } : { GITHUB_WORKFLOW_RUN_ID: "9101" },
+      handlers: {
+        [runUrl(8101)]: newest, [runUrl(9101)]: verify,
+        [jobsUrl(9101)]: { jobs: [{ name: "verify", status: "completed", conclusion: "success" }] },
+        [runsUrl]: { workflow_runs: orphan ? [verify] : [] },
+        [suiteRunsUrl()]: first, [pageUrl(1)]: first, [pageUrl(2)]: second,
+      },
+    });
+  }
+
+  it.each([false, true])("newest legitimate verify posts with 101 runs, orphan=%s", async (orphan) => {
+    const h = paged(orphan);
+    const result = await h.run();
+    expect(h.posts).toHaveLength(1);
+    expect(h.posts[0]).toMatchObject({ name: "verify", head_sha: PR_SHA, conclusion: "success" });
+    expect(h.requests).toContain(pageUrl(2));
+    if (orphan) expect(result.sweep.relayed).toContainEqual({ context: "verify", runId: "9101" });
+  });
+
+  it.each([false, true])("page-2 newer failure suppresses the old certificate, orphan=%s", async (orphan) => {
+    const h = paged(orphan, { total_count: 101, workflow_runs: [suite({ id: 8102, conclusion: "failure" })] });
+    const result = await h.run();
+    expect(h.posts).toEqual([]);
+    expect(renderRelayResult(result).join("\n")).toContain("superseded by run 8102");
+  });
+
+  it.each([
+    ["changed total", { total_count: 102, workflow_runs: [history[100]] }, /total_count.*changed/],
+    ["short page", { total_count: 101, workflow_runs: [] }, /short|expected/],
+    ["duplicate id", { total_count: 101, workflow_runs: [history[0]] }, /duplicate/],
+    ["read failure", { httpStatus: 503 }, /suite.*failed/],
+  ])("%s fails closed for both mirror and sweep", async (_label, second, message) => {
+    for (const orphan of [false, true]) {
+      const h = paged(orphan, second);
+      await expect(h.run()).rejects.toThrow(message as RegExp);
+      expect(h.posts).toEqual([]);
+      expect(h.requests.filter((url) => url === pageUrl(2))).toHaveLength(1);
+    }
+  });
+
+  it.each([false, true])("page cap fails closed, orphan=%s", async (orphan) => {
+    const h = paged(orphan, undefined, { total_count: 1001, workflow_runs: history.slice(0, 100) });
+    await expect(h.run()).rejects.toThrow(/1000|10 pages/);
+    expect(h.posts).toEqual([]);
   });
 });

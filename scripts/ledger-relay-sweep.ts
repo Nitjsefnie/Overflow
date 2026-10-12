@@ -34,7 +34,7 @@ import {
   type PinMap,
   type RelayJob,
 } from "./ledger-relay-decisions.ts";
-import { suiteRunsUrl, supersessionMessage } from "./pr-suite-supersession.ts";
+import { readSuiteRuns, suiteRunsUrl, supersessionMessage } from "./pr-suite-supersession.ts";
 import { resolveWorkflowRunHead } from "./ledger-relay-upstream.ts";
 
 /**
@@ -79,7 +79,7 @@ export interface SweepOutcome {
  * thrown sweep is a red relay job rather than a silent degradation.
  */
 export interface SweepApi {
-  get<T>(url: string, what: string): Promise<T>;
+  get<T>(url: string, what: string, retryTransient?: boolean): Promise<T>;
   postCheckRun(body: Record<string, unknown>, what: string): Promise<unknown>;
 }
 
@@ -253,7 +253,7 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
       deps.repositoryId,
       (id) => deps.api.get(`${deps.apiRoot}/repos/${deps.repo}/actions/runs/${id}`, `the workflow run ${id}`),
       undefined,
-      (sha) => deps.api.get(suiteRunsUrl(deps.apiRoot, deps.repo, sha), "the suite supersession listing"),
+      (sha) => readSuiteRuns((page) => deps.api.get(suiteRunsUrl(deps.apiRoot, deps.repo, sha, page), "the suite supersession listing", false)),
     );
     if (resolved.supersededBy !== undefined) {
       superseded.push({ runId: candidate.runId, supersededBy: resolved.supersededBy });
