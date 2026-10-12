@@ -1,5 +1,6 @@
 // Every producer refreshes recency after its App write commits and can make
-// one corrective POST. Workflow-run producers also retain the suite checks
+// one producer correction. Deterministic exhaustion requires a negative bound
+// certificate even after that correction. Workflow-run producers retain suite checks
 // before/after publication; ordinary API failures still throw.
 
 import { decideContexts, type ContextDecision } from "./ledger-relay-decisions.ts";
@@ -47,7 +48,7 @@ async function writeCheck(deps: ProducerDeps, decision: ContextDecision, run: Sw
   await deps.api.postCheckRun(checkRunBody(decision, run), `the check-run for ${decision.context}`);
 }
 
-/** One original write, at most one correction. A corrective recheck never starts another correction. */
+/** One producer correction, plus any mandatory bound certificate. Never reselect or loop after correction. */
 async function repairAfterPost(
   deps: ProducerDeps,
   original: ContextDecision,
@@ -60,14 +61,14 @@ async function repairAfterPost(
       run: { ...run, status: run.status ?? original.status }, check, historyBound: state.historyBound,
     } : undefined);
   if (state.historyBound !== undefined && (newest === undefined || newest.run.status !== "completed")) {
-    // Keep the bound's negative direction even if a replacement is still running.
+    // Keep the bound's negative direction without a completed replacement.
     if (original.conclusion === "failure" && original.summary.includes(state.historyBound)) return;
     const decision = historyBoundDecision(state.historyBound);
     await writeCheck(deps, decision, run);
     await publicationState(check);
     return { runId: run.runId, decision };
   }
-  // A queued/running or not-yet-created replacement is attested by its own completion relay.
+  // A replacement without a completed eligible producer waits for its own completion relay.
   if (newest === undefined || newest.run.status !== "completed") return;
   const attested = await attestedContexts(deps, run.headSha, new Map([[original.context, newest.run]]));
   const boundAlreadyPublished = newest.historyBound !== undefined && newest.run.runId === run.runId
@@ -86,17 +87,21 @@ async function repairAfterPost(
   if (decision === undefined) throw new Error("the newest producer has no pinned corrective context");
   await writeCheck(deps, decision, newest.run);
   const afterCorrection = await publicationState(newest.check);
-  // No second corrective POST. A newly exhausted history after a positive
-  // correction is red so the next sweep can publish the bound's failure.
-  if (afterCorrection.historyBound !== undefined && decision.conclusion !== "failure") {
-    throw new SuiteHistoryBoundError();
+  // A deterministic bound must leave its negative certificate, even after a correction.
+  // No new producer selection: the corrective-write race remains for the next scheduled sweep.
+  if (afterCorrection.historyBound !== undefined && (decision.conclusion !== "failure"
+    || !decision.summary.includes(afterCorrection.historyBound))) {
+    const failure = historyBoundDecision(afterCorrection.historyBound);
+    await writeCheck(deps, failure, newest.run);
+    await publicationState(newest.check); // Transient read errors still throw; a repeated bound never loops.
+    return { runId: newest.run.runId, decision: failure };
   }
   return { runId: newest.run.runId, decision };
 }
 
 interface ResolvedCandidate { run: SweepCandidate; check?: SupersessionCheck; historyBound?: string }
 
-/** Resolve the same eligible producer class and id/attempt order as the sweep, including live blockers. */
+/** Resolve completed eligible producers in the sweep's id/attempt order; unfinished runs are ignored. */
 async function newestCandidate(
   deps: ProducerDeps, headSha: string, context: string, posted?: ResolvedCandidate,
 ): Promise<ResolvedCandidate | undefined> {
@@ -105,10 +110,12 @@ async function newestCandidate(
   );
   if (!Array.isArray(listing?.workflow_runs)) throw new Error("the post-write producer listing returned no runs array");
   const contextPins = { [context]: deps.pinMap[context] };
-  // Keep the just-posted producer in recency even if the listing omits it.
-  const eligible: SweepCandidate[] = posted === undefined ? [] : [posted.run];
-  const resolved = new Map<SweepCandidate, ResolvedCandidate>(posted === undefined ? [] : [[posted.run, posted]]);
-  for (const candidate of selectSweepCandidates(listing.workflow_runs, contextPins, "", true)) {
+  // Keep the completed just-posted producer even if the listing omits it.
+  const completedPosted = posted?.run.status === "completed" ? posted : undefined;
+  const eligible: SweepCandidate[] = completedPosted === undefined ? [] : [completedPosted.run];
+  const resolved = new Map<SweepCandidate, ResolvedCandidate>(completedPosted === undefined ? [] : [[completedPosted.run, completedPosted]]);
+  for (const candidate of selectSweepCandidates(listing.workflow_runs, contextPins, "")) {
+    candidate.status = "completed";
     let entry: ResolvedCandidate = { run: candidate };
     if (candidate.workflowRun === true) {
       const upstream = await resolveWorkflowRunHead(
@@ -127,7 +134,7 @@ async function newestCandidate(
       });
       entry = { run: candidate, check: upstream.recheckSupersession, historyBound: upstream.historyBound };
     }
-    if (candidate.headSha !== headSha) continue;
+    if (candidate.status !== "completed" || candidate.headSha !== headSha) continue;
     eligible.push(candidate);
     resolved.set(candidate, entry);
   }
