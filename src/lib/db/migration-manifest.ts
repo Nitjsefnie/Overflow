@@ -94,6 +94,7 @@ export const bundledMigrationNames: readonly string[] = [
   "062_webhook_delivery_body_digest.sql",
   "063_null_avatar_urls.sql",
   "064_data_subject_suppressions.sql",
+  "065_retention_foreign_key_indexes.sql",
 ];
 
 /**
