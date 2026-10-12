@@ -55,8 +55,8 @@ permissions:
   # request's head is still live, the relay re-dispatches it. The rerun
   # authenticates as this workflow's own repo-scoped github.token, NOT the
   # ledger App's — the App keeps its narrow permission set — and a rerun
-  # re-enters the producer workflow's repo-wide concurrency group as a new
-  # arrival, so the heal cannot jump any queue.
+  # re-enters pr-gates.yml's group for the same pull request and follows that
+  # group's cancellation policy. Other pull requests have separate groups.
   contents: read
   actions: write
 
