@@ -1,7 +1,14 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll, vi } from "vitest";
 import { assertNoSharedProvisionSurvivors, resetSharedProvisions } from "./tests/support/postgres-container";
+
+// Issue 1160: Next captures this global when its storage factory first loads.
+// next/server can load that factory before a build helper boots Next's node
+// environment; its later console patches then call exit() on the cached fake.
+// Initialize the native constructor before each file imports any Next modules.
+Reflect.set(globalThis, "AsyncLocalStorage", AsyncLocalStorage);
 
 // Issue 736: with `isolate: false` the evaluated module graph is shared by
 // every test file a worker runs, and a module's import bindings freeze at its
