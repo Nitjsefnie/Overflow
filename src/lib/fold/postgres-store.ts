@@ -12,6 +12,7 @@ import {
 import type { DifficultyScheme, DifficultySchemeVersion } from "@/lib/domain/difficulty-scheme";
 import { calculateSettlement } from "@/lib/domain/settlement";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
+import { moderationEventsFromJson } from "@/lib/fold/moderation-history";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { recordNewPolicyViolations } from "@/lib/fold/policy-violation-record";
 import type { FoldForgeIdentity } from "@/lib/fold/repository-fold";
@@ -35,7 +36,6 @@ import { RECONCILIATION_LEASE_MS } from "@/lib/fold/reconciliation-worker";
 import { waitForRepositoryLockRetry } from "@/lib/fold/repository-lock-retry";
 import { scrubSuppressedForgeData } from "@/lib/fold/data-subject-suppression";
 import type {
-  FoldModerationEvent,
   FoldResult,
   FoldSettlement,
   FoldUser,
@@ -2659,42 +2659,4 @@ function nullableTimestampToIso(value: string | Date | null): string | null {
     throw new Error("Timestamp was invalid.");
   }
   return date.toISOString();
-}
-
-function moderationEventsFromJson(value: unknown): FoldModerationEvent[] {
-  if (!Array.isArray(value)) {
-    throw new Error("Moderation history was invalid.");
-  }
-  return value.map((candidate) => {
-    if (!isRecord(candidate)) {
-      throw new Error("Moderation history was invalid.");
-    }
-    const { id, priorState, newState, occurredAt } = candidate;
-    if (
-      typeof id !== "string" ||
-      !isEnforcementState(priorState) ||
-      !isEnforcementState(newState) ||
-      (typeof occurredAt !== "string" && !(occurredAt instanceof Date))
-    ) {
-      throw new Error("Moderation history was invalid.");
-    }
-    return {
-      id,
-      priorState,
-      newState,
-      occurredAt: timestampToIso(occurredAt),
-    };
-  });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function isEnforcementState(value: unknown): value is EnforcementState {
-  return value === "ACTIVE" ||
-    value === "UNDER_AUDIT" ||
-    value === "WARNED" ||
-    value === "RECALIBRATING" ||
-    value === "BANNED";
 }
