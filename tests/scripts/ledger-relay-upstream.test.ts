@@ -451,3 +451,47 @@ describe("complete listing for mirror and orphan supersession", () => {
     expect(h.posts).toEqual([]);
   });
 });
+
+
+describe("superseded mirror keeps orphan recovery available", () => {
+  it.each(["initial", "after-jobs"])("%s supersession skips only its own posting", async (phase) => {
+    let reads = 0;
+    const orphan = producer({ id: 9002, display_title: "verify for pr suite run 8002", html_url: `https://github.com/${REPO}/actions/runs/9002` });
+    const h = harness({ handlers: {
+      [suiteRunsUrl()]: () => {
+        reads += 1;
+        return phase === "after-jobs" && reads === 1
+          ? { total_count: 1, workflow_runs: [suite()] }
+          : { total_count: 2, workflow_runs: [suite(), suite({ id: 8003, conclusion: "failure" })] };
+      },
+      [runsUrl]: { workflow_runs: [orphan] },
+      [runUrl(9002)]: orphan,
+      [runUrl(8002)]: suite({ id: 8002, head_sha: OTHER_PR_SHA }),
+      [jobsUrl(9002)]: { jobs: [{ name: "verify", status: "completed", conclusion: "success" }] },
+    } });
+    const result = await h.run();
+    expect(result.posted).toEqual([]);
+    expect(result.sweep.relayed).toContainEqual({ context: "verify", runId: "9002" });
+    expect(h.posts).toHaveLength(1);
+    expect(h.posts[0]).toMatchObject({ name: "verify", head_sha: OTHER_PR_SHA, conclusion: "success" });
+    expect(h.posts.some((post) => post.head_sha === PR_SHA)).toBe(false);
+    const output = renderRelayResult(result).join("\n");
+    expect(output).toContain("superseded by run 8003");
+    expect(output).toContain("orphan-sweep: relayed verify from run 9002");
+  });
+
+  it("recovers the newer same-SHA certificate instead of the superseded mirror", async () => {
+    const orphan = producer({ id: 9002, display_title: "verify for pr suite run 8002", html_url: `https://github.com/${REPO}/actions/runs/9002` });
+    const h = harness({ handlers: {
+      [suiteRunsUrl()]: { total_count: 2, workflow_runs: [suite(), suite({ id: 8002 })] },
+      [runsUrl]: { workflow_runs: [orphan] },
+      [runUrl(9002)]: orphan, [runUrl(8002)]: suite({ id: 8002 }),
+      [jobsUrl(9002)]: { jobs: [{ name: "verify", status: "completed", conclusion: "success" }] },
+    } });
+    const result = await h.run();
+    expect(result.posted).toEqual([]);
+    expect(result.sweep.relayed).toEqual([{ context: "verify", runId: "9002" }]);
+    expect(h.posts).toHaveLength(1);
+    expect(h.posts[0]).toMatchObject({ head_sha: PR_SHA, details_url: `https://github.com/${REPO}/actions/runs/9002` });
+  });
+});

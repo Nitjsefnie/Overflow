@@ -248,6 +248,17 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     run = triggeringRunFromApi(fetchedProducer);
   }
 
+  const runSweep = () => sweepOrphans({
+    api: sweepApi(deps, repo, auth),
+    decide: decideContexts,
+    pinMap,
+    apiRoot: API_ROOT,
+    repo,
+    appId,
+    repositoryId: env.GITHUB_REPOSITORY_ID,
+    triggerRunId: run.runId,
+  });
+
   let attestationRun = run;
   let recheckSupersession: (() => Promise<number | undefined>) | undefined;
   if (run.event === "workflow_run") {
@@ -259,7 +270,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
       fetchedProducer,
       (sha) => readSuiteRuns((page) => api.get(suiteRunsUrl(API_ROOT, repo, sha, page), "the suite supersession listing", false)),
     );
-    if (resolved.supersededBy !== undefined) return skippedSuperseded(resolved.supersededBy);
+    if (resolved.supersededBy !== undefined) return skippedSuperseded(resolved.supersededBy, runSweep);
     recheckSupersession = resolved.recheckSupersession;
     run = resolved.run;
     attestationRun = { ...run, headSha: resolved.headSha };
@@ -285,7 +296,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   const jobs = validateJobs(jobsBody);
 
   const newer = await recheckSupersession?.();
-  if (newer !== undefined) return skippedSuperseded(newer);
+  if (newer !== undefined) return skippedSuperseded(newer, runSweep);
   const decisions = decideContexts(pinMap, run.path, run.conclusion, jobs);
   const posted: string[] = [];
   for (const decision of decisions) {
@@ -313,16 +324,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   let sweep: SweepOutcome;
   let sweepError: unknown = undefined;
   try {
-    sweep = await sweepOrphans({
-      api: sweepApi(deps, repo, auth),
-      decide: decideContexts,
-      pinMap,
-      apiRoot: API_ROOT,
-      repo,
-      appId,
-      repositoryId: env.GITHUB_REPOSITORY_ID,
-      triggerRunId: run.runId,
-    });
+    sweep = await runSweep();
   } catch (error) {
     sweep = NO_SWEEP;
     sweepError = error;
@@ -335,8 +337,8 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
 }
 
 /** A late older verification must not replace either a newer failure or success. */
-function skippedSuperseded(supersededBy: number): RelayResult {
-  return { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP, supersededBy };
+async function skippedSuperseded(supersededBy: number, runSweep: () => Promise<SweepOutcome>): Promise<RelayResult> {
+  return { decisions: [], posted: [], rerunDispatched: false, sweep: await runSweep(), supersededBy };
 }
 
 /**
@@ -726,7 +728,10 @@ function required(env: Record<string, string | undefined>, name: string): string
  * living undrivable in main().
  */
 export function renderRelayResult(result: RelayResult): string[] {
-  if (result.supersededBy !== undefined) return [`[ledger-relay] ${supersessionMessage(result.supersededBy)}`];
+  if (result.supersededBy !== undefined) return [
+    `[ledger-relay] ${supersessionMessage(result.supersededBy)}`,
+    ...renderSweepLines(result.sweep),
+  ];
   if (result.sweepOnly === true) {
     // Issue 1116: the sweep's summary is the whole output; there is no
     // triggering run to name and no mirror to report.
