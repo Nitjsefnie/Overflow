@@ -40,6 +40,18 @@ describe("migration compatibility fixtures", () => {
     ["026_default_column_name.sql", "add column not null without default"],
     ["028_quoted_comment_delimiter.sql", "drop column"],
     ["029_identifier_comment_delimiter.sql", "drop column"],
+    ["030_unicode_column.sql", "alter type"],
+    ["031_dollar_default_data.sql", "add column not null without default"],
+    ["032_safe_marker_in_notice.sql", "drop column"],
+    ["033_escaped_e_string.sql", "drop column"],
+    ["034_quoted_semicolon.sql", "rename"],
+    ["035_quoted_whitespace.sql", "alter type"],
+    ["036_unicode_optional_column.sql", "alter type"],
+    ["037_doubled_string_quote.sql", "drop column"],
+    ["038_safe_marker_in_dollar_data.sql", "drop column"],
+    ["041_executable_do_body.sql", "drop column"],
+    ["042_executable_function_body.sql", "drop column"],
+    ["045_doubled_identifier_quote.sql", "alter type"],
   ])("flags %s with its matched shapes", async (name, shapes) => {
     const tree = await readMigrationTree(fixturesDirectory);
     expect(tree.has(name), `disk-backed fixture ${name}`).toBe(true);
@@ -52,22 +64,21 @@ describe("migration compatibility fixtures", () => {
     "010_create_table.sql", "011_add_default.sql", "012_add_nullable.sql",
     "013_create_index.sql", "014_drop_not_null.sql", "018_line_comment.sql",
     "019_block_comment.sql", "022_drop_default.sql", "027_nested_comment.sql",
+    "039_ordinary_literal_shapes.sql", "040_dollar_literal_shapes.sql",
   ])("does not flag %s", async (name) => {
     const tree = await readMigrationTree(fixturesDirectory);
     expect(pendingMigrationLines(new Map([[name, tree.get(name)!]]), new Set())).toEqual([`${name}\t-`]);
   });
 
-  it("downgrades a shape hit with a reasoned safe comment", async () => {
+  it.each(["015_safe_marker.sql", "043_safe_comment_in_do.sql"])("downgrades a shape hit with a reasoned safe comment in %s", async (name) => {
     const tree = await readMigrationTree(fixturesDirectory);
-    const name = "015_safe_marker.sql";
     expect(pendingMigrationLines(new Map([[name, tree.get(name)!]]), new Set())).toEqual([
       `${name}\t-\toverflow: mixed-version safe: retained releases stopped using note`,
     ]);
   });
 
-  it("honors a review marker inside a block comment", async () => {
+  it.each(["020_review_comment.sql", "044_raw_review_literal.sql"])("honors the raw review marker in %s", async (name) => {
     const tree = await readMigrationTree(fixturesDirectory);
-    const name = "020_review_comment.sql";
     expect(pendingMigrationLines(new Map([[name, tree.get(name)!]]), new Set())).toEqual([`${name}\treview`]);
   });
 
