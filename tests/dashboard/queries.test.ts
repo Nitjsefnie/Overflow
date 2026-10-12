@@ -1,6 +1,6 @@
 import postgres, { type Sql } from "postgres";
 import { startPostgresContainer, type StartedPostgres } from "../support/postgres-container";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   getCalibrationComparison,
   getCalibrationComparisonByRepository,
@@ -1744,6 +1744,12 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
         state text,
         opened_at timestamptz
       );
+    `);
+  });
+
+  beforeEach(async () => {
+    await sql.unsafe(`
+      truncate users, registered_repositories, issues, balances;
       insert into users values ('sponsor', 'grace', 901, 'ACTIVE'), ('member', 'ada', 902, 'ACTIVE');
       insert into registered_repositories (id, owner_name, sponsor_id, active, visibility, difficulty_scheme) values
         ('repo', 'co-op/harbour', 'sponsor', true, 'PUBLIC', '{"openingName":"Promise band","actualName":"Delivered band"}');
@@ -1851,7 +1857,7 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
     // and its claimed issue stays off the claimed board — the unavailability
     // filter holds in both claim states, not only through the repayment
     // nomination.
-    expect(board.map((row) => row.id)).toEqual(["open", "unavailable-open", "repayment-available"]);
+    expect(board.map((row) => row.id)).toEqual(["open", "repayment-available"]);
     const claimedBoard = await listEligibleIssues("member", { claimState: "CLAIMED" }, { sql: sql as unknown as DashboardSql });
     expect(claimedBoard.map((row) => row.id)).toEqual(["ambiguous", "claimed"]);
   });
