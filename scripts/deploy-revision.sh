@@ -82,8 +82,10 @@ map_refusal_prefix='Could not read a valid .github/required-checks.json at %s (a
 # check-run posted by the ledger App (OVERFLOW_DEPLOY_LEDGER_APP_ID, default
 # 5118623) attributes the context, and the NEWEST App check-run for it
 # (highest id) decides. When no App check-run exists, the pinned workflow's
-# job record decides exactly as before: among that workflow's runs on the
-# SHA the newest run, and within it the latest attempt. Completed + success
+# job record decides only for push, schedule or workflow_dispatch runs on the
+# SHA: the newest eligible run, and within it the latest attempt. PR and
+# workflow_run jobs cannot certify main (workflow_run carries main's SHA even
+# when it judges a PR). A missing event refuses. Completed + success
 # passes; completed + any other conclusion refuses immediately; a status
 # that is not completed is pending and waits; an absent job (GitHub has not
 # created the run yet — the normal state in the first minute after a merge)
@@ -112,7 +114,7 @@ map_refusal_prefix='Could not read a valid .github/required-checks.json at %s (a
 # just after a merge, a legitimate job's check-run can be listed before its
 # run is.
 required_checks_gate() {
-  local remote_url repo required pins check check_pins unmapped check_runs runs run_id run_path run_jobs jobs
+  local remote_url repo required pins check check_pins unmapped check_runs runs run_id run_path run_event run_jobs jobs
   local map map_status tree_parse_status fallback_parser fallback_read_status fallback_parse_status
   local job_line job_run job_path job_id job_name job_attempt job_status job_conclusion
   local cr_id cr_name cr_app cr_status cr_conclusion producer_ids status conclusion
@@ -138,7 +140,7 @@ required_checks_gate() {
   # may be pinned to several workflow files (issue 1090 splits the workflows
   # that read pull-request data, leaving one required context produced by a
   # pull_request_target file and a push file), and every path it names is a
-  # workflow whose job for that check counts. A missing file, invalid JSON,
+  # workflow whose main-event job for that check counts. A missing file, invalid JSON,
   # anything but exactly one object of .github/workflows/*.yml paths or
   # non-empty lists of them, or an absent jq all fail here. The jq program is
   # scripts/required-checks-parse.jq, a tracked file beside this script: the
@@ -211,17 +213,25 @@ required_checks_gate() {
       exit 1
     fi
     if ! runs=$(gh api "repos/$repo/actions/runs?head_sha=$full_sha&per_page=100" --paginate \
-        --jq '.workflow_runs[] | [.id, .path] | @tsv'); then
+        --jq '.workflow_runs[] | [.id, .path, (.event // "(missing)")] | @tsv'); then
       printf 'Could not read workflow runs for %s on %s; refusing to deploy.\n' "$repo" "$full_sha" >&2
       exit 1
     fi
-    # Every job of every run of a pinned workflow, one per line:
+    # Every job of every eligible main-event run of a pinned workflow, one per line:
     # run, path, job id, name, attempt, status, conclusion. Tab is IFS
     # whitespace, so an empty field would shift the ones after it: the jobs
     # projection fills every field but the last.
     jobs=
-    while IFS=$'\t' read -r run_id run_path; do
+    while IFS=$'\t' read -r run_id run_path run_event; do
       [ -n "$run_id" ] || continue
+      if [ -z "$run_event" ] || [ "$run_event" = "(missing)" ]; then
+        printf 'Workflow run %s has no event for %s on %s; refusing to deploy.\n' "$run_id" "$repo" "$full_sha" >&2
+        exit 1
+      fi
+      case "$run_event" in
+        push|schedule|workflow_dispatch) ;;
+        *) continue ;;
+      esac
       is_pinned_path "$run_path" || continue
       if ! run_jobs=$(gh api "repos/$repo/actions/runs/$run_id/jobs?filter=all&per_page=100" --paginate \
           --jq '.jobs[] | [.id, (if (.name // "") == "" then "(unnamed)" else .name end), (.run_attempt // 0), (.status // "unknown"), (.conclusion // "")] | @tsv' </dev/null); then
