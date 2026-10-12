@@ -15,8 +15,8 @@
 // So every relay start sweeps the repository for such orphans: recent completed
 // runs of a pinned workflow, deduplicated against the App's OWN check-runs at
 // each candidate commit. Only the newest eligible producer per context is
-// considered, and its latest App check must link to that producer to count as
-// attestation — app id matters as much as name here, because branch
+// considered, and its latest App check must identify that producer's attempt
+// to count as attestation — app id matters as much as name here, because branch
 // protection matches a required context by name AND app, so a same-named
 // github-actions check-run leaves the App's context missing.
 //
@@ -36,6 +36,7 @@ import {
 } from "./ledger-relay-decisions.ts";
 import { readSuiteRuns, suiteRunsUrl, supersessionMessage } from "./pr-suite-supersession.ts";
 import { resolveWorkflowRunHead } from "./ledger-relay-upstream.ts";
+import { normalizedAttempt } from "./ledger-relay-trigger.ts";
 
 /**
  * The bound on one sweep: at most this many candidates are examined, so one
@@ -56,6 +57,7 @@ export const SWEEP_RUN_LIMIT = 20;
 /** One completed producer run the sweep may still have to relay for. */
 export interface SweepCandidate {
   runId: string;
+  runAttempt: number;
   headSha: string;
   path: string;
   conclusion: string | null;
@@ -99,8 +101,10 @@ export interface SweepDeps {
   appId: string;
   /** The relay's own Actions repository id; required only for workflow_run. */
   repositoryId?: string;
-  /** The run that triggered this relay instance; never swept — the mirror already posted it. */
+  /** Excluded from orphan posting, but retained as a newest-producer blocker. */
   triggerRunId: string;
+  /** Mirror's validated producer with the resolved attestation SHA, even if superseded. */
+  triggerRun?: SweepCandidate;
 }
 
 /**
@@ -119,8 +123,9 @@ export interface SweepDeps {
  *   being pinned twice says the path produces a required context, not that the
  *   run at it may attest one, so the check runs for those paths exactly as it
  *   does for a single-path pin;
- * - its id is not the triggering run's — the mirror above already posted it,
- *   and re-deciding it here would duplicate every context on every start;
+ * - its id is not the triggering run's — this selects the orphan workload.
+ *   The trigger is retained separately for recency and never reposted, even
+ *   when its mirror was superseded and posted nothing;
  * - it carries both a head SHA and an html_url. Legacy candidates attest that
  *   SHA; workflow_run candidates replace it with the resolved upstream SHA
  *   and re-read the producer's details_url before any attestation or POST.
@@ -153,6 +158,7 @@ export function selectSweepCandidates(
       html_url?: unknown;
       event?: unknown;
       head_branch?: unknown;
+      run_attempt?: unknown;
     };
     if (run.status !== "completed") continue;
     if (typeof run.path !== "string" || !pinnedPaths.has(run.path)) continue;
@@ -172,6 +178,10 @@ export function selectSweepCandidates(
     if (candidates.length === SWEEP_RUN_LIMIT) break;
     candidates.push({
       runId,
+      runAttempt: normalizedAttempt(
+        typeof run.run_attempt === "number" || typeof run.run_attempt === "string"
+          ? run.run_attempt : undefined,
+      ),
       headSha: run.head_sha,
       path: run.path,
       conclusion: typeof run.conclusion === "string" ? run.conclusion : null,
@@ -185,7 +195,7 @@ export function selectSweepCandidates(
 /**
  * The missing-context computation, pure. The contexts one of whose pinned paths
  * is the candidate's path, minus the names whose latest App checks attest the
- * selected newest producer at that commit, minus the contexts this same sweep
+ * selected newest producer attempt at that commit, minus the contexts this same sweep
  * has already relayed at that commit.
  *
  * The caller restricts each context to its newest eligible producer before
@@ -211,8 +221,10 @@ export function missingContextsFor(
 /**
  * The sweep. One repository-wide listing, then one check-runs GET per DISTINCT
  * candidate commit, then one jobs GET and at most one POST per candidate that
- * still has something missing. Only the highest run id for each context at a
- * commit may post: an older candidate never replaces a newer attestation.
+ * still has something missing. Recency includes the trigger and orders by run
+ * id then attempt. A winning trigger is never reposted, and blocks older runs
+ * even when its mirror posted nothing. Superseded non-trigger workflow_run
+ * candidates remain excluded.
  * Candidates at the same commit share the attestation and this invocation's
  * relayed set, so a burst of completions on
  * one pull request head costs one check-runs GET and one post per context
@@ -236,6 +248,18 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
     deps.pinMap,
     deps.triggerRunId,
   );
+  let triggerRun = deps.triggerRun;
+  // The mirror supplies resolved identity even if the trigger is absent from
+  // this bounded listing. Other callers can recover a listed trigger through
+  // the same validation/resolution path as orphans, without posting it.
+  const listedTrigger = triggerRun === undefined && deps.triggerRunId !== ""
+    ? selectSweepCandidates(
+      Array.isArray(listing?.workflow_runs) ? listing.workflow_runs.filter((entry: unknown) =>
+        typeof entry === "object" && entry !== null &&
+        idOf((entry as { id?: unknown }).id) === deps.triggerRunId,
+      ) : [], deps.pinMap, "",
+    )[0]
+    : undefined;
   // Built as a mutable array and narrowed on return: SweepOutcome is readonly
   // so a consumer cannot push into a result it was handed, but this function
   // is the one place that accumulates.
@@ -246,8 +270,13 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
 
   // Resolve BEFORE grouping: both attestation and this sweep's dedupe key are
   // the upstream PR SHA. A refusal propagates, never falling back to main.
-  for (const candidate of candidates) {
-    if (candidate.workflowRun !== true) { active.push(candidate); continue; }
+  for (const candidate of [...candidates, ...(listedTrigger === undefined ? [] : [listedTrigger])]) {
+    const isTrigger = candidate.runId === deps.triggerRunId;
+    if (candidate.workflowRun !== true) {
+      if (isTrigger) triggerRun = candidate;
+      else active.push(candidate);
+      continue;
+    }
     const resolved = await resolveWorkflowRunHead(
       candidate.runId,
       deps.repositoryId,
@@ -255,20 +284,24 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
       undefined,
       (sha) => readSuiteRuns((page) => deps.api.get(suiteRunsUrl(deps.apiRoot, deps.repo, sha, page), "the suite supersession listing", false)),
     );
+    candidate.headSha = resolved.headSha;
+    candidate.path = resolved.run.path;
+    candidate.conclusion = resolved.run.conclusion;
+    candidate.htmlUrl = resolved.run.htmlUrl;
+    candidate.runAttempt = resolved.run.runAttempt;
+    if (isTrigger) { triggerRun = candidate; continue; }
     if (resolved.supersededBy !== undefined) {
       superseded.push({ runId: candidate.runId, supersededBy: resolved.supersededBy });
       continue;
     }
     active.push(candidate);
     rechecks.set(candidate.runId, resolved.recheckSupersession);
-    candidate.headSha = resolved.headSha;
-    candidate.path = resolved.run.path;
-    candidate.conclusion = resolved.run.conclusion;
-    candidate.htmlUrl = resolved.run.htmlUrl;
   }
 
   for (const [headSha, atHead] of groupByHeadSha(active)) {
-    const newest = newestProducersFor(deps.pinMap, atHead);
+    const newest = newestProducersFor(deps.pinMap, [
+      ...atHead, ...(triggerRun?.headSha === headSha ? [triggerRun] : []),
+    ]);
     const attested = await attestedContexts(deps, headSha, newest);
     const relayedThisSweep = new Set<string>();
     for (const candidate of atHead) {
@@ -329,9 +362,10 @@ function groupByHeadSha(candidates: readonly SweepCandidate[]): Array<[string, S
 }
 
 /**
- * Select the highest numeric producer run id for each context at one resolved
+ * Select the highest numeric producer run id, then attempt, at one resolved
  * SHA, across every pinned path. Call only after workflow_run supersession has
- * excluded ineligible candidates. Listing order does not establish recency.
+ * excluded ineligible orphans; the trigger still participates as a blocker.
+ * Listing order does not establish recency.
  */
 function newestProducersFor(
   pinMap: PinMap,
@@ -342,7 +376,10 @@ function newestProducersFor(
     for (const [context, pins] of Object.entries(pinMap)) {
       if (!pinsFor(pins).includes(candidate.path)) continue;
       const previous = newest.get(context);
-      if (previous === undefined || BigInt(candidate.runId) > BigInt(previous.runId)) {
+      if (
+        previous === undefined || BigInt(candidate.runId) > BigInt(previous.runId) ||
+        (BigInt(candidate.runId) === BigInt(previous.runId) && candidate.runAttempt > previous.runAttempt)
+      ) {
         newest.set(context, candidate);
       }
     }
@@ -352,8 +389,8 @@ function newestProducersFor(
 
 /**
  * The contexts whose latest concluded App checks at this SHA attest their
- * newest eligible producer: details_url must equal that producer's htmlUrl.
- * A same-named check for an older run is not evidence for the selected run.
+ * newest eligible producer attempt: external_id must equal <runId>:<runAttempt>.
+ * Older attempts and legacy checks without that identity are not attestation.
  *
  * The listing is filtered by `app_id` server-side AND by `app.id` here, because
  * a filter the caller cannot see is not a filter: a same-named check-run owned
@@ -386,7 +423,7 @@ async function attestedContexts(
     const checkRun = entry as {
       name?: unknown;
       status?: unknown;
-      details_url?: unknown;
+      external_id?: unknown;
       app?: { id?: unknown } | undefined;
     };
     if (typeof checkRun.name !== "string") continue;
@@ -400,7 +437,7 @@ async function attestedContexts(
     if (checkRun.status === "queued" || checkRun.status === "in_progress") continue;
     const producer = newest.get(checkRun.name);
     if (producer === undefined) continue;
-    if (checkRun.details_url !== producer.htmlUrl) continue;
+    if (checkRun.external_id !== producerExternalId(producer)) continue;
     attested.add(checkRun.name);
   }
   return attested;
@@ -412,13 +449,14 @@ async function attestedContexts(
  * from ledger-relay.ts without forming a cycle, so the one-way dependency is
  * ledger-relay.ts → this module and the shape cannot be duplicated and drift.
  *
- * `run` is structural: both callers pass the commit the context attests and
- * the producer's details URL. For workflow_run, that commit is the resolved
+ * `run` is structural: both callers pass the producer id/attempt, commit and
+ * details URL. external_id binds every posted check to that producer attempt.
+ * For workflow_run, the commit is the resolved
  * upstream PR SHA; the producer's own main SHA must never reach this function.
  */
 export function checkRunBody(
   decision: ContextDecision,
-  run: { headSha: string; htmlUrl: string },
+  run: { runId: string; runAttempt: number; headSha: string; htmlUrl: string },
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     name: decision.context,
@@ -426,11 +464,17 @@ export function checkRunBody(
     status: decision.status,
     output: { title: decision.title, summary: decision.summary },
     details_url: run.htmlUrl,
+    external_id: producerExternalId(run),
   };
   if (decision.conclusion !== undefined) {
     body.conclusion = decision.conclusion;
   }
   return body;
+}
+
+/** Identity shared by check-run writes and attestation reads. */
+function producerExternalId(run: { runId: string; runAttempt: number }): string {
+  return `${run.runId}:${run.runAttempt}`;
 }
 
 /**

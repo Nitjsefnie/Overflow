@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  checkRunBody,
   missingContextsFor,
   selectSweepCandidates,
   sweepOrphans,
@@ -64,6 +65,7 @@ function runEntry(over: Record<string, unknown> = {}): Record<string, unknown> {
   const id = (over.id as number | undefined) ?? 9001;
   return {
     id,
+    run_attempt: 1,
     path: PATH_CI,
     status: "completed",
     conclusion: "success",
@@ -78,6 +80,7 @@ function runEntry(over: Record<string, unknown> = {}): Record<string, unknown> {
 function candidate(over: Partial<SweepCandidate> = {}): SweepCandidate {
   return {
     runId: "9002",
+    runAttempt: 1,
     headSha: HEAD_SHA,
     path: PATH_ACTIONLINT,
     conclusion: "success",
@@ -111,6 +114,7 @@ describe("selectSweepCandidates", () => {
     expect(selected.map((entry) => entry.runId)).toEqual(["9002"]);
     expect(selected[0]).toEqual({
       runId: "9002",
+      runAttempt: 1,
       headSha: HEAD_SHA,
       path: PATH_ACTIONLINT,
       conclusion: "success",
@@ -356,6 +360,7 @@ function fakeApi(handlers: Record<string, unknown>): {
 function appCheckRun(name: string, over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     name, status: "completed", app: { id: Number(APP_ID) },
+    external_id: "9002:1",
     details_url: `https://github.com/${REPO}/actions/runs/9002`, ...over,
   };
 }
@@ -448,6 +453,7 @@ describe("sweepOrphans", () => {
             "the outcome is relayed to branch protection.",
         },
         details_url: `https://github.com/${REPO}/actions/runs/9002`,
+        external_id: "9002:1",
       },
     });
   });
@@ -594,8 +600,8 @@ describe("sweepOrphans", () => {
       [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
       [checkRunsAt(HEAD_SHA)]: {
         check_runs: [
-          { name: "actionlint", status: "completed", app: { id: 15368 }, details_url: candidate().htmlUrl },
-          { name: "actionlint", status: "completed", details_url: candidate().htmlUrl },
+          { name: "actionlint", status: "completed", app: { id: 15368 }, external_id: "9002:1" },
+          { name: "actionlint", status: "completed", external_id: "9002:1" },
           { name: "other", status: "completed", app: { id: Number(APP_ID) } },
           null,
         ],
@@ -706,7 +712,7 @@ describe("producer-bound sweep attestation", () => {
       const { api, requests } = fakeApi({
         [RUNS_URL]: { workflow_runs: order === "newest first" ? [newer, older] : [older, newer] },
         [checkRunsAt(HEAD_SHA)]: { check_runs: [appCheckRun("verify", {
-          details_url: details("9001"), conclusion: "success",
+          details_url: details("9001"), external_id: "9001:1", conclusion: "success",
         })] },
         [jobsUrl("9001")]: {
           jobs: [{ name: "verify", run_attempt: 1, status: "completed", conclusion: "success" }],
@@ -725,7 +731,7 @@ describe("producer-bound sweep attestation", () => {
     },
   );
 
-  it("skips jobs and posting when the newest candidate is already attested by its details URL", async () => {
+  it("skips jobs and posting when the newest candidate is already attested by its producer attempt", async () => {
     const { api, requests } = fakeApi({
       [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002 })] },
       [checkRunsAt(HEAD_SHA)]: { check_runs: [appCheckRun("verify", { details_url: details("9002") })] },
@@ -739,7 +745,7 @@ describe("producer-bound sweep attestation", () => {
   it("never reposts an older unattested candidate over a newer attested one at the same head", async () => {
     const { api, requests } = fakeApi({
       [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002 }), runEntry({ id: 9003 })] },
-      [checkRunsAt(HEAD_SHA)]: { check_runs: [appCheckRun("verify", { details_url: details("9003") })] },
+      [checkRunsAt(HEAD_SHA)]: { check_runs: [appCheckRun("verify", { details_url: details("9003"), external_id: "9003:1" })] },
       [jobsUrl("9002")]: { jobs: [] },
       [jobsUrl("9003")]: { jobs: [] },
     });
@@ -758,9 +764,9 @@ describe("producer-bound sweep attestation", () => {
           runEntry({ id: 9002, path: gatePath }), runEntry({ id: 9003 }),
         ] },
         [checkRunsAt(HEAD_SHA)]: { check_runs: [
-          appCheckRun("actionlint", { details_url: details(stale === "actionlint" ? "9001" : "9002") }),
+          appCheckRun("actionlint", { details_url: details(stale === "actionlint" ? "9001" : "9002"), external_id: `${stale === "actionlint" ? "9001" : "9002"}:1` }),
           appCheckRun("secret-scan", { details_url: details("9002") }),
-          appCheckRun("verify", { details_url: details(stale === "verify" ? "9001" : "9003") }),
+          appCheckRun("verify", { details_url: details(stale === "verify" ? "9001" : "9003"), external_id: `${stale === "verify" ? "9001" : "9003"}:1` }),
         ] },
         [jobsUrl("9002")]: { jobs: [
           { name: "actionlint", run_attempt: 1, status: "completed", conclusion: "failure" },
@@ -798,12 +804,12 @@ describe("producer-bound sweep attestation", () => {
     expect(requests.some((request) => request.url === jobsUrl("9"))).toBe(false);
   });
 
-  it.each([undefined, "", "https://github.com/someone/other/actions/runs/9002"])(
-    "does not attest the newest candidate with missing, empty, or different details URL %s",
-    async (url) => {
+  it.each([undefined, "", "9001:1"])(
+    "does not attest the newest candidate with missing, empty, or different external identity %s",
+    async (identity) => {
       const { api, requests } = fakeApi({
         [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, conclusion: "failure" })] },
-        [checkRunsAt(HEAD_SHA)]: { check_runs: [appCheckRun("verify", { details_url: url })] },
+        [checkRunsAt(HEAD_SHA)]: { check_runs: [appCheckRun("verify", { external_id: identity })] },
         [jobsUrl("9002")]: { jobs: [] },
       });
       const outcome = await sweepOrphans(deps(api));
@@ -811,4 +817,73 @@ describe("producer-bound sweep attestation", () => {
       expect(requests.at(-1)?.body).toMatchObject({ conclusion: "failure", details_url: details("9002") });
     },
   );
+});
+
+describe("trigger recency and attempt attestation", () => {
+  it("retains a listed trigger beyond the orphan cap without reducing that cap", async () => {
+    const { api, requests } = fakeApi({
+      [RUNS_URL]: { workflow_runs: [
+        ...Array.from({ length: SWEEP_RUN_LIMIT }, (_, n) => runEntry({ id: 8000 + n, path: PATH_ACTIONLINT })),
+        runEntry({ id: 9003, path: PATH_ACTIONLINT, conclusion: "failure" }),
+      ] },
+      [checkRunsAt(HEAD_SHA)]: { check_runs: [appCheckRun("actionlint", { external_id: "9003:1" })] },
+      [jobsUrl("8019")]: { jobs: [] },
+    });
+    const outcome = await sweepOrphans(deps(api, { triggerRunId: "9003" }));
+    expect(outcome).toEqual({ examined: SWEEP_RUN_LIMIT, relayed: [] });
+    expect(requests.some((request) => request.url?.includes("/jobs?"))).toBe(false);
+  });
+
+  it("keeps a listed trigger newest when a sweep caller only supplies its id", async () => {
+    const { api, requests } = fakeApi({
+      [RUNS_URL]: { workflow_runs: [
+        runEntry({ id: 9003, path: PATH_ACTIONLINT, conclusion: "failure" }),
+        runEntry({ id: 9002, path: PATH_ACTIONLINT }),
+      ] },
+      [checkRunsAt(HEAD_SHA)]: { check_runs: [appCheckRun("actionlint", {
+        external_id: "9003:1", details_url: `https://github.com/${REPO}/actions/runs/9003`, conclusion: "failure",
+      })] },
+      [jobsUrl("9002")]: { jobs: [] },
+    });
+    const outcome = await sweepOrphans(deps(api, { triggerRunId: "9003" }));
+    expect(outcome.relayed).toEqual([]);
+    expect(requests.some((request) => request.url === jobsUrl("9002"))).toBe(false);
+  });
+
+  it("reposts a legacy check once, then converges on the emitted producer-attempt identity", async () => {
+    const checks = { check_runs: [appCheckRun("verify", { external_id: undefined, conclusion: "success" })] };
+    const { api, requests } = fakeApi({
+      [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, conclusion: "failure" })] },
+      [checkRunsAt(HEAD_SHA)]: checks,
+      [jobsUrl("9002")]: { jobs: [] },
+    });
+    const first = await sweepOrphans(deps(api));
+    expect(first.relayed).toEqual([{ context: "verify", runId: "9002" }]);
+    const body = requests.find((request) => request.method === "POST")?.body as Record<string, unknown>;
+    expect(body).toMatchObject({ conclusion: "failure", external_id: "9002:1" });
+    checks.check_runs = [{ ...body, app: { id: Number(APP_ID) } }];
+    const second = await sweepOrphans(deps(api));
+    expect(second.relayed).toEqual([]);
+    expect(requests.filter((request) => request.method === "POST")).toHaveLength(1);
+    expect(requests.filter((request) => request.url === jobsUrl("9002"))).toHaveLength(1);
+  });
+
+  it.each([[1, 2], [2, 1]])("selects the highest attempt for tied run ids, order %s/%s", async (first, second) => {
+    const { api, requests } = fakeApi({
+      [RUNS_URL]: { workflow_runs: [first, second].map((attempt) => runEntry({
+        id: 9002, run_attempt: attempt, conclusion: attempt === 2 ? "failure" : "success",
+      })) },
+      [checkRunsAt(HEAD_SHA)]: { check_runs: [] },
+      [jobsUrl("9002")]: { jobs: [] },
+    });
+    await sweepOrphans(deps(api));
+    expect(requests.filter((request) => request.method === "POST").map((request) => request.body))
+      .toEqual([expect.objectContaining({ conclusion: "failure", external_id: "9002:2" })]);
+  });
+
+  it.each(["queued", "in_progress", "completed"] as const)("the shared %s check body carries the producer id and attempt", (status) => {
+    const decision = { context: "verify", status, title: "verify", summary: "producer attempt" };
+    const run = { runId: "9002", runAttempt: 2, headSha: HEAD_SHA, htmlUrl: candidate().htmlUrl };
+    expect(checkRunBody(decision, run)).toMatchObject({ external_id: "9002:2", head_sha: HEAD_SHA, status });
+  });
 });
