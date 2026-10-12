@@ -7,9 +7,39 @@ const PATH = ".github/workflows/pr-suite.yml";
 type Body = Record<string, unknown>;
 type Certificate = { judgedAttempt: number } | { verifyCreatedAt: unknown };
 
-export function suiteRunsUrl(apiRoot: string, repo: string, headSha: string): string {
+export function suiteRunsUrl(apiRoot: string, repo: string, headSha: string, page = 1): string {
   return `${apiRoot}/repos/${repo}/actions/workflows/pr-suite.yml/runs` +
-    `?head_sha=${headSha}&event=pull_request&per_page=100`;
+    `?head_sha=${headSha}&event=pull_request&per_page=100&page=${page}`;
+}
+
+/** One complete pass over a bounded history, never a wait for it to change. */
+export async function readSuiteRuns(readPage: (page: number) => Promise<unknown>): Promise<Body> {
+  const runs: unknown[] = [];
+  const ids = new Set<number>();
+  let total: number | undefined;
+  for (let page = 1; page <= 10; page += 1) {
+    const reply = await readPage(page);
+    const body = typeof reply === "object" && reply !== null ? reply as Body : {};
+    const count = body.total_count;
+    const entries = body.workflow_runs;
+    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0 || !Array.isArray(entries)) {
+      throw new Error("the suite supersession page is malformed");
+    }
+    if (total !== undefined && count !== total) throw new Error("suite total_count changed between pages");
+    total = count;
+    if (total > 1000) throw new Error("suite history exceeds 10 pages / 1000 runs");
+    const expected = Math.min(100, total - runs.length);
+    if (entries.length !== expected) throw new Error(`suite page ${page} expected ${expected} entries; short or oversized page refused`);
+    for (const entry of entries) {
+      const id = typeof entry === "object" && entry !== null ? (entry as Body).id : undefined;
+      if (!positive(id)) throw new Error("the suite supersession page contains no usable run id");
+      if (ids.has(id)) throw new Error(`duplicate suite run id ${id} across pages`);
+      ids.add(id);
+      runs.push(entry);
+    }
+    if (runs.length === total) return { total_count: total, workflow_runs: runs };
+  }
+  throw new Error("suite history exceeds 10 pages / 1000 runs");
 }
 
 function positive(value: unknown): value is number {
