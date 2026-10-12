@@ -17,6 +17,28 @@ const dollarDelimiter = /^\$(?:[A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*)
 /** Shape-based deploy review; only real comments can declare a migration safe. */
 export function classifyMigrationCompatibility(contents: string): MigrationCompatibility {
   const { tokens, comments } = lexSql(contents);
+  const matches = new Map(matchShapes(tokens, true));
+  // Every literal may contain executable SQL. Its tokens remain separate so
+  // neither DEFAULT clauses nor safe comments can authorize the outer file.
+  const literals = tokens.filter((token) => token.kind === "literal");
+  for (let at = 0; at < literals.length; at += 1) {
+    const body = lexSql(literals[at].value);
+    for (const [shape, matched] of matchShapes(body.tokens, false)) {
+      if (matched) matches.set(shape, true);
+    }
+    literals.push(...body.tokens.filter((token) => token.kind === "literal"));
+  }
+  const shapes = [...matches].filter(([, matched]) => matched).map(([shape]) => shape);
+
+  if (contents.includes(reviewMarker)) return { verdict: "review", shapes };
+  const reason = comments.map((comment) => safeMarker.exec(comment)?.[1].trim()).find(Boolean);
+  if (shapes.length > 0 && reason) {
+    return { verdict: "-", shapes, note: "overflow: mixed-version safe: " + reason.replace(/\s+/g, " ") };
+  }
+  return { verdict: shapes.length > 0 ? "review" : "-", shapes };
+}
+
+function matchShapes(tokens: readonly SqlToken[], allowDefault: boolean): [string, boolean][] {
   const statements = splitTokens(tokens, ";");
   const matches: [string, boolean][] = [
     ["drop column", hasWords(tokens, ["drop", "column"])],
@@ -39,18 +61,11 @@ export function classifyMigrationCompatibility(contents: string): MigrationCompa
       splitTokens(statement, ",").some((definition) => {
         const clauses = topLevelTokens(definition);
         return hasWords(clauses, ["add", "column"]) && hasWords(clauses, ["not", "null"]) &&
-          !hasWords(clauses, ["default"]);
+          (!allowDefault || !hasWords(clauses, ["default"]));
       }),
     )],
   ];
-  const shapes = matches.filter(([, matched]) => matched).map(([shape]) => shape);
-
-  if (contents.includes(reviewMarker)) return { verdict: "review", shapes };
-  const reason = comments.map((comment) => safeMarker.exec(comment)?.[1].trim()).find(Boolean);
-  if (shapes.length > 0 && reason) {
-    return { verdict: "-", shapes, note: "overflow: mixed-version safe: " + reason.replace(/\s+/g, " ") };
-  }
-  return { verdict: shapes.length > 0 ? "review" : "-", shapes };
+  return matches;
 }
 
 function wordIs(token: SqlToken | undefined, word: string): boolean {
@@ -70,7 +85,6 @@ function lexSql(sql: string): { tokens: SqlToken[]; comments: string[] } {
   const tokens: SqlToken[] = [];
   const comments: string[] = [];
   let at = 0;
-  let statementStart = 0;
   while (at < sql.length) {
     const pair = sql.slice(at, at + 2);
     if (/[ \t\r\n\f\v]/.test(sql[at])) {
@@ -86,8 +100,11 @@ function lexSql(sql: string): { tokens: SqlToken[]; comments: string[] } {
       at = end;
     } else if (sql[at] === "'" || /^[eE]'/.test(pair)) {
       const escaped = sql[at] !== "'";
-      at = quotedEnd(sql, at + (escaped ? 1 : 0), escaped);
-      tokens.push({ kind: "literal", value: "" });
+      const start = at + (escaped ? 1 : 0);
+      const end = quotedEnd(sql, start, escaped);
+      const value = sql.slice(start + 1, sql[end - 1] === "'" ? end - 1 : end).replace(/''/g, "'");
+      tokens.push({ kind: "literal", value: escaped ? unescapeString(value) : value });
+      at = end;
     } else if (sql[at] === '"') {
       const end = quotedEnd(sql, at, false);
       tokens.push({ kind: "identifier", value: sql.slice(at, end) });
@@ -98,14 +115,7 @@ function lexSql(sql: string): { tokens: SqlToken[]; comments: string[] } {
         const start = at + delimiter.length;
         const closing = sql.indexOf(delimiter, start);
         const end = closing < 0 ? sql.length : closing;
-        if (isExecutableBody(tokens.slice(statementStart))) {
-          const body = lexSql(sql.slice(start, end));
-          tokens.push({ kind: "symbol", value: ";" }, ...body.tokens, { kind: "symbol", value: ";" });
-          comments.push(...body.comments);
-          statementStart = tokens.length;
-        } else {
-          tokens.push({ kind: "literal", value: "" });
-        }
+        tokens.push({ kind: "literal", value: sql.slice(start, end) });
         at = closing < 0 ? sql.length : closing + delimiter.length;
       } else {
         const name = identifier.exec(sql.slice(at))?.[0];
@@ -114,7 +124,6 @@ function lexSql(sql: string): { tokens: SqlToken[]; comments: string[] } {
           at += name.length;
         } else {
           tokens.push({ kind: "symbol", value: sql[at] });
-          if (sql[at] === ";") statementStart = tokens.length;
           at += 1;
         }
       }
@@ -123,17 +132,19 @@ function lexSql(sql: string): { tokens: SqlToken[]; comments: string[] } {
   return { tokens, comments };
 }
 
-function isExecutableBody(statement: readonly SqlToken[]): boolean {
-  const doAt = statement.findIndex((token, at) => wordIs(token, "do") &&
-    (at === 0 || ["begin", "then", "else", "loop"].some((word) => wordIs(statement[at - 1], word))),
+function unescapeString(value: string): string {
+  const escapes: Record<string, string> = { b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
+  return value.replace(/\\([0-7]{1,3}|x[\da-fA-F]{1,2}|u[\da-fA-F]{4}|U[\da-fA-F]{8}|[\s\S])/g,
+    (_, escape: string) => {
+      if (/^[0-7]/.test(escape)) return String.fromCharCode(parseInt(escape, 8) & 0xff);
+      if (escape.startsWith("x") && escape.length > 1) return String.fromCharCode(parseInt(escape.slice(1), 16));
+      if (/^[uU]/.test(escape) && escape.length > 1) {
+        const point = parseInt(escape.slice(1), 16);
+        return point <= 0x10ffff ? String.fromCodePoint(point) : "\ufffd";
+      }
+      return escapes[escape] ?? escape;
+    },
   );
-  const prefix = statement.slice(doAt + 1);
-  const doBody = doAt >= 0 && (prefix.length === 0 ||
-    (prefix.length === 2 && wordIs(prefix[0], "language") && prefix[1].kind !== "symbol"));
-  return doBody ||
-    (statement.some((token) => wordIs(token, "create")) &&
-      statement.some((token) => wordIs(token, "function") || wordIs(token, "procedure")) &&
-      wordIs(statement.at(-1), "as"));
 }
 
 function quotedEnd(sql: string, start: number, escaped: boolean): number {
