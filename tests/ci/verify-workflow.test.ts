@@ -943,3 +943,25 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
     expect(Boolean(step?.["continue-on-error"])).toBe(false);
   });
 });
+
+
+describe("the verify workflow's prerender step", () => {
+  let steps: WorkflowStep[] = [];
+  beforeAll(async () => {
+    const workflow = parse(await readFile(resolve(".github/workflows/ci.yml"), "utf8"));
+    steps = workflow.jobs.verify.steps;
+  });
+
+  it("runs the prerender check after the production build, beside geometry, as a required gate", () => {
+    const checks = steps.filter((step) => step.name === "Prerendered routes check");
+    expect(checks).toHaveLength(1);
+    const step = checks[0]!;
+    expect(step.run).toBe("node scripts/check-prerendered-routes.ts");
+    const build = steps.findIndex((entry) => entry.name === "Production build");
+    expect(build).toBeGreaterThan(-1);
+    expect(steps.indexOf(step)).toBeGreaterThan(build);
+    expect(Math.abs(steps.indexOf(step) - steps.findIndex((entry) => entry.name === "Page geometry check"))).toBe(1);
+    expect(step.if).toBeUndefined();
+    expect(step["continue-on-error"]).toBeFalsy();
+  });
+});

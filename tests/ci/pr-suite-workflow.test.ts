@@ -399,6 +399,19 @@ describe("the pull request suite workflow", () => {
     expect(suite["timeout-minutes"]).toBe(45);
   });
 
+  it("runs the prerender check after the production build, beside geometry, as a required gate", () => {
+    const checks = suite.steps.filter((step) => step.name === "Prerendered routes check");
+    expect(checks).toHaveLength(1);
+    const step = checks[0]!;
+    expect(step.run).toBe("node scripts/check-prerendered-routes.ts");
+    const build = suite.steps.findIndex((entry) => entry.name === "Production build");
+    expect(build).toBeGreaterThan(-1);
+    expect(suite.steps.indexOf(step)).toBeGreaterThan(build);
+    expect(Math.abs(suite.steps.indexOf(step) - suite.steps.findIndex((entry) => entry.name === "Page geometry check"))).toBe(1);
+    expect(step.if).toBeUndefined();
+    expect((step as { "continue-on-error"?: unknown })["continue-on-error"]).toBeFalsy();
+  });
+
   it("runs every code check verify ran for a pull request, in order", () => {
     const order = [
       "corepack install --global pnpm@",
@@ -410,6 +423,7 @@ describe("the pull request suite workflow", () => {
       "pnpm lint",
       "pnpm typecheck",
       "pnpm build",
+      "node scripts/check-prerendered-routes.ts",
       "node scripts/check-page-geometry.mjs",
     ];
     const indices = order.map((command) => suite.steps.indexOf(stepRunning(command)));

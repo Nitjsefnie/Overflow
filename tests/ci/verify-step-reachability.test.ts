@@ -2246,3 +2246,16 @@ for (const scenario of PRT_SCENARIOS) {
     });
   });
 }
+
+
+for (const scenario of SCENARIOS.filter((entry) => entry.file === "ci.yml")) {
+  it(`runs the prerender gate on ${scenario.label}`, () => {
+    const selected = selectSteps(stepsFor(scenario), contextFor(scenario));
+    const gates = runsContaining(selected, "scripts/check-prerendered-routes.ts");
+    expect(gates).toHaveLength(1);
+    expect(gates[0]!["continue-on-error"]).toBeFalsy();
+    const builds = runsContaining(selected, "pnpm build");
+    expect(builds).toHaveLength(1);
+    expect(selected.indexOf(gates[0]!)).toBeGreaterThan(selected.indexOf(builds[0]!));
+  });
+}
