@@ -628,6 +628,7 @@ describe("awaitPrSuite — exact triggering run", () => {
   it.each([
     ["wrong path", { path: ".github/workflows/ci.yml" }],
     ["wrong event", { event: "push" }],
+    ["privileged PR event", { event: "pull_request_target" }],
     ["wrong head", { head_sha: OTHER_SHA }],
     ["wrong id", { id: 101 }],
     ["unfinished", { status: "in_progress" }],
