@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
-import { rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 /** One run owns its detached process groups, signal hooks and work directory. */
 export class OwnedProcesses {
-  constructor(workDir, { graceMs = 1000, keepWorkDir = process.env.LAYOUT_CHECK_KEEP_WORKDIR === "1" } = {}) {
+  constructor(workDir = null, { graceMs = 1000, keepWorkDir = process.env.LAYOUT_CHECK_KEEP_WORKDIR === "1" } = {}) {
     this.workDir = workDir;
     this.graceMs = graceMs;
     this.keepWorkDir = keepWorkDir;
@@ -19,12 +21,23 @@ export class OwnedProcesses {
     this.onInt = () => this.terminate(130);
     this.onExit = () => {
       for (const child of this.children) this.signalGroup(child, "SIGKILL");
-      if (this.keepWorkDir) this.reportKeptDirectory();
-      else rmSync(this.workDir, { recursive: true, force: true });
+      if (this.workDir !== null) {
+        if (this.keepWorkDir) this.reportKeptDirectory();
+        else rmSync(this.workDir, { recursive: true, force: true });
+      }
     };
     process.on("SIGTERM", this.onTerm);
     process.on("SIGINT", this.onInt);
     process.on("exit", this.onExit);
+  }
+
+  createWorkDir() {
+    if (this.closed) throw new Error("process ownership is closed");
+    if (this.workDir !== null) throw new Error("work directory already allocated");
+    // Hooks are already installed. Attach the result before yielding so a
+    // signal delivered during allocation sees the directory when handled.
+    this.workDir = mkdtempSync(join(tmpdir(), "page-geometry-"));
+    return this.workDir;
   }
 
   spawn(command, args, options = {}) {
@@ -89,8 +102,10 @@ export class OwnedProcesses {
       await Promise.all([...this.children].map(child => this.stop(child)));
     } finally {
       try {
-        if (this.keepWorkDir) this.reportKeptDirectory();
-        else await rm(this.workDir, { recursive: true, force: true });
+        if (this.workDir !== null) {
+          if (this.keepWorkDir) this.reportKeptDirectory();
+          else await rm(this.workDir, { recursive: true, force: true });
+        }
       } finally {
         // On termination keep hooks installed through exit, including during
         // async directory removal; repeated signals cannot bypass cleanup.

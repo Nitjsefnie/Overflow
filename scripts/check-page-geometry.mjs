@@ -35,9 +35,8 @@
 
 import { spawn } from "node:child_process";
 import { createCipheriv, createHash, createHmac, hkdfSync, randomBytes, randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { open, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -1166,12 +1165,12 @@ async function main() {
   }
 
   const chrome = discoverChrome();
-  const workDir = mkdtempSync(join(tmpdir(), "page-geometry-"));
-  const owner = new OwnedProcesses(workDir);
+  const owner = new OwnedProcesses();
   let failed = false;
   let hardFailure = null;
 
   try {
+    const workDir = owner.createWorkDir();
     if (spawned) await startServer(workDir, owner);
 
     // The session fixture (issue 453) seeds before any contract runs — in
