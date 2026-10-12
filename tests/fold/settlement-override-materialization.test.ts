@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -53,6 +53,10 @@ beforeAll(async () => {
   await runMigrations();
 });
 
+beforeEach(async () => {
+  await sql`truncate users cascade`;
+});
+
 afterAll(async () => {
   await closeSql();
   await container?.stop();
@@ -64,21 +68,30 @@ afterAll(async () => {
 });
 
 describe("a granted settlement override survives reconciliation", () => {
-  it("rebuilds the corrected settlement on every reconciliation, with credits recomputed from the rule", async () => {
-    const sponsorId = await insertUser(sponsorLogin, 1001);
-    const contributorId = await insertUser(contributorLogin, 2001);
-    const moderatorId = await insertUser("override-moderator", 3001);
+  let sponsorId: string;
+  let contributorId: string;
+  let moderatorId: string;
+  let repositoryId: string;
+  let store: PostgresFoldStore;
+  let github: ReconciliationGateway;
+
+  beforeEach(async () => {
+    sponsorId = await insertUser(sponsorLogin, 1001);
+    contributorId = await insertUser(contributorLogin, 2001);
+    moderatorId = await insertUser("override-moderator", 3001);
     await giveAccessToken(sponsorId);
-    const repositoryId = await insertRepository(sponsorId, {
+    repositoryId = await insertRepository(sponsorId, {
       githubRepositoryId: repositoryGitHubId,
       ownerName: repositoryOwnerName,
       githubWebhookId: 8_300_002,
     });
-    const store = new PostgresFoldStore(sql, tokenEncryptionKey);
-    const github = gateway();
+    store = new PostgresFoldStore(sql, tokenEncryptionKey);
+    github = gateway();
 
     await reconcileRepository({ store, github }, repositoryId);
+  });
 
+  it("rebuilds the corrected settlement on every reconciliation, with credits recomputed from the rule", async () => {
     // The bookkeeping failed: the rationale comment is missing, so the fold
     // records an unsettled settlement with no credits even though the pull
     // request merged.
@@ -164,15 +177,23 @@ describe("a granted settlement override survives reconciliation", () => {
   });
 
   it("applies the most recently granted correction when a settlement is corrected twice", async () => {
-    const repositoryId = await repositoryIdFor(disputedIssueId);
-    const store = new PostgresFoldStore(sql, tokenEncryptionKey);
     const overrides = new PostgresSettlementOverrideStore(sql);
-    const [{ id: contributorId }] = await sql<{ id: string }[]>`
-      select id from users where github_login = ${contributorLogin}
-    `;
-    const [{ id: moderatorId }] = await sql<{ id: string }[]>`
-      select id from users where github_login = ${"override-moderator"}
-    `;
+    const firstRequest = await overrides.createRequest({
+      requesterId: contributorId,
+      target: { kind: "settlement", settlementId: await settlementIdFor(disputedIssueId) },
+      reason: "The rationale comment came later than the delivered label.",
+    });
+    if (firstRequest.kind !== "ok") {
+      throw new Error("Expected the first correction request to open.");
+    }
+    await overrides.decideRequest({
+      actorId: moderatorId,
+      requestId: firstRequest.value.id,
+      decision: "GRANT",
+      settledPoints: 6,
+      reason: "The merged work matches six delivered points.",
+    });
+    await reconcileRepository({ store, github }, repositoryId);
 
     const reopened = await overrides.createRequest({
       requesterId: contributorId,
@@ -249,12 +270,8 @@ describe("a grant schedules its own materialization through the reconciliation q
       credits: 0,
     });
 
-    // Claim, fold and complete exactly as the worker does — including every
-    // job earlier tests' grants left queued.
-    const processed = await drainQueue(store, [
-      [repositoryId, github],
-      [await repositoryIdFor(disputedIssueId), gateway()],
-    ]);
+    // Claim, fold and complete this test's job exactly as the worker does.
+    const processed = await drainQueue(store, [[repositoryId, github]]);
     expect(processed).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ reason: "OVERRIDE", repositoryId }),
@@ -386,10 +403,7 @@ describe("a granted correction to a self-work calibration survives reconciliatio
       reason: "Eight points matches the delivered diff.",
     });
 
-    const processed = await drainQueue(store, [
-      [repositoryId, github],
-      [await repositoryIdFor(correctedCalibrationIssueId), selfWorkGateway()],
-    ]);
+    const processed = await drainQueue(store, [[repositoryId, github]]);
     expect(processed).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ reason: "OVERRIDE", repositoryId }),
@@ -426,8 +440,7 @@ async function reconcileOnce(
  * Works the queue until it is empty exactly as the worker does — claim, fold,
  * complete — because a job that is never claimed corrects nothing, whatever the
  * decision that enqueued it said. Each claimed job is folded through the
- * gateway its repository is registered with, so jobs earlier tests' grants left
- * queued converge here too instead of lingering behind the one under test.
+ * gateway its repository is registered with.
  */
 async function drainQueue(
   store: PostgresFoldStore,
@@ -535,13 +548,6 @@ async function settlementIdFor(githubIssueId: number): Promise<string> {
     where issues.github_issue_id = ${githubIssueId}
   `;
   return row.id;
-}
-
-async function repositoryIdFor(githubIssueId: number): Promise<string> {
-  const [row] = await sql<{ repository_id: string }[]>`
-    select repository_id from issues where github_issue_id = ${githubIssueId}
-  `;
-  return row.repository_id;
 }
 
 async function balanceOf(accountId: string): Promise<number> {
