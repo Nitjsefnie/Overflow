@@ -8,6 +8,8 @@ export const RECEIPT_FAILED_RETENTION_DAYS = 90;
 export const RECEIPT_PENDING_RETENTION_DAYS = 90;
 /** Terminal run history kept to the same horizon as failed receipts. */
 export const RUN_TERMINAL_RETENTION_DAYS = 90;
+/** Maximum rows deleted by any one statement in the retention sweep. */
+export const RETENTION_PRUNE_BATCH_SIZE = 100;
 
 export interface RetentionPruneResult {
   /** webhook_deliveries PROCESSED rows deleted. */
@@ -32,82 +34,92 @@ export interface RetentionPruneResult {
  * whose lease is still live is never deleted, and a change row is deleted
  * only through its run's expiry, never by its own age.
  *
- * Idempotent: a second pass on unchanged data deletes nothing. The two run
- * statements are deliberately separate — the FK has no cascade, so the
- * changes must go first; and a crash between them leaves changes deleted
- * while the run survives to the next tick, which is consistent either way.
- *
- * Batching is not required at this scale: steady state is on the order of
- * 2.6k receipts and a handful of runs per six-hour tick, and even the first
- * run's backlog is one small statement.
+ * Idempotent: a second pass on unchanged data deletes nothing. Every delete
+ * is bounded, and each arm drains its backlog before proceeding. Each run
+ * batch locks one fixed set of expired runs and deletes their changes first
+ * in the same transaction, so a boundary crossing cannot split membership
+ * and a failed run delete rolls back that batch's change deletions.
  */
 export async function pruneExpiredMaintenanceRows(sql: SqlClient): Promise<RetentionPruneResult> {
-  // PROCESSED receipts: dedup reads only PROCESSED rows, and a pruned
-  // receipt's late redelivery reprocesses safely — reconciliation is
-  // idempotent from the forge source of truth.
-  const processed = await sql`
-    delete from webhook_deliveries
-    where processing_state = 'PROCESSED'
-      and processed_at < now() - ${RECEIPT_PROCESSED_RETENTION_DAYS} * interval '1 day'
-    returning id
-  `;
-
-  // FAILED receipts: kept longer than PROCESSED ones, as the record of what
-  // failed and when.
-  const failed = await sql`
-    delete from webhook_deliveries
-    where processing_state = 'FAILED'
-      and processed_at < now() - ${RECEIPT_FAILED_RETENTION_DAYS} * interval '1 day'
-    returning id
-  `;
-
-  // Abandoned PENDING receipts: old, and not held by a live lease. The
-  // coalesce is the live-lease guard: a PENDING row whose lease_expires_at
-  // lies in the future is never pruned regardless of age, because a late
-  // redelivery's claim upsert can still resume it; a row with no lease at
-  // all falls back to received_at.
-  const abandonedPending = await sql`
-    delete from webhook_deliveries
-    where processing_state = 'PENDING'
-      and received_at < now() - ${RECEIPT_PENDING_RETENTION_DAYS} * interval '1 day'
-      and coalesce(lease_expires_at, received_at) < now()
-    returning id
-  `;
-
-  // Change rows go first: the FK from reconciliation_changes to
-  // reconciliation_runs has no cascade, so the runs cannot go while their
-  // changes remain. A change row is deleted ONLY through its run's expiry —
-  // its own age is never a predicate, so a change of a surviving run
-  // survives however old it is.
-  const changesOfExpiredRuns = await sql`
-    delete from reconciliation_changes
-    where reconciliation_run_id in (
-      select id from reconciliation_runs
-      where status in ('COMPLETED', 'FAILED')
-        and completed_at < now() - ${RUN_TERMINAL_RETENTION_DAYS} * interval '1 day'
-    )
-    returning id
-  `;
-
-  // Then the runs, under the same predicate as the statement above. The two
-  // statements read now() a hair apart, so a run crossing the 90-day
-  // boundary between the two reads keeps its changes in the first statement
-  // and is deleted by this one, which fails on the FK — an error the sweep's
-  // own guard contains, and the next tick's prune deletes the pair. PENDING
-  // runs never match, at any age, and completed_at NULL never matches
-  // either.
-  const expiredRuns = await sql`
-    delete from reconciliation_runs
-    where status in ('COMPLETED', 'FAILED')
-      and completed_at < now() - ${RUN_TERMINAL_RETENTION_DAYS} * interval '1 day'
-    returning id
-  `;
-
-  return {
-    processedReceipts: processed.length,
-    failedReceipts: failed.length,
-    abandonedPendingReceipts: abandonedPending.length,
-    expiredRuns: expiredRuns.length,
-    changesOfExpiredRuns: changesOfExpiredRuns.length,
+  const result: RetentionPruneResult = {
+    processedReceipts: 0, failedReceipts: 0, abandonedPendingReceipts: 0,
+    expiredRuns: 0, changesOfExpiredRuns: 0,
   };
+
+  // Receipt dedup reads only PROCESSED rows; a pruned late redelivery
+  // reprocesses safely because reconciliation is idempotent from the forge.
+  for (;;) {
+    const deleted = await sql`
+      delete from webhook_deliveries where id in (
+        select id from webhook_deliveries
+        where processing_state = 'PROCESSED'
+          and processed_at < now() - ${RECEIPT_PROCESSED_RETENTION_DAYS} * interval '1 day'
+        order by id limit ${RETENTION_PRUNE_BATCH_SIZE} for update
+      )
+    `;
+    result.processedReceipts += deleted.count;
+    if (deleted.count === 0) break;
+  }
+
+  for (;;) {
+    const deleted = await sql`
+      delete from webhook_deliveries where id in (
+        select id from webhook_deliveries
+        where processing_state = 'FAILED'
+          and processed_at < now() - ${RECEIPT_FAILED_RETENTION_DAYS} * interval '1 day'
+        order by id limit ${RETENTION_PRUNE_BATCH_SIZE} for update
+      )
+    `;
+    result.failedReceipts += deleted.count;
+    if (deleted.count === 0) break;
+  }
+
+  // A live lease always protects a PENDING receipt, regardless of its age.
+  for (;;) {
+    const deleted = await sql`
+      delete from webhook_deliveries where id in (
+        select id from webhook_deliveries
+        where processing_state = 'PENDING'
+          and received_at < now() - ${RECEIPT_PENDING_RETENTION_DAYS} * interval '1 day'
+          and coalesce(lease_expires_at, received_at) < now()
+        order by id limit ${RETENTION_PRUNE_BATCH_SIZE} for update
+      )
+    `;
+    result.abandonedPendingReceipts += deleted.count;
+    if (deleted.count === 0) break;
+  }
+
+  for (;;) {
+    const batch = await sql.begin(async (tx) => {
+      const runs = await tx<{ id: string }[]>`
+        select id from reconciliation_runs
+        where status in ('COMPLETED', 'FAILED')
+          and completed_at < now() - ${RUN_TERMINAL_RETENTION_DAYS} * interval '1 day'
+        order by id limit ${RETENTION_PRUNE_BATCH_SIZE} for update
+      `;
+      if (runs.length === 0) return { runs: 0, changes: 0 };
+      const ids = runs.map((run) => run.id);
+      let changes = 0;
+      // A single run can have more changes than the batch bound. Delete only
+      // this fixed run set's changes, in bounded statements, before its runs.
+      for (;;) {
+        const deleted = await tx`
+          delete from reconciliation_changes where id in (
+            select id from reconciliation_changes
+            where reconciliation_run_id in ${tx(ids)}
+            order by id limit ${RETENTION_PRUNE_BATCH_SIZE}
+          )
+        `;
+        changes += deleted.count;
+        if (deleted.count === 0) break;
+      }
+      const deleted = await tx`delete from reconciliation_runs where id in ${tx(ids)}`;
+      return { runs: deleted.count, changes };
+    });
+    result.expiredRuns += batch.runs;
+    result.changesOfExpiredRuns += batch.changes;
+    if (batch.runs === 0) break;
+  }
+
+  return result;
 }

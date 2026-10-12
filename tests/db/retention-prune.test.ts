@@ -169,6 +169,102 @@ describe("retention prune", () => {
     expect(await changeExists(changeOfPendingWithCompletion)).toBe(true);
   });
 
+  it("bounds every delete and drains a backlog larger than one batch in one call", async () => {
+    await resetMaintenanceTables();
+    await sql`create table prune_batches (table_name text, deleted integer)`;
+    await sql`create function record_prune_batch() returns trigger language plpgsql as $$
+      begin
+        insert into prune_batches select TG_TABLE_NAME, count(*) from deleted_rows;
+        return null;
+      end
+    $$`;
+    for (const table of ["webhook_deliveries", "reconciliation_changes", "reconciliation_runs"]) {
+      await sql.unsafe(`create trigger record_prune_batch after delete on ${table}
+        referencing old table as deleted_rows for each statement execute function record_prune_batch()`);
+    }
+    try {
+      await sql`
+        insert into webhook_deliveries (provider, registration_id, delivery_key, execution_id,
+          event_name, processing_state, received_at, processed_at, processing_lease_token, lease_expires_at)
+        select 'github', ${REGISTRATION_ID}, state || n, state || n, 'push',
+          state::webhook_processing_state, now() - interval '120 days',
+          case when state <> 'PENDING' then now() - interval '120 days' end,
+          case when state = 'PENDING' then gen_random_uuid() end,
+          case when state = 'PENDING' then now() - interval '1 hour' end
+        from unnest(array['PROCESSED', 'FAILED', 'PENDING']) state cross join generate_series(1, 205) n
+      `;
+      await sql`insert into reconciliation_runs (status, completed_at)
+        select 'COMPLETED', now() - interval '120 days' from generate_series(1, 205)`;
+      await sql`insert into reconciliation_changes (reconciliation_run_id, entity_kind, change_kind)
+        select id, 'SETTLEMENT', 'ADD' from reconciliation_runs cross join generate_series(1, 3)`;
+      expect(await pruneExpiredMaintenanceRows(sql)).toEqual({
+        processedReceipts: 205, failedReceipts: 205, abandonedPendingReceipts: 205,
+        expiredRuns: 205, changesOfExpiredRuns: 615,
+      });
+      const batches = await sql<{ table_name: string; deleted: number }[]>`select * from prune_batches`;
+      expect(batches.length).toBeGreaterThan(5);
+      expect(batches.every((batch) => batch.deleted <= 100)).toBe(true);
+      expect(await pruneExpiredMaintenanceRows(sql)).toEqual({
+        processedReceipts: 0, failedReceipts: 0, abandonedPendingReceipts: 0,
+        expiredRuns: 0, changesOfExpiredRuns: 0,
+      });
+    } finally {
+      for (const table of ["webhook_deliveries", "reconciliation_changes", "reconciliation_runs"]) {
+        await sql.unsafe(`drop trigger record_prune_batch on ${table}`);
+      }
+      await sql`drop function record_prune_batch()`;
+      await sql`drop table prune_batches`;
+    }
+  });
+
+  it("uses a fixed run set when another run expires between the two deletes", async () => {
+    await resetMaintenanceTables();
+    const expired = await seedRun({ status: "COMPLETED", completedDaysAgo: 120 });
+    const crossing = await seedRun({ status: "COMPLETED", completedDaysAgo: 10 });
+    await seedChange(expired);
+    await seedChange(crossing);
+    // Force the boundary deterministically, without sleeping or timing: the
+    // changes DELETE makes the previously recent run newly eligible.
+    await sql`create function expire_next_run() returns trigger language plpgsql as $$
+      begin
+        update reconciliation_runs set completed_at = now() - interval '120 days'
+        where completed_at > now() - interval '90 days';
+        return null;
+      end
+    $$`;
+    await sql`create trigger expire_next_run after delete on reconciliation_changes
+      for each statement execute function expire_next_run()`;
+    try {
+      expect(await pruneExpiredMaintenanceRows(sql)).toEqual({
+        processedReceipts: 0, failedReceipts: 0, abandonedPendingReceipts: 0,
+        expiredRuns: 2, changesOfExpiredRuns: 2,
+      });
+      expect(await runExists(crossing)).toBe(false);
+    } finally {
+      await sql`drop trigger expire_next_run on reconciliation_changes`;
+      await sql`drop function expire_next_run()`;
+    }
+  });
+
+  it("rolls back a run batch's changes if deleting its runs fails", async () => {
+    await resetMaintenanceTables();
+    const run = await seedRun({ status: "COMPLETED", completedDaysAgo: 120 });
+    const change = await seedChange(run);
+    await sql`create function refuse_pruned_run() returns trigger language plpgsql as $$
+      begin raise exception 'test refuses run deletion'; end
+    $$`;
+    await sql`create trigger refuse_pruned_run before delete on reconciliation_runs
+      for each row execute function refuse_pruned_run()`;
+    try {
+      await expect(pruneExpiredMaintenanceRows(sql)).rejects.toThrow("test refuses run deletion");
+      expect(await runExists(run)).toBe(true);
+      expect(await changeExists(change)).toBe(true);
+    } finally {
+      await sql`drop trigger refuse_pruned_run on reconciliation_runs`;
+      await sql`drop function refuse_pruned_run()`;
+    }
+  });
+
   it("deletes nothing on the second pass and reports zeros", async () => {
     await resetMaintenanceTables();
     const processed = await seedReceipt({ processingState: "PROCESSED", processedDaysAgo: 31 });
