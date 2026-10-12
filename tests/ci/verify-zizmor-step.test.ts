@@ -234,7 +234,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     expect(step.env, "the step maps MERGE_SHA and nothing else — no token, no PR_TREE").toEqual({
       MERGE_SHA: "${{ steps.pr-tree.outputs.merge_sha }}",
     });
-    expect(step.if, "the gate must be unconditional").toBeUndefined();
+    expect(step.if, "only a superseded cancellation may skip the gate").toBe("${{ steps.pr.outputs.superseded != 'true' }}");
     expect(step["continue-on-error"], "the gate must not tolerate its own failure").toBeFalsy();
     const names = steps.map((entry) => entry.name);
     expect(names.indexOf(STEP_NAME)).toBeGreaterThan(names.indexOf("Refuse a commit whose scope names a workflow outside the ci type"));

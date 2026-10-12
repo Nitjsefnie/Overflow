@@ -203,8 +203,8 @@ describe("the verify workflow's migration immutability step", () => {
     ).toEqual(["workflow_run"]);
     expect(
       step?.if,
-      "the step carries no event gate: its file's closed trigger set is the gate",
-    ).toBeUndefined();
+      "the step skips only API-proven superseded cancellations",
+    ).toBe("${{ steps.pr.outputs.superseded != 'true' }}");
   });
 
   it("runs from the base checkout, comparing the base tip against the merge commit", () => {
@@ -286,9 +286,8 @@ describe("the verify workflow's legal revision currency step", () => {
     expect(step, "the verify job must contain the Legal revision currency step").toBeDefined();
     expect(
       step?.if,
-      "the step carries no event gate: an `if` naming a sibling event would be dead here and " +
-        "would re-open the class ci-pr.yml's split removed",
-    ).toBeUndefined();
+      "the step skips only API-proven superseded cancellations",
+    ).toBe("${{ steps.pr.outputs.superseded != 'true' }}");
   });
 
   it("walks every commit of the merge range", () => {
@@ -443,10 +442,8 @@ describe("the required workflows' base-freshness step", () => {
       ).toEqual(label === "verify" ? ["workflow_run"] : ["pull_request_target"]);
       expect(
         step.if,
-        `${label}: the step carries no event gate: its file's closed trigger set is the gate, and ` +
-          "an expression naming a sibling event here would be either dead or would re-open the " +
-          "class the split removed",
-      ).toBeUndefined();
+        `${label}: only verify skips an API-proven superseded cancellation`,
+      ).toBe(label === "verify" ? "${{ steps.pr.outputs.superseded != 'true' }}" : undefined);
     }
   });
 
@@ -757,7 +754,7 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
       'cd "${PR_TREE:?the pull request tree was not materialised}"\n',
     );
     expect(step?.run).not.toContain("GITHUB_EVENT_NAME");
-    expect(step?.if).toBeUndefined();
+    expect(step?.if).toBe("${{ steps.pr.outputs.superseded != 'true' }}");
     expect(Boolean(step?.["continue-on-error"])).toBe(false);
   });
 
@@ -796,9 +793,8 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
     expect(step?.env).toEqual({ PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
     expect(
       step?.if,
-      "the step carries no event gate: an `if` naming a sibling event would be dead here, and the " +
-        "file's closed workflow_run trigger set is what keeps it off a push",
-    ).toBeUndefined();
+      "the step skips only API-proven superseded cancellations",
+    ).toBe("${{ steps.pr.outputs.superseded != 'true' }}");
     expect(Boolean(step?.["continue-on-error"])).toBe(false);
   });
 });

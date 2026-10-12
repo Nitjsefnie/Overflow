@@ -101,6 +101,7 @@ import {
   headRepositoryFullNameOf,
   resolveWorkflowRunHead,
   triggeringRunFromApi,
+  type UpstreamPublicationCheck,
 } from "./ledger-relay-upstream.ts";
 
 export type { TriggeringRun };
@@ -260,7 +261,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     triggerRun: attestationRun,
   });
 
-  let recheckSupersession: (() => Promise<number | undefined>) | undefined;
+  let recheckPublication: UpstreamPublicationCheck | undefined;
   let historyBound: string | undefined;
   if (run.event === "workflow_run") {
     const api = sweepApi(deps, repo, auth);
@@ -274,7 +275,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     run = resolved.run;
     attestationRun = { ...run, headSha: resolved.headSha };
     if (resolved.supersededBy !== undefined) return skippedSuperseded(resolved.supersededBy, runSweep);
-    recheckSupersession = resolved.recheckSupersession;
+    recheckPublication = resolved.recheckPublication;
     historyBound = resolved.historyBound;
   }
   if (contextsFor(pinMap, run.path).length === 0) {
@@ -298,7 +299,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
   const publication = await publishProducerContexts({
     api: sweepApi(deps, repo, auth), pinMap, apiRoot: API_ROOT, repo, appId,
     repositoryId: env.GITHUB_REPOSITORY_ID,
-  }, attestationRun, jobsBody, recheckSupersession, historyBound);
+  }, attestationRun, jobsBody, recheckPublication, historyBound);
   if (publication.supersededBy !== undefined) return skippedSuperseded(publication.supersededBy, runSweep);
   const { decisions, posted } = publication;
 

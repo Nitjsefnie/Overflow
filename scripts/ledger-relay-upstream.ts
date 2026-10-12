@@ -9,6 +9,12 @@ import { assertShape, normalizedAttempt, SHA_40, type TriggeringRun } from "./le
 
 const VERIFY_RUN_TITLE = /^verify for pr suite run ([1-9][0-9]*)$/;
 
+export interface UpstreamPublicationState {
+  supersededBy?: number;
+  upstreamConclusion: string | null;
+}
+export type UpstreamPublicationCheck = () => Promise<UpstreamPublicationState>;
+
 /** getRun reads the run by id from this repository's Actions API. */
 export async function resolveWorkflowRunHead(
   runId: string,
@@ -17,7 +23,7 @@ export async function resolveWorkflowRunHead(
   // Only the dispatch path supplies this, reusing its already-fetched API body.
   fetchedProducer?: unknown,
   getSuiteRuns?: (headSha: string) => Promise<unknown>,
-): Promise<{ run: TriggeringRun; headSha: string; producerStatus: string; historyBound?: string; supersededBy?: number; recheckSupersession: () => Promise<number | undefined> }> {
+): Promise<{ run: TriggeringRun; headSha: string; producerStatus: string; historyBound?: string; supersededBy?: number; recheckPublication: UpstreamPublicationCheck }> {
   assertShape(repositoryId ?? "", /^[1-9][0-9]*$/, "GITHUB_REPOSITORY_ID must be the repository's numeric id");
   const body = runBody(fetchedProducer ?? (await getRun(runId)), "producer");
   if (body.path !== ".github/workflows/ci-pr.yml") {
@@ -60,12 +66,13 @@ export async function resolveWorkflowRunHead(
     if (getSuiteRuns === undefined) throw new Error("the suite supersession API is required");
     const newer = supersedingSuiteRunId(current, await getSuiteRuns(headSha), { verifyCreatedAt: body.created_at });
     if (newer === undefined && current.status !== "completed") throw new Error("the upstream run must be completed");
-    return newer;
+    return { supersededBy: newer,
+      upstreamConclusion: typeof current.conclusion === "string" ? current.conclusion : null };
   };
   let supersededBy: number | undefined;
   let historyBound: string | undefined;
   try {
-    supersededBy = await check(upstream);
+    supersededBy = (await check(upstream)).supersededBy;
   } catch (error) {
     // Identity and SHA are already API-proven. Only deterministic exhaustion
     // becomes negative verify evidence; transient/shape failures still throw.
@@ -76,7 +83,7 @@ export async function resolveWorkflowRunHead(
     producerStatus: typeof body.status === "string" ? body.status : "",
     // Reuse only the immutable, API-proven producer identity. Re-read the
     // upstream and its listing immediately before POST to catch late reruns.
-    recheckSupersession: async () => check(await readUpstream()),
+    recheckPublication: async () => check(await readUpstream()),
   };
 }
 

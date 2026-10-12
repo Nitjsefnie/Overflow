@@ -240,8 +240,8 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
       MERGE_SHA: "${{ steps.pr-tree.outputs.merge_sha }}",
       BASE_SHA: "${{ steps.pr.outputs.base_sha }}",
     });
-    expect(step.if, "the step is gated on the workflow_run event").toBe(
-      "github.event_name == 'workflow_run'",
+    expect(step.if, "the step keeps its workflow_run guard and skips superseded cancellations").toBe(
+      "${{ steps.pr.outputs.superseded != 'true' && (github.event_name == 'workflow_run') }}",
     );
     expect(step["continue-on-error"], "the gate must not tolerate its own failure").toBeFalsy();
     const names = steps.map((entry) => entry.name);

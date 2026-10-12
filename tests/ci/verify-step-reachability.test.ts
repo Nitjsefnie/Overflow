@@ -1128,9 +1128,8 @@ describe("the docs-only detection the scenarios above assume", () => {
       ).toContain("scripts/docs-only.ts");
       expect(
         producers[0]?.if,
-        `${leg}: the docs-only producer must run unconditionally — a condition on it means the ` +
-          "output the steps reading it may never be written at all",
-      ).toBeUndefined();
+        `${leg}: only superseded PR cancellations skip the producer and all of its consumers`,
+      ).toBe(leg === "ci-pr.yml" ? "${{ steps.pr.outputs.superseded != 'true' }}" : undefined);
     }
   });
 
@@ -1384,6 +1383,17 @@ for (const scenario of SCENARIOS) {
  */
 
 const PRT_SCENARIOS = SCENARIOS.filter((scenario) => scenario.event === "workflow_run");
+
+describe("superseded cancelled suite step selection", () => {
+  it.each(PRT_SCENARIOS.map((scenario) => [scenario.label, scenario] as const))("selects no later verify steps for %s", (_label, scenario) => {
+    const steps = stepsFor(scenario);
+    const resolver = steps.findIndex((step) => step.id === "pr");
+    expect(resolver).toBeGreaterThan(-1);
+    const context = { ...contextFor(scenario), steps: { pr: { outputs: { superseded: "true" } } } };
+    expect(selectSteps(steps.slice(resolver + 1), context).map((step) => step.name)).toEqual([]);
+    expect(selectSteps(steps.slice(0, resolver + 1), context).some((step) => step.id === "pr")).toBe(true);
+  });
+});
 
 /**
  * Issue 1099: the ONE sanctioned package-manager invocation on this leg. The
@@ -2066,9 +2076,8 @@ for (const scenario of PRT_SCENARIOS) {
       ).toHaveLength(1);
       expect(
         gates[0]!.if,
-        "the gate is gated on the workflow_run event — the only event this file receives, " +
-          "and the only one on which the checkout is not main itself",
-      ).toBe("github.event_name == 'workflow_run'");
+        "the gate keeps its workflow_run condition and skips only superseded cancellations",
+      ).toBe("${{ steps.pr.outputs.superseded != 'true' && (github.event_name == 'workflow_run') }}");
     });
 
     it("sanctions the suppression-list gate only when its run text is byte-identical to the pin", () => {

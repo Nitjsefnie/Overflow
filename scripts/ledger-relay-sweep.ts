@@ -34,7 +34,7 @@ import {
   type RelayJob,
 } from "./ledger-relay-decisions.ts";
 import { readSuiteRuns, suiteRunsUrl, supersessionMessage } from "./pr-suite-supersession.ts";
-import { resolveWorkflowRunHead } from "./ledger-relay-upstream.ts";
+import { resolveWorkflowRunHead, type UpstreamPublicationCheck } from "./ledger-relay-upstream.ts";
 
 import {
   attestedContexts, idOf, newestProducersFor,
@@ -132,7 +132,7 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
   const relayed: Array<{ context: string; runId: string }> = [];
   const superseded: Array<{ runId: string; supersededBy: number }> = [];
   const active: SweepCandidate[] = [];
-  const rechecks = new Map<string, () => Promise<number | undefined>>();
+  const rechecks = new Map<string, UpstreamPublicationCheck>();
   const bounds = new Map<string, string>();
 
   // Resolve BEFORE grouping: both attestation and this sweep's dedupe key are
@@ -162,7 +162,7 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
       continue;
     }
     active.push(candidate);
-    rechecks.set(candidate.runId, resolved.recheckSupersession);
+    rechecks.set(candidate.runId, resolved.recheckPublication);
     if (resolved.historyBound !== undefined) bounds.set(candidate.runId, resolved.historyBound);
   }
 
@@ -204,6 +204,7 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
         // mirror's pending behavior is unchanged (residual, PM-accepted).
         if (decision.status !== "completed") continue;
         const correction = await postProducerCheck(deps, decision, candidate, rechecks.get(candidate.runId));
+        if (correction === null) continue;
         relayed.push({ context: decision.context, runId: candidate.runId });
         if (correction !== undefined) relayed.push({ context: decision.context, runId: correction.runId });
         relayedThisSweep.add(decision.context);
