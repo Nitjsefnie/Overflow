@@ -14,9 +14,9 @@
 //
 // So every relay start sweeps the repository for such orphans: recent completed
 // runs of a pinned workflow, deduplicated against the App's OWN check-runs at
-// each candidate commit. A context the App has already attested is never
-// reposted, which is what keeps the sweep from stamping duplicate check-runs on
-// arbitrary commits — and app id matters as much as name here, because branch
+// each candidate commit. Only the newest eligible producer per context is
+// considered, and its latest App check must link to that producer to count as
+// attestation — app id matters as much as name here, because branch
 // protection matches a required context by name AND app, so a same-named
 // github-actions check-run leaves the App's context missing.
 //
@@ -184,16 +184,14 @@ export function selectSweepCandidates(
 
 /**
  * The missing-context computation, pure. The contexts one of whose pinned paths
- * is the candidate's path, minus the names the App already holds at that
- * commit, minus the contexts this same sweep has already relayed at that
- * commit.
+ * is the candidate's path, minus the names whose latest App checks attest the
+ * selected newest producer at that commit, minus the contexts this same sweep
+ * has already relayed at that commit.
  *
- * The last subtraction is what makes the sweep safe to run on every relay
- * start: two completed runs of the same workflow at one head are two
- * candidates at one commit, and without it every start would re-post whatever
- * its peer just posted. `attested` and `relayedThisSweep` are the two
- * deduplication sources and must not be merged — one is what GitHub holds, the
- * other is what this invocation has itself just written.
+ * The caller restricts each context to its newest eligible producer before
+ * reading jobs. `attested` holds the producer-bound evidence GitHub returned;
+ * `relayedThisSweep` records successful writes by this invocation. They stay
+ * separate so a successful POST cannot be mistaken for an API attestation.
  */
 export function missingContextsFor(
   pinMap: PinMap,
@@ -213,8 +211,10 @@ export function missingContextsFor(
 /**
  * The sweep. One repository-wide listing, then one check-runs GET per DISTINCT
  * candidate commit, then one jobs GET and at most one POST per candidate that
- * still has something missing. Candidates at the same commit share both the
- * attestation and this invocation's relayed set, so a burst of completions on
+ * still has something missing. Only the highest run id for each context at a
+ * commit may post: an older candidate never replaces a newer attestation.
+ * Candidates at the same commit share the attestation and this invocation's
+ * relayed set, so a burst of completions on
  * one pull request head costs one check-runs GET and one post per context
  * rather than one per run.
  *
@@ -268,11 +268,13 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
   }
 
   for (const [headSha, atHead] of groupByHeadSha(active)) {
-    const attested = await attestedContexts(deps, headSha);
+    const newest = newestProducersFor(deps.pinMap, atHead);
+    const attested = await attestedContexts(deps, headSha, newest);
     const relayedThisSweep = new Set<string>();
     for (const candidate of atHead) {
       const missing = new Set(
-        missingContextsFor(deps.pinMap, candidate, attested, relayedThisSweep),
+        missingContextsFor(deps.pinMap, candidate, attested, relayedThisSweep)
+          .filter((context) => newest.get(context) === candidate),
       );
       if (missing.size === 0) continue;
       const jobs = validateJobs(
@@ -327,9 +329,31 @@ function groupByHeadSha(candidates: readonly SweepCandidate[]): Array<[string, S
 }
 
 /**
- * The names the App itself already holds at one commit, COUNTING ONLY THE
- * CONCLUDED ONES — the sweep's whole deduplication evidence, and therefore the
- * one query whose failure direction has to be argued rather than inherited.
+ * Select the highest numeric producer run id for each context at one resolved
+ * SHA, across every pinned path. Call only after workflow_run supersession has
+ * excluded ineligible candidates. Listing order does not establish recency.
+ */
+function newestProducersFor(
+  pinMap: PinMap,
+  candidates: readonly SweepCandidate[],
+): Map<string, SweepCandidate> {
+  const newest = new Map<string, SweepCandidate>();
+  for (const candidate of candidates) {
+    for (const [context, pins] of Object.entries(pinMap)) {
+      if (!pinsFor(pins).includes(candidate.path)) continue;
+      const previous = newest.get(context);
+      if (previous === undefined || BigInt(candidate.runId) > BigInt(previous.runId)) {
+        newest.set(context, candidate);
+      }
+    }
+  }
+  return newest;
+}
+
+/**
+ * The contexts whose latest concluded App checks at this SHA attest their
+ * newest eligible producer: details_url must equal that producer's htmlUrl.
+ * A same-named check for an older run is not evidence for the selected run.
  *
  * The listing is filtered by `app_id` server-side AND by `app.id` here, because
  * a filter the caller cannot see is not a filter: a same-named check-run owned
@@ -337,29 +361,20 @@ function groupByHeadSha(candidates: readonly SweepCandidate[]): Array<[string, S
  * treating it as evidence would keep the orphan exactly where it is.
  *
  * `filter=latest` is passed explicitly rather than left to the endpoint's
- * default: the dedup only needs the latest check-run per name, and stating it
- * means the convergence does not depend on a default this repository does not
- * pin.
+ * default: only the latest App check-run per name can attest the producer.
+ * Stating it means convergence does not depend on an unpinned API default.
  *
  * A malformed listing reads as NO attestation rather than throwing — the same
  * asymmetry hasLiveRunOfPath already sets in scripts/ledger-relay.ts.
  *
- * The earlier version of this comment argued that the direction was safe
- * because "reading nothing as attested can only cause a duplicate context to be
- * posted, never an orphan to be left in place". That was false, and it is worth
- * recording why, because it is the sentence a future reader would trust when
- * deciding whether this guard is safe to relax. The claim assumed the only way
- * a state became unattested-by-the-sweep was an external one. It is not: the
- * sweep POSTS check-runs, including pending ones, so a state it cannot read as
- * attested is a state it can create — see the pending-status guard below, whose
- * defect was exactly this argument taken at face value. The argument is now the
- * other way round and is the one that holds: reading nothing as attested can at
- * worst post a duplicate context, which branch protection tolerates, because a
- * duplicate check-run does not withhold a required context. Reading anything as
- * attested that is not, can withhold one, which is the failure this whole issue
- * exists to prevent.
+ * Pending checks remain placeholders, never attestation. An API read failure
+ * throws rather than treating unreadable evidence as an already-healed run.
  */
-async function attestedContexts(deps: SweepDeps, headSha: string): Promise<Set<string>> {
+async function attestedContexts(
+  deps: SweepDeps,
+  headSha: string,
+  newest: ReadonlyMap<string, SweepCandidate>,
+): Promise<Set<string>> {
   const body = await deps.api.get<Record<string, unknown>>(
     `${deps.apiRoot}/repos/${deps.repo}/commits/${headSha}/check-runs?app_id=${deps.appId}&filter=latest&per_page=100`,
     `the ledger App's check-runs at ${headSha}`,
@@ -371,6 +386,7 @@ async function attestedContexts(deps: SweepDeps, headSha: string): Promise<Set<s
     const checkRun = entry as {
       name?: unknown;
       status?: unknown;
+      details_url?: unknown;
       app?: { id?: unknown } | undefined;
     };
     if (typeof checkRun.name !== "string") continue;
@@ -382,6 +398,9 @@ async function attestedContexts(deps: SweepDeps, headSha: string): Promise<Set<s
     // to post the run's real conclusion, and branch protection would wait
     // forever on a check nothing ever completes.
     if (checkRun.status === "queued" || checkRun.status === "in_progress") continue;
+    const producer = newest.get(checkRun.name);
+    if (producer === undefined) continue;
+    if (checkRun.details_url !== producer.htmlUrl) continue;
     attested.add(checkRun.name);
   }
   return attested;
