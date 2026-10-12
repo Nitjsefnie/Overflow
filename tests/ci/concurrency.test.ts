@@ -15,6 +15,9 @@ import { parse } from "yaml";
  * pending run per group by default and replaces it on a newer arrival, which
  * can drop another pull request's current head without a replacement.
  *
+ * PER_PR_REQUIRED pins the privileged aggregate per pull request: every
+ * newer event reissues all four required contexts for its head.
+ *
  * UNBOUNDED_BY_CHOICE records a reason and the exact group, cancellation flag
  * and queue for each exception. Groups isolate the units of work named in
  * their reasons; queue is pinned where preserving pending arrivals needs it.
@@ -817,7 +820,7 @@ describe("the per-pull-request group keys", () => {
 
   it("does not deny a repository-level group", () => {
     // The negative direction, so the list cannot be widened until it denies
-    // the four groups this repository actually ships.
+    // the repository-wide groups this policy table actually records.
     for (const group of Object.values(BOUNDED).map((entry) => entry.group)) {
       expect(unboundedGroupKeysIn(group), `${group} is a repository-level group`).toEqual([]);
     }

@@ -1,6 +1,6 @@
 name: ledger relay
 
-# Re-posts the three required checks as check-runs owned by the Overflow
+# Re-posts the five required contexts as check-runs owned by the Overflow
 # Ledger GitHub App (app id 5118623), so branch protection can pin each
 # required context to the App instead of the github-actions app. As its second
 # duty (issue 861) it heals a run that GitHub cancelled out of the shared

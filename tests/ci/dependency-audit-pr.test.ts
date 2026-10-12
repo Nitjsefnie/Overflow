@@ -24,8 +24,8 @@ import { parse } from "yaml";
  *  - STRUCTURAL: the trigger set is closed ({pull_request_target}), there is
  *    no paths filter (the leg must fire on EVERY pull request so the required
  *    context always reports — a missing context blocks a merge as surely as a
- *    red one), the concurrency block is the repository-level shape
- *    tests/ci/concurrency.test.ts requires of a required-context producer, the
+ *    red one), the concurrency block cancels superseded runs within one PR,
+ *    as tests/ci/concurrency.test.ts requires of this aggregate, the
  *    job is named `dependency-audit` (the context name the relay matches), the
  *    env pins ride at job level, and the audit portion is byte-identical to
  *    the push leg's.
