@@ -60,9 +60,10 @@ function world(kind: "verify" | "pr-gates" = "verify") {
   const state = {
     suites: [oldSuite], producers: [initial], checks: [] as Body[], requests: [] as string[],
     oversized: false, historyReadFails: false, blockOldWrite: false,
-    listingReadFails: false,
+    listingReadFails: false, blockWriteId: "9001:1",
     oldCommitted: false, afterOldCommitReads: [] as string[],
     onCommit: undefined as ((body: Body) => void | Promise<void>) | undefined,
+    onJobs: undefined as (() => void) | undefined,
   };
   const blocked = deferred();
   const released = deferred();
@@ -83,7 +84,7 @@ function world(kind: "verify" | "pr-gates" = "verify") {
     if (url.endsWith("/access_tokens")) return response({ token: "test-only" });
     if (url === `${ROOT}/check-runs` && init.method === "POST") {
       const body = JSON.parse(String(init.body)) as Body;
-      if (state.blockOldWrite && body.external_id === "9001:1") {
+      if (state.blockOldWrite && body.external_id === state.blockWriteId) {
         blocked.resolve();
         await released.promise;
       }
@@ -111,6 +112,7 @@ function world(kind: "verify" | "pr-gates" = "verify") {
     for (const run of [...state.suites, ...state.producers]) {
       if (url === `${ROOT}/actions/runs/${run.id}`) return response(run);
       if (url === `${ROOT}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`) {
+        state.onJobs?.();
         const contexts = run.path === ".github/workflows/pr-gates.yml" ? GATE_CONTEXTS : ["verify"];
         return response({ jobs: contexts.map((name) => ({ name, run_attempt: run.run_attempt,
           status: run.status, conclusion: run.conclusion })) });
@@ -175,64 +177,145 @@ describe("unsuccessful upstream suites cannot receive App success", () => {
     expect(result.sweep.relayed).toEqual([]);
   });
 
-  it.each(["cancelled", "failure"])("does not correct an older post to success for a %s upstream", async (conclusion) => {
+  it.each(["cancelled", "failure"])("does not publish a selected newer success for a %s upstream", async (conclusion) => {
     const w = world();
-    w.state.onCommit = (body) => {
-      if (body.external_id !== "9001:1") return;
-      w.state.suites = [suite(8002, conclusion), oldSuite];
-      w.state.producers = [verify(9002, 8002, "success"), oldVerify];
-    };
+    w.state.suites = [suite(8002, conclusion), oldSuite];
+    w.state.producers = [verify(9002, 8002, "success"), oldVerify];
     await w.relay("sweep");
-    expect(w.state.checks.map((check) => check.external_id)).toEqual(["9001:1"]);
+    expect(w.state.checks).toEqual([]);
   });
 });
 
-describe("post-write supersession repair", () => {
-  it.each(["sweep", "mirror"] as const)("repairs a delayed older %s success after the newer failure relay completes", async (mode) => {
+describe("issue 1195 newest-completed publication regressions", () => {
+  it("never posts corrective 10002 success after the relayed 11002 failure", async () => {
     const w = world();
+    const middleSuite = { ...suite(10001, "success"), run_started_at: "2026-10-12T09:01:00Z" };
+    const middleVerify = { ...verify(10002, 10001, "success"), created_at: "2026-10-12T09:02:00Z" };
+    const lastSuite = { ...suite(11001, "failure"), run_started_at: "2026-10-12T09:03:00Z" };
+    const lastVerify = { ...verify(11002, 11001, "failure"), created_at: "2026-10-12T09:04:00Z" };
     w.state.blockOldWrite = true;
-    const older = w.relay(mode);
-    await w.blocked.promise;
+    w.state.blockWriteId = "10002:1";
+    w.state.onCommit = (body) => {
+      if (body.external_id !== "9001:1") return;
+      w.state.suites = [middleSuite, oldSuite];
+      w.state.producers = [middleVerify, oldVerify];
+    };
+    const olderSweep = w.relay("sweep");
+    // A removed correction must let the original sweep finish; it must not
+    // deadlock this reproduction waiting for a POST that no longer exists.
+    await Promise.race([w.blocked.promise, olderSweep]);
     try {
-      w.state.suites = [failedSuite, oldSuite];
-      w.state.producers = [failedVerify, oldVerify];
+      w.state.suites = [lastSuite, middleSuite, oldSuite];
+      w.state.producers = [lastVerify, middleVerify, oldVerify];
       const resolution = await resolveSuitePullRequest({
-        env: { GITHUB_REPOSITORY: REPO, GH_TOKEN: "test-only", SUITE_RUN_ID: "8002" }, fetchFn: w.fetchFn,
+        env: { GITHUB_REPOSITORY: REPO, GH_TOKEN: ["test", "only"].join("-"), SUITE_RUN_ID: "11001" },
+        fetchFn: w.fetchFn,
       });
       expect(resolution.exitCode).toBe(1);
       expect(resolution.lines[0]).toMatch(/must conclude success/);
-      await w.relay("mirror", failedVerify);
-      expect(w.state.checks.at(-1)?.conclusion).toBe("failure");
-    } finally {
-      w.released.resolve();
-    }
-    await older;
-    expect(w.state.afterOldCommitReads[0]).toBe(`${ROOT}/actions/runs/8001`);
+      const failure = await w.relay("mirror", lastVerify);
+      expect(failure.decisions[0]).toMatchObject({ context: "verify", conclusion: "failure" });
+      expect(w.state.checks.at(-1)).toMatchObject({ external_id: "11002:1", conclusion: "failure" });
+    } finally { w.released.resolve(); }
+    expect((await olderSweep).sweepOnly).toBe(true);
+    expect(w.state.checks.at(-1)).toMatchObject({
+      head_sha: HEAD, name: "verify", external_id: "11002:1", conclusion: "failure", app: { id: 5118623 },
+    });
     expect(w.state.checks.map((check) => `${check.external_id}=${check.conclusion}`))
-      .toEqual(["9002:1=failure", "9001:1=success", "9002:1=failure"]);
+      .toEqual(["9001:1=success", "11002:1=failure"]);
+    const before = w.state.checks.length;
+    await w.relay("sweep");
+    expect(w.state.checks).toHaveLength(before);
+  });
+
+  it("posts nothing when an older pr-gates mirror follows the newer failure relay", async () => {
+    const w = world("pr-gates");
+    const older = gate(9001, "success");
+    const newer = gate(9002, "failure");
+    w.state.producers = [newer, older];
+    await w.relay("mirror", newer);
+    const before = w.state.checks.length;
+    const result = await w.relay("mirror", older);
+    expect(result.posted).toEqual([]);
+    expect(w.state.checks.slice(before)).toEqual([]);
+    for (const context of GATE_CONTEXTS) {
+      expect(w.state.checks.filter((check) => check.name === context).at(-1))
+        .toMatchObject({ head_sha: HEAD, external_id: "9002:1", conclusion: "failure" });
+    }
+  });
+
+  it("posts nothing for an older workflow_run mirror with the same unsuperseded suite", async () => {
+    const w = world();
+    const newer = verify(9002, 8001, "failure");
+    w.state.producers = [newer, oldVerify];
+    await w.relay("mirror", newer);
+    const before = w.state.checks.length;
+    const result = await w.relay("mirror", oldVerify);
+    expect(result.supersededBy).toBeUndefined();
+    expect(result.posted).toEqual([]);
+    expect(w.state.checks.slice(before)).toEqual([]);
     expect(w.state.checks.at(-1)).toMatchObject({ head_sha: HEAD, external_id: "9002:1", conclusion: "failure" });
   });
 
-  it.each(["sweep", "mirror"] as const)("does not correct the %s write without a completed unsuperseded replacement", async (mode) => {
+  it("relies on G-1 serialization: the older sweep POST finishes before the newer failure relay starts", async () => {
     const w = world();
-    w.state.onCommit = (body) => {
-      if (body.external_id !== "9001:1") return;
-      w.state.suites = [failedSuite, oldSuite];
-      w.state.producers = [{ ...failedVerify, status: "queued", conclusion: null }, oldVerify];
-    };
+    w.state.blockOldWrite = true;
+    const olderSweep = w.relay("sweep");
+    await Promise.race([w.blocked.promise, olderSweep.then(() => { throw new Error("original POST was not held"); })]);
+    // The producer can complete while a relay is running; G-1 queues its relay.
+    w.state.suites = [failedSuite, oldSuite];
+    w.state.producers = [failedVerify, oldVerify];
+    w.released.resolve();
+    expect((await olderSweep).sweepOnly).toBe(true);
+    const resolution = await resolveSuitePullRequest({
+      env: { GITHUB_REPOSITORY: REPO, GH_TOKEN: ["test", "only"].join("-"), SUITE_RUN_ID: "8002" },
+      fetchFn: w.fetchFn,
+    });
+    expect(resolution.exitCode).toBe(1);
+    await w.relay("mirror", failedVerify);
+    expect(w.state.checks.at(-1)).toMatchObject({ head_sha: HEAD, external_id: "9002:1", conclusion: "failure" });
+    const failureIndex = w.state.checks.findIndex((check) => check.external_id === "9002:1");
+    expect(w.state.checks.slice(failureIndex).every((check) => check.conclusion === "failure")).toBe(true);
+  });
+});
+
+describe("serialized supersession publication", () => {
+  it.each(["sweep", "mirror"] as const)("finishes an older %s success before relaying the newer failure", async (mode) => {
+    const w = world();
+    w.state.blockOldWrite = true;
+    const older = w.relay(mode);
+    await Promise.race([w.blocked.promise, older.then(() => { throw new Error("old POST was not held"); })]);
+    w.released.resolve();
+    await older;
+    w.state.suites = [failedSuite, oldSuite];
+    w.state.producers = [failedVerify, oldVerify];
+    const resolution = await resolveSuitePullRequest({
+      env: { GITHUB_REPOSITORY: REPO, GH_TOKEN: ["test", "only"].join("-"), SUITE_RUN_ID: "8002" }, fetchFn: w.fetchFn,
+    });
+    expect(resolution.exitCode).toBe(1);
+    expect(resolution.lines[0]).toMatch(/must conclude success/);
+    await w.relay("mirror", failedVerify);
+    expect(w.state.checks.map((check) => `${check.external_id}=${check.conclusion}`))
+      .toEqual(["9001:1=success", "9002:1=failure"]);
+    expect(w.state.checks.at(-1)).toMatchObject({ head_sha: HEAD, external_id: "9002:1", conclusion: "failure" });
+  });
+
+  it.each(["sweep", "mirror"] as const)("selects the completed %s producer instead of an unfinished replacement", async (mode) => {
+    const w = world();
+    w.state.producers = [{ ...verify(9002, 8001, "failure"), status: "queued", conclusion: null }, oldVerify];
     await w.relay(mode);
     expect(w.state.checks.map((check) => check.external_id)).toEqual(["9001:1"]);
     expect(w.state.requests).not.toContain(`${ROOT}/actions/runs/9002/jobs?filter=latest&per_page=100`);
   });
 
-  it.each(["sweep", "mirror"] as const)("throws when the %s post-write supersession read fails", async (mode) => {
+  it.each(["sweep", "mirror"] as const)("throws when the %s pre-write supersession read fails", async (mode) => {
     const w = world();
-    w.state.onCommit = () => { w.state.historyReadFails = true; };
+    w.state.onJobs = () => { w.state.historyReadFails = true; };
     await expect(w.relay(mode)).rejects.toThrow(/suite.*failed/);
-    expect(w.state.checks).toHaveLength(1);
+    expect(w.state.checks).toEqual([]);
   });
 
-  it("bounds correction to one even when a third producer appears", async () => {
+  it("leaves producers completed after a write for the next serialized sweep", async () => {
     const w = world();
     const middleSuite = suite(8002, "success");
     const middleVerify = verify(9002, 8002, "success");
@@ -248,18 +331,21 @@ describe("post-write supersession repair", () => {
       }
     };
     await w.relay("sweep");
+    expect(w.state.checks.map((check) => check.external_id)).toEqual(["9001:1"]);
+    await w.relay("sweep");
     expect(w.state.checks.map((check) => check.external_id)).toEqual(["9001:1", "9002:1"]);
+    await w.relay("sweep");
+    expect(w.state.checks.map((check) => `${check.external_id}=${check.conclusion}`))
+      .toEqual(["9001:1=success", "9002:1=success", "9003:1=failure"]);
   });
 
-  it("does not duplicate a newest producer already attested after the older write", async () => {
+  it("does not duplicate a newest producer already attested before an older start", async () => {
     const w = world();
-    w.state.onCommit = async (body) => {
-      if (body.external_id !== "9001:1") return;
-      w.state.suites = [failedSuite, oldSuite];
-      w.state.producers = [failedVerify, oldVerify];
-      await w.relay("mirror", failedVerify);
-    };
     await w.relay("sweep");
+    w.state.suites = [failedSuite, oldSuite];
+    w.state.producers = [failedVerify, oldVerify];
+    await w.relay("mirror", failedVerify);
+    await w.relay("mirror", oldVerify);
     expect(w.state.checks.map((check) => check.external_id)).toEqual(["9001:1", "9002:1"]);
     expect(w.state.checks.at(-1)?.conclusion).toBe("failure");
   });
@@ -286,91 +372,78 @@ describe("history-bound publication direction", () => {
   });
 });
 
-describe("every-producer post-write correction", () => {
-  it.each(["mirror", "sweep"] as const)("refreshes producer selection after a %s history-bound failure write", async (mode) => {
+describe("every-producer pre-write selection", () => {
+  it.each(["mirror", "sweep"] as const)("fails before the %s history-bound certificate when the producer listing fails", async (mode) => {
     const w = world();
     w.state.oversized = true;
-    w.state.onCommit = () => { w.state.listingReadFails = true; };
-    await expect(w.relay(mode)).rejects.toThrow(/post-write producer listing.*failed/);
-    expect(w.state.checks).toHaveLength(1);
-    expect(w.state.checks[0]).toMatchObject({ name: "verify", conclusion: "failure" });
+    w.state.listingReadFails = true;
+    await expect(w.relay(mode)).rejects.toThrow(/listing.*failed/);
+    expect(w.state.checks).toEqual([]);
   });
 
-  it("corrects a history-bound sweep certificate to the newest producer identity", async () => {
+  it("binds a history-bound sweep certificate to the newest producer before posting", async () => {
     const w = world();
     w.state.oversized = true;
-    w.state.onCommit = (body) => {
-      if (body.external_id !== "9001:1") return;
-      w.state.suites = [failedSuite, oldSuite];
-      w.state.producers = [failedVerify, oldVerify];
-    };
+    w.state.suites = [failedSuite, oldSuite];
+    w.state.producers = [failedVerify, oldVerify];
     await w.relay("sweep");
-    expect(w.state.checks.map((check) => check.external_id)).toEqual(["9001:1", "9002:1"]);
+    expect(w.state.checks.map((check) => check.external_id)).toEqual(["9002:1"]);
     expect(w.state.checks.every((check) => check.conclusion === "failure")).toBe(true);
     expect((w.state.checks.at(-1)?.output as Body).summary).toMatch(/1000 runs/);
+    await w.relay("sweep");
+    expect(w.state.checks).toHaveLength(1);
   });
 
-  it("repairs issue 1191's delayed pr-gates sweep write for all four contexts", async () => {
+  it("serializes issue 1191's pr-gates sweep and newer failure for all four contexts", async () => {
     const w = world("pr-gates");
     const olderRun = gate(9001, "success");
     const newerRun = gate(9002, "failure");
     w.state.blockOldWrite = true;
     const older = w.relay("sweep");
     await Promise.race([w.blocked.promise, older.then(() => { throw new Error("old sweep missed its held write"); })]);
-    try {
-      w.state.producers = [newerRun, olderRun];
-      const failure = await w.relay("mirror", newerRun);
-      expect(failure.posted).toEqual(GATE_CONTEXTS);
-      expect(w.state.checks.map((check) => check.conclusion)).toEqual(GATE_CONTEXTS.map(() => "failure"));
-    } finally { w.released.resolve(); }
+    w.released.resolve();
     await older;
+    expect(w.state.afterOldCommitReads).toEqual([]);
+    w.state.producers = [newerRun, olderRun];
+    const failure = await w.relay("mirror", newerRun);
+    expect(failure.posted).toEqual(GATE_CONTEXTS);
     for (const context of GATE_CONTEXTS) {
       const atContext = w.state.checks.filter((check) => check.name === context);
       expect(atContext.map((check) => `${check.external_id}=${check.conclusion}`))
-        .toEqual(["9002:1=failure", "9001:1=success", "9002:1=failure"]);
+        .toEqual(["9001:1=success", "9002:1=failure"]);
       expect(atContext.at(-1)).toMatchObject({ head_sha: HEAD, external_id: "9002:1", conclusion: "failure" });
     }
-    expect(w.state.afterOldCommitReads[0]).toBe(`${ROOT}/actions/runs?per_page=100`);
     const before = w.state.checks.length;
-    w.state.blockOldWrite = false;
     await w.relay("sweep");
     expect(w.state.checks).toHaveLength(before);
   });
 
   it.each(["mirror", "sweep"] as const)("keeps the pr-gates %s attestation when only an unfinished replacement exists", async (mode) => {
     const w = world("pr-gates");
-    w.state.onCommit = (body) => {
-      if (body.external_id !== "9001:1") return;
-      w.state.producers = [{ ...gate(9002, "failure"), status: "queued", conclusion: null }, gate(9001, "success")];
-    };
+    w.state.producers = [{ ...gate(9002, "failure"), status: "queued", conclusion: null }, gate(9001, "success")];
     await w.relay(mode);
     expect(w.state.checks.map((check) => check.external_id)).toEqual(GATE_CONTEXTS.map(() => "9001:1"));
     expect(w.state.requests).not.toContain(`${ROOT}/actions/runs/9002/jobs?filter=latest&per_page=100`);
   });
 
-  it("bounds the pr-gates correction to one per original context write", async () => {
+  it("posts only the newest pr-gates producer for every context", async () => {
     const w = world("pr-gates");
-    w.state.onCommit = (body) => {
-      if (body.name !== "actionlint") return;
-      if (body.external_id === "9001:1") w.state.producers = [gate(9002, "success"), gate(9001, "success")];
-      if (body.external_id === "9002:1") w.state.producers = [gate(9003, "failure"), gate(9002, "success"), gate(9001, "success")];
-    };
+    w.state.producers = [gate(9003, "failure"), gate(9002, "success"), gate(9001, "success")];
     await w.relay("sweep");
-    expect(w.state.checks.filter((check) => check.name === "actionlint").map((check) => check.external_id))
-      .toEqual(["9001:1", "9002:1"]);
+    expect(w.state.checks.map((check) => `${check.external_id}=${check.conclusion}`))
+      .toEqual(GATE_CONTEXTS.map(() => "9003:1=failure"));
   });
 
-  it.each(["mirror", "sweep"] as const)("throws on the fresh pr-gates %s correction-listing read failure", async (mode) => {
+  it.each(["mirror", "sweep"] as const)("throws on the pr-gates %s pre-write listing read failure", async (mode) => {
     const w = world("pr-gates");
-    w.state.onCommit = () => { w.state.listingReadFails = true; };
-    await expect(w.relay(mode)).rejects.toThrow(/producer.*failed/);
-    expect(w.state.checks).toHaveLength(1);
+    w.state.listingReadFails = true;
+    await expect(w.relay(mode)).rejects.toThrow(/listing.*failed/);
+    expect(w.state.checks).toEqual([]);
   });
 });
 
-
-describe("completed producer and bound corrections", () => {
-  it.each(["pr-gates", "verify"] as const)("restores completed B failure despite queued C after delayed %s A success", async (kind) => {
+describe("completed producer and bound selection", () => {
+  it.each(["pr-gates", "verify"] as const)("selects completed B failure despite queued C after the serialized %s A sweep", async (kind) => {
     const w = world(kind);
     const runA = kind === "verify" ? oldVerify : gate(9001, "success");
     const runB = kind === "verify" ? failedVerify : gate(9002, "failure");
@@ -379,56 +452,48 @@ describe("completed producer and bound corrections", () => {
     w.state.blockOldWrite = true;
     const older = w.relay("sweep");
     await Promise.race([w.blocked.promise, older.then(() => { throw new Error("old sweep missed its held write"); })]);
-    try {
-      w.state.suites = [failedSuite, oldSuite];
-      w.state.producers = [runB, runA];
-      await w.relay("mirror", runB);
-      expect(w.state.checks.every((check) => check.conclusion === "failure")).toBe(true);
-      w.state.producers = [runC, runB, runA];
-    } finally { w.released.resolve(); }
+    w.released.resolve();
     await older;
+    w.state.suites = [failedSuite, oldSuite];
+    w.state.producers = [runC, runB, runA];
+    await w.relay("mirror", runA);
     for (const context of kind === "verify" ? ["verify"] : GATE_CONTEXTS) {
       const checks = w.state.checks.filter((check) => check.name === context);
       expect(checks.at(-1)).toMatchObject({ head_sha: HEAD, external_id: "9002:1", conclusion: "failure" });
       expect(checks.map((check) => `${check.external_id}=${check.conclusion}`))
-        .toEqual(["9002:1=failure", "9001:1=success", "9002:1=failure"]);
+        .toEqual(["9001:1=success", "9002:1=failure"]);
     }
     expect(w.state.requests).not.toContain(`${ROOT}/actions/runs/9003/jobs?filter=latest&per_page=100`);
   });
 
   it.each([
     ["sweep", "success"], ["mirror", "success"], ["sweep", "failure"], ["mirror", "failure"],
-  ] as const)("posts the bound failure certificate after a %s corrective %s", async (mode, conclusion) => {
+  ] as const)("decides the bound failure before the %s selected %s producer writes", async (mode, conclusion) => {
     const w = world();
+    await w.relay("mirror");
     const middleSuite = suite(8002, conclusion);
     const middleVerify = verify(9002, 8002, conclusion);
-    w.state.onCommit = (body) => {
-      if (body.external_id === "9001:1") {
-        w.state.suites = [middleSuite, oldSuite];
-        w.state.producers = [middleVerify, oldVerify];
-      } else if (body.external_id === "9002:1") w.state.oversized = true;
-    };
-    const result = await w.relay(mode);
-    // The mirror's ordinary sweep may subsequently repeat the negative cap certificate.
-    expect(w.state.checks.slice(0, 3).map((check) => `${check.external_id}=${check.conclusion}`))
-      .toEqual(["9001:1=success", `9002:1=${conclusion}`, "9002:1=failure"]);
+    w.state.suites = [middleSuite, oldSuite];
+    w.state.producers = [middleVerify, oldVerify];
+    w.state.oversized = true;
+    const result = await w.relay(mode, middleVerify);
+    expect(w.state.checks.map((check) => `${check.external_id}=${check.conclusion}`))
+      .toEqual(["9001:1=success", "9002:1=failure"]);
     expect(w.state.checks.at(-1)).toMatchObject({ name: "verify", head_sha: HEAD, external_id: "9002:1", conclusion: "failure" });
     expect((w.state.checks.at(-1)?.output as Body).summary).toMatch(/1000 runs/);
     if (mode === "mirror") expect(result.decisions[0]).toMatchObject({ context: "verify", conclusion: "failure", summary: expect.stringMatching(/1000 runs/) });
   });
 
-  it.each(["sweep", "mirror"] as const)("still throws for transient history failure after the %s corrective write", async (mode) => {
+  it.each(["sweep", "mirror"] as const)("throws for transient history failure before the %s selected newer write", async (mode) => {
     const w = world();
+    await w.relay("mirror");
     const middleSuite = suite(8002, "success");
     const middleVerify = verify(9002, 8002, "success");
-    w.state.onCommit = (body) => {
-      if (body.external_id === "9001:1") {
-        w.state.suites = [middleSuite, oldSuite];
-        w.state.producers = [middleVerify, oldVerify];
-      } else if (body.external_id === "9002:1") w.state.historyReadFails = true;
-    };
-    await expect(w.relay(mode)).rejects.toThrow(/suite.*failed/);
+    w.state.suites = [middleSuite, oldSuite];
+    w.state.producers = [middleVerify, oldVerify];
+    w.state.onJobs = () => { w.state.historyReadFails = true; };
+    await expect(w.relay(mode, middleVerify)).rejects.toThrow(/suite.*failed/);
     expect(w.state.checks.map((check) => `${check.external_id}=${check.conclusion}`))
-      .toEqual(["9001:1=success", "9002:1=success"]);
+      .toEqual(["9001:1=success"]);
   });
 });

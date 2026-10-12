@@ -618,7 +618,7 @@ describe("sweepOrphans", () => {
     expect(requests.some((request) => request.url === jobsUrl("9002"))).toBe(true);
   });
 
-  it("reads each head once for selection and again after its newest producer is posted", async () => {
+  it("reads each head once before posting its newest producer", async () => {
     const { api, requests } = fakeApi({
       [RUNS_URL]: {
         workflow_runs: [
@@ -649,8 +649,7 @@ describe("sweepOrphans", () => {
       (request) => request.url?.startsWith(`https://api.github.com/repos/${REPO}/commits/`) ?? false,
     );
     expect(headsRead.map((request) => request.url)).toEqual([
-      checkRunsAt(HEAD_SHA), checkRunsAt(HEAD_SHA),
-      checkRunsAt(OTHER_SHA), checkRunsAt(OTHER_SHA),
+      checkRunsAt(HEAD_SHA), checkRunsAt(OTHER_SHA),
     ]);
     // Two jobs listings, four candidates.
     expect(requests.filter((request) => request.url?.includes("/jobs?") ?? false)).toHaveLength(2);

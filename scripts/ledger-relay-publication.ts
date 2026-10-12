@@ -1,9 +1,9 @@
-// Every producer refreshes recency after its App write commits and can make
-// one producer correction. Deterministic exhaustion requires a negative bound
-// certificate even after that correction. Workflow-run producers retain suite checks
-// before/after publication; ordinary API failures still throw.
+// The mirror selects the newest completed eligible producer before writing.
+// Both duties recheck suite supersession and upstream success before each POST;
+// deterministic history exhaustion becomes a negative certificate at that point.
+// Serialized relay starts need no post-write correction.
 
-import { decideContexts, type ContextDecision } from "./ledger-relay-decisions.ts";
+import { decideContexts, pinsFor, type ContextDecision } from "./ledger-relay-decisions.ts";
 import {
   attestedContexts, checkRunBody, newestProducersFor, selectSweepCandidates,
   validateJobs, type ProducerDeps, type SweepCandidate,
@@ -12,7 +12,6 @@ import { resolveWorkflowRunHead, type UpstreamPublicationCheck } from "./ledger-
 import { readSuiteRuns, SuiteHistoryBoundError, suiteRunsUrl } from "./pr-suite-supersession.ts";
 
 export interface PublicationState { supersededBy?: number; historyBound?: string; upstreamConclusion?: string | null }
-export interface Correction { runId: string; decision: ContextDecision }
 
 /** Classify only deterministic history exhaustion; never convert a read error to a result. */
 export async function publicationState(check?: UpstreamPublicationCheck): Promise<PublicationState> {
@@ -32,18 +31,17 @@ export function historyBoundDecision(bound: string): ContextDecision {
   };
 }
 
-/** Recheck before every write; null means suppressed, undefined means posted without correction. */
+/** Recheck before every write; return the posted decision, or undefined when suppressed. */
 export async function postProducerCheck(
   deps: ProducerDeps,
   decision: ContextDecision,
   run: SweepCandidate,
   check?: UpstreamPublicationCheck,
-): Promise<Correction | undefined | null> {
+): Promise<ContextDecision | undefined> {
   const checked = publicationDecision(decision, await publicationState(check), run);
-  if (checked === undefined) return null;
+  if (checked === undefined) return;
   await writeCheck(deps, checked, run);
-  const correction = await repairAfterPost(deps, checked, run, check, await publicationState(check));
-  return correction ?? (checked === decision ? undefined : { runId: run.runId, decision: checked });
+  return checked;
 }
 
 /** A successful verify job may be a cancellation no-op, never an App certificate. */
@@ -61,75 +59,23 @@ async function writeCheck(deps: ProducerDeps, decision: ContextDecision, run: Sw
   await deps.api.postCheckRun(checkRunBody(decision, run), `the check-run for ${decision.context}`);
 }
 
-/** One producer correction, plus any mandatory bound certificate. Never reselect or loop after correction. */
-async function repairAfterPost(
-  deps: ProducerDeps,
-  original: ContextDecision,
-  run: SweepCandidate,
-  check: UpstreamPublicationCheck | undefined,
-  state: PublicationState,
-): Promise<Correction | undefined> {
-  const newest = await newestCandidate(deps, run.headSha, original.context,
-    state.supersededBy === undefined ? {
-      run: { ...run, status: run.status ?? original.status }, check, historyBound: state.historyBound,
-    } : undefined);
-  if (state.historyBound !== undefined && (newest === undefined || newest.run.status !== "completed")) {
-    // Keep the bound's negative direction without a completed replacement.
-    if (original.conclusion === "failure" && original.summary.includes(state.historyBound)) return;
-    const decision = historyBoundDecision(state.historyBound);
-    await writeCheck(deps, decision, run);
-    await publicationState(check);
-    return { runId: run.runId, decision };
-  }
-  // A replacement without a completed eligible producer waits for its own completion relay.
-  if (newest === undefined || newest.run.status !== "completed") return;
-  const attested = await attestedContexts(deps, run.headSha, new Map([[original.context, newest.run]]));
-  const boundAlreadyPublished = newest.historyBound !== undefined && newest.run.runId === run.runId
-    && newest.run.runAttempt === run.runAttempt && original.conclusion === "failure"
-    && original.summary.includes(newest.historyBound);
-  // Identity alone cannot preserve a green certificate when history is exhausted.
-  if (attested.has(original.context) && (newest.historyBound === undefined || boundAlreadyPublished)) return;
-  const proposed = newest.historyBound === undefined
-    ? decideContexts(deps.pinMap, newest.run.path, newest.run.conclusion, validateJobs(
-      await deps.api.get<Record<string, unknown>>(
-        `${deps.apiRoot}/repos/${deps.repo}/actions/runs/${newest.run.runId}/jobs?filter=latest&per_page=100`,
-        `the corrective job listing of run ${newest.run.runId}`,
-      ),
-    )).find((entry) => entry.context === original.context)
-    : historyBoundDecision(newest.historyBound);
-  if (proposed === undefined) throw new Error("the newest producer has no pinned corrective context");
-  const decision = publicationDecision(proposed, await publicationState(newest.check), newest.run);
-  if (decision === undefined) return;
-  await writeCheck(deps, decision, newest.run);
-  const afterCorrection = await publicationState(newest.check);
-  // A deterministic bound must leave its negative certificate, even after a correction.
-  // No new producer selection: the corrective-write race remains for the next scheduled sweep.
-  if (afterCorrection.historyBound !== undefined && (decision.conclusion !== "failure"
-    || !decision.summary.includes(afterCorrection.historyBound))) {
-    const failure = historyBoundDecision(afterCorrection.historyBound);
-    await writeCheck(deps, failure, newest.run);
-    await publicationState(newest.check); // Transient read errors still throw; a repeated bound never loops.
-    return { runId: newest.run.runId, decision: failure };
-  }
-  return { runId: newest.run.runId, decision };
-}
-
 interface ResolvedCandidate { run: SweepCandidate; check?: UpstreamPublicationCheck; historyBound?: string }
 
 /** Resolve completed eligible producers in the sweep's id/attempt order; unfinished runs are ignored. */
 async function newestCandidate(
-  deps: ProducerDeps, headSha: string, context: string, posted?: ResolvedCandidate,
+  deps: ProducerDeps, headSha: string, context: string, trigger: ResolvedCandidate,
 ): Promise<ResolvedCandidate | undefined> {
   const listing = await deps.api.get<Record<string, unknown>>(
-    `${deps.apiRoot}/repos/${deps.repo}/actions/runs?per_page=100`, "the post-write producer listing",
+    `${deps.apiRoot}/repos/${deps.repo}/actions/runs?per_page=100`, "the pre-write producer listing",
   );
-  if (!Array.isArray(listing?.workflow_runs)) throw new Error("the post-write producer listing returned no runs array");
+  if (!Array.isArray(listing?.workflow_runs)) throw new Error("the pre-write producer listing returned no runs array");
   const contextPins = { [context]: deps.pinMap[context] };
-  // Keep the completed just-posted producer even if the listing omits it.
-  const completedPosted = posted?.run.status === "completed" ? posted : undefined;
-  const eligible: SweepCandidate[] = completedPosted === undefined ? [] : [completedPosted.run];
-  const resolved = new Map<SweepCandidate, ResolvedCandidate>(completedPosted === undefined ? [] : [[completedPosted.run, completedPosted]]);
+  // Retain the completed trigger even if the bounded listing omits it.
+  const completed = trigger.run.status === "completed";
+  const eligible: SweepCandidate[] = completed ? [trigger.run] : [];
+  const resolved = new Map<SweepCandidate, ResolvedCandidate>(completed ? [[trigger.run, trigger]] : []);
   for (const candidate of selectSweepCandidates(listing.workflow_runs, contextPins, "")) {
+    if (candidate.runId === trigger.run.runId && candidate.runAttempt === trigger.run.runAttempt) continue;
     candidate.status = "completed";
     let entry: ResolvedCandidate = { run: candidate };
     if (candidate.workflowRun === true) {
@@ -169,16 +115,33 @@ export async function publishProducerContexts(
   const state = await publicationState(check);
   const bound = state.historyBound ?? initialBound;
   if (state.supersededBy !== undefined && bound === undefined) return { decisions: [], posted: [], supersededBy: state.supersededBy };
-  const proposed = bound === undefined
-    ? decideContexts(deps.pinMap, run.path, run.conclusion, jobs)
-    : [historyBoundDecision(bound)];
+  const contexts = Object.entries(deps.pinMap)
+    .filter(([, pins]) => pinsFor(pins).includes(run.path)).map(([context]) => context);
   const decisions: ContextDecision[] = [];
   const posted: string[] = [];
-  for (const decision of proposed) {
-    const correction = await postProducerCheck(deps, decision, run, check);
-    if (correction === null) continue;
-    posted.push(decision.context);
-    decisions.push(correction?.decision ?? decision);
+  for (const context of contexts) {
+    const newest = await newestCandidate(deps, run.headSha, context, {
+      run: { ...run, status: run.status ?? "completed" }, check, historyBound: bound,
+    });
+    if (newest === undefined) continue;
+    const attested = await attestedContexts(deps, run.headSha, new Map([[context, newest.run]]));
+    if (attested.has(context)) continue;
+    const selectedJobs = newest.run.runId === run.runId && newest.run.runAttempt === run.runAttempt
+      ? jobs : newest.historyBound !== undefined ? [] : validateJobs(
+        await deps.api.get<Record<string, unknown>>(
+          `${deps.apiRoot}/repos/${deps.repo}/actions/runs/${newest.run.runId}/jobs?filter=latest&per_page=100`,
+          `the job listing of run ${newest.run.runId}`,
+        ),
+      );
+    const proposed = newest.historyBound === undefined
+      ? decideContexts(deps.pinMap, newest.run.path, newest.run.conclusion, selectedJobs)
+        .find((entry) => entry.context === context)
+      : historyBoundDecision(newest.historyBound);
+    if (proposed === undefined) throw new Error("the newest producer has no pinned context");
+    const decision = await postProducerCheck(deps, proposed, newest.run, newest.check);
+    if (decision === undefined) continue;
+    posted.push(context);
+    decisions.push(decision);
   }
   return { decisions, posted };
 }

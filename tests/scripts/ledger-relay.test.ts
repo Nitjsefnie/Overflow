@@ -564,22 +564,23 @@ describe("runRelay", () => {
 
   type Outcome = { status: number; body: unknown } | { fail: Error };
 
-  function makeFetch(outcomes: Outcome[]) {
+  function makeFetch(outcomes: Outcome[], mirrorContexts = 1) {
+    let mirrorReady = false;
     const requests: Recorded[] = [];
     const fn = vi.fn(async (url: unknown, init?: RequestInit) => {
       const rendered = typeof url === "string" ? url : String(url);
       requests.push({ url: rendered, init: init ?? {} });
+      // The mirror sees no other producers or attestations before its writes.
+      // Sweep and heal responses remain explicit in the queued outcomes.
+      if (mirrorReady && mirrorContexts > 0 && init?.method === "GET") {
+        if (rendered === SWEEP_RUNS_URL) return new Response(JSON.stringify({ workflow_runs: [] }));
+        if (rendered.includes("/check-runs?")) return new Response(JSON.stringify({ check_runs: [] }));
+      }
       const outcome = outcomes.shift();
       if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
       if ("fail" in outcome) throw outcome.fail;
-      if (rendered.endsWith("/check-runs") && init?.method === "POST" && outcome.status === 201) {
-        const posted = JSON.parse(String(init.body)) as Record<string, unknown>;
-        // Post-write snapshots see this write; pending producers block attestation reads.
-        outcomes.unshift({ status: 200, body: { workflow_runs: [] } },
-          ...(posted.status === "completed" ? [{ status: 200, body: {
-            check_runs: [{ ...posted, app: { id: 5118623 } }],
-          } }] : []));
-      }
+      if (rendered === JOBS_URL && outcome.status === 200) mirrorReady = true;
+      if (rendered === CHECK_RUNS_URL && init?.method === "POST" && outcome.status === 201) mirrorContexts -= 1;
       return new Response(JSON.stringify(outcome.body), {
         status: outcome.status,
         headers: { "content-type": "application/json" },
@@ -647,8 +648,8 @@ describe("runRelay", () => {
     expect(fetchStub.requests.map((request) => request.url)).toEqual([
       TOKEN_URL,
       JOBS_URL,
-      CHECK_RUNS_URL,
       SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+      CHECK_RUNS_URL,
       SWEEP_RUNS_URL,
     ]);
 
@@ -836,6 +837,7 @@ describe("runRelay", () => {
           head_sha: HEAD_SHA,
           path: PATH_CI,
           conclusion: "success",
+          status: "completed",
           html_url: HTML_URL,
           event: "push",
           head_branch: "main",
@@ -865,8 +867,8 @@ describe("runRelay", () => {
       TOKEN_URL,
       RUN_URL,
       JOBS_URL,
-      CHECK_RUNS_URL,
       SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+      CHECK_RUNS_URL,
       SWEEP_RUNS_URL,
     ]);
     expect(bodiesOf(fetchStub.requests).every((body) => body.head_sha === HEAD_SHA)).toBe(true);
@@ -956,6 +958,7 @@ describe("runRelay", () => {
       head_sha: HEAD_SHA,
       path: PATH_CI,
       conclusion: "success",
+      status: "completed",
       html_url: HTML_URL,
       event: "push",
       head_branch: "main",
@@ -1179,8 +1182,8 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        CHECK_RUNS_URL,
         SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
       ]);
     });
@@ -1202,8 +1205,8 @@ describe("runRelay", () => {
         TOKEN_URL,
         RUN_URL,
         JOBS_URL,
-        CHECK_RUNS_URL,
         SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
       ]);
     });
@@ -1262,8 +1265,8 @@ describe("runRelay", () => {
         expect(fetchStub.requests.map((request) => request.url), runPath).toEqual([
           TOKEN_URL,
           JOBS_URL,
-          CHECK_RUNS_URL,
           SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+          CHECK_RUNS_URL,
           SWEEP_RUNS_URL,
         ]);
         const [body] = bodiesOf(fetchStub.requests);
@@ -1492,8 +1495,8 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        CHECK_RUNS_URL,
         SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
         PULLS_URL,
       ]);
@@ -1622,7 +1625,7 @@ describe("runRelay", () => {
         pullsListing([pullEntry()]),
         runsListing([]),
         { status: 202, body: undefined },
-      ]);
+      ], 2);
       const result = await runRelay({
         env: cancelledPrEnv(),
         fetchFn: fetchStub.fn,
@@ -1657,8 +1660,8 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        CHECK_RUNS_URL,
         SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
       ]);
     });
@@ -1701,8 +1704,8 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        CHECK_RUNS_URL,
         SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
       ]);
     });
@@ -1798,6 +1801,7 @@ describe("runRelay", () => {
             head_sha: HEAD_SHA,
             path: PATH_CI,
             conclusion: "cancelled",
+            status: "completed",
             html_url: HTML_URL,
             event: "pull_request_target",
             head_branch: "feature/some-branch",
@@ -1835,8 +1839,8 @@ describe("runRelay", () => {
         TOKEN_URL,
         RUN_URL,
         JOBS_URL,
-        CHECK_RUNS_URL,
         SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
         PULLS_URL,
         RUNS_AT_HEAD_URL,
@@ -2164,7 +2168,7 @@ describe("runRelay", () => {
       expect(result.sweep.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
     });
 
-    it("leaves a normal single-completion relay unchanged and reads no check-runs", async () => {
+    it("leaves a normal single-completion relay unchanged and sweeps no orphans", async () => {
       const fetchStub = makeFetch([
         token(),
         jobsListing([job({})]),
@@ -2185,8 +2189,8 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        CHECK_RUNS_URL,
         SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
       ]);
     });
@@ -2251,8 +2255,8 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        CHECK_RUNS_URL,
         SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
         CHECK_RUNS_AT_HEAD_URL,
       ]);
@@ -2293,13 +2297,13 @@ describe("runRelay", () => {
         { context: "actionlint", runId: "9003" },
         { context: "actionlint", runId: "9005" },
       ]);
-      expect(requestsTo(fetchStub.requests, CHECK_RUNS_AT_HEAD_URL)).toHaveLength(3);
+      expect(requestsTo(fetchStub.requests, CHECK_RUNS_AT_HEAD_URL)).toHaveLength(2);
       expect(
         requestsTo(
           fetchStub.requests,
           `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${otherSha}/check-runs?app_id=${APP_ID}&filter=latest&per_page=100`,
         ),
-      ).toHaveLength(2);
+      ).toHaveLength(1);
     });
 
     it("never sweeps a run nothing is pinned to, a run that has not completed, or the triggering run itself", async () => {
@@ -2333,8 +2337,8 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        CHECK_RUNS_URL,
         SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
         CHECK_RUNS_AT_HEAD_URL,
       ]);
@@ -2367,8 +2371,8 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        CHECK_RUNS_URL,
         SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
       ]);
     });

@@ -1,5 +1,5 @@
-// Shared producer selection and App check plumbing. The mirror, sweep and
-// post-write correction use one identity formatter and one recency rule.
+// Shared producer selection and App check plumbing. The mirror and sweep
+// use one identity formatter and one recency rule.
 
 import { isTrustedProducerRun, pinsFor, type ContextDecision, type PinMap, type RelayJob } from "./ledger-relay-decisions.ts";
 import { normalizedAttempt } from "./ledger-relay-trigger.ts";
@@ -15,7 +15,7 @@ export interface SweepCandidate {
   conclusion: string | null;
   htmlUrl: string;
   workflowRun?: true;
-  /** Present when selection admits unfinished producers as recency blockers. */
+  /** The API-proven producer status, when available to completed-only selection. */
   status?: string;
 }
 
@@ -82,6 +82,7 @@ export function selectSweepCandidates(
 export function newestProducersFor(pinMap: PinMap, candidates: readonly SweepCandidate[]): Map<string, SweepCandidate> {
   const newest = new Map<string, SweepCandidate>();
   for (const candidate of candidates) {
+    if (candidate.status !== undefined && candidate.status !== "completed") continue;
     for (const [context, pins] of Object.entries(pinMap)) {
       if (!pinsFor(pins).includes(candidate.path)) continue;
       const previous = newest.get(context);
