@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import postgres, { type Sql } from "postgres";
-import { writeSync } from "node:fs";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -180,7 +179,6 @@ describe("real store moderation history at database precision", () => {
             'infinity', timestamptz 'infinity', 'negativeInfinity', timestamptz '-infinity'
           ) as renderings
         `;
-        writeSync(1, `PostgreSQL BC/infinity probe: ${JSON.stringify(special!.renderings)}\n`);
         expect(special!.renderings.infinity).toBe("infinity");
         expect(special!.renderings.negativeInfinity).toBe("-infinity");
         for (const value of [special!.renderings.infinity, special!.renderings.negativeInfinity]) {
