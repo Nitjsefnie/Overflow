@@ -33,7 +33,7 @@ export interface ProducerDeps {
   repositoryId?: string;
 }
 
-/** Select eligible pinned runs. Correction admits live producers so they block older writes. */
+/** Select eligible pinned completed runs unless unfinished runs are explicitly requested. */
 export function selectSweepCandidates(
   entries: unknown,
   pinMap: PinMap,
