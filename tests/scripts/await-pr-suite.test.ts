@@ -600,3 +600,58 @@ describe("the CLI, as a spawned process", () => {
     });
   });
 });
+
+
+describe("awaitPrSuite — exact triggering run", () => {
+  function exact(run = suiteRun(), status = 200) {
+    const h = harness([], { SUITE_RUN_ID: "100" });
+    h.deps.fetchFn = (async (input: string | URL | Request) => {
+      h.calls.push({ url: String(input), headers: {}, signal: undefined });
+      return new Response(JSON.stringify(run), { status });
+    }) as typeof fetch;
+    return h;
+  }
+
+  it("judges the named run once without listing runs or polling", async () => {
+    const h = exact();
+    const outcome = await awaitPrSuite(h.deps);
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.runId).toBe(100);
+    expect(h.calls.map((call) => call.url)).toEqual([`https://api.github.com/repos/${REPO}/actions/runs/100`]);
+    expect(h.sleeps).toEqual([]);
+  });
+
+  it.each([
+    ["wrong path", { path: ".github/workflows/ci.yml" }],
+    ["wrong event", { event: "push" }],
+    ["wrong head", { head_sha: OTHER_SHA }],
+    ["wrong id", { id: 101 }],
+    ["unfinished", { status: "in_progress" }],
+    ["cancelled", { conclusion: "cancelled" }],
+    ["failed", { conclusion: "failure" }],
+  ])("fails closed on %s, without polling", async (_label, override) => {
+    const h = exact(suiteRun(override as Partial<FakeRun>));
+    const outcome = await awaitPrSuite(h.deps);
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.runId).toBeUndefined();
+    expect(errorLines(outcome.lines)).toHaveLength(1);
+    expect(h.calls).toHaveLength(1);
+    expect(h.sleeps).toEqual([]);
+  });
+
+  it("fails a read error immediately without sleeping", async () => {
+    const h = exact(suiteRun(), 503);
+    const outcome = await awaitPrSuite(h.deps);
+    expect(outcome.exitCode).toBe(1);
+    expect(errorLines(outcome.lines)).toHaveLength(1);
+    expect(h.calls).toHaveLength(1);
+    expect(h.sleeps).toEqual([]);
+  });
+
+  it.each(["", "0", "-1", "1x", "100\n"])("rejects invalid explicit run id %s", async (id) => {
+    const h = exact();
+    h.deps.env.SUITE_RUN_ID = id;
+    expect((await awaitPrSuite(h.deps)).exitCode).toBe(2);
+    expect(h.calls).toEqual([]);
+  });
+});
