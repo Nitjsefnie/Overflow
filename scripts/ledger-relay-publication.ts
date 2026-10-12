@@ -38,10 +38,12 @@ export async function postProducerCheck(
   decision: ContextDecision,
   run: SweepCandidate,
   check?: UpstreamPublicationCheck,
+  initialBound?: string,
 ): Promise<ContextDecision | CheckRunSuppression | undefined> {
-  const checked = publicationDecision(decision, await publicationState(check), run);
+  const state = await publicationState(check);
+  const checked = publicationDecision(decision, state, run);
   if (checked === undefined) return;
-  const posted = await writeCheck(deps, checked, run);
+  const posted = await writeCheck(deps, checked, run, state.historyBound ?? initialBound);
   if (posted !== undefined && "suppressedBy" in posted) return {
     context: checked.context, headSha: run.headSha, externalId: producerExternalId(run), suppressedBy: posted.suppressedBy,
   };
@@ -59,8 +61,10 @@ function publicationDecision(decision: ContextDecision, state: PublicationState,
   return decision;
 }
 
-async function writeCheck(deps: ProducerDeps, decision: ContextDecision, run: SweepCandidate): Promise<CheckRunPostResult> {
-  return deps.api.postCheckRun(checkRunBody(decision, run), `the check-run for ${decision.context}`);
+async function writeCheck(
+  deps: ProducerDeps, decision: ContextDecision, run: SweepCandidate, historyBound?: string,
+): Promise<CheckRunPostResult> {
+  return deps.api.postCheckRun(checkRunBody(decision, run), `the check-run for ${decision.context}`, historyBound);
 }
 
 interface ResolvedCandidate { run: SweepCandidate; check?: UpstreamPublicationCheck; historyBound?: string }
@@ -144,7 +148,7 @@ export async function publishProducerContexts(
         .find((entry) => entry.context === context)
       : historyBoundDecision(newest.historyBound);
     if (proposed === undefined) throw new Error("the newest producer has no pinned context");
-    const decision = await postProducerCheck(deps, proposed, newest.run, newest.check);
+    const decision = await postProducerCheck(deps, proposed, newest.run, newest.check, newest.historyBound);
     if (decision === undefined) continue;
     if ("suppressedBy" in decision) {
       suppressed.push(decision);

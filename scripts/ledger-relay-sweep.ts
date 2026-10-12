@@ -225,7 +225,7 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
         // Only completed decisions are attested. An unfinished decision gets
         // no POST and remains eligible for a later sweep once it concludes.
         if (decision.status !== "completed") continue;
-        const posted = await postProducerCheck(deps, decision, candidate, rechecks.get(candidate.runId));
+        const posted = await postProducerCheck(deps, decision, candidate, rechecks.get(candidate.runId), bound);
         if (posted === undefined) continue;
         if ("suppressedBy" in posted) {
           suppressed.push(posted);

@@ -1,6 +1,6 @@
 // All relay requests share a run deadline, per-attempt timeout and bounded
 // retries. An ambiguous check-run write is read back before another write.
-import { compareProducerIdentities, identityFromExternalId,
+import { attestsConcludedCheck, compareProducerIdentities, identityFromExternalId,
   type CheckRunPostResult, type SweepApi } from "./ledger-relay-producers.ts";
 
 export const API_ROOT = "https://api.github.com";
@@ -93,7 +93,7 @@ export function sweepApi(deps: RelayHttpDeps, repo: string, appId: string, auth:
     apiCall(deps, { url, method: "GET", headers }, what, retryTransient);
   return {
     get,
-    postCheckRun: (body, what) => apiCall<CheckRunPostResult>(deps, {
+    postCheckRun: (body, what, historyBound) => apiCall<CheckRunPostResult>(deps, {
       url: `${API_ROOT}/repos/${repo}/check-runs`, method: "POST", headers, body: JSON.stringify(body),
     }, what, true, async () => {
       const latest = await get<{ check_runs?: unknown }>(
@@ -108,14 +108,16 @@ export function sweepApi(deps: RelayHttpDeps, repo: string, appId: string, auth:
         if (typeof entry !== "object" || entry === null) continue;
         const check = entry as {
           name?: unknown; external_id?: unknown; status?: unknown; conclusion?: unknown; app?: { id?: unknown };
+          output?: { summary?: unknown } | null;
         };
         if (String(check.app?.id ?? "") !== appId || check.name !== body.name) continue;
         const identity = identityFromExternalId(check.external_id);
         if (identity === undefined) continue;
         const ordering = compareProducerIdentities(identity, intended);
         if (ordering > 0) return { retry: false, value: { suppressedBy: String(check.external_id) } };
-        if (ordering === 0 && check.status === "completed" && check.status === body.status &&
-          check.conclusion === body.conclusion) committed = true;
+        if (ordering === 0 && attestsConcludedCheck(check, {
+          status: body.status, conclusion: body.conclusion, historyBound,
+        })) committed = true;
       }
       return committed ? { retry: false, value: undefined } : { retry: true };
     }),
