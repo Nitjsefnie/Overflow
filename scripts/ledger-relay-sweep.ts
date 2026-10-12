@@ -20,9 +20,9 @@
 // protection matches a required context by name AND app, so a same-named
 // github-actions check-run leaves the App's context missing.
 //
-// Its only import is scripts/ledger-relay-decisions.ts: the types, and the
-// trusted-producer predicate, which is imported rather than injected so the
-// sweep cannot be handed a looser rule than the mirror applies. Everything else
+// Trust predicates and workflow_run resolution are imported rather than
+// injected so the sweep cannot be handed a looser rule than the mirror applies.
+// Everything else
 // it needs at runtime arrives through injected deps. The pure decision layer
 // holds what both duties decide and depends on neither, so neither duty has to
 // import the other and no runtime cycle can form between them.
@@ -34,6 +34,7 @@ import {
   type PinMap,
   type RelayJob,
 } from "./ledger-relay-decisions.ts";
+import { resolveWorkflowRunHead } from "./ledger-relay-upstream.ts";
 
 /**
  * The bound on one sweep: at most this many candidates are examined, so one
@@ -58,6 +59,8 @@ export interface SweepCandidate {
   path: string;
   conclusion: string | null;
   htmlUrl: string;
+  /** Needs API-backed validation and PR-head resolution before use. */
+  workflowRun?: true;
 }
 
 export interface SweepOutcome {
@@ -92,6 +95,8 @@ export interface SweepDeps {
   apiRoot: string;
   repo: string;
   appId: string;
+  /** The relay's own Actions repository id; required only for workflow_run. */
+  repositoryId?: string;
   /** The run that triggered this relay instance; never swept — the mirror already posted it. */
   triggerRunId: string;
 }
@@ -106,20 +111,22 @@ export interface SweepDeps {
  * - its executed workflow definition is the base branch's, judged from its
  *   `event` and `head_branch` by the same isTrustedProducerRun the mirror
  *   applies — an absent or non-string field reads as empty, which refuses it.
+ *   workflow_run candidates instead require API resolution before any use;
+ *   selection marks them, but confers no trust from head_branch or the listing.
  *   A path reached through a LIST pin (issue 1090's split) gets no exemption:
  *   being pinned twice says the path produces a required context, not that the
  *   run at it may attest one, so the check runs for those paths exactly as it
  *   does for a single-path pin;
  * - its id is not the triggering run's — the mirror above already posted it,
  *   and re-deciding it here would duplicate every context on every start;
- * - it carries both a head SHA and an html_url — a check-run needs the first as
- *   the commit it attests and the second as its details_url, so a run missing
- *   either could only be posted against nothing.
+ * - it carries both a head SHA and an html_url. Legacy candidates attest that
+ *   SHA; workflow_run candidates replace it with the resolved upstream SHA
+ *   and re-read the producer's details_url before any attestation or POST.
  *
  * The listing order is preserved and the first SWEEP_RUN_LIMIT survivors are
- * taken, so the newest completions are always the ones considered — and a
- * refused run is filtered before the cap, so it never takes a trusted one's
- * place in that window.
+ * taken, so the newest completions are always the ones considered. Legacy
+ * refusals are filtered before the cap; workflow_run provenance failures
+ * throw when resolved, keeping a failed sweep visible rather than posting.
  */
 export function selectSweepCandidates(
   entries: unknown,
@@ -148,6 +155,7 @@ export function selectSweepCandidates(
     if (run.status !== "completed") continue;
     if (typeof run.path !== "string" || !pinnedPaths.has(run.path)) continue;
     if (
+      run.event !== "workflow_run" &&
       !isTrustedProducerRun(
         typeof run.event === "string" ? run.event : "",
         typeof run.head_branch === "string" ? run.head_branch : "",
@@ -166,6 +174,7 @@ export function selectSweepCandidates(
       path: run.path,
       conclusion: typeof run.conclusion === "string" ? run.conclusion : null,
       htmlUrl: run.html_url,
+      ...(run.event === "workflow_run" ? { workflowRun: true as const } : {}),
     });
   }
   return candidates;
@@ -229,6 +238,21 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
   // so a consumer cannot push into a result it was handed, but this function
   // is the one place that accumulates.
   const relayed: Array<{ context: string; runId: string }> = [];
+
+  // Resolve BEFORE grouping: both attestation and this sweep's dedupe key are
+  // the upstream PR SHA. A refusal propagates, never falling back to main.
+  for (const candidate of candidates) {
+    if (candidate.workflowRun !== true) continue;
+    const resolved = await resolveWorkflowRunHead(
+      candidate.runId,
+      deps.repositoryId,
+      (id) => deps.api.get(`${deps.apiRoot}/repos/${deps.repo}/actions/runs/${id}`, `the workflow run ${id}`),
+    );
+    candidate.headSha = resolved.headSha;
+    candidate.path = resolved.run.path;
+    candidate.conclusion = resolved.run.conclusion;
+    candidate.htmlUrl = resolved.run.htmlUrl;
+  }
 
   for (const [headSha, atHead] of groupByHeadSha(candidates)) {
     const attested = await attestedContexts(deps, headSha);
@@ -351,10 +375,9 @@ async function attestedContexts(deps: SweepDeps, headSha: string): Promise<Set<s
  * from ledger-relay.ts without forming a cycle, so the one-way dependency is
  * ledger-relay.ts → this module and the shape cannot be duplicated and drift.
  *
- * `run` is structural, not a TriggeringRun or a SweepCandidate: the mirror
- * passes the triggering run, the sweep passes the candidate it is healing, and
- * the two agree on exactly these two fields — the commit the context attests
- * and the run whose page explains it.
+ * `run` is structural: both callers pass the commit the context attests and
+ * the producer's details URL. For workflow_run, that commit is the resolved
+ * upstream PR SHA; the producer's own main SHA must never reach this function.
  */
 export function checkRunBody(
   decision: ContextDecision,
