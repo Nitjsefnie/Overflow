@@ -11,6 +11,7 @@ import {
   RUN_TERMINAL_RETENTION_DAYS,
   pruneExpiredMaintenanceRows,
 } from "@/lib/retention/prune";
+import { observeRetentionSql } from "../support/retention-probe";
 import { startPostgresContainer } from "../support/postgres-container";
 
 /**
@@ -197,9 +198,14 @@ describe("retention prune", () => {
         select 'COMPLETED', now() - interval '120 days' from generate_series(1, 205)`;
       await sql`insert into reconciliation_changes (reconciliation_run_id, entity_kind, change_kind)
         select id, 'SETTLEMENT', 'ADD' from reconciliation_runs cross join generate_series(1, 3)`;
+      // One run itself exceeds two change batches; a per-run DELETE still
+      // needs its own bound, independently of the number of selected runs.
+      await sql`insert into reconciliation_changes (reconciliation_run_id, entity_kind, change_kind)
+        select run.id, 'SETTLEMENT', 'ADD' from
+          (select id from reconciliation_runs order by id limit 1) run cross join generate_series(1, 205)`;
       expect(await pruneExpiredMaintenanceRows(sql)).toEqual({
         processedReceipts: 205, failedReceipts: 205, abandonedPendingReceipts: 205,
-        expiredRuns: 205, changesOfExpiredRuns: 615,
+        expiredRuns: 205, changesOfExpiredRuns: 820,
       });
       const batches = await sql<{ table_name: string; deleted: number }[]>`select * from prune_batches`;
       expect(batches.length).toBeGreaterThan(5);
@@ -219,8 +225,13 @@ describe("retention prune", () => {
 
   it("uses a fixed run set when another run expires between the two deletes", async () => {
     await resetMaintenanceTables();
-    const expired = await seedRun({ status: "COMPLETED", completedDaysAgo: 120 });
-    const crossing = await seedRun({ status: "COMPLETED", completedDaysAgo: 10 });
+    const ids = [randomUUID(), randomUUID()].sort();
+    const expired = ids[0]!;
+    const crossing = ids[1]!;
+    // Make the boundary crossing lie ahead of the advancing cursor.
+    await sql`insert into reconciliation_runs (id, status, completed_at) values
+      (${expired}, 'COMPLETED', now() - interval '120 days'),
+      (${crossing}, 'COMPLETED', now() - interval '10 days')`;
     await seedChange(expired);
     await seedChange(crossing);
     // Force the boundary deterministically, without sleeping or timing: the
@@ -263,6 +274,23 @@ describe("retention prune", () => {
       await sql`drop trigger refuse_pruned_run on reconciliation_runs`;
       await sql`drop function refuse_pruned_run()`;
     }
+  });
+
+  it("never materialises returned rows from any of its delete arms", async () => {
+    await resetMaintenanceTables();
+    await seedReceipt({ processingState: "PROCESSED", processedDaysAgo: 31 });
+    await seedReceipt({ processingState: "FAILED", processedDaysAgo: 91 });
+    await seedReceipt({ processingState: "PENDING", receivedDaysAgo: 91, leaseExpiresInHours: -1 });
+    await seedChange(await seedRun({ status: "COMPLETED", completedDaysAgo: 91 }));
+    const probe = observeRetentionSql(sql);
+    expect(await pruneExpiredMaintenanceRows(probe.client)).toEqual({
+      processedReceipts: 1, failedReceipts: 1, abandonedPendingReceipts: 1,
+      expiredRuns: 1, changesOfExpiredRuns: 1,
+    });
+    expect(probe.deletes.filter((query) => query.deleted > 0)).toHaveLength(5);
+    const materialised = probe.deletes.map((query) => query.returned);
+    process.stdout.write(`RETENTION_RETURNED_ROWS ${JSON.stringify(materialised)}\n`);
+    expect(materialised.every((count) => count === 0)).toBe(true);
   });
 
   it("deletes nothing on the second pass and reports zeros", async () => {

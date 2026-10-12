@@ -5,6 +5,7 @@ import type { Sql } from "postgres";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { pruneExpiredMaintenanceRows } from "@/lib/retention/prune";
+import { observeRetentionSql } from "../support/retention-probe";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer } from "../support/postgres-container";
 
@@ -33,14 +34,20 @@ it("serves the expired-run FK check through the run index while the real prune d
   await sql`insert into reconciliation_changes (reconciliation_run_id, entity_kind, change_kind)
     select id, 'SETTLEMENT', 'ADD' from reconciliation_runs cross join generate_series(1, 20)`;
   await sql`analyze reconciliation_changes`;
-  const [run] = await sql`select id from reconciliation_runs where completed_at < now() - interval '90 days' limit 1`;
-  // This is PostgreSQL's RI_FKey_noaction_del lookup. EXPLAIN isolates its
-  // selective lookup from the prune's legitimate batch DELETE scan choices.
-  const plan = await sql`explain (format json) select 1 from only reconciliation_changes x
-    where reconciliation_run_id = ${run.id} for key share of x`;
-  expect(JSON.stringify(plan)).not.toContain('"Seq Scan"');
-  expect(JSON.stringify(plan)).toContain("reconciliation_changes_run_idx");
-  const result = await pruneExpiredMaintenanceRows(sql);
+  if (process.env.RETENTION_DROP_RUN_INDEX === "1") {
+    await sql`drop index reconciliation_changes_run_idx`;
+  }
+  const probe = observeRetentionSql(sql, {
+    observeRunFk: true,
+    disableTransactionIndexes: process.env.RETENTION_FORCE_SEQ_FK === "1",
+  });
+  const result = await pruneExpiredMaintenanceRows(probe.client);
+  const seq = probe.fk.reduce((sum, batch) => sum + batch.seq, 0);
+  const idx = probe.fk.reduce((sum, batch) => sum + batch.idx, 0);
+  process.stdout.write(`RETENTION_REAL_FK ${JSON.stringify({ seq, idx, deletes: probe.fk.length })}\n`);
+  expect(probe.fk.reduce((sum, batch) => sum + batch.deleted, 0)).toBe(100);
+  expect(seq).toBe(0);
+  expect(idx).toBeGreaterThanOrEqual(100);
   expect(result.expiredRuns).toBe(100);
   expect(result.changesOfExpiredRuns).toBe(2000);
 });
