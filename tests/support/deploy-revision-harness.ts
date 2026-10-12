@@ -89,7 +89,7 @@ export const FIXTURE_REPO = "overflow-fixture/overflow-fixture";
 export const FIXTURE_REMOTE_URL = `git@github.com:${FIXTURE_REPO}.git`;
 export const JQ_PROTECTION = `([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]`;
 export const JQ_CHECKRUNS = `.check_runs[] | [.id, .name, (.app.id // 0), (.status // "unknown"), (.conclusion // "")] | @tsv`;
-export const JQ_RUNS = `.workflow_runs[] | [.id, .path, (.event // "(missing)")] | @tsv`;
+export const JQ_RUNS = `.workflow_runs[] | [.id, .path, (.event // "(missing)"), (.head_branch // "(missing)")] | @tsv`;
 export const JQ_JOBS = `.jobs[] | [.id, (if (.name // "") == "" then "(unnamed)" else .name end), (.run_attempt // 0), (.status // "unknown"), (.conclusion // "")] | @tsv`;
 export const MAP_PATH = ".github/required-checks.json";
 /** The fixture's pin map: protection requires verify and deploy-gate. */
@@ -146,6 +146,8 @@ export interface GateRun {
   path: string;
   /** Omitted fixtures model main pushes; null models a missing API event. */
   event?: string | null;
+  /** Omitted fixtures model main; null models a missing API head branch. */
+  headBranch?: string | null;
   jobs: GateJob[];
 }
 
@@ -175,6 +177,7 @@ export async function writeGateState(
   const tsv = (rows: Array<Array<string | number>>) => rows.map((row) => row.join("\t") + "\n").join("");
   await writeFile(path.join(directory, "runs.tsv"), tsv(runs.map((run) => [
     run.id, run.path, run.event === null ? "(missing)" : run.event ?? "push",
+    run.headBranch === null ? "(missing)" : run.headBranch ?? "main",
   ])));
   for (const run of runs) {
     await writeFile(
@@ -495,10 +498,11 @@ case "\$path" in
     cat "\$(cat "\$state_file")/jobs-\${run_id%%/*}.tsv"
     ;;
   */actions/runs"?"*)
-    # Model gh's projection: old scripts request two columns, the fixed gate
-    # also requests the event. This keeps baseline RED about the real defect.
-    if [[ "\${!#}" == *".event"* ]]; then
+    # Serve exactly the columns requested by this version of the gate.
+    if [[ "\${!#}" == *".head_branch"* ]]; then
       cat "\$(cat "\$state_file")/runs.tsv"
+    elif [[ "\${!#}" == *".event"* ]]; then
+      cut -f1-3 "\$(cat "\$state_file")/runs.tsv"
     else
       cut -f1-2 "\$(cat "\$state_file")/runs.tsv"
     fi
