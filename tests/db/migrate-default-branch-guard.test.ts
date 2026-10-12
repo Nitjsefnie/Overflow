@@ -355,7 +355,7 @@ describe("the CLI against a real database", () => {
 
   it("runs clean once the tree carries nothing foreign", async () => {
     const applied = runCli("skip");
-    expect(applied.status, applied.stderr).toBe(0);
+    expect(applied.status, String(applied.stderr)).toBe(0);
     rmSync(path.join(worktreeRoot(), "db/migrations", fakeMigrationName), { force: true });
 
     const clean = runCli(undefined);
