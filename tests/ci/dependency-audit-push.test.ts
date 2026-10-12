@@ -6,34 +6,6 @@ import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
-/**
- * The push leg of the dependency audit always reports (issue 1149 fix round
- * 2). Once branch protection requires `dependency-audit`, the deploy gate
- * derives its required set from protection, so a push whose diff touched no
- * manifest must STILL leave a green `dependency-audit` check-run: a
- * `paths:` filter on the push trigger would strand those pushes and the
- * deploy gate would refuse every one of their deploys. So the trigger fires
- * on every push to main, and the audit step itself classifies: a push whose
- * diff changed neither manifest cannot have changed what the audit reads —
- * the manifest and the lockfile ARE its inputs — so the verdict is recorded
- * green without asking the registry. That classification is an OUTCOME
- * inside the step, never a skip: there is no `if:` on the job or on the
- * audit step, the job always runs, and the check-run always posts.
- *
- * The classification is deliberately narrow, and every ambiguity falls
- * through to the FULL audit: a before-SHA that is not 40 hex, the all-zeros
- * SHA (a new branch or a force push), a before commit missing from the
- * checkout, a before that is not an ancestor of the pushed HEAD, and a diff
- * command error all audit. The schedule and dispatch legs never enter the
- * fast path at all — they audit unconditionally, as they always have.
- *
- * This suite pins the shape structurally (the trigger set, the absence of
- * any skip shape, the env-delivered classification inputs, the classification
- * lines themselves) and behaviorally, by executing the shipped run text over
- * scratch repositories with `pnpm` and `sleep` stubbed first on PATH: the
- * fast path exits 0 with the audit stub never consulted, and every
- * ambiguous or manifest-changing case runs the real audit path.
- */
 
 const LINUX_ONLY = process.platform === "linux";
 
@@ -86,7 +58,7 @@ describe("the push trigger always fires", () => {
     // check-run: a paths filter would leave that push with a MISSING context,
     // which protection refuses, and the deploy would be stranded. The
     // pull_request trigger is gone with the completed issue-1090 split: the
-    // pull-request leg is dependency-audit-pr.yml, the base-defined one.
+    // pull-request leg is pr-gates.yml, the base-defined one.
     expect(workflow.on).toEqual({
       push: { branches: ["main"] },
       schedule: [{ cron: "37 6 * * *" }],

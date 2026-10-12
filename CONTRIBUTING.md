@@ -174,8 +174,8 @@ base freshness — over the pull request's merge tree as data, and requires the
 code — its install, migrations, tests, lint, typecheck, build and page
 geometry — runs only in `.github/workflows/pr-suite.yml` (`pr suite`), on the
 pull request's own code with no trust. Ratchet documents are judged by the
-`ratchet guard` pair, `.github/workflows/ratchet-guard.yml` and
-`.github/workflows/ratchet-guard-pr.yml`. Docs-only changes run the test
+`ratchet-guard` jobs in `.github/workflows/ratchet-guard.yml` and
+`.github/workflows/pr-gates.yml`. Docs-only changes run the test
 suite without coverage; other changes also measure coverage and check the
 floor. Run this local baseline in the same order:
 
@@ -281,11 +281,11 @@ cannot notice. If you changed anything under `db/`, `src/lib/db/`,
 `src/lib/fold/` or `src/lib/moderation/` and your run says skipped, you have
 not tested it.
 
-A second workflow pair, `.github/workflows/actionlint.yml` and
-`.github/workflows/actionlint-pr.yml`, checks the workflows themselves:
+The `actionlint` jobs in `.github/workflows/actionlint.yml` and
+`.github/workflows/pr-gates.yml` check the workflows themselves:
 actionlint for schema, expression and shell correctness, and zizmor for
 workflow security and supply-chain posture, both over
-`.github/workflows/*.yml`. The pair exists because a broken workflow does not
+`.github/workflows/*.yml`. These jobs run because a broken workflow does not
 go red, it silently stops running.
 
 If you edit a workflow, note that `tests/api/ci-workflows.test.ts` asserts its

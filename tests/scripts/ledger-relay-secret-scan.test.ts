@@ -31,7 +31,7 @@ import {
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const PATH_SECRET_SCAN = ".github/workflows/secret-scan.yml";
-const PATH_SECRET_SCAN_PR = ".github/workflows/secret-scan-pr.yml";
+const PATH_SECRET_SCAN_PR = ".github/workflows/pr-gates.yml";
 /** The job name both producer files ship, and the required context itself. */
 const CONTEXT = "secret-scan";
 
@@ -43,6 +43,14 @@ function job(over: Partial<RelayJob>): RelayJob {
     conclusion: "success",
     ...over,
   };
+}
+
+const PR_CONTEXTS = ["actionlint", "ratchet-guard", "secret-scan", "dependency-audit"];
+
+/** A real aggregate run reports all four jobs, with only this gate failing. */
+function producerJobs(path: string): RelayJob[] {
+  const contexts = path === PATH_SECRET_SCAN_PR ? PR_CONTEXTS : [CONTEXT];
+  return contexts.map((name) => job({ name, conclusion: name === CONTEXT ? "failure" : "success" }));
 }
 
 let committed: PinMap;
@@ -63,13 +71,15 @@ describe("the committed pin (issue 1034)", () => {
 });
 
 describe("a red secret-scan producer relays as a failing ledger check-run (issue 1034)", () => {
-  const RED_JOB = [job({ conclusion: "failure" })];
 
   it.each([PATH_SECRET_SCAN, PATH_SECRET_SCAN_PR])(
     "maps a failing secret-scan job to a completed/failure decision for a run of %s",
     (runPath) => {
-      const decisions = decideContexts(committed, runPath, "failure", RED_JOB);
-      expect(decisions).toEqual([
+      const decisions = decideContexts(committed, runPath, "failure", producerJobs(runPath));
+      expect(decisions.map((decision) => decision.context)).toEqual(
+        runPath === PATH_SECRET_SCAN_PR ? PR_CONTEXTS : [CONTEXT],
+      );
+      expect(decisions.filter((decision) => decision.context === CONTEXT)).toEqual([
         {
           context: CONTEXT,
           status: "completed",
@@ -137,7 +147,7 @@ describe("the committed pin drives runRelay end to end (issue 1034)", () => {
 
   it.each([
     [
-      "the pull_request_target leg (secret-scan-pr.yml)",
+      "the pull_request_target leg (pr-gates.yml)",
       {
         GITHUB_WORKFLOW_RUN_PATH: PATH_SECRET_SCAN_PR,
         GITHUB_WORKFLOW_RUN_EVENT: "pull_request_target",
@@ -153,10 +163,12 @@ describe("the committed pin drives runRelay end to end (issue 1034)", () => {
       },
     ],
   ])("posts the failing secret-scan check-run for a red run of %s", async (_name, over) => {
+    const jobs = producerJobs(over.GITHUB_WORKFLOW_RUN_PATH);
+    const contexts = over.GITHUB_WORKFLOW_RUN_PATH === PATH_SECRET_SCAN_PR ? PR_CONTEXTS : [CONTEXT];
     const fetchStub = makeFetch([
       { status: 201, body: { token: "installation-token" } },
-      { status: 200, body: { total_count: 1, jobs: [job({ conclusion: "failure" })] } },
-      { status: 201, body: { id: 1 } },
+      { status: 200, body: { total_count: jobs.length, jobs } },
+      ...contexts.map((_, index) => ({ status: 201, body: { id: index + 1 } })),
       { status: 200, body: { total_count: 0, workflow_runs: [] } },
     ]);
     const result = await runRelay({
@@ -166,22 +178,24 @@ describe("the committed pin drives runRelay end to end (issue 1034)", () => {
       readPinMap: async () => committed,
     });
 
-    expect(result.posted).toEqual([CONTEXT]);
+    expect(result.posted).toEqual(contexts);
     expect(fetchStub.requests.map((request) => request.url)).toEqual([
       TOKEN_URL,
       JOBS_URL,
-      CHECK_RUNS_URL,
+      ...contexts.map(() => CHECK_RUNS_URL),
       SWEEP_RUNS_URL,
     ]);
-    const checkRun = fetchStub.requests.find((request) => request.url === CHECK_RUNS_URL);
-    expect(JSON.parse(String(checkRun?.init.body))).toEqual({
-      name: CONTEXT,
-      head_sha: HEAD_SHA,
-      status: "completed",
-      conclusion: "failure",
-      details_url: HTML_URL,
-      output: { title: expect.any(String), summary: expect.any(String) },
-    });
+    const checkRuns = fetchStub.requests.filter((request) => request.url === CHECK_RUNS_URL);
+    expect(checkRuns.map((request) => JSON.parse(String(request.init.body)))).toEqual(
+      contexts.map((context) => ({
+        name: context,
+        head_sha: HEAD_SHA,
+        status: "completed",
+        conclusion: context === CONTEXT ? "failure" : "success",
+        details_url: HTML_URL,
+        output: { title: expect.any(String), summary: expect.any(String) },
+      })),
+    );
   });
 
   it("refuses a red run of the push leg that did not execute main's definition", async () => {

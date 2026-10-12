@@ -82,18 +82,10 @@ type Workflow = {
   >;
 };
 
-/**
- * The two files issue 1090 split the single scan workflow into, and the job
- * shape this suite pins. Every assertion below is stated over BOTH legs: the
- * two files were one file before the split, and a pin that held for the whole
- * of it must hold for each half of it, or the split quietly dropped coverage
- * on the side nobody was looking at. The few assertions that genuinely differ
- * between the legs — the `on:` set, the checkout, the fetch, the reachability
- * root — are stated per file in their own `it`.
- */
+
 const LEGS = [
   { file: ".github/workflows/secret-scan.yml", pr: false },
-  { file: ".github/workflows/secret-scan-pr.yml", pr: true },
+  { file: ".github/workflows/pr-gates.yml", pr: true },
 ] as const;
 
 /** The file that carries a given leg, as it is named inside `.github/workflows/`. */
@@ -112,7 +104,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     // Two workflows sharing one `name:` would make the ledger relay's
     // `workflows:` filter ambiguous, and GitHub's own UI would show two runs
     // under one heading with nothing to tell them apart.
-    expect(workflow.name).toBe(pr ? "secret scan pull request" : "secret scan");
+    expect(workflow.name).toBe(pr ? "pr gates" : "secret scan");
   });
 
   it(pr ? "runs on pull_request_target alone" : "runs on push, daily, and on dispatch", () => {
@@ -143,15 +135,14 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
   }
 
   it("produces exactly the secret-scan check context", () => {
-    expect(Object.keys(workflow.jobs)).toEqual(["secret-scan"]);
+    expect(Object.keys(workflow.jobs)).toEqual(pr
+      ? ["actionlint", "ratchet-guard", "secret-scan", "dependency-audit"]
+      : ["secret-scan"]);
     expect(scan.name ?? "secret-scan").toBe("secret-scan");
   });
 
   it(pr ? "uses main's checkout and fetches the PR head only as git objects" : "uses main's checkout, and fetches no pull-request ref", () => {
     const checkouts = scan.steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
-    // One checkout per file since the split: the event-name split that used to
-    // produce two checkouts in one job is the thing the split removed, and
-    // these workflows no longer need it.
     expect(checkouts).toHaveLength(1);
     // Ungated on both legs: each file has exactly one event class, so there is
     // nothing left to switch on.
@@ -335,8 +326,10 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     // ratchet-guard. A job id or name that matched one of those would be a
     // required context this workflow's conclusions could silently satisfy.
     expect(workflow.jobs, "the job id must not be verify").not.toHaveProperty("verify");
-    expect(workflow.jobs, "the job id must not be actionlint").not.toHaveProperty("actionlint");
-    expect(workflow.jobs, "the job id must not be ratchet-guard").not.toHaveProperty("ratchet-guard");
+    if (!pr) {
+      expect(workflow.jobs, "the push scan must not produce actionlint").not.toHaveProperty("actionlint");
+      expect(workflow.jobs, "the push scan must not produce ratchet-guard").not.toHaveProperty("ratchet-guard");
+    }
     expect(scan.name ?? "", "a job name carrying an expression is a required-checks failure").not.toContain("${{");
   });
 
@@ -613,14 +606,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
    */
   describe("the reachability step, executed against repositories this suite builds", () => {
     const SCRIPT = "scripts/secret-scan-baseline.sh";
-    /**
-     * The file's own reachability step. Since issue 1090 split this workflow,
-     * the step is found by its `run:` rather than by its `if:` — there is no
-     * longer an event-name split inside one job to select between, and a
-     * selector that expected one would quietly resolve to the PR leg's step on
-     * both files, executing one workflow's block and reporting it as the
-     * other's.
-     */
+
     const step = () => {
       const found = scan.steps.find((candidate) => /scripts\/secret-scan-baseline\.sh/.test(candidate.run ?? ""));
       expect(found, "no step runs the baseline-reachability check").toBeDefined();

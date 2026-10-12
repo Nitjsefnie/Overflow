@@ -125,12 +125,6 @@ describe("GitHub Actions release gates", () => {
 
   it("runs on a pull request or a closed issue so the action can decline the command in a reply", async () => {
     const condition = (await readWorkflow("claim.yml")).jobs.claim!.if!;
-    // Each pre-filter the job condition used to carry is denied separately, so
-    // restoring one is named rather than buried in the whole-job diff. A job
-    // whose `if` does not match starts NO run, so the commenter is met with
-    // silence; the reference condition lets the action answer instead, and the
-    // answer is a refusal — which is what tells the author the command reached
-    // the workflow at all.
     expect(
       condition,
       "claim.yml must not pre-filter pull requests on github.event.issue.pull_request: a job " +
@@ -187,34 +181,15 @@ describe("GitHub Actions release gates", () => {
   });
 
   it("judges the pull request head only as git data, executed entirely from main", async () => {
-    const workflow = await readWorkflow("ratchet-guard-pr.yml");
-    // pull_request_target keeps the gate alive when a pull request disables a
-    // workflow's own pull_request run: the workflow definition, the checkout
-    // and the script that executes all come from main — the ci pull-request
-    // leg has fired pull_request_target since issue 822, and since issue 1090
-    // that leg is ci-pr.yml's own trigger, so the ci run can no longer be
-    // silenced that way. `branches: [main]` keeps a PR retargeted to main
-    // (an edited event, which gets no new run) from carrying its stale green
-    // over.
-    //
-    // Issue 1090 moved this leg into a file of its own so its `on:` set is
-    // exactly {pull_request_target}: a privileged trigger on a file carrying a
-    // `refs/pull` fetch is what CodeQL's cache-poisoning and untrusted-checkout
-    // alerts describe. The push and dispatch legs that used to share this file
-    // are in ratchet-guard.yml, which reads no pull-request data at all.
+    const workflow = await readWorkflow("pr-gates.yml");
     expect(workflow.on).toEqual({
       pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
     });
     expect(workflow.permissions).toEqual({ contents: "read" });
-    // Every pull request shares one repository-level group, so the repository's
-    // Actions minutes stop scaling with the number of open pull requests;
-    // GitHub keeps one PENDING run per group and cancels the superseded one.
-    // cancel-in-progress is the literal false because that group is shared by
-    // every pull request and this job is a required context — see ci-pr.yml's
-    // concurrency block for the full argument.
+    // Each newer PR event replaces only that PR's four privileged gates.
     expect(workflow.concurrency).toEqual({
-      group: "ratchet-guard-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-      "cancel-in-progress": false,
+      group: "pr-gates-${{ github.event.pull_request.number }}",
+      "cancel-in-progress": true,
     });
     // The whole job, exactly, in the dependency-audit style. One checkout with
     // no ref input at all — actions/checkout's default, main's last commit, the
@@ -227,8 +202,9 @@ describe("GitHub Actions release gates", () => {
     // stale base and the head sits below the real fork point, so a real
     // relaxation would pass against the looser document there. Every event value
     // travels through env, never ${{ }} in run:.
-    expect(workflow.jobs).toEqual({
+    expect(workflow.jobs).toMatchObject({
       "ratchet-guard": {
+        permissions: { contents: "read" },
         "runs-on": "ubuntu-latest",
         "timeout-minutes": 10,
         steps: [
@@ -423,7 +399,7 @@ fi
     // and the other's not at all.
     const cases: Array<{ file: string; accepted: string[]; refused: string[] }> = [
       {
-        file: "ratchet-guard-pr.yml",
+        file: "pr-gates.yml",
         accepted: ["pull_request_target"],
         refused: ["push", "schedule", "workflow_dispatch"],
       },
@@ -464,10 +440,6 @@ fi
     expect(manifest.packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+$/);
     expect(manifest.engines?.node).toMatch(/^\d+\.\d+(\.\d+)?$/);
     expect(manifest.engines?.pnpm).toMatch(/^\d+\.\d+\.\d+$/);
-    // Issue 1090 split this workflow, so ci.yml is now the push/dispatch leg
-    // and ci-pr.yml the pull-request leg; the trigger set below is asserted
-    // WHOLE per file rather than by objectContaining over one, so a trigger
-    // re-added to either is a failure rather than a tolerated extra key.
     expect(workflow.on).toEqual({
       push: { branches: ["main"] },
       // The dispatch trigger carries the calibrate self-test's input: a
@@ -666,15 +638,10 @@ fi
   });
 
   it("parses a catalogue-style workflow gate with explicit least privilege", async () => {
-    // Both legs of the gate (issue 1090 split this workflow in two), asserted
-    // per file. The pin is per-leg rather than shared, because the two legs
-    // genuinely differ — the pull-request leg extracts the head ref's workflows
-    // with `git show`, the push leg copies its own checked-out tree — and a
-    // single equality covering both would have to be loosened to fit.
-    const workflow = await readWorkflow("actionlint-pr.yml");
+    const workflow = await readWorkflow("pr-gates.yml");
     // pull_request_target executes main's definition and main's tools; the
     // pull request head enters only as git objects extracted with `git show`
-    // (issue 822). Same trigger shape as ratchet-guard-pr.yml.
+    // (issue 822). Same trigger shape as pr-gates.yml.
     //
     // The whole `on:` set is pinned, and it is exactly one event: the file
     // holds a `refs/pull` fetch, so a privileged trigger here is the shape
@@ -688,8 +655,8 @@ fi
     expect(workflow.on, "a pull_request trigger would execute the PR's own workflow files").not.toHaveProperty("pull_request");
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.concurrency).toEqual({
-      group: "actionlint-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-      "cancel-in-progress": false,
+      group: "pr-gates-${{ github.event.pull_request.number }}",
+      "cancel-in-progress": true,
     });
     // The whole job, exactly, in the dependency-audit style: any extra step —
     // a second checkout, a script sourced from the extracted tree — fails this
@@ -697,6 +664,7 @@ fi
     // the checkout step carries no ref input, and the PR head is fetched as
     // git objects and extracted as data, never checked out.
     expect(workflow.jobs.actionlint).toEqual({
+      permissions: { contents: "read" },
       "runs-on": "ubuntu-latest",
       "timeout-minutes": 15,
       env: {
@@ -862,10 +830,10 @@ cp .github/workflows/*.yml .github/workflows-pr/
       const workflow = await readWorkflow(file);
       return (workflow.jobs.actionlint?.env ?? {}) as Record<string, string>;
     };
-    const prEnv = await readEnv("actionlint-pr.yml");
+    const prEnv = await readEnv("pr-gates.yml");
     const pushEnv = await readEnv("actionlint.yml");
     for (const key of ["ACTIONLINT_REPO", "ACTIONLINT_VERSION", "ACTIONLINT_SHA256"]) {
-      expect(prEnv[key], `${key} must be present in actionlint-pr.yml`).toBeDefined();
+      expect(prEnv[key], `${key} must be present in pr-gates.yml`).toBeDefined();
       expect(pushEnv[key], `${key} must be present in actionlint.yml`).toBeDefined();
       expect(prEnv[key], `${key} must be identical in both actionlint legs`).toBe(pushEnv[key]);
     }
@@ -922,7 +890,7 @@ cp .github/workflows/*.yml .github/workflows-pr/
     // be refused. The audit step itself classifies no-manifest pushes (an
     // outcome, never a skip; tests/ci/dependency-audit-push.test.ts holds
     // that). The pull_request trigger is gone entirely: the pull-request leg
-    // is dependency-audit-pr.yml, the issue-1090 split's base-defined
+    // is pr-gates.yml, the issue-1090 split's base-defined
     // pull_request_target file.
     expect(workflow.on).toEqual({
       push: { branches: ["main"] },
@@ -934,7 +902,7 @@ cp .github/workflows/*.yml .github/workflows-pr/
     // reaches it, so the per-SHA group is the sibling push files' shape — no
     // two pushes share a group, so a cancelled conclusion on a merged SHA
     // makes the deploy gate refuse immediately (issue 474). The
-    // repository-level bound lives on dependency-audit-pr.yml.
+    // PR gates share pr-gates.yml's per-PR cancelling group.
     expect(workflow.concurrency).toEqual({
       group: "dependency-audit-${{ github.sha }}",
       "cancel-in-progress": false,
@@ -1434,11 +1402,7 @@ exit 1
   });
 
   it("hash-pins the zizmor install through the tracked requirements file", async () => {
-    // Both actionlint files. Issue 1090 split the gate in two and each leg
-    // installs its own copy of zizmor, so pinning one leg's install left the
-    // other installing from wherever it liked — a hash-free `pip install
-    // zizmor` in the leg nobody read.
-    for (const file of ["actionlint-pr.yml", "actionlint.yml"]) {
+    for (const file of ["pr-gates.yml", "actionlint.yml"]) {
       const workflow = await readWorkflow(file);
       const steps = workflow.jobs.actionlint!.steps;
 
@@ -1453,67 +1417,12 @@ exit 1
       );
       expect(install!.run).not.toContain("upgrade pip");
       expect(install!.run).not.toContain("pip install zizmor");
-      // The id is load-bearing: the zizmor step's condition skips the scan only
-      // when the install failed. The scan targets the extracted PR copies as
-      // explicit globbed FILE inputs (.github/workflows-pr/*.yml) — zizmor's
-      // directory input only collects a repo root or a path ending in
-      // .github/workflows, so the bare directory exits 3 "no inputs collected"
-      // (fix round 2, finding C) — and never the checked-out tree's own
-      // workflows.
       const zizmor = steps.find((step) => step.run === "zizmor --no-progress .github/workflows-pr/*.yml");
       expect(zizmor, `${file} must run zizmor over the extracted workflow copies`).toBeDefined();
       expect(zizmor!.if).toBe("${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}");
     }
   });
 
-  // zizmor's ref-version-mismatch audit is the mechanism that catches a pin's
-  // version comment going stale after a bump — but only once the comment is
-  // THERE. Measured against zizmor 1.30.1 at the gate's own invocation: a pin
-  // with no version comment is reported at `help` severity, which falls below
-  // the `regular` persona floor the gate runs under and exits 0; the same pin
-  // carrying a STALE comment is reported at `warning` and exits 13. So the
-  // annotation is what puts a pin under that audit, and dropping it is silent —
-  // the state issue 1022 found for Nitjsefnie-Actions/pr-gate. Nothing here
-  // asserts the annotation any more: fleet-rules, "Merging and CI" reads no
-  // release or version comment out of a workflow, so the comment half is left
-  // to zizmor — whose missing-comment arm sits BELOW the gate's persona floor,
-  // a recorded gap rather than a held property. What remains compares two ways
-  // of FINDING a pin, reading the raw text because a YAML parse drops the
-  // comment, and it does not assert which release any comment names.
-  //
-  // Three ways that went wrong the first time round, all of them silent, so the
-  // shape below is load-bearing rather than incidental:
-  //
-  //  - `owner/repo/subpath` is a real shape and this tree uses it three times
-  //    (github/codeql-action/init, /analyze, /upload-sarif). A selector written
-  //    `[\w.-]+\/[\w.-]+` cannot match two path segments, so all three were
-  //    invisible to this case AND to zizmor, whose missing-comment arm is
-  //    help-severity and suppressed under the gate's persona. `(?:\/[\w.-]+)*`
-  //    takes any number of further segments; a spelling-independent sweep
-  //    (detect a pin by `uses:` + an `@` + 40 hex, never by its path shape) puts
-  //    the tree at 33 real pins, 33 matched.
-  //  - The liveness guard counts PINS, not workflow FILES. A selector that
-  //    silently matches nothing sits between the two, and a file-count guard
-  //    stays green across that. Rotting `{40}` to `{39}` — one character — used
-  //    to pass with a version comment deleted.
-  //  - The comment shape WAS anchored to digits. `#\s*v\S+` is satisfied by
-  //    `# verify against the action docs`, which zizmor does NOT back up: it
-  //    treats any present comment as annotated, so the instrument was widened
-  //    to zizmor's own `v\d+\.\d+\.\d+` shape. Both comment-shape arms left
-  //    with the annotation assertion (fleet-rules, "Merging and CI"): no
-  //    instrument here reads the comment any more.
-  //
-  // A fourth hole, of a different kind, was left open by that fix round: the
-  // guard above proves the pin list is NON-EMPTY, and the property this case is
-  // named for is that the two lists are IDENTICAL. `> 0` cannot tell those apart, and a
-  // selector that quietly narrows stays green — which is exactly the state the
-  // case shipped in for one commit. A number would close it and rot on every
-  // dependency bump. So the coverage is asserted by COMPARING TWO INSTRUMENTS
-  // instead of quoting a constant: `shapeFree` encodes no path shape at all, so
-  // it cannot inherit `pin`'s blind spot, and the two sets are compared for
-  // equality. Neither side is a literal, so adding or removing a pin moves both
-  // and the assertion holds; narrowing one side only is the defect, and the diff
-  // names every pin the selector lost or invented.
   it("agrees with the shape-free sweep on every SHA-pinned action reference", async () => {
     const workflows = (await readdir(resolve(".github/workflows")))
       .filter((name) => name.endsWith(".yml"));
@@ -1563,68 +1472,6 @@ exit 1
       }
     }
 
-    // What these two assertions do and do not establish, since the previous
-    // round's note claimed both directions and only had one:
-    //
-    //  - `pin`'s set is a SUBSET of `shapeFree`'s, structurally: everything
-    //    `[\w.-]+(?:\/[\w.-]+)*` matches is non-space, so `\S+` matches it too,
-    //    and the terminators are shared. So `pin` cannot invent a pin, and the
-    //    equality below can only ever fail through `population \ matched`.
-    //    That containment is a PROPERTY, not a licence: it does not by itself
-    //    say the detector is right about what it matched.
-    //  - It is why the equality and a one-sided `population \ matched == []` are
-    //    the SAME test here, not two grades of strictness — measured over the
-    //    adversarial forms, they disagreed on 0 cases. So narrowing the assertion
-    //    to the "covered" direction was tried and discarded: it closed nothing,
-    //    because the false red this case was fixing lives in the detector
-    //    matching something that is not a pin, not in the comparison's strictness.
-    //  - What is NOT established. Below is a SAMPLE of forms measured against these
-    //    two regexes, not a census of them: an earlier version of this comment
-    //    called the list a census, and measuring showed that was false. Three
-    //    directions, all open:
-    //
-    //    (a) Forms NEITHER regex matches. The pins leave both sets together and
-    //        nothing here can see them. Measured examples: a `uses:` inside a
-    //        comment or prose (the anchor), a `- {uses: …}` flow mapping with or
-    //        without a comment, a `docker://img@sha256:<64hex>` container
-    //        digest, an `&anchor` on the value, a folded `>-`, and a `.yaml`
-    //        workflow file (filtered out at the `readdir`). CRLF is NOT in this
-    //        list: the `split(/\r?\n/)` above already covers it.
-    //        REACHABLE AND SILENT, and the reason the sample matters: a QUOTED
-    //        scalar — `- uses: "owner/repo@<40hex>"` — is legal YAML, matches
-    //        neither regex, and a workflow holding only unannotated quoted or
-    //        uppercase pins leaves this case green while reporting full
-    //        coverage. That is the exact failure this case exists to prevent,
-    //        still open, and not fixed here.
-    //
-    //    (b) Forms `shapeFree` accepts and `pin` rejects — DETECTOR-ONLY. On
-    //        any of these the equality fails, naming a pin `pin` cannot read.
-    //        Naming the five I happened to try is worse than naming the class:
-    //        sweeping every printable ASCII character into a subpath segment
-    //        leaves the two disagreeing on TWENTY-EIGHT of them —
-    //        `!"#$%&'()*+,:;<=>?@[\]^`{|}~` — because each is outside `[\w.-]`
-    //        while `\S+` accepts it. Plus any scheme that is not
-    //        lowercase-with-`//` (`DOCKER://`, `Docker://`, `docker:/`). None is
-    //        a form GitHub's syntax reference documents or shows an example of;
-    //        that reference gives no character grammar for a path segment, so
-    //        this is "undocumented", not "impossible", and a red on one of them
-    //        is the DETECTOR talking rather than a pin that lost its comment.
-    //
-    //    (c) A form BOTH regexes read as an action pin: GitHub documents
-    //        `{owner}/{repo}/.github/workflows/{filename}@{ref}`, and a SHA ref
-    //        matches here. Whether a reusable-workflow call should carry a
-    //        version comment is a policy no assertion here states (the
-    //        annotation arm left with fleet-rules, "Merging and CI"); zizmor
-    //        1.30.1 at `--persona=pedantic` reports no finding on such a line
-    //        even with a deliberately wrong version, so nothing else settles
-    //        it. If one appears here without a comment, no assertion here
-    //        reds it either — the gap is open and recorded here.
-    //
-    //    These are recorded limits, not closed routes, and the sample is not the
-    //    full set of either class. No assertion here pretends otherwise.
-    //
-    // Liveness first: a selector matching nothing is a better message than a
-    // 33-element diff, and the equality cannot fire when both sets are empty.
     expect(matched.length).toBeGreaterThan(0);
     expect(matched).toEqual(population);
   });
@@ -1804,10 +1651,10 @@ exit 1
     // The split's new producer files (issue 1090). A workflow file that exists
     // on disk and is invisible to git ships nothing, and the check that would
     // notice is the one this line stands in for.
-    expect(checkIgnore(".github/workflows/actionlint-pr.yml")).toBe(1);
+    expect(checkIgnore(".github/workflows/pr-gates.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/ci-pr.yml")).toBe(1);
-    expect(checkIgnore(".github/workflows/ratchet-guard-pr.yml")).toBe(1);
-    expect(checkIgnore(".github/workflows/secret-scan-pr.yml")).toBe(1);
+    expect(checkIgnore(".github/workflows/pr-gates.yml")).toBe(1);
+    expect(checkIgnore(".github/workflows/pr-gates.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/dependency-audit.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/ratchet-guard.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/secret-scan.yml")).toBe(1);
@@ -2126,20 +1973,6 @@ exit 1
         "needs its own pins here, not just an entry in this array.",
     ).toEqual(["analysis"]);
 
-    // A trend signal, not a gate. Asserted against the parsed pins, not the
-    // prose: a required check naming this workflow would block every pull
-    // request on a weekly measurement that is allowed to be flat.
-    //
-    // The check name GitHub posts for a job is the job's `name:` when set, else
-    // its id — which is exactly how tests/ci/required-checks.test.ts resolves
-    // producers. So the spellings that could actually appear in this file are
-    // derived from the workflow rather than hardcoded: this workflow's own name
-    // (the altitude slip) and the analysis job's real check-run name (the
-    // realistic promotion). An earlier version of this clause tested only
-    // `check === "scorecard"`, which could never fire, because the spelling a
-    // human writes when promoting this workflow is the job's name and not the
-    // file's — the file clause was carrying the whole guard alone. The path
-    // clause still does most of the work and still stays.
     const requiredChecks = JSON.parse(
       await readFile(resolve(".github/required-checks.json"), "utf8"),
     ) as Record<string, string | string[]>;

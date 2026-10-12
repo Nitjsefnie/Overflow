@@ -162,15 +162,6 @@ describe("scripts/commit_scopes.py", () => {
     expect(result.stdout).toContain("Examined 0 commit subjects");
   });
 
-  // This list deliberately fails when a workflow is added, so update the pin in
-  // the same change, like tests/support/applied-migrations.ts for migrations.
-  //
-  // Issue 1090 split actionlint, ratchet-guard, secret-scan and ci into a file
-  // per leg, adding four workflows whose `name:` is the original's plus
-  // " pull request". This test is the one consumer of the workflow DIRECTORY
-  // that a grep for a workflow PATH cannot find: it keys on the `name:` field,
-  // so the four new names had to be added here by reading them out of
-  // scripts/commit_scopes.py against HEAD rather than by transcribing them.
   it("reads every real workflow at HEAD and derives the complete name set", () => {
     const result = spawnSync("python3", ["-c", [
       "import importlib.util, json, pathlib, sys",
@@ -182,13 +173,13 @@ describe("scripts/commit_scopes.py", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual([
       "Actions event policy",
-      "actionlint", "actionlint pull request",
+      "actionlint",
       "ci", "ci pull request",
       "claim", "code scanning", "coverage comment",
-      "dependency audit", "dependency audit pull request",
-      "ledger relay", "pr gate", "pr suite",
-      "ratchet guard", "ratchet guard pull request", "scorecard",
-      "secret scan", "secret scan pull request",
+      "dependency audit",
+      "ledger relay", "pr gate", "pr gates", "pr suite",
+      "ratchet guard", "scorecard",
+      "secret scan",
     ]);
   });
 });

@@ -10,7 +10,7 @@ import { parse } from "yaml";
  * Issue 1149: the dependency audit's pull-request leg is a required context
  * produced from a definition the pull request cannot change.
  *
- * `.github/workflows/dependency-audit-pr.yml` runs under `pull_request_target`
+ * `.github/workflows/pr-gates.yml` runs under `pull_request_target`
  * alone, so it always executes MAIN'S copy of itself; the pull request enters
  * only as git objects (this event's head and base SHAs), its merge tree is
  * built locally with `git merge-tree --write-tree`, and the two manifests are
@@ -61,7 +61,7 @@ type Workflow = {
   jobs?: Record<string, Job>;
 };
 
-const PR_FILE = ".github/workflows/dependency-audit-pr.yml";
+const PR_FILE = ".github/workflows/pr-gates.yml";
 const PUSH_FILE = ".github/workflows/dependency-audit.yml";
 const JOB_NAME = "dependency-audit";
 const AUDIT_STEP_NAME = "Audit the pull request's merge-tree manifests";
@@ -98,14 +98,14 @@ beforeAll(async () => {
   workflow = parse(await readFile(resolve(PR_FILE), "utf8")) as Workflow;
   pushWorkflow = parse(await readFile(resolve(PUSH_FILE), "utf8")) as Workflow;
   const job = workflow.jobs?.[JOB_NAME];
-  expect(job, `dependency-audit-pr.yml must carry a job named ${JOB_NAME}`).toBeDefined();
+  expect(job, `pr-gates.yml must carry a job named ${JOB_NAME}`).toBeDefined();
   steps = job?.steps ?? [];
   auditStep = steps.find((step) => step.name === AUDIT_STEP_NAME) as Step;
 });
 
-describe("dependency-audit-pr.yml's shape", () => {
+describe("pr-gates.yml's shape", () => {
   it("is named for the relay's filter, which matches the name: field", () => {
-    expect(workflow.name).toBe("dependency audit pull request");
+    expect(workflow.name).toBe("pr gates");
   });
 
   it("triggers on pull_request_target alone, with no paths filter", () => {
@@ -125,15 +125,10 @@ describe("dependency-audit-pr.yml's shape", () => {
     expect(workflow.permissions).toEqual({ contents: "read" });
   });
 
-  it("carries the repository-level required-producer concurrency shape", () => {
-    // One group per repository for pull-request arrivals, cancel false, and
-    // the parenthesised event-class form the bounded table pins — the shape
-    // tests/ci/concurrency.test.ts refuses to let a required context ship
-    // any other way.
+  it("cancels only superseded runs of the same pull request", () => {
     expect(workflow.concurrency).toEqual({
-      group:
-        "dependency-audit-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-      "cancel-in-progress": false,
+      group: "pr-gates-${{ github.event.pull_request.number }}",
+      "cancel-in-progress": true,
     });
   });
 
@@ -520,14 +515,6 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   });
 
   it("audits the merge tree's bytes, not the head's, when main has advanced past the branch point", async () => {
-    // Fix round 1: every green-path fixture above builds a head whose
-    // merge-tree bytes EQUAL the head's, so a step that materialized
-    // "${HEAD_SHA}" instead of the merged tree passed all of them while
-    // auditing the wrong artifact on exactly the pull requests where the two
-    // diverge. Here main has ADVANCED past the branch point, and the two
-    // sides' lockfile edits sit in different regions of the file, so the
-    // merge is clean and its lockfile carries BOTH sides' lines — the head's
-    // carries only its own, the (advanced) base's only its own.
     cases += 1;
     const origin = join(root, `origin-advance-${cases}`);
     const workspace = join(root, `workspace-advance-${cases}`);

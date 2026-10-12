@@ -5,8 +5,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 /**
- * Every workflow is classified in BOUNDED or UNBOUNDED_BY_CHOICE, and both
- * tables pin the concurrency policy read from parsed YAML.
+ * Every workflow is classified in BOUNDED, PER_PR_REQUIRED or
+ * UNBOUNDED_BY_CHOICE; the tables pin the concurrency policy read from parsed YAML.
  *
  * BOUNDED workflows share one repository-level group per workflow across pull
  * requests. Their other event legs key on github.sha, so different commits
@@ -67,37 +67,14 @@ const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = 
     group: "ci-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
   },
-  // Issue 1090 split actionlint, ratchet-guard, secret-scan and ci into a file
-  // per leg so no job reading pull-request data could be started by a
-  // privileged trigger. These are the pull-request legs, and the bound they
-  // carry is the one the bound is FOR: a group shared by every pull request, so
-  // the repository's Actions minutes stop scaling with the number of open pull
-  // requests. Their push/dispatch siblings (actionlint.yml, ratchet-guard.yml,
-  // secret-scan.yml, ci.yml) take no pull-request event at all and are in
-  // UNBOUNDED_BY_CHOICE with that reason; a workflow with no pull-request
-  // trigger cannot be in BOUNDED at all, which the reachability assertion
-  // below enforces in the other direction.
-  "actionlint-pr.yml": {
-    group: "actionlint-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": false,
-  },
-  "ratchet-guard-pr.yml": {
-    group: "ratchet-guard-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": false,
-  },
-  "secret-scan-pr.yml": {
-    group: "secret-scan-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": false,
-  },
-  // Issue 1149 pins `dependency-audit` as a required context, produced by two
-  // files. Only the pull-request leg is pull-request-reachable, so only it
-  // belongs here: one repository-level group for every pull request, cancel
-  // false. The push leg (dependency-audit.yml) receives no pull-request
-  // event since the split completed in fix round 2 and is recorded in
-  // UNBOUNDED_BY_CHOICE with the sibling push files' per-SHA shape.
-  "dependency-audit-pr.yml": {
-    group: "dependency-audit-pr-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": false,
+
+};
+
+/** Required PR gates cancel only an older run of the same pull request. */
+const PER_PR_REQUIRED = {
+  "pr-gates.yml": {
+    group: "pr-gates-${{ github.event.pull_request.number }}",
+    "cancel-in-progress": true,
   },
 };
 
@@ -293,7 +270,7 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     "secret-scan.yml",
     {
       reason:
-        "No pull-request trigger reaches this file since issue 1090 moved the pull-request leg to secret-scan-pr.yml, so neither arm that would make it unbounded is reachable: it never keys its group on one contributor's pull request, and it never receives the event that would make a repository-level group contend. Its group is per-SHA, which is exactly what its remaining legs want — push, workflow_dispatch and schedule runs group per SHA so different merged SHAs cannot cancel each other's pending scans. cancel-in-progress false preserves every in-flight full-history detection record.",
+        "No PR event reaches this main producer. The secret-scan PR job lives in pr-gates.yml with a per-PR cancelling group. This file checks main on push and dispatch and schedule. Its SHA-keyed group preserves every in-flight run, so another merged SHA cannot cancel a conclusion that deployment reads.",
       group: "secret-scan-${{ github.sha }}",
       "cancel-in-progress": false,
       queue: undefined,
@@ -303,7 +280,7 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     "actionlint.yml",
     {
       reason:
-        "No pull-request trigger reaches this file since issue 1090 moved the pull-request leg to actionlint-pr.yml, which is the bounded one. Its remaining legs are push to main and workflow_dispatch, and the group is per-SHA so no push to main shares a group with another push — a cancelled conclusion on a merged SHA makes the deploy gate refuse immediately (issue 474). A workflow with no pull_request and no pull_request_target event cannot be listed in BOUNDED at all, because the bound it would carry would be vacuous: the repository-level arm is dead code, so recording it would pin a promise no run exercises.",
+        "No PR event reaches this main producer. The actionlint PR job lives in pr-gates.yml with a per-PR cancelling group. This file checks main on push and dispatch. Its SHA-keyed group preserves every in-flight run, so another merged SHA cannot cancel a conclusion that deployment reads.",
       group: "actionlint-${{ github.sha }}",
       "cancel-in-progress": false,
       queue: undefined,
@@ -313,7 +290,7 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     "ratchet-guard.yml",
     {
       reason:
-        "No pull-request trigger reaches this file since issue 1090 moved the pull-request leg to ratchet-guard-pr.yml, which is the bounded one. Its remaining legs are push to main and workflow_dispatch, and the group is per-SHA so no push to main shares a group with another push — a cancelled conclusion on a merged SHA makes the deploy gate refuse immediately (issue 474). A workflow with no pull_request and no pull_request_target event cannot be listed in BOUNDED at all, because the bound it would carry would be vacuous: the repository-level arm is dead code, so recording it would pin a promise no run exercises.",
+        "No PR event reaches this main producer. The ratchet-guard PR job lives in pr-gates.yml with a per-PR cancelling group. This file checks main on push and dispatch. Its SHA-keyed group preserves every in-flight run, so another merged SHA cannot cancel a conclusion that deployment reads.",
       group: "ratchet-guard-${{ github.sha }}",
       "cancel-in-progress": false,
       queue: undefined,
@@ -323,7 +300,7 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     "ci.yml",
     {
       reason:
-        "No pull-request trigger reaches this file since issue 1090 moved the pull-request leg to ci-pr.yml, which is the bounded one. Its remaining legs are push to main and workflow_dispatch — the latter being the deploy-recovery dispatch — and the group is per-SHA so no push to main shares a group with another push: a cancelled conclusion on a merged SHA makes the deploy gate refuse immediately (issue 474). A workflow with no pull_request and no pull_request_target event cannot be listed in BOUNDED at all, because the bound it would carry would be vacuous: the repository-level arm is dead code, so recording it would pin a promise no run exercises.",
+        "No PR trigger reaches this main producer. The verify PR job lives in ci-pr.yml. Its legs are push to main and workflow_dispatch — the latter being the deploy-recovery dispatch — and the group is per-SHA so no push to main shares a group with another push: a cancelled conclusion on a merged SHA makes the deploy gate refuse immediately (issue 474). A workflow with no pull_request and no pull_request_target event cannot be listed in BOUNDED at all, because the bound it would carry would be vacuous: the repository-level arm is dead code, so recording it would pin a promise no run exercises.",
       group: "ci-${{ github.sha }}",
       "cancel-in-progress": false,
       queue: undefined,
@@ -333,7 +310,7 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     "dependency-audit.yml",
     {
       reason:
-        "No pull-request trigger reaches this file since issue 1090's split completed for it in issue 1149's fix round 2: the pull-request leg is dependency-audit-pr.yml, which is the bounded one. Its remaining legs are push to main, the daily tick and workflow_dispatch, and the group is per-SHA so no push to main shares a group with another push or with the tick — a cancelled conclusion on a merged SHA makes the deploy gate refuse immediately (issue 474), and the audit's fast path never changes what a red run means. A workflow with no pull_request and no pull_request_target event cannot be listed in BOUNDED at all, because the bound it would carry would be vacuous: the repository-level arm is dead code, so recording it would pin a promise no run exercises.",
+        "No PR event reaches this main producer. The dependency-audit PR job lives in pr-gates.yml with a per-PR cancelling group. This file checks main on push and dispatch and schedule. Its SHA-keyed group preserves every in-flight run, so another merged SHA cannot cancel a conclusion that deployment reads.",
       group: "dependency-audit-${{ github.sha }}",
       "cancel-in-progress": false,
       queue: undefined,
@@ -481,7 +458,6 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   // on a main push alike. The name is deliberately NOT suffixed — the
   // check-run name is what branch protection and .github/required-checks.json
   // match.
-  "actionlint-pr.yml": ["actionlint"],
   "actionlint.yml": ["actionlint"],
   "ci-pr.yml": ["verify"],
   "ci.yml": ["calibrate", "push-recalibration", "shellcheck", "verify"],
@@ -489,15 +465,13 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   "code-scanning.yml": ["analyze"],
   "coverage-comment.yml": ["comment"],
   "dependency-audit.yml": ["dependency-audit"],
-  "dependency-audit-pr.yml": ["dependency-audit"],
   "event-policy.yml": ["event-policy", "event-policy-pull-request"],
   "ledger-relay.yml": ["relay-required-checks"],
   "pr-gate.yml": ["gate"],
+  "pr-gates.yml": ["actionlint", "ratchet-guard", "secret-scan", "dependency-audit"],
   "pr-suite.yml": ["suite"],
-  "ratchet-guard-pr.yml": ["ratchet-guard"],
   "ratchet-guard.yml": ["ratchet-guard"],
   "scorecard.yml": ["analysis"],
-  "secret-scan-pr.yml": ["secret-scan"],
   "secret-scan.yml": ["secret-scan"],
 };
 
@@ -525,32 +499,6 @@ describe("the workflow directory", () => {
 
 describe("every workflow's top-level keys", () => {
   it("carry nothing outside the allowed set, because an unasserted key is a channel nothing reads", () => {
-    // The one assertion in this file that reads against UNEXPECTED keys rather
-    // than expected ones. Everything else here looks up a key by name, so it can
-    // only ever fail on a key someone chose to read — and a key nobody chose to
-    // read is exactly the one that ships. Asserted on the PARSED object, never
-    // on file text, so reformatting the block does not disturb it while a key
-    // change fails loudly by name.
-    //
-    // Built as a whole-collection comparison rather than a per-workflow `expect`
-    // inside the loop, and that shape is load-bearing twice over: it names every
-    // offending workflow at once, and — with the companion comparison below — an
-    // EMPTY result fails. Both of those were arrived at by mutation, and the
-    // mutations are the reason neither can be simplified:
-    //
-    // 1. The per-workflow `expect`-in-loop variant is VACUOUS. Written first, it
-    //    passed this suite whole with a planted top-level `env:` block in the
-    //    tree once its iteration source was emptied to `new Map()` — the
-    //    assertion never ran. The enumeration guard above did not notice either;
-    //    it reads the Map, not this loop.
-    // 2. Hoisting ONE sorted name list for both sides is that same vacuity in
-    //    another hat: emptying the collected side empties the expectation too,
-    //    and the comparison holds against itself. Written, and the planted block
-    //    passed it.
-    //
-    // So the two sides are derived from SEPARATE reads: only the collected side
-    // goes through the loop this assertion depends on, and the expected side
-    // re-reads the directory. Keep it that way.
     const entries = [...workflows].map(
       ([name, workflow]): [string, string[]] => [
         name,
@@ -606,29 +554,6 @@ describe("every workflow's top-level keys", () => {
   });
 
   it("never allows `env`, because allowing it reopens the hole it was absent for", () => {
-    // The escape this denies is a two-file edit that nothing else catches. Plant
-    // an unpinned top-level `env:` block in any workflow, add "env" to
-    // ALLOWED_TOP_LEVEL_KEYS, and every other assertion here passes: the key
-    // check sees a key it has been told is fine, and the rot guard above passes
-    // too, because the planted block now genuinely ships one. Both files are
-    // edited together, so neither suite's count moves and nothing is red. This
-    // was measured, not reasoned: that plant passed the suite whole before this
-    // assertion existed.
-    //
-    // `env` is a legitimate GitHub Actions key and a workflow may pin one, at the
-    // job level or at the top. That is exactly why the mechanism is an allowlist
-    // and not a denylist — a denylist would have had to name `env` to catch it,
-    // and the next unasserted key nobody had thought of would have passed
-    // instead. A denylist cannot protect a key it has not been told about; an
-    // allowlist can, and that is the property worth keeping. This assertion is
-    // the cost of that choice made explicit at the one entry where the
-    // allowlist's own weak side is exploitable.
-    //
-    // The other escape stays open by design and is a reviewer's job, not this
-    // suite's: allowlisting some OTHER key and planting it together is equally
-    // silent. No assertion inside an allowlist can tell a deliberate widening
-    // from a silencing one — the key set is the specification, so editing it is
-    // always a visible diff in a file a reviewer reads.
     expect(
       ALLOWED_TOP_LEVEL_KEYS,
       "`env` must never appear in ALLOWED_TOP_LEVEL_KEYS. It is absent on purpose, and adding " +
@@ -767,7 +692,7 @@ describe("every workflow's concurrency block", () => {
     // written reason or it does not ship; there is no third option.
     for (const [name, workflow] of workflows) {
       if (!isPullRequestReachable(workflow.on)) continue;
-      if (UNBOUNDED_BY_CHOICE.has(name)) continue;
+      if (UNBOUNDED_BY_CHOICE.has(name) || Object.hasOwn(PER_PR_REQUIRED, name)) continue;
       const group = String(workflow.concurrency?.group ?? "");
       for (const key of unboundedGroupKeysIn(group)) {
         expect(
@@ -786,8 +711,20 @@ describe("every workflow's concurrency block", () => {
     // red here until it is either added to BOUNDED or justified in
     // UNBOUNDED_BY_CHOICE, and a workflow deleted here leaves a stale key that
     // this same equality fails. Neither direction passes silently.
-    const classified = [...Object.keys(BOUNDED), ...UNBOUNDED_BY_CHOICE.keys()].sort();
+    const classified = [...Object.keys(BOUNDED), ...Object.keys(PER_PR_REQUIRED), ...UNBOUNDED_BY_CHOICE.keys()].sort();
     expect([...workflows.keys()].sort()).toEqual(classified);
+  });
+});
+
+describe("the per-pull-request required gates", () => {
+  it("isolates superseded runs and reaches every gate on every PR event", () => {
+    for (const [name, expected] of Object.entries(PER_PR_REQUIRED)) {
+      const workflow = workflows.get(name);
+      expect(workflow, `${name} must exist`).toBeDefined();
+      expect(workflow!.concurrency).toEqual(expected);
+      expect(pullRequestTriggerKeys(workflow!.on)).toEqual(["pull_request_target"]);
+      expect(requiredCheckWorkflows()).toContain(name);
+    }
   });
 });
 
@@ -836,28 +773,6 @@ describe("the bounded workflows", () => {
   });
 
   it("never cancel an in-flight run, because the group is shared by every pull request", () => {
-    // Asserted against the value actually shipped in the workflow file, not
-    // against BOUNDED's own copy of it, so it cannot be weakened by editing a
-    // table. A `true` here — or the event expression that used to be here —
-    // lets one contributor's push cancel a peer's RUNNING run, because the
-    // group is repository-level and the run it destroys is not necessarily the
-    // author's own. `verify`, `actionlint` and `ratchet-guard` are the required
-    // contexts in .github/required-checks.json and ledger-relay mirrors a run
-    // conclusion onto them, so that cancellation blocks a pull request that did
-    // nothing wrong. Measured over the 370 pull-request arrivals of the 6.13-day
-    // window that is ~15 destroyed running runs a day, ~98 on the busiest
-    // measured day (the 106 push and 7 dispatch runs key their own SHA and never
-    // contend, so they are not in either figure).
-    //
-    // The message below is careful about what this does and does not buy,
-    // because the over-strong version of the claim is the one that was shipped
-    // first and it is false: `false` does NOT prevent cancellation. GitHub
-    // cancels the PENDING run in a group whatever this flag says, and on this
-    // shared group that run can be another pull request's live head with no
-    // replacement. The flag governs the running run only; the bound is
-    // unaffected either way because the group holds at most one running job
-    // regardless. On the non-pull-request leg the same literal also keeps the
-    // issue-474 deploy gate satisfied.
     for (const [name] of Object.entries(BOUNDED)) {
       expect(
         workflows.get(name)!.concurrency?.["cancel-in-progress"],
@@ -922,17 +837,6 @@ describe("the workflows left unbounded", () => {
   });
 
   it("ship exactly the group, cancel-in-progress and queue recorded beside the reason", () => {
-    // Two workflows sharing a group cancel each other's PENDING runs whatever
-    // each one's own reason says, so a collision is a correctness change and not
-    // a cosmetic one — but nothing in this suite used to pin an exception's
-    // group, so pointing pr-gate's at `ci-pr-repo-wide` left the whole file green
-    // and only an older suite's whole-block pin noticed. This is that pin.
-    //
-    // The whole block, not three keys read one at a time: a `queue` that appears
-    // or disappears is a change in what GitHub does with a pending arrival, and
-    // comparing the object makes that change fail here whether it is on
-    // claim.yml — whose reason depends on the queue — or on an exception that
-    // has no queue and should not have grown one.
     for (const [name, entry] of UNBOUNDED_BY_CHOICE) {
       expect(workflows.get(name)!.concurrency, `${name}'s concurrency block`).toEqual({
         group: entry.group,
@@ -964,38 +868,6 @@ describe("the workflows left unbounded", () => {
   });
 
   it("keeps the premise each reason names", () => {
-    // The premise these reasons rest on is NOT that `cancel-in-progress: false`
-    // prevents cancellation — it does not, for the pending run. It is that each
-    // exception's GROUP is scoped to one unit of work, so that the pending run
-    // GitHub drops is always that same unit's superseded attempt and a
-    // replacement exists. What that premise licenses for `cancel-in-progress`
-    // depends on the unit, and the entry records which kind it is rather than
-    // leaving one rule to cover both.
-    //
-    // `unreproducible` (the default): the unit's work is not re-run by
-    // anything — the first of two /claim racers, the run that repairs an
-    // already-closed pull request, the relay that posts the check-runs. The
-    // RUNNING attempt is destroyed too if the flag says so, so the flag must be
-    // the literal `false`. Flipping it makes each stated reason false, which is
-    // why it is asserted at all.
-    //
-    // `superseded-attempt`: the unit is one pull request, so a cancelled run is
-    // always that pull request's own superseded head and the replacement is the
-    // push that superseded it. The pull-request event expression is then
-    // correct and is what the workflow ships; what must hold instead is that
-    // the group really is keyed on the pull request, that the workflow really
-    // is reachable from one — on `pull_request` specifically — and that a
-    // cancelled run concludes nothing a merge waits on.
-    //
-    // What is deliberately NOT asserted is that these reasons contain any
-    // particular word. An earlier version of this test required each
-    // `superseded-attempt` reason to match `/superseded|replacement|next
-    // push/i`, which is the repository's banned shape: the string is prose this
-    // file wrote, so a maintainer rewording it for clarity got a red suite and
-    // a faithful paraphrase that changed no premise got one too. Every
-    // structural fact the premise depends on is checked against the WORKFLOW
-    // above — the trigger, the group key, the flag, the required-check set —
-    // which is what a wrong premise actually breaks.
     const required = new Set(requiredCheckWorkflows());
     for (const [name, entry] of UNBOUNDED_BY_CHOICE) {
       const premise = premiseOf(entry);
@@ -1115,28 +987,6 @@ describe("the workflows left unbounded", () => {
   });
 
   it("never covers a workflow that produces a required check", () => {
-    // The mechanical half of the de-bounding guard, and the only one in the
-    // suite. Moving a required-check workflow out of BOUNDED and reverting its
-    // group passes every other assertion here, because the table entry can move
-    // with the workflow — that escape needs a two-line diff and looks like
-    // housekeeping. The workflows whose job names appear in
-    // .github/required-checks.json are the ones this repository cannot afford
-    // to have quietly unbounded, so a pull-request-reachable one cannot be
-    // exempted from the bound at all. A workflow that legitimately needs its
-    // own group per unit of work (pr-gate.yml, keyed on the pull request
-    // number) is not a required context and is unaffected.
-    //
-    // Issue 1090 split actionlint, ratchet-guard and secret-scan into a file
-    // per leg, so a required context is now named by BOTH a push file and a
-    // pull_request_target file. The condition is therefore reachability, not
-    // membership of the pin map: the leg that RECEIVES a pull-request event is
-    // the one the bound is for, and it must be bounded. A leg that receives no
-    // pull-request event cannot be in BOUNDED at all — the bound's
-    // repository-level arm would be dead code there, and the reachability
-    // assertion above reds on it — so requiring it to be would make the two
-    // assertions contradict each other and force one of them to be deleted.
-    // Those files are still pinned exactly by the UNBOUNDED_BY_CHOICE
-    // assertion above, so nothing about their groups goes unasserted.
     const required = requiredCheckWorkflows();
     expect([...required].sort(), ".github/required-checks.json must name workflows this suite can read")
       .not.toEqual([]);
@@ -1147,9 +997,9 @@ describe("the workflows left unbounded", () => {
       if (!isPullRequestReachable(workflow!.on)) continue;
       reachableCount += 1;
       expect(
-        Object.hasOwn(BOUNDED, name),
-        `${name} is a pull-request-reachable required-check workflow, so it belongs in BOUNDED with ` +
-          "the repository-level group. An UNBOUNDED_BY_CHOICE entry records an exception carrying a " +
+        Object.hasOwn(BOUNDED, name) || Object.hasOwn(PER_PR_REQUIRED, name),
+        `${name} is a pull-request-reachable required-check workflow, so it belongs in BOUNDED or PER_PR_REQUIRED with ` +
+          "its explicitly checked group. An UNBOUNDED_BY_CHOICE entry records an exception carrying a " +
           "written reason, and a required context is not an exception.",
       ).toBe(true);
     }
