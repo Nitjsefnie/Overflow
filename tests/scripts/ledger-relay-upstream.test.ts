@@ -307,7 +307,7 @@ describe("workflow_run orphan sweep", () => {
     expect(result.sweep.examined).toBe(2);
     expect(h.posts).toHaveLength(1);
     expect(h.posts[0]?.head_sha).toBe(PR_SHA);
-    expect(h.requests.filter((url) => url === checksUrl(PR_SHA))).toHaveLength(2);
+    expect(h.requests.filter((url) => url === checksUrl(PR_SHA))).toHaveLength(1);
   });
 
   it("keeps distinct PR heads separate even when verify runs have the same own main SHA", async () => {
@@ -512,6 +512,21 @@ describe("superseded mirror keeps orphan recovery available", () => {
 });
 
 describe("producer-bound workflow_run sweep attestation", () => {
+  it.each(["mirror", "sweep"])("selects a completed producer through %s when a newer listed completion is now rerunning", async (mode) => {
+    const newer = producer({ id: 9002, conclusion: "failure" });
+    const h = harness({
+      env: mode === "sweep" ? { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" } : {},
+      handlers: {
+        [runsUrl]: { workflow_runs: [newer, producer()] },
+        [runUrl(9002)]: { ...newer, status: "in_progress", conclusion: null, run_attempt: 2 },
+        [jobsUrl(9002)]: { jobs: [{ name: "verify", status: "completed", conclusion: "failure" }] },
+      },
+    });
+    await h.run();
+    expect(h.posts.map((post) => post.external_id)).toEqual(["9001:1"]);
+    expect(h.requests).not.toContain(jobsUrl(9002));
+  });
+
   it("replaces the real older green with an orphaned newer failed verify on the same PR head", async () => {
     const initial = harness();
     await initial.run();

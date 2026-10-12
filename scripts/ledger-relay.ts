@@ -21,7 +21,7 @@
 // LEDGER_DISPATCH_RUN_ID, recovering a run whose relay posting died. The pin
 // map (.github/required-checks.json) is read from the relay's own checkout —
 // the trusted main tip — and each context whose pin names the triggering run's
-// path is decided from that run's job records and posted as a check-run under
+// path is decided from the newest completed eligible producer's job records under
 // an App installation token minted in-process. A pin may name several paths
 // (issue 1090 splits the workflows that read pull-request data, leaving one
 // required context produced by a pull_request_target file and a push file),
@@ -50,6 +50,7 @@ import {
   type SweepOutcome,
 } from "./ledger-relay-sweep.ts";
 import { publishProducerContexts } from "./ledger-relay-publication.ts";
+import { type SweepCandidate } from "./ledger-relay-producers.ts";
 import { LEDGER_APP_MINT_PERMISSIONS } from "./ledger-app-mint-permissions.ts";
 // The pure decision layer. Re-exported below, with `.ts` specifiers, so the
 // surface this entry has always presented is unchanged: a caller importing
@@ -248,7 +249,9 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
     run = triggeringRunFromApi(fetchedProducer);
   }
 
-  let attestationRun = run;
+  let attestationRun: SweepCandidate = {
+    ...run, status: trigger.kind === "dispatch" ? String(fetchedProducer?.status ?? "") : "completed",
+  };
   const runSweep = () => sweepOrphans({
     api: sweepApi(deps, repo, auth),
     decide: decideContexts,
@@ -273,7 +276,7 @@ export async function runRelay(deps: RelayDeps): Promise<RelayResult> {
       (sha) => readSuiteRuns((page) => api.get(suiteRunsUrl(API_ROOT, repo, sha, page), "the suite supersession listing", false)),
     );
     run = resolved.run;
-    attestationRun = { ...run, headSha: resolved.headSha };
+    attestationRun = { ...run, headSha: resolved.headSha, status: resolved.producerStatus };
     if (resolved.supersededBy !== undefined) return skippedSuperseded(resolved.supersededBy, runSweep);
     recheckPublication = resolved.recheckPublication;
     historyBound = resolved.historyBound;

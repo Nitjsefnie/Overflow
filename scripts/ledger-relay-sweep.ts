@@ -156,6 +156,7 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
     candidate.conclusion = resolved.run.conclusion;
     candidate.htmlUrl = resolved.run.htmlUrl;
     candidate.runAttempt = resolved.run.runAttempt;
+    candidate.status = resolved.producerStatus;
     if (isTrigger) { triggerRun = candidate; continue; }
     if (resolved.supersededBy !== undefined) {
       superseded.push({ runId: candidate.runId, supersededBy: resolved.supersededBy });
@@ -174,8 +175,7 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
     const relayedThisSweep = new Set<string>();
     for (const candidate of atHead) {
       const missing = new Set(
-        [...missingContextsFor(deps.pinMap, candidate, attested, relayedThisSweep),
-          ...(bounds.has(candidate.runId) ? ["verify"] : [])]
+        missingContextsFor(deps.pinMap, candidate, attested, relayedThisSweep)
           .filter((context) => newest.get(context) === candidate),
       );
       if (missing.size === 0) continue;
@@ -203,10 +203,9 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
         // for the next sweep, which posts the concluded decision once. The
         // mirror's pending behavior is unchanged (residual, PM-accepted).
         if (decision.status !== "completed") continue;
-        const correction = await postProducerCheck(deps, decision, candidate, rechecks.get(candidate.runId));
-        if (correction === null) continue;
+        const posted = await postProducerCheck(deps, decision, candidate, rechecks.get(candidate.runId));
+        if (posted === undefined) continue;
         relayed.push({ context: decision.context, runId: candidate.runId });
-        if (correction !== undefined) relayed.push({ context: decision.context, runId: correction.runId });
         relayedThisSweep.add(decision.context);
       }
     }

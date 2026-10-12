@@ -136,13 +136,9 @@ describe("the heal's evidence on the live relay paths (issue 1037)", () => {
       requests.push({ url: rendered, init: init ?? {} });
       const outcome = outcomes.shift();
       if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
-      if (rendered.endsWith("/check-runs") && init?.method === "POST" && outcome.status === 201) {
-        const posted = JSON.parse(String(init.body)) as Record<string, unknown>;
-        // Post-write snapshots see this write; pending producers block attestation reads.
+      if (rendered.includes(`/actions/runs/${RUN_ID}/jobs?`) && outcome.status === 200) {
         outcomes.unshift({ status: 200, body: { workflow_runs: [] } },
-          ...(posted.status === "completed" ? [{ status: 200, body: {
-            check_runs: [{ ...posted, app: { id: 5118623 } }],
-          } }] : []));
+          { status: 200, body: { check_runs: [] } });
       }
       return new Response(JSON.stringify(outcome.body), {
         status: outcome.status,
@@ -250,6 +246,7 @@ describe("the heal's evidence on the live relay paths (issue 1037)", () => {
       head_sha: HEAD_SHA,
       path: PATH_CI,
       conclusion: "cancelled",
+      status: "completed",
       html_url: HTML_URL,
       event: "pull_request_target",
       head_branch: "feature/some-branch",
