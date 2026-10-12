@@ -312,6 +312,9 @@ describe("sanction contest store", () => {
       const beforePast = await eligibilityAt(accountId, sanction!.past_at);
       const beforeNow = await eligibilityAt(accountId, sanction!.created_at);
       const beforeFuture = await eligibilityAt(accountId, sanction!.future_at);
+      expect(beforePast).toBe(true);
+      expect(beforeNow).toBe(false);
+      expect(beforeFuture).toBe(false);
 
       const result = await store().fileSanctionContest({
         accountId,
@@ -334,7 +337,9 @@ describe("sanction contest store", () => {
       expect(afterPast).toEqual(beforePast);
       expect(afterNow).toEqual(beforeNow);
       expect(afterFuture).toEqual(beforeFuture);
+      expect(afterPast).toBe(true);
       expect(afterNow).toBe(false);
+      expect(afterFuture).toBe(false);
 
       const history = await listEnforcementHistory();
       const filing = history.find((entry) => entry.reason === "A filing event is a same-state no-op for the fold.");

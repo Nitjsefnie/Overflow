@@ -128,12 +128,19 @@ describe("the backup and restore procedure", () => {
   });
 
   // A case that dies mid-flight cannot clean up after itself, so the file does
-  // it here: whatever the case started, whatever route it left by. A no-op
-  // whenever the case finished its own runs, which is every green run.
+  // it here: whatever the case started, whatever route it left by. Remove its
+  // backup directory after process and pool teardown.
   afterEach(async () => {
-    await reapBackupRuns();
-    await drill?.end();
-    drill = undefined;
+    try {
+      await reapBackupRuns();
+    } finally {
+      try {
+        await drill?.end();
+      } finally {
+        drill = undefined;
+        if (backupDir !== undefined) rmSync(backupDir, { recursive: true, force: true });
+      }
+    }
   });
 
   it("refuses to back up without DATABASE_URL", () => {
