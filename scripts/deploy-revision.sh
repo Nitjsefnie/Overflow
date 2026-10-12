@@ -86,11 +86,13 @@ map_refusal_prefix='Could not read a valid .github/required-checks.json at %s (a
 # SHA: the newest eligible run, and within it the latest attempt. PR and
 # workflow_run jobs cannot certify main (workflow_run carries main's SHA even
 # when it judges a PR). Dispatch runs must also name head_branch=main; a
-# missing dispatch branch or event refuses. Completed + success
+# missing run metadata refuses. Completed + success
 # passes; completed + any other conclusion refuses immediately; a status
 # that is not completed is pending and waits; an absent job (GitHub has not
 # created the run yet — the normal state in the first minute after a merge)
 # waits too, listed as `<check> (absent)`. A check-run bearing a required
+# name from a known excluded run is ignored: its jobs are read for identity,
+# but never contribute decision evidence. Every other check-run bearing a required
 # name whose app is neither the ledger App nor one of the pinned workflow's
 # jobs of that name waits as `<check> (unattributed check-run <id>)`, so the
 # gate never passes while one exists. The OVERFLOW_DEPLOY_CI_TIMEOUT
@@ -118,6 +120,7 @@ required_checks_gate() {
   local remote_url repo required pins check check_pins unmapped check_runs runs run_id run_path run_event run_head_branch run_jobs jobs
   local map map_status tree_parse_status fallback_parser fallback_read_status fallback_parse_status
   local job_line job_run job_path job_id job_name job_attempt job_status job_conclusion
+  local run_eligible excluded_ids
   local cr_id cr_name cr_app cr_status cr_conclusion producer_ids status conclusion
   local decided_run decided_attempt pending timeout deadline ledger_app_id ledger_id
   remote_url=$(git config --get remote.origin.url)
@@ -209,46 +212,64 @@ required_checks_gate() {
     # between these listings, so a check-run whose job is not listed yet
     # waits as unattributed rather than refusing.
     if ! check_runs=$(gh api "repos/$repo/commits/$full_sha/check-runs?filter=all&per_page=100" --paginate \
-        --jq '.check_runs[] | [.id, .name, (.app.id // 0), (.status // "unknown"), (.conclusion // "")] | @tsv'); then
+        --jq '.check_runs[] | [.id, .name, (.app.id // 0), (.status // "unknown"), (.conclusion // "")] | map(if . == null or . == "" then "[missing]" else . end) | @tsv'); then
       printf 'Could not read check runs for %s on %s; refusing to deploy.\n' "$repo" "$full_sha" >&2
       exit 1
     fi
     if ! runs=$(gh api "repos/$repo/actions/runs?head_sha=$full_sha&per_page=100" --paginate \
-        --jq '.workflow_runs[] | [.id, .path, (.event // "(missing)"), (.head_branch // "(missing)")] | @tsv'); then
+        --jq '.workflow_runs[] | [.id, .path, .event, .head_branch] | map(if . == null or . == "" then "[missing]" else . end) | @tsv'); then
       printf 'Could not read workflow runs for %s on %s; refusing to deploy.\n' "$repo" "$full_sha" >&2
       exit 1
     fi
-    # Every job of every eligible main-event run of a pinned workflow, one per line:
+    # Eligible pinned jobs decide; excluded jobs supply only known-excluded IDs.
+    # Read excluded runs even at unpinned paths so their check-runs do not stall
+    # otherwise certified main evidence. Unknown check IDs still hold the gate.
     # run, path, job id, name, attempt, status, conclusion. Tab is IFS
-    # whitespace, so an empty field would shift the ones after it: the jobs
-    # projection fills every field but the last.
+    # whitespace, so jq gives every null/empty field a nonempty sentinel before
+    # splitting. Missing run/job identity refuses; missing outcomes stay pending
+    # or negative. No field can move into its neighbor's slot.
     jobs=
+    excluded_ids=$'\n'
     while IFS=$'\t' read -r run_id run_path run_event run_head_branch; do
       [ -n "$run_id" ] || continue
-      if [ -z "$run_event" ] || [ "$run_event" = "(missing)" ]; then
+      if [ "$run_id" = "[missing]" ] || [ "$run_path" = "[missing]" ]; then
+        printf 'Workflow run %s has missing id or path for %s on %s; refusing to deploy.\n' "$run_id" "$repo" "$full_sha" >&2
+        exit 1
+      fi
+      if [ -z "$run_event" ] || [ "$run_event" = "[missing]" ]; then
         printf 'Workflow run %s has no event for %s on %s; refusing to deploy.\n' "$run_id" "$repo" "$full_sha" >&2
         exit 1
       fi
+      if [ -z "$run_head_branch" ] || [ "$run_head_branch" = "[missing]" ]; then
+        printf 'Workflow run %s has no head_branch for %s on %s; refusing to deploy.\n' "$run_id" "$repo" "$full_sha" >&2
+        exit 1
+      fi
+      run_eligible=1
       case "$run_event" in
         push|schedule|workflow_dispatch) ;;
-        *) continue ;;
+        *) run_eligible=0 ;;
       esac
       if [ "$run_event" = workflow_dispatch ]; then
-        if [ -z "$run_head_branch" ] || [ "$run_head_branch" = "(missing)" ]; then
-          printf 'Workflow run %s has no head_branch for %s on %s; refusing to deploy.\n' "$run_id" "$repo" "$full_sha" >&2
-          exit 1
-        fi
-        [ "$run_head_branch" = main ] || continue
+        [ "$run_head_branch" = main ] || run_eligible=0
       fi
-      is_pinned_path "$run_path" || continue
+      [ "$run_eligible" -eq 0 ] || is_pinned_path "$run_path" || continue
       if ! run_jobs=$(gh api "repos/$repo/actions/runs/$run_id/jobs?filter=all&per_page=100" --paginate \
-          --jq '.jobs[] | [.id, (if (.name // "") == "" then "(unnamed)" else .name end), (.run_attempt // 0), (.status // "unknown"), (.conclusion // "")] | @tsv' </dev/null); then
+          --jq '.jobs[] | [.id, (if (.name // "") == "" then "(unnamed)" else .name end), (.run_attempt // 0), (.status // "unknown"), (.conclusion // "")] | map(if . == null or . == "" then "[missing]" else . end) | @tsv' </dev/null); then
         printf 'Could not read the jobs of workflow run %s for %s on %s; refusing to deploy.\n' "$run_id" "$repo" "$full_sha" >&2
         exit 1
       fi
       while IFS= read -r job_line; do
         if [ -n "$job_line" ]; then
-          jobs+="$run_id"$'\t'"$run_path"$'\t'"$job_line"$'\n'
+          job_id=${job_line%%$'\t'*}
+          if [ "$job_id" = "[missing]" ]; then
+            printf 'Workflow run %s has a job with no id; refusing to deploy.\n' "$run_id" >&2
+            exit 1
+          fi
+          if [ "$run_eligible" -eq 0 ]; then
+            excluded_ids+="$job_id"$'\n'
+          else
+            jobs+="$run_id"$'\t'"$run_path"$'\t'"$job_line"$'\n'
+          fi
         fi
       done <<<"$run_jobs"
     done <<<"$runs"
@@ -270,6 +291,9 @@ required_checks_gate() {
       while IFS=$'\t' read -r job_run job_path job_id job_name job_attempt job_status job_conclusion; do
         is_pinned_one_of "$check_pins" "$job_path" && [ "$job_name" = "$check" ] || continue
         producer_ids+="$job_id"$'\n'
+        if [ "$job_attempt" = "[missing]" ]; then job_attempt=0; fi
+        if [ "$job_status" = "[missing]" ]; then job_status=unknown; fi
+        if [ "$job_conclusion" = "[missing]" ]; then job_conclusion=''; fi
         if [ "$job_run" -gt "$decided_run" ] \
           || { [ "$job_run" -eq "$decided_run" ] && [ "$job_attempt" -gt "$decided_attempt" ]; } \
           || { [ "$job_run" -eq "$decided_run" ] && [ "$job_attempt" -eq "$decided_attempt" ] \
@@ -282,9 +306,12 @@ required_checks_gate() {
       # protection matches on post-switch.
       ledger_id=0
       while IFS=$'\t' read -r cr_id cr_name cr_app cr_status cr_conclusion; do
+        [[ "$excluded_ids" != *$'\n'"$cr_id"$'\n'* ]] || continue
         [ "$cr_name" = "$check" ] || continue
         [ "$cr_app" = "$ledger_app_id" ] || continue
         if [ "$cr_id" -gt "$ledger_id" ]; then
+          if [ "$cr_status" = "[missing]" ]; then cr_status=unknown; fi
+          if [ "$cr_conclusion" = "[missing]" ]; then cr_conclusion=''; fi
           ledger_id=$cr_id status=$cr_status conclusion=$cr_conclusion
         fi
       done <<<"$check_runs"
@@ -299,9 +326,10 @@ required_checks_gate() {
         exit 1
       fi
       # A check-run bearing the name that the ledger App did not post and
-      # none of those producers accounts for keeps the check pending,
+      # neither eligible producers nor known excluded jobs account for stays pending,
       # whatever the pinned job or the ledger App concluded.
       while IFS=$'\t' read -r cr_id cr_name cr_app cr_status cr_conclusion; do
+        [[ "$excluded_ids" != *$'\n'"$cr_id"$'\n'* ]] || continue
         [ "$cr_name" = "$check" ] || continue
         if [ "$cr_app" = "$ledger_app_id" ]; then continue; fi
         if [[ "$producer_ids" != *$'\n'"$cr_id"$'\n'* ]]; then
