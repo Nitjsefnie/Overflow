@@ -2,18 +2,20 @@ name: ledger relay
 
 # Re-posts the five required contexts as check-runs owned by the Overflow
 # Ledger GitHub App (app id 5118623), so branch protection can pin each
-# required context to the App instead of the github-actions app. Every relay
-# start shares one concurrency group: only one relay run writes at a time
-# across the repository. Every start sweeps for producers whose pending relay
-# start was displaced by a newer arrival, deduplicated against the App's own
-# check-runs at each candidate commit. The sweep also re-dispatches eligible
-# cancelled producer runs while their pull request's head is still live.
-# A workflow_run runs this workflow's definition from the default branch's
+# required context to the App instead of the github-actions app. As its second
+# duty (issue 861) it heals a run that GitHub cancelled out of the shared
+# pending concurrency slot while its pull request's head is still live: the
+# relay re-dispatches that run, so a cancelled pending run does not strand the
+# PR. As its third duty (issue 885) it sweeps for the completions whose OWN
+# relay instance was cancelled out of that slot before it could post anything —
+# the orphan sweep in scripts/ledger-relay-sweep.ts, deduplicated against the
+# App's own check-runs at each candidate commit. A workflow_run runs this
+# workflow's definition from the default branch's
 # tip, in the default branch's context, so the pin map and the script executed
 # here are always the trusted main tip, never pull-request content. Check-run
 # writes go through the App installation token the script mints; the rerun
-# and the read of this job's own start go through the workflow's own
-# repo-scoped token, which holds contents: read + actions: write.
+# goes through the workflow's own repo-scoped token, which holds contents:
+# read + actions: write.
 on:
   # workflow_run runs this definition from the default branch's tip, in the
   # default branch's context: the checkout, the pin map and the script are
@@ -39,9 +41,11 @@ on:
         required: false
         default: ""
         type: string
-  # Sweep every ten minutes without waiting for another producer completion.
-  # Every start sweeps, including a start that refuses its triggering producer;
-  # a scheduled start shares the same serialized group as every other start.
+  # Issue 1116: the sweep must not depend on a producer run arriving — a
+  # pending App check-run the sweep posts (a placeholder, not attestation) is
+  # completed only by a LATER sweep, and a relay start that refuses its
+  # triggering run never sweeps. Every ten minutes, then, a start whose sole
+  # duty is the sweep.
   schedule:
     - cron: "*/10 * * * *"
 
@@ -57,13 +61,16 @@ permissions:
   actions: write
 
 concurrency:
-  # Schedule, dispatch with or without run_id, and workflow_run share one
-  # literal group: only one relay run writes at a time across the repository.
-  group: ledger-relay
-  # `false` preserves the running start. GitHub keeps at most one pending run
-  # per group, and a newer arrival replaces the pending one. Every start
-  # sweeps, so the start that displaced a pending start attests the displaced
-  # start's producer.
+  group: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_id == '')) && 'ledger-relay-sweep' || 'ledger-relay' }}
+  # `false` keeps this workflow's RUNNING instance alive when a newer arrival
+  # joins the group. It does NOT keep a PENDING one: GitHub keeps at most one
+  # pending run per concurrency group and cancels the previous pending run
+  # whenever a newer one arrives, whatever this flag says (the repository
+  # documents that in tests/ci/concurrency.test.ts). So two producer runs
+  # completing close together still cancel one of these instances before it
+  # posts, and the completion that triggered it would otherwise be orphaned
+  # forever with no App check-run for it. That is what the relay's third duty
+  # (issue 885) is for: every start sweeps for those orphans and heals them.
   cancel-in-progress: false
 
 jobs:
@@ -73,33 +80,22 @@ jobs:
   # tests/ci/required-checks.test.ts.
   relay-required-checks:
     runs-on: ubuntu-latest
-    # Bound every step: 2 + 2 + 11 = 15 minutes; the job gets 1 minute more.
-    # The relay step must exceed its script budget: 600s deadline + 30s last
-    # request + (1s + 2s) backoff = 633s < 660s (11 minutes).
-    # The job timeout also covers the runner's unbounded "Set up job" phase,
-    # so the script reads this job's started_at and starts no request later
-    # than started_at + 16 min - 30s request bound - 60s margin. The value is
-    # RELAY_JOB_TIMEOUT_MINUTES in scripts/ledger-relay-job-budget.ts, and the
-    # job id is the name that read selects: change neither alone.
-    timeout-minutes: 16
+    timeout-minutes: 15
     environment: overflow-ledger
     steps:
       # No ref input: under workflow_run the default checkout is the default
       # branch's tip — the trusted main tip the pin map is read from.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        timeout-minutes: 2
         with:
           persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        timeout-minutes: 2
         with:
           node-version: "24.17.0"
 
       # Event data reaches the script through env only, never ${{ }}
       # interpolation in run:.
       - name: Relay the required checks under the ledger App
-        timeout-minutes: 11
         env:
           LEDGER_APP_ID: "5118623"
           LEDGER_INSTALLATION_ID: "166057493"
@@ -111,14 +107,14 @@ jobs:
           GITHUB_WORKFLOW_RUN_HTML_URL: ${{ github.event.workflow_run.html_url }}
           GITHUB_WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
           # With the event, decides whether the run executed main's definition;
-          # a pinned run that did not is refused, and the sweep still runs.
+          # a pinned run that did not is refused and nothing is posted.
           GITHUB_WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           GITHUB_WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           RELAY_RERUN_TOKEN: ${{ github.token }}
-          # Rule: the job-start read uses the runner's default GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT; never set them here.
           LEDGER_DISPATCH_RUN_ID: ${{ inputs.run_id }}
-          # A schedule or a dispatch without run_id has no triggering run to
-          # mirror. Carry the sweep-only mode so the script fails closed on
-          # ambiguity with a named run; every mode sweeps and shares one group.
+          # Issue 1116: the same predicate that keys the concurrency group,
+          # carried so the script can fail closed on any ambiguity between the
+          # mode and a named run: schedule, or a dispatch whose run_id is
+          # empty, is sweep-only (no mirror, no heal).
           LEDGER_SWEEP_ONLY: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_id == '') }}
         run: node scripts/ledger-relay.ts

@@ -1,5 +1,3 @@
-import { appSuiteListing, appChecksUrl, appSuitesUrl, RELAY_OWN_RUN_ENV, relayJobStartListing,
-  relayJobStartUrl } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -99,7 +97,6 @@ describe("the committed pin drives runRelay end to end (issue 1034)", () => {
   const RUN_ID = "1034";
   const HTML_URL = `https://github.com/Nitjsefnie/Overflow/actions/runs/${RUN_ID}`;
   const TOKEN_URL = "https://api.github.com/app/installations/166057493/access_tokens";
-  const OWN_JOB_URL = relayJobStartUrl();
   const JOBS_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs/${RUN_ID}/jobs?filter=latest&per_page=100`;
   const CHECK_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/check-runs";
   const SWEEP_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs?per_page=100";
@@ -124,10 +121,16 @@ describe("the committed pin drives runRelay end to end (issue 1034)", () => {
     const fn = vi.fn(async (url: unknown, init?: RequestInit) => {
       const rendered = typeof url === "string" ? url : String(url);
       requests.push({ url: rendered, init: init ?? {} });
-      const suites = appSuiteListing(rendered) ?? relayJobStartListing(rendered);
-      if (suites !== undefined) return new Response(JSON.stringify(suites));
       const outcome = outcomes.shift();
       if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
+      if (rendered.endsWith("/check-runs") && init?.method === "POST" && outcome.status === 201) {
+        const posted = JSON.parse(String(init.body)) as Record<string, unknown>;
+        // Post-write snapshots see this write; pending producers block attestation reads.
+        outcomes.unshift({ status: 200, body: { workflow_runs: [] } },
+          ...(posted.status === "completed" ? [{ status: 200, body: {
+            check_runs: [{ ...posted, app: { id: 5118623 } }],
+          } }] : []));
+      }
       return new Response(JSON.stringify(outcome.body), {
         status: outcome.status,
         headers: { "content-type": "application/json" },
@@ -138,7 +141,7 @@ describe("the committed pin drives runRelay end to end (issue 1034)", () => {
 
   function relayEnv(over: Record<string, string>): Record<string, string> {
     return {
-      ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623",
+      LEDGER_APP_ID: "5118623",
       LEDGER_INSTALLATION_ID: "166057493",
       LEDGER_APP_KEY: keyPem,
       GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
@@ -173,11 +176,7 @@ describe("the committed pin drives runRelay end to end (issue 1034)", () => {
     const fetchStub = makeFetch([
       { status: 201, body: { token: "installation-token" } },
       { status: 200, body: { total_count: jobs.length, jobs } },
-      ...contexts.flatMap((_, index) => [
-        { status: 200, body: { workflow_runs: [] } },
-        { status: 200, body: { check_runs: [] } },
-        { status: 201, body: { id: index + 1 } },
-      ]),
+      ...contexts.map((_, index) => ({ status: 201, body: { id: index + 1 } })),
       { status: 200, body: { total_count: 0, workflow_runs: [] } },
     ]);
     const result = await runRelay({
@@ -189,11 +188,10 @@ describe("the committed pin drives runRelay end to end (issue 1034)", () => {
 
     expect(result.posted).toEqual(contexts);
     expect(fetchStub.requests.map((request) => request.url)).toEqual([
-      OWN_JOB_URL, TOKEN_URL,
+      TOKEN_URL,
       JOBS_URL,
-      ...contexts.flatMap(() => [SWEEP_RUNS_URL,
-        appSuitesUrl("https://api.github.com/repos/Nitjsefnie/Overflow", HEAD_SHA),
-        appChecksUrl("https://api.github.com/repos/Nitjsefnie/Overflow", HEAD_SHA), CHECK_RUNS_URL]),
+      ...contexts.flatMap(() => [CHECK_RUNS_URL, SWEEP_RUNS_URL,
+        `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${HEAD_SHA}/check-runs?app_id=5118623&filter=latest&per_page=100`]),
       SWEEP_RUNS_URL,
     ]);
     const checkRuns = fetchStub.requests.filter((request) => request.url === CHECK_RUNS_URL);
@@ -232,7 +230,6 @@ describe("the committed pin drives runRelay end to end (issue 1034)", () => {
         },
       },
       { status: 200, body: [] },
-      { status: 200, body: { workflow_runs: [] } },
     ]);
     const result = await runRelay({
       env: relayEnv({

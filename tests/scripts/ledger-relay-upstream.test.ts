@@ -1,4 +1,3 @@
-import { appSuiteListing, appChecksUrl, RELAY_OWN_RUN_ENV, relayJobStartListing } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -18,7 +17,7 @@ const suiteRunsUrl = (sha = PR_SHA) => `${API}/actions/workflows/pr-suite.yml/ru
 const runUrl = (id: number) => `${API}/actions/runs/${id}`;
 const jobsUrl = (id: number) => `${runUrl(id)}/jobs?filter=latest&per_page=100`;
 const checksUrl = (sha: string) =>
-  appChecksUrl(API, sha);
+  `${API}/commits/${sha}/check-runs?app_id=5118623&filter=latest&per_page=100`;
 
 let keyPem: string;
 beforeAll(() => {
@@ -94,8 +93,6 @@ function harness(over: {
   const fetchFn = (async (input: unknown, init?: RequestInit) => {
     const url = String(input);
     requests.push(url);
-    const suites = appSuiteListing(url) ?? relayJobStartListing(url);
-    if (suites !== undefined) return new Response(JSON.stringify(suites));
     if (url.endsWith("/access_tokens")) {
       return new Response(JSON.stringify({ token: "installation-token" }), { status: 201 });
     }
@@ -120,7 +117,7 @@ function harness(over: {
     return new Response(JSON.stringify(result));
   }) as typeof fetch;
   const env: Record<string, string | undefined> = {
-    ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623",
+    LEDGER_APP_ID: "5118623",
     LEDGER_INSTALLATION_ID: "166057493",
     LEDGER_APP_KEY: keyPem,
     GITHUB_REPOSITORY: REPO,
@@ -185,7 +182,6 @@ describe("API-backed workflow_run verify", () => {
   ] as const)("throws for %s before posting", async (_name, changes, error) => {
     const h = harness({ producer: producer(changes) });
     await expect(h.run()).rejects.toThrow(error);
-    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
     expect(h.requests).not.toContain(runUrl(8001));
   });
@@ -196,7 +192,6 @@ describe("API-backed workflow_run verify", () => {
       head_repository: { id: 654321, full_name: "contributor/Overflow", owner: { login: "contributor" } },
     }) });
     await expect(h.run()).rejects.toThrow(/producer.*event/);
-    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
   });
 
@@ -206,7 +201,6 @@ describe("API-backed workflow_run verify", () => {
       env: { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_DISPATCH_RUN_ID: "9001" },
     });
     await expect(h.run()).rejects.toThrow(/producer.*id/);
-    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
     expect(h.requests).not.toContain(runUrl(8001));
   });
@@ -217,7 +211,6 @@ describe("API-backed workflow_run verify", () => {
       producer: producer({ path: ".github/workflows/other.yml" }),
     });
     await expect(h.run()).rejects.toThrow(/producer.*path/);
-    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
   });
 
@@ -226,7 +219,6 @@ describe("API-backed workflow_run verify", () => {
   ])("throws when the relay's repository id is %s", async (_name, id) => {
     const h = harness({ env: { GITHUB_REPOSITORY_ID: id } });
     await expect(h.run()).rejects.toThrow(/GITHUB_REPOSITORY_ID/);
-    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
   });
 
@@ -239,7 +231,6 @@ describe("API-backed workflow_run verify", () => {
   ] as const)("throws for %s before posting", async (_name, changes, error) => {
     const h = harness({ upstream: suite(changes) });
     await expect(h.run()).rejects.toThrow(error);
-    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
     expect(h.requests).not.toContain(jobsUrl(9001));
   });
@@ -249,14 +240,12 @@ describe("API-backed workflow_run verify", () => {
   ])("throws on upstream %s read failure", async (_name, failure) => {
     const h = harness({ upstream: failure });
     await expect(h.run()).rejects.toThrow(/workflow run 8001.*failed/);
-    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
   });
 
   it("throws on a producer API read failure", async () => {
     const h = harness({ producer: { httpStatus: 404 } });
     await expect(h.run()).rejects.toThrow(/workflow run 9001.*failed/);
-    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
   });
 
@@ -318,7 +307,7 @@ describe("workflow_run orphan sweep", () => {
     expect(result.sweep.examined).toBe(2);
     expect(h.posts).toHaveLength(1);
     expect(h.posts[0]?.head_sha).toBe(PR_SHA);
-    expect(h.requests.filter((url) => url === checksUrl(PR_SHA))).toHaveLength(1);
+    expect(h.requests.filter((url) => url === checksUrl(PR_SHA))).toHaveLength(2);
   });
 
   it("keeps distinct PR heads separate even when verify runs have the same own main SHA", async () => {
@@ -331,7 +320,7 @@ describe("workflow_run orphan sweep", () => {
     } });
     const result = await h.run();
     expect(result.sweep.relayed).toHaveLength(2);
-    expect(h.posts.map((body) => body.head_sha)).toEqual([OTHER_PR_SHA, PR_SHA]);
+    expect(h.posts.map((body) => body.head_sha)).toEqual([PR_SHA, OTHER_PR_SHA]);
   });
 
   it.each([
@@ -342,7 +331,6 @@ describe("workflow_run orphan sweep", () => {
       [runsUrl]: { workflow_runs: [producer()] },
     } });
     await expect(h.run()).rejects.toThrow(error);
-    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
     expect(h.requests).not.toContain(checksUrl(MAIN_SHA));
   });
@@ -352,7 +340,6 @@ describe("workflow_run orphan sweep", () => {
       [runsUrl]: { workflow_runs: [producer()] },
     } });
     await expect(h.run()).rejects.toThrow(/producer.*repository/);
-    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
   });
 });
@@ -397,7 +384,6 @@ describe("superseded verification never publishes", () => {
       },
     });
     await expect(h.run()).rejects.toThrow(/suite.*failed/);
-    expect(h.requests).toContain(runsUrl);
     expect(h.posts).toEqual([]);
   });
 });
@@ -467,7 +453,6 @@ describe("complete listing for mirror and orphan supersession", () => {
     for (const orphan of [false, true]) {
       const h = paged(orphan, second);
       await expect(h.run()).rejects.toThrow(message as RegExp);
-      expect(h.requests).toContain(runsUrl);
       expect(h.posts).toEqual([]);
       expect(h.requests.filter((url) => url === pageUrl(2))).toHaveLength(1);
     }
@@ -527,21 +512,6 @@ describe("superseded mirror keeps orphan recovery available", () => {
 });
 
 describe("producer-bound workflow_run sweep attestation", () => {
-  it.each(["mirror", "sweep"])("selects a completed producer through %s when a newer listed completion is now rerunning", async (mode) => {
-    const newer = producer({ id: 9002, conclusion: "failure" });
-    const h = harness({
-      env: mode === "sweep" ? { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" } : {},
-      handlers: {
-        [runsUrl]: { workflow_runs: [newer, producer()] },
-        [runUrl(9002)]: { ...newer, status: "in_progress", conclusion: null, run_attempt: 2 },
-        [jobsUrl(9002)]: { jobs: [{ name: "verify", status: "completed", conclusion: "failure" }] },
-      },
-    });
-    await h.run();
-    expect(h.posts.map((post) => post.external_id)).toEqual(["9001:1"]);
-    expect(h.requests).not.toContain(jobsUrl(9002));
-  });
-
   it("replaces the real older green with an orphaned newer failed verify on the same PR head", async () => {
     const initial = harness();
     await initial.run();

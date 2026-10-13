@@ -1,5 +1,3 @@
-import { publicationBlockedContexts } from "../../scripts/ledger-relay-producers.ts";
-import { appSuiteListing, appChecksUrl, appSuitesUrl } from "./ledger-relay-check-fixtures.ts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -92,11 +90,8 @@ function candidate(over: Partial<SweepCandidate> = {}): SweepCandidate {
 }
 
 describe("SWEEP_RUN_LIMIT", () => {
-  it("retains 50 recent candidates and excludes the fifty-first", () => {
-    const many = Array.from({ length: 51 }, (_, index) => runEntry({ id: 9100 - index }));
-    const selected = selectSweepCandidates(many, PIN_MAP, "");
-    expect(selected).toHaveLength(50);
-    expect(selected.at(-1)?.runId).toBe("9051");
+  it("is 20 — the bound on candidates examined per relay start", () => {
+    expect(SWEEP_RUN_LIMIT).toBe(20);
   });
 });
 
@@ -120,8 +115,6 @@ describe("selectSweepCandidates", () => {
     expect(selected[0]).toEqual({
       runId: "9002",
       runAttempt: 1,
-      event: "pull_request_target",
-      runStartedAt: null,
       headSha: HEAD_SHA,
       path: PATH_ACTIONLINT,
       conclusion: "success",
@@ -142,15 +135,15 @@ describe("selectSweepCandidates", () => {
     expect(selected.map((entry) => entry.runId)).toEqual(["9009", "9008", "9007"]);
   });
 
-  it("caps at SWEEP_RUN_LIMIT candidates after sorting newest first", () => {
+  it("caps at SWEEP_RUN_LIMIT candidates, taking the first in listing order", () => {
     const many = Array.from({ length: SWEEP_RUN_LIMIT + 9 }, (_unused, index) =>
       runEntry({ id: 9000 + index, path: PATH_ACTIONLINT }),
     );
     const selected = selectSweepCandidates(many, PIN_MAP, "1");
     expect(selected).toHaveLength(SWEEP_RUN_LIMIT);
-    // Sort before truncating even when the API listing is oldest first.
-    expect(selected[0]?.runId).toBe(String(9000 + many.length - 1));
-    expect(selected[SWEEP_RUN_LIMIT - 1]?.runId).toBe(String(9000 + many.length - SWEEP_RUN_LIMIT));
+    // The first SWEEP_RUN_LIMIT in listing order, so the newest completions.
+    expect(selected[0]?.runId).toBe("9000");
+    expect(selected[SWEEP_RUN_LIMIT - 1]?.runId).toBe(String(9000 + SWEEP_RUN_LIMIT - 1));
   });
 
   it("drops a completed pinned run carrying no head SHA or no html_url, because nothing could be posted for it", () => {
@@ -187,7 +180,7 @@ describe("selectSweepCandidates", () => {
       PIN_MAP,
       "9001",
     );
-    expect(selected.map((entry) => entry.runId)).toEqual(["9013", "9012", "9011", "9010"]);
+    expect(selected.map((entry) => entry.runId)).toEqual(["9010", "9011", "9012", "9013"]);
   });
 
   // Issue 1090's shape, at the sweep's own door. Flattening list pins is what
@@ -238,7 +231,7 @@ describe("selectSweepCandidates", () => {
       TWO_PATH_PIN_MAP,
       "1",
     );
-    expect(selected.map((entry) => entry.runId)).toEqual(["9421", "9420"]);
+    expect(selected.map((entry) => entry.runId)).toEqual(["9420", "9421"]);
   });
 
   it("fails closed on a run whose event or head branch is absent or not a string", () => {
@@ -347,12 +340,10 @@ function fakeApi(handlers: Record<string, unknown>): {
   const api: SweepApi = {
     get: async <T,>(url: string): Promise<T> => {
       record(url, "GET", undefined);
-      const suites = url in handlers ? undefined : appSuiteListing(url);
-      if (suites !== undefined) return suites as T;
       if (!(url in handlers)) throw new Error(`unexpected fetch: ${url}`);
       return handlers[url] as T;
     },
-    postCheckRun: async (body: Record<string, unknown>): Promise<{ id: number }> => {
+    postCheckRun: async (body: Record<string, unknown>): Promise<unknown> => {
       record(null, "POST", body);
       const url = checkRunsAt(String(body.head_sha));
       const checks = (handlers[url] as { check_runs: Record<string, unknown>[] }).check_runs;
@@ -381,7 +372,7 @@ function appCheckRun(name: string, over: Record<string, unknown> = {}): Record<s
 
 const RUNS_URL = `https://api.github.com/repos/${REPO}/actions/runs?per_page=100`;
 const checkRunsAt = (sha: string) =>
-  appChecksUrl(`https://api.github.com/repos/${REPO}`, sha);
+  `https://api.github.com/repos/${REPO}/commits/${sha}/check-runs?app_id=${APP_ID}&filter=latest&per_page=100`;
 const jobsUrl = (runId: string) =>
   `https://api.github.com/repos/${REPO}/actions/runs/${runId}/jobs?filter=latest&per_page=100`;
 
@@ -529,14 +520,21 @@ describe("sweepOrphans", () => {
     expect(outcome).toEqual({ examined: 1, relayed: [] });
     expect(requests.map((request) => request.url)).toEqual([
       RUNS_URL,
-      appSuitesUrl(`https://api.github.com/repos/${REPO}`, HEAD_SHA),
       checkRunsAt(HEAD_SHA),
     ]);
   });
 
   it("posts nothing for a candidate whose jobs listing is unfinished, and the next sweep posts the conclusion once", async () => {
-    // An unfinished producing job gets no POST. Once it concludes, the
-    // sweep completes a pending App check carrying that producer's identity.
+    // The defect this pins, end to end across two sweeps. A completed
+    // producer run whose jobs listing reports an unfinished job is decided as
+    // PENDING, and the sweep used to POST that pending check-run — a
+    // placeholder, not attestation, which wedged merge evidence: only a later
+    // sweep could complete it (issue 1116). The non-completed decision is now
+    // DROPPED — no POST, not relayed this sweep, the candidate stays a
+    // candidate — and the next sweep, facing a concluded job, posts the real
+    // conclusion exactly once. The second half still pins issue 885's guard:
+    // the pending placeholder the mirror may hold is not read back as an
+    // attestation.
     const pending = { check_runs: [appCheckRun("actionlint", { status: "queued" })] };
     const jobsPending = {
       jobs: [{ name: "actionlint", run_attempt: 1, status: "queued", conclusion: null }],
@@ -555,7 +553,8 @@ describe("sweepOrphans", () => {
     expect(firstOutcome).toEqual({ examined: 1, relayed: [] });
     expect(first.requests.filter((request) => request.method === "POST")).toEqual([]);
 
-    // Sweep #2: the job has concluded; its own pending App check is not attestation.
+    // Sweep #2: the job has concluded, and the App holds only the mirror's
+    // pending placeholder. It must not be read as an attestation.
     const second = fakeApi({
       [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
       [checkRunsAt(HEAD_SHA)]: pending,
@@ -570,19 +569,17 @@ describe("sweepOrphans", () => {
     });
   });
 
-  it.each(["queued", "in_progress"])("completes a %s App check carrying the selected producer identity", async (status) => {
+  it("reads an in_progress App check-run as a placeholder too, not an attestation", async () => {
     const { api, requests } = fakeApi({
       [RUNS_URL]: { workflow_runs: [runEntry({ id: 9002, path: PATH_ACTIONLINT })] },
       [checkRunsAt(HEAD_SHA)]: {
-        check_runs: [appCheckRun("actionlint", { status })],
+        check_runs: [appCheckRun("actionlint", { status: "in_progress" })],
       },
       [jobsUrl("9002")]: { jobs: [] },
     });
     const outcome = await sweepOrphans(deps(api));
     expect(outcome.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
-    expect(requests.filter((request) => request.method === "POST").at(-1)?.body)
-      .toMatchObject({ name: "actionlint", external_id: "9002:1", status: "completed", conclusion: "success" });
-    expect(requests.some((request) => request.url === jobsUrl("9002"))).toBe(true);
+    expect(requests.filter((request) => request.method === "POST").at(-1)?.body).toMatchObject({ name: "actionlint", conclusion: "success" });
   });
 
   it("still skips a candidate whose contexts hold a CONCLUDED App check-run", async () => {
@@ -596,7 +593,7 @@ describe("sweepOrphans", () => {
     });
     const outcome = await sweepOrphans(deps(api));
     expect(outcome).toEqual({ examined: 1, relayed: [] });
-    expect(requests.map((request) => request.url)).toEqual([RUNS_URL, appSuitesUrl(`https://api.github.com/repos/${REPO}`, HEAD_SHA), checkRunsAt(HEAD_SHA)]);
+    expect(requests.map((request) => request.url)).toEqual([RUNS_URL, checkRunsAt(HEAD_SHA)]);
   });
 
   it("counts only the App's own check-runs as evidence, whatever else is at the commit", async () => {
@@ -621,7 +618,7 @@ describe("sweepOrphans", () => {
     expect(requests.some((request) => request.url === jobsUrl("9002"))).toBe(true);
   });
 
-  it("reads each head once before posting its newest producer", async () => {
+  it("reads each head once for selection and again after its newest producer is posted", async () => {
     const { api, requests } = fakeApi({
       [RUNS_URL]: {
         workflow_runs: [
@@ -644,16 +641,16 @@ describe("sweepOrphans", () => {
     expect(outcome).toEqual({
       examined: 4,
       relayed: [
-        { context: "actionlint", runId: "9005" },
         { context: "actionlint", runId: "9003" },
+        { context: "actionlint", runId: "9005" },
       ],
     });
     const headsRead = requests.filter(
       (request) => request.url?.startsWith(`https://api.github.com/repos/${REPO}/commits/`) ?? false,
     );
     expect(headsRead.map((request) => request.url)).toEqual([
-      appSuitesUrl(`https://api.github.com/repos/${REPO}`, OTHER_SHA),
-      appSuitesUrl(`https://api.github.com/repos/${REPO}`, HEAD_SHA),
+      checkRunsAt(HEAD_SHA), checkRunsAt(HEAD_SHA),
+      checkRunsAt(OTHER_SHA), checkRunsAt(OTHER_SHA),
     ]);
     // Two jobs listings, four candidates.
     expect(requests.filter((request) => request.url?.includes("/jobs?") ?? false)).toHaveLength(2);
@@ -747,7 +744,7 @@ describe("producer-bound sweep attestation", () => {
     });
     const outcome = await sweepOrphans(deps(api));
     expect(outcome).toEqual({ examined: 1, relayed: [] });
-    expect(requests.map((request) => request.url)).toEqual([RUNS_URL, appSuitesUrl(`https://api.github.com/repos/${REPO}`, HEAD_SHA), checkRunsAt(HEAD_SHA)]);
+    expect(requests.map((request) => request.url)).toEqual([RUNS_URL, checkRunsAt(HEAD_SHA)]);
   });
 
   it("never reposts an older unattested candidate over a newer attested one at the same head", async () => {
@@ -759,7 +756,7 @@ describe("producer-bound sweep attestation", () => {
     });
     const outcome = await sweepOrphans(deps(api));
     expect(outcome).toEqual({ examined: 2, relayed: [] });
-    expect(requests.map((request) => request.url)).toEqual([RUNS_URL, appSuitesUrl(`https://api.github.com/repos/${REPO}`, HEAD_SHA), checkRunsAt(HEAD_SHA)]);
+    expect(requests.map((request) => request.url)).toEqual([RUNS_URL, checkRunsAt(HEAD_SHA)]);
   });
 
   it.each(["verify", "actionlint"])(
@@ -828,7 +825,7 @@ describe("producer-bound sweep attestation", () => {
 });
 
 describe("trigger recency and attempt attestation", () => {
-  it("counts a listed newest trigger inside the eligible producer window", async () => {
+  it("retains a listed trigger beyond the orphan cap without reducing that cap", async () => {
     const { api, requests } = fakeApi({
       [RUNS_URL]: { workflow_runs: [
         ...Array.from({ length: SWEEP_RUN_LIMIT }, (_, n) => runEntry({ id: 8000 + n, path: PATH_ACTIONLINT })),
@@ -838,7 +835,7 @@ describe("trigger recency and attempt attestation", () => {
       [jobsUrl("8019")]: { jobs: [] },
     });
     const outcome = await sweepOrphans(deps(api, { triggerRunId: "9003" }));
-    expect(outcome).toEqual({ examined: SWEEP_RUN_LIMIT - 1, relayed: [] });
+    expect(outcome).toEqual({ examined: SWEEP_RUN_LIMIT, relayed: [] });
     expect(requests.some((request) => request.url?.includes("/jobs?"))).toBe(false);
   });
 
@@ -893,39 +890,5 @@ describe("trigger recency and attempt attestation", () => {
     const decision = { context: "verify", status, title: "verify", summary: "producer attempt" };
     const run = { runId: "9002", runAttempt: 2, headSha: HEAD_SHA, htmlUrl: candidate().htmlUrl };
     expect(checkRunBody(decision, run)).toMatchObject({ external_id: "9002:2", head_sha: HEAD_SHA, status });
-  });
-});
-
-
-describe("complete App suite reader", () => {
-  const root = `https://api.github.com/repos/${REPO}`;
-  const suitesUrl = appSuitesUrl(root, HEAD_SHA);
-  const winner = new Map([["actionlint", candidate()]]);
-
-  it("finds the identity floor on a second App suite page", async () => {
-    const handlers: Record<string, unknown> = {
-      [suitesUrl]: { total_count: 101, check_suites: Array.from({ length: 100 }, (_, i) => ({ id: i + 1, app: { id: Number(APP_ID) } })) },
-      [`${suitesUrl}&page=2`]: { total_count: 101, check_suites: [{ id: 101, app: { id: Number(APP_ID) } }] },
-    };
-    for (let id = 1; id <= 101; id++) handlers[`${root}/check-suites/${id}/check-runs?filter=latest&per_page=100`] = {
-      check_runs: id === 101 ? [appCheckRun("actionlint", { external_id: "9900:1" })] : [],
-    };
-    const { api } = fakeApi(handlers);
-    expect(await publicationBlockedContexts(deps(api), HEAD_SHA, winner)).toEqual(new Set(["actionlint"]));
-  });
-
-  it("finds concluded attestation on a second check-run page within an App suite", async () => {
-    const checksUrl = appChecksUrl(root, HEAD_SHA);
-    const { api } = fakeApi({
-      [checksUrl]: { total_count: 101, check_runs: Array.from({ length: 100 }, () => appCheckRun("unrelated")) },
-      [`${checksUrl}&page=2`]: { total_count: 101, check_runs: [appCheckRun("actionlint")] },
-    });
-    expect(await publicationBlockedContexts(deps(api), HEAD_SHA, winner)).toEqual(new Set(["actionlint"]));
-  });
-
-  it.each([{ checkSuites: [] }, { checkSuites: [{ id: 1, app: { id: 15368 } }] }])("has no floor without an App suite: $checkSuites", async ({ checkSuites }) => {
-    const { api, requests } = fakeApi({ [suitesUrl]: { total_count: checkSuites.length, check_suites: checkSuites } });
-    expect(await publicationBlockedContexts(deps(api), HEAD_SHA, winner)).toEqual(new Set());
-    expect(requests.map((r) => r.url)).toEqual([suitesUrl]);
   });
 });

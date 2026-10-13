@@ -1,4 +1,3 @@
-import { RELAY_OWN_RUN_ENV, relayJobStartListing } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
@@ -82,12 +81,9 @@ describe("untrusted runs whose SHA is an open pull request head", () => {
         body: pullRequests ?? [{ state: "open", head: { sha: HEAD_SHA, ref: PULL_REQUEST_BRANCH } }],
       },
     ];
-    outcomes.push({ status: 200, body: { workflow_runs: [] } });
     const fetchFn = vi.fn(async (input: unknown, init?: RequestInit) => {
       const url = typeof input === "string" ? input : String(input);
       requests.push({ url, init: init ?? {} });
-      const ownJob = relayJobStartListing(url);
-      if (ownJob !== undefined) return new Response(JSON.stringify(ownJob));
       const outcome = outcomes.shift();
       if (!outcome) throw new Error(`unexpected fetch: ${url}`);
       return new Response(JSON.stringify(outcome.body), {
@@ -97,7 +93,6 @@ describe("untrusted runs whose SHA is an open pull request head", () => {
     }) as unknown as typeof fetch;
     const result = runRelay({
       env: {
-        ...RELAY_OWN_RUN_ENV,
         LEDGER_APP_ID: "1",
         LEDGER_INSTALLATION_ID: "2",
         LEDGER_APP_KEY: APP_KEY,
@@ -123,7 +118,6 @@ describe("untrusted runs whose SHA is an open pull request head", () => {
       expect(relayResult.decisions).toEqual([]);
     }
 
-    expect(requests.filter((request) => request.url.endsWith("/actions/runs?per_page=100"))).toHaveLength(1);
     expect(
       requests.filter((request) => request.url.endsWith("/check-runs") && request.init.method === "POST"),
     ).toEqual([]);

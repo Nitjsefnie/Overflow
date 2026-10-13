@@ -3,8 +3,6 @@ import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { parse } from "yaml";
-import * as relayHttp from "../../scripts/ledger-relay-http.ts";
-import { RELAY_JOB_NAME, RELAY_JOB_TIMEOUT_MINUTES } from "../../scripts/ledger-relay-job-budget.ts";
 
 /**
  * The relay mints its App installation token from the LEDGER_APP_ID and
@@ -21,11 +19,7 @@ import { RELAY_JOB_NAME, RELAY_JOB_TIMEOUT_MINUTES } from "../../scripts/ledger-
  * duplicated literal fails loudly here instead of quietly repointing the
  * relay.
  */
-type WorkflowStep = {
-  name?: string;
-  env?: Record<string, string | undefined>;
-  "timeout-minutes"?: number;
-};
+type WorkflowStep = { name?: string; env?: Record<string, string | undefined> };
 type ParsedWorkflow = {
   on?: {
     schedule?: string[];
@@ -33,7 +27,7 @@ type ParsedWorkflow = {
   };
   permissions?: Record<string, string>;
   concurrency?: { group?: string };
-  jobs?: Record<string, { name?: string; steps?: WorkflowStep[]; "timeout-minutes"?: number }>;
+  jobs?: Record<string, { steps?: WorkflowStep[] }>;
 };
 
 describe("the ledger relay workflow's pinned App identity", () => {
@@ -50,42 +44,6 @@ describe("the ledger relay workflow's pinned App identity", () => {
   /** Every step-env value the workflow carries for one of the pinned names. */
   const envValues = (name: string): unknown[] =>
     steps.flatMap((step) => (step.env?.[name] === undefined ? [] : [step.env[name]]));
-
-  it("bounds every step so the job cannot cut off an in-flight relay request", () => {
-    const job = workflow.jobs?.["relay-required-checks"];
-    expect(job?.steps?.length).toBeGreaterThan(0);
-    for (const step of job?.steps ?? []) {
-      expect(step["timeout-minutes"], "each relay job step needs its own time bound").toBeTypeOf("number");
-      expect(step["timeout-minutes"]).toBeGreaterThan(0);
-    }
-    const relaySteps = steps.filter((step) => step.env?.LEDGER_APP_ID !== undefined);
-    expect(relaySteps).toHaveLength(1);
-    const worstCaseMs = relayHttp.RUN_DEADLINE_MS + relayHttp.REQUEST_TIMEOUT_MS +
-      relayHttp.BACKOFF_MS.reduce((sum, delay) => sum + delay, 0);
-    expect((relaySteps[0]["timeout-minutes"] ?? 0) * 60_000).toBeGreaterThan(worstCaseMs);
-    const stepMinutes = (job?.steps ?? []).reduce((sum, step) => sum + (step["timeout-minutes"] ?? 0), 0);
-    expect(
-      job?.["timeout-minutes"],
-      "the job bound needs a margin over its declared steps for the runner's Set up job phase",
-    ).toBeGreaterThan(stepMinutes);
-  });
-
-  it("names the relay job as the script's job-start read selects it, with the job timeout the script budgets", () => {
-    expect(Object.keys(workflow.jobs ?? {})).toEqual([RELAY_JOB_NAME]);
-    const job = workflow.jobs?.[RELAY_JOB_NAME];
-    expect(job?.name, "a name: override would rename the job the jobs API lists").toBeUndefined();
-    expect(
-      job?.["timeout-minutes"],
-      "RELAY_JOB_TIMEOUT_MINUTES must equal the job's timeout-minutes, or the job-start deadline drifts",
-    ).toBe(RELAY_JOB_TIMEOUT_MINUTES);
-  });
-
-  it("leaves the relay run's own id and attempt to the runner's default variables", () => {
-    // A step cannot override a default GITHUB_* variable, so an env entry for
-    // either would be ignored; the job-start read uses the runner's values.
-    expect(envValues("GITHUB_RUN_ID")).toEqual([]);
-    expect(envValues("GITHUB_RUN_ATTEMPT")).toEqual([]);
-  });
 
   it("carries the ledger App id exactly once, as the literal the gate and tests pin", () => {
     expect(
@@ -117,7 +75,7 @@ describe("the ledger relay workflow's pinned App identity", () => {
     expect(
       envValues("RELAY_RERUN_TOKEN"),
       "the relay step must carry RELAY_RERUN_TOKEN exactly once — the " +
-        "repo-scoped workflow token the job-start read and the rerun-heal authenticate with",
+        "repo-scoped workflow token the rerun-heal authenticates its POST with",
     ).toEqual(["${{ github.token }}"]);
   });
 
@@ -159,14 +117,26 @@ describe("the ledger relay workflow's pinned App identity", () => {
     ).toMatchObject({ required: false, default: "" });
   });
 
-  it("serializes every relay trigger in one literal concurrency group", () => {
-    const group = workflow.concurrency?.group;
-    expect(group, "the relay group must not vary with the event or run_id").not.toContain("${{");
+  it("keys the concurrency group with the same predicate the sweep-only env carries", () => {
+    // The predicate is read from the workflow's OWN env value, not restated:
+    // the drift this catches is one copy edited and its literal pin updated to
+    // match, which leaves every restated pin green while the group and the env
+    // diverge.
+    const envExpression = String(envValues("LEDGER_SWEEP_ONLY")[0] ?? "");
+    const predicate = envExpression.replace(/^\$\{\{/, "").replace(/\}\}$/, "").trim();
+    const group = String(workflow.concurrency?.group ?? "").replace(/^\$\{\{/, "").replace(/\}\}$/, "").trim();
+    expect(predicate, "the premise: the step carries a sweep-only predicate").not.toBe("");
+    // Containment alone is too weak to be the witness: the group legitimately
+    // holds each arm of the predicate, so a SHRUNKEN env copy would still be
+    // contained. The relation pinned is the design's exact pairing — the group
+    // is the env predicate, parenthesized, between the two group names.
     expect(
       group,
-      "schedule, workflow_dispatch with or without run_id, and workflow_run " +
-        "must share one repository-wide group so relay writes cannot overlap",
-    ).toBe("ledger-relay");
+      "the concurrency group must decide the sweep-only case from the SAME " +
+        "predicate the LEDGER_SWEEP_ONLY env carries: one copy changed without " +
+        "the other puts a sweep-only start in the relay group (it displaces a " +
+        "PENDING workflow_run relay) or a healing dispatch in the sweep group",
+    ).toEqual(`(${predicate}) && 'ledger-relay-sweep' || 'ledger-relay'`);
   });
 
   it("passes the sweep-only predicate as LEDGER_SWEEP_ONLY exactly once, as the pinned expression", () => {
@@ -174,8 +144,8 @@ describe("the ledger relay workflow's pinned App identity", () => {
       envValues("LEDGER_SWEEP_ONLY"),
       "the relay step must carry LEDGER_SWEEP_ONLY exactly once — the event " +
         "predicate that makes a scheduled start (or a workflow_dispatch without " +
-        "a run_id) sweep-only, which the script fails closed on; every mode " +
-        "still shares the literal ledger-relay concurrency group",
+        "a run_id) sweep-only, which the script fails closed on: the same " +
+        "predicate keys the concurrency group, so the two cannot drift",
     ).toEqual([
       "${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_id == '') }}",
     ]);

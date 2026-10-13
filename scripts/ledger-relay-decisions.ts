@@ -217,10 +217,11 @@ function decideOne(
         "the outcome is relayed to branch protection.",
     };
   }
-  // An unfinished job yields a pending decision. The mirror may post that
-  // placeholder; the sweep posts only completed decisions. A pending App
-  // check does not attest the same producer, so a later start can publish
-  // its conclusion once the jobs listing reports completion.
+  // A job that has not concluded posts PENDING, and the sweep posts pending for a
+  // candidate too, though a candidate is `completed` by selection. Deliberate:
+  // an ABSENT check is what branch protection refuses a merge on, a PENDING one
+  // is what it waits on. So the sweep counts only CONCLUDED App check-runs as
+  // attestations, and the next start supersedes this one.
   return {
     context,
     status: best.status,

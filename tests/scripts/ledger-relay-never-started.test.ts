@@ -1,4 +1,3 @@
-import { appSuiteListing, RELAY_OWN_RUN_ENV, relayJobStartListing } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
@@ -135,13 +134,15 @@ describe("the heal's evidence on the live relay paths (issue 1037)", () => {
     const fn = vi.fn(async (url: unknown, init?: RequestInit) => {
       const rendered = typeof url === "string" ? url : String(url);
       requests.push({ url: rendered, init: init ?? {} });
-      const suites = appSuiteListing(rendered) ?? relayJobStartListing(rendered);
-      if (suites !== undefined) return new Response(JSON.stringify(suites));
       const outcome = outcomes.shift();
       if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
-      if (rendered.includes(`/actions/runs/${RUN_ID}/jobs?`) && outcome.status === 200) {
+      if (rendered.endsWith("/check-runs") && init?.method === "POST" && outcome.status === 201) {
+        const posted = JSON.parse(String(init.body)) as Record<string, unknown>;
+        // Post-write snapshots see this write; pending producers block attestation reads.
         outcomes.unshift({ status: 200, body: { workflow_runs: [] } },
-          { status: 200, body: { check_runs: [] } });
+          ...(posted.status === "completed" ? [{ status: 200, body: {
+            check_runs: [{ ...posted, app: { id: 5118623 } }],
+          } }] : []));
       }
       return new Response(JSON.stringify(outcome.body), {
         status: outcome.status,
@@ -158,7 +159,7 @@ describe("the heal's evidence on the live relay paths (issue 1037)", () => {
 
   function relayEnv(over: Record<string, string> = {}): Record<string, string> {
     return {
-      ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623",
+      LEDGER_APP_ID: "5118623",
       LEDGER_INSTALLATION_ID: "166057493",
       LEDGER_APP_KEY: keyPem,
       GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
@@ -249,7 +250,6 @@ describe("the heal's evidence on the live relay paths (issue 1037)", () => {
       head_sha: HEAD_SHA,
       path: PATH_CI,
       conclusion: "cancelled",
-      status: "completed",
       html_url: HTML_URL,
       event: "pull_request_target",
       head_branch: "feature/some-branch",

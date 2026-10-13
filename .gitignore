@@ -352,7 +352,6 @@ scripts/*
 !scripts/ledger-relay-upstream.ts
 !scripts/ledger-relay-producers.ts
 !scripts/ledger-relay-publication.ts
-!scripts/ledger-relay-http.ts
 !scripts/resolve-suite-pull-request.ts
 !scripts/pr-suite-supersession.ts
 !scripts/measure-header-geometry.mjs
@@ -452,8 +451,6 @@ tests/scripts/*
 !tests/scripts/*.ts
 !tests/scripts/ledger-relay-upstream.test.ts
 !tests/scripts/ledger-relay-publication.test.ts
-!tests/scripts/ledger-relay-http.test.ts
-!tests/scripts/ledger-relay-check-fixtures.ts
 !tests/scripts/resolve-suite-pull-request.test.ts
 !tests/security/
 tests/security/*

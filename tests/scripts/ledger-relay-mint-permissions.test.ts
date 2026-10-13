@@ -1,4 +1,3 @@
-import { appSuiteListing, RELAY_OWN_RUN_ENV, relayJobStartListing } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
@@ -40,8 +39,7 @@ const APP_TOKEN_CALL_PERMISSIONS: Record<string, readonly string[]> = {
   "GET run": ["actions:read"],
   "GET jobs": ["actions:read"],
   "GET runs listing": ["actions:read"],
-  "GET commit check-suites": ["checks:read"],
-  "GET suite check-runs": ["checks:read"],
+  "GET commit check-runs": ["checks:read"],
   "POST check-runs": ["checks:write"],
   "GET commit pulls": ["pull_requests:read"],
   "GET fork-head pulls": ["pull_requests:read"],
@@ -83,14 +81,16 @@ function makeFetch(outcomes: Outcome[]) {
   const fn = vi.fn(async (url: unknown, init?: RequestInit) => {
     const rendered = typeof url === "string" ? url : String(url);
     requests.push({ url: rendered, init: init ?? {} });
-      const suites = appSuiteListing(rendered) ?? relayJobStartListing(rendered);
-      if (suites !== undefined) return new Response(JSON.stringify(suites));
     const outcome = outcomes.shift();
     if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
     if ("fail" in outcome) throw outcome.fail;
-    if (rendered.includes(`/actions/runs/${RUN_ID}/jobs?`) && outcome.status === 200) {
+    if (rendered.endsWith("/check-runs") && init?.method === "POST" && outcome.status === 201) {
+      const posted = JSON.parse(String(init.body)) as Record<string, unknown>;
+      // Post-write snapshots see this write; pending producers block attestation reads.
       outcomes.unshift({ status: 200, body: { workflow_runs: [] } },
-        { status: 200, body: { check_runs: [] } });
+        ...(posted.status === "completed" ? [{ status: 200, body: {
+          check_runs: [{ ...posted, app: { id: 5118623 } }],
+        } }] : []));
     }
     return new Response(JSON.stringify(outcome.body), {
       status: outcome.status,
@@ -107,7 +107,7 @@ function makeDelay() {
 
 function relayEnv(over: Record<string, string> = {}): Record<string, string> {
   return {
-    ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623",
+    LEDGER_APP_ID: "5118623",
     LEDGER_INSTALLATION_ID: "166057493",
     LEDGER_APP_KEY: keyPem,
     GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
@@ -226,7 +226,6 @@ function fetchedRunBody(over: Record<string, unknown> = {}): Record<string, unkn
     head_sha: HEAD_SHA,
     path: PATH_CI,
     conclusion: "success",
-    status: "completed",
     html_url: HTML_URL,
     event: "push",
     head_branch: "main",
@@ -282,19 +281,13 @@ function classifyCall(url: string, method: string): string | undefined {
   ) {
     return "POST rerun";
   }
-  if (method === "GET" && /^\/repos\/Nitjsefnie\/Overflow\/actions\/runs\/\d+\/attempts\/\d+\/jobs$/.test(path)) {
-    return "GET own job";
-  }
   if (method === "GET" && path.startsWith(`${repo}/actions/runs/`) && path.endsWith("/jobs")) {
     return "GET jobs";
   }
   if (method === "GET" && path.startsWith(`${repo}/actions/runs/`)) return "GET run";
   if (method === "GET" && path === `${repo}/actions/runs`) return "GET runs listing";
-  if (method === "GET" && path.startsWith(`${repo}/commits/`) && path.endsWith("/check-suites")) {
-    return "GET commit check-suites";
-  }
-  if (method === "GET" && path.startsWith(`${repo}/check-suites/`) && path.endsWith("/check-runs")) {
-    return "GET suite check-runs";
+  if (method === "GET" && path.startsWith(`${repo}/commits/`) && path.endsWith("/check-runs")) {
+    return "GET commit check-runs";
   }
   if (method === "GET" && path.startsWith(`${repo}/commits/`) && path.endsWith("/pulls")) {
     return "GET commit pulls";
@@ -351,7 +344,6 @@ async function runForkRefusalFlow(): Promise<Recorded[]> {
       head_repository: { full_name: "someone/some-fork", owner: { login: "someone" } },
     }),
     { status: 200, body: [] },
-    sweepListing([]),
   ]);
   const result = await runRelay({
     env: dispatchEnv(),
@@ -508,12 +500,10 @@ describe("the relay's installation-token mint (issue 1051)", () => {
         expect(authHeaderOf(request)).not.toBe("Bearer installation-token");
         continue;
       }
-      if (key === "POST rerun" || key === "GET own job") {
-        // The rerun and the relay's read of its own job's start authenticate
-        // with the workflow's own RELAY_RERUN_TOKEN (the rerun needs actions:
-        // write, which the App does not hold, and the job-start read precedes
-        // the mint), so they are deliberately outside the App token's
-        // enumeration.
+      if (key === "POST rerun") {
+        // The rerun authenticates with the workflow's own RELAY_RERUN_TOKEN
+        // (actions: write, which the App does not hold), so it is the one
+        // relay shape deliberately outside the App token's enumeration.
         expect(authHeaderOf(request)).toBe("Bearer rerun-token");
         continue;
       }
