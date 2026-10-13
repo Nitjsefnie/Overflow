@@ -2,7 +2,13 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { argv, exit } from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { deriveHttpSurfaceShapes, shapesCompatible, type HttpShape } from "./http-surface-derive.ts";
+import { deriveHttpSurfaceRecord } from "./http-surface-record.ts";
+import {
+  classifyHttpChange,
+  recordedSurface,
+  type HttpSurfaceSnapshot,
+  type RecordedHttpSurface,
+} from "./surface-change.ts";
 
 /**
  * Records the HTTP surface snapshot and moves the server version with it
@@ -19,6 +25,12 @@ import { deriveHttpSurfaceShapes, shapesCompatible, type HttpShape } from "./htt
  * the mcpServerVersion field of scripts/mcp-surface-snapshot.json, so one
  * version keeps covering the HTTP API and the MCP endpoint
  * (tests/lib/api-version.test.ts pins the pair).
+ *
+ * Since issue 1056 the snapshot records, beside the route shapes, the error
+ * envelope, each route's success status and its failure answers
+ * (scripts/http-surface-record.ts), and compatibility is classifyHttpChange's
+ * (scripts/surface-change.ts): a removed failure answer or a changed status
+ * or envelope is incompatible like a removed or retyped shape.
  */
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -30,7 +42,6 @@ const usage = "Usage: update-http-surface-snapshot.ts [--version <v>]";
 const remedy =
   "Surface changed without acknowledgment. Run again with --version <new> to record the snapshot and move SERVER_VERSION in src/lib/version.ts, MCP_SERVER_VERSION in src/lib/mcp/protocol.ts, and the MCP snapshot's mcpServerVersion in the same change.";
 
-type Snapshot = { httpServerVersion: string; routes: Record<string, HttpShape> };
 
 function assignmentPattern(name: string): RegExp {
   return new RegExp(`export const ${name} = ("(?:[^"\\\\]|\\\\.)*");`, "g");
@@ -98,6 +109,37 @@ export function decideSnapshotUpdate(input: {
   return input.snapshotVersion === input.protocolVersion ? "in-sync" : "drift-refuse";
 }
 
+/**
+ * Whether the derived surface differs from the recorded one, and whether the
+ * difference is compatible (not breaking, per classifyHttpChange). A missing
+ * snapshot is changed and compatible with nothing, so a first record keeps
+ * demanding --version.
+ */
+export function surfaceUpdateInputs(
+  snapshot: HttpSurfaceSnapshot | undefined,
+  derived: RecordedHttpSurface,
+): { surfaceChanged: boolean; surfaceCompatible: boolean } {
+  if (snapshot === undefined) return { surfaceChanged: true, surfaceCompatible: false };
+  const recorded = recordedSurface(snapshot);
+  return {
+    surfaceChanged: !equal(derived, recorded),
+    surfaceCompatible: classifyHttpChange(recorded, derived).kind !== "breaking",
+  };
+}
+
+/** The snapshot file's text: the format marker and version first, then the recorded sections. */
+export function serializedSnapshot(version: string, derived: RecordedHttpSurface & { snapshotFormat: 2 }): string {
+  const snapshot: HttpSurfaceSnapshot = {
+    snapshotFormat: derived.snapshotFormat,
+    httpServerVersion: version,
+    errorEnvelope: derived.errorEnvelope,
+    routes: derived.routes,
+    successStatus: derived.successStatus,
+    failures: derived.failures,
+  };
+  return `${JSON.stringify(snapshot, null, 2)}\n`;
+}
+
 function normalized(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normalized);
   if (value !== null && typeof value === "object") {
@@ -121,24 +163,17 @@ async function main(): Promise<void> {
   }
   const requestedVersion = args[1];
 
-  const routes = await deriveHttpSurfaceShapes();
+  const derived = await deriveHttpSurfaceRecord();
+  const routes = derived.routes;
 
-  let snapshot: Snapshot | undefined;
+  let snapshot: HttpSurfaceSnapshot | undefined;
   try {
-    snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Snapshot;
+    snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as HttpSurfaceSnapshot;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 
-  const surfaceChanged = !equal(routes, snapshot?.routes);
-  // Compatibility direction: every recorded key and field must still be
-  // derived with a compatible shape; derived-only routes and fields are
-  // additive. A missing snapshot file is compatible with nothing, so a first
-  // record keeps demanding --version.
-  const surfaceCompatible = snapshot !== undefined
-    && Object.entries(snapshot.routes).every(([key, recorded]) =>
-      key in routes && shapesCompatible(recorded, routes[key]!),
-    );
+  const { surfaceChanged, surfaceCompatible } = surfaceUpdateInputs(snapshot, derived);
   if (surfaceChanged) {
     const previous = new Set(Object.keys(snapshot?.routes ?? {}));
     const current = new Set(Object.keys(routes));
@@ -150,6 +185,10 @@ async function main(): Promise<void> {
     if (added.length) console.log(`Added: ${added.join(", ")}`);
     if (removed.length) console.log(`Removed: ${removed.join(", ")}`);
     if (changed.length) console.log(`Changed: ${changed.join(", ")}`);
+    if (snapshot !== undefined) {
+      const change = classifyHttpChange(snapshot, derived);
+      console.log(`Classified ${change.kind}${change.reasons.length ? `: ${change.reasons.join("; ")}` : ""}`);
+    }
   }
 
   const serverVersion = readConstAssignment(readFileSync(versionPath, "utf8"), "SERVER_VERSION");
@@ -165,18 +204,15 @@ async function main(): Promise<void> {
     exit(1);
   }
   if (decision === "same-version-refuse") {
-    console.error("the version must move when a recorded shape is removed or retyped");
+    console.error("the version must move when a recorded shape, status or failure answer is removed or changed");
     exit(1);
   }
   if (decision === "record-additive") {
-    writeFileSync(
-      snapshotPath,
-      `${JSON.stringify({ httpServerVersion: snapshot!.httpServerVersion, routes }, null, 2)}\n`,
-    );
+    writeFileSync(snapshotPath, serializedSnapshot(snapshot!.httpServerVersion, derived));
     console.log(
-      "Recorded the additive HTTP surface change into scripts/http-surface-snapshot.json; " +
-        "the server version stands (adding a route or a field is not breaking). " +
-        "Removing or retyping a recorded shape still needs --version <new>.",
+      "Recorded the compatible HTTP surface change into scripts/http-surface-snapshot.json; " +
+        "the server version stands (adding a route, a field or a failure answer is not breaking). " +
+        "Removing or changing a recorded shape, status or failure answer still needs --version <new>.",
     );
     exit(0);
   }
@@ -203,7 +239,7 @@ async function main(): Promise<void> {
     "MCP_SERVER_VERSION",
     version,
   );
-  writeFileSync(snapshotPath, `${JSON.stringify({ httpServerVersion: version, routes }, null, 2)}\n`);
+  writeFileSync(snapshotPath, serializedSnapshot(version, derived));
   writeFileSync(versionPath, updatedVersion);
   writeFileSync(protocolPath, updatedProtocol);
   const mcpSnapshot = JSON.parse(readFileSync(mcpSnapshotPath, "utf8")) as { mcpServerVersion: string };

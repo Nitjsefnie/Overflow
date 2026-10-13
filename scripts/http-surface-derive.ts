@@ -54,7 +54,7 @@ import {
   fixtureRegistrationInput,
   fixtureRepositoryRouteDependencies,
 } from "./http-surface-fixtures.ts";
-import { moderationSurfaceShapes } from "./http-surface-derive-moderation.ts";
+import { moderationSurfaceAnswers } from "./http-surface-derive-moderation.ts";
 
 /**
  * The HTTP surface snapshot's shared machinery (issue 912): what the recorded
@@ -238,8 +238,11 @@ const memberDependencies = {
   getCurrentRole: async () => "MEMBER" as const,
 };
 
-export async function bodyShape(response: Response): Promise<HttpShape> {
-  return shapeOf(await response.json());
+/** What one derived success answer records: its HTTP status and its body's shape. */
+export type DerivedAnswer = { status: number; shape: HttpShape };
+
+export async function derivedAnswer(response: Response): Promise<DerivedAnswer> {
+  return { status: response.status, shape: shapeOf(await response.json()) };
 }
 
 export function memberRequest(path: string): Request {
@@ -281,19 +284,19 @@ export async function withAppUrl<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-async function deriveGetVersion(): Promise<HttpShape> {
-  return bodyShape(await getVersionRoute());
+async function deriveGetVersion(): Promise<DerivedAnswer> {
+  return derivedAnswer(await getVersionRoute());
 }
 
-async function deriveGetReadiness(): Promise<HttpShape> {
+async function deriveGetReadiness(): Promise<DerivedAnswer> {
   const dependencies: ReadinessRouteDependencies = {
     probe: async () => ({ status: "ready" }),
     now: () => derivationNowMs,
   };
-  return bodyShape(await createReadinessGetHandler(dependencies)());
+  return derivedAnswer(await createReadinessGetHandler(dependencies)());
 }
 
-async function derivePostTokens(): Promise<HttpShape> {
+async function derivePostTokens(): Promise<DerivedAnswer> {
   const session: ApiTokenRouteSession = {
     user: { id: memberId, role: "MEMBER", authenticatedAt: derivationNowMs / 1000 },
   };
@@ -310,7 +313,7 @@ async function derivePostTokens(): Promise<HttpShape> {
     now: () => derivationNowMs,
   };
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createApiTokenPostHandler(dependencies)(
         new Request("https://overflow.example/api/tokens", {
           method: "POST",
@@ -337,7 +340,7 @@ const recentSettlement = {
   settledAt: "2026-01-15T12:00:00.000Z",
 };
 
-async function deriveGetDashboard(): Promise<HttpShape> {
+async function deriveGetDashboard(): Promise<DerivedAnswer> {
   const dependencies: DashboardRouteDependencies = {
     ...memberDependencies,
     getDashboard: async () => ({
@@ -389,10 +392,10 @@ async function deriveGetDashboard(): Promise<HttpShape> {
       },
     }),
   };
-  return bodyShape(await createDashboardGetHandler(dependencies)(memberRequest("/api/dashboard")));
+  return derivedAnswer(await createDashboardGetHandler(dependencies)(memberRequest("/api/dashboard")));
 }
 
-async function deriveGetIssues(): Promise<HttpShape> {
+async function deriveGetIssues(): Promise<DerivedAnswer> {
   const dependencies: IssuesRouteDependencies = {
     ...memberDependencies,
     listEligibleIssues: async () => [
@@ -414,10 +417,10 @@ async function deriveGetIssues(): Promise<HttpShape> {
       },
     ],
   };
-  return bodyShape(await createIssuesGetHandler(dependencies)(memberRequest("/api/issues?claimState=OPEN")));
+  return derivedAnswer(await createIssuesGetHandler(dependencies)(memberRequest("/api/issues?claimState=OPEN")));
 }
 
-async function deriveGetSettlements(): Promise<HttpShape> {
+async function deriveGetSettlements(): Promise<DerivedAnswer> {
   const dependencies: SettlementsRouteDependencies = {
     ...memberDependencies,
     listSettlementHistory: async () => [
@@ -435,10 +438,10 @@ async function deriveGetSettlements(): Promise<HttpShape> {
       },
     ],
   };
-  return bodyShape(await createSettlementsGetHandler(dependencies)(memberRequest("/api/settlements")));
+  return derivedAnswer(await createSettlementsGetHandler(dependencies)(memberRequest("/api/settlements")));
 }
 
-async function deriveGetSettlementProof(): Promise<HttpShape> {
+async function deriveGetSettlementProof(): Promise<DerivedAnswer> {
   const dependencies: SettlementProofRouteDependencies = {
     ...memberDependencies,
     getSettlementProof: async () => ({
@@ -488,7 +491,7 @@ async function deriveGetSettlementProof(): Promise<HttpShape> {
       ],
     }),
   };
-  return bodyShape(
+  return derivedAnswer(
     await createSettlementProofGetHandler(dependencies)(
       memberRequest("/api/settlements/00000000-0000-4000-8000-000000000002"),
       { params: Promise.resolve({ id: "00000000-0000-4000-8000-000000000002" }) },
@@ -496,7 +499,7 @@ async function deriveGetSettlementProof(): Promise<HttpShape> {
   );
 }
 
-async function deriveGetCalibration(): Promise<HttpShape> {
+async function deriveGetCalibration(): Promise<DerivedAnswer> {
   const dependencies: CalibrationRouteDependencies = {
     ...memberDependencies,
     loadCalibrationCohorts: async () => ({
@@ -553,12 +556,12 @@ async function deriveGetCalibration(): Promise<HttpShape> {
       },
     ],
   };
-  return bodyShape(await createCalibrationGetHandler(dependencies)(memberRequest("/api/calibration")));
+  return derivedAnswer(await createCalibrationGetHandler(dependencies)(memberRequest("/api/calibration")));
 }
 
-async function derivePostRepositories(): Promise<HttpShape> {
+async function derivePostRepositories(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createRepositoryPostHandler(fixtureRepositoryRouteDependencies())(
         mutationRequest("/api/repositories", "POST", fixtureRegistrationInput),
       ),
@@ -566,9 +569,9 @@ async function derivePostRepositories(): Promise<HttpShape> {
   );
 }
 
-async function derivePatchRepositories(): Promise<HttpShape> {
+async function derivePatchRepositories(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createRepositoryPatchHandler(fixtureRepositoryRouteDependencies())(
         mutationRequest("/api/repositories", "PATCH", fixtureRegistrationInput),
       ),
@@ -576,9 +579,9 @@ async function derivePatchRepositories(): Promise<HttpShape> {
   );
 }
 
-async function deriveDeleteRepositories(): Promise<HttpShape> {
+async function deriveDeleteRepositories(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createRepositoryDeleteHandler(fixtureRepositoryRouteDependencies())(
         mutationRequest("/api/repositories", "DELETE", { repositoryUrl: "octo/overflow" }),
       ),
@@ -586,21 +589,21 @@ async function deriveDeleteRepositories(): Promise<HttpShape> {
   );
 }
 
-async function deriveGetRepositoryLabels(): Promise<HttpShape> {
-  return bodyShape(
+async function deriveGetRepositoryLabels(): Promise<DerivedAnswer> {
+  return derivedAnswer(
     await createLabelsGetHandler(fixtureLabelsRouteDependencies())(
       memberRequest("/api/repositories/labels?owner=octo&name=overflow"),
     ),
   );
 }
 
-async function deriveGetForgeIdentities(): Promise<HttpShape> {
-  return bodyShape(await createForgeIdentitiesGetHandler(fixtureForgeIdentitiesRouteDependencies())());
+async function deriveGetForgeIdentities(): Promise<DerivedAnswer> {
+  return derivedAnswer(await createForgeIdentitiesGetHandler(fixtureForgeIdentitiesRouteDependencies())());
 }
 
-async function derivePostForgeIdentities(): Promise<HttpShape> {
+async function derivePostForgeIdentities(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createForgeIdentitiesPostHandler(fixtureForgeIdentitiesRouteDependencies())(
         mutationRequest("/api/forge-identities", "POST", {
           instanceUrl: "https://gitlab.example",
@@ -611,9 +614,9 @@ async function derivePostForgeIdentities(): Promise<HttpShape> {
   );
 }
 
-async function deriveDeleteForgeIdentities(): Promise<HttpShape> {
+async function deriveDeleteForgeIdentities(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createForgeIdentitiesDeleteHandler(fixtureForgeIdentitiesRouteDependencies())(
         mutationRequest("/api/forge-identities", "DELETE", { id: "00000000-0000-4000-8000-000000000020" }),
       ),
@@ -621,9 +624,9 @@ async function deriveDeleteForgeIdentities(): Promise<HttpShape> {
   );
 }
 
-async function deriveDeleteAccount(): Promise<HttpShape> {
+async function deriveDeleteAccount(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createAccountDeleteHandler(fixtureAccountDeleteRouteDependencies())(
         mutationRequest("/api/account", "DELETE", { confirmLogin: "member" }),
       ),
@@ -631,9 +634,9 @@ async function deriveDeleteAccount(): Promise<HttpShape> {
   );
 }
 
-async function derivePostAccountExport(): Promise<HttpShape> {
+async function derivePostAccountExport(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createAccountExportPostHandler(fixtureAccountExportRouteDependencies())(
         mutationRequest("/api/account/export", "POST"),
       ),
@@ -642,13 +645,14 @@ async function derivePostAccountExport(): Promise<HttpShape> {
 }
 
 /**
- * The documented routes the snapshot pins, keyed "METHOD /path" in the
+ * The documented routes' success answers the snapshot pins (the body shape
+ * and, since issue 1056, the status), keyed "METHOD /path" in the
  * spelling API.md documents dynamic segments with (<id> for [id]). The
  * moderation and override entries live in
  * scripts/http-surface-derive-moderation.ts and are spread in last, in the
  * order API.md documents them.
  */
-export async function deriveHttpSurfaceShapes(): Promise<Record<string, HttpShape>> {
+export async function deriveHttpSurfaceAnswers(): Promise<Record<string, DerivedAnswer>> {
   return {
     "GET /api/version": await deriveGetVersion(),
     "GET /api/readiness": await deriveGetReadiness(),
@@ -667,6 +671,6 @@ export async function deriveHttpSurfaceShapes(): Promise<Record<string, HttpShap
     "GET /api/settlements": await deriveGetSettlements(),
     "GET /api/settlements/<id>": await deriveGetSettlementProof(),
     "GET /api/calibration": await deriveGetCalibration(),
-    ...(await moderationSurfaceShapes()),
+    ...(await moderationSurfaceAnswers()),
   };
 }
