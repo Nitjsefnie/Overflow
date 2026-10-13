@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { deriveMcpSurfaceRecord } from "./mcp-surface-record.ts";
 import { deriveHttpSurfaceRecord } from "./http-surface-record.ts";
-import { replaceConstAssignment, serializedSnapshot } from "./update-http-surface-snapshot.ts";
+import { readConstAssignment, replaceConstAssignment, serializedSnapshot } from "./update-http-surface-snapshot.ts";
 import { assertSnapshotVersions, assertSurfaceVersion, classifySurfaces } from "./surface-version.ts";
 import { decideSnapshotUpdate } from "./snapshot-update.ts";
 import type { HttpSurfaceSnapshot, McpSurfaceSnapshot } from "./surface-change.ts";
@@ -62,15 +62,18 @@ async function main(): Promise<void> {
   const protocol = readFileSync(protocolPath, "utf8");
   const serverSource = readFileSync(versionPath, "utf8");
   const protocolVersion = readVersionAssignment(protocol);
+  const serverVersion = readConstAssignment(serverSource, "SERVER_VERSION");
   const decision = decideSnapshotUpdate({ surfaceChanged, changeKind: change.kind,
-    snapshotVersion: snapshot?.mcpServerVersion, requestedVersion, protocolVersion });
+    snapshotVersion: snapshot?.mcpServerVersion, requestedVersion, protocolVersion,
+    peerProtocolVersion: serverVersion, peerSnapshotVersion: httpSnapshot.httpServerVersion });
   if (decision === "surface-refuse") {
     if (snapshot) assertSurfaceVersion(snapshot.mcpServerVersion, snapshot.mcpServerVersion, change,
       "scripts/update-mcp-surface-snapshot.ts --version <new>");
     throw new Error("Recording a new MCP snapshot needs an explicit --version <v>.");
   }
   if (decision === "drift-refuse") {
-    throw new Error(`MCP_SERVER_VERSION is ${protocolVersion} but the snapshot records ${snapshot?.mcpServerVersion}. ` +
+    throw new Error(`The four version sites disagree: SERVER_VERSION=${serverVersion}, MCP_SERVER_VERSION=${protocolVersion}, ` +
+      `httpServerVersion=${httpSnapshot.httpServerVersion}, mcpServerVersion=${snapshot?.mcpServerVersion}. ` +
       "Run scripts/update-mcp-surface-snapshot.ts --version <snapshot-version> to repair it.");
   }
   const version = requestedVersion ?? snapshot!.mcpServerVersion;

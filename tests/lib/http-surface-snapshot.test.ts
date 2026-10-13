@@ -116,6 +116,22 @@ describe("HTTP surface snapshot", () => {
     ).toEqual(await derivedSurface());
   });
 
+  it("suppresses fixture audit lines while preserving the production logger afterwards", () => {
+    const env = { ...process.env };
+    delete env.DATABASE_URL;
+    const result = spawnSync(process.execPath, ["--experimental-transform-types", "--import",
+      "./scripts/register-path-aliases.ts", "--input-type=module"], { cwd: repoRoot, encoding: "utf8", env,
+      input: `import { deriveHttpSurfaceRecord } from "./scripts/http-surface-record.ts";
+import { logPrivilegedAction } from "./src/lib/security/privileged-action-log.ts";
+await deriveHttpSurfaceRecord();
+logPrivilegedAction({ action: "audit.open", actorId: "fixture-actor", credential: { kind: "session" },
+  clientAddress: null, clientAddressVerified: false, subject: { auditId: "after-derivation" } });`,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.match(/Privileged action/g)).toHaveLength(1);
+    expect(result.stdout).toContain("after-derivation");
+  });
+
   it("records the same version as the HTTP server", () => {
     expect(
       snapshot.httpServerVersion,

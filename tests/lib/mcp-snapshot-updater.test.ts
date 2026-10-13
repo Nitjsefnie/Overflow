@@ -52,6 +52,30 @@ describe("MCP snapshot updater", () => {
     expect(decideSnapshotUpdate({ ...input, requestedVersion: "1.1.0" })).toBe("repair");
   });
 
+  it.each([
+    { peerProtocolVersion: "1.2.0", peerSnapshotVersion: "1.1.0" },
+    { peerProtocolVersion: "1.1.0", peerSnapshotVersion: "1.0.0" },
+  ])("detects and repairs peer drift: $peerProtocolVersion / $peerSnapshotVersion", (peer) => {
+    const input = { surfaceChanged: false, changeKind: "none" as const,
+      snapshotVersion: "1.1.0", protocolVersion: "1.1.0", ...peer };
+    expect(decideSnapshotUpdate(input)).toBe("drift-refuse");
+    expect(decideSnapshotUpdate({ ...input, requestedVersion: "1.1.0" })).toBe("repair");
+  });
+
+  it.each([
+    { peerProtocolVersion: "1.2.0-alpha", peerSnapshotVersion: "1.1.0" },
+    { peerProtocolVersion: "1.1.0", peerSnapshotVersion: "1.1.0+build" },
+  ])("validates both peer versions: $peerProtocolVersion / $peerSnapshotVersion", (peer) => {
+    expect(() => decideSnapshotUpdate({ surfaceChanged: false, changeKind: "none",
+      snapshotVersion: "1.1.0", protocolVersion: "1.1.0", ...peer })).toThrow(/MAJOR.MINOR.PATCH/);
+  });
+
+  it("refuses an explicit flag below the peer recorded version", () => {
+    expect(() => decideSnapshotUpdate({ surfaceChanged: false, changeKind: "none",
+      snapshotVersion: "1.1.0", protocolVersion: "1.1.0", peerProtocolVersion: "1.1.0",
+      peerSnapshotVersion: "1.2.0", requestedVersion: "1.1.0" })).toThrow(/versions cannot move backwards/);
+  });
+
   it("requires an explicit version for the first snapshot", () => {
     const input = { surfaceChanged: true, changeKind: "none" as const, protocolVersion: "1.1.0" };
     expect(decideSnapshotUpdate(input)).toBe("surface-refuse");
