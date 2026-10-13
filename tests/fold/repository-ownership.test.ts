@@ -82,7 +82,7 @@ describe("belongsToRegisteredRepository", () => {
   // `Object.is(a, b)` comparison are equivalent-in-practice here and cannot be
   // killed by any case. Both differ from `===` only on `NaN` and on `-0`, and
   // neither reaches this function: the registered id is `toSafeInteger(row.
-  // github_repository_id)` at `src/lib/fold/postgres-store.ts:2604`, which throws
+  // github_repository_id)` at `src/lib/fold/repository-lookup-store.ts:toReconciliationRepository`, which throws
   // on `NaN`, and a closing pull request's id is `repositoryGitHubId(node)` at
   // `src/lib/github/client.ts:1308`, which throws unless it is a safe integer
   // greater than zero. The predicate itself is pure and takes plain numbers, so

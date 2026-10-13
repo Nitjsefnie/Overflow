@@ -27,15 +27,15 @@ const SETTLEMENT_EVIDENCE_WINDOW_MS = 15 * 60 * 1000;
  *
  * 1. **No pending job.** The job runner claims exactly PENDING rows due by
  *    run_after and RUNNING rows whose lease has expired or predates lease
- *    durations (src/lib/fold/postgres-store.ts:1313-1321), so PENDING and
+ *    durations (src/lib/fold/reconciliation-job-store.ts:claimNextReconciliationJob), so PENDING and
  *    RUNNING are pending work and FAILED is the one state the runner will not
  *    execute. A FAILED row is terminal here because every revival path is
  *    closed to an unregistered repository at the moment this gate runs: the
  *    sweep enqueues only active repositories (src/lib/fold/sweep.ts:125, via
- *    the active-only listing at src/lib/fold/postgres-store.ts:774-776) and
+ *    the active-only listing at src/lib/fold/repository-lookup-store.ts:listActiveRepositoryIds) and
  *    this transaction has already set active = false. The row is therefore
  *    scrubbable when it is absent (a completed fold deleted it —
- *    src/lib/fold/postgres-store.ts:1415) or FAILED.
+ *    src/lib/fold/reconciliation-job-store.ts:completeReconciliationJob) or FAILED.
  * 2. **No open settlement evidence window.** A pull request of this repository
  *    merged within the last fifteen minutes that has no settlements row yet
  *    could still have one written by a later fold, so its evidence window is
