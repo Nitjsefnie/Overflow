@@ -28,7 +28,8 @@ Private vulnerability reporting: see #642. Alerting: see #651.
 
 Steps: [detect and triage](#detect-and-triage), [contain](#contain),
 [scope](#scope), [recover](#recover), [record](#record),
-[notification decision](#notification-decision).
+[notification decision](#notification-decision),
+[communicate with affected people](#communicate-with-affected-people).
 
 ## Detect and triage
 
@@ -40,25 +41,58 @@ Do not wait for a complete scope before containing active abuse.
 
 ### Journal retention and immediate preservation
 
-Measured on 2026-09-26: `/etc/systemd/journald.conf` sets nothing (all defaults),
-no drop-ins, storage is persistent (`/var/log/journal` exists), so `SystemMaxUse`
-defaults to 10% of the filesystem capped at 4 GiB; `journalctl --disk-usage`
-reports 4 GiB, i.e. at the cap, so retention is size-bound, not time-bound;
-the oldest entry on 2026-09-26 was 2026-07-22; there is no time limit
-(`MaxRetentionSec` unset) and rsyslog is not running, so the journal is the
-only copy.
-
-Re-measure before relying on those observations:
+Measure before relying on the journal. It is size-bound, so neither its disk
+usage nor an earlier oldest-entry date promises a number of days. As root on
+the service host, measure all three separately in UTC:
 
 ```bash
 journalctl --disk-usage
-journalctl --no-pager -q | head -1
+journalctl -u overflow.service --utc --no-pager -q -o short-iso-precise | head -1
+journalctl -u overflow.service --utc --no-pager -q -o short-iso-precise \
+  --grep 'Privileged action' | head -1
 ```
 
-Those are host-wide observations, not a promise that Overflow's entire
-incident window is present. Size pressure can remove older entries sooner.
-As root on the service host, replace the example UTC bounds and choose a new
-file in the maintainer-approved evidence location. Export the full window,
+The first measures host-wide usage; the second finds the oldest retained unit
+entry; the third finds the oldest retained privileged-action start. Record
+the measurement time and those bounds in the restricted breach log, not the
+line contents in a public issue. No matching line means no retained match,
+not proof that no action occurred. Size pressure can remove older entries
+sooner, and a unit start predating privileged-action logging cannot supply
+that missing evidence.
+
+Security log lines carrying client IP addresses have a **configured 90-day
+retention horizon** in a root-only export outside the size-bound journal,
+following the sponsor's retention decision in #1076. On this host,
+`overflow-journal-export.timer` runs daily at 00:20 UTC with `Persistent=true`;
+`overflow-journal-export.service` invokes
+`/usr/local/sbin/overflow-journal-export.sh`. It exports complete UTC days of
+`overflow.service` to `/var/log/overflow-journal/overflow-YYYY-MM-DD.log.gz`,
+catches up days still available in the journal, skips existing day files and
+prunes files older than the 90-day cutoff. The directory is root:root 0700
+and the exports are root:root 0600. This is the host's configured horizon,
+not a promise of 90 days of populated history: it cannot recover entries
+already lost before export, and today's incomplete day remains in the journal.
+
+Before scoping beyond the journal's measured reach, inspect the export as
+root and check its actual date coverage and permissions:
+
+```bash
+systemctl is-enabled overflow-journal-export.timer
+systemctl list-timers --all --no-pager overflow-journal-export.timer
+stat -c '%a %U:%G %n' /var/log/overflow-journal
+ls -l /var/log/overflow-journal/overflow-*.log.gz
+```
+
+Use the relevant daily files for older evidence and the journal for recent
+entries. Inspect each selected file locally with `gzip -cd <export-file>`;
+preserve the full objects, including continuation lines, as described in
+[Journal and request correlation](#journal-and-request-correlation). Preserve
+selected originals in the maintainer-approved restricted evidence location
+before pruning removes them; record file locations, date bounds and gaps.
+Do not paste client addresses or journal contents into public notices.
+
+For the journal still present, replace the example UTC bounds and choose a
+new file in the maintainer-approved evidence location. Export the full window,
 including the object fields that can span multiple journal entries:
 
 ```bash
@@ -347,7 +381,12 @@ No recipe selects bearer material or its hash.
 
 ### Journal and request correlation
 
-Locate the fixed message within the preserved time window:
+First [measure the journal's reach and inspect the root-only daily exports](#journal-retention-and-immediate-preservation).
+Privileged-action entries carrying client addresses have a configured 90-day
+export horizon; use `/var/log/overflow-journal/overflow-YYYY-MM-DD.log.gz` when
+the suspected window is older than the live journal. Record actual coverage
+and gaps; the horizon does not manufacture missing history. For a window
+still in the journal, locate the fixed message:
 
 ```bash
 journalctl -u overflow --utc --since '2026-09-26 00:00:00 UTC' \
@@ -385,7 +424,8 @@ are not a ledger of every action in the table above; retain the journal and
 follow its subject IDs when scoping other actions. Missing journal output is
 not proof of no mutation, particularly beyond retention or after a crash.
 
-`clientAddress` appears only in the journal, never in these database rows.
+`clientAddress` appears in the journal and its root-only daily exports, never
+in these database rows.
 The app listens on `127.0.0.1`, but loopback is not a trust boundary: any
 local process can reach the listener and set `X-Real-IP` itself, so an
 address in the journal is a claim unless the request also carried the
@@ -711,10 +751,10 @@ proceeds, including a breach for which notification was not made: Article
 33(5) GDPR requires documenting those too, with the reasons for not
 notifying. The log is the record required by Article 33(5) GDPR, and it
 exists so scope reconstruction and any later supervisory-authority
-verification do not depend on the journal's size-bound retention (a 4 GiB
-cap, the oldest entry months back, rsyslog off, the journal the only copy;
-measured in [Journal retention and immediate
-preservation](#journal-retention-and-immediate-preservation)).
+verification do not depend on the journal's measured, size-bound reach or
+the privileged-action export's configured 90-day horizon. Preserve relevant
+evidence before either source loses it; measure actual coverage and record
+gaps using [Journal retention and immediate preservation](#journal-retention-and-immediate-preservation).
 
 Each entry records:
 
@@ -728,9 +768,9 @@ Each entry records:
   was notified and when; whether data subjects were communicated and when;
   where notification was not made, the reasons for that decision.
 - **Scope reconstruction**: affected account, token-issuance and subject
-  IDs; journal and nginx access-log export time bounds and file locations;
-  evidence access restriction: who may access the evidence and the
-  maintainer's handling decision.
+  IDs; journal, root-only daily export and nginx access-log time bounds and
+  file locations; evidence access restriction: who may access the evidence
+  and the maintainer's handling decision.
 - **Record-keeping**: who wrote the entry and when; who approved it.
 
 ## Notification decision
@@ -770,3 +810,111 @@ the regulation:
   freedoms. Article 34(3) names the exceptions, among them data rendered
   unintelligible, subsequent measures making the high risk unlikely, and
   disproportionate effort, where a public communication is made instead.
+
+## Communicate with affected people
+
+Overflow stores no e-mail address or notification contact list for its
+members: GitHub sign-in keeps the numeric user ID and login, and strips
+e-mail from the session. There is no in-app incident-banner setting or
+broadcast-notification control. The hosted instance publishes the
+[public GitHub issue tracker](https://github.com/Nitjsefnie/Overflow/issues)
+and [private vulnerability reporting](https://github.com/Nitjsefnie/Overflow/security/advisories/new)
+as its contact routes; the private route receives sensitive replies rather
+than broadcasting a notice. Do not promise individual e-mails or scrape
+addresses to build a recipient list.
+
+1. **Draft during triage.** The responding operator fills in the two
+   skeletons below from the [scope](#scope) and containment evidence, marking
+   unknowns explicitly. Keep drafts in the restricted incident record until
+   approved. Describe the affected people and data in terms readers can use
+   to recognize whether they may be affected, without listing account IDs,
+   client addresses, journal excerpts, credentials or exploitable details.
+   Do not wait for perfect scope to prepare a draft.
+2. **Get the decision and a publication time.** Nitjsefnie approves the
+   notification decision, audience, wording, channels and timing under
+   [Notification decision](#notification-decision). Record the awareness time,
+   decision time, reasons, publication target and next-update time in the
+   breach log. Use that section's timing requirements; a site deployment or
+   incomplete investigation must not silently postpone an approved public
+   notice. Record any delay and escalate it to Nitjsefnie. Public posting is
+   not proof every affected person received it; record reach limitations for
+   the notification decision.
+3. **Publish the approved public issue.** Nitjsefnie opens an issue on
+   `Nitjsefnie/Overflow` with the public-issue draft below and keeps that URL
+   as the incident's update location. Put only the approved public text
+   there; sensitive questions go through private vulnerability reporting.
+   Record the URL, publisher and UTC publication time. If repository access
+   is lost or compromised, follow [Account loss and account compromise](#account-loss-and-account-compromise)
+   and have Nitjsefnie decide a usable publication route; do not assume the
+   issue channel is available or trustworthy.
+4. **Publish the site notice through a code deployment.** There is no switch
+   to turn on: the operator prepares a reviewed code change adding the
+   approved short notice and public-issue link to both `AppShell` and
+   `PublicAppShell` in `src/components/app-shell.tsx`, so members and
+   signed-out visitors can see it. Merge that change to `main` and follow
+   [deploy/README.md section 10](README.md#10-deploying-a-new-revision) to
+   build and deploy it after recovery is approved. Verify the notice and
+   link on the signed-out landing page and a signed-in member page; record
+   the deployed revision and time. If containment keeps the site stopped or
+   deployment is blocked, publish the approved GitHub issue first and record
+   the site-notice delay. Do not edit the serving build or restart a
+   contained service just to display a notice.
+5. **Update and close the communication record.** At the stated next-update
+   time, update the issue even if the investigation is still open, and keep
+   any deployed notice consistent. Record each publication and revision,
+   remaining uncertainty, questions received privately, and Nitjsefnie's
+   decision about when to remove the site notice through another reviewed
+   deployment. Keep the breach-log record even when notification was not
+   required.
+
+### Public issue notification draft
+
+Replace every placeholder before publication. This is public text, not the
+restricted breach log:
+
+```text
+Title: Overflow security incident — [short description], [UTC date]
+
+Published: [UTC time]. Last updated: [UTC time].
+We became aware on [UTC time] of [plain-language description of the breach].
+The suspected incident window is [start/end UTC, or explicitly unknown].
+
+Who may be affected: [recognizable group and relevant period; no account list].
+Data affected: [categories and what happened to them; distinguish confirmed
+facts from what is still being investigated].
+Likely consequences: [effects on affected people; uncertainties].
+
+What we have done: [containment, mitigation and recovery status].
+What you should do: [specific protective steps, or why no action is currently
+recommended; do not ask people to post private information].
+
+Operator: Nitjsefnie, maintainer of Overflow.
+Public questions and updates: [this issue URL].
+Sensitive questions or reports:
+https://github.com/Nitjsefnie/Overflow/security/advisories/new
+Please do not post client addresses, credentials or private account details here.
+
+Next update: [UTC time], including if there is no material change.
+```
+
+### Site notice draft
+
+```text
+Overflow security notice — [UTC date].
+[Plain-language summary of the incident and who may be affected].
+[Immediate protective action, if any].
+Read the incident notice and updates: [public issue URL].
+Last updated: [UTC time]. Next update: [UTC time].
+For sensitive questions, use GitHub private vulnerability reporting:
+https://github.com/Nitjsefnie/Overflow/security/advisories/new
+```
+
+### Tabletop completion
+
+For a planted signal, follow [Detect and triage](#detect-and-triage), measure
+the evidence bounds, scope the affected group and fill in both drafts using
+synthetic facts. End with drafts ready for Nitjsefnie's decision, proposed
+publication and update times, and the site deployment step identified.
+Record evidence gaps and channel limitations. Keep the exercise drafts in
+the restricted exercise record; do not publish an exercise as a real breach
+or change the running host during the tabletop.
