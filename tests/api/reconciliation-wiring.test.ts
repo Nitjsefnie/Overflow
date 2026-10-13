@@ -31,6 +31,13 @@ vi.mock("@/auth", () => ({ auth: readSession }));
 vi.mock("@/lib/db/client", () => ({ getSql: () => vi.fn(async () => [{ role: "MEMBER" }]) }));
 vi.mock("@/lib/fold/postgres-store", () => ({
   PostgresFoldStore: class {
+    async enqueueReconciliationJob(repositoryId: string, reason: ReconciliationJobReason) {
+      enqueued.push({ repositoryId, reason });
+    }
+  },
+}));
+vi.mock("@/lib/webhooks/postgres-delivery-store", () => ({
+  PostgresWebhookDeliveryStore: class {
     async applyIssueView() {}
     async claimDelivery() {
       return { status: "CLAIMED" as const, receiptId: "receipt-1", leaseToken: "lease-1" };
@@ -43,9 +50,6 @@ vi.mock("@/lib/fold/postgres-store", () => ({
     }
     async markFailed() {
       return true;
-    }
-    async enqueueReconciliationJob(repositoryId: string, reason: ReconciliationJobReason) {
-      enqueued.push({ repositoryId, reason });
     }
     async enqueueWebhookReconciliation(repositoryId: string, delivery: GitHubWebhookDelivery) {
       enqueued.push({ repositoryId, reason: "WEBHOOK", subject: delivery.subject });
