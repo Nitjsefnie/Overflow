@@ -6,7 +6,7 @@ import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { CACHED_COMMENT_BODY_PLACEHOLDER, RECONCILIATION_EVIDENCE_FORMAT } from "@/lib/fold/reconciliation-evidence";
-import { parseGitHubWebhookDelivery } from "@/lib/github/webhook-schema";
+import { parseGitHubWebhookDeliveryDetailed } from "@/lib/github/webhook-schema";
 import * as repositoryFold from "@/lib/fold/repository-fold";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import { reconcileRepositoryAsSponsor } from "@/lib/fold/reconcile-as-sponsor";
@@ -491,14 +491,14 @@ describe("incremental reconciliation", () => {
     // nothing reaches the reconciliation queue. The envelope's id is the issue
     // surface's, which would poison the evidence delete-key as an ISSUE row;
     // the true PULL_REQUEST row arrives from PR lifecycle events instead.
-    const prEnvelope = parseGitHubWebhookDelivery("issues", `pr-envelope-${f.id}`, {
+    const prEnvelope = parseGitHubWebhookDeliveryDetailed("issues", `pr-envelope-${f.id}`, {
       action: "edited",
       repository: { id: f.githubRepositoryId, full_name: `octo/repo-${f.githubRepositoryId}` },
       issue: { id: 5_393_690_180, number: 263, state: "open", updated_at: "2026-09-08T10:00:00Z",
         title: "PR title", body: null, html_url: "https://github.com/octo/repo/pull/263",
         pull_request: { url: `https://api.github.com/repos/octo/repo-${f.githubRepositoryId}/pulls/263` } },
     });
-    if (prEnvelope !== null) await f.store.enqueueWebhookReconciliation(f.id, prEnvelope);
+    if (prEnvelope.status === "ok") await f.store.enqueueWebhookReconciliation(f.id, prEnvelope.delivery);
     expect(await f.store.getDirtyReconciliationSubjects(f.id)).toEqual([]);
     // The fixture's genuine-issue delivery still enqueues.
     await f.dirty("ISSUE", f.issues[0]!);

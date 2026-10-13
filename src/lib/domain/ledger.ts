@@ -34,13 +34,3 @@ export function foldLedger(settlements: readonly SettlementDecision[]): LedgerEn
 
   return entries;
 }
-
-export function foldBalances(entries: readonly LedgerEntry[]): Map<string, number> {
-  const balances = new Map<string, number>();
-
-  for (const entry of entries) {
-    balances.set(entry.accountId, (balances.get(entry.accountId) ?? 0) + entry.amount);
-  }
-
-  return balances;
-}

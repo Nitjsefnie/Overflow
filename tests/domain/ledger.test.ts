@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { foldBalances, foldLedger, type LedgerEntry } from "@/lib/domain/ledger";
+import { foldLedger } from "@/lib/domain/ledger";
 import { calculateSettlement, type SettlementDecision } from "@/lib/domain/settlement";
 
 describe("foldLedger", () => {
@@ -44,22 +44,5 @@ describe("foldLedger", () => {
     } as unknown as SettlementDecision;
 
     expect(foldLedger([adjustment])).toEqual([]);
-  });
-});
-
-describe("foldBalances", () => {
-  it("sums each account from folded entries", () => {
-    const entries: LedgerEntry[] = [
-      { accountId: "u1", counterpartyId: "u2", amount: 4 },
-      { accountId: "u2", counterpartyId: "u1", amount: -4 },
-      { accountId: "u1", counterpartyId: "u3", amount: -1 },
-      { accountId: "u3", counterpartyId: "u1", amount: 1 },
-    ];
-
-    expect([...foldBalances(entries)]).toEqual([
-      ["u1", 3],
-      ["u2", -4],
-      ["u3", 1],
-    ]);
   });
 });

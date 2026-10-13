@@ -4,7 +4,7 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
-import { parseGitHubWebhookDelivery } from "@/lib/github/webhook-schema";
+import { parseGitHubWebhookDeliveryDetailed } from "@/lib/github/webhook-schema";
 import { processWebhook } from "@/lib/webhooks/processor";
 import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -126,7 +126,7 @@ describe("webhook issue materialization", () => {
         // claimed, viewed or enqueued, so the rows and queue below stay
         // untouched.
         const [repository] = await sql`select github_repository_id from registered_repositories where id = ${fixture.repositoryId}`;
-        expect(parseGitHubWebhookDelivery("issue_comment", randomUUID(), {
+        expect(deliveryOrNull("issue_comment", randomUUID(), {
           action: "created",
           repository: { id: Number(repository.github_repository_id), full_name: "octo/example" },
           issue: { id: fixture.fold.issues[0].githubIssueId, number: 1, state: "open",
@@ -152,6 +152,11 @@ async function row(fixture: Fixture) {
   return result;
 }
 
+function deliveryOrNull(eventName: string, deliveryId: string, payload: unknown) {
+  const result = parseGitHubWebhookDeliveryDetailed(eventName, deliveryId, payload);
+  return result.status === "ok" ? result.delivery : null;
+}
+
 async function deliver(fixture: Fixture, options: {
   event?: string; state?: string; updatedAt?: string; deliveryId?: string;
   issueId?: number; repositoryGitHubId?: number;
@@ -160,7 +165,7 @@ async function deliver(fixture: Fixture, options: {
 } = {}) {
   const [repository] = await sql`select github_repository_id from registered_repositories where id = ${fixture.repositoryId}`;
   const event = options.event ?? "issues";
-  const delivery = parseGitHubWebhookDelivery(event, options.deliveryId ?? randomUUID(), {
+  const delivery = deliveryOrNull(event, options.deliveryId ?? randomUUID(), {
     action: event === "issues" ? "reopened" : "created",
     repository: { id: options.repositoryGitHubId ?? Number(repository.github_repository_id), full_name: "octo/example" },
     issue: { id: options.issueId ?? fixture.fold.issues[0].githubIssueId, number: 1,

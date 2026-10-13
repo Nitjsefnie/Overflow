@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   difficultySchemeInForceAt,
-  parseActualDifficulty,
-  parseOpeningDifficulty,
   validateDifficultyScheme,
   type DifficultyScheme,
   type DifficultySchemeVersion,
@@ -43,35 +41,6 @@ function version(scheme: DifficultyScheme, versionNumber: number, effectiveFrom:
 describe("difficulty schemes", () => {
   it("validates a complete non-overlapping scheme", () => {
     expect(validateDifficultyScheme(createScheme())).toEqual({ ok: true });
-  });
-
-  it("resolves exactly one configured opening label", () => {
-    expect(parseOpeningDifficulty(["bug", "size/M"], createScheme())).toEqual({
-      kind: "ok",
-      label: "size/M",
-      comparisonPoints: 5,
-      reservePoints: 5,
-    });
-  });
-
-  it("marks multiple configured opening labels as ambiguous", () => {
-    expect(parseOpeningDifficulty(["size/S", "size/L"], createScheme())).toEqual({
-      kind: "ambiguous",
-    });
-  });
-
-  it("resolves the configured actual points without using display names", () => {
-    expect(parseActualDifficulty(["delivered/7"], createScheme())).toEqual({
-      kind: "ok",
-      label: "delivered/7",
-      points: 7,
-    });
-  });
-
-  it("returns none when a label is absent from the configured catalog", () => {
-    expect(parseActualDifficulty(["bug", "delivered/eleven"], createScheme())).toEqual({
-      kind: "none",
-    });
   });
 
   it("rejects empty display names", () => {

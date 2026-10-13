@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  parseGitLabWebhookDelivery,
-  parseGitLabWebhookDeliveryDetailed,
-} from "@/lib/gitlab/webhook-schema";
+import { parseGitLabWebhookDeliveryDetailed } from "@/lib/gitlab/webhook-schema";
 
 /**
  * The GitLab issue payload maps into the delivery vocabulary the shared
@@ -44,8 +41,9 @@ function payload(overrides: Record<string, unknown> = {}, attributeOverrides: Re
   };
 }
 
-function parse(payloadValue: unknown, deliveryUuid = "uuid-1") {
-  return parseGitLabWebhookDelivery("Issue Hook", deliveryUuid, payloadValue);
+function parse(payloadValue: unknown, deliveryUuid: string | null = "uuid-1") {
+  const result = parseGitLabWebhookDeliveryDetailed("Issue Hook", deliveryUuid, payloadValue);
+  return result.status === "ok" ? result.delivery : null;
 }
 
 describe("GitLab webhook issue delivery", () => {
@@ -117,8 +115,8 @@ describe("GitLab webhook issue delivery", () => {
   });
 
   it("rejects a missing delivery uuid", () => {
-    expect(parseGitLabWebhookDelivery("Issue Hook", null, payload())).toBeNull();
-    expect(parseGitLabWebhookDelivery("Issue Hook", "   ", payload())).toBeNull();
+    expect(parse(payload(), null)).toBeNull();
+    expect(parse(payload(), "   ")).toBeNull();
   });
 });
 
@@ -306,8 +304,10 @@ describe("GitLab webhook message identity", () => {
     { name: "accepts a 255-character webhook-id after trimming", ids: { webhookId: ` ${"x".repeat(255)} ` }, key: "x".repeat(255) },
   ])("$name for issues and merge requests", ({ ids, key }) => {
     for (const body of [payload(), mergeRequestPayload()]) {
-      expect(parseGitLabWebhookDelivery("Issue Hook", " execution-1 ", body, ids))
-        .toMatchObject({ deliveryId: key, executionId: "execution-1" });
+      const result = parseGitLabWebhookDeliveryDetailed("Issue Hook", " execution-1 ", body, ids);
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.delivery).toMatchObject({ deliveryId: key, executionId: "execution-1" });
     }
   });
 
