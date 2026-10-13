@@ -37,6 +37,45 @@ const DEFAULTED_CONCURRENCY_MESSAGE =
   "Reconciliation worker concurrency could not be used; drains use the default concurrency instead";
 
 describe("running the next reconciliation job", () => {
+  it.each([
+    { name: "retry-after", error: () => new GitHubApiError(403, true, 120, null, { "retry-after": "120" }), expected: "2030-01-02T03:06:05.678Z" },
+    { name: "primary reset", error: () => new GitHubApiError(403, true, null, null, { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(new Date("2030-01-02T03:09:05Z").getTime() / 1000) }), expected: "2030-01-02T03:09:05Z" },
+  ])("defers a wrapped $name failure to GitHub's deadline and reports it", async ({ error, expected }) => {
+    const { store, calls } = createFakeStore({ jobs: [job()] });
+    const failure = new Error("Fold failed", { cause: new Error("Request failed", { cause: error() }) });
+    const reported: unknown[] = [];
+    expect(await runNextReconciliationJob({
+      store, now: () => new Date("2030-01-02T03:04:05.678Z"),
+      scheduleLeaseRenewal: () => () => {},
+      reconcile: async () => { throw failure; },
+      onFailure: (_id, error) => { reported.push(error); },
+    })).toBe("DEFERRED");
+    expect(calls).toEqual([
+      { method: "claim", args: [] },
+      { method: "defer", args: ["job-1", "lease-1", new Date(expected)] },
+    ]);
+    expect(reported).toEqual([failure]);
+  });
+
+  it("never exhausts the retry table on repeated rate-limit failures", async () => {
+    const { store, calls } = createFakeStore({ jobs: Array.from({ length: 8 }, (_, index) => job({ attemptCount: index + 1 })) });
+    const reported: unknown[] = [];
+    const failure = new GitHubApiError(429, true);
+    const outcomes = [];
+    for (let index = 0; index < 8; index++) {
+      outcomes.push(await runNextReconciliationJob({
+        store, now: () => new Date("2030-01-02T03:04:05.678Z"),
+        scheduleLeaseRenewal: () => () => {},
+        reconcile: async () => { throw failure; },
+        onFailure: (_id, error) => { reported.push(error); },
+      }));
+    }
+    expect(outcomes).toEqual(Array.from({ length: 8 }, () => "DEFERRED"));
+    expect(calls.filter(({ method }) => method === "defer")).toHaveLength(8);
+    expect(calls.some(({ method }) => method === "retry" || method === "fail")).toBe(false);
+    expect(reported).toHaveLength(8);
+  });
+
   it("journals GitHub diagnostics from a wrapped reconciliation failure", async () => {
     const token = randomBytes(24).toString("base64url");
     const cause = new GitHubApiError(403, true, 60, `Secondary rate limit: ${token}`, {
@@ -47,7 +86,7 @@ describe("running the next reconciliation job", () => {
     await expect(runNextReconciliationJob({
       store, now: () => new Date("2030-01-02T03:04:05Z"), scheduleLeaseRenewal: () => () => {},
       reconcile: async () => { throw new Error("Unable to reconcile repository.", { cause }); },
-    })).resolves.toBe("RETRY_SCHEDULED");
+    })).resolves.toBe("DEFERRED");
     const line = logged.mock.calls.find(([message]) => message === "Reconciliation failed for repository")!.join(" ");
     expect(line).toContain('status=403 body="Secondary rate limit: [REDACTED]"');
     expect(line).toContain('retry-after="60" x-github-request-id="request-worker"');

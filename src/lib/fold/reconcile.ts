@@ -2,7 +2,7 @@ import { reconciliationBudgetHoldUntil, type ReconciliationBudgetDependencies } 
 import type { GitHubIssueListOptions } from "@/lib/github/client";
 import { DEFAULT_GRAPHQL_BUDGET_RESERVE, type GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
-import { GitHubApiError, isGitHubRateLimitError, isGitHubSubjectNotFoundError } from "@/lib/github/errors";
+import { GitHubApiError, githubRateLimitNotBefore, isGitHubRateLimitError, isGitHubSubjectNotFoundError } from "@/lib/github/errors";
 import { GitHubResponseTooLargeError } from "@/lib/github/response-text";
 import { GitLabApiError } from "@/lib/gitlab/client";
 import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
@@ -38,9 +38,7 @@ const reconciliationConcurrency = 4;
 const reconciliationOverlapMs = 60_000;
 const reconciliationFullRepairMs = 6 * 60 * 60_000;
 
-// A large repository can exhaust an hourly GitHub budget; without retry guidance,
-// allow a full hour for it to recover before spending points on another full fold.
-export const DEFAULT_RECONCILIATION_COOLDOWN_SECONDS = 60 * 60;
+export { DEFAULT_RECONCILIATION_COOLDOWN_SECONDS } from "@/lib/github/errors";
 
 // The stored failure for a fold that died on a rejected linked credential — a
 // code constant for the same reason the generic message below is one (the runs
@@ -475,8 +473,7 @@ async function reconcileRepositoryWhileCoordinated(
       carriesCredentialRejection(error) ? FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE : "Reconciliation failed.",
     );
     if (isGitHubRateLimitError(error)) {
-      const seconds = error.retryAfterSeconds ?? DEFAULT_RECONCILIATION_COOLDOWN_SECONDS;
-      await dependencies.store.setReconciliationCooldown(repositoryId, new Date(now().getTime() + seconds * 1000));
+      await dependencies.store.setReconciliationCooldown(repositoryId, githubRateLimitNotBefore(error, now()));
     }
     throw new Error("Unable to reconcile repository.", { cause: reportedError });
   }
