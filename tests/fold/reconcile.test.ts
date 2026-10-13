@@ -23,6 +23,24 @@ import { inspect, format } from "node:util";
 import { RECORD_MARKER, withRecordBearingPostgresWrite } from "../support/record-bearing-postgres-error";
 
 describe("reconcileRepository", () => {
+  it("journals the GitHub refusal without the reflected access token", async () => {
+    const token = createHash("sha256").update("reconciliation diagnostic fixture").digest("hex");
+    const upstream = new GitHubApiError(403, true, 60, `Secondary rate limit: ${token}`, {
+      "retry-after": "60", "x-github-request-id": "request-reconcile",
+    }, token);
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(upstream) } });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ cause: upstream });
+      const line = logged.mock.calls.find(([message]) => message === "Reconciliation of repository repository failed.")!.join(" ");
+      expect(line).toContain('status=403 body="Secondary rate limit: [REDACTED]"');
+      expect(line).toContain('retry-after="60" x-github-request-id="request-reconcile"');
+      expect(line).not.toContain(token);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
   it("enables bounded timeline verification from the repository catalogs", async () => {
     const dependencies = reconciliationDependencies();
     await reconcileRepository(dependencies, "repository");

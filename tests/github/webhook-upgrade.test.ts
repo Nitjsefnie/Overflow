@@ -12,11 +12,12 @@ const hook = {
 afterEach(() => vi.useRealTimers());
 
 describe("upgrading persisted GitHub webhook subscriptions", () => {
-  it("sanitizes upstream errors during scoped configuration", async () => {
+  it("retains service diagnostics without exposing them in serialized scoped errors", async () => {
     const gateway = new GitHubGateway({ accessToken: "token", fetch: async () =>
       new Response("synthetic-private-hook-secret", { status: 403 }) });
     const error = await gateway.configureWebhook(repository, 81, { callbackUrl: "https://example.test", secret: "test-secret" }).catch((error: unknown) => error);
-    expect(error).toMatchObject({ status: 403, body: null });
+    expect(error).toMatchObject({ status: 403, body: "synthetic-private-hook-secret" });
+    expect(JSON.stringify(error)).not.toContain("synthetic-private-hook-secret");
   });
   it("explicitly configures callback and scoped secret even for complete subscriptions", async () => {
     let remote = { ...structuredClone(hook), events: [...hook.events, "issue_comment"] };
@@ -132,11 +133,12 @@ describe("upgrading persisted GitHub webhook subscriptions", () => {
     expect(methods).toEqual([]);
   });
 
-  it.each([403, 404, 422, 500])("reports HTTP %s without exposing private response diagnostics", async (status) => {
+  it.each([403, 404, 422, 500])("retains HTTP %s diagnostics without exposing them in serialized errors", async (status) => {
     const gateway = new GitHubGateway({ accessToken: "token", fetch: async (_input, init) => init?.method === "PATCH"
       ? new Response("private upstream token and secret", { status }) : Response.json(hook) });
     const error = await gateway.ensureWebhookEvents(repository, 81, secret).catch((error: unknown) => error);
-    expect(error).toMatchObject({ status, body: null });
+    expect(error).toMatchObject({ status, body: "private upstream [REDACTED] and secret" });
+    expect(JSON.stringify(error)).not.toContain("private upstream");
     expect(String(error)).not.toContain("private upstream");
   });
 

@@ -26,16 +26,20 @@ export function isGitHubSubjectNotFoundError(error: unknown): boolean {
 
 export class GitHubApiError extends Error implements GitHubRateLimitDetails {
   public readonly body: string | null;
+  public readonly headers: Readonly<Record<string, string>>;
 
   public constructor(
     public readonly status: number,
     public readonly rateLimited: boolean = false,
     public readonly retryAfterSeconds: number | null = null,
     body: string | null = null,
+    headers: HeadersInit = {},
+    accessToken: string = "",
   ) {
     super(`GitHub API request failed with status ${status}.`);
     this.name = "GitHubApiError";
-    this.body = body === null ? null : body.slice(0, 500);
+    this.body = body === null ? null : redactToken(body, accessToken).slice(0, 500);
+    this.headers = diagnosticHeaders(headers, accessToken);
   }
 
   // Keep response diagnostics in service logs, out of serialized API errors.
@@ -46,6 +50,42 @@ export class GitHubApiError extends Error implements GitHubRateLimitDetails {
       rateLimited: this.rateLimited,
       retryAfterSeconds: this.retryAfterSeconds,
     };
+  }
+}
+
+const responseDiagnosticHeaders = [
+  "retry-after", "x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-used",
+  "x-ratelimit-reset", "x-ratelimit-resource", "x-github-request-id",
+] as const;
+
+function diagnosticHeaders(source: HeadersInit, accessToken: string): Readonly<Record<string, string>> {
+  const headers = new Headers(source);
+  const captured: Record<string, string> = {};
+  for (const name of responseDiagnosticHeaders) {
+    const value = headers.get(name);
+    if (value !== null) captured[name] = redactToken(value, accessToken).slice(0, 256);
+  }
+  return Object.freeze(captured);
+}
+
+function redactToken(value: string, accessToken: string): string {
+  return accessToken.length > 0 ? value.replaceAll(accessToken, "[REDACTED]") : value;
+}
+
+export class GitHubGraphqlRequestError extends Error implements GitHubRateLimitDetails {
+  public readonly requestId: string | null;
+
+  public constructor(
+    message: string,
+    public readonly rateLimited: boolean = false,
+    public readonly retryAfterSeconds: number | null = null,
+    public readonly status: number | null = null,
+    requestId: string | null = null,
+    accessToken: string = "",
+  ) {
+    super(message);
+    this.name = "GitHubGraphqlRequestError";
+    this.requestId = requestId === null ? null : redactToken(requestId, accessToken).slice(0, 256);
   }
 }
 

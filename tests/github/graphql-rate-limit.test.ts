@@ -84,7 +84,7 @@ describe("HTTP 200 GraphQL rate-limit classification", () => {
     });
 
     await expect(client.query(query, {})).rejects.toMatchObject({
-      message: "GitHub GraphQL request failed.", rateLimited: false, retryAfterSeconds: null,
+      message: "GitHub GraphQL request failed. Error: RATE_LIMIT secondary rate limit", rateLimited: false, retryAfterSeconds: null,
     });
   });
 });

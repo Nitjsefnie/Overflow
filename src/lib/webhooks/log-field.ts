@@ -17,6 +17,8 @@
 // the cut split, or one the input carried — is escaped like any other unsafe
 // code unit, so the token never holds a lone surrogate.
 
+import { GitHubApiError, GitHubGraphqlRequestError } from "@/lib/github/errors";
+
 const MAX_LOGGED_CODE_UNITS = 256;
 
 export function logField(value: string): string {
@@ -66,8 +68,8 @@ function isLowSurrogate(unit: number): boolean {
 // any other log field: one bounded single-line token per message, the chain
 // flattened onto the same line, and nothing raw anywhere in the output.
 //
-// The chain walk follows `cause` (Error and plain objects alike), is bounded
-// in depth so a deep chain cannot flood the line, and carries a visited set so
+// The chain walk follows `cause` (Error and plain objects alike), bounds the
+// generic preview plus one deeper GitHub failure, and carries a visited set so
 // a constructed cycle cannot loop it. Every segment render and the cause read
 // itself are guarded, because a thrown value can be a Proxy or carry getters
 // that refuse access — a reason that cannot be read still leaves the line.
@@ -94,6 +96,20 @@ export function errorLogToken(value: unknown): string {
   // The cap is reached with a live cause: the line names that the chain
   // continues beyond what it carries.
   if (current !== null && current !== undefined) segments.push(CHAIN_CONTINUES);
+  // A stack of wrappers must not hide GitHub's refusal. Keep the generic
+  // preview bounded, then surface only the first GitHub failure in its tail.
+  try {
+    while (current !== null && current !== undefined && !visited.has(current)) {
+      visited.add(current);
+      if (current instanceof GitHubApiError || current instanceof GitHubGraphqlRequestError) {
+        segments.push(errorSegment(current));
+        break;
+      }
+      current = causeOf(current);
+    }
+  } catch {
+    // A proxy that refuses instanceof must not lose the existing preview.
+  }
   return segments.join("; ");
 }
 
@@ -124,7 +140,16 @@ function errorSegment(value: unknown): string {
       // message — nothing in the token is raw.
       const name = typeof value.name === "string" && value.name !== "" ? value.name : "Error";
       const message = typeof value.message === "string" ? value.message : String(value.message);
-      return `${logField(name)}: ${logField(message)}`;
+      let token = `${logField(name)}: ${logField(message)}`;
+      if (value instanceof GitHubApiError) {
+        token += ` status=${value.status}`;
+        if (value.body !== null) token += ` body=${logField(value.body)}`;
+        for (const [header, field] of Object.entries(value.headers)) token += ` ${header}=${logField(field)}`;
+      } else if (value instanceof GitHubGraphqlRequestError) {
+        if (value.status !== null) token += ` status=${value.status}`;
+        if (value.requestId !== null) token += ` x-github-request-id=${logField(value.requestId)}`;
+      }
+      return token;
     }
     return logField(String(value));
   } catch {
