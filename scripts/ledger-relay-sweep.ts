@@ -38,7 +38,7 @@ import { readSuiteRuns, suiteRunsUrl, supersessionMessage } from "./pr-suite-sup
 import { resolveWorkflowRunHead, type UpstreamPublicationCheck } from "./ledger-relay-upstream.ts";
 
 import {
-  publicationBlockedContexts, idOf, newestProducersFor,
+  publicationBlockedContexts, idOf, newestProducersFor, compareProducerIdentities,
   selectSweepCandidates, validateJobs, type CheckRunSuppression, type ProducerDeps, type SweepCandidate,
 } from "./ledger-relay-producers.ts";
 import { historyBoundDecision, postProducerCheck, publicationState } from "./ledger-relay-publication.ts";
@@ -94,21 +94,11 @@ export function missingContextsFor(
 }
 
 /**
- * The sweep. One repository-wide listing, API-backed workflow_run resolution,
- * then one check-runs GET per distinct orphan commit, one jobs GET per missing
- * producer, and one POST per missing completed context. Recency includes the trigger and orders by run
- * id then attempt. A winning trigger is never reposted, and blocks older runs
- * even when its mirror posted nothing. Superseded non-trigger workflow_run
- * candidates remain excluded.
- * Candidates at the same commit share the attestation and this invocation's
- * relayed set, so a burst of completions on
- * one pull request head costs one check-runs GET and one post per context
- * rather than one per run.
- *
- * An attested candidate needs no publication jobs GET or POST. A newest
- * cancelled pull_request_target candidate can still need the jobs fallback
- * and heal queries, so attestation never suppresses the rerun-heal. Other
- * candidates incur no heal requests.
+ * Resolve and publish candidates newest-first, caching App checks per resolved
+ * head. A handled context excludes older producers even after a no-op. The
+ * mirror's resolved trigger participates in selection and healing but is never
+ * reposted. Superseded non-trigger workflow_run candidates remain excluded.
+ * Attestation skips publication jobs and writes, never cancellation healing.
  */
 export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
   const listing = await deps.api.get<Record<string, unknown>>(
@@ -141,106 +131,81 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
   const relayed: Array<{ context: string; runId: string }> = [];
   const suppressed: CheckRunSuppression[] = [];
   const superseded: Array<{ runId: string; supersededBy: number }> = [];
-  const active: SweepCandidate[] = [];
   const rerunDispatched: string[] = [];
-  const rechecks = new Map<string, UpstreamPublicationCheck>();
-  const bounds = new Map<string, string>();
-
-  // Resolve BEFORE grouping: both attestation and this sweep's dedupe key are
-  // the upstream PR SHA. A refusal propagates, never falling back to main.
-  for (const candidate of [...candidates, ...(listedTrigger === undefined ? [] : [listedTrigger])]) {
-    const isTrigger = candidate.runId === deps.triggerRunId &&
-      (triggerRun === undefined || candidate.runAttempt === triggerRun.runAttempt);
-    if (isTrigger && triggerRun !== undefined) {
-      // The resolved trigger identity stays authoritative. Use the listing's
-      // primary started-at evidence only for that same attempt.
-      triggerRun.runStartedAt = candidate.runStartedAt ?? triggerRun.runStartedAt;
-      continue;
-    }
-    if (candidate.workflowRun !== true) {
-      if (isTrigger) triggerRun = candidate;
-      else active.push(candidate);
-      continue;
-    }
-    const resolved = await resolveWorkflowRunHead(
-      candidate.runId,
-      deps.repositoryId,
-      (id) => deps.api.get(`${deps.apiRoot}/repos/${deps.repo}/actions/runs/${id}`, `the workflow run ${id}`),
-      undefined,
-      (sha) => readSuiteRuns((page) => deps.api.get(suiteRunsUrl(deps.apiRoot, deps.repo, sha, page), "the suite supersession listing", false)),
-    );
-    candidate.headSha = resolved.headSha;
-    candidate.path = resolved.run.path;
-    candidate.conclusion = resolved.run.conclusion;
-    candidate.htmlUrl = resolved.run.htmlUrl;
-    candidate.runAttempt = resolved.run.runAttempt;
-    candidate.status = resolved.producerStatus;
-    if (isTrigger) { triggerRun = candidate; continue; }
-    if (resolved.supersededBy !== undefined) {
-      superseded.push({ runId: candidate.runId, supersededBy: resolved.supersededBy });
-      continue;
-    }
-    active.push(candidate);
-    rechecks.set(candidate.runId, resolved.recheckPublication);
-    if (resolved.historyBound !== undefined) bounds.set(candidate.runId, resolved.historyBound);
+  const handled = new Map<string, Set<string>>();
+  const appReads = new Map<string, unknown[] | undefined>();
+  if (triggerRun !== undefined && listedTrigger?.runAttempt === triggerRun.runAttempt) {
+    triggerRun.runStartedAt = listedTrigger.runStartedAt ?? triggerRun.runStartedAt;
   }
-
-  for (const [headSha, atHead] of groupByHeadSha([
-    ...active, ...(triggerRun === undefined ? [] : [triggerRun]),
-  ])) {
-    const newest = newestProducersFor(deps.pinMap, atHead);
-    const historyBounds = new Map<string, string>();
-    for (const [context, producer] of newest) {
-      const bound = bounds.get(producer.runId);
-      if (bound !== undefined) historyBounds.set(context, bound);
-    }
-    const hasOrphans = atHead.some((candidate) => candidate !== triggerRun);
-    const blocked = hasOrphans ? await publicationBlockedContexts(deps, headSha, newest, historyBounds) : new Set<string>();
-    const relayedThisSweep = new Set<string>();
-    const jobsBodies = new Map<SweepCandidate, Record<string, unknown>>();
-    if (triggerRun !== undefined && deps.triggerJobs !== undefined) jobsBodies.set(triggerRun, deps.triggerJobs);
-    for (const candidate of atHead) {
-      if (candidate === triggerRun) continue;
-      const missing = new Set(
-        missingContextsFor(deps.pinMap, candidate, blocked, relayedThisSweep)
-          .filter((context) => newest.get(context) === candidate),
+  const listed = listedTrigger === undefined || (triggerRun !== undefined && listedTrigger.runAttempt === triggerRun.runAttempt)
+    ? [] : [listedTrigger];
+  // Resolve and publish one producer at a time. Deadline exhaustion drops the
+  // oldest tail, and never discards already-resolved newest work unwritten.
+  const ordered = [...candidates, ...listed, ...(triggerRun === undefined ? [] : [triggerRun])]
+    .sort((first, second) => compareProducerIdentities(second, first));
+  for (const candidate of ordered) {
+    const isTrigger = candidate === triggerRun || (triggerRun === undefined && candidate.runId === deps.triggerRunId);
+    let recheck: UpstreamPublicationCheck | undefined;
+    let initialBound: string | undefined;
+    if (candidate.workflowRun === true && candidate !== triggerRun) {
+      const resolved = await resolveWorkflowRunHead(
+        candidate.runId, deps.repositoryId,
+        (id) => deps.api.get(`${deps.apiRoot}/repos/${deps.repo}/actions/runs/${id}`, `the workflow run ${id}`),
+        undefined,
+        (sha) => readSuiteRuns((page) => deps.api.get(suiteRunsUrl(deps.apiRoot, deps.repo, sha, page), "the suite supersession listing", false)),
       );
-      if (missing.size === 0) continue;
-      const jobsBody = bounds.has(candidate.runId) ? { jobs: [] } : await deps.api.get<Record<string, unknown>>(
-        `${deps.apiRoot}/repos/${deps.repo}/actions/runs/${candidate.runId}/jobs?filter=latest&per_page=100`,
-        `the job listing of run ${candidate.runId}`,
-      );
-      jobsBodies.set(candidate, jobsBody);
-      const jobs = validateJobs(jobsBody);
-      const state = await publicationState(rechecks.get(candidate.runId));
-      const bound = state.historyBound ?? bounds.get(candidate.runId);
-      if (state.supersededBy !== undefined && bound === undefined) {
-        superseded.push({ runId: candidate.runId, supersededBy: state.supersededBy });
+      Object.assign(candidate, {
+        headSha: resolved.headSha, path: resolved.run.path, conclusion: resolved.run.conclusion,
+        htmlUrl: resolved.run.htmlUrl, runAttempt: resolved.run.runAttempt, status: resolved.producerStatus,
+      });
+      if (!isTrigger && resolved.supersededBy !== undefined) {
+        superseded.push({ runId: candidate.runId, supersededBy: resolved.supersededBy });
         continue;
       }
-      const decisions = (bound === undefined
-        ? deps.decide(deps.pinMap, candidate.path, candidate.conclusion, jobs)
-        : [historyBoundDecision(bound)]).filter((decision) => missing.has(decision.context));
-      for (const decision of decisions) {
-        // Only completed decisions are attested. An unfinished decision gets
-        // no POST and remains eligible for a later sweep once it concludes.
-        if (decision.status !== "completed") continue;
-        const posted = await postProducerCheck(deps, decision, candidate, rechecks.get(candidate.runId), bound);
-        if (posted === undefined) continue;
-        if ("suppressedBy" in posted) {
-          suppressed.push(posted);
-          blocked.add(decision.context);
+      recheck = resolved.recheckPublication;
+      initialBound = resolved.historyBound;
+    }
+    if (isTrigger && triggerRun === undefined) triggerRun = candidate;
+    const atHead = handled.get(candidate.headSha) ?? new Set<string>();
+    handled.set(candidate.headSha, atHead);
+    const newest = newestProducersFor(deps.pinMap, [candidate]);
+    for (const context of atHead) newest.delete(context);
+    if (newest.size === 0) continue;
+    // Even a newest no-op or upstream refusal excludes an older producer for
+    // these contexts in this start. A trigger's mirror already attempted them.
+    for (const context of newest.keys()) atHead.add(context);
+    let jobsBody = isTrigger ? deps.triggerJobs : undefined;
+    if (!isTrigger) {
+      const historyBounds = new Map(initialBound === undefined ? [] : [...newest.keys()].map((context) => [context, initialBound]));
+      const blocked = await publicationBlockedContexts(deps, candidate.headSha, newest, historyBounds, appReads);
+      const missing = new Set(missingContextsFor(deps.pinMap, candidate, blocked, new Set())
+        .filter((context) => newest.has(context)));
+      if (missing.size > 0) {
+        jobsBody = initialBound !== undefined ? { jobs: [] } : await deps.api.get<Record<string, unknown>>(
+          `${deps.apiRoot}/repos/${deps.repo}/actions/runs/${candidate.runId}/jobs?filter=latest&per_page=100`,
+          `the job listing of run ${candidate.runId}`,
+        );
+        const jobs = validateJobs(jobsBody);
+        const state = await publicationState(recheck);
+        const bound = state.historyBound ?? initialBound;
+        if (state.supersededBy !== undefined && bound === undefined) {
+          superseded.push({ runId: candidate.runId, supersededBy: state.supersededBy });
           continue;
         }
-        relayed.push({ context: decision.context, runId: candidate.runId });
-        relayedThisSweep.add(decision.context);
+        const decisions = (bound === undefined
+          ? deps.decide(deps.pinMap, candidate.path, candidate.conclusion, jobs)
+          : [historyBoundDecision(bound)]).filter((decision) => missing.has(decision.context));
+        for (const decision of decisions) {
+          if (decision.status !== "completed") continue;
+          const posted = await postProducerCheck(deps, decision, candidate, recheck, bound);
+          if (posted === undefined) continue;
+          if ("suppressedBy" in posted) { suppressed.push(posted); continue; }
+          relayed.push({ context: decision.context, runId: candidate.runId });
+        }
       }
     }
-    // Attestation does not suppress healing: an already-attested cancellation
-    // can still be the newest producer whose pending relay start was displaced.
-    for (const candidate of new Set(newest.values())) {
-      if (await healCandidate(deps, candidate, jobsBodies.get(candidate))) rerunDispatched.push(candidate.runId);
-    }
+    // An already-attested newest cancellation can still require healing.
+    if (await healCandidate(deps, candidate, jobsBody)) rerunDispatched.push(candidate.runId);
   }
   return { examined: candidates.length, relayed, ...(superseded.length > 0 ? { superseded } : {}),
     ...(suppressed.length > 0 ? { suppressed } : {}),
@@ -284,22 +249,6 @@ async function healCandidate(deps: SweepDeps, run: SweepCandidate, jobsBody?: Re
   if (deps.rerun === undefined) throw new Error("the rerun transport is required");
   await deps.rerun(run.runId, token);
   return true;
-}
-
-/** Candidates grouped by head SHA, in the listing order of first appearance. */
-function groupByHeadSha(candidates: readonly SweepCandidate[]): Array<[string, SweepCandidate[]]> {
-  const order: string[] = [];
-  const groups = new Map<string, SweepCandidate[]>();
-  for (const candidate of candidates) {
-    const existing = groups.get(candidate.headSha);
-    if (existing === undefined) {
-      order.push(candidate.headSha);
-      groups.set(candidate.headSha, [candidate]);
-      continue;
-    }
-    existing.push(candidate);
-  }
-  return order.map((sha) => [sha, groups.get(sha)!]);
 }
 
 /**

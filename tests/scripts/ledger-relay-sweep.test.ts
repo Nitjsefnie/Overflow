@@ -644,16 +644,16 @@ describe("sweepOrphans", () => {
     expect(outcome).toEqual({
       examined: 4,
       relayed: [
-        { context: "actionlint", runId: "9003" },
         { context: "actionlint", runId: "9005" },
+        { context: "actionlint", runId: "9003" },
       ],
     });
     const headsRead = requests.filter(
       (request) => request.url?.startsWith(`https://api.github.com/repos/${REPO}/commits/`) ?? false,
     );
     expect(headsRead.map((request) => request.url)).toEqual([
-      appSuitesUrl(`https://api.github.com/repos/${REPO}`, HEAD_SHA),
       appSuitesUrl(`https://api.github.com/repos/${REPO}`, OTHER_SHA),
+      appSuitesUrl(`https://api.github.com/repos/${REPO}`, HEAD_SHA),
     ]);
     // Two jobs listings, four candidates.
     expect(requests.filter((request) => request.url?.includes("/jobs?") ?? false)).toHaveLength(2);

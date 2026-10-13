@@ -331,7 +331,7 @@ describe("workflow_run orphan sweep", () => {
     } });
     const result = await h.run();
     expect(result.sweep.relayed).toHaveLength(2);
-    expect(h.posts.map((body) => body.head_sha)).toEqual([PR_SHA, OTHER_PR_SHA]);
+    expect(h.posts.map((body) => body.head_sha)).toEqual([OTHER_PR_SHA, PR_SHA]);
   });
 
   it.each([
