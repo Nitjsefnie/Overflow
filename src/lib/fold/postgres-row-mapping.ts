@@ -1,3 +1,5 @@
+import type { JSONValue } from "postgres";
+import type { TransactionClient } from "@/lib/db/types";
 import type { FoldSettlement } from "@/lib/fold/repository-fold";
 
 export type SettlementRow = {
@@ -53,4 +55,41 @@ export function nullableTimestampToIso(value: string | Date | null): string | nu
     throw new Error("Timestamp was invalid.");
   }
   return date.toISOString();
+}
+
+type ReconciledEntityKind =
+  | "SETTLEMENT"
+  | "SELF_WORK_CALIBRATION"
+  | "UNWRITABLE_CLOSURE"
+  | "ISSUE"
+  | "PULL_REQUEST";
+
+type ReconciliationChangeKind = "ADD" | "CHANGE" | "REMOVE";
+
+export async function recordChange(
+  sql: TransactionClient,
+  runId: string,
+  pullRequestId: string | null,
+  entityKind: ReconciledEntityKind,
+  changeKind: ReconciliationChangeKind,
+  before: JSONValue | null,
+  after: JSONValue | null,
+): Promise<void> {
+  await sql`
+    insert into reconciliation_changes (
+      reconciliation_run_id, pull_request_id, entity_kind, change_kind, before_state, after_state
+    )
+    values (
+      ${runId}, ${pullRequestId}, ${entityKind}, ${changeKind},
+      ${before === null ? null : sql.json(before)}, ${after === null ? null : sql.json(after)}
+    )
+  `;
+}
+
+export function requiredId(ids: Map<number, string>, githubId: number, label: string): string {
+  const id = ids.get(githubId);
+  if (id === undefined) {
+    throw new Error(`${label} materialization was missing.`);
+  }
+  return id;
 }
