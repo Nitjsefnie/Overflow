@@ -1,11 +1,12 @@
-// The mirror selects the newest completed eligible producer before writing.
+// The mirror selects the newest completed eligible producer before writing,
+// resolving only producers newer than its trigger.
 // Both duties recheck suite supersession and upstream success before each POST;
 // deterministic history exhaustion becomes a negative certificate at that point.
 // Serialized relay starts need no post-write correction.
 
 import { decideContexts, pinsFor, type ContextDecision } from "./ledger-relay-decisions.ts";
 import {
-  publicationBlockedContexts, checkRunBody, newestProducersFor, selectSweepCandidates,
+  publicationBlockedContexts, checkRunBody, compareProducerIdentities, selectSweepCandidates,
   validateJobs, producerExternalId, type CheckRunPostResult, type CheckRunSuppression,
   type ProducerDeps, type SweepCandidate,
 } from "./ledger-relay-producers.ts";
@@ -69,7 +70,12 @@ async function writeCheck(
 
 interface ResolvedCandidate { run: SweepCandidate; check?: UpstreamPublicationCheck; historyBound?: string }
 
-/** Resolve completed eligible producers in the sweep's id/attempt order; unfinished runs are ignored. */
+/**
+ * The newest completed eligible producer at this head and context. Only
+ * candidates strictly newer than the trigger are resolved, newest-first and
+ * one at a time, stopping at the first that resolves to this head; older
+ * candidates are left to the sweep. Unfinished runs are ignored.
+ */
 async function newestCandidate(
   deps: ProducerDeps, headSha: string, context: string, trigger: ResolvedCandidate,
 ): Promise<ResolvedCandidate | undefined> {
@@ -77,13 +83,10 @@ async function newestCandidate(
     `${deps.apiRoot}/repos/${deps.repo}/actions/runs?per_page=100`, "the pre-write producer listing",
   );
   if (!Array.isArray(listing?.workflow_runs)) throw new Error("the pre-write producer listing returned no runs array");
-  const contextPins = { [context]: deps.pinMap[context] };
-  // Retain the completed trigger even if the bounded listing omits it.
-  const completed = trigger.run.status === "completed";
-  const eligible: SweepCandidate[] = completed ? [trigger.run] : [];
-  const resolved = new Map<SweepCandidate, ResolvedCandidate>(completed ? [[trigger.run, trigger]] : []);
-  for (const candidate of selectSweepCandidates(listing.workflow_runs, contextPins, "")) {
-    if (candidate.runId === trigger.run.runId && candidate.runAttempt === trigger.run.runAttempt) continue;
+  // selectSweepCandidates orders by run id, then attempt, newest first.
+  const newer = selectSweepCandidates(listing.workflow_runs, { [context]: deps.pinMap[context] }, "")
+    .filter((candidate) => compareProducerIdentities(candidate, trigger.run) > 0);
+  for (const candidate of newer) {
     candidate.status = "completed";
     let entry: ResolvedCandidate = { run: candidate };
     if (candidate.workflowRun === true) {
@@ -104,11 +107,11 @@ async function newestCandidate(
       entry = { run: candidate, check: upstream.recheckPublication, historyBound: upstream.historyBound };
     }
     if (candidate.status !== "completed" || candidate.headSha !== headSha) continue;
-    eligible.push(candidate);
-    resolved.set(candidate, entry);
+    // Resolution reads the run's current attempt, which may equal the trigger's.
+    if (compareProducerIdentities(candidate, trigger.run) > 0) return entry;
   }
-  const winner = newestProducersFor(contextPins, eligible).get(context);
-  return winner === undefined ? undefined : resolved.get(winner);
+  // The completed trigger is retained even if the bounded listing omits it.
+  return trigger.run.status === "completed" ? trigger : undefined;
 }
 
 /** Cohesive mirror publication keeps ledger-relay.ts below its module ceiling. */
