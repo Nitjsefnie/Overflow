@@ -1225,7 +1225,6 @@
       "unavailable": {
         "status": 503,
         "shape": {
-          "reason": "string",
           "status": "string"
         }
       }
