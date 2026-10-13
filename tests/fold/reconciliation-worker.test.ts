@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+import { GitHubApiError } from "@/lib/github/errors";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FAILURE_LOG_QUIET_WINDOW_MS, FailureLogger } from "@/lib/worker/failure-logger";
 import { errorLogToken, logField } from "@/lib/webhooks/log-field";
@@ -35,6 +37,23 @@ const DEFAULTED_CONCURRENCY_MESSAGE =
   "Reconciliation worker concurrency could not be used; drains use the default concurrency instead";
 
 describe("running the next reconciliation job", () => {
+  it("journals GitHub diagnostics from a wrapped reconciliation failure", async () => {
+    const token = randomBytes(24).toString("base64url");
+    const cause = new GitHubApiError(403, true, 60, `Secondary rate limit: ${token}`, {
+      "retry-after": "60", "x-github-request-id": "request-worker",
+    }, token);
+    const { store } = createFakeStore({ jobs: [job()] });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(runNextReconciliationJob({
+      store, now: () => new Date("2030-01-02T03:04:05Z"), scheduleLeaseRenewal: () => () => {},
+      reconcile: async () => { throw new Error("Unable to reconcile repository.", { cause }); },
+    })).resolves.toBe("RETRY_SCHEDULED");
+    const line = logged.mock.calls.find(([message]) => message === "Reconciliation failed for repository")!.join(" ");
+    expect(line).toContain('status=403 body="Secondary rate limit: [REDACTED]"');
+    expect(line).toContain('retry-after="60" x-github-request-id="request-worker"');
+    expect(line).not.toContain(token);
+  });
+
   it("passes the request generation captured at claim time to completion", async () => {
     const captured = 7;
     const { store, calls } = createFakeStore({ jobs: [job({

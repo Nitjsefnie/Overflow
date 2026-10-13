@@ -1,4 +1,4 @@
-import { classifyGitHubGraphqlRateLimit, classifyGitHubRateLimit, GitHubApiError, type GitHubRateLimitDetails } from "@/lib/github/errors";
+import { classifyGitHubGraphqlRateLimit, classifyGitHubRateLimit, GitHubApiError, GitHubGraphqlRequestError } from "@/lib/github/errors";
 import { gitHubGraphqlBudget, readGraphqlBudgetPayload, type GitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
 import { checkGraphqlRequestBudget, GraphqlBudgetHeld } from "@/lib/github/graphql-request-budget";
 import { recordGraphqlResponseCost } from "@/lib/github/graphql-cost";
@@ -22,16 +22,6 @@ const maxErrorPathSegments = 10;
 // Ten serialized segments of at most 48 units, commas, brackets and an optional
 // omission marker fit in 495 units, while retaining every previewed position.
 const maxSerializedPathSegmentLength = 48;
-
-class GitHubGraphqlRequestError extends Error implements GitHubRateLimitDetails {
-  public constructor(
-    message: string,
-    public readonly rateLimited: boolean = false,
-    public readonly retryAfterSeconds: number | null = null,
-  ) {
-    super(message);
-  }
-}
 
 function boundedErrorText(value: string, accessToken: string): string {
   const redacted = accessToken.length > 0 ? value.replaceAll(accessToken, "[REDACTED]") : value;
@@ -159,6 +149,7 @@ export class GitHubGraphqlClient {
   public async query<TData>(query: string, variables: Record<string, unknown>): Promise<TData> {
     const controller = new AbortController();
     let timedOut = false;
+    let response: Response | undefined;
     const timeout = setTimeout(() => {
       timedOut = true;
       controller.abort();
@@ -166,7 +157,7 @@ export class GitHubGraphqlClient {
 
     try {
       checkGraphqlRequestBudget();
-      const response = await this.fetchImplementation(this.endpoint, {
+      response = await this.fetchImplementation(this.endpoint, {
         method: "POST",
         headers: {
           Accept: "application/vnd.github+json",
@@ -185,7 +176,7 @@ export class GitHubGraphqlClient {
       if (!response.ok) {
         const body = await response.text().catch(() => null);
         const { rateLimited, retryAfterSeconds } = classifyGitHubRateLimit(response.status, response.headers, body);
-        throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body);
+        throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body, response.headers, this.accessToken);
       }
 
       const body = await boundedResponseText(response, MAX_SUCCESS_BODY_BYTES, controller.signal);
@@ -193,7 +184,11 @@ export class GitHubGraphqlClient {
       const payload = JSON.parse(body) as { data?: TData; errors?: unknown };
       if (payload?.data === undefined || payload.errors !== undefined) {
         const { rateLimited, retryAfterSeconds } = classifyGitHubGraphqlRateLimit(payload?.errors, response.headers);
-        throw new GitHubGraphqlRequestError(graphqlFailureMessage(payload?.errors, this.accessToken), rateLimited, retryAfterSeconds);
+        const message = payload?.data === undefined && payload?.errors === undefined
+          ? `${graphqlFailureMessage(payload?.errors, this.accessToken)} Payload missing data.`
+          : graphqlFailureMessage(payload?.errors, this.accessToken);
+        throw new GitHubGraphqlRequestError(message, rateLimited, retryAfterSeconds,
+          response.status, response.headers.get("x-github-request-id"), this.accessToken);
       }
 
       recordGraphqlResponseCost((payload.data as { rateLimit?: unknown } | null)?.rateLimit);
@@ -224,7 +219,11 @@ export class GitHubGraphqlClient {
         throw new GitHubGraphqlRequestError("GitHub request timed out.");
       }
 
-      throw new GitHubGraphqlRequestError("GitHub GraphQL request failed.");
+      const description = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      throw new GitHubGraphqlRequestError(
+        `GitHub GraphQL request failed. ${boundedErrorText(description, this.accessToken)}`,
+        false, null, response?.status ?? null, response?.headers.get("x-github-request-id") ?? null, this.accessToken,
+      );
     } finally {
       clearTimeout(timeout);
     }

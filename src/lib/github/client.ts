@@ -308,7 +308,7 @@ export class GitHubGateway implements ForgeGateway {
         throw new Error("GitHub webhook configuration verification failed.");
       }
     } catch (error) {
-      if (error instanceof GitHubApiError) throw new GitHubApiError(error.status, error.rateLimited, error.retryAfterSeconds);
+      if (error instanceof GitHubApiError) throw new GitHubApiError(error.status, error.rateLimited, error.retryAfterSeconds, error.body, error.headers, configuration.secret);
       throw error;
     }
   }
@@ -350,10 +350,10 @@ export class GitHubGateway implements ForgeGateway {
         throw new Error("GitHub webhook subscription verification failed.");
       }
     } catch (error) {
-      // The ordinary gateway retains diagnostic bodies for internal callers.
-      // Administrative outcomes must never carry those bodies to an operator.
+      // Preserve bounded diagnostics for service logs while redacting the known
+      // webhook secret; GitHubApiError.toJSON keeps them out of API responses.
       if (error instanceof GitHubApiError) {
-        throw new GitHubApiError(error.status, error.rateLimited, error.retryAfterSeconds);
+        throw new GitHubApiError(error.status, error.rateLimited, error.retryAfterSeconds, error.body, error.headers, existingSecret);
       }
       throw error;
     }
@@ -444,7 +444,7 @@ export class GitHubGateway implements ForgeGateway {
         const body = await beforeDeadline(boundedResponseText(response, Infinity, controller.signal)).catch(() => null);
         controller.signal.throwIfAborted();
         const { rateLimited, retryAfterSeconds } = classifyGitHubRateLimit(response.status, response.headers, body);
-        throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body);
+        throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body, response.headers, this.accessToken);
       }
       return response;
     };
@@ -873,7 +873,7 @@ export class GitHubGateway implements ForgeGateway {
         // "preserves the HTTP failure when reading its body is aborted" in graphql.test.ts.
         const body = await beforeDeadline(boundedResponseText(response, Infinity, controller.signal)).catch(() => null);
         const { rateLimited, retryAfterSeconds } = classifyGitHubRateLimit(response.status, response.headers, body);
-        throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body);
+        throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body, response.headers, this.accessToken);
       }
 
       // Drain successful bodies even when callers only need the status. Past the

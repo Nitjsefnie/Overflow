@@ -135,16 +135,16 @@ describe("GitHubGraphqlClient failures", () => {
       fetch: async () => { throw failure; },
     });
 
-    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub GraphQL request failed\.$/);
+    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub GraphQL request failed\. /);
   });
 
-  it("normalizes JSON parse failures", async () => {
+  it("retains the class of JSON parse failures", async () => {
     const client = new GitHubGraphqlClient({
       accessToken: "test-access-token",
       fetch: async () => new Response("private invalid JSON"),
     });
 
-    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub GraphQL request failed\.$/);
+    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub GraphQL request failed\. SyntaxError:/);
   });
 });
 

@@ -168,7 +168,7 @@ export function createAppInstallationTokenResolver(options: {
       return null;
     }
     if (status !== 200) {
-      throw classifiedError(status, headers, body);
+      throw classifiedError(status, headers, body, jwt);
     }
     const id = parseJsonPayload(body)?.["id"];
     if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0) {
@@ -190,7 +190,7 @@ export function createAppInstallationTokenResolver(options: {
       JSON.stringify({ permissions: installationTokenPermissions }),
     );
     if (status !== 201) {
-      throw classifiedError(status, headers, body);
+      throw classifiedError(status, headers, body, jwt);
     }
     const payload = parseJsonPayload(body);
     const token = payload?.["token"];
@@ -235,9 +235,9 @@ export function createAppInstallationTokenResolver(options: {
     return { status: response.status, headers: response.headers, body };
   }
 
-  function classifiedError(status: number, headers: Headers, body: string | null): GitHubApiError {
+  function classifiedError(status: number, headers: Headers, body: string | null, jwt: string): GitHubApiError {
     const { rateLimited, retryAfterSeconds } = classifyGitHubRateLimit(status, headers, body);
-    return new GitHubApiError(status, rateLimited, retryAfterSeconds, body);
+    return new GitHubApiError(status, rateLimited, retryAfterSeconds, body, headers, jwt);
   }
 
   function mintJwt(at: Date): string {
