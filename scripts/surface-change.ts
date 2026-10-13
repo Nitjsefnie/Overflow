@@ -21,6 +21,9 @@ export type RecordedHttpSurface = {
   failures?: Record<string, string[]>;
 };
 
+/** The surface as the code derives it today: every section present. */
+export type DerivedHttpSurface = Required<RecordedHttpSurface>;
+
 /** A recorded HTTP surface together with the version it was recorded at. */
 export type HttpSurfaceSnapshot = RecordedHttpSurface & { httpServerVersion: string };
 

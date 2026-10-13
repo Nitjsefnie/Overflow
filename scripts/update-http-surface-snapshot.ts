@@ -6,6 +6,7 @@ import { deriveHttpSurfaceRecord } from "./http-surface-record.ts";
 import {
   classifyHttpChange,
   recordedSurface,
+  type DerivedHttpSurface,
   type HttpSurfaceSnapshot,
   type RecordedHttpSurface,
 } from "./surface-change.ts";
@@ -128,7 +129,7 @@ export function surfaceUpdateInputs(
 }
 
 /** The snapshot file's text: the format marker and version first, then the recorded sections. */
-export function serializedSnapshot(version: string, derived: RecordedHttpSurface & { snapshotFormat: 2 }): string {
+export function serializedSnapshot(version: string, derived: DerivedHttpSurface): string {
   const snapshot: HttpSurfaceSnapshot = {
     snapshotFormat: derived.snapshotFormat,
     httpServerVersion: version,
