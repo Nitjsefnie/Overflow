@@ -31,6 +31,7 @@ import {
   type ReconciliationSynchronization,
 } from "@/lib/fold/reconciliation-evidence";
 import { PostgresReconciliationJobStore } from "@/lib/fold/reconciliation-job-store";
+import { PostgresSponsorCredentialStore } from "@/lib/fold/sponsor-credential-store";
 import { RepositoryCoordinator } from "@/lib/fold/repository-coordination";
 import { scrubSuppressedForgeData } from "@/lib/fold/data-subject-suppression";
 import type {
@@ -58,7 +59,6 @@ import {
 import type { WebhookDeliveryClaim, WebhookDeliveryStore, WebhookReceiptScope, WebhookRepositoryRegistration } from "@/lib/webhooks/processor";
 import { PostgresWebhookDeliveryStore } from "@/lib/webhooks/postgres-delivery-store";
 import { logField } from "@/lib/webhooks/log-field";
-import { credentialBinding, decryptToken, tokenKeySetFrom } from "@/lib/security/token-cipher";
 
 export { repositoryLockNamespace } from "@/lib/fold/repository-coordination";
 
@@ -238,12 +238,13 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   private readonly coordinator: RepositoryCoordinator;
   private readonly reconciliationJobs: PostgresReconciliationJobStore;
   private readonly webhookDeliveries: PostgresWebhookDeliveryStore;
+  private readonly sponsorCredentials: PostgresSponsorCredentialStore;
 
   public constructor(
     private readonly sql: SqlClient = getSql(),
-    private readonly tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY,
+    tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY,
     private readonly coordinationSql?: SqlClient,
-    private readonly previousTokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS,
+    previousTokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS,
     /**
      * Store-level tuning, injectable for tests. The only knob today is the
      * per-fact byte limit the evidence cache omits facts over (default 64 MiB,
@@ -254,6 +255,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     this.coordinator = new RepositoryCoordinator(sql, coordinationSql);
     this.reconciliationJobs = new PostgresReconciliationJobStore(sql);
     this.webhookDeliveries = new PostgresWebhookDeliveryStore(sql);
+    this.sponsorCredentials = new PostgresSponsorCredentialStore(sql, tokenEncryptionKey, previousTokenEncryptionKey);
   }
 
   public async withRepositoryReconciliation<T>(
@@ -509,15 +511,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   }
 
   public async getGitHubAccessToken(userId: string): Promise<string | null> {
-    const [row] = await this.sql<{ github_user_id: string | number; encrypted_oauth_token: Buffer | null }[]>`
-      select github_user_id, encrypted_oauth_token from users where id = ${userId} limit 1
-    `;
-    if (row === undefined || row.encrypted_oauth_token === null) {
-      return null;
-    }
-    const keys = tokenKeySetFrom(this.tokenEncryptionKey, this.previousTokenEncryptionKey);
-    return decryptToken(Buffer.from(row.encrypted_oauth_token).toString("utf8"), keys,
-      credentialBinding.userOAuthToken(row.github_user_id));
+    return this.sponsorCredentials.getGitHubAccessToken(userId);
   }
 
   public async findUsersByGitHubUserIds(githubUserIds: readonly number[]): Promise<FoldUser[]> {
