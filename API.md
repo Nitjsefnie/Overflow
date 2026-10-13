@@ -851,6 +851,85 @@ arrive — concurrent requests share the in-flight probe and its answer is
 cached until the window expires — so the unauthenticated endpoint costs an
 attacker at most one query per window.
 
+## Public discovery and notices
+
+These GET routes take no credential and no request body.
+
+### MCP protected-resource discovery
+
+`GET /.well-known/oauth-protected-resource` and
+`GET /.well-known/oauth-protected-resource/api/mcp` return the same document.
+The `WWW-Authenticate` header on `POST /api/mcp`'s `401` responses currently
+names the root discovery URL:
+`Bearer resource_metadata="<overflow-origin>/.well-known/oauth-protected-resource"`.
+That `401` carries `Cache-Control: no-store`; the discovery handlers themselves
+set no `Cache-Control` header.
+
+| HTTP | Content-Type | Response |
+| --- | --- | --- |
+| 200 | `application/json` | `{ "resource": "<overflow-origin>/api/mcp", "bearer_methods_supported": ["header"] }`. |
+| 500 | `application/json` | `{ "error": { "code": "MISCONFIGURED", "message": "The server is not configured to accept this request." } }`. |
+
+`<overflow-origin>` is the origin of `APP_URL` (scheme, host and port;
+any path is ignored). An absent, blank, malformed or opaque-origin `APP_URL`
+produces the `500` above. The document advertises bearer credentials in the
+`Authorization` header; it contains no `authorization_servers` field.
+
+### Third-party notices
+
+`GET /third-party-notices.txt` serves the build-generated production dependency
+notices, including package names and versions, licence identifiers, full licence
+texts and any accompanying notices. It reads the file from the running build's
+distribution directory (`NEXT_DIST_DIR`, or `.next` when unset or blank),
+pinning that directory's real path on first use so a later symlink switch
+does not change the notices served by that process. The handler sets no
+`Cache-Control` header.
+
+| HTTP | Content-Type | Response |
+| --- | --- | --- |
+| 200 | `text/plain; charset=utf-8` | The generated notice text. |
+| 404 | `text/plain;charset=UTF-8` | `Not Found` when the distribution directory or notice file is missing, or a path component is not a directory. |
+| 500 | Framework error response | Other filesystem errors propagate to Next.js; the route defines no error-body shape for them. |
+
+## Browser authentication routes
+
+The `/api/auth/*` mount exports Auth.js's GET and POST handlers. No Overflow
+API token or existing sign-in is required to reach them; browser cookies carry
+the session and OAuth handshake state. The configured provider is GitHub only,
+with JWT sessions. These response shapes and redirects belong to Auth.js,
+not Overflow's `{ "error": { "code", "message" } }` envelope.
+
+| Method and path | HTTP / Content-Type | Response / purpose |
+| --- | --- | --- |
+| `GET /api/auth/providers` | `200`, `application/json` | `{ "github": { "id": "github", "name": "GitHub", "type": "oauth", "signinUrl": "<auth-origin>/api/auth/signin/github", "callbackUrl": "<auth-origin>/api/auth/callback/github" } }`. |
+| `GET /api/auth/csrf` | `200`, `application/json` | `{ "csrfToken": "<csrf-token>" }`, with the corresponding CSRF cookie. |
+| `GET /api/auth/session` | `200`, `application/json` | `null` without a usable session; otherwise the Auth.js session object with `user` and `expires`. Overflow adds `id`, `role`, `canAdministerWebhooks` and, when available, `authenticatedAt` to a resolved member's `user`. |
+| `POST /api/auth/session` | `200`, `application/json` | Auth.js session update; requires the CSRF token and matching cookie. |
+| `GET /api/auth/signin` | `200`, `text/html` | Auth.js's GitHub sign-in page. |
+| `POST /api/auth/signin/github` | `302`, `Location` header | Starts GitHub OAuth; requires the CSRF token and matching cookie. |
+| `GET /api/auth/callback/github` (also mounted for POST) | `302`, `Location` header | Completes the GitHub OAuth handshake, using its callback parameters and state cookies, and redirects back to the application or an auth error page. |
+| `GET /api/auth/signout` | `200`, `text/html` | Auth.js's sign-out confirmation page. |
+| `POST /api/auth/signout` | `302`, `Location` header | Clears the session cookie and redirects; requires the CSRF token and matching cookie. |
+| `GET /api/auth/error` | `200`, `403` or `500`, `text/html` | Auth.js error page: the default is `200`, access-denied or verification errors use `403`, and configuration errors use `500`. |
+| `GET /api/auth/verify-request` | `200`, `text/html` | Auth.js's built-in verification page remains reachable, though no email provider is configured. |
+
+`<auth-origin>` is the origin Auth.js uses for the request, including any
+`AUTH_URL` override. Its GET session and CSRF answers set
+`Cache-Control: private, no-cache, no-store`, `Expires: 0` and
+`Pragma: no-cache`. The other normal responses above set no cache headers
+in Auth.js, including the POST session update; Overflow's mount adds none.
+
+For Auth.js redirects, a request carrying `X-Auth-Return-Redirect` can receive
+`200` JSON `{ "url": "<redirect-url>" }` instead. Refused sign-in, callback
+or sign-out flows normally redirect to an Auth.js error or sign-in page.
+A failed POST session update answers `400` JSON `null`; an unrecognized auth
+path answers `400` JSON `"Bad request."`. Invalid Auth.js configuration answers
+`500` JSON `{ "message": "..." }` on non-page requests, or its `500` HTML
+configuration page on page GETs. Use the browser sign-in flow rather than
+treating these framework endpoints as token-authenticated member APIs;
+[OPERATING.md](OPERATING.md#operating-an-instance-github-oauth-and-webhooks)
+describes the OAuth setup.
+
 ## Calling Overflow from an agent harness
 
 The API above is also exposed as MCP tools over a single endpoint,
