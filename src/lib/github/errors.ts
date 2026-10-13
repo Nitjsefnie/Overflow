@@ -34,12 +34,12 @@ export class GitHubApiError extends Error implements GitHubRateLimitDetails {
     public readonly retryAfterSeconds: number | null = null,
     body: string | null = null,
     headers: HeadersInit = {},
-    accessToken: string = "",
+    credentials: string | readonly string[] = "",
   ) {
     super(`GitHub API request failed with status ${status}.`);
     this.name = "GitHubApiError";
-    this.body = body === null ? null : redactToken(body, accessToken).slice(0, 500);
-    this.headers = diagnosticHeaders(headers, accessToken);
+    this.body = body === null ? null : redactCredentials(body, credentials).slice(0, 500);
+    this.headers = diagnosticHeaders(headers, credentials);
   }
 
   // Keep response diagnostics in service logs, out of serialized API errors.
@@ -58,18 +58,23 @@ const responseDiagnosticHeaders = [
   "x-ratelimit-reset", "x-ratelimit-resource", "x-github-request-id",
 ] as const;
 
-function diagnosticHeaders(source: HeadersInit, accessToken: string): Readonly<Record<string, string>> {
+function diagnosticHeaders(source: HeadersInit, credentials: string | readonly string[]): Readonly<Record<string, string>> {
   const headers = new Headers(source);
   const captured: Record<string, string> = {};
   for (const name of responseDiagnosticHeaders) {
     const value = headers.get(name);
-    if (value !== null) captured[name] = redactToken(value, accessToken).slice(0, 256);
+    if (value !== null) captured[name] = redactCredentials(value, credentials).slice(0, 256);
   }
   return Object.freeze(captured);
 }
 
-function redactToken(value: string, accessToken: string): string {
-  return accessToken.length > 0 ? value.replaceAll(accessToken, "[REDACTED]") : value;
+function redactCredentials(value: string, credentials: string | readonly string[]): string {
+  const tokens = typeof credentials === "string" ? [credentials] : credentials;
+  // Remove longer credentials first so an overlapping short token cannot
+  // prevent matching the full secret and leave its suffix behind.
+  return [...tokens].sort((a, b) => b.length - a.length).reduce(
+    (text, token) => token.length > 0 ? text.replaceAll(token, "[REDACTED]") : text, value,
+  );
 }
 
 export class GitHubGraphqlRequestError extends Error implements GitHubRateLimitDetails {
@@ -85,7 +90,7 @@ export class GitHubGraphqlRequestError extends Error implements GitHubRateLimitD
   ) {
     super(message);
     this.name = "GitHubGraphqlRequestError";
-    this.requestId = requestId === null ? null : redactToken(requestId, accessToken).slice(0, 256);
+    this.requestId = requestId === null ? null : redactCredentials(requestId, accessToken).slice(0, 256);
   }
 }
 

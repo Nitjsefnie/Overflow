@@ -266,7 +266,7 @@ export class GitHubGateway implements ForgeGateway {
             secret: configuration.secret,
           },
         }),
-      },
+      }, [configuration.secret],
     );
     const payload = await responseJson<{ id: number }>(response);
     if (!Number.isSafeInteger(payload.id) || payload.id <= 0) {
@@ -292,7 +292,7 @@ export class GitHubGateway implements ForgeGateway {
   ): Promise<void> {
     try {
       const path = `/repos/${segment(repository.owner)}/${segment(repository.name)}/hooks/${webhookId}`;
-      const before = parseWebhook(await this.request(path), webhookId);
+      const before = parseWebhook(await this.request(path, {}, [configuration.secret]), webhookId);
       const after = parseWebhook(await this.request(path, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -301,7 +301,7 @@ export class GitHubGateway implements ForgeGateway {
           active: before.active,
           config: { ...before.config, url: configuration.callbackUrl, secret: configuration.secret },
         }),
-      }), webhookId);
+      }, [configuration.secret]), webhookId);
       if (after.config.url !== configuration.callbackUrl
         || ![...githubWebhookEvents, ...before.events].every((event) => subscribesTo(after.events, event))
         || after.active !== before.active) {
@@ -326,7 +326,7 @@ export class GitHubGateway implements ForgeGateway {
     }
     const path = `/repos/${segment(repository.owner)}/${segment(repository.name)}/hooks/${webhookId}`;
     try {
-      const before = parseWebhook(await this.request(path), webhookId);
+      const before = parseWebhook(await this.request(path, {}, [existingSecret]), webhookId);
       const missing = githubWebhookEvents.filter((event) => !subscribesTo(before.events, event));
       if (missing.length === 0) return;
 
@@ -341,7 +341,7 @@ export class GitHubGateway implements ForgeGateway {
           active: before.active,
           config: { ...before.config, secret: existingSecret },
         }),
-      }), webhookId);
+      }, [existingSecret]), webhookId);
       if (
         ![...githubWebhookEvents, ...before.events].every((event) => subscribesTo(after.events, event))
         || after.active !== before.active
@@ -839,7 +839,7 @@ export class GitHubGateway implements ForgeGateway {
     return page;
   }
 
-  private async request(path: string, init: RequestInit = {}): Promise<GitHubRestResponse> {
+  private async request(path: string, init: RequestInit = {}, additionalCredentials: readonly string[] = []): Promise<GitHubRestResponse> {
     const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     // One absolute deadline covers headers and body: require progress within
@@ -873,7 +873,7 @@ export class GitHubGateway implements ForgeGateway {
         // "preserves the HTTP failure when reading its body is aborted" in graphql.test.ts.
         const body = await beforeDeadline(boundedResponseText(response, Infinity, controller.signal)).catch(() => null);
         const { rateLimited, retryAfterSeconds } = classifyGitHubRateLimit(response.status, response.headers, body);
-        throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body, response.headers, this.accessToken);
+        throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body, response.headers, [this.accessToken, ...additionalCredentials]);
       }
 
       // Drain successful bodies even when callers only need the status. Past the
