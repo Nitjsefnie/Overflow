@@ -48,4 +48,8 @@ Reference links:
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to change Overflow, and the conventions of this repository that reject work silently.
 - [deploy/README.md](deploy/README.md) — the production deployment procedure.
 
+<img src="https://nitjsefni.eu/widgets/stars-nitjsefnie-overflow.svg" alt="Star history for Nitjsefnie/Overflow" width="780">
+
+[Star history for Nitjsefnie/Overflow](https://nitjsefni.eu/widgets/stars-nitjsefnie-overflow.svg), refreshed hourly.
+
 MIT — see [LICENSE](LICENSE).
