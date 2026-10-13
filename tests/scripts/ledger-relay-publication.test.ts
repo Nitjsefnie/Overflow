@@ -725,8 +725,8 @@ describe("completed producer and bound selection", () => {
 
 type QueueMode = "single" | "max";
 
-function workflowQueue(): QueueMode {
-  const workflow = parse(readFileSync(".github/workflows/ledger-relay.yml", "utf8"));
+function workflowQueue(yaml = readFileSync(".github/workflows/ledger-relay.yml", "utf8")): QueueMode {
+  const workflow = parse(yaml);
   const queue: unknown = workflow.concurrency?.queue;
   if (queue === undefined || queue === "single") return "single";
   if (queue === "max") return "max";
@@ -1539,4 +1539,79 @@ describe("relay queue simulator", () => {
     expect(group.displaced).toEqual(["100"]);
     expect(group.errors).toEqual([]);
   });
+});
+
+describe("workflow queue parser", () => {
+  it.each([
+    ["absent", "concurrency: {}", "single"],
+    ["single", "concurrency:\n  queue: single", "single"],
+    ["max", "concurrency:\n  queue: max", "max"],
+  ])("uses the expected mode for %s queue input", (_label, yaml, expected) => {
+    expect(workflowQueue(yaml)).toBe(expected);
+  });
+
+  it("rejects an unsupported queue input", () => {
+    expect(() => workflowQueue("concurrency:\n  queue: unsupported")).toThrow(/unsupported.*queue/);
+  });
+});
+
+describe("issue 1207 independent queued safety rules", () => {
+  it.each(["identity floor", "mirror newest-selection"] as const)(
+    "preserves the entire newer-failure history through the decisive %s", async (rule) => {
+      const w = world("pr-gates");
+      const inFlight = { ...gate(9600, "success"), head_sha: (9600).toString(16).padStart(40, "0") };
+      const older = gate(9002, "success"), newer = gate(9003, "failure");
+      // The held start's listing excludes the queued completions, so its sweep
+      // cannot supply the newer App identity before either pending start runs.
+      w.state.producers = [inFlight];
+      w.state.blockOldWrite = true;
+      w.state.blockWriteId = "9600:1";
+      const group = concurrencyGroup("max", ["newer", "older"]);
+      group.enqueue("in-flight", () => w.relay("mirror", inFlight));
+      await Promise.race([w.blocked.promise, group.drain().then(() => { throw new Error("9600 POST was not held"); })]);
+
+      group.enqueue("older", async () => {
+        for (const context of GATE_CONTEXTS) {
+          const history = w.state.checks.filter((check) => check.head_sha === HEAD && check.name === context);
+          expect(history.map((check) => `${check.external_id}=${check.conclusion}`))
+            .toEqual(rule === "identity floor" ? ["9003:1=failure"] : []);
+        }
+        if (rule === "identity floor") {
+          // Fifty eligible other-head producers exclude newer from the bounded
+          // selection. The older mirror retains its own trigger, leaving only
+          // the stored, strictly newer App identity to prevent older success.
+          const otherHeadRuns = Array.from({ length: SWEEP_RUN_LIMIT }, (_, i) => ({
+            ...gate(10020 - i, "success"), head_sha: "c".repeat(40),
+          }));
+          w.state.producers = [...otherHeadRuns, newer, older];
+        } else {
+          w.state.producers = [inFlight, newer, older];
+        }
+        await w.relay("mirror", older);
+      });
+      group.enqueue("newer", async () => {
+        w.state.producers = [inFlight, newer, older];
+        if (rule === "mirror newest-selection") {
+          // A failed job fetch prevents this real mirror and its sweep from
+          // publishing. The older start must select the still-unposted newer
+          // completed producer once the HTTP fault is gone.
+          w.state.onJobs = () => { throw new Error("newer job fetch unavailable"); };
+        }
+        try { await w.relay("mirror", newer); }
+        finally { w.state.onJobs = undefined; }
+      });
+      w.released.resolve();
+      await group.drain();
+
+      expect(group.started).toEqual(["in-flight", "newer", "older"]);
+      expect(group.displaced).toEqual([]);
+      expect(group.errors).toHaveLength(rule === "mirror newest-selection" ? 1 : 0);
+      if (rule === "mirror newest-selection") expect(String(group.errors[0])).toContain("newer job fetch unavailable");
+      for (const context of GATE_CONTEXTS) {
+        const history = w.state.checks.filter((check) => check.head_sha === HEAD && check.name === context);
+        expect(history.map((check) => `${check.external_id}=${check.conclusion}`)).toEqual(["9003:1=failure"]);
+        expect(history.at(-1)).toMatchObject({ external_id: "9003:1", conclusion: "failure", app: { id: 5118623 } });
+      }
+    },
+  );
 });
