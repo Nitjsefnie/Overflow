@@ -142,6 +142,57 @@ export function GET() { return errorResponse(400, CODE, "m"); }
     expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:1`);
   });
 
+  it.each([
+    ["awaited dynamic property call", '(await import("@/lib/http/error-response")).errorResponse(418, "HIDDEN", "m")'],
+    ["dynamic property call without await", 'import("@/lib/http/error-response").errorResponse(418, "HIDDEN", "m")'],
+    ["dynamic call with nonliteral arguments", '(await import("@/lib/http/error-response")).errorResponse(Number(418), ["HIDDEN"][0]!, "m")'],
+    ["dynamic namespace binding", '(() => { const http = import("@/lib/http/error-response"); return http; })()'],
+    ["awaited dynamic namespace binding", '(async () => { const http = await import("@/lib/http/error-response"); return http.errorResponse(418, "HIDDEN", "m"); })()'],
+    ["dynamic destructuring", '(async () => { const { errorResponse: f } = await import("@/lib/http/error-response"); return f(418, "HIDDEN", "m"); })()'],
+    ["dynamic then callback", 'import("@/lib/http/error-response").then(http => http.errorResponse(418, "HIDDEN", "m"))'],
+    ["dynamic then destructuring", 'import("@/lib/http/error-response").then(({ errorResponse: f }) => f(418, "HIDDEN", "m"))'],
+    ["dynamic template specifier", '(await import(`../../../lib/http/error-response.ts`)).errorResponse(418, "HIDDEN", "m")'],
+    ["dynamic builder", '(await import("@/lib/http/error-response")).errorEnvelope("HIDDEN", "m")'],
+  ])("refuses %s even when the former failure remains recorded", (_label, expression) => {
+    const root = tree({
+      [routeFile]: `${importHelper}export async function GET() {
+  errorResponse(400, "INVALID_REQUEST", "m");
+  errorResponse(400, "INVALID_REQUEST", "m");
+  return ${expression};
+}
+`,
+    });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:5:`);
+  });
+
+  it.each([
+    ["import-equals namespace", 'import http = require("@/lib/http/error-response");', 'http.errorResponse(418, "HIDDEN", "m")'],
+    ["import-equals destructuring", 'import http = require("../../../lib/http/error-response.ts");', '(() => { const { errorResponse: f } = http; return f(418, "HIDDEN", "m"); })()'],
+    ["default import and re-binding", 'import http from "@/lib/http/error-response";', '(() => { const f = http.errorResponse; return f(418, "HIDDEN", "m"); })()'],
+    ["named default import", 'import { default as http } from "@/lib/http/error-response";', 'http.errorResponse(418, "HIDDEN", "m")'],
+    ["string-named namespace import", 'import { "*" as http } from "@/lib/http/error-response";', 'http.errorResponse(418, "HIDDEN", "m")'],
+    ["namespace re-binding", 'import * as http from "@/lib/http/error-response";', '(() => { const { errorResponse: f } = http; return f(418, "HIDDEN", "m"); })()'],
+  ])("refuses %s at the helper import", (_label, declaration, expression) => {
+    const root = tree({
+      [routeFile]: `${importHelper}${declaration}
+export function GET() { errorResponse(400, "INVALID_REQUEST", "m"); return ${expression}; }
+`,
+    });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:2:`);
+  });
+
+  it.each([
+    ["local alias", 'const f = errorResponse; return f(418, "HIDDEN", "m");'],
+    ["internal import-equals alias", 'import f = errorResponse; return f(418, "HIDDEN", "m");'],
+    ["stored property", 'const http = { fail: errorResponse }; return http.fail(418, "HIDDEN", "m");'],
+    ["stored shorthand", 'const http = { errorResponse }; return http.errorResponse(418, "HIDDEN", "m");'],
+    ["passed callback", 'return [1].map(errorResponse);'],
+    ["bound helper", 'return errorResponse.bind(null, 418, "HIDDEN", "m")();'],
+  ])("refuses an unattributed helper reference: %s", (_label, body) => {
+    const root = tree({ [routeFile]: `${importHelper}export function GET() { ${body} }\n` });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:2:`);
+  });
+
   it("fails loudly on a re-export of the helper", () => {
     const root = tree({
       [routeFile]: 'export { errorResponse as GET } from "@/lib/http/error-response";\n',
