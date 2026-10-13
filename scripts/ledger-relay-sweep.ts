@@ -137,7 +137,7 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
   const suppressed: CheckRunSuppression[] = [];
   const superseded: Array<{ runId: string; supersededBy: number }> = [];
   const rerunDispatched: string[] = [];
-  const handled = new Map<string, Set<string>>();
+  const handled = new Map<string, Map<string, Pick<SweepCandidate, "runId" | "runAttempt">>>();
   const appReads = new Map<string, unknown[] | undefined>();
   if (triggerRun !== undefined && listedTrigger?.runAttempt === triggerRun.runAttempt) {
     triggerRun.runStartedAt = listedTrigger.runStartedAt ?? triggerRun.runStartedAt;
@@ -171,14 +171,26 @@ export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
       initialBound = resolved.historyBound;
     }
     if (isTrigger && triggerRun === undefined) triggerRun = candidate;
-    const atHead = handled.get(candidate.headSha) ?? new Set<string>();
+    const atHead = handled.get(candidate.headSha) ?? new Map<string, Pick<SweepCandidate, "runId" | "runAttempt">>();
     handled.set(candidate.headSha, atHead);
     const newest = newestProducersFor(deps.pinMap, [candidate]);
-    for (const context of atHead) newest.delete(context);
+    for (const [context, producer] of newest) {
+      const previous = atHead.get(context);
+      if (previous === undefined) continue;
+      if (compareProducerIdentities(producer, previous) <= 0) {
+        newest.delete(context);
+      } else {
+        // Resolution can advance an attempt past an earlier handled identity.
+        // Its floor must include this start's writes, so discard the old snapshot.
+        appReads.delete(candidate.headSha);
+      }
+    }
     if (newest.size === 0) continue;
     // Even a newest no-op or upstream refusal excludes an older producer for
     // these contexts in this start. A trigger's mirror already attempted them.
-    for (const context of newest.keys()) atHead.add(context);
+    for (const context of newest.keys()) atHead.set(context, {
+      runId: candidate.runId, runAttempt: candidate.runAttempt,
+    });
     let jobsBody = isTrigger ? deps.triggerJobs : undefined;
     if (!isTrigger) {
       const historyBounds = new Map(initialBound === undefined ? [] : [...newest.keys()].map((context) => [context, initialBound]));
