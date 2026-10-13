@@ -156,6 +156,22 @@ describe("errorLogToken", () => {
     expect(errorLogToken(error)).toBe(`${logField("Error")}: ${logField("loop")}; …`);
   });
 
+  it("bounds work for a generative cause getter even with fresh identities", () => {
+    let reads = 0;
+    const fresh = (): Error => {
+      const error = new Error("generated");
+      Object.defineProperty(error, "cause", { get() {
+        // Keep the fixture finite even when the production traversal is broken.
+        if (++reads > 1000) throw new Error("fixture fuse exhausted");
+        return fresh();
+      } });
+      return error;
+    };
+    const token = errorLogToken(fresh());
+    expect(reads).toBeLessThanOrEqual(64);
+    expect(token.endsWith("; …")).toBe(true);
+  });
+
   it("renders a non-Error thrown value through logField(String(...))", () => {
     expect(errorLogToken("raw\nstring")).toBe(logField("raw\nstring"));
     expect(errorLogToken(42)).toBe(logField("42"));
