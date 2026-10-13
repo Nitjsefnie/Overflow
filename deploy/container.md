@@ -217,7 +217,9 @@ sh scripts/db-backup.sh --output-dir /absolute/path/private-backups
 ```
 
 For a restore drill, provision a separate target database and a role that can
-restore into it, set `DATABASE_URL` for that server/role, then run:
+restore into it, and set `DATABASE_URL` for that server/role. For the invocation
+below, the URL's database name must differ from `overflow_restore_drill`:
+the script refuses an equal target without `--allow-live`. Then run:
 
 ```sh
 sh scripts/db-restore.sh overflow_restore_drill /absolute/path/private-backups/selected.dump
