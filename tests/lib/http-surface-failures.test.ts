@@ -117,15 +117,24 @@ export function refuse() { return errorResponse(400, "INVALID_INPUT", "Bad."); }
 
   it.each([
     'import type { Thing } from "@/lib/types-only";',
-    'import { type Thing } from "@/lib/types-only";',
     'export type { Thing } from "@/lib/types-only";',
-    'export { type Thing } from "@/lib/types-only";',
   ])("does not follow an erased src edge: %s", (source) => {
     const root = tree({
       [routeFile]: source,
       "src/lib/types-only.ts": 'import { createRequire } from "node:module"; export type Thing = string; export const load = createRequire(import.meta.url);',
     });
     expect(deriveRouteFailures(["GET /api/things"], root)).toEqual({ "GET /api/things": [] });
+  });
+
+  it.each([
+    'import { type Thing } from "@/lib/types-only";',
+    'export { type Thing } from "@/lib/types-only";',
+  ])("follows the runtime module edge despite erased bindings: %s", (source) => {
+    const root = tree({
+      [routeFile]: source,
+      "src/lib/types-only.ts": 'import { createRequire } from "node:module"; export type Thing = string; export const load = createRequire(import.meta.url);',
+    });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow("src/lib/types-only.ts:1:");
   });
 
   it("retains the runtime half of a mixed import", () => {
