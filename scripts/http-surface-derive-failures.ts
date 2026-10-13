@@ -33,9 +33,12 @@ import ts from "typescript";
  * spread, a non-literal options or extra object — throws naming file:line,
  * and the remedy is to make the call site literal. The helper referenced
  * other than by a direct named-import call (passed as a value, imported as a
- * namespace, re-exported) throws too, as does any use of the envelope
- * builder `errorEnvelope` outside the helper module: either would answer a
- * failure the walk cannot see.
+ * namespace/default, re-exported, or aliased locally) throws too. Direct
+ * dynamic imports and import-equals of the helper module are refused at the
+ * import, regardless of await, destructuring, property access or .then use.
+ * Named imports (including renamed imports) are the only supported helper
+ * bindings. Any use of the envelope builder `errorEnvelope` outside the
+ * helper module also throws: it would answer a failure the walk cannot see.
  *
  * The granularity is the module, not the code path: every helper call in
  * every module a route reaches counts for that route, whichever handler or
@@ -237,9 +240,14 @@ function moduleFailureAnswers(root: string, checker: ts.TypeChecker, source: ts.
   const bindings = new Map<ts.Symbol, string>();
   for (const reference of moduleReferences(root, source)) {
     const declaration = reference.declaration;
-    if (declaration === undefined ||
-        resolveModule(root, source, reference.node, reference.specifier) !== helperFile) {
+    if (resolveModule(root, source, reference.node, reference.specifier) !== helperFile) {
       continue;
+    }
+    if (declaration === undefined) {
+      throw new Error(
+        `${location(root, source, reference.node)}: dynamically imports or import-equals ${helperModule}; ` +
+          `import { ${helperName} } and call it directly so the HTTP surface derivation can record the failure answers.`,
+      );
     }
     if (ts.isExportDeclaration(declaration)) {
       throw new Error(
@@ -255,9 +263,16 @@ function moduleFailureAnswers(root: string, checker: ts.TypeChecker, source: ts.
       );
     }
     for (const specifier of named?.elements ?? []) {
+      if (specifier.isTypeOnly) continue;
       const imported = (specifier.propertyName ?? specifier.name).text;
+      if (imported !== helperName && imported !== builderName) {
+        throw new Error(
+          `${location(root, source, specifier)}: unsupported value import ${JSON.stringify(imported)} from ` +
+            `${helperModule}; import { ${helperName} } so the HTTP surface derivation can attribute every call.`,
+        );
+      }
       const symbol = checker.getSymbolAtLocation(specifier.name);
-      if (!specifier.isTypeOnly && symbol !== undefined && (imported === helperName || imported === builderName)) {
+      if (symbol !== undefined) {
         bindings.set(symbol, imported);
       }
     }
