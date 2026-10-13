@@ -224,14 +224,15 @@ export function moderationErrorResponse(error: unknown): Response {
   if (error instanceof ModerationServiceError) {
     switch (error.code) {
       case "FORBIDDEN":
-        return errorResponse(403, error.code, "Unable to process moderation request.");
+        return errorResponse(403, "FORBIDDEN", "Unable to process moderation request.");
       case "NOT_FOUND":
-        return errorResponse(404, error.code, "Unable to process moderation request.");
+        return errorResponse(404, "NOT_FOUND", "Unable to process moderation request.");
       case "CONFLICT":
-        return errorResponse(409, error.code, "Unable to process moderation request.");
+        return errorResponse(409, "CONFLICT", "Unable to process moderation request.");
       case "INVALID_INPUT":
+        return errorResponse(422, "INVALID_INPUT", "Unable to process moderation request.");
       case "INSUFFICIENT_SAMPLES":
-        return errorResponse(422, error.code, "Unable to process moderation request.");
+        return errorResponse(422, "INSUFFICIENT_SAMPLES", "Unable to process moderation request.");
     }
   }
   return errorResponse(500, "INTERNAL_ERROR", "Unable to process moderation request.");

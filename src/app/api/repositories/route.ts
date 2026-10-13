@@ -607,15 +607,15 @@ function requiredWebhookConfiguration(provider?: "gitlab"): { callbackUrl: strin
 function forgeIdentityErrorResponse(error: ForgeIdentityError): Response {
   switch (error.code) {
     case "INVALID_INPUT":
-      return errorResponse(400, error.code, error.message);
+      return errorResponse(400, "INVALID_INPUT", error.message);
     case "UNVERIFIED":
-      return errorResponse(401, error.code, error.message);
+      return errorResponse(401, "UNVERIFIED", error.message);
     case "FORBIDDEN":
-      return errorResponse(403, error.code, error.message);
+      return errorResponse(403, "FORBIDDEN", error.message);
     case "NOT_FOUND":
-      return errorResponse(404, error.code, error.message);
+      return errorResponse(404, "NOT_FOUND", error.message);
     case "UPSTREAM_FAILURE":
-      return errorResponse(502, error.code, error.message);
+      return errorResponse(502, "UPSTREAM_FAILURE", error.message);
   }
 }
 
@@ -632,24 +632,25 @@ function registrationErrorResponse(error: RepositoryRegistrationError): Response
   }
   switch (error.code) {
     case "INVALID_INPUT":
-      return errorResponse(400, error.code, error.message);
+      return errorResponse(400, "INVALID_INPUT", error.message);
     case "GITHUB_CREDENTIALS":
-      return errorResponse(401, error.code, error.message);
+      return errorResponse(401, "GITHUB_CREDENTIALS", error.message);
     case "FORBIDDEN":
+      return errorResponse(403, "FORBIDDEN", error.message);
     case "GITHUB_ACCESS":
-      return errorResponse(403, error.code, error.message);
+      return errorResponse(403, "GITHUB_ACCESS", error.message);
     case "GITHUB_RATE_LIMITED":
-      return errorResponse(429, error.code, error.message);
+      return errorResponse(429, "GITHUB_RATE_LIMITED", error.message);
     case "CONFLICT":
-      return errorResponse(409, error.code, error.message);
+      return errorResponse(409, "CONFLICT", error.message);
     case "UPSTREAM_FAILURE":
-      return errorResponse(502, error.code, error.message);
+      return errorResponse(502, "UPSTREAM_FAILURE", error.message);
     case "NOT_FOUND":
-      return errorResponse(404, error.code, error.message);
+      return errorResponse(404, "NOT_FOUND", error.message);
     // The registration save failed and the compensating webhook deletion failed too
     // (issue 451): the orphaned webhook is the actionable state, so it is surfaced as
     // its own answer rather than folded into the save failure that started it.
     case "ROLLBACK_INCOMPLETE":
-      return errorResponse(503, error.code, error.message);
+      return errorResponse(503, "ROLLBACK_INCOMPLETE", error.message);
   }
 }
