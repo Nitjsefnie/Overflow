@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as layout from "../../src/app/layout";
 
-// Issue 1046: the middleware's nonce-based script CSP reaches Next's bootstrap
+// Issue 1046: the proxy's nonce-based script CSP reaches Next's bootstrap
 // scripts only when a page renders dynamically — prerendered HTML is produced
 // at build time, when no request exists, so its scripts carry no nonce and
 // 'strict-dynamic' blocks every one of them (measured live before the fix:

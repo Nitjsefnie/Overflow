@@ -348,9 +348,9 @@ describe("framing-protection headers", () => {
 
   // Fails unless the route's unconditioned map carries exactly the XFO
   // fallback plus the issue 1046 hardening pair, with NO Content-Security-Policy:
-  // the CSP is single-sourced in src/middleware.ts (Next merges headers() and
-  // middleware response headers by overwriting same-named keys, so a CSP
-  // emitted here never reaches the wire and would only mask the middleware's),
+  // the CSP is single-sourced in src/proxy.ts (Next merges headers() and
+  // proxy response headers by overwriting same-named keys, so a CSP
+  // emitted here never reaches the wire and would only mask the proxy's),
   // and no matching conditioned rule may set a framing header either.
   async function expectRouteFramed(route: string) {
     const { effective, conditionedFramingHeaders } = await routeHeaders(route);

@@ -1,14 +1,14 @@
 import { NextRequest } from "next/server";
 import { describe, expect, it } from "vitest";
-import { config, middleware } from "../../src/middleware";
+import { config, proxy } from "../../src/proxy";
 
-// Issue 1046: the middleware serves a per-request, nonce-based script CSP so
+// Issue 1046: the proxy serves a per-request, nonce-based script CSP so
 // Next's bootstrap scripts stay allowlisted without unsafe-inline. Next merges
-// headers() and middleware response headers by overwriting same-named keys, so
+// headers() and proxy response headers by overwriting same-named keys, so
 // exactly ONE Content-Security-Policy header reaches the wire — this
-// middleware's. It therefore also carries the frame pair's CSP leg
+// proxy's. It therefore also carries the frame pair's CSP leg
 // (frame-ancestors 'none', issue 677), single-sourced here; next.config keeps
-// only the X-Frame-Options fallback. These tests drive the real middleware
+// only the X-Frame-Options fallback. These tests drive the real proxy
 // with a NextRequest and read back the headers Next's own adapter reads
 // (x-middleware-override-headers plus one x-middleware-request-<name> per
 // propagated header), and evaluate config.matcher with Next's own build-time
@@ -21,7 +21,7 @@ const cspPattern = /^script-src 'self' 'nonce-([A-Za-z0-9+/]+=*)' 'strict-dynami
 
 function cspOf(response: Response) {
   const csp = response.headers.get("content-security-policy");
-  expect(csp, "middleware must set a Content-Security-Policy header").toBeTypeOf("string");
+  expect(csp, "proxy must set a Content-Security-Policy header").toBeTypeOf("string");
   return csp as string;
 }
 
@@ -35,9 +35,9 @@ function nonceOf(response: Response) {
   return match![1];
 }
 
-describe("middleware script CSP", () => {
+describe("proxy script CSP", () => {
   it("serves a nonce-based script-src CSP on the response", () => {
-    const response = middleware(request("/some-page"));
+    const response = proxy(request("/some-page"));
 
     const csp = cspOf(response);
     expect(csp.startsWith("script-src 'self' 'nonce-")).toBe(true);
@@ -46,23 +46,23 @@ describe("middleware script CSP", () => {
   });
 
   it("generates a fresh nonce for every request", () => {
-    const first = nonceOf(middleware(request("/some-page")));
-    const second = nonceOf(middleware(request("/some-page")));
+    const first = nonceOf(proxy(request("/some-page")));
+    const second = nonceOf(proxy(request("/some-page")));
 
     expect(first).not.toBe(second);
   });
 
-  it("delivers frame-ancestors 'none' in the middleware's own CSP header", () => {
-    const response = middleware(request("/some-page"));
+  it("delivers frame-ancestors 'none' in the proxy's own CSP header", () => {
+    const response = proxy(request("/some-page"));
 
     // The one CSP that reaches the wire (Next overwrites same-named headers
-    // between headers() and the middleware) must keep refusing framing; the
+    // between headers() and the proxy) must keep refusing framing; the
     // static next.config header no longer carries this directive.
     expect(cspOf(response)).toContain("frame-ancestors 'none'");
   });
 
   it("carries no unsafe-inline, unsafe-eval or default-src", () => {
-    const csp = cspOf(middleware(request("/some-page")));
+    const csp = cspOf(proxy(request("/some-page")));
 
     for (const forbidden of ["unsafe-inline", "unsafe-eval", "default-src"]) {
       expect(csp.toLowerCase()).not.toContain(forbidden);
@@ -70,7 +70,7 @@ describe("middleware script CSP", () => {
   });
 
   it("propagates the nonce and the CSP to the request the renderer receives", () => {
-    const response = middleware(request("/some-page"));
+    const response = proxy(request("/some-page"));
     const csp = cspOf(response);
 
     // NextResponse.next({ request: { headers } }) records the propagated
@@ -86,13 +86,13 @@ describe("middleware script CSP", () => {
   });
 
   it("exports only the handler and its matcher config", async () => {
-    const middlewareModule = await import("../../src/middleware");
+    const proxyModule = await import("../../src/proxy");
 
-    expect(Object.keys(middlewareModule).sort()).toEqual(["config", "middleware"]);
+    expect(Object.keys(proxyModule).sort()).toEqual(["config", "proxy"]);
   });
 });
 
-describe("middleware matcher config", () => {
+describe("proxy matcher config", () => {
   // The docs' production shape, minus the docs' api exclusion: this app's API
   // routes are matched (the brief rules /api/x must match), so only the static
   // assets, the favicon and prefetches are skipped. Prefetch exclusion lives in
