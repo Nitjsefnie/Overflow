@@ -26,7 +26,8 @@ function propertyName(name: ts.PropertyName | undefined): string | undefined {
 
 function unwrap(expression: ts.Expression): ts.Expression {
   return ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) ||
-    ts.isSatisfiesExpression(expression) || ts.isTypeAssertionExpression(expression)
+    ts.isSatisfiesExpression(expression) || ts.isTypeAssertionExpression(expression) ||
+    ts.isNonNullExpression(expression)
     ? unwrap(expression.expression) : expression;
 }
 
@@ -80,8 +81,13 @@ function envelopeCopies(source: ts.SourceFile, checker: ts.TypeChecker): string[
     ts.forEachChild(node, collectWrites);
   };
   collectWrites(source);
-  const merge = (target: Shape, value: Shape | undefined) => {
-    for (const [key, field] of value ?? []) target.set(key, field);
+  // Shapes are construction evidence, not final runtime values. Later writes
+  // and spreads may add facts, but must never erase an earlier envelope.
+  const merge = (target: Shape, value: Shape | undefined): Shape => {
+    for (const [key, field] of value ?? []) {
+      const previous = target.get(key);
+      target.set(key, field === undefined ? previous : merge(new Map(previous), field));
+    }
     return target;
   };
   const symbolOf = (node: ts.Identifier) => ts.isShorthandPropertyAssignment(node.parent)
@@ -118,7 +124,7 @@ function envelopeCopies(source: ts.SourceFile, checker: ts.TypeChecker): string[
           if (key === undefined) continue;
           const value = ts.isPropertyAssignment(property) ? property.initializer
             : ts.isShorthandPropertyAssignment(property) ? property.name : undefined;
-          shape.set(key, value === undefined ? undefined : resolve(value, seen, bindings));
+          merge(shape, new Map([[key, value === undefined ? undefined : resolve(value, seen, bindings)]]));
         }
       }
       return shape;
@@ -140,7 +146,7 @@ function envelopeCopies(source: ts.SourceFile, checker: ts.TypeChecker): string[
         }
         const value = resolve(write.value, seen, bindings);
         if (write.spread || write.keys.length === 0) merge(target, value);
-        else target.set(write.keys.at(-1)!, value);
+        else merge(target, new Map([[write.keys.at(-1)!, value]]));
       }
       return shape;
     }
@@ -190,6 +196,10 @@ function envelopeCopies(source: ts.SourceFile, checker: ts.TypeChecker): string[
       }
     }
     if (ts.isObjectLiteralExpression(node)) check(node, resolve(node));
+    if (ts.isPropertyAssignment(node) && propertyName(node.name) === "error" &&
+        isDetail(resolve(node.initializer))) {
+      record(node, "hand-built error envelope");
+    }
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) check(node, resolve(node.name));
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
         member(node.left)?.key === "error" && isDetail(resolve(node.right))) {
@@ -240,6 +250,18 @@ const bypasses = [
   ["static computed and template keys", 'const detail = { ["code"]: "REJECTED", [`message`]: "Denied." }; Response.json({ [`error`]: detail });'],
 ] as const;
 
+const monotoneCases = [
+  ["the reviewed non-null override plant", 'const detail = { code: "UNAUTHENTICATED", message: "The supplied API token was not accepted." }; const overrides: Record<string, unknown> = { error: detail! }; Response.json({ error: { code: "UNAUTHENTICATED", message: "The supplied API token was not accepted." }, ...overrides }, { status: 401 });'],
+  ["a non-null local detail binding", 'const detail = { code: "REJECTED", message: "Denied." }; Response.json({ error: detail! });'],
+  ["a direct literal before an unknown spread", 'declare const unknownValue: unknown; const overrides = { error: unknownValue }; Response.json({ error: { code: "REJECTED", message: "Denied." }, ...overrides });'],
+  ["a direct literal before a later unknown property", 'declare const unknownValue: unknown; Response.json({ error: { code: "REJECTED", message: "Denied." }, error: unknownValue });'],
+  ["a forwarded detail before an unknown spread", 'declare const unknownValue: unknown; function wrap(detail) { return { error: detail, ...{ error: unknownValue } }; } Response.json(wrap({ code: "REJECTED", message: "Denied." }));'],
+  ["a forwarded detail before a later partial property", 'function wrap(detail) { return { error: detail, error: { hint: "replacement" } }; } Response.json(wrap({ code: "REJECTED", message: "Denied." }));'],
+  ["a forwarded body before an unknown property write", 'declare const unknownValue: unknown; function wrap(detail) { const body = { error: detail }; body.error = unknownValue; return body; } Response.json(wrap({ code: "REJECTED", message: "Denied." }));'],
+  ["a forwarded detail before a partial Object.assign replacement", 'function wrap(detail) { return Object.assign({ error: detail }, { error: { hint: "replacement" } }); } Response.json(wrap({ code: "REJECTED", message: "Denied." }));'],
+  ["a forwarded detail before a later conditional shape", 'declare const flag: boolean; function wrap(detail) { return flag ? { error: detail } : { error: { hint: "replacement" } }; } Response.json(wrap({ code: "REJECTED", message: "Denied." }));'],
+] as const;
+
 describe("HTTP error envelope", () => {
   it("preserves status, headers, body bytes and code/message/extra key order", async () => {
     expect(existsSync(path.join(root, helperPath))).toBe(true);
@@ -282,6 +304,10 @@ describe("HTTP error envelope", () => {
   });
 
   it.each(bypasses)("recognizes %s as another envelope construction", (_label, fixture) => {
+    expect(scan([path.join(root, "src/guard-fixture.ts")], fixture)).not.toEqual([]);
+  });
+
+  it.each(monotoneCases)("retains envelope evidence for %s", (_label, fixture) => {
     expect(scan([path.join(root, "src/guard-fixture.ts")], fixture)).not.toEqual([]);
   });
 
