@@ -30,6 +30,7 @@ describe("reconcileRepository", () => {
     }, token);
     const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(upstream) } });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const budgetLog = vi.spyOn(console, "info").mockImplementation(() => {});
     try {
       await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ cause: upstream });
       const line = logged.mock.calls.find(([message]) => message === "Reconciliation of repository repository failed.")!.join(" ");
@@ -38,6 +39,7 @@ describe("reconcileRepository", () => {
       expect(line).not.toContain(token);
     } finally {
       logged.mockRestore();
+      budgetLog.mockRestore();
     }
   });
 

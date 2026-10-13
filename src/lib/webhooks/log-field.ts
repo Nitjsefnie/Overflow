@@ -75,6 +75,8 @@ function isLowSurrogate(unit: number): boolean {
 // that refuse access — a reason that cannot be read still leaves the line.
 
 const MAX_ERROR_CAUSE_DEPTH = 5;
+// Includes the six preview reads; fresh identities cannot expand work forever.
+const MAX_ERROR_CAUSE_READS = 64;
 const CHAIN_CONTINUES = "…";
 
 export function errorLogToken(value: unknown): string {
@@ -99,7 +101,9 @@ export function errorLogToken(value: unknown): string {
   // A stack of wrappers must not hide GitHub's refusal. Keep the generic
   // preview bounded, then surface only the first GitHub failure in its tail.
   try {
-    while (current !== null && current !== undefined && !visited.has(current)) {
+    for (let reads = MAX_ERROR_CAUSE_DEPTH + 1;
+      reads < MAX_ERROR_CAUSE_READS && current !== null && current !== undefined && !visited.has(current);
+      reads += 1) {
       visited.add(current);
       if (current instanceof GitHubApiError || current instanceof GitHubGraphqlRequestError) {
         segments.push(errorSegment(current));
