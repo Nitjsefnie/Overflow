@@ -3,6 +3,19 @@ import { deriveHttpSurfaceAnswers, shapeOf } from "./http-surface-derive.ts";
 import { deriveRouteFailures } from "./http-surface-derive-failures.ts";
 import type { DerivedHttpSurface } from "./surface-change.ts";
 
+/** Fixture calls must not write synthetic actions to the updater's journal output. */
+async function fixtureAnswers(): ReturnType<typeof deriveHttpSurfaceAnswers> {
+  const info = console.info;
+  console.info = (...args: Parameters<typeof console.info>) => {
+    if (args[0] !== "Privileged action") info.apply(console, args);
+  };
+  try {
+    return await deriveHttpSurfaceAnswers();
+  } finally {
+    console.info = info;
+  }
+}
+
 /**
  * The whole recorded HTTP surface as the code derives it (issue 1056), in
  * the shape scripts/http-surface-snapshot.json records it minus the version:
@@ -13,7 +26,7 @@ import type { DerivedHttpSurface } from "./surface-change.ts";
  * (scripts/http-surface-derive-failures.ts).
  */
 export async function deriveHttpSurfaceRecord(): Promise<DerivedHttpSurface> {
-  const answers = await deriveHttpSurfaceAnswers();
+  const answers = await fixtureAnswers();
   const keys = Object.keys(answers);
   return {
     snapshotFormat: 2,

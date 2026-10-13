@@ -10,24 +10,31 @@ export function decideSnapshotUpdate(input: {
   snapshotVersion?: string;
   requestedVersion?: string;
   protocolVersion?: string;
+  peerProtocolVersion?: string;
+  peerSnapshotVersion?: string;
 }): UpdateDecision {
-  if (input.snapshotVersion !== undefined) requiredVersion(input.snapshotVersion, "none");
-  if (input.protocolVersion !== undefined) requiredVersion(input.protocolVersion, "none");
+  const currentVersions = [input.snapshotVersion, input.protocolVersion, input.peerProtocolVersion, input.peerSnapshotVersion];
+  for (const version of currentVersions) {
+    if (version !== undefined) requiredVersion(version, "none");
+  }
+  const aligned = input.snapshotVersion === input.protocolVersion && currentVersions.every(
+    (version) => version === undefined || version === input.snapshotVersion,
+  );
   if (input.requestedVersion !== undefined) {
     requiredVersion(input.requestedVersion, "none");
-    if (input.snapshotVersion !== undefined) {
-      assertSurfaceVersion(input.snapshotVersion, input.requestedVersion,
+    for (const version of [input.snapshotVersion, input.peerSnapshotVersion]) {
+      if (version !== undefined) assertSurfaceVersion(version, input.requestedVersion,
         { kind: input.changeKind, reasons: [] }, "scripts/update-http-surface-snapshot.ts or scripts/update-mcp-surface-snapshot.ts --version <new>");
     }
   }
   if (input.surfaceChanged) {
     if (input.requestedVersion !== undefined) return "record";
     if (input.snapshotVersion === undefined || input.changeKind !== "none") return "surface-refuse";
-    return input.snapshotVersion === input.protocolVersion ? "record-current" : "drift-refuse";
+    return aligned ? "record-current" : "drift-refuse";
   }
   if (input.requestedVersion !== undefined) {
-    return input.snapshotVersion === input.requestedVersion && input.protocolVersion === input.requestedVersion
+    return aligned && input.snapshotVersion === input.requestedVersion
       ? "in-sync" : "repair";
   }
-  return input.snapshotVersion === input.protocolVersion ? "in-sync" : "drift-refuse";
+  return aligned ? "in-sync" : "drift-refuse";
 }

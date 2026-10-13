@@ -104,15 +104,18 @@ async function main(): Promise<void> {
   const serverSource = readFileSync(versionPath, "utf8");
   const protocolSource = readFileSync(protocolPath, "utf8");
   const serverVersion = readConstAssignment(serverSource, "SERVER_VERSION");
+  const mcpVersion = readConstAssignment(protocolSource, "MCP_SERVER_VERSION");
   const decision = decideSnapshotUpdate({ surfaceChanged, changeKind: change.kind,
-    snapshotVersion: snapshot?.httpServerVersion, requestedVersion, protocolVersion: serverVersion });
+    snapshotVersion: snapshot?.httpServerVersion, requestedVersion, protocolVersion: serverVersion,
+    peerProtocolVersion: mcpVersion, peerSnapshotVersion: mcpSnapshot.mcpServerVersion });
   if (decision === "surface-refuse") {
     if (snapshot) assertSurfaceVersion(snapshot.httpServerVersion, snapshot.httpServerVersion, change,
       "scripts/update-http-surface-snapshot.ts --version <new>");
     throw new Error("Recording a new HTTP snapshot needs an explicit --version <v>.");
   }
   if (decision === "drift-refuse") {
-    throw new Error(`SERVER_VERSION is ${serverVersion} but the snapshot records ${snapshot?.httpServerVersion}. ` +
+    throw new Error(`The four version sites disagree: SERVER_VERSION=${serverVersion}, MCP_SERVER_VERSION=${mcpVersion}, ` +
+      `httpServerVersion=${snapshot?.httpServerVersion}, mcpServerVersion=${mcpSnapshot.mcpServerVersion}. ` +
       "Run scripts/update-http-surface-snapshot.ts --version <snapshot-version> to repair it.");
   }
   const version = requestedVersion ?? snapshot!.httpServerVersion;
