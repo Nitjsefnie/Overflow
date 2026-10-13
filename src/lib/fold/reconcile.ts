@@ -2,7 +2,7 @@ import { reconciliationBudgetHoldUntil, type ReconciliationBudgetDependencies } 
 import type { GitHubIssueListOptions } from "@/lib/github/client";
 import { DEFAULT_GRAPHQL_BUDGET_RESERVE, type GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
-import { GitHubApiError, findGitHubRateLimitError, githubRateLimitNotBefore, isGitHubSubjectNotFoundError } from "@/lib/github/errors";
+import { GitHubApiError, findGitHubRateLimitError, githubRateLimitNotBefore, isGitHubSubjectNotFoundError, MAX_ERROR_CAUSE_READS } from "@/lib/github/errors";
 import { GitHubResponseTooLargeError } from "@/lib/github/response-text";
 import { GitLabApiError } from "@/lib/gitlab/client";
 import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
@@ -474,12 +474,22 @@ async function reconcileRepositoryWhileCoordinated(
     );
     const failure = new Error("Unable to reconcile repository.", { cause: reportedError });
     const rateLimit = findGitHubRateLimitError(error);
-    if (rateLimit) {
-      const notBefore = rateLimit.notBefore ?? githubRateLimitNotBefore(rateLimit, now());
+    let notBefore: Date | undefined;
+    let retryAfterSeconds: number | null = null;
+    try {
+      if (rateLimit) {
+        const deadline = rateLimit.notBefore ?? githubRateLimitNotBefore(rateLimit, now());
+        retryAfterSeconds = rateLimit.retryAfterSeconds;
+        notBefore = deadline;
+      }
+    } catch {
+      // Keep the recorded failure and its original cause when guidance is unreadable.
+    }
+    if (notBefore) {
       // Carry the decision across awaited persistence/reporting without adding API JSON fields.
       Object.defineProperties(failure, {
         rateLimited: { value: true },
-        retryAfterSeconds: { value: rateLimit.retryAfterSeconds },
+        retryAfterSeconds: { value: retryAfterSeconds },
         notBefore: { value: notBefore },
       });
       await dependencies.store.setReconciliationCooldown(repositoryId, notBefore);
@@ -490,13 +500,18 @@ async function reconcileRepositoryWhileCoordinated(
 
 // A credential rejection reaches this module nested — the sponsor gateway's
 // guard raises it from inside a read, and intermediate layers may wrap it — so
-// the walk follows the cause chain, with a visited set because a constructed
-// chain could be cyclic. Anything else is the generic failure.
+// the finite, guarded walk follows the cause chain as with rate-limit detection.
+// Unreadable evidence leaves the generic failure.
 function carriesCredentialRejection(error: unknown): boolean {
   const visited = new Set<unknown>();
-  for (let cause = error; cause !== null && cause !== undefined && !visited.has(cause); cause = (cause as { cause?: unknown }).cause) {
-    visited.add(cause);
-    if (cause instanceof ForgeCredentialRejectedError) return true;
+  try {
+    for (let cause = error, depth = 0; depth < MAX_ERROR_CAUSE_READS && cause !== null && cause !== undefined && !visited.has(cause); depth += 1) {
+      visited.add(cause);
+      if (cause instanceof ForgeCredentialRejectedError) return true;
+      cause = (cause as { cause?: unknown }).cause;
+    }
+  } catch {
+    // Diagnostic getters cannot cost the persisted failure outcome.
   }
   return false;
 }

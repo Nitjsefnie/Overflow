@@ -269,9 +269,14 @@ export async function runNextReconciliationJob(
       // the failure is recorded on its own job and never propagated to the drain.
       reportJobFailure(dependencies, job.repositoryId, error);
       const rateLimit = findGitHubRateLimitError(error);
-      if (rateLimit) {
+      let notBefore: Date | undefined;
+      try {
+        if (rateLimit) notBefore = rateLimit.notBefore ?? githubRateLimitNotBefore(rateLimit, now());
+      } catch {
+        // A getter may refuse even after classification; retain ordinary retry/FAILED.
+      }
+      if (notBefore) {
         // Deferral refunds the claim: GitHub's limit must not exhaust job attempts.
-        const notBefore = rateLimit.notBefore ?? githubRateLimitNotBefore(rateLimit, now());
         await store.deferReconciliationJob(job.id, job.leaseToken, notBefore);
         return "DEFERRED";
       }

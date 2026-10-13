@@ -37,6 +37,66 @@ const DEFAULTED_CONCURRENCY_MESSAGE =
   "Reconciliation worker concurrency could not be used; drains use the default concurrency instead";
 
 describe("running the next reconciliation job", () => {
+  it.each(["cause", "rateLimited", "retryAfterSeconds", "deadline", "headers", "instanceof", "has"] as const)(
+    "keeps ordinary FAILED bookkeeping when %s cannot be read", async (field) => {
+      let failure: Error = new Error("Upstream failure");
+      const refuse = () => { throw new Error("error field refused"); };
+      if (field === "instanceof") failure = new Proxy(failure, { getPrototypeOf: refuse });
+      else if (field === "has") failure = new Proxy(failure, { has: refuse });
+      else if (field === "headers") {
+        failure = new GitHubApiError(403, true);
+        Object.defineProperty(failure, "headers", { get: refuse });
+      } else {
+        if (field === "retryAfterSeconds" || field === "deadline") {
+          Object.defineProperties(failure, { rateLimited: { value: true }, retryAfterSeconds: { value: 120, configurable: true } });
+        }
+        Object.defineProperty(failure, field === "deadline" ? "notBefore" : field, { get: refuse });
+      }
+      const { store, calls } = createFakeStore({ jobs: [job({ attemptCount: 5 })] });
+      const reported: unknown[] = [];
+      await expect(runNextReconciliationJob({
+        store, now: () => new Date("2030-01-02T03:04:05.678Z"), scheduleLeaseRenewal: () => () => {},
+        onFailure: (_id, error) => { reported.push(error); }, reconcile: async () => { throw failure; },
+      })).resolves.toBe("FAILED");
+      expect(calls).toEqual([{ method: "claim", args: [] }, { method: "fail", args: ["job-1", "lease-1"] }]);
+      expect(reported[0]).toBe(failure);
+    },
+  );
+
+  it.each([32, 63])("defers a log-visible GitHub limit through %s ordinary wrappers", async (depth) => {
+    let failure: Error = new GitHubApiError(403, true, 120, "Secondary rate limit", { "retry-after": "120" });
+    for (let index = 0; index < depth; index++) failure = new Error("Wrapper", { cause: failure });
+    expect(errorLogToken(failure)).toContain('status=403');
+    const { store, calls } = createFakeStore({ jobs: [job({ attemptCount: 5 })] });
+    expect(await runNextReconciliationJob({
+      store, now: () => new Date("2030-01-02T03:04:05.678Z"), scheduleLeaseRenewal: () => () => {},
+      onFailure: () => {}, reconcile: async () => { throw failure; },
+    })).toBe("DEFERRED");
+    expect(calls).toEqual([
+      { method: "claim", args: [] },
+      { method: "defer", args: ["job-1", "lease-1", new Date("2030-01-02T03:06:05.678Z")] },
+    ]);
+  });
+
+  it("defers a real reset-only HTTP-200 primary GraphQL limit at the reset instant", async () => {
+    const { GitHubGraphqlClient } = await import("@/lib/github/graphql");
+    const client = new GitHubGraphqlClient({
+      accessToken: randomBytes(24).toString("base64url"),
+      fetch: async () => Response.json({ errors: [{ type: "RATE_LIMITED" }] }, { headers: {
+        "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(new Date("2030-01-02T03:09:05Z").getTime() / 1000),
+      } }),
+    });
+    const { store, calls } = createFakeStore({ jobs: [job({ attemptCount: 5 })] });
+    expect(await runNextReconciliationJob({
+      store, now: () => new Date("2030-01-02T03:04:05.678Z"), scheduleLeaseRenewal: () => () => {}, onFailure: () => {},
+      reconcile: async () => { await client.query("query {}", {}); },
+    })).toBe("DEFERRED");
+    expect(calls).toEqual([
+      { method: "claim", args: [] },
+      { method: "defer", args: ["job-1", "lease-1", new Date("2030-01-02T03:09:05Z")] },
+    ]);
+  });
+
   it("defers a structured GraphQL rate limit beyond the retry table", async () => {
     const { store, calls } = createFakeStore({ jobs: [job({ attemptCount: 5 })] });
     const upstream = new GitHubGraphqlRequestError("GraphQL limit", true, 120);

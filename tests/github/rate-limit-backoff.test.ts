@@ -61,6 +61,6 @@ describe("bounded rate-limit cause detection", () => {
     let result: ReturnType<typeof findGitHubRateLimitError> | undefined;
     expect(() => { result = findGitHubRateLimitError(freshCause()); }).not.toThrow();
     expect(result).toBeNull();
-    expect(reads).toBeLessThanOrEqual(32);
+    expect(reads).toBeLessThanOrEqual(64);
   });
 });

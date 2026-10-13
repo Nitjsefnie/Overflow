@@ -227,6 +227,36 @@ describe("GitHub failure diagnostics", () => {
     expect(line).not.toContain(accessToken);
   });
 
+  it("omits credential prefixes from engine-shortened JSON parse diagnostics", async () => {
+    const client = new GitHubGraphqlClient({ accessToken, fetch: async () => new Response(`!${accessToken}`, {
+      headers: { "x-github-request-id": "request-prefix" },
+    }) });
+    const failure = await client.query("query {}", {}).catch((error: unknown) => error);
+    const line = errorLogToken(failure);
+    expect(line).toContain("SyntaxError:");
+    expect(line).toContain('status=200 x-github-request-id="request-prefix"');
+    expect(line).not.toContain(accessToken.slice(0, 8));
+  });
+
+  it("renders captured primary GraphQL limit evidence with one request-id", async () => {
+    const reset = String(new Date("2030-01-02T03:09:05Z").getTime() / 1000);
+    const client = new GitHubGraphqlClient({ accessToken, fetch: async () => Response.json({
+      errors: [{ type: "RATE_LIMITED" }],
+    }, { headers: {
+      "x-ratelimit-remaining": "0", "x-ratelimit-reset": reset,
+      "x-github-request-id": "request-primary", authorization: accessToken,
+    } }) });
+    const failure = await client.query("query {}", {}).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": reset } });
+    const line = errorLogToken(failure);
+    expect(line).toContain('status=200');
+    expect(line).toContain('x-ratelimit-remaining="0"');
+    expect(line).toContain(`x-ratelimit-reset="${reset}"`);
+    expect(line.match(/x-github-request-id=/g)).toHaveLength(1);
+    expect(line).not.toContain("authorization");
+    expect(line).not.toContain(accessToken);
+  });
+
   it("retains a bounded redacted network failure description without inventing HTTP context", async () => {
     const client = new GitHubGraphqlClient({ accessToken, fetch: async () => {
       throw new TypeError(`Connection failed ${accessToken}\n${"x".repeat(2000)}`);

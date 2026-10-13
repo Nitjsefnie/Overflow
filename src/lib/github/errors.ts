@@ -6,12 +6,19 @@ export interface GitHubRateLimitDetails {
 }
 
 export function isGitHubRateLimitError(error: unknown): error is Error & GitHubRateLimitDetails {
-  return error instanceof Error
-    && "rateLimited" in error && error.rateLimited === true
-    && "retryAfterSeconds" in error
-    && (error.retryAfterSeconds === null || (typeof error.retryAfterSeconds === "number"
-      && Number.isSafeInteger(error.retryAfterSeconds) && error.retryAfterSeconds >= 0));
+  try {
+    return error instanceof Error
+      && "rateLimited" in error && error.rateLimited === true
+      && "retryAfterSeconds" in error
+      && (error.retryAfterSeconds === null || (typeof error.retryAfterSeconds === "number"
+        && Number.isSafeInteger(error.retryAfterSeconds) && error.retryAfterSeconds >= 0));
+  } catch {
+    return false;
+  }
 }
+
+// Includes the root and the logger's six-link preview; fresh causes cannot expand work.
+export const MAX_ERROR_CAUSE_READS = 64;
 
 // A large repository can exhaust an hourly GitHub budget; without retry guidance,
 // allow a full hour before spending points on another full fold.
@@ -41,11 +48,14 @@ export function githubRateLimitNotBefore(error: GitHubRateLimitDetails, now: Dat
 
 export function findGitHubRateLimitError(error: unknown): (Error & GitHubRateLimitDetails) | null {
   const visited = new Set<unknown>();
-  // Bound getter work as well as cycles: a cause accessor can fabricate fresh objects.
-  for (let cause = error, depth = 0; depth < 32 && cause !== null && typeof cause === "object" && !visited.has(cause); depth += 1) {
-    if (isGitHubRateLimitError(cause)) return cause;
-    visited.add(cause);
-    cause = "cause" in cause ? cause.cause : undefined;
+  try {
+    for (let cause = error, depth = 0; depth < MAX_ERROR_CAUSE_READS && cause !== null && typeof cause === "object" && !visited.has(cause); depth += 1) {
+      if (isGitHubRateLimitError(cause)) return cause;
+      visited.add(cause);
+      cause = "cause" in cause ? cause.cause : undefined;
+    }
+  } catch {
+    // Unreadable exception evidence must not escape ordinary failure bookkeeping.
   }
   return null;
 }

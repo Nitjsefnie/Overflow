@@ -17,7 +17,7 @@
 // the cut split, or one the input carried — is escaped like any other unsafe
 // code unit, so the token never holds a lone surrogate.
 
-import { GitHubApiError, GitHubGraphqlRequestError } from "@/lib/github/errors";
+import { GitHubApiError, GitHubGraphqlRequestError, MAX_ERROR_CAUSE_READS } from "@/lib/github/errors";
 
 const MAX_LOGGED_CODE_UNITS = 256;
 
@@ -75,8 +75,6 @@ function isLowSurrogate(unit: number): boolean {
 // that refuse access — a reason that cannot be read still leaves the line.
 
 const MAX_ERROR_CAUSE_DEPTH = 5;
-// Includes the six preview reads; fresh identities cannot expand work forever.
-const MAX_ERROR_CAUSE_READS = 64;
 const CHAIN_CONTINUES = "…";
 
 export function errorLogToken(value: unknown): string {
@@ -145,13 +143,14 @@ function errorSegment(value: unknown): string {
       const name = typeof value.name === "string" && value.name !== "" ? value.name : "Error";
       const message = typeof value.message === "string" ? value.message : String(value.message);
       let token = `${logField(name)}: ${logField(message)}`;
-      if (value instanceof GitHubApiError) {
-        token += ` status=${value.status}`;
-        if (value.body !== null) token += ` body=${logField(value.body)}`;
-        for (const [header, field] of Object.entries(value.headers)) token += ` ${header}=${logField(field)}`;
-      } else if (value instanceof GitHubGraphqlRequestError) {
+      if (value instanceof GitHubApiError || value instanceof GitHubGraphqlRequestError) {
         if (value.status !== null) token += ` status=${value.status}`;
-        if (value.requestId !== null) token += ` x-github-request-id=${logField(value.requestId)}`;
+        if (value instanceof GitHubApiError && value.body !== null) token += ` body=${logField(value.body)}`;
+        for (const [header, field] of Object.entries(value.headers)) token += ` ${header}=${logField(field)}`;
+        if (value instanceof GitHubGraphqlRequestError && value.requestId !== null
+          && !Object.hasOwn(value.headers, "x-github-request-id")) {
+          token += ` x-github-request-id=${logField(value.requestId)}`;
+        }
       }
       return token;
     }
