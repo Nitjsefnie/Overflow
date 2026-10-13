@@ -352,16 +352,3 @@ describe(".dockerignore", () => {
     }
   });
 });
-
-describe("deploy/container.md", () => {
-  it("warns that APP_URL must name the real browsable host or Auth.js refuses sessions", () => {
-    const containerDoc = readFileSync(
-      new URL("../../deploy/container.md", import.meta.url),
-      "utf8",
-    );
-    const guidance = containerDoc
-      .split("\n")
-      .find((line) => line.includes("APP_URL") && line.includes("UntrustedHost"));
-    expect(guidance, "the Auth.js trust guidance line naming APP_URL and UntrustedHost").toBeDefined();
-  });
-});

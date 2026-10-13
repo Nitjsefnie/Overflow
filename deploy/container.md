@@ -85,15 +85,24 @@ By default both services bind to loopback — the app on `127.0.0.1:3000`, the
 database on `127.0.0.1:5432` — and `APP_HOST_BIND` / `POSTGRES_HOST_BIND`
 change their host bind addresses deliberately. `POSTGRES_HOST_PORT` changes
 the database's host port from its default of `5432`; the container port stays
-`5432`. `APP_URL` must name the real browsable
-host, because it is what the Auth.js configuration trusts for sign-in: Auth.js
-itself never reads `APP_URL` — its own derivation trusts a host only from
-`AUTH_URL`, `AUTH_TRUST_HOST`, `VERCEL` or `CF_PAGES` — so the configuration
-in `src/auth.ts` derives its trust from `APP_URL`, the same origin the origin
-guard enforces. A missing or malformed `APP_URL` logs `[auth][error] UntrustedHost` on
-every sign-in route, and so does an operator `AUTH_URL` mis-set to a blank
-value; a parseable but wrong `APP_URL` passes the sign-in routes
-and fails later, at GitHub's OAuth redirect.
+`5432`. `APP_URL` must name the real public application origin, because the
+browser mutation guard accepts only that origin; a missing, malformed or
+opaque-origin value refuses those mutations. In production, when `AUTH_URL`,
+`AUTH_TRUST_HOST`, `VERCEL` and `CF_PAGES` are all unset, Overflow enables
+Auth.js's boolean `trustHost` flag only if `APP_URL` parses to a valid,
+non-opaque origin. The first defined override in that order instead decides
+the flag: non-empty enables it and empty disables it. This flag does not
+compare incoming sign-in hosts against `APP_URL` or select the OAuth origin.
+
+The installed Auth.js packages select that origin from `AUTH_URL` (or its
+legacy fallback `NEXTAUTH_URL`) when non-empty, otherwise from the request
+URL and headers. Keep any URL override's pathname at `/` or `/api/auth` so
+the generated URLs match Overflow's mount, as described in
+[API.md](../API.md#browser-authentication-routes). A parseable but wrong
+`APP_URL` can enable host trust while refusing browser mutations from the
+served origin; it does not itself change GitHub's OAuth callback URL. See the
+[environment reference](../OPERATING.md#environment-reference) for the
+`APP_URL` and Auth.js overrides.
 
 ## Operator ownership
 
