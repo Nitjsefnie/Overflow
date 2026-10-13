@@ -14,21 +14,49 @@ function name(node: ts.PropertyName | ts.Expression): string | undefined {
   return ts.isIdentifier(node) || ts.isStringLiteral(node) ? node.text : undefined;
 }
 
-/** Resolve local aliases without treating unrelated object methods as response factories. */
-function responseClass(node: ts.Expression, checker: ts.TypeChecker, seen = new Set<ts.Symbol>()): boolean {
+/** Identify original constructor bindings only; runtime aliases are refused at their origin. */
+function responseClass(node: ts.Expression, checker: ts.TypeChecker): boolean {
   node = unwrap(node);
-  if (ts.isPropertyAccessExpression(node)) return ["Response", "NextResponse"].includes(node.name.text);
+  if (ts.isPropertyAccessExpression(node) && ["Response", "NextResponse"].includes(node.name.text)) {
+    const receiver = unwrap(node.expression);
+    if (!ts.isIdentifier(receiver)) return false;
+    if (["globalThis", "global", "self"].includes(receiver.text)) return true;
+    return (checker.getSymbolAtLocation(receiver)?.declarations ?? []).some(ts.isNamespaceImport);
+  }
   if (!ts.isIdentifier(node)) return false;
-  const symbol = checker.getSymbolAtLocation(node);
+  const symbol = ts.isShorthandPropertyAssignment(node.parent)
+    ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
   if (!symbol) return ["Response", "NextResponse"].includes(node.text);
-  if (seen.has(symbol)) return false;
-  seen.add(symbol);
   for (const declaration of symbol.declarations ?? []) {
     if (ts.isImportSpecifier(declaration)) return ["Response", "NextResponse"].includes((declaration.propertyName ?? declaration.name).text);
     if (ts.isImportClause(declaration)) return ["Response", "NextResponse"].includes(node.text);
-    if (ts.isVariableDeclaration(declaration) && declaration.initializer) return responseClass(declaration.initializer, checker, seen);
   }
   return false;
+}
+
+function outerExpression(node: ts.Expression): ts.Expression {
+  let outer = node;
+  while ((ts.isParenthesizedExpression(outer.parent) || ts.isAsExpression(outer.parent) ||
+      ts.isSatisfiesExpression(outer.parent) || ts.isNonNullExpression(outer.parent) ||
+      ts.isTypeAssertionExpression(outer.parent)) && outer.parent.expression === outer) outer = outer.parent;
+  return outer;
+}
+
+function factoryReference(node: ts.Expression, checker: ts.TypeChecker): "constructor" | "member" | undefined {
+  if (responseClass(node, checker)) return "constructor";
+  const expression = unwrap(node);
+  if ((ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) &&
+      responseClass(expression.expression, checker)) return "member";
+  return undefined;
+}
+
+function valueReference(node: ts.Identifier): boolean {
+  const parent = node.parent;
+  return !((ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+    (ts.isPropertyAssignment(parent) && parent.name === node) ||
+    (ts.isBindingElement(parent) && (parent.name === node || parent.propertyName === node)) ||
+    ((ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isFunctionDeclaration(parent) ||
+      ts.isClassDeclaration(parent)) && parent.name === node));
 }
 
 function numbers(node: ts.Expression, checker: ts.TypeChecker, seen = new Set<ts.Symbol>()): number[] | undefined {
@@ -99,7 +127,28 @@ function navigationRedirect(node: ts.Expression, checker: ts.TypeChecker): boole
 function sites(source: ts.SourceFile, checker: ts.TypeChecker): Site[] {
   const found: Site[] = [];
   const visit = (node: ts.Node): void => {
-    if (ts.isTypeNode(node)) return;
+    if (ts.isTypeNode(node) || ts.isImportDeclaration(node) || ts.isImportEqualsDeclaration(node) ||
+        (ts.isExportDeclaration(node) && node.isTypeOnly) ||
+        (ts.isExportSpecifier(node) && node.isTypeOnly)) return;
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) ||
+        (ts.isIdentifier(node) && valueReference(node))) {
+      const kind = factoryReference(node, checker);
+      if (kind) {
+        const outer = outerExpression(node);
+        const parent = outer.parent;
+        const callee = (ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.expression === outer;
+        const receiver = kind === "constructor" &&
+          (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+          parent.expression === outer && factoryReference(parent, checker) === "member";
+        const brandCheck = kind === "constructor" && ts.isBinaryExpression(parent) &&
+          parent.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword && parent.right === outer;
+        if (!callee && !receiver && !brandCheck) {
+          const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+          throw new Error(`${source.fileName}:${line}: non-envelope response factory reference is not a direct callee; ` +
+            "call the factory directly instead of storing, passing or aliasing it.");
+        }
+      }
+    }
     if (ts.isNewExpression(node) && responseClass(node.expression, checker)) {
       found.push({ node, statuses: statuses(node.arguments?.[1], checker), handlers: enclosingNames(node) });
     } else if (ts.isCallExpression(node)) {

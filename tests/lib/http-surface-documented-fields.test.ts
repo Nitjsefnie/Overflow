@@ -1,7 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { classifyHttpChange, type RecordedHttpSurface } from "../../scripts/surface-change.ts";
 
-const fixture = vi.hoisted(() => ({ body: {} as Record<string, unknown> }));
+const fixture = vi.hoisted(() => {
+  // The suite shares workers across files; re-evaluate the recorder with this stub.
+  vi.resetModules();
+  return { body: {} as Record<string, unknown> };
+});
 vi.mock("../../src/app/api/readiness/route.ts", () => ({
   createReadinessGetHandler: () => async function getReadiness() {
     return Response.json(fixture.body, { status: 503 });
@@ -17,6 +21,7 @@ async function surface(): Promise<RecordedHttpSurface> {
 }
 
 describe("documented non-envelope body projection", () => {
+  afterAll(() => { vi.resetModules(); });
   beforeEach(() => { fixture.body = { status: "unavailable", reason: "fixture detail" }; });
 
   it("records only readiness's declared documented fields", async () => {

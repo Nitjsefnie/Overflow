@@ -28,6 +28,67 @@ function tree(files: Record<string, string>): string {
 const routeFile = "src/app/api/things/route.ts";
 
 describe("HTTP failure-answer derivation", () => {
+  it.each(["Response", "NextResponse"].flatMap((constructor) => [
+    constructor,
+    `(${constructor})`,
+    `(${constructor} as typeof ${constructor})`,
+    `(${constructor} satisfies typeof ${constructor})`,
+    `${constructor}!`,
+  ]))("accepts an instanceof brand check: %s", (constructor) => {
+    const root = tree({ [routeFile]: `import { NextResponse } from "next/server";\nexport function GET(value: unknown) { return value instanceof ${constructor}; }` });
+    expect(deriveRouteFailures(["GET /api/things"], root)).toEqual({ "GET /api/things": [] });
+  });
+
+  it("refuses storing a constructor beside allowed instanceof checks", () => {
+    const root = tree({ [routeFile]: 'export function GET() { const R = Response; }' });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:1:`);
+  });
+
+  it.each([
+    'const json = Response.json; return json({bad:true}, {status:418});',
+    'const { json } = Response; return json({bad:true}, {status:418});',
+    'const Constructor = Response;',
+    'const Constructor = NextResponse;',
+    'const factory = Response.redirect;',
+    'const factory = Response.error;',
+    'const factory = NextResponse.json;',
+    'const factory = NextResponse.redirect;',
+    'const factory = NextResponse.rewrite;',
+    'const factory = NextResponse.next;',
+    'const factory = NextResponse.futureMember;',
+    'consume(Response.json);',
+    'consume(Response);',
+    'return Response.json;',
+    'return NextResponse;',
+    'const object = { factory: Response.json };',
+    'const object = { Response };',
+    'const array = [Response.json, NextResponse];',
+    'Response.json.bind(Response);',
+    'Response.json.call(Response, {bad:true}, {status:418});',
+    'Response.json.apply(Response, [{bad:true}, {status:418}]);',
+    'const factory = (Response.json);',
+    'const factory = Response.json as typeof Response.json;',
+    'const factory = Response.json satisfies typeof Response.json;',
+    'const factory = Response.json!;',
+    'const factory = (NextResponse as typeof NextResponse)!;',
+    'const { next } = NextResponse;',
+  ])("refuses a non-callee response factory reference: %s", (body) => {
+    const root = tree({ [routeFile]: `import { NextResponse } from "next/server";\nexport function GET() { ${body} }` });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:2:`);
+  });
+
+  it.each([
+    'return (Response.json)({ok:true});',
+    'return (Response.json as typeof Response.json)({ok:true});',
+    'return (Response.json satisfies typeof Response.json)({ok:true});',
+    'return Response.json!({ok:true});',
+    'return new (Response as typeof Response)("ok", {status:200});',
+    'type Factory = typeof Response; const value: typeof Response.json | undefined = undefined; return Response.json({ok:true});',
+    'interface Factories { json: typeof Response.json; next: typeof NextResponse.next } return NextResponse.json({ok:true});',
+  ])("accepts direct wrapped callees and erased response types: %s", (body) => {
+    const root = tree({ [routeFile]: `import { NextResponse } from "next/server";\nexport function GET() { ${body} }` });
+    expect(deriveRouteFailures(["GET /api/things"], root)).toEqual({ "GET /api/things": [] });
+  });
   it.each([
     'import Response from "some-package"; export function GET() { return new Response("bad", {status:400}); }',
     'import { redirect as go } from "next/navigation"; export function GET() { return go("/elsewhere"); }',
