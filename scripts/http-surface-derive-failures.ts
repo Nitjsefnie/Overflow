@@ -15,15 +15,15 @@ import ts from "typescript";
  * follows its import graph:
  *
  * - followed: static `import` and `export … from` declarations, `import x =
- *   require(…)`, and `import(…)` with a literal specifier, whose specifier is
+ *   require(…)`, bare `require(…)`, and `import(…)` with a literal specifier, whose specifier is
  *   `@/…` (src/), `./…` or `../…` and resolves to a .ts/.tsx module under src/
  *   (as written, or with .ts, .tsx, /index.ts or /index.tsx appended);
  * - not followed: `import type` / `export type` declarations (erased at
  *   runtime), package specifiers, modules outside src/, and non-TypeScript
  *   files (JSON);
  * - refused (the derivation throws naming file:line): an `import(…)` whose
- *   specifier is not a literal (also refused for `require(…)`), and an `@/`/relative specifier that resolves
- *   to nothing.
+ *   specifier is not a literal (also refused for `require(…)`), and an
+ *   `@/`/relative specifier that resolves to nothing.
  *
  * In every reached module each call to `errorResponse` is recorded as
  * "<status> <CODE>", plus " +<key>" for each field of a literal `extra`

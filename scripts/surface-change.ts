@@ -38,6 +38,27 @@ export type HttpChangeKind = "none" | "additive" | "breaking";
 
 export type HttpChange = { kind: HttpChangeKind; reasons: string[] };
 
+/** MCP entries are opaque: even an extended existing schema is breaking. */
+export type RecordedMcpSurface = { tools: ({ name: string } & Record<string, unknown>)[] };
+export type McpSurfaceSnapshot = RecordedMcpSurface & { mcpServerVersion: string };
+
+export function classifyMcpChange(base: RecordedMcpSurface, current: RecordedMcpSurface): HttpChange {
+  const before = new Map(base.tools.map((tool) => [tool.name, tool]));
+  const now = new Map(current.tools.map((tool) => [tool.name, tool]));
+  const breaking: string[] = [];
+  const additive: string[] = [];
+  for (const [name, entry] of before) {
+    if (!now.has(name)) breaking.push(`tool removed: ${name}`);
+    else if (!isDeepStrictEqual(entry, now.get(name))) breaking.push(`tool changed: ${name}`);
+  }
+  for (const name of now.keys()) {
+    if (!before.has(name)) additive.push(`tool added: ${name}`);
+  }
+  if (breaking.length) return { kind: "breaking", reasons: breaking };
+  if (additive.length) return { kind: "additive", reasons: additive };
+  return { kind: "none", reasons: [] };
+}
+
 /** Whether a surface records the envelope, statuses and failures; refuses a marker it does not know. */
 function recordsAnswers(surface: RecordedHttpSurface): boolean {
   const format: unknown = surface.snapshotFormat;

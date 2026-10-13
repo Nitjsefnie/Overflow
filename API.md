@@ -13,10 +13,13 @@ probe — and an MCP `initialize` answer carries the same value as
 what it was built against with either.
 
 Within a major version, the response shapes documented on this page and every
-MCP tool schema stay compatible: adding a field, a route, or a tool is not
-breaking; removing or changing a documented shape is. A breaking change
-requires a new major version and at least 30 days' notice, and during the
-notice window the served old shape keeps working unchanged.
+MCP tool schema stay compatible: adding an HTTP field or route, or a new MCP
+tool, requires a greater minor version in the same major; removing or changing
+a documented shape or an existing recorded MCP tool entry requires a greater
+major version. Failure answers — the error envelope, each route's status codes
+and error codes — are documented shapes under the same version rule. A breaking
+change requires a new major version and at least 30 days' notice, and during
+the notice window the served old shape keeps working unchanged.
 
 **Current deprecations:**
 
