@@ -3,7 +3,20 @@ import {
   buildConstAssignment,
   decideSnapshotUpdate,
   replaceConstAssignment,
+  serializedSnapshot,
+  surfaceUpdateInputs,
 } from "../../scripts/update-http-surface-snapshot.ts";
+import type { RecordedHttpSurface } from "../../scripts/surface-change.ts";
+
+function derived(): RecordedHttpSurface & { snapshotFormat: 2 } {
+  return {
+    snapshotFormat: 2,
+    errorEnvelope: { error: { code: "string", message: "string" } },
+    routes: { "GET /a": { id: "string" } },
+    successStatus: { "GET /a": 200 },
+    failures: { "GET /a": ["401 UNAUTHENTICATED", "403 FORBIDDEN"] },
+  };
+}
 
 describe("HTTP snapshot updater", () => {
   it.each(["$$", "$&"])("writes the literal version %s into a const assignment", (version) => {
@@ -149,5 +162,70 @@ describe("HTTP snapshot updater", () => {
     },
   ])("chooses $expected for $label", ({ input, expected }) => {
     expect(decideSnapshotUpdate(input)).toBe(expected);
+  });
+
+  it.each([
+    { label: "a missing snapshot", snapshot: () => undefined, changed: true, compatible: false },
+    {
+      label: "an identical recorded surface",
+      snapshot: () => ({ httpServerVersion: "1.1.0", ...derived() }),
+      changed: false,
+      compatible: true,
+    },
+    {
+      label: "a snapshot recorded before the envelope, statuses and failures were",
+      snapshot: () => ({ httpServerVersion: "1.1.0", routes: derived().routes }),
+      changed: true,
+      compatible: true,
+    },
+    {
+      label: "a recorded failure answer the derivation no longer gives",
+      snapshot: () => {
+        const recorded = { httpServerVersion: "1.1.0", ...derived() };
+        recorded.failures["GET /a"] = [...recorded.failures["GET /a"]!, "409 CONFLICT"];
+        return recorded;
+      },
+      changed: true,
+      compatible: false,
+    },
+    {
+      label: "a failure answer the recording lacks",
+      snapshot: () => {
+        const recorded = { httpServerVersion: "1.1.0", ...derived() };
+        recorded.failures["GET /a"] = ["401 UNAUTHENTICATED"];
+        return recorded;
+      },
+      changed: true,
+      compatible: true,
+    },
+    {
+      label: "a recorded success status the derivation changed",
+      snapshot: () => {
+        const recorded = { httpServerVersion: "1.1.0", ...derived() };
+        recorded.successStatus["GET /a"] = 201;
+        return recorded;
+      },
+      changed: true,
+      compatible: false,
+    },
+  ])("judges $label changed=$changed compatible=$compatible", ({ snapshot, changed, compatible }) => {
+    expect(surfaceUpdateInputs(snapshot(), derived())).toEqual({
+      surfaceChanged: changed,
+      surfaceCompatible: compatible,
+    });
+  });
+
+  it("serializes the format marker and version ahead of the recorded sections", () => {
+    const text = serializedSnapshot("1.1.0", derived());
+    expect(Object.keys(JSON.parse(text))).toEqual([
+      "snapshotFormat",
+      "httpServerVersion",
+      "errorEnvelope",
+      "routes",
+      "successStatus",
+      "failures",
+    ]);
+    expect(JSON.parse(text)).toEqual({ httpServerVersion: "1.1.0", ...derived() });
+    expect(text.endsWith("}\n")).toBe(true);
   });
 });

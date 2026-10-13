@@ -24,6 +24,13 @@ export type RecordedHttpSurface = {
 /** A recorded HTTP surface together with the version it was recorded at. */
 export type HttpSurfaceSnapshot = RecordedHttpSurface & { httpServerVersion: string };
 
+/** The recorded sections of a snapshot, without the version they were recorded at. */
+export function recordedSurface(snapshot: HttpSurfaceSnapshot): RecordedHttpSurface {
+  const surface: Partial<HttpSurfaceSnapshot> = { ...snapshot };
+  delete surface.httpServerVersion;
+  return surface as RecordedHttpSurface;
+}
+
 export type HttpChangeKind = "none" | "additive" | "breaking";
 
 export type HttpChange = { kind: HttpChangeKind; reasons: string[] };

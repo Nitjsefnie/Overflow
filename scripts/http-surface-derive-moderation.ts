@@ -21,11 +21,11 @@ import {
 } from "../src/app/api/overrides/route.ts";
 import { createSettlementOverridePatchHandler } from "../src/app/api/overrides/[id]/route.ts";
 import {
-  bodyShape,
+  derivedAnswer,
   memberRequest,
   mutationRequest,
   withAppUrl,
-  type HttpShape,
+  type DerivedAnswer,
 } from "./http-surface-derive.ts";
 import {
   fixtureAdjustmentInput,
@@ -51,63 +51,63 @@ import {
   fixtureTargetId,
 } from "./http-surface-fixtures.ts";
 
-export async function deriveGetModerationAudits(): Promise<HttpShape> {
-  return bodyShape(
+export async function deriveGetModerationAudits(): Promise<DerivedAnswer> {
+  return derivedAnswer(
     await createModerationAuditsGetHandler(fixtureModerationAuditsRouteDependencies())(
       memberRequest("/api/moderation/audits"),
     ),
   );
 }
 
-export async function deriveGetModerationUnwritableClosures(): Promise<HttpShape> {
-  return bodyShape(
+export async function deriveGetModerationUnwritableClosures(): Promise<DerivedAnswer> {
+  return derivedAnswer(
     await createModerationUnwritableClosuresGetHandler(
       fixtureModerationUnwritableClosuresRouteDependencies(),
     )(memberRequest("/api/moderation/unwritable-closures")),
   );
 }
 
-export async function deriveGetModerationCohort(): Promise<HttpShape> {
+export async function deriveGetModerationCohort(): Promise<DerivedAnswer> {
   const query = new URLSearchParams({
     targetAccountId: fixtureTargetId,
     sampleStartedAt: "2026-01-01T00:00:00.000Z",
     sampleEndedAt: "2026-02-01T00:00:00.000Z",
   });
-  return bodyShape(
+  return derivedAnswer(
     await createModerationCohortGetHandler(fixtureModerationRouteDependencies())(
       memberRequest(`/api/moderation/cohort?${query}`),
     ),
   );
 }
 
-export async function deriveGetModerationRecalibration(): Promise<HttpShape> {
+export async function deriveGetModerationRecalibration(): Promise<DerivedAnswer> {
   const query = new URLSearchParams({ targetAccountId: fixtureTargetId });
-  return bodyShape(
+  return derivedAnswer(
     await createModerationRecalibrationGetHandler(fixtureModerationCreditRouteDependencies())(
       memberRequest(`/api/moderation/recalibration?${query}`),
     ),
   );
 }
 
-export async function deriveGetRederivation(): Promise<HttpShape> {
-  return bodyShape(
+export async function deriveGetRederivation(): Promise<DerivedAnswer> {
+  return derivedAnswer(
     await createRederivationGetHandler(fixtureRederivationRouteDependencies())(
       memberRequest("/api/moderation/rederivation"),
     ),
   );
 }
 
-export async function deriveGetModerators(): Promise<HttpShape> {
-  return bodyShape(
+export async function deriveGetModerators(): Promise<DerivedAnswer> {
+  return derivedAnswer(
     await createModeratorGetHandler(fixtureModeratorRouteDependencies())(
       memberRequest("/api/moderation/moderators"),
     ),
   );
 }
 
-export async function derivePostModerators(): Promise<HttpShape> {
+export async function derivePostModerators(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createModeratorPostHandler(fixtureModeratorRouteDependencies())(
         mutationRequest("/api/moderation/moderators", "POST", {
           targetAccountId: fixtureTargetId,
@@ -118,9 +118,9 @@ export async function derivePostModerators(): Promise<HttpShape> {
   );
 }
 
-export async function derivePostModeration(): Promise<HttpShape> {
+export async function derivePostModeration(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createModerationPostHandler(fixtureModerationRouteDependencies())(
         mutationRequest("/api/moderation", "POST", fixtureOpenAuditInput),
       ),
@@ -128,9 +128,9 @@ export async function derivePostModeration(): Promise<HttpShape> {
   );
 }
 
-export async function derivePatchModerationAudit(): Promise<HttpShape> {
+export async function derivePatchModerationAudit(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createModerationAuditPatchHandler(fixtureModerationRouteDependencies())(
         mutationRequest(`/api/moderation/${fixtureAuditId}`, "PATCH", fixtureAuditActionInput),
         { params: Promise.resolve({ id: fixtureAuditId }) },
@@ -139,9 +139,9 @@ export async function derivePatchModerationAudit(): Promise<HttpShape> {
   );
 }
 
-export async function derivePatchModerationClose(): Promise<HttpShape> {
+export async function derivePatchModerationClose(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createModerationClosePatchHandler(fixtureModerationRouteDependencies())(
         mutationRequest("/api/moderation", "PATCH", fixtureCloseRecalibrationInput),
       ),
@@ -149,9 +149,9 @@ export async function derivePatchModerationClose(): Promise<HttpShape> {
   );
 }
 
-export async function derivePatchModerationReversal(): Promise<HttpShape> {
+export async function derivePatchModerationReversal(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createModerationReversalPatchHandler(fixtureModerationRouteDependencies())(
         mutationRequest("/api/moderation/reversal", "PATCH", fixtureBanReversalInput),
       ),
@@ -159,9 +159,9 @@ export async function derivePatchModerationReversal(): Promise<HttpShape> {
   );
 }
 
-export async function derivePostModerationAdjustment(): Promise<HttpShape> {
+export async function derivePostModerationAdjustment(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createModerationAdjustmentPostHandler(fixtureModerationCreditRouteDependencies())(
         mutationRequest("/api/moderation/recalibration/adjustment", "POST", fixtureAdjustmentInput),
       ),
@@ -169,9 +169,9 @@ export async function derivePostModerationAdjustment(): Promise<HttpShape> {
   );
 }
 
-export async function derivePostModerationReversal(): Promise<HttpShape> {
+export async function derivePostModerationReversal(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createModerationReversalPostHandler(fixtureModerationCreditRouteDependencies())(
         mutationRequest("/api/moderation/adjustments/reversal", "POST", fixtureReversalInput),
       ),
@@ -179,9 +179,9 @@ export async function derivePostModerationReversal(): Promise<HttpShape> {
   );
 }
 
-export async function derivePostRederivation(): Promise<HttpShape> {
+export async function derivePostRederivation(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createRederivationPostHandler(fixtureRederivationRouteDependencies())(
         mutationRequest("/api/moderation/rederivation", "POST", fixtureRederivationInput),
       ),
@@ -189,9 +189,9 @@ export async function derivePostRederivation(): Promise<HttpShape> {
   );
 }
 
-export async function derivePostOverride(): Promise<HttpShape> {
+export async function derivePostOverride(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createSettlementOverridePostHandler(fixtureOverrideRouteDependencies())(
         mutationRequest("/api/overrides", "POST", fixtureOverrideInput),
       ),
@@ -199,17 +199,17 @@ export async function derivePostOverride(): Promise<HttpShape> {
   );
 }
 
-export async function deriveGetOverrides(): Promise<HttpShape> {
-  return bodyShape(
+export async function deriveGetOverrides(): Promise<DerivedAnswer> {
+  return derivedAnswer(
     await createSettlementOverrideListGetHandler(fixtureOverrideListRouteDependencies())(
       memberRequest("/api/overrides"),
     ),
   );
 }
 
-export async function derivePatchOverride(): Promise<HttpShape> {
+export async function derivePatchOverride(): Promise<DerivedAnswer> {
   return withAppUrl(async () =>
-    bodyShape(
+    derivedAnswer(
       await createSettlementOverridePatchHandler(fixtureOverrideDecisionRouteDependencies())(
         mutationRequest(`/api/overrides/${fixtureOverrideRequestId}`, "PATCH", fixtureOverrideDecisionInput),
         { params: Promise.resolve({ id: fixtureOverrideRequestId }) },
@@ -219,15 +219,15 @@ export async function derivePatchOverride(): Promise<HttpShape> {
 }
 
 /**
- * The moderation and override routes' shapes (issue 912, task 3), keyed
+ * The moderation and override routes' success answers (issue 912, task 3), keyed
  * "METHOD /path" in the spelling API.md documents dynamic segments with
  * (<id> for [id]). The derivation is split off
  * scripts/http-surface-derive.ts because that module's tooling ceiling
  * (800 lines) has no room for sixteen more per-route functions; the record
- * this returns is spread into deriveHttpSurfaceShapes, and the stubs live in
+ * this returns is spread into deriveHttpSurfaceAnswers, and the stubs live in
  * scripts/http-surface-fixtures.ts like every other route's.
  */
-export async function moderationSurfaceShapes(): Promise<Record<string, HttpShape>> {
+export async function moderationSurfaceAnswers(): Promise<Record<string, DerivedAnswer>> {
   return {
     "GET /api/moderation/audits": await deriveGetModerationAudits(),
     "GET /api/moderation/unwritable-closures": await deriveGetModerationUnwritableClosures(),
