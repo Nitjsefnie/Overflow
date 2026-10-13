@@ -1,12 +1,13 @@
 import { readFileSync } from "node:fs";
-import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   baseCommit,
   firstParentOfMerge,
-  git,
   pickBase,
 } from "../../scripts/http-surface-derive.ts";
+import { readSurfaceSnapshotsAt } from "../../scripts/surface-snapshot-base.ts";
+import { assertSnapshotVersions } from "../../scripts/surface-version.ts";
+import type { HttpSurfaceSnapshot, McpSurfaceSnapshot } from "../../scripts/surface-change.ts";
 import { MCP_SERVER_VERSION } from "@/lib/mcp/protocol";
 import { defineMcpTools, type McpToolDependencies } from "@/lib/mcp/tools";
 
@@ -29,8 +30,10 @@ const dependencies: McpToolDependencies = {
 
 const snapshot = JSON.parse(
   readFileSync(new URL("../../scripts/mcp-surface-snapshot.json", import.meta.url), "utf8"),
-) as { mcpServerVersion: string; tools: unknown[] };
-const snapshotPath = "scripts/mcp-surface-snapshot.json";
+) as McpSurfaceSnapshot;
+const httpSnapshot = JSON.parse(
+  readFileSync(new URL("../../scripts/http-surface-snapshot.json", import.meta.url), "utf8"),
+) as HttpSurfaceSnapshot;
 
 describe("MCP tool surface snapshot", () => {
   it("records the served names, descriptions, and input schemas", () => {
@@ -46,35 +49,13 @@ describe("MCP tool surface snapshot", () => {
   it("records the same version as the MCP server", () => {
     expect(
       snapshot.mcpServerVersion,
-      `scripts/mcp-surface-snapshot.json records ${snapshot.mcpServerVersion} but MCP_SERVER_VERSION is ${MCP_SERVER_VERSION}. The snapshot and MCP_SERVER_VERSION move together: run the update script (it moves both) or edit both to the same value.`,
+      `scripts/mcp-surface-snapshot.json records ${snapshot.mcpServerVersion} but MCP_SERVER_VERSION is ${MCP_SERVER_VERSION}. The snapshot and MCP_SERVER_VERSION move together: run the update script (it moves all four version sites) or edit both to the same value.`,
     ).toBe(MCP_SERVER_VERSION);
   });
 
-  it("never changes the recorded surface without moving the server version", () => {
-    const base = baseCommit(process.env.MCP_SNAPSHOT_BASE_COMMIT, "MCP");
-    const listing = git(["--literal-pathspecs", "ls-tree", "-z", base, "--", snapshotPath])
-      .split("\0")[0]!;
-    if (listing === "") {
-      // This branch introduces the snapshot, so the base has no surface to compare.
-      return;
-    }
-    const [entry, path] = listing.split("\t", 2);
-    if (path !== snapshotPath || !entry?.startsWith("100644 blob ")) {
-      throw new Error(`${snapshotPath} at ${base} is not a regular file`);
-    }
-
-    let previous: { mcpServerVersion: string; tools: unknown[] };
-    try {
-      previous = JSON.parse(git(["show", `${base}:${snapshotPath}`])) as typeof previous;
-    } catch (error) {
-      throw new Error(`${snapshotPath} at ${base} could not be parsed: ${error}`);
-    }
-    if (isDeepStrictEqual(previous.tools, snapshot.tools)) return;
-
-    expect(
-      snapshot.mcpServerVersion,
-      `The recorded MCP tool surface changed relative to ${base.slice(0, 8)} but the version did not move (${previous.mcpServerVersion}). Bump MCP_SERVER_VERSION in src/lib/mcp/protocol.ts and record it in scripts/mcp-surface-snapshot.json in the same change.`,
-    ).not.toBe(previous.mcpServerVersion);
+  it("enforces the combined HTTP and MCP SemVer requirement", () => {
+    const base = baseCommit(process.env.MCP_SNAPSHOT_BASE_COMMIT ?? process.env.HTTP_SNAPSHOT_BASE_COMMIT, "MCP");
+    assertSnapshotVersions(readSurfaceSnapshotsAt(base), { http: httpSnapshot, mcp: snapshot });
   });
 
   it.each([

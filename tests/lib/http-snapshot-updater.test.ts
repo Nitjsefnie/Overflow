@@ -39,144 +39,62 @@ describe("HTTP snapshot updater", () => {
   });
 
   it.each([
-    {
-      label: "an unchanged, aligned surface without a flag",
-      input: {
-        surfaceChanged: false,
-        surfaceCompatible: true,
-        snapshotVersion: "0.3.0",
-        requestedVersion: undefined,
-        protocolVersion: "0.3.0",
-      },
-      expected: "in-sync",
-    },
-    {
-      label: "an unchanged surface with protocol drift and no flag",
-      input: {
-        surfaceChanged: false,
-        surfaceCompatible: true,
-        snapshotVersion: "0.3.0",
-        requestedVersion: undefined,
-        protocolVersion: "0.2.0",
-      },
-      expected: "drift-refuse",
-    },
-    {
-      label: "an unchanged surface with protocol drift and the recorded version requested",
-      input: {
-        surfaceChanged: false,
-        surfaceCompatible: true,
-        snapshotVersion: "0.3.0",
-        requestedVersion: "0.3.0",
-        protocolVersion: "0.2.0",
-      },
-      expected: "repair",
-    },
-    {
-      label: "an unchanged surface with a new version requested",
-      input: {
-        surfaceChanged: false,
-        surfaceCompatible: true,
-        snapshotVersion: "0.1.0",
-        requestedVersion: "0.4.0",
-        protocolVersion: "0.3.0",
-      },
-      expected: "repair",
-    },
-    {
-      label: "an additively changed surface without a flag",
-      input: {
-        surfaceChanged: true,
-        surfaceCompatible: true,
-        snapshotVersion: "0.3.0",
-        requestedVersion: undefined,
-        protocolVersion: "0.3.0",
-      },
-      expected: "record-additive",
-    },
-    {
-      label: "an additively changed surface without a flag while the versions drift",
-      input: {
-        surfaceChanged: true,
-        surfaceCompatible: true,
-        snapshotVersion: "0.3.0",
-        requestedVersion: undefined,
-        protocolVersion: "0.2.0",
-      },
-      expected: "drift-refuse",
-    },
-    {
-      label: "an additively changed surface with a version flag",
-      input: {
-        surfaceChanged: true,
-        surfaceCompatible: true,
-        snapshotVersion: "0.3.0",
-        requestedVersion: "0.4.0",
-        protocolVersion: "0.3.0",
-      },
-      expected: "record",
-    },
-    {
-      label: "an incompatibly changed surface without a version flag",
-      input: {
-        surfaceChanged: true,
-        surfaceCompatible: false,
-        snapshotVersion: "0.3.0",
-        requestedVersion: undefined,
-        protocolVersion: "0.3.0",
-      },
-      expected: "surface-refuse",
-    },
-    {
-      label: "an incompatibly changed surface with the recorded version requested",
-      input: {
-        surfaceChanged: true,
-        surfaceCompatible: false,
-        snapshotVersion: "0.3.0",
-        requestedVersion: "0.3.0",
-        protocolVersion: "0.3.0",
-      },
-      expected: "same-version-refuse",
-    },
-    {
-      label: "an incompatibly changed surface with a new version requested",
-      input: {
-        surfaceChanged: true,
-        surfaceCompatible: false,
-        snapshotVersion: "0.3.0",
-        requestedVersion: "0.4.0",
-        protocolVersion: "0.3.0",
-      },
-      expected: "record",
-    },
-    {
-      label: "a new snapshot with a requested version",
-      input: {
-        surfaceChanged: true,
-        surfaceCompatible: false,
-        snapshotVersion: undefined,
-        requestedVersion: "0.1.0",
-        protocolVersion: "0.0.0",
-      },
-      expected: "record",
-    },
-  ])("chooses $expected for $label", ({ input, expected }) => {
-    expect(decideSnapshotUpdate(input)).toBe(expected);
+    { changed: false, kind: "none" as const, version: undefined, expected: "in-sync" },
+    { changed: true, kind: "none" as const, version: undefined, expected: "record-current" },
+    { changed: true, kind: "additive" as const, version: undefined, expected: "surface-refuse" },
+    { changed: true, kind: "breaking" as const, version: undefined, expected: "surface-refuse" },
+    { changed: true, kind: "additive" as const, version: "1.2.0", expected: "record" },
+    { changed: true, kind: "breaking" as const, version: "2.0.0", expected: "record" },
+    { changed: false, kind: "none" as const, version: "1.1.1", expected: "repair" },
+  ])("chooses $expected for $kind at $version", ({ changed, kind, version, expected }) => {
+    expect(decideSnapshotUpdate({ surfaceChanged: changed, changeKind: kind,
+      snapshotVersion: "1.1.0", requestedVersion: version, protocolVersion: "1.1.0",
+    })).toBe(expected);
   });
 
   it.each([
-    { label: "a missing snapshot", snapshot: () => undefined, changed: true, compatible: false },
+    { kind: "additive" as const, version: "1.1.0", minimum: "1.2.0" },
+    { kind: "additive" as const, version: "1.1.1", minimum: "1.2.0" },
+    { kind: "additive" as const, version: "2.0.0", minimum: "1.2.0" },
+    { kind: "breaking" as const, version: "1.2.0", minimum: "2.0.0" },
+    { kind: "none" as const, version: "1.0.9", minimum: "1.1.0" },
+  ])("refuses $kind with insufficient version $version", ({ kind, version, minimum }) => {
+    expect(() => decideSnapshotUpdate({ surfaceChanged: kind !== "none", changeKind: kind,
+      snapshotVersion: "1.1.0", requestedVersion: version, protocolVersion: "1.1.0",
+    })).toThrow(minimum);
+  });
+
+  it.each(["1.2.0-alpha", "1.2.0+build", "01.2.0", "1.2", "$$"])("refuses malformed version %s", (version) => {
+    expect(() => decideSnapshotUpdate({ surfaceChanged: true, changeKind: "additive",
+      snapshotVersion: "1.1.0", requestedVersion: version, protocolVersion: "1.1.0",
+    })).toThrow(/MAJOR.MINOR.PATCH/);
+  });
+
+  it("refuses drift without a flag and repairs it explicitly", () => {
+    const input = { surfaceChanged: false, changeKind: "none" as const, snapshotVersion: "1.1.0", protocolVersion: "1.0.0" };
+    expect(decideSnapshotUpdate(input)).toBe("drift-refuse");
+    expect(decideSnapshotUpdate({ ...input, requestedVersion: "1.1.0" })).toBe("repair");
+  });
+
+  it("requires an explicit version for the first snapshot", () => {
+    const input = { surfaceChanged: true, changeKind: "none" as const, protocolVersion: "1.1.0" };
+    expect(decideSnapshotUpdate(input)).toBe("surface-refuse");
+    expect(decideSnapshotUpdate({ ...input, requestedVersion: "1.1.0" })).toBe("record");
+  });
+
+  it.each([
+    { label: "a missing snapshot", snapshot: () => undefined, changed: true, kind: "breaking" },
     {
       label: "an identical recorded surface",
       snapshot: () => ({ httpServerVersion: "1.1.0", ...derived() }),
       changed: false,
-      compatible: true,
+      kind: "none",
     },
     {
       label: "a snapshot recorded before the envelope, statuses and failures were",
       snapshot: () => ({ httpServerVersion: "1.1.0", routes: derived().routes }),
       changed: true,
-      compatible: true,
+      kind: "none",
     },
     {
       label: "a recorded failure answer the derivation no longer gives",
@@ -186,7 +104,7 @@ describe("HTTP snapshot updater", () => {
         return recorded;
       },
       changed: true,
-      compatible: false,
+      kind: "breaking",
     },
     {
       label: "a failure answer the recording lacks",
@@ -196,7 +114,7 @@ describe("HTTP snapshot updater", () => {
         return recorded;
       },
       changed: true,
-      compatible: true,
+      kind: "additive",
     },
     {
       label: "a recorded success status the derivation changed",
@@ -206,12 +124,12 @@ describe("HTTP snapshot updater", () => {
         return recorded;
       },
       changed: true,
-      compatible: false,
+      kind: "breaking",
     },
-  ])("judges $label changed=$changed compatible=$compatible", ({ snapshot, changed, compatible }) => {
+  ])("judges $label changed=$changed kind=$kind", ({ snapshot, changed, kind }) => {
     expect(surfaceUpdateInputs(snapshot(), derived())).toEqual({
       surfaceChanged: changed,
-      surfaceCompatible: compatible,
+      changeKind: kind,
     });
   });
 

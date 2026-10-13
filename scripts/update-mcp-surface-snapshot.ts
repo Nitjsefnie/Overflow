@@ -2,14 +2,21 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { argv, exit } from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { defineMcpTools, type McpToolDependencies } from "../src/lib/mcp/tools.ts";
+import { isDeepStrictEqual } from "node:util";
+import { deriveMcpSurfaceRecord } from "./mcp-surface-record.ts";
+import { deriveHttpSurfaceRecord } from "./http-surface-record.ts";
+import { replaceConstAssignment, serializedSnapshot } from "./update-http-surface-snapshot.ts";
+import { assertSnapshotVersions, assertSurfaceVersion, classifySurfaces } from "./surface-version.ts";
+import { decideSnapshotUpdate } from "./snapshot-update.ts";
+import type { HttpSurfaceSnapshot, McpSurfaceSnapshot } from "./surface-change.ts";
+export { decideSnapshotUpdate } from "./snapshot-update.ts";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const snapshotPath = join(root, "scripts/mcp-surface-snapshot.json");
 const protocolPath = join(root, "src/lib/mcp/protocol.ts");
+const versionPath = join(root, "src/lib/version.ts");
+const httpSnapshotPath = join(root, "scripts/http-surface-snapshot.json");
 const usage = "Usage: update-mcp-surface-snapshot.ts [--version <v>]";
-const remedy =
-  "Surface changed without acknowledgment. Run again with --version <new> to record the surface and move MCP_SERVER_VERSION in src/lib/mcp/protocol.ts in the same change.";
 
 export function buildVersionAssignment(version: string): string {
   return `export const MCP_SERVER_VERSION = ${JSON.stringify(version)};`;
@@ -32,129 +39,57 @@ export function replaceVersionAssignment(source: string, version: string): strin
   return source.replace(assignment, () => buildVersionAssignment(version));
 }
 
-type UpdateDecision = "in-sync" | "drift-refuse" | "repair" | "surface-refuse" | "same-version-refuse" | "record";
-
-export function decideSnapshotUpdate(input: {
-  surfaceChanged: boolean;
-  snapshotVersion?: string;
-  requestedVersion?: string;
-  protocolVersion?: string;
-}): UpdateDecision {
-  if (input.surfaceChanged) {
-    if (!input.requestedVersion) return "surface-refuse";
-    if (input.snapshotVersion === input.requestedVersion) return "same-version-refuse";
-    return "record";
-  }
-  if (input.requestedVersion !== undefined) {
-    return input.snapshotVersion === input.requestedVersion && input.protocolVersion === input.requestedVersion
-      ? "in-sync"
-      : "repair";
-  }
-  return input.snapshotVersion === input.protocolVersion ? "in-sync" : "drift-refuse";
-}
-
-function main(): void {
+/** MCP uses the same combined requirement and four-site version synchronization as HTTP. */
+async function main(): Promise<void> {
   const args = argv.slice(2);
   if (args.length !== 0 && (args.length !== 2 || args[0] !== "--version" || !args[1] || args[1].startsWith("--"))) {
     console.error(usage);
     exit(2);
   }
   const requestedVersion = args[1];
-
-  const stub = async () => Response.json({});
-  const dependencies: McpToolDependencies = {
-    issuesBoard: stub,
-    settlementsList: stub,
-    settlementGet: stub,
-    calibrationCompare: stub,
-    dashboardSummary: stub,
-    moderationQueue: stub,
-    unwritableClosures: stub,
-    auditOpen: stub,
-    auditDecide: stub,
-    correctionOpen: stub,
-    correctionList: stub,
-    correctionDecide: stub,
-  };
-  const surface = defineMcpTools(dependencies, new Headers()).map(
-    ({ name, description, inputSchema }) => ({ name, description, inputSchema }),
-  );
-
-  type Surface = typeof surface;
-  type Snapshot = { mcpServerVersion: string; tools: Surface };
-  let snapshot: Snapshot | undefined;
+  const derived = deriveMcpSurfaceRecord();
+  const httpDerived = await deriveHttpSurfaceRecord();
+  let snapshot: McpSurfaceSnapshot | undefined;
   try {
-    snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Snapshot;
+    snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as McpSurfaceSnapshot;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-
-  function normalized(value: unknown): unknown {
-    if (Array.isArray(value)) return value.map(normalized);
-    if (value !== null && typeof value === "object") {
-      return Object.fromEntries(
-        Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
-          .map(([key, item]) => [key, normalized(item)]),
-      );
-    }
-    return value;
-  }
-
-  function equal(left: unknown, right: unknown): boolean {
-    return JSON.stringify(normalized(left)) === JSON.stringify(normalized(right));
-  }
-
-  const surfaceChanged = !equal(surface, snapshot?.tools);
-  if (surfaceChanged) {
-    const previous = new Map(snapshot?.tools.map((tool) => [tool.name, tool]) ?? []);
-    const current = new Map(surface.map((tool) => [tool.name, tool]));
-    const added = surface.filter((tool) => !previous.has(tool.name)).map((tool) => tool.name);
-    const removed = (snapshot?.tools ?? []).filter((tool) => !current.has(tool.name)).map((tool) => tool.name);
-    const changed = surface.filter((tool) => previous.has(tool.name) && !equal(tool, previous.get(tool.name)))
-      .map((tool) => tool.name);
-    if (added.length) console.log(`Added: ${added.join(", ")}`);
-    if (removed.length) console.log(`Removed: ${removed.join(", ")}`);
-    if (changed.length) console.log(`Changed: ${changed.join(", ")}`);
-
-  }
-
+  const httpSnapshot = JSON.parse(readFileSync(httpSnapshotPath, "utf8")) as HttpSurfaceSnapshot;
+  const change = classifySurfaces({ http: httpSnapshot, mcp: snapshot }, { http: httpDerived, mcp: derived });
+  const surfaceChanged = !isDeepStrictEqual(derived.tools, snapshot?.tools) || change.kind !== "none";
+  if (surfaceChanged) console.log(`Classified ${change.kind}: ${change.reasons.join("; ")}`);
   const protocol = readFileSync(protocolPath, "utf8");
+  const serverSource = readFileSync(versionPath, "utf8");
   const protocolVersion = readVersionAssignment(protocol);
-  const decision = decideSnapshotUpdate({
-    surfaceChanged,
-    snapshotVersion: snapshot?.mcpServerVersion,
-    requestedVersion,
-    protocolVersion,
-  });
+  const decision = decideSnapshotUpdate({ surfaceChanged, changeKind: change.kind,
+    snapshotVersion: snapshot?.mcpServerVersion, requestedVersion, protocolVersion });
   if (decision === "surface-refuse") {
-    console.error(remedy);
-    exit(1);
-  }
-  if (decision === "same-version-refuse") {
-    console.error("the version must move when the surface changes");
-    exit(1);
+    if (snapshot) assertSurfaceVersion(snapshot.mcpServerVersion, snapshot.mcpServerVersion, change,
+      "scripts/update-mcp-surface-snapshot.ts --version <new>");
+    throw new Error("Recording a new MCP snapshot needs an explicit --version <v>.");
   }
   if (decision === "drift-refuse") {
-    console.error(
-      `MCP_SERVER_VERSION is ${JSON.stringify(protocolVersion)} but scripts/mcp-surface-snapshot.json records ${JSON.stringify(snapshot?.mcpServerVersion)}. ` +
-        "Run again with --version <snapshot-version> to repair it, or edit both to the same value.",
-    );
-    exit(1);
+    throw new Error(`MCP_SERVER_VERSION is ${protocolVersion} but the snapshot records ${snapshot?.mcpServerVersion}. ` +
+      "Run scripts/update-mcp-surface-snapshot.ts --version <snapshot-version> to repair it.");
   }
+  const version = requestedVersion ?? snapshot!.mcpServerVersion;
+  assertSnapshotVersions({ http: httpSnapshot, mcp: snapshot }, {
+    http: { ...httpDerived, httpServerVersion: version }, mcp: { ...derived, mcpServerVersion: version },
+  });
   if (decision === "in-sync") {
     console.log("in sync");
-    exit(0);
+    return;
   }
-
-  const version = requestedVersion!;
   const updatedProtocol = replaceVersionAssignment(protocol, version);
-  writeFileSync(snapshotPath, `${JSON.stringify({ mcpServerVersion: version, tools: surface }, null, 2)}\n`);
+  const updatedServer = replaceConstAssignment(serverSource, "SERVER_VERSION", version);
+  writeFileSync(snapshotPath, `${JSON.stringify({ mcpServerVersion: version, ...derived }, null, 2)}\n`);
   writeFileSync(protocolPath, updatedProtocol);
-  if (decision === "repair") {
-    console.log(`Reconciled MCP tool snapshot and MCP_SERVER_VERSION to ${version}`);
-  } else {
-    console.log(`Recorded MCP tool surface and MCP_SERVER_VERSION ${snapshot?.mcpServerVersion ?? "(none)"} -> ${version}`);
-  }
+  writeFileSync(versionPath, updatedServer);
+  writeFileSync(httpSnapshotPath, serializedSnapshot(version, httpDerived));
+  console.log(`Recorded the MCP surface and synchronized all four version sites at ${version}`);
 }
 
-if (argv[1] && import.meta.url === pathToFileURL(argv[1]).href) main();
+if (argv[1] && import.meta.url === pathToFileURL(argv[1]).href) {
+  void main().catch((error: unknown) => { console.error(error instanceof Error ? error.message : error); exit(1); });
+}
