@@ -115,11 +115,7 @@ jobs:
           GITHUB_WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           GITHUB_WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           RELAY_RERUN_TOKEN: ${{ github.token }}
-          # This run's own id and attempt (default runner variables, stated so
-          # the dependency is visible): the script reads this job's started_at
-          # from them, with RELAY_RERUN_TOKEN, before any write.
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          # Rule: the job-start read uses the runner's default GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT; never set them here.
           LEDGER_DISPATCH_RUN_ID: ${{ inputs.run_id }}
           # A schedule or a dispatch without run_id has no triggering run to
           # mirror. Carry the sweep-only mode so the script fails closed on

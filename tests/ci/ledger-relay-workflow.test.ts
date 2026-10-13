@@ -80,9 +80,11 @@ describe("the ledger relay workflow's pinned App identity", () => {
     ).toBe(RELAY_JOB_TIMEOUT_MINUTES);
   });
 
-  it("passes the relay run's own id and attempt to the job-start read exactly once", () => {
-    expect(envValues("GITHUB_RUN_ID")).toEqual(["${{ github.run_id }}"]);
-    expect(envValues("GITHUB_RUN_ATTEMPT")).toEqual(["${{ github.run_attempt }}"]);
+  it("leaves the relay run's own id and attempt to the runner's default variables", () => {
+    // A step cannot override a default GITHUB_* variable, so an env entry for
+    // either would be ignored; the job-start read uses the runner's values.
+    expect(envValues("GITHUB_RUN_ID")).toEqual([]);
+    expect(envValues("GITHUB_RUN_ATTEMPT")).toEqual([]);
   });
 
   it("carries the ledger App id exactly once, as the literal the gate and tests pin", () => {
