@@ -23,6 +23,22 @@ import { inspect, format } from "node:util";
 import { RECORD_MARKER, withRecordBearingPostgresWrite } from "../support/record-bearing-postgres-error";
 
 describe("reconcileRepository", () => {
+  it.each(["cause", "deadline", "headers"] as const)("records an ordinary failure when %s guidance is unreadable", async (field) => {
+    const upstream = field === "cause" ? new Error("Upstream failure") : new GitHubApiError(403, true, 120);
+    Object.defineProperty(upstream, field === "deadline" ? "notBefore" : field, {
+      get: () => { throw new Error("error field refused"); },
+    });
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(upstream) } });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const failure = await reconcileRepository(dependencies, "repository").catch((error: unknown) => error);
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect((failure as Error).cause === upstream).toBe(true);
+      expect(dependencies.store.setReconciliationCooldown).not.toHaveBeenCalled();
+    } finally { logged.mockRestore(); info.mockRestore(); }
+  });
+
   it.each([false, true])("shares the exact repository and job deadline across advancing clocks, wrapped=%s", async (wrapped) => {
     const { runNextReconciliationJob } = await import("@/lib/fold/reconciliation-worker");
     let clock = new Date("2030-01-02T03:04:05.678Z");

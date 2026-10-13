@@ -182,7 +182,13 @@ export class GitHubGraphqlClient {
 
       const body = await boundedResponseText(response, MAX_SUCCESS_BODY_BYTES, controller.signal);
       if (body === null) throw new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES);
-      const payload = JSON.parse(body) as { data?: TData; errors?: unknown };
+      let payload: { data?: TData; errors?: unknown };
+      try {
+        payload = JSON.parse(body);
+      } catch {
+        // Engine excerpts can truncate credentials before redaction can match them.
+        throw new SyntaxError("Invalid JSON response.");
+      }
       if (payload?.data === undefined || payload.errors !== undefined) {
         const { rateLimited, retryAfterSeconds } = classifyGitHubGraphqlRateLimit(payload?.errors, response.headers);
         const message = payload?.data === undefined && payload?.errors === undefined
