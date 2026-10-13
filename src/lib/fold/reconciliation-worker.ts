@@ -1,3 +1,4 @@
+import { findGitHubRateLimitError, githubRateLimitNotBefore } from "@/lib/github/errors";
 import { callGuarded } from "@/lib/fold/guarded-callback";
 import { errorLogToken } from "@/lib/webhooks/log-field";
 import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
@@ -267,6 +268,12 @@ export async function runNextReconciliationJob(
       // One unreachable repository must not stop the worker draining the rest, so
       // the failure is recorded on its own job and never propagated to the drain.
       reportJobFailure(dependencies, job.repositoryId, error);
+      const rateLimit = findGitHubRateLimitError(error);
+      if (rateLimit) {
+        // Deferral refunds the claim: GitHub's limit must not exhaust job attempts.
+        await store.deferReconciliationJob(job.id, job.leaseToken, githubRateLimitNotBefore(rateLimit, now()));
+        return "DEFERRED";
+      }
       const delayMs = RECONCILIATION_RETRY_DELAYS_MS[job.attemptCount - 1];
       if (delayMs === undefined) {
         await store.failReconciliationJob(job.id, job.leaseToken);

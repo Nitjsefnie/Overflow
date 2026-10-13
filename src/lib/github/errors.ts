@@ -11,6 +11,41 @@ export function isGitHubRateLimitError(error: unknown): error is Error & GitHubR
       && Number.isSafeInteger(error.retryAfterSeconds) && error.retryAfterSeconds >= 0));
 }
 
+// A large repository can exhaust an hourly GitHub budget; without retry guidance,
+// allow a full hour before spending points on another full fold.
+export const DEFAULT_RECONCILIATION_COOLDOWN_SECONDS = 60 * 60;
+
+// https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-primary-rate-limit
+// https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits
+// https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately
+// https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api#exceeding-the-rate-limit
+// Honour both signals when present, with the documented one-minute minimum.
+export function githubRateLimitNotBefore(error: GitHubRateLimitDetails, now: Date): Date {
+  const nowMs = now.getTime();
+  const retryMs = error.retryAfterSeconds === null ? NaN : nowMs + error.retryAfterSeconds * 1000;
+  const retryAt = Number.isFinite(new Date(retryMs).getTime()) ? retryMs : null;
+  const reset = error instanceof GitHubApiError && error.headers["x-ratelimit-remaining"] === "0"
+    ? error.headers["x-ratelimit-reset"] : undefined;
+  const resetMs = reset !== undefined && /^\d+$/.test(reset) && Number.isSafeInteger(Number(reset))
+    ? Number(reset) * 1000 : NaN;
+  const resetAt = Number.isFinite(new Date(resetMs).getTime()) ? resetMs : null;
+  return new Date(Math.max(
+    nowMs + 60_000,
+    retryAt ?? resetAt ?? nowMs + DEFAULT_RECONCILIATION_COOLDOWN_SECONDS * 1000,
+    resetAt ?? 0,
+  ));
+}
+
+export function findGitHubRateLimitError(error: unknown): (Error & GitHubRateLimitDetails) | null {
+  const visited = new Set<unknown>();
+  for (let cause = error; cause !== null && typeof cause === "object" && !visited.has(cause);) {
+    if (isGitHubRateLimitError(cause)) return cause;
+    visited.add(cause);
+    cause = "cause" in cause ? cause.cause : undefined;
+  }
+  return null;
+}
+
 // GitHub answers a lookup of a number that names nothing upstream with a
 // NOT_FOUND GraphQL error ("Could not resolve to an Issue/PullRequest ...").
 // The client flattens the structured errors into a bounded summary before the

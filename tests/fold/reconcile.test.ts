@@ -67,13 +67,29 @@ describe("reconcileRepository", () => {
         if (upstream instanceof GitHubApiError && upstream.rateLimited) {
           expect(writes).toHaveLength(1);
           expect(writes).toEqual([["repository", new Date(now().getTime() +
-            (retryAfterSeconds ?? DEFAULT_RECONCILIATION_COOLDOWN_SECONDS) * 1000)]]);
+            Math.max(60, retryAfterSeconds ?? DEFAULT_RECONCILIATION_COOLDOWN_SECONDS) * 1000)]]);
         } else {
           expect(writes).toEqual([]);
         }
       }
     } finally {
       errorLog.mockRestore();
+    }
+  });
+
+  it("writes the exhausted primary reset as the repository cooldown", async () => {
+    const upstream = new GitHubApiError(403, true, 120, null, {
+      "retry-after": "120", "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": String(new Date("2030-01-02T03:09:05Z").getTime() / 1000),
+    });
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(upstream) } });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(reconcileRepository({ ...dependencies, now: () => new Date("2030-01-02T03:04:05.678Z") }, "repository"))
+        .rejects.toMatchObject({ cause: upstream });
+      expect(dependencies.store.setReconciliationCooldown).toHaveBeenCalledWith("repository", new Date("2030-01-02T03:09:05Z"));
+    } finally {
+      logged.mockRestore();
     }
   });
 
