@@ -365,6 +365,33 @@ export function GET() { errorResponse(400, "INVALID_REQUEST", "m"); return ${exp
     expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:1`);
   });
 
+  it.each([
+    'export { type errorResponse }',
+    'export { type errorEnvelope }',
+    'export type { errorResponse }',
+    'export {}',
+  ])("keeps recorded calls with no runtime helper re-export: %s", (declaration) => {
+    const root = tree({
+      [routeFile]: `${importHelper}${declaration} from "@/lib/http/error-response";
+export function GET() { return errorResponse(400, "INVALID_INPUT", "Bad."); }
+`,
+    });
+    expect(deriveRouteFailures(["GET /api/things"], root)).toEqual({ "GET /api/things": ["400 INVALID_INPUT"] });
+  });
+
+  it.each([
+    'export { errorEnvelope }',
+    'export { type errorResponse, errorEnvelope }',
+    'export { type errorEnvelope, errorResponse as refuse }',
+    'export *',
+    'export * as failures',
+  ])("refuses runtime helper re-exports: %s", (declaration) => {
+    const root = tree({
+      [routeFile]: `${declaration} from "@/lib/http/error-response";`,
+    });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:1: re-exports`);
+  });
+
   it("fails loudly on the envelope builder used outside the helper", () => {
     const root = tree({
       [routeFile]: 'import { errorEnvelope } from "@/lib/http/error-response";\n' +

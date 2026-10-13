@@ -371,6 +371,9 @@ function moduleFailureAnswers(root: string, checker: ts.TypeChecker, source: ts.
       );
     }
     if (ts.isExportDeclaration(declaration)) {
+      // The module edge survives inline type erasure; only value bindings re-export the helper.
+      const clause = declaration.exportClause;
+      if (clause && ts.isNamedExports(clause) && clause.elements.every((item) => item.isTypeOnly)) continue;
       throw new Error(
         `${location(root, source, declaration)}: re-exports from ${helperModule}; call ${helperName} directly ` +
           "so the HTTP surface derivation can record the failure answer.",
