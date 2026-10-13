@@ -28,6 +28,15 @@ function tree(files: Record<string, string>): string {
 const routeFile = "src/app/api/things/route.ts";
 
 describe("HTTP failure-answer derivation", () => {
+  it.each([
+    'import Response from "some-package"; export function GET() { return new Response("bad", {status:400}); }',
+    'import { redirect as go } from "next/navigation"; export function GET() { return go("/elsewhere"); }',
+    'import { permanentRedirect as go } from "next/navigation"; export function GET() { return go("/elsewhere"); }',
+    'import * as navigation from "next/navigation"; export function GET() { return navigation.redirect("/elsewhere"); }',
+  ])("refuses an unrecorded constructor or navigation redirect: %s", (source) => {
+    const root = tree({ [routeFile]: source });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:1:`);
+  });
   it.each(["Response", "NextResponse"])("refuses an imported %s constructor alias outside the helper", (constructor) => {
     const root = tree({ [routeFile]: `import { ${constructor} as Reply } from "some-package";
 export function GET() { return new Reply("bad", {status: 400}); }` });

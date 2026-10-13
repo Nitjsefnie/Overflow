@@ -25,6 +25,7 @@ function responseClass(node: ts.Expression, checker: ts.TypeChecker, seen = new 
   seen.add(symbol);
   for (const declaration of symbol.declarations ?? []) {
     if (ts.isImportSpecifier(declaration)) return ["Response", "NextResponse"].includes((declaration.propertyName ?? declaration.name).text);
+    if (ts.isImportClause(declaration)) return ["Response", "NextResponse"].includes(node.text);
     if (ts.isVariableDeclaration(declaration) && declaration.initializer) return responseClass(declaration.initializer, checker, seen);
   }
   return false;
@@ -76,6 +77,24 @@ function enclosingNames(node: ts.Node): string[] {
 
 type Site = { node: ts.Node; statuses: number[] | undefined; handlers: string[] };
 
+function navigationRedirect(node: ts.Expression, checker: ts.TypeChecker): boolean {
+  const redirects = ["redirect", "permanentRedirect"];
+  node = unwrap(node);
+  if (ts.isIdentifier(node)) {
+    const symbol = checker.getSymbolAtLocation(node);
+    if (!symbol) return redirects.includes(node.text);
+    return (symbol.declarations ?? []).some((declaration) => ts.isImportSpecifier(declaration) &&
+      redirects.includes((declaration.propertyName ?? declaration.name).text));
+  }
+  if (ts.isPropertyAccessExpression(node) && redirects.includes(node.name.text) && ts.isIdentifier(node.expression)) {
+    const declarations = checker.getSymbolAtLocation(node.expression)?.declarations ?? [];
+    return declarations.some((declaration) => ts.isNamespaceImport(declaration) &&
+      ts.isStringLiteral(declaration.parent.parent.moduleSpecifier) &&
+      /^next\/navigation(?:\.js)?$/.test(declaration.parent.parent.moduleSpecifier.text));
+  }
+  return false;
+}
+
 /** Every response factory is inventoried, even latent calls and unresolved/conditional statuses. */
 function sites(source: ts.SourceFile, checker: ts.TypeChecker): Site[] {
   const found: Site[] = [];
@@ -85,7 +104,11 @@ function sites(source: ts.SourceFile, checker: ts.TypeChecker): Site[] {
       found.push({ node, statuses: statuses(node.arguments?.[1], checker), handlers: enclosingNames(node) });
     } else if (ts.isCallExpression(node)) {
       const expression = unwrap(node.expression);
-      if ((ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) &&
+      if (navigationRedirect(expression, checker)) {
+        // Framework redirects throw rather than returning a Response. Until a
+        // handler fixture exercises their transport, they cannot be silently recorded.
+        found.push({ node, handlers: enclosingNames(node), statuses: undefined });
+      } else if ((ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) &&
           responseClass(expression.expression, checker)) {
         const member = ts.isElementAccessExpression(expression) && expression.argumentExpression
           ? unwrap(expression.argumentExpression) : undefined;
