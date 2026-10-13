@@ -33,6 +33,23 @@ function run(root: string, script: string, version?: string) {
 
 describe("surface updater CLIs", () => {
   it.each(["update-http-surface-snapshot.ts", "update-mcp-surface-snapshot.ts"])(
+    "%s refuses a missing peer snapshot version instead of certifying sync", (script) => {
+      const root = fixture(false);
+      const http = script.startsWith("update-http");
+      const path = join(root, versionSites[http ? 3 : 2]!);
+      const snapshot = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+      delete snapshot[http ? "mcpServerVersion" : "httpServerVersion"];
+      writeFileSync(path, JSON.stringify(snapshot, null, 2));
+      const before = versionSites.map((site) => readFileSync(join(root, site), "utf8"));
+      const result = run(root, script);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("MAJOR.MINOR.PATCH");
+      expect(versionSites.map((site) => readFileSync(join(root, site), "utf8"))).toEqual(before);
+    },
+  );
+
+
+  it.each(["update-http-surface-snapshot.ts", "update-mcp-surface-snapshot.ts"])(
     "%s keeps fixture audit output out of successful and refused diagnostics", (script) => {
       const clean = run(fixture(false), script);
       expect(clean.status, clean.stderr).toBe(0);

@@ -9,17 +9,15 @@ export function decideSnapshotUpdate(input: {
   changeKind: HttpChangeKind;
   snapshotVersion?: string;
   requestedVersion?: string;
-  protocolVersion?: string;
-  peerProtocolVersion?: string;
-  peerSnapshotVersion?: string;
+  protocolVersion: string;
+  peerProtocolVersion: string;
+  peerSnapshotVersion: string;
 }): UpdateDecision {
-  const currentVersions = [input.snapshotVersion, input.protocolVersion, input.peerProtocolVersion, input.peerSnapshotVersion];
-  for (const version of currentVersions) {
-    if (version !== undefined) requiredVersion(version, "none");
-  }
-  const aligned = input.snapshotVersion === input.protocolVersion && currentVersions.every(
-    (version) => version === undefined || version === input.snapshotVersion,
-  );
+  // Source constants and the other recorded snapshot must exist, even during first recording.
+  const currentVersions = [input.protocolVersion, input.peerProtocolVersion, input.peerSnapshotVersion];
+  for (const version of currentVersions) requiredVersion(version, "none");
+  if (input.snapshotVersion !== undefined) requiredVersion(input.snapshotVersion, "none");
+  const aligned = currentVersions.every((version) => version === input.snapshotVersion);
   if (input.requestedVersion !== undefined) {
     requiredVersion(input.requestedVersion, "none");
     for (const version of [input.snapshotVersion, input.peerSnapshotVersion]) {
