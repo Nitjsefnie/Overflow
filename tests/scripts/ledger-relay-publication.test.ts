@@ -7,6 +7,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { renderRelayResult, runRelay } from "../../scripts/ledger-relay.ts";
 import { RUN_DEADLINE_MS } from "../../scripts/ledger-relay-http.ts";
 import { SWEEP_RUN_LIMIT } from "../../scripts/ledger-relay-producers.ts";
+import { MIRROR_TRIGGER_RESERVE_MS } from "../../scripts/ledger-relay-publication.ts";
 import { resolveSuitePullRequest } from "../../scripts/resolve-suite-pull-request.ts";
 
 const REPO = "Nitjsefnie/Overflow";
@@ -1356,5 +1357,71 @@ describe("mirror liveness under a slow API", () => {
 
     expect(posted[0]).toBe("9030:1");
     expect(w.state.checks.filter((check) => check.external_id === "9001:1")).toEqual([]);
+  });
+});
+
+/**
+ * The selection reserve bounds only the choice of a newer candidate. Once a
+ * winner is chosen, its publication (floor, jobs, upstream recheck, POST)
+ * runs under the ordinary run deadline, even below the reserve.
+ */
+describe("mirror reserve scope", () => {
+  // Built per test: the App key exists only after beforeAll.
+  const dispatchEnv = () => ({ ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493",
+    LEDGER_APP_KEY: key, GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", LEDGER_DISPATCH_RUN_ID: "9001" });
+
+  it("publishes a newer same-head winner found just above the reserve, whose publication runs below it", async () => {
+    const w = world();
+    w.state.producers = [verify(9002, 8001, "failure"), oldVerify];
+    let now = 0;
+    const remainingAtWinner: number[] = [];
+    const result = await runRelay({
+      env: dispatchEnv(), nowFn: () => now, delayFn: async (ms) => { now += ms; }, readPinMap: async () => pins,
+      fetchFn: (async (input, init) => {
+        const url = String(input);
+        // The winner's resolution starts so that it ends with the reserve plus
+        // 11 s left (224 s at a 213 s reserve); its floor and jobs reads then
+        // take the remaining budget below the reserve before the recheck.
+        if (url === `${ROOT}/actions/runs/9002` && remainingAtWinner.length === 0) {
+          now = RUN_DEADLINE_MS - MIRROR_TRIGGER_RESERVE_MS - 23_000;
+          remainingAtWinner.push(MIRROR_TRIGGER_RESERVE_MS + 11_000);
+        }
+        const reply = await w.fetchFn(input, init);
+        now += 4000;
+        return reply;
+      }) as typeof fetch,
+    });
+
+    expect(remainingAtWinner).toHaveLength(1);
+    // The mirror itself posts the winner; the start does not fail over to the sweep.
+    expect(result.posted).toEqual(["verify"]);
+    expect(result.decisions).toMatchObject([{ context: "verify", conclusion: "failure" }]);
+    expect(w.state.checks.map((check) => check.external_id)).toEqual(["9002:1"]);
+  });
+
+  it("keeps enough reserve for an uncommitted ambiguous POST, its read-back and one retry", async () => {
+    const w = world();
+    w.state.producers = Array.from({ length: 50 }, (_, i) => verify(9050 - i, 8050 - i, "success"));
+    w.state.suites = Array.from({ length: 50 }, (_, i) => ({ ...suite(8050 - i, "success"),
+      head_sha: (50 - i).toString(16).padStart(40, "0") }));
+    let now = 0;
+    let posts = 0;
+    await runRelay({
+      env: dispatchEnv(), nowFn: () => now, delayFn: async (ms) => { now += ms; }, readPinMap: async () => pins,
+      fetchFn: (async (input, init = {}) => {
+        // Successful responses take 29 s; the first check-run POST runs to the
+        // 30 s request bound and fails without committing.
+        if (String(input) === `${ROOT}/check-runs` && ++posts === 1) {
+          now += 30_000;
+          throw new TypeError("ambiguous POST did not commit");
+        }
+        const reply = await w.fetchFn(input, init);
+        now += 29_000;
+        return reply;
+      }) as typeof fetch,
+    }).catch(() => undefined);
+
+    expect(posts).toBeGreaterThanOrEqual(2);
+    expect(w.state.checks[0]).toMatchObject({ external_id: "9001:1", conclusion: "success" });
   });
 });

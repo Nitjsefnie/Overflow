@@ -74,14 +74,18 @@ interface ResolvedCandidate { run: SweepCandidate; check?: UpstreamPublicationCh
 /**
  * Rule: the mirror starts a selection request (the listing or a newer
  * candidate's resolution) only while the remaining run budget exceeds this
- * reserve, so the trigger's own decision can still be posted before the
- * deadline. Each remaining trigger request counts at its full bound: jobs
- * read (1), App floor read (check-suites + check-runs, 2), upstream recheck
- * (upstream run + suite listing, 2) and the POST (1), plus one selection
- * request already in flight and the retry backoff:
- * 7 x 30 s + (1 s + 2 s) = 213 s.
+ * reserve; publication never consults it. It holds the chosen producer's
+ * publication path with every request at the 30 s bound: App floor read
+ * (check-suites + check-runs, 2), jobs read (1), upstream recheck (upstream
+ * run + one suite-history page, 2), POST (1), one ambiguous-POST read-back
+ * (a second floor read, 2) and one retry POST (1), plus the selection request
+ * in flight when the reserve is crossed (1) and the retry backoff:
+ * 10 x 30 s + (1 s + 2 s) = 303 s. Not held: suite-history pages 2-10, an
+ * App floor over more than one suite or page, per-request transient
+ * retries, and a second ambiguous POST; a reserve holding all of them would
+ * be 573 s or more of a 600 s run and would stop selection almost at once.
  */
-export const MIRROR_TRIGGER_RESERVE_MS = 7 * REQUEST_TIMEOUT_MS + BACKOFF_MS.reduce((sum, delay) => sum + delay, 0);
+export const MIRROR_TRIGGER_RESERVE_MS = 10 * REQUEST_TIMEOUT_MS + BACKOFF_MS.reduce((sum, delay) => sum + delay, 0);
 
 /** The mirror's dependencies; `remainingMs` reads the effective run deadline's remaining budget. */
 export type MirrorDeps = ProducerDeps & { remainingMs?: () => number };
@@ -99,10 +103,28 @@ async function newestCandidate(
   deps: MirrorDeps, headSha: string, context: string, trigger: ResolvedCandidate,
 ): Promise<ResolvedCandidate | undefined> {
   const triggerResult = trigger.run.status === "completed" ? trigger : undefined;
+  // The winner's upstream recheck captures `get`; it runs during publication,
+  // after selection ends, under the ordinary run deadline only.
+  let selecting = true;
   const get = async <T>(url: string, what: string, retryTransient?: boolean): Promise<T> => {
-    if (deps.remainingMs !== undefined && deps.remainingMs() <= MIRROR_TRIGGER_RESERVE_MS) throw new MirrorReserveReached();
+    if (selecting && deps.remainingMs !== undefined && deps.remainingMs() <= MIRROR_TRIGGER_RESERVE_MS) {
+      throw new MirrorReserveReached();
+    }
     return deps.api.get<T>(url, what, retryTransient);
   };
+  try {
+    return await selectNewer(deps, headSha, context, trigger, get, triggerResult);
+  } finally {
+    selecting = false;
+  }
+}
+
+/** The selection itself; `get` refuses new requests at the reserve only while it runs. */
+async function selectNewer(
+  deps: MirrorDeps, headSha: string, context: string, trigger: ResolvedCandidate,
+  get: <T>(url: string, what: string, retryTransient?: boolean) => Promise<T>,
+  triggerResult: ResolvedCandidate | undefined,
+): Promise<ResolvedCandidate | undefined> {
   let listing: Record<string, unknown>;
   try {
     listing = await get(`${deps.apiRoot}/repos/${deps.repo}/actions/runs?per_page=100`, "the pre-write producer listing");
