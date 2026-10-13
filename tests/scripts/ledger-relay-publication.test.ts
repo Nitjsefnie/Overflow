@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { renderRelayResult, runRelay } from "../../scripts/ledger-relay.ts";
+import { RUN_DEADLINE_MS } from "../../scripts/ledger-relay-http.ts";
 import { SWEEP_RUN_LIMIT } from "../../scripts/ledger-relay-producers.ts";
 import { resolveSuitePullRequest } from "../../scripts/resolve-suite-pull-request.ts";
 
@@ -1079,3 +1080,37 @@ describe("panel regression: App suite visibility", () => {
   });
 });
 
+describe("panel regression: incremental sweep deadline", () => {
+  it.each([0, 4000])("attests newest candidates first at %i ms per successful response", async (latency) => {
+    const w = world();
+    w.state.producers = Array.from({ length: 50 }, (_, i) => verify(9001 + i, 8001 + i, "success"));
+    w.state.suites = Array.from({ length: 50 }, (_, i) => ({
+      ...suite(8001 + i, "success"), head_sha: (i + 1).toString(16).padStart(40, "0"),
+    }));
+    let now = 0;
+    const startedAt: number[] = [];
+    const result = await runRelay({
+      env: { LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
+        GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", LEDGER_SWEEP_ONLY: "true" },
+      nowFn: () => now,
+      fetchFn: (async (input, init) => {
+        startedAt.push(now);
+        const reply = await w.fetchFn(input, init);
+        now += latency;
+        return reply;
+      }) as typeof fetch,
+      delayFn: async () => {}, readPinMap: async () => pins,
+    }).catch((error: unknown) => error);
+    if (latency === 0) expect(w.state.checks).toHaveLength(50);
+    else {
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).message).toContain("run deadline");
+      expect(w.state.checks.some((c) => c.external_id === "9050:1")).toBe(true);
+      expect(w.state.checks.some((c) => c.external_id === "9049:1")).toBe(true);
+    }
+    expect(w.state.checks.map((c) => c.external_id)).toEqual(
+      Array.from({ length: w.state.checks.length }, (_, i) => `${9050 - i}:1`),
+    );
+    expect(startedAt.every((time) => time < RUN_DEADLINE_MS)).toBe(true);
+  });
+});

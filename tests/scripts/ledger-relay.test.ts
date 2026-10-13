@@ -2304,8 +2304,8 @@ describe("runRelay", () => {
       expect(result.sweep.examined).toBe(4);
       // Two posts: the newest producer at each head SHA.
       expect(result.sweep.relayed).toEqual([
-        { context: "actionlint", runId: "9003" },
         { context: "actionlint", runId: "9005" },
+        { context: "actionlint", runId: "9003" },
       ]);
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_AT_HEAD_URL)).toHaveLength(2);
       expect(

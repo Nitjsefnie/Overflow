@@ -176,8 +176,10 @@ export async function publicationBlockedContexts(
   headSha: string,
   newest: ReadonlyMap<string, SweepCandidate>,
   historyBounds?: ReadonlyMap<string, string>,
+  appReads?: Map<string, unknown[] | undefined>,
 ): Promise<Set<string>> {
-  const checks = await readAppCheckRuns(deps, headSha);
+  const checks = appReads?.has(headSha) === true ? appReads.get(headSha) : await readAppCheckRuns(deps, headSha);
+  appReads?.set(headSha, checks);
   const blocked = new Set<string>();
   if (checks === undefined) return blocked;
   for (const entry of checks) {
