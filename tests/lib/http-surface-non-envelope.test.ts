@@ -44,7 +44,7 @@ console.log(JSON.stringify({restored, errors}));`,
     const result = probe();
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout).nonEnvelopeFailures).toEqual({
-      "GET /api/readiness": { unavailable: { status: 503, shape: { reason: "string", status: "string" } } },
+      "GET /api/readiness": { unavailable: { status: 503, shape: { status: "string" } } },
     });
   });
 
