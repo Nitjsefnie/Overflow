@@ -53,3 +53,5 @@ Reference links:
 [Star history for Nitjsefnie/Overflow](https://nitjsefni.eu/widgets/stars-nitjsefnie-overflow.svg), refreshed hourly.
 
 MIT — see [LICENSE](LICENSE).
+
+<!-- post-merge proof c for PR 1217; this pull request is closed unmerged -->
