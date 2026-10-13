@@ -1,17 +1,12 @@
 import type { JSONValue } from "postgres";
 import { getSql } from "@/lib/db/client";
 import {
-  type EnforcementState,
   type IssueState,
   type PullRequestState,
   type SqlClient,
   type TransactionClient,
 } from "@/lib/db/types";
-import type { DifficultyScheme, DifficultySchemeVersion } from "@/lib/domain/difficulty-scheme";
-import { calculateSettlement } from "@/lib/domain/settlement";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
-import { moderationEventsFromJson } from "@/lib/fold/moderation-history";
-import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { recordNewPolicyViolations } from "@/lib/fold/policy-violation-record";
 import type { FoldForgeIdentity } from "@/lib/fold/repository-fold";
 import {
@@ -30,6 +25,9 @@ import {
 } from "@/lib/fold/reconciliation-evidence";
 import { PostgresReconciliationJobStore } from "@/lib/fold/reconciliation-job-store";
 import { PostgresReconciliationPacingStore } from "@/lib/fold/reconciliation-pacing-store";
+import { PostgresRepositoryLookupStore } from "@/lib/fold/repository-lookup-store";
+import { reResolveIdentityClaims } from "@/lib/fold/identity-claims";
+import { nullableTimestampToIso, timestampToIso, toSafeInteger, type SettlementRow } from "@/lib/fold/postgres-row-mapping";
 import { PostgresSponsorCredentialStore } from "@/lib/fold/sponsor-credential-store";
 import { RepositoryCoordinator } from "@/lib/fold/repository-coordination";
 import { scrubSuppressedForgeData } from "@/lib/fold/data-subject-suppression";
@@ -57,8 +55,8 @@ import {
 } from "@/lib/overrides/apply";
 import type { WebhookDeliveryClaim, WebhookDeliveryStore, WebhookReceiptScope, WebhookRepositoryRegistration } from "@/lib/webhooks/processor";
 import { PostgresWebhookDeliveryStore } from "@/lib/webhooks/postgres-delivery-store";
-import { logField } from "@/lib/webhooks/log-field";
 
+export { claimGitHubIdentity, claimForgeIdentity } from "@/lib/fold/identity-claims";
 export { repositoryLockNamespace } from "@/lib/fold/repository-coordination";
 
 type RepositoryFoldRevisionCountsRow = {
@@ -73,30 +71,6 @@ type RepositoryRederivationRequestRow = {
   repository_id: string;
   owner_name: string;
   rederivation_requested_at: Date | null;
-};
-
-type RepositoryRow = {
-  id: string;
-  github_repository_id: number | string;
-  owner_name: string;
-  active: boolean;
-  created_at: string | Date;
-  difficulty_scheme: DifficultyScheme;
-  provider: string | null;
-  instance_url: string | null;
-  sponsor_id: string;
-  sponsor_github_user_id: number | string;
-  sponsor_github_login: string;
-  sponsor_enforcement_state: EnforcementState;
-  sponsor_moderation_events: unknown;
-};
-
-type UserRow = {
-  id: string;
-  github_user_id: number | string;
-  github_login: string;
-  enforcement_state: EnforcementState;
-  moderation_events: unknown;
 };
 
 type IssueRow = {
@@ -125,47 +99,6 @@ type PullRequestRow = {
   merge_commit_oid?: string | null;
   merged_at?: string | Date | null;
 };
-
-type SettlementRow = {
-  id: string;
-  fold_revision: number;
-  issue_id: string;
-  pull_request_id: string;
-  github_issue_id: number | string;
-  github_pull_request_id: number | string;
-  creditor_id: string | null;
-  creditor_github_login: string | null;
-  creditor_github_user_id: number | string | null;
-  debtor_id: string;
-  opening_comparison_points: number;
-  settled_points: number | null;
-  review_rounds: number;
-  credits: number;
-  proof_sha256: string;
-  status: FoldSettlement["status"];
-  settled_label: string | null;
-  settled_label_event_id: string | null;
-  settled_label_actor_login: string | null;
-  settled_label_applied_at: string | Date | null;
-  settled_rationale_comment_id: string | null;
-  settled_rationale_actor_login: string | null;
-  settled_rationale_commented_at: string | Date | null;
-  merge_commit_oid: string | null;
-  merged_at: string | Date | null;
-};
-
-type IdentityClaimSettlementRow = Pick<
-  SettlementRow,
-  | "id"
-  | "fold_revision"
-  | "issue_id"
-  | "pull_request_id"
-  | "creditor_id"
-  | "creditor_github_login"
-  | "debtor_id"
-  | "opening_comparison_points"
-  | "settled_points"
->;
 
 type SelfWorkCalibrationRow = {
   id: string;
@@ -235,6 +168,7 @@ export type RepositoryRederivationRequest = {
 
 export class PostgresFoldStore implements ReconciliationStore, WebhookDeliveryStore {
   private readonly coordinator: RepositoryCoordinator;
+  private readonly repositoryLookup: PostgresRepositoryLookupStore;
   private readonly reconciliationJobs: PostgresReconciliationJobStore;
   private readonly webhookDeliveries: PostgresWebhookDeliveryStore;
   private readonly sponsorCredentials: PostgresSponsorCredentialStore;
@@ -253,6 +187,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     private readonly options: { reconciliationFactByteLimit?: number } = {},
   ) {
     this.coordinator = new RepositoryCoordinator(sql, coordinationSql);
+    this.repositoryLookup = new PostgresRepositoryLookupStore(sql, this.coordinator);
     this.reconciliationPacing = new PostgresReconciliationPacingStore(sql, this.coordinator);
     this.reconciliationJobs = new PostgresReconciliationJobStore(sql);
     this.webhookDeliveries = new PostgresWebhookDeliveryStore(sql);
@@ -270,110 +205,11 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     repositoryId: string,
     forgeUserIds: number[],
   ): Promise<FoldForgeIdentity[]> {
-    if (forgeUserIds.length === 0) return [];
-    // Scope: the exact triple's repository-side columns. The fold's match is
-    // the triple by construction, so the same forge id on another instance or
-    // another forge never resolves here.
-    // The moderation-events projection mirrors the GitHub identity query: the
-    // fold's participation gate replays at-merge state from these events, and
-    // a forge identity whose account was banned at merge but unbanned later
-    // must replay the ban, not the current state.
-    const rows = await this.sql<{
-      id: string;
-      github_user_id: number | string;
-      github_login: string;
-      enforcement_state: EnforcementState;
-      forge_user_id: number | string;
-      moderation_events: unknown;
-    }[]>`
-      select users.id, users.github_user_id, users.github_login, users.enforcement_state,
-             identities.forge_user_id,
-             coalesce((
-               select jsonb_agg(jsonb_build_object(
-                 'id', events.id,
-                 'priorState', events.prior_state,
-                 'newState', events.new_state,
-                 'occurredAt', events.created_at
-               ) order by events.created_at, events.id)
-               from moderation_events as events
-               where events.target_user_id = users.id
-             ), '[]'::jsonb) as moderation_events
-      from user_forge_identities as identities
-      join users on users.id = identities.user_id
-      join registered_repositories as repositories
-        on repositories.provider = identities.provider
-        and repositories.instance_url = identities.instance_url
-      where repositories.id = ${repositoryId}
-        and identities.provider = 'gitlab'
-        and identities.forge_user_id = any(${this.sql.array(forgeUserIds)}::bigint[])
-    `;
-    return rows.map((row) => ({
-      forgeUserId: toSafeInteger(row.forge_user_id),
-      user: {
-        id: row.id,
-        githubUserId: toSafeInteger(row.github_user_id),
-        githubLogin: row.github_login,
-        enforcementState: row.enforcement_state,
-        moderationEvents: moderationEventsFromJson(row.moderation_events),
-      },
-    }));
+    return this.repositoryLookup.findForgeIdentitiesByForgeUserIds(repositoryId, forgeUserIds);
   }
 
   public async getRepository(repositoryId: string): Promise<ReconciliationRepository | null> {
-    const [row] = await this.sql<RepositoryRow[]>`
-      select
-        repositories.id,
-        repositories.github_repository_id,
-        repositories.owner_name,
-        repositories.active,
-        repositories.created_at,
-        repositories.difficulty_scheme,
-        repositories.provider,
-        repositories.instance_url,
-        sponsors.id as sponsor_id,
-        sponsors.github_user_id as sponsor_github_user_id,
-        sponsors.github_login as sponsor_github_login,
-        sponsors.enforcement_state as sponsor_enforcement_state,
-        coalesce((
-          select jsonb_agg(jsonb_build_object(
-            'id', events.id,
-            'priorState', events.prior_state,
-            'newState', events.new_state,
-            'occurredAt', events.created_at
-          ) order by events.created_at, events.id)
-          from moderation_events as events
-          where events.target_user_id = sponsors.id
-        ), '[]'::jsonb) as sponsor_moderation_events
-      from registered_repositories as repositories
-      join users as sponsors on sponsors.id = repositories.sponsor_id
-      where repositories.id = ${repositoryId}
-      limit 1
-    `;
-    if (row === undefined) {
-      return null;
-    }
-    const difficultySchemeVersions = await this.listDifficultySchemeVersions(row.github_repository_id);
-    return toReconciliationRepository(row, difficultySchemeVersions);
-  }
-
-  private async listDifficultySchemeVersions(
-    githubRepositoryId: number | string,
-  ): Promise<DifficultySchemeVersion[]> {
-    const rows = await this.sql<{
-      version_number: number | string;
-      scheme: DifficultyScheme;
-      effective_from: string | Date;
-    }[]>`
-      select version_number, scheme, effective_from
-      from repository_difficulty_scheme_versions
-      where github_repository_id = ${githubRepositoryId}
-      order by effective_from, version_number
-    `;
-    return rows.map((row) => ({
-      versionNumber: toSafeInteger(row.version_number),
-      scheme: row.scheme,
-      effectiveFrom: timestampToIso(row.effective_from),
-    }));
+    return this.repositoryLookup.getRepository(repositoryId);
   }
 
   public async recordVerifiedRepositoryIdentity(input: {
@@ -381,85 +217,23 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     ownerName: string;
     visibility: "PUBLIC";
   }): Promise<void> {
-    try {
-      await this.coordinator.withRepositoryPublication(input.repositoryId, async (transaction) => {
-        await transaction`
-          update registered_repositories
-          set
-            owner_name = ${input.ownerName},
-            visibility = ${input.visibility},
-            unavailable_reason = null,
-            unavailable_since = null,
-            updated_at = now()
-          where id = ${input.repositoryId}
-            and (owner_name, visibility, unavailable_reason)
-              is distinct from (${input.ownerName}, ${input.visibility}, null)
-        `;
-      });
-    } catch (error) {
-      if (!isUniqueViolation(error)) {
-        throw error;
-      }
-      // owner_name is unique and a rename can land on a path another registration
-      // still holds. The numeric id already proved which repository this row is, so
-      // keep the crawl available and leave the display name to the row that owns it; the verified path is forge text, so the warning encodes it (issue 1042).
-      console.warn(
-        `Verified owner name ${logField(input.ownerName)} for repository ${input.repositoryId} is already registered `
-        + "to another repository. The stored path stays stale, so this recurs on every reconciliation until the other registration releases the path.",
-      );
-      await this.coordinator.withRepositoryPublication(input.repositoryId, async (transaction) => {
-        await transaction`
-          update registered_repositories
-          set
-            visibility = ${input.visibility},
-            unavailable_reason = null,
-            unavailable_since = null,
-            updated_at = now()
-          where id = ${input.repositoryId}
-        `;
-      });
-    }
+    return this.repositoryLookup.recordVerifiedRepositoryIdentity(input);
   }
 
-  // The sweep re-attempts a dark repository every few hours for as long as it stays
-  // dark, so a repeat of the reason already recorded must not touch the row at all.
   public async markRepositoryUnavailable(input: {
     repositoryId: string;
     reason: RepositoryUnavailableReason;
     at: Date;
   }): Promise<void> {
-    // The where guard is what preserves the first observation: a row whose reason
-    // already equals the input never reaches this set list, so every row that does
-    // is taking on a reason it did not carry before. Relaxing that guard would
-    // require unavailable_since to go back to keeping the earlier value.
-    await this.coordinator.withRepositoryPublication(input.repositoryId, async (transaction) => {
-      await transaction`
-        update registered_repositories
-        set
-          unavailable_reason = ${input.reason},
-          unavailable_since = ${input.at},
-          updated_at = now()
-        where id = ${input.repositoryId}
-          and unavailable_reason is distinct from ${input.reason}
-      `;
-    });
+    return this.repositoryLookup.markRepositoryUnavailable(input);
   }
 
   public async findRepositoryByOwnerName(ownerName: string): Promise<{ id: string } | null> {
-    const [row] = await this.sql<{ id: string }[]>`
-      select id
-      from registered_repositories
-      where owner_name = ${ownerName} and active = true
-      limit 1
-    `;
-    return row ?? null;
+    return this.repositoryLookup.findRepositoryByOwnerName(ownerName);
   }
 
   public async listActiveRepositoryIds(): Promise<string[]> {
-    const rows = await this.sql<{ id: string }[]>`
-      select id from registered_repositories where active = true order by id
-    `;
-    return rows.map((row) => row.id);
+    return this.repositoryLookup.listActiveRepositoryIds();
   }
 
   public async getReconciliationCooldown(repositoryId: string): Promise<Date | null> {
@@ -484,30 +258,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   }
 
   public async findUsersByGitHubUserIds(githubUserIds: readonly number[]): Promise<FoldUser[]> {
-    const normalized = [...new Set(githubUserIds.filter((id) => Number.isSafeInteger(id) && id > 0))];
-    if (normalized.length === 0) {
-      return [];
-    }
-    const rows = await this.sql<UserRow[]>`
-      select
-        users.id,
-        users.github_user_id,
-        users.github_login,
-        users.enforcement_state,
-        coalesce((
-          select jsonb_agg(jsonb_build_object(
-            'id', events.id,
-            'priorState', events.prior_state,
-            'newState', events.new_state,
-            'occurredAt', events.created_at
-          ) order by events.created_at, events.id)
-          from moderation_events as events
-          where events.target_user_id = users.id
-        ), '[]'::jsonb) as moderation_events
-      from users
-      where users.github_user_id = any(${this.sql.array(normalized.map(String))}::bigint[])
-    `;
-    return rows.map(toFoldUser);
+    return this.repositoryLookup.findUsersByGitHubUserIds(githubUserIds);
   }
 
   public async hasDerivedRowsBelowFoldRevision(repositoryId: string, revision: number): Promise<boolean> {
@@ -849,301 +600,6 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   public async failReconciliationJob(jobId: string, leaseToken: string): Promise<boolean> {
     return this.reconciliationJobs.failReconciliationJob(jobId, leaseToken);
   }
-}
-
-export async function claimGitHubIdentity(
-  sql: SqlClient,
-  userId: string,
-  githubUserId: number,
-): Promise<void> {
-  if (!Number.isSafeInteger(githubUserId) || githubUserId <= 0) {
-    throw new Error("GitHub user id must be a positive integer.");
-  }
-  await sql.begin(async (transaction) => {
-    // Fence against concurrent fold publications (issue 472): a publication takes
-    // its repository's registered_repositories row lock as its own first statement,
-    // so claiming under every such row lock orders a claim against every
-    // publication transaction — one committing between the publication's identity
-    // re-resolution and its materialization writes can no longer be overwritten by
-    // the stale snapshot. The claim's write scope is every repository, so the
-    // fence's scope is every repository; row locks release at COMMIT/ROLLBACK, so
-    // unlike the per-repository advisory locks there is no session-lock pool
-    // hazard. Ordered by id so two concurrent claims serialize without deadlock;
-    // a publication takes exactly its one row and waits on nothing else, so no
-    // cycle exists with concurrent publications either.
-    await transaction`select id from registered_repositories order by id for update`;
-    const selfWorkSettlements = await transaction<IdentityClaimSettlementRow[]>`
-      select
-        settlements.id,
-        settlements.fold_revision,
-        settlements.issue_id,
-        settlements.pull_request_id,
-        settlements.creditor_id,
-        settlements.creditor_github_login,
-        settlements.debtor_id,
-        settlements.opening_comparison_points,
-        settlements.settled_points
-      from settlements
-      join pull_requests on pull_requests.id = settlements.pull_request_id
-      where settlements.status = ${"UNCLAIMED"}
-        and settlements.provider = ${"github"}
-        and settlements.creditor_github_user_id = ${githubUserId}
-        and settlements.debtor_id = ${userId}
-        and pull_requests.merged_at is not null
-        and participation_eligible_at(${userId}, pull_requests.merged_at)
-    `;
-    for (const settlement of selfWorkSettlements) {
-      await transaction`
-        insert into self_work_calibrations (
-          pull_request_id, issue_id, user_id, opening_comparison_points, actual_points, fold_revision
-        )
-        values (
-          ${settlement.pull_request_id}, ${settlement.issue_id}, ${userId},
-          ${settlement.opening_comparison_points}, ${settlement.settled_points}, ${settlement.fold_revision}
-        )
-        on conflict (pull_request_id, issue_id) do update
-        set user_id = excluded.user_id,
-            opening_comparison_points = excluded.opening_comparison_points,
-            actual_points = excluded.actual_points,
-            -- Identity claims carry values forward without recomputing them;
-            -- keep the older provenance when either row came from older logic.
-            fold_revision = least(self_work_calibrations.fold_revision, excluded.fold_revision)
-      `;
-      await transaction`delete from settlements where id = ${settlement.id}`;
-    }
-
-    await transaction`
-      update pull_requests
-      set author_id = ${userId}
-      where author_github_user_id = ${githubUserId}
-        and exists (
-          select 1 from registered_repositories
-          where registered_repositories.id = pull_requests.repository_id
-            and registered_repositories.provider = 'github'
-        )
-    `;
-    await transaction`
-      update settlements
-      set creditor_id = ${userId}, status = ${"SETTLED"}
-      from users as creditor, users as debtor, pull_requests
-      where settlements.status = ${"UNCLAIMED"}
-        and settlements.provider = ${"github"}
-        and settlements.creditor_github_user_id = ${githubUserId}
-        and settlements.debtor_id <> ${userId}
-        and creditor.id = ${userId}
-        and debtor.id = settlements.debtor_id
-        and pull_requests.id = settlements.pull_request_id
-        and pull_requests.merged_at is not null
-        and participation_eligible_at(creditor.id, pull_requests.merged_at)
-        and participation_eligible_at(debtor.id, pull_requests.merged_at)
-    `;
-  });
-}
-
-/**
- * The GitLab analogue of claimGitHubIdentity (contract decision 3): linking a
- * forge identity claims the PAST UNCLAIMED GitLab settlements its exact
- * triple — (provider, instance_url, forge_user_id); never the login — already
- * produced, retroactively, under the same participation guards the GitHub
- * claim applies. The settlement's own provider and instance_url columns
- * (written by the fold since 038) scope the match, so a forge id on another
- * instance or another forge never resolves here.
- */
-export async function claimForgeIdentity(
-  sql: SqlClient,
-  input: { userId: string; instanceUrl: string; forgeUserId: number },
-): Promise<void> {
-  if (!Number.isSafeInteger(input.forgeUserId) || input.forgeUserId <= 0) {
-    throw new Error("Forge user id must be a positive integer.");
-  }
-  const instanceUrl = normalizeInstanceUrl(input.instanceUrl);
-  await sql.begin(async (transaction) => {
-    // The same publication fence claimGitHubIdentity takes (issue 472).
-    await transaction`select id from registered_repositories order by id for update`;
-    const selfWorkSettlements = await transaction<IdentityClaimSettlementRow[]>`
-      select
-        settlements.id,
-        settlements.fold_revision,
-        settlements.issue_id,
-        settlements.pull_request_id,
-        settlements.creditor_id,
-        settlements.creditor_github_login,
-        settlements.debtor_id,
-        settlements.opening_comparison_points,
-        settlements.settled_points
-      from settlements
-      join pull_requests on pull_requests.id = settlements.pull_request_id
-      where settlements.status = ${"UNCLAIMED"}
-        and settlements.provider = ${"gitlab"}
-        and settlements.instance_url = ${instanceUrl}
-        and settlements.creditor_github_user_id = ${input.forgeUserId}
-        and settlements.debtor_id = ${input.userId}
-        and pull_requests.merged_at is not null
-        and participation_eligible_at(${input.userId}, pull_requests.merged_at)
-    `;
-    for (const settlement of selfWorkSettlements) {
-      await transaction`
-        insert into self_work_calibrations (
-          pull_request_id, issue_id, user_id, opening_comparison_points, actual_points, fold_revision
-        )
-        values (
-          ${settlement.pull_request_id}, ${settlement.issue_id}, ${input.userId},
-          ${settlement.opening_comparison_points}, ${settlement.settled_points}, ${settlement.fold_revision}
-        )
-        on conflict (pull_request_id, issue_id) do update
-        set user_id = excluded.user_id,
-            opening_comparison_points = excluded.opening_comparison_points,
-            actual_points = excluded.actual_points,
-            fold_revision = least(self_work_calibrations.fold_revision, excluded.fold_revision)
-      `;
-      await transaction`delete from settlements where id = ${settlement.id}`;
-    }
-
-    await transaction`
-      update settlements
-      set creditor_id = ${input.userId}, status = ${"SETTLED"}
-      from users as creditor, users as debtor, pull_requests
-      where settlements.status = ${"UNCLAIMED"}
-        and settlements.provider = ${"gitlab"}
-        and settlements.instance_url = ${instanceUrl}
-        and settlements.creditor_github_user_id = ${input.forgeUserId}
-        and settlements.debtor_id <> ${input.userId}
-        and creditor.id = ${input.userId}
-        and debtor.id = settlements.debtor_id
-        and pull_requests.id = settlements.pull_request_id
-        and pull_requests.merged_at is not null
-        and participation_eligible_at(creditor.id, pull_requests.merged_at)
-        and participation_eligible_at(debtor.id, pull_requests.merged_at)
-    `;
-  });
-}
-
-/**
- * Re-resolve the identities a stale fold snapshot left unclaimed, so publishing
- * it does not undo a claim made since the snapshot was taken (issue 446).
- *
- * A fold captured before a contributor's Overflow account existed marks their
- * settlements UNCLAIMED (creditor unrecorded, only a GitHub user id) and their
- * pull requests authorless. `claimGitHubIdentity` later flips those rows, and
- * materialization rewrites the same tables from the fold — replaying the
- * snapshot verbatim would write UNCLAIMED back over SETTLED, resurrect a
- * settlement the claim moved into `self_work_calibrations`, and clear the
- * claimed `pull_requests.author_id`. Inside this publication transaction,
- * resolve each unclaimed GitHub identity against the users table and recompute
- * the row the fold would produce today, evaluating the claim's own guards
- * against current data.
- *
- * The resolution is only as current as this transaction's users-table read: a
- * claim committing between that read and the materialization writes below
- * would be overwritten by those writes. claimGitHubIdentity fences against
- * this by taking every registered_repositories row lock, in id order, as its
- * own first statement — a claim waits here for this publication to commit
- * before it applies, so this window is closed rather than merely self-healing.
- *
- * Returns a NEW fold — callers retain and reuse fold objects across runs, so
- * the input is never mutated.
- */
-async function reResolveIdentityClaims(
-  sql: TransactionClient,
-  fold: FoldResult,
-): Promise<FoldResult> {
-  const githubUserIds = new Set<number>();
-  for (const settlement of fold.settlements) {
-    if (settlement.status === "UNCLAIMED" && settlement.creditorGitHubUserId !== null) {
-      githubUserIds.add(settlement.creditorGitHubUserId);
-    }
-  }
-  for (const pullRequest of fold.pullRequests) {
-    if (pullRequest.authorGitHubUserId !== null) {
-      githubUserIds.add(pullRequest.authorGitHubUserId);
-    }
-  }
-  if (githubUserIds.size === 0) {
-    return fold;
-  }
-
-  const rows = await sql<{ github_user_id: string; id: string }[]>`
-    select github_user_id, id from users
-    where github_user_id = any(${sql.array([...githubUserIds].map(String))}::bigint[])
-  `;
-  const usersByGitHubId = new Map(rows.map((row) => [Number(row.github_user_id), row.id]));
-
-  // Mirrors claimGitHubIdentity's unconditional `update pull_requests set
-  // author_id`: an identity claim is authoritative for authorship, with no
-  // eligibility filter on this path.
-  const pullRequests = fold.pullRequests.map((pullRequest) => {
-    if (pullRequest.authorGitHubUserId === null) {
-      return pullRequest;
-    }
-    const userId = usersByGitHubId.get(pullRequest.authorGitHubUserId);
-    return userId === undefined ? pullRequest : { ...pullRequest, authorId: userId };
-  });
-
-  const selfWorkCalibrations = [...fold.selfWorkCalibrations];
-  const settlements: FoldSettlement[] = [];
-  for (const settlement of fold.settlements) {
-    const claimedCreditorId = settlement.status === "UNCLAIMED" && settlement.creditorGitHubUserId !== null
-      ? usersByGitHubId.get(settlement.creditorGitHubUserId)
-      : undefined;
-    if (claimedCreditorId === undefined) {
-      settlements.push(settlement);
-      continue;
-    }
-
-    // The claim's own WHERE clause, evaluated against current data: a
-    // settlement it would not have flipped stays UNCLAIMED here too. When the
-    // claimed identity is the debtor, both terms name the same user — the
-    // self-work guard the claim applies.
-    const [guard] = await sql<{ eligible: boolean }[]>`
-      select participation_eligible_at(${claimedCreditorId}, ${settlement.mergedAt})
-        and participation_eligible_at(${settlement.debtorId}, ${settlement.mergedAt}) as eligible
-    `;
-    if (guard?.eligible !== true) {
-      settlements.push(settlement);
-      continue;
-    }
-
-    if (claimedCreditorId === settlement.debtorId) {
-      // Self-work: the claim deletes the settlement and records the calibration
-      // with the field mapping the fold itself uses, so the rewritten fold
-      // describes exactly those rows.
-      selfWorkCalibrations.push({
-        githubIssueId: settlement.githubIssueId,
-        githubPullRequestId: settlement.githubPullRequestId,
-        userId: claimedCreditorId,
-        openingComparisonPoints: settlement.openingComparisonPoints,
-        actualLabel: settlement.settledLabel,
-        actualPoints: settlement.settledPoints,
-        actualLabelEventId: settlement.settledLabelEventId,
-        actualLabelActorLogin: settlement.settledLabelActorLogin,
-        actualLabelAppliedAt: settlement.settledLabelAppliedAt,
-        rationaleCommentId: settlement.settledRationaleCommentId,
-        rationaleActorLogin: settlement.settledRationaleActorLogin,
-        rationaleCommentedAt: settlement.settledRationaleCommentedAt,
-        mergeCommitOid: settlement.mergeCommitOid,
-        mergedAt: settlement.mergedAt,
-      });
-      continue;
-    }
-
-    // Re-resolve exactly as toSettlement prices a known author. reviewRounds on
-    // the fold settlement is a count, so the decision's review ids are stand-ins
-    // consistent with it.
-    const decision = calculateSettlement({
-      creditorId: claimedCreditorId,
-      debtorId: settlement.debtorId,
-      opening: settlement.openingComparisonPoints,
-      settled: settlement.settledPoints,
-      reviewIds: Array.from({ length: settlement.reviewRounds }, (_, index) => String(index)),
-    });
-    settlements.push(
-      decision.status === "SETTLED"
-        ? { ...settlement, creditorId: claimedCreditorId, credits: decision.credits, status: "SETTLED" }
-        : { ...settlement, credits: 0, status: "UNSETTLED" },
-    );
-  }
-
-  return { ...fold, pullRequests, settlements, selfWorkCalibrations };
 }
 
 async function upsertIssues(
@@ -1984,75 +1440,10 @@ function combineDeltas(...deltas: readonly ReconciliationDeltas[]): Reconciliati
   );
 }
 
-function toReconciliationRepository(
-  row: RepositoryRow,
-  difficultySchemeVersions: DifficultySchemeVersion[],
-): ReconciliationRepository {
-  return {
-    id: row.id,
-    githubRepositoryId: toSafeInteger(row.github_repository_id),
-    ownerName: row.owner_name,
-    active: row.active,
-    registeredAt: timestampToIso(row.created_at),
-    difficultyScheme: row.difficulty_scheme,
-    difficultySchemeVersions,
-    provider: row.provider ?? "github",
-    instanceUrl: row.instance_url,
-    sponsor: {
-      id: row.sponsor_id,
-      githubUserId: toSafeInteger(row.sponsor_github_user_id),
-      githubLogin: row.sponsor_github_login,
-      enforcementState: row.sponsor_enforcement_state,
-      moderationEvents: moderationEventsFromJson(row.sponsor_moderation_events),
-    },
-  };
-}
-
-function toFoldUser(row: UserRow): FoldUser {
-  return {
-    id: row.id,
-    githubUserId: toSafeInteger(row.github_user_id),
-    githubLogin: row.github_login,
-    enforcementState: row.enforcement_state,
-    moderationEvents: moderationEventsFromJson(row.moderation_events),
-  };
-}
-
 function requiredId(ids: Map<number, string>, githubId: number, label: string): string {
   const id = ids.get(githubId);
   if (id === undefined) {
     throw new Error(`${label} materialization was missing.`);
   }
   return id;
-}
-
-function toSafeInteger(value: number | string): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isSafeInteger(parsed)) {
-    throw new Error("Database record was invalid.");
-  }
-  return parsed;
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
-}
-
-function timestampToIso(value: string | Date | null): string {
-  const normalized = nullableTimestampToIso(value);
-  if (normalized === null) {
-    throw new Error("Database timestamp was missing.");
-  }
-  return normalized;
-}
-
-function nullableTimestampToIso(value: string | Date | null): string | null {
-  if (value === null) {
-    return null;
-  }
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.valueOf())) {
-    throw new Error("Timestamp was invalid.");
-  }
-  return date.toISOString();
 }
