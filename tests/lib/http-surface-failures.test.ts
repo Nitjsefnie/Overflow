@@ -166,6 +166,42 @@ export function GET() { return errorResponse(400, CODE, "m"); }
   });
 
   it.each([
+    ["CommonJS property call", 'require("../../../lib/http/error-response.ts").errorResponse(418, "HIDDEN", "m")'],
+    ["CommonJS destructuring", '(() => { const { errorResponse: f } = require("@/lib/http/error-response"); return f(418, "HIDDEN", "m"); })()'],
+    ["CommonJS builder", 'require(`@/lib/http/error-response`).errorEnvelope("HIDDEN", "m")'],
+  ])("refuses %s naming the helper require location", (_label, expression) => {
+    const root = tree({ [routeFile]: `${importHelper}export function GET() {
+  return ${expression};
+}
+` });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:3:`);
+  });
+
+  it("follows a CommonJS edge to a module with named helper calls", () => {
+    const root = tree({
+      [routeFile]: 'export function GET() { return require("@/lib/refuse").refuse(); }',
+      "src/lib/refuse.ts": `${importHelper}export function refuse() { return errorResponse(418, "HIDDEN", "m"); }`,
+    });
+    expect(deriveRouteFailures(["GET /api/things"], root)).toEqual({ "GET /api/things": ["418 HIDDEN"] });
+  });
+
+  it("refuses a CommonJS edge to a helper re-export", () => {
+    const root = tree({
+      [routeFile]: 'export function GET() { return require("@/lib/barrel").errorResponse(418, "HIDDEN", "m"); }',
+      "src/lib/barrel.ts": 'export { errorResponse } from "@/lib/http/error-response";',
+    });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow("src/lib/barrel.ts:1:");
+  });
+
+  it.each([
+    ['const module = "@/lib/refuse";\nrequire(module);', 2],
+    ['require("./gone");', 1],
+  ])("refuses unresolved CommonJS references %s", (source, line) => {
+    const root = tree({ [routeFile]: source });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:${line}:`);
+  });
+
+  it.each([
     ["import-equals namespace", 'import http = require("@/lib/http/error-response");', 'http.errorResponse(418, "HIDDEN", "m")'],
     ["import-equals destructuring", 'import http = require("../../../lib/http/error-response.ts");', '(() => { const { errorResponse: f } = http; return f(418, "HIDDEN", "m"); })()'],
     ["default import and re-binding", 'import http from "@/lib/http/error-response";', '(() => { const f = http.errorResponse; return f(418, "HIDDEN", "m"); })()'],

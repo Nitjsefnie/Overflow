@@ -22,7 +22,7 @@ import ts from "typescript";
  *   runtime), package specifiers, modules outside src/, and non-TypeScript
  *   files (JSON);
  * - refused (the derivation throws naming file:line): an `import(…)` whose
- *   specifier is not a literal, and an `@/`/relative specifier that resolves
+ *   specifier is not a literal (also refused for `require(…)`), and an `@/`/relative specifier that resolves
  *   to nothing.
  *
  * In every reached module each call to `errorResponse` is recorded as
@@ -34,7 +34,7 @@ import ts from "typescript";
  * and the remedy is to make the call site literal. The helper referenced
  * other than by a direct named-import call (passed as a value, imported as a
  * namespace/default, re-exported, or aliased locally) throws too. Direct
- * dynamic imports and import-equals of the helper module are refused at the
+ * dynamic imports, bare require calls and import-equals of the helper module are refused at the
  * import, regardless of await, destructuring, property access or .then use.
  * Named imports (including renamed imports) are the only supported helper
  * bindings. Any use of the envelope builder `errorEnvelope` outside the
@@ -111,11 +111,12 @@ function moduleReferences(root: string, source: ts.SourceFile): ModuleReference[
           ts.isStringLiteral(node.moduleReference.expression)) {
         references.push({ node, specifier: node.moduleReference.expression.text });
       }
-    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+    } else if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === "require"))) {
       const argument = node.arguments[0];
       if (argument === undefined || !(ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument))) {
         throw new Error(
-          `${location(root, source, node)}: a dynamic import() without a literal specifier cannot be followed; ` +
+          `${location(root, source, node)}: ${node.expression.getText(source)}() without a literal specifier cannot be followed; ` +
             "name the module literally so the HTTP surface derivation can record its failure answers.",
         );
       }
@@ -245,7 +246,7 @@ function moduleFailureAnswers(root: string, checker: ts.TypeChecker, source: ts.
     }
     if (declaration === undefined) {
       throw new Error(
-        `${location(root, source, reference.node)}: dynamically imports or import-equals ${helperModule}; ` +
+        `${location(root, source, reference.node)}: dynamically imports, requires or import-equals ${helperModule}; ` +
           `import { ${helperName} } and call it directly so the HTTP surface derivation can record the failure answers.`,
       );
     }
