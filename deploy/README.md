@@ -1002,10 +1002,12 @@ confirm that review. The acknowledgment has no effect when the status command
 fails, and any value other than `1` is refused. The runner records the verdict
 in `schema_migrations.mixed_version_review` in the same transaction as the
 migration; already-applied legacy rows are not reclassified. Readiness renders
-only ledger names matching the runner's migration filename grammar. An invalid
-flagged name still refuses readiness, but the body and journal show only
-`<unrecognised migration name>`. Only an actual boolean true flags a row; a
-legacy missing flag or a drifted non-boolean flag is treated as unflagged.
+only ledger names matching the runner's migration filename grammar in the
+journal. An invalid flagged name still refuses readiness, but the journal
+replaces that name with `<unrecognised migration name>`. The anonymous `503`
+body contains only `{ "status": "unavailable" }`; inspect the journal for the
+reason. Only an actual boolean true flags a row; a legacy missing flag or a
+drifted non-boolean flag is treated as unflagged.
 
 Use expand/contract releases: drop or rename a column only one release after
 the code stopped reading and writing it. Change a type or add `NOT NULL` only
