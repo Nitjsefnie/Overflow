@@ -28,6 +28,8 @@ import ts from "typescript";
  *   other than direct calls, module.require/module aliases, and createRequire
  *   constructors or loader namespaces are refused. Locally bound names and
  *   erased type references are distinguished by TypeScript symbol identity.
+ *   Type-only declarations/specifiers never enter the runtime reference walk;
+ *   globalThis/global/self require properties are refused at their access.
  *
  * In every reached module each call to `errorResponse` is recorded as
  * "<status> <CODE>", plus " +<key>" for each field of a literal `extra`
@@ -138,6 +140,19 @@ function isFreeLoader(symbol: ts.Symbol | undefined): boolean {
     (ts.getCombinedModifierFlags(declaration) & ts.ModifierFlags.Ambient) !== 0);
 }
 
+/** Inline type specifiers carry no runtime edge; empty import/export lists retain side effects. */
+function onlyTypeSpecifiers(bindings: ts.NamedImports | ts.NamedExports): boolean {
+  return bindings.elements.length > 0 && bindings.elements.every((binding) => binding.isTypeOnly);
+}
+
+function isGlobalHost(expression: ts.Expression, checker: ts.TypeChecker): boolean {
+  const host = unwrap(expression);
+  if (!ts.isIdentifier(host) || !["globalThis", "global", "self"].includes(host.text)) return false;
+  const symbol = referenceSymbol(checker, host);
+  // globalThis is a compiler intrinsic with no declaration, rather than a local binding.
+  return isFreeLoader(symbol) || (symbol?.declarations?.length ?? 0) === 0;
+}
+
 /** Every runtime module reference, including unsupported Node loader operations that must refuse. */
 function moduleReferences(
   root: string,
@@ -172,15 +187,20 @@ function moduleReferences(
     }
   }
   const visit = (node: ts.Node): void => {
-    if (ts.isTypeNode(node)) return;
+    if (ts.isTypeNode(node) ||
+        ((ts.isExportSpecifier(node) || ts.isImportSpecifier(node)) && node.isTypeOnly)) return;
     if (ts.isImportDeclaration(node)) {
-      if (!node.importClause?.isTypeOnly && ts.isStringLiteral(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      const bindings = clause?.namedBindings;
+      if (clause?.isTypeOnly || (!clause?.name && bindings && ts.isNamedImports(bindings) && onlyTypeSpecifiers(bindings))) return;
+      if (ts.isStringLiteral(node.moduleSpecifier)) {
         references.push({ node, specifier: node.moduleSpecifier.text, declaration: node });
       }
       return;
     }
     if (ts.isExportDeclaration(node)) {
-      if (!node.isTypeOnly && node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier)) {
+      if (node.isTypeOnly || (node.exportClause && ts.isNamedExports(node.exportClause) && onlyTypeSpecifiers(node.exportClause))) return;
+      if (node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier)) {
         if (nodeModule(node.moduleSpecifier.text) && (!node.exportClause || !ts.isNamedExports(node.exportClause) ||
             node.exportClause.elements.some((item) => !item.isTypeOnly &&
               ["createRequire", "Module", "default"].includes((item.propertyName ?? item.name).text)))) {
@@ -195,6 +215,12 @@ function moduleReferences(
         references.push({ node, specifier: node.moduleReference.expression.text });
       }
       return;
+    } else if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const member = ts.isPropertyAccessExpression(node) ? node.name.text
+        : literalOf(node.argumentExpression, "string");
+      if (member === "require" && isGlobalHost(node.expression, checker)) {
+        return refuse(node, "a global require property reference");
+      }
     } else if (ts.isCallExpression(node)) {
       const callee = unwrap(node.expression);
       const isRequire = ts.isIdentifier(callee) && callee.text === "require" && isFreeLoader(referenceSymbol(checker, callee));
