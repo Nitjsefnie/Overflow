@@ -3,16 +3,36 @@ import { deriveHttpSurfaceAnswers, shapeOf } from "./http-surface-derive.ts";
 import { deriveRouteFailures } from "./http-surface-derive-failures.ts";
 import type { DerivedHttpSurface } from "./surface-change.ts";
 
+type FixtureLogOwner = { users: number; original: typeof console.info };
+let fixtureLogOwner: FixtureLogOwner | undefined;
+
+/** Overlapping fixture derivations share one filter and release the original logger together. */
+function acquireFixtureLogFilter(): () => void {
+  if (fixtureLogOwner === undefined) {
+    const original = console.info;
+    fixtureLogOwner = { users: 0, original };
+    console.info = (...args: Parameters<typeof console.info>) => {
+      if (args[0] !== "Privileged action") original.apply(console, args);
+    };
+  }
+  const owner = fixtureLogOwner;
+  owner.users += 1;
+  return () => {
+    owner.users -= 1;
+    if (owner.users === 0) {
+      console.info = owner.original;
+      fixtureLogOwner = undefined;
+    }
+  };
+}
+
 /** Fixture calls must not write synthetic actions to the updater's journal output. */
 async function fixtureAnswers(): ReturnType<typeof deriveHttpSurfaceAnswers> {
-  const info = console.info;
-  console.info = (...args: Parameters<typeof console.info>) => {
-    if (args[0] !== "Privileged action") info.apply(console, args);
-  };
+  const release = acquireFixtureLogFilter();
   try {
     return await deriveHttpSurfaceAnswers();
   } finally {
-    console.info = info;
+    release();
   }
 }
 
