@@ -70,11 +70,31 @@ function diagnosticHeaders(source: HeadersInit, credentials: string | readonly s
 
 function redactCredentials(value: string, credentials: string | readonly string[]): string {
   const tokens = typeof credentials === "string" ? [credentials] : credentials;
-  // Remove longer credentials first so an overlapping short token cannot
-  // prevent matching the full secret and leave its suffix behind.
-  return [...tokens].sort((a, b) => b.length - a.length).reduce(
-    (text, token) => token.length > 0 ? text.replaceAll(token, "[REDACTED]") : text, value,
-  );
+  const spans: Array<{ start: number; end: number }> = [];
+  // Locate matches in the original text: replacing one credential first can
+  // destroy a partially overlapping match and leave its unmatched suffix.
+  for (const token of new Set(tokens)) {
+    if (token.length === 0) continue;
+    let start = value.indexOf(token);
+    while (start !== -1) {
+      spans.push({ start, end: start + token.length });
+      // Include overlapping occurrences of the same credential too.
+      start = value.indexOf(token, start + 1);
+    }
+  }
+  spans.sort((left, right) => left.start - right.start);
+  let redacted = "";
+  let cursor = 0;
+  for (let index = 0; index < spans.length; index++) {
+    const span = spans[index]!;
+    let end = span.end;
+    while (index + 1 < spans.length && spans[index + 1]!.start <= end) {
+      end = Math.max(end, spans[++index]!.end);
+    }
+    redacted += `${value.slice(cursor, span.start)}[REDACTED]`;
+    cursor = end;
+  }
+  return redacted + value.slice(cursor);
 }
 
 export class GitHubGraphqlRequestError extends Error implements GitHubRateLimitDetails {

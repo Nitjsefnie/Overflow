@@ -134,6 +134,38 @@ describe("GitHub failure diagnostics", () => {
     });
   });
 
+  it("redacts the union of partially overlapping credentials in body and allowed headers", async () => {
+    const prefix = randomBytes(18).toString("base64url");
+    const shared = randomBytes(18).toString("base64url");
+    const suffix = randomBytes(12).toString("base64url");
+    const token = prefix + shared;
+    const secret = shared + suffix;
+    const reflected = prefix + shared + suffix;
+    const gateway = new GitHubGateway({ accessToken: token, fetch: async () => new Response(reflected, {
+      status: 403, headers: { "x-github-request-id": reflected },
+    }) });
+    const error = await gateway.configureWebhook(repository, 81, { callbackUrl: "https://example.test", secret })
+      .catch((error: unknown) => error);
+    expect(error).toMatchObject({ body: "[REDACTED]", headers: { "x-github-request-id": "[REDACTED]" } });
+    const line = errorLogToken(error);
+    expect(line).toContain('body="[REDACTED]" x-github-request-id="[REDACTED]"');
+    for (const part of [prefix, shared, suffix]) expect(line).not.toContain(part);
+  });
+
+  it("redacts overlapping occurrences of the same credential", async () => {
+    const part = randomBytes(6).toString("base64url");
+    const token = part.repeat(3);
+    const secret = randomBytes(24).toString("base64url");
+    const reflected = part.repeat(4);
+    const gateway = new GitHubGateway({ accessToken: token, fetch: async () => new Response(reflected, {
+      status: 403, headers: { "x-github-request-id": reflected },
+    }) });
+    const error = await gateway.configureWebhook(repository, 81, { callbackUrl: "https://example.test", secret })
+      .catch((error: unknown) => error);
+    expect(error).toMatchObject({ body: "[REDACTED]", headers: { "x-github-request-id": "[REDACTED]" } });
+    expect(errorLogToken(error)).not.toContain(part);
+  });
+
   it("captures workflow-read HTTP diagnostics", async () => {
     const gateway = new GitHubGateway({ accessToken, fetch: async () => new Response(`Denied ${accessToken}`, {
       status: 403, headers: { "retry-after": "60" },
