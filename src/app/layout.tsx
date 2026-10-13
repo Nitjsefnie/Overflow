@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
-// The middleware's nonce-based script CSP (src/middleware.ts) reaches Next's
+// The proxy's nonce-based script CSP (src/proxy.ts) reaches Next's
 // bootstrap scripts only on dynamically rendered documents: prerendered HTML
 // is produced at build time with no request nonce, so 'strict-dynamic' blocks
 // every script a static page serves (measured live — issue 1046's headless
