@@ -97,6 +97,61 @@ export function refuse() { return errorResponse(400, "INVALID_INPUT", "Bad."); }
     expect(deriveRouteFailures(["GET /api/things"], root)).toEqual({ "GET /api/things": [] });
   });
 
+  it.each([
+    'export type { createRequire } from "node:module";',
+    'export { type createRequire } from "node:module";',
+    'export type * from "node:module";',
+    'export type * as loaders from "node:module";',
+    'import type { createRequire } from "node:module"; export type Loader = typeof createRequire;',
+    'import { type createRequire } from "node:module"; export type Loader = typeof createRequire;',
+    'import type * as loaders from "node:module"; export type Loader = typeof loaders.createRequire;',
+    'import type loaders = require("node:module"); export type Loader = typeof loaders;',
+    'type Loader = typeof require; type Host = typeof module; type Maker = typeof createRequire;',
+    'export type Loader = typeof import("node:module").createRequire;',
+    'type require = string; export type { require };',
+    'import { type createRequire, builtinModules } from "node:module"; export { type createRequire, builtinModules };',
+  ])("ignores erased loader syntax: %s", (source) => {
+    const root = tree({ [routeFile]: source });
+    expect(deriveRouteFailures(["GET /api/things"], root)).toEqual({ "GET /api/things": [] });
+  });
+
+  it.each([
+    'import type { Thing } from "@/lib/types-only";',
+    'import { type Thing } from "@/lib/types-only";',
+    'export type { Thing } from "@/lib/types-only";',
+    'export { type Thing } from "@/lib/types-only";',
+  ])("does not follow an erased src edge: %s", (source) => {
+    const root = tree({
+      [routeFile]: source,
+      "src/lib/types-only.ts": 'import { createRequire } from "node:module"; export type Thing = string; export const load = createRequire(import.meta.url);',
+    });
+    expect(deriveRouteFailures(["GET /api/things"], root)).toEqual({ "GET /api/things": [] });
+  });
+
+  it("retains the runtime half of a mixed import", () => {
+    const root = tree({
+      [routeFile]: 'import { type Thing, refuse } from "@/lib/mixed"; export const GET = refuse;',
+      "src/lib/mixed.ts": `${importHelper}export type Thing = string; export const refuse = () => errorResponse(418, "RUNTIME", "m");`,
+    });
+    expect(deriveRouteFailures(["GET /api/things"], root)).toEqual({ "GET /api/things": ["418 RUNTIME"] });
+  });
+
+  it.each(["globalThis", "global", "self"].flatMap((host) =>
+    [ `${host}.require`, `${host}["require"]`, `(${host} as any).require`,
+      `(() => { const load = ${host}.require; return load; })()` ],
+  ))("refuses a global loader reference %s", (loader) => {
+    const root = tree({ [routeFile]: `export function GET() { return ${loader}("@/lib/http/error-response").errorResponse(418, "GLOBAL_CJS", "probe"); }` });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:1:`);
+  });
+
+  it("does not confuse shadowed global hosts or their type queries with runtime loaders", () => {
+    const root = tree({ [routeFile]: `type Loader = typeof globalThis.require;
+export function GET(globalThis: any, global: any, self: any) {
+  return globalThis.require() ?? global["require"]() ?? self.require();
+}` });
+    expect(deriveRouteFailures(["GET /api/things"], root)).toEqual({ "GET /api/things": [] });
+  });
+
   it("follows a re-export within src", () => {
     const root = tree({
       [routeFile]: 'export { refuse as GET } from "../../../lib/refuse";\n',
