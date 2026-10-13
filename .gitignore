@@ -14,7 +14,6 @@
 !pnpm-workspace.yaml
 !tsconfig.json
 !next.config.ts
-!postcss.config.mjs
 !eslint.config.mjs
 !vitest.config.ts
 !vitest.setup.ts
