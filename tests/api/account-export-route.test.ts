@@ -43,6 +43,15 @@ function dependencies() {
 }
 
 describe("POST /api/account/export", () => {
+  it("keeps the unauthenticated refusal bytes in code/message order", async () => {
+    const deps = dependencies();
+    deps.getSession.mockResolvedValueOnce(null);
+    const response = await createAccountExportPostHandler(deps)(requests.json({}));
+    expect(response.status).toBe(401);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(await response.text()).toBe('{"error":{"code":"UNAUTHENTICATED","message":"Sign in is required."}}');
+  });
+
   it.each([
     ["foreign Origin", requests.foreignJson({})],
     ["missing Origin", new Request(requests.url, { method: "POST" })],
