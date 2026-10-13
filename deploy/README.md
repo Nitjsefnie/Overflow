@@ -179,16 +179,17 @@ probe. Preserve them when constructing or changing a vhost:
   `X-Forwarded-Port` to `$server_port`. Keep `APP_URL` set to the public HTTPS
   origin; the application's cookie-authenticated mutation guard compares the
   request's `Origin` to that configured origin.
-- **Body caps.** Allow 25 MiB (`client_max_body_size 25m`) on
-  `/api/github/webhooks` and `/api/gitlab/webhooks`. Cap `/api/moderation` and
-  `/api/overrides`, including their subpaths, at 64 KiB (`64k`), as the host
-  does. The application's limits there are 8 or 32 KiB. A 64 KiB cap also fits
-  the 4 KiB `/api/account` and `/api/forge-identities` bodies. Keep larger
-  exceptions for `/api/repositories` (128 KiB) and `/api/mcp` (1 MiB): a blanket
-  64 KiB cap would reject bodies those handlers accept. The deployed vhost
-  currently sets 25m at server level and overrides it only for moderation and
-  overrides; its `/` location inherits 25m. The smaller application limits
-  still apply, but the proxy does not currently impose 64 KiB everywhere else.
+- **Body caps.** The required proxy body caps are 25 MiB
+  (`client_max_body_size 25m`) on `/api/github/webhooks` and
+  `/api/gitlab/webhooks`, and 64 KiB (`64k`) on `/api/moderation` and
+  `/api/overrides`, including their subpaths, matching the host configuration.
+  The application's limits on moderation and overrides are 8 or 32 KiB.
+  Other routes retain their own application streaming body limits: 4 KiB on
+  `/api/account` and `/api/forge-identities`, 128 KiB on `/api/repositories`,
+  and 1 MiB on `/api/mcp`. The server-level 25m cap is acceptable for these
+  other routes because the application enforces those smaller limits. A
+  smaller proxy cap there is optional defence-in-depth and must not fall
+  below the corresponding application limit.
 - **Proxy timeouts.** All three proxying locations on the host use
   `proxy_connect_timeout 5s`, `proxy_read_timeout 60s`, and
   `proxy_send_timeout 60s`. Preserve these bounds. Read/send timeouts bound
