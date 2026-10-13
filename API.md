@@ -899,6 +899,18 @@ the session and OAuth handshake state. The configured provider is GitHub only,
 with JWT sessions. These response shapes and redirects belong to Auth.js,
 not Overflow's `{ "error": { "code", "message" } }` envelope.
 
+The framework response shapes, statuses, redirects and cache headers below are
+observations of the installed `next-auth` 5.0.0-beta.32 (`@auth/core` 0.41.3).
+They are governed by Auth.js and fall outside Overflow's response-shape and
+versioning guarantee in the Stability and versioning section.
+
+The table describes Auth.js with `basePath: "/api/auth"`, which must match
+Overflow's fixed `/api/auth/*` mount. Overflow sets no explicit `basePath`.
+Leave `AUTH_URL` and its legacy fallback `NEXTAUTH_URL` unset, or give the
+selected URL a pathname of `/` or `/api/auth`. Any other non-root pathname
+changes Auth.js's base path and the URLs shown here; an override outside
+`/api/auth` generates URLs outside this mount.
+
 | Method and path | HTTP / Content-Type | Response / purpose |
 | --- | --- | --- |
 | `GET /api/auth/providers` | `200`, `application/json` | `{ "github": { "id": "github", "name": "GitHub", "type": "oauth", "signinUrl": "<auth-origin>/api/auth/signin/github", "callbackUrl": "<auth-origin>/api/auth/callback/github" } }`. |
@@ -914,7 +926,8 @@ not Overflow's `{ "error": { "code", "message" } }` envelope.
 | `GET /api/auth/verify-request` | `200`, `text/html` | Auth.js's built-in verification page remains reachable, though no email provider is configured. |
 
 `<auth-origin>` is the origin Auth.js uses for the request, including any
-`AUTH_URL` override. Its GET session and CSRF answers set
+`AUTH_URL` override (or `NEXTAUTH_URL` fallback) with the pathname described
+above. Its GET session and CSRF answers set
 `Cache-Control: private, no-cache, no-store`, `Expires: 0` and
 `Pragma: no-cache`. The other normal responses above set no cache headers
 in Auth.js, including the POST session update; Overflow's mount adds none.
