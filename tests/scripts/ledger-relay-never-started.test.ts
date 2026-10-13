@@ -1,4 +1,4 @@
-import { appSuiteListing } from "./ledger-relay-check-fixtures.ts";
+import { appSuiteListing, RELAY_OWN_RUN_ENV, relayJobStartListing } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
@@ -135,7 +135,7 @@ describe("the heal's evidence on the live relay paths (issue 1037)", () => {
     const fn = vi.fn(async (url: unknown, init?: RequestInit) => {
       const rendered = typeof url === "string" ? url : String(url);
       requests.push({ url: rendered, init: init ?? {} });
-      const suites = appSuiteListing(rendered);
+      const suites = appSuiteListing(rendered) ?? relayJobStartListing(rendered);
       if (suites !== undefined) return new Response(JSON.stringify(suites));
       const outcome = outcomes.shift();
       if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
@@ -158,7 +158,7 @@ describe("the heal's evidence on the live relay paths (issue 1037)", () => {
 
   function relayEnv(over: Record<string, string> = {}): Record<string, string> {
     return {
-      LEDGER_APP_ID: "5118623",
+      ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623",
       LEDGER_INSTALLATION_ID: "166057493",
       LEDGER_APP_KEY: keyPem,
       GITHUB_REPOSITORY: "Nitjsefnie/Overflow",

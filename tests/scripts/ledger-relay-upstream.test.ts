@@ -1,4 +1,4 @@
-import { appSuiteListing, appChecksUrl } from "./ledger-relay-check-fixtures.ts";
+import { appSuiteListing, appChecksUrl, RELAY_OWN_RUN_ENV, relayJobStartListing } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -94,7 +94,7 @@ function harness(over: {
   const fetchFn = (async (input: unknown, init?: RequestInit) => {
     const url = String(input);
     requests.push(url);
-    const suites = appSuiteListing(url);
+    const suites = appSuiteListing(url) ?? relayJobStartListing(url);
     if (suites !== undefined) return new Response(JSON.stringify(suites));
     if (url.endsWith("/access_tokens")) {
       return new Response(JSON.stringify({ token: "installation-token" }), { status: 201 });
@@ -120,7 +120,7 @@ function harness(over: {
     return new Response(JSON.stringify(result));
   }) as typeof fetch;
   const env: Record<string, string | undefined> = {
-    LEDGER_APP_ID: "5118623",
+    ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623",
     LEDGER_INSTALLATION_ID: "166057493",
     LEDGER_APP_KEY: keyPem,
     GITHUB_REPOSITORY: REPO,

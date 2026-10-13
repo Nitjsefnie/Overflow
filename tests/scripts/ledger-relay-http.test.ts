@@ -1,4 +1,5 @@
-import { appSuiteListing, appChecksUrl, appSuitesUrl } from "./ledger-relay-check-fixtures.ts";
+import { appSuiteListing, appChecksUrl, appSuitesUrl, RELAY_OWN_RUN_ENV, relayJobStartListing,
+  relayJobStartUrl } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -37,7 +38,7 @@ function world() {
       status: "completed", conclusion: "success", event: "push", head_branch: "main",
       html_url: `https://github.com/${REPO}/actions/runs/9001`,
     }] });
-    const suites = appSuiteListing(url);
+    const suites = appSuiteListing(url) ?? relayJobStartListing(url);
     if (suites !== undefined) return response(suites);
     if (url === CHECKS) return response({ check_runs: state.checks.slice(-1) });
     if (url.endsWith("/9001/jobs?filter=latest&per_page=100")) return response({ jobs: [{
@@ -50,7 +51,7 @@ function world() {
     throw new Error(`unexpected request ${url}`);
   }) as typeof fetch;
   const deps: RelayDeps = {
-    env: { LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
+    env: { ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
       GITHUB_REPOSITORY: REPO, LEDGER_SWEEP_ONLY: "true" },
     fetchFn, delayFn: async (ms) => { state.delays.push(ms); },
     readPinMap: async () => ({ verify: ".github/workflows/ci.yml" }),
@@ -72,12 +73,12 @@ describe("ledger relay request lifetime", () => {
     const timeout = vi.spyOn(AbortSignal, "timeout");
     try {
       await w.run();
-      expect(w.state.requests).toHaveLength(6);
-      expect(timeout).toHaveBeenCalledTimes(6);
+      expect(w.state.requests).toHaveLength(7);
+      expect(timeout).toHaveBeenCalledTimes(7);
       expect(timeout.mock.calls.every(([ms]) => ms === 30_000)).toBe(true);
       const signals = w.state.requests.map(({ init }) => init.signal);
       for (const signal of signals) expect(signal).toBeInstanceOf(AbortSignal);
-      expect(new Set(signals).size).toBe(6);
+      expect(new Set(signals).size).toBe(7);
     } finally { timeout.mockRestore(); }
   });
 
@@ -286,7 +287,7 @@ describe("ledger relay request lifetime", () => {
     await expect(w.run({ nowFn: () => now, delayFn: async () => { now += 10 * 60_000; } }))
       .rejects.toThrow(/run deadline/);
     expect(w.state.requests.map(({ url }) => url)).toEqual([
-      "https://api.github.com/app/installations/166057493/access_tokens", LISTING,
+      relayJobStartUrl(), "https://api.github.com/app/installations/166057493/access_tokens", LISTING,
     ]);
   });
 
@@ -358,7 +359,7 @@ describe("ledger relay request lifetime", () => {
         status: "completed", conclusion: "cancelled", event: "pull_request_target", head_branch: "feature/heal",
         html_url: `https://github.com/${REPO}/actions/runs/9001`, run_started_at: null,
       }] });
-      if (url.includes("/jobs?")) return response({ jobs: [{
+      if (url.includes("/9001/jobs?")) return response({ jobs: [{
         name: "verify", run_attempt: 1, status: "queued", conclusion: null, started_at: null,
       }] });
       if (url.includes("/pulls?")) return response([{ state: "open", head: { sha: HEAD } }]);

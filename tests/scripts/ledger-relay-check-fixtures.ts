@@ -14,3 +14,22 @@ export function appSuiteListing(url: string): { total_count: number; check_suite
   return { total_count: 1, check_suites: [{ id: String(BigInt(`0x${match[1]}`) + 1n),
     app: { id: new URL(url).searchParams.get("app_id") } }] };
 }
+
+/**
+ * The relay's own run: every start reads its job's started_at through the
+ * workflow token before any write (issue 1195), so every harness carries
+ * these env values and answers that read with a job that has just started.
+ */
+export const RELAY_OWN_RUN_ENV = {
+  GITHUB_RUN_ID: "7700", GITHUB_RUN_ATTEMPT: "1", RELAY_RERUN_TOKEN: ["rerun", "token"].join("-"),
+};
+
+export function relayJobStartUrl(root = "https://api.github.com/repos/Nitjsefnie/Overflow"): string {
+  return `${root}/actions/runs/${RELAY_OWN_RUN_ENV.GITHUB_RUN_ID}/attempts/${RELAY_OWN_RUN_ENV.GITHUB_RUN_ATTEMPT}/jobs?per_page=100`;
+}
+
+/** The job-start listing for the relay's own run, or undefined for any other URL. */
+export function relayJobStartListing(url: string): { total_count: number; jobs: unknown[] } | undefined {
+  if (!url.endsWith(`/actions/runs/${RELAY_OWN_RUN_ENV.GITHUB_RUN_ID}/attempts/${RELAY_OWN_RUN_ENV.GITHUB_RUN_ATTEMPT}/jobs?per_page=100`)) return;
+  return { total_count: 1, jobs: [{ name: "relay-required-checks", status: "in_progress", started_at: new Date().toISOString() }] };
+}
