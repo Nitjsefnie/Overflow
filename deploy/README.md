@@ -111,16 +111,9 @@ may read it.
 
 The reverse proxy must allow request bodies of at least 25 MiB on
 `/api/github/webhooks` and `/api/gitlab/webhooks`, matching the application's
-delivery limit. nginx defaults `client_max_body_size` to 1 MiB, so the default
-proxy rejects deliveries larger than 1 MiB and up to 25 MiB before they reach
-the application. The application also enforces JSON body limits by route: 4 KiB
-on `/api/account` and `/api/forge-identities`; 8 KiB on `/api/moderation/[id]`
-and `/api/overrides/[id]`; 32 KiB on `/api/moderation`,
-`/api/moderation/adjustments/reversal`, `/api/moderation/moderators`,
-`/api/moderation/recalibration/adjustment`, `/api/moderation/rederivation`, and
-`/api/overrides`; 128 KiB on `/api/repositories`; and 1 MiB on `/api/mcp`. For
-example, the production host currently caps `client_max_body_size` at 64k on
-its moderation and overrides locations.
+delivery limit. The [reverse-proxy requirements](#reverse-proxy-requirements)
+below cover body caps and the address, origin and resource bounds that must
+accompany them.
 
 systemd reads `EnvironmentFile=` as PID 1, before it drops to `User=overflow`,
 so the service account does not need to read `overflow.env` directly. Keep that
@@ -158,6 +151,78 @@ traversable by the overflow account — `0750 root:overflow` on the production
 host today — because the Overflow Ledger App private key lives under it, and
 an untraversable `/etc/overflow` leaves the key unreadable, which fails the
 required checks closed.
+
+### Reverse-proxy requirements
+
+The unit binds Next to `127.0.0.1:3000`. The documented deployment puts nginx
+behind Cloudflare; these controls belong to the proxy, not to the readiness
+probe. Preserve them when constructing or changing a vhost:
+
+- **Client-address trust.** Set `real_ip_header CF-Connecting-IP` and restrict
+  `set_real_ip_from` to Cloudflare's IPv4 and IPv6 edge ranges; keep that list
+  current. Never trust this header from arbitrary peers. In every proxying
+  location, overwrite `X-Real-IP` with `$remote_addr` after that real-ip step,
+  rather than forwarding the caller's header. The privileged-action logger
+  reads only `X-Real-IP`, requires one valid IP, and never uses the appendable
+  `X-Forwarded-For` chain. The host's range list is
+  `/etc/nginx/snippets/cloudflare-realip.conf`.
+- **Origin lock and HTTPS.** Require authenticated origin pulls: the host
+  configures `ssl_client_certificate` with the Cloudflare origin-pull CA and
+  `ssl_verify_client on`. Enable the corresponding authenticated-origin-pull
+  setting at Cloudflare too; do not remove certificate verification to make a
+  direct origin request succeed. The HTTP vhost redirects to HTTPS, and the
+  HTTPS vhost emits `Strict-Transport-Security: max-age=31536000; includeSubDomains`
+  with `always`. These are deployment controls; the application does not
+  supply the origin lock or this HSTS policy.
+- **Forwarded origin.** Each proxying location sets `Host` and
+  `X-Forwarded-Host` to `$host`, `X-Forwarded-Proto` to `$scheme`, and
+  `X-Forwarded-Port` to `$server_port`. Keep `APP_URL` set to the public HTTPS
+  origin; the application's cookie-authenticated mutation guard compares the
+  request's `Origin` to that configured origin.
+- **Body caps.** Allow 25 MiB (`client_max_body_size 25m`) on
+  `/api/github/webhooks` and `/api/gitlab/webhooks`. Cap `/api/moderation` and
+  `/api/overrides`, including their subpaths, at 64 KiB (`64k`), as the host
+  does. The application's limits there are 8 or 32 KiB. A 64 KiB cap also fits
+  the 4 KiB `/api/account` and `/api/forge-identities` bodies. Keep larger
+  exceptions for `/api/repositories` (128 KiB) and `/api/mcp` (1 MiB): a blanket
+  64 KiB cap would reject bodies those handlers accept. The deployed vhost
+  currently sets 25m at server level and overrides it only for moderation and
+  overrides; its `/` location inherits 25m. The smaller application limits
+  still apply, but the proxy does not currently impose 64 KiB everywhere else.
+- **Proxy timeouts.** All three proxying locations on the host use
+  `proxy_connect_timeout 5s`, `proxy_read_timeout 60s`, and
+  `proxy_send_timeout 60s`. Preserve these bounds. Read/send timeouts bound
+  inactivity between operations, not the entire request duration; do not
+  treat them as a 60-second reconciliation deadline. Webhooks enqueue durable
+  work, and the worker folds it separately from the delivery request.
+- **Origin rate limits.** Keep a rate limit at nginx, keyed by the trusted
+  real client address after the real-ip step. Application limits on expensive
+  routes run after authentication and use account/token identities; they do
+  not replace the origin's request bound. The host's
+  `/etc/nginx/conf.d/overflow-ratelimit.conf` defines expensive writes and
+  account export at 12 requests/minute (burst 20), MCP at 60/minute (burst 30),
+  and general traffic at 20/second (burst 200), all with `nodelay` and rejection
+  status `429`. MCP and expensive requests also encounter the general bound.
+  Loopback and the host's own addresses are exempt; webhook receivers are
+  exempt from the general class and retain the application's shared receiver
+  buckets. Review exemptions for the deployment's own callers rather than
+  copying another host's trusted addresses.
+- **Address attestation in every location.** Follow [section 13](#13-verifying-the-privileged-action-journals-client-addresses)
+  to set `PRIVILEGED_PROXY_SECRET` and put the matching
+  `X-Privileged-Proxy-Secret` directive in a root-only include. Include it in
+  **every proxying `location`**, including `/api/overrides`, `/api/moderation`
+  and `/` on the host. nginx's
+  [header inheritance rule](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header)
+  means that a location setting any `proxy_set_header` inherits none from an
+  outer level. A missing or mismatched attestation leaves logged addresses
+  marked `clientAddressVerified: false`; it does not stop the privileged action.
+
+The host's vhost is `/etc/nginx/sites-enabled/overflow.nitjsefni.eu`. Review the
+vhost and its nonsecret includes against this list; keep the attestation
+include root-only and do not copy its value into deployment records. Section 13
+provides the validation/reload and privileged-journal check after a change.
+Use [the operational state map](../OPERATING.md#starting-healthy-and-degraded-states)
+to distinguish a proxy failure from a database or reconciliation failure.
 
 ## 5. Build the deployment tree
 
@@ -419,10 +484,11 @@ Expected: `active`; `200` from curl — the readiness endpoint answers `200` onl
 when PostgreSQL is reachable and every migration this build bundles is recorded
 applied in `schema_migrations` (a bounded probe: at most a few seconds, ~3 s
 worst case), so a `200` here is a real dependency check, not a bare port probe.
-The schema half of the check is one-sided: a database ahead of the build —
-carrying rows from a newer migration set, the state a rollback to an older
-release runs against — still answers `200`; only a schema missing a migration
-the build bundles fails here. The second `200` is the sign-in smoke: GET
+An ahead schema answers `200` only when its extra migrations are not flagged
+for mixed-version review. A missing bundled migration or an extra migration
+flagged for that review answers `503`; inspect `Readiness probe failed:` in the
+journal before continuing a deployment or rollback. The second `200` is the
+sign-in smoke: GET
 `/api/auth/providers` runs the Auth.js configuration, and answers `500`
 (`[auth][error] UntrustedHost` in the journal) when the deployment's
 environment cannot sign in — a failure class the readiness endpoint cannot
@@ -2844,8 +2910,12 @@ marker added. The steps below close that gap.
 
    `proxy_set_header X-Privileged-Proxy-Secret "<value from step 1>";`
 
-   Then include it from the overflow vhost's proxy `location` block — the
-   same block that already sets `X-Real-IP`:
+   Then include it in **every proxying `location` block** in the Overflow
+   vhost, alongside that block's `X-Real-IP` setting. On the documented host
+   these are `/api/overrides`, `/api/moderation`, and `/`. A location that sets
+   any `proxy_set_header` inherits none of those directives from an outer
+   level, so putting the attestation header only at server level or only in
+   `/` leaves the other locations without it:
 
    `include /etc/nginx/overflow-privileged-proxy.conf;`
 
