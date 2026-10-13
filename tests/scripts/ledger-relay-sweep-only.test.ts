@@ -1,4 +1,5 @@
-import { appSuiteListing } from "./ledger-relay-check-fixtures.ts";
+import { appSuiteListing, RELAY_OWN_RUN_ENV, relayJobStartListing,
+  relayJobStartUrl } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -30,6 +31,7 @@ const PIN_MAP = {
   actionlint: PATH_ACTIONLINT,
 };
 const TOKEN_URL = "https://api.github.com/app/installations/166057493/access_tokens";
+const OWN_JOB_URL = relayJobStartUrl();
 const SWEEP_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs?per_page=100";
 const CHECK_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/check-runs";
 const JOBS_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs/${RUN_ID}/jobs?filter=latest&per_page=100`;
@@ -47,7 +49,7 @@ function makeFetch(outcomes: Outcome[]) {
   const fn = (async (url: unknown, init?: RequestInit) => {
     const rendered = typeof url === "string" ? url : String(url);
     requests.push({ url: rendered, init: init ?? {} });
-      const suites = appSuiteListing(rendered);
+      const suites = appSuiteListing(rendered) ?? relayJobStartListing(rendered);
       if (suites !== undefined) return new Response(JSON.stringify(suites));
     const outcome = outcomes.shift();
     if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
@@ -125,7 +127,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
    */
   function sweepOnlyEnv(over: Record<string, string> = {}): Record<string, string> {
     return {
-      LEDGER_APP_ID: "5118623",
+      ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623",
       LEDGER_INSTALLATION_ID: "166057493",
       LEDGER_APP_KEY: KEY_PEM,
       GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
@@ -154,9 +156,9 @@ describe("sweep-only relay runs (issue 1116)", () => {
     expect(result.decisions).toEqual([]);
     expect(result.rerunDispatched).toBe(false);
     expect(result.sweep).toEqual({ examined: 0, relayed: [] });
-    // Past the mint, the sweep's listing is the only request: no jobs
-    // listing, no check-run POST, no heal queries.
-    expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, SWEEP_RUNS_URL]);
+    // Past the own-job read and the mint, the sweep's listing is the only
+    // request: no jobs listing, no check-run POST, no heal queries.
+    expect(fetchStub.requests.map((request) => request.url)).toEqual([OWN_JOB_URL, TOKEN_URL, SWEEP_RUNS_URL]);
     expect(renderRelayResult(result)).toEqual([]);
   });
 
@@ -210,7 +212,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
     expect(error, "a sweep-only start names no triggering run").toBeInstanceOf(Error);
     expect(error?.message).toContain("LEDGER_SWEEP_ONLY");
     expect(error?.message).toContain("no triggering run may be named");
-    expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, SWEEP_RUNS_URL]);
+    expect(fetchStub.requests.map((request) => request.url)).toEqual([OWN_JOB_URL, TOKEN_URL, SWEEP_RUNS_URL]);
   });
 
   it.each([
@@ -234,7 +236,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
 
     expect(error, "an ambiguous mode must fail closed").toBeInstanceOf(Error);
     expect(error?.message).toContain('LEDGER_SWEEP_ONLY must be exactly "true" or "false"');
-    expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, SWEEP_RUNS_URL]);
+    expect(fetchStub.requests.map((request) => request.url)).toEqual([OWN_JOB_URL, TOKEN_URL, SWEEP_RUNS_URL]);
   });
 
   it("reads LEDGER_SWEEP_ONLY=false with no run id as today's no-triggering-run refusal", async () => {
@@ -250,7 +252,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
 
     expect(error, "false is absent, and absent means today's refusal").toBeInstanceOf(Error);
     expect(error?.message).toContain("no triggering run in the environment");
-    expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, SWEEP_RUNS_URL]);
+    expect(fetchStub.requests.map((request) => request.url)).toEqual([OWN_JOB_URL, TOKEN_URL, SWEEP_RUNS_URL]);
   });
 
   it("fails visibly when the sweep itself throws", async () => {

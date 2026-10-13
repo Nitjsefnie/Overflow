@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { parse } from "yaml";
 import * as relayHttp from "../../scripts/ledger-relay-http.ts";
+import { RELAY_JOB_NAME, RELAY_JOB_TIMEOUT_MINUTES } from "../../scripts/ledger-relay-job-budget.ts";
 
 /**
  * The relay mints its App installation token from the LEDGER_APP_ID and
@@ -32,7 +33,7 @@ type ParsedWorkflow = {
   };
   permissions?: Record<string, string>;
   concurrency?: { group?: string };
-  jobs?: Record<string, { steps?: WorkflowStep[]; "timeout-minutes"?: number }>;
+  jobs?: Record<string, { name?: string; steps?: WorkflowStep[]; "timeout-minutes"?: number }>;
 };
 
 describe("the ledger relay workflow's pinned App identity", () => {
@@ -63,7 +64,25 @@ describe("the ledger relay workflow's pinned App identity", () => {
       relayHttp.BACKOFF_MS.reduce((sum, delay) => sum + delay, 0);
     expect((relaySteps[0]["timeout-minutes"] ?? 0) * 60_000).toBeGreaterThan(worstCaseMs);
     const stepMinutes = (job?.steps ?? []).reduce((sum, step) => sum + (step["timeout-minutes"] ?? 0), 0);
-    expect(job?.["timeout-minutes"]).toBeGreaterThanOrEqual(stepMinutes);
+    expect(
+      job?.["timeout-minutes"],
+      "the job bound needs a margin over its declared steps for the runner's Set up job phase",
+    ).toBeGreaterThan(stepMinutes);
+  });
+
+  it("names the relay job as the script's job-start read selects it, with the job timeout the script budgets", () => {
+    expect(Object.keys(workflow.jobs ?? {})).toEqual([RELAY_JOB_NAME]);
+    const job = workflow.jobs?.[RELAY_JOB_NAME];
+    expect(job?.name, "a name: override would rename the job the jobs API lists").toBeUndefined();
+    expect(
+      job?.["timeout-minutes"],
+      "RELAY_JOB_TIMEOUT_MINUTES must equal the job's timeout-minutes, or the job-start deadline drifts",
+    ).toBe(RELAY_JOB_TIMEOUT_MINUTES);
+  });
+
+  it("passes the relay run's own id and attempt to the job-start read exactly once", () => {
+    expect(envValues("GITHUB_RUN_ID")).toEqual(["${{ github.run_id }}"]);
+    expect(envValues("GITHUB_RUN_ATTEMPT")).toEqual(["${{ github.run_attempt }}"]);
   });
 
   it("carries the ledger App id exactly once, as the literal the gate and tests pin", () => {
@@ -96,7 +115,7 @@ describe("the ledger relay workflow's pinned App identity", () => {
     expect(
       envValues("RELAY_RERUN_TOKEN"),
       "the relay step must carry RELAY_RERUN_TOKEN exactly once — the " +
-        "repo-scoped workflow token the rerun-heal authenticates its POST with",
+        "repo-scoped workflow token the job-start read and the rerun-heal authenticate with",
     ).toEqual(["${{ github.token }}"]);
   });
 

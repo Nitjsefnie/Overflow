@@ -1,4 +1,5 @@
-import { appSuiteListing } from "./ledger-relay-check-fixtures.ts";
+import { appSuiteListing, RELAY_OWN_RUN_ENV, relayJobStartListing,
+  relayJobStartUrl } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -74,7 +75,7 @@ function world(kind: "verify" | "pr-gates" = "verify") {
   const blocked = deferred();
   const released = deferred();
   const baseEnv = {
-    LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493",
+    ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493",
     LEDGER_APP_KEY: key, GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456",
     RELAY_RERUN_TOKEN: ["rerun", "test"].join("-"),
   };
@@ -113,7 +114,7 @@ function world(kind: "verify" | "pr-gates" = "verify") {
       const page = Number(new URL(url).searchParams.get("page") ?? 1);
       return response({ total_count: state.producers.length, workflow_runs: state.producers.slice((page - 1) * 100, page * 100) });
     }
-    const appSuites = appSuiteListing(url);
+    const appSuites = appSuiteListing(url) ?? relayJobStartListing(url);
     if (appSuites !== undefined) return response(appSuites);
     const checkSuite = /\/check-suites\/([0-9]+)\/check-runs\?/.exec(url)?.[1];
     const checksHead = checkSuite === undefined
@@ -185,10 +186,10 @@ describe("unsuccessful upstream suites cannot receive App success", () => {
     let reads = 0;
     const result = await runRelay({
       env: mode === "sweep" ? {
-        LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
+        ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
         GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", LEDGER_SWEEP_ONLY: "true",
       } : {
-        LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
+        ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
         GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", LEDGER_DISPATCH_RUN_ID: "9001",
       },
       fetchFn: (async (input, init) => {
@@ -399,7 +400,7 @@ describe("fix round 2 pending recovery and malformed identity probes", () => {
     }) as typeof fetch;
     const producer = w.state.producers[0];
     const baseEnv = {
-      LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
+      ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
       GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456",
     };
     const mirrorEnv = {
@@ -546,7 +547,7 @@ describe("history-bound publication direction", () => {
     w.state.oversized = true;
     let writes = 0;
     const env = {
-      LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
+      ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
       GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456",
       ...(mode === "sweep" ? { LEDGER_SWEEP_ONLY: "true" } : {
         GITHUB_WORKFLOW_RUN_ID: "9001", GITHUB_WORKFLOW_RUN_HEAD_SHA: String(failed.head_sha),
@@ -904,7 +905,7 @@ describe("issue 1195 sweep rerun-heal", () => {
       external_id: "9001:1", status: "completed", conclusion: "failure", app: { id: 5118623 } });
     await w.relay("sweep");
     expect(w.state.reruns.map((run) => run.id)).toEqual(["9001"]);
-    expect(w.state.requests.filter((url) => url.includes("/jobs?"))).toHaveLength(1);
+    expect(w.state.requests.filter((url) => url.includes("/jobs?filter="))).toHaveLength(1);
   });
 
   it.each([
@@ -928,14 +929,14 @@ describe("issue 1195 sweep rerun-heal", () => {
     if (guard === "closed-pr") w.state.openPulls = false;
     if (guard === "live-run") w.state.liveRuns = [{ path: candidate.path, status: "pending" }];
     const fetchFn = (async (input: unknown, init?: RequestInit) => {
-      if (guard === "started-job" && String(input).includes("/jobs?")) {
+      if (guard === "started-job" && String(input).includes("/jobs?filter=")) {
         w.state.requests.push(String(input));
         return response({ jobs: GATE_CONTEXTS.map((name) => ({ name, status: "completed",
           conclusion: "cancelled", started_at: "2026-10-12T08:00:00Z" })) });
       }
       return w.fetchFn(input as RequestInfo, init);
     }) as typeof fetch;
-    await runRelay({ env: { LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493",
+    await runRelay({ env: { ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493",
       LEDGER_APP_KEY: key, GITHUB_REPOSITORY: REPO, LEDGER_SWEEP_ONLY: "true", RELAY_RERUN_TOKEN: "test" },
     fetchFn, delayFn: async () => {}, readPinMap: async () => pins });
     expect(w.state.reruns).toEqual([]);
@@ -954,12 +955,13 @@ describe("issue 1195 sweep rerun-heal", () => {
     expect(w.state.requests.some((url) => url.includes("/pulls?"))).toBe(false);
   });
 
-  it("fails red for a missing rerun token only when a heal candidate is on the table", async () => {
+  it("fails red for a missing rerun token before any request, with or without a heal candidate", async () => {
+    // The job-start read authenticates with the same workflow token.
     const w = world("pr-gates");
-    await w.relay("sweep", undefined, { RELAY_RERUN_TOKEN: "" });
+    await expect(w.relay("sweep", undefined, { RELAY_RERUN_TOKEN: "" })).rejects.toThrow("RELAY_RERUN_TOKEN is required");
     w.state.producers = [gate(9001, "cancelled")];
     await expect(w.relay("sweep", undefined, { RELAY_RERUN_TOKEN: "" })).rejects.toThrow("RELAY_RERUN_TOKEN is required");
-    expect(w.state.requests.some((url) => url.includes("/pulls?"))).toBe(false);
+    expect(w.state.requests).toEqual([]);
   });
 });
 
@@ -980,14 +982,15 @@ describe("issue 1195 sweep request budget", () => {
       const result = await w.relay("sweep");
       expect(result.sweep.examined).toBe(50);
       expect(result.sweep.relayed).toHaveLength(attested ? 0 : 50);
-      expect(w.state.requests).toHaveLength((attested ? 251 : 551) + pages);
+      expect(w.state.requests).toHaveLength((attested ? 252 : 552) + pages);
+      expect(w.state.requests.filter((url) => url === relayJobStartUrl())).toHaveLength(1);
       expect(w.state.requests.filter((url) => url.endsWith("/access_tokens"))).toHaveLength(1);
       expect(w.state.requests.filter((url) => url.startsWith(`${ROOT}/actions/runs?per_page=100`))).toHaveLength(pages);
       expect(w.state.requests.filter((url) => /\/actions\/runs\/[0-9]+$/.test(url))).toHaveLength(attested ? 100 : 200);
       expect(w.state.requests.filter((url) => url.includes("/actions/workflows/pr-suite.yml/runs?"))).toHaveLength(attested ? 50 : 150);
       expect(w.state.requests.filter((url) => url.includes("/commits/") && url.includes("/check-suites?"))).toHaveLength(50);
       expect(w.state.requests.filter((url) => url.includes("/check-suites/") && url.includes("/check-runs?"))).toHaveLength(50);
-      expect(w.state.requests.filter((url) => url.includes("/jobs?"))).toHaveLength(attested ? 0 : 50);
+      expect(w.state.requests.filter((url) => url.includes("/jobs?filter="))).toHaveLength(attested ? 0 : 50);
       expect(w.state.requests.filter((url) => url === `${ROOT}/check-runs`)).toHaveLength(attested ? 0 : 50);
   });
 });
@@ -1098,7 +1101,7 @@ describe("panel regression: App suite visibility", () => {
     }))];
     let cappedReads = 0;
     await runRelay({
-      env: { LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
+      env: { ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
         GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", LEDGER_DISPATCH_RUN_ID: "9001" },
       fetchFn: (async (input, init) => {
         const url = String(input);
@@ -1135,7 +1138,7 @@ describe("panel regression: incremental sweep deadline", () => {
     let now = 0;
     const startedAt: number[] = [];
     const result = await runRelay({
-      env: { LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
+      env: { ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
         GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", LEDGER_SWEEP_ONLY: "true" },
       nowFn: () => now,
       fetchFn: (async (input, init) => {

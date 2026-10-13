@@ -1,3 +1,4 @@
+import { RELAY_OWN_RUN_ENV, relayJobStartListing } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
@@ -85,6 +86,8 @@ describe("untrusted runs whose SHA is an open pull request head", () => {
     const fetchFn = vi.fn(async (input: unknown, init?: RequestInit) => {
       const url = typeof input === "string" ? input : String(input);
       requests.push({ url, init: init ?? {} });
+      const ownJob = relayJobStartListing(url);
+      if (ownJob !== undefined) return new Response(JSON.stringify(ownJob));
       const outcome = outcomes.shift();
       if (!outcome) throw new Error(`unexpected fetch: ${url}`);
       return new Response(JSON.stringify(outcome.body), {
@@ -94,6 +97,7 @@ describe("untrusted runs whose SHA is an open pull request head", () => {
     }) as unknown as typeof fetch;
     const result = runRelay({
       env: {
+        ...RELAY_OWN_RUN_ENV,
         LEDGER_APP_ID: "1",
         LEDGER_INSTALLATION_ID: "2",
         LEDGER_APP_KEY: APP_KEY,

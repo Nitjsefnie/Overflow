@@ -1,3 +1,5 @@
+import { RELAY_OWN_RUN_ENV, relayJobStartListing,
+  relayJobStartUrl } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -37,6 +39,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
   const HEAD_BRANCH = "fix/117-env-file-migrate";
   const HTML_URL = `https://github.com/Nitjsefnie/Overflow/actions/runs/${RUN_ID}`;
   const TOKEN_URL = "https://api.github.com/app/installations/166057493/access_tokens";
+  const OWN_JOB_URL = relayJobStartUrl();
   const RUN_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs/${RUN_ID}`;
   // The encoding is pinned as a literal, not re-derived through
   // encodeURIComponent: a test that builds its expectation with the code's
@@ -63,6 +66,8 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
     const fn = vi.fn(async (url: unknown, init?: RequestInit) => {
       const rendered = typeof url === "string" ? url : String(url);
       requests.push({ url: rendered, init: init ?? {} });
+      const ownJob = relayJobStartListing(rendered);
+      if (ownJob !== undefined) return new Response(JSON.stringify(ownJob));
       const outcome = outcomes.shift();
       if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
       if ("fail" in outcome) throw outcome.fail;
@@ -82,7 +87,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
   /** The workflow_run trigger's env, in the incident's shape. */
   function relayEnv(over: Record<string, string> = {}): Record<string, string> {
     return {
-      LEDGER_APP_ID: "5118623",
+      ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623",
       LEDGER_INSTALLATION_ID: "166057493",
       LEDGER_APP_KEY: keyPem,
       GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
@@ -187,7 +192,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
     expect(result.sweep.examined).toBe(0);
     expect(result.refusedDeadHead, "a dead fork head exits 0 through the refusal").toBe(REFUSAL);
     expect(fetchStub.requests.map((request) => request.url)).toEqual([
-      TOKEN_URL,
+      OWN_JOB_URL, TOKEN_URL,
       RUN_URL,
       FORK_PULLS_URL, SWEEP_RUNS_URL,
     ]);
@@ -220,7 +225,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
     expect(error, "a live fork head must keep the refusal visible").toBeInstanceOf(Error);
     expect(error?.message, "the message stays byte-identical").toBe(REFUSAL);
     expect(fetchStub.requests.map((request) => request.url)).toEqual([
-      TOKEN_URL,
+      OWN_JOB_URL, TOKEN_URL,
       RUN_URL,
       FORK_PULLS_URL, SWEEP_RUNS_URL,
     ]);
@@ -240,7 +245,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
     expect(result.refusedDeadHead, "a moved fork head is a dead head").toBe(REFUSAL);
     expect(result.posted).toEqual([]);
     expect(fetchStub.requests.map((request) => request.url)).toEqual([
-      TOKEN_URL,
+      OWN_JOB_URL, TOKEN_URL,
       RUN_URL,
       FORK_PULLS_URL, SWEEP_RUNS_URL,
     ]);
@@ -265,7 +270,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
     );
     expect(result.posted).toEqual([]);
     expect(fetchStub.requests.map((request) => request.url)).toEqual([
-      TOKEN_URL,
+      OWN_JOB_URL, TOKEN_URL,
       RUN_URL,
       RUN_URL,
       FORK_PULLS_URL, SWEEP_RUNS_URL,
@@ -321,8 +326,9 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
     expect(error, "an unprovable fork head must fail closed").toBeInstanceOf(Error);
     expect(error?.message).toMatch(expected);
     expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
-    expect(fetchStub.requests[0]?.url).toBe(TOKEN_URL);
-    expect(fetchStub.requests[1]?.url).toBe(RUN_URL);
+    expect(fetchStub.requests[0]?.url).toBe(OWN_JOB_URL);
+    expect(fetchStub.requests[1]?.url).toBe(TOKEN_URL);
+    expect(fetchStub.requests[2]?.url).toBe(RUN_URL);
   });
 
   it("fails closed when the fork listing read fails after the bounded retries", async () => {
@@ -337,7 +343,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
     );
     // Every retry re-issues the same listing request.
     expect(fetchStub.requests.map((request) => request.url)).toEqual([
-      TOKEN_URL,
+      OWN_JOB_URL, TOKEN_URL,
       RUN_URL,
       FORK_PULLS_URL,
       FORK_PULLS_URL,
@@ -355,7 +361,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
 
     expect(error, "a deleted fork must keep the refusal visible").toBeInstanceOf(Error);
     expect(error?.message).toBe(REFUSAL);
-    expect(fetchStub.requests.map((request) => request.url)).toEqual([TOKEN_URL, RUN_URL, SWEEP_RUNS_URL]);
+    expect(fetchStub.requests.map((request) => request.url)).toEqual([OWN_JOB_URL, TOKEN_URL, RUN_URL, SWEEP_RUNS_URL]);
     expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
   });
 });

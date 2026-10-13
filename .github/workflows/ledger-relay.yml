@@ -12,8 +12,8 @@ name: ledger relay
 # tip, in the default branch's context, so the pin map and the script executed
 # here are always the trusted main tip, never pull-request content. Check-run
 # writes go through the App installation token the script mints; the rerun
-# goes through the workflow's own repo-scoped token, which holds contents:
-# read + actions: write.
+# and the read of this job's own start go through the workflow's own
+# repo-scoped token, which holds contents: read + actions: write.
 on:
   # workflow_run runs this definition from the default branch's tip, in the
   # default branch's context: the checkout, the pin map and the script are
@@ -76,6 +76,11 @@ jobs:
     # Bound every step: 2 + 2 + 11 = 15 minutes; the job gets 1 minute more.
     # The relay step must exceed its script budget: 600s deadline + 30s last
     # request + (1s + 2s) backoff = 633s < 660s (11 minutes).
+    # The job timeout also covers the runner's unbounded "Set up job" phase,
+    # so the script reads this job's started_at and starts no request later
+    # than started_at + 16 min - 30s request bound - 60s margin. The value is
+    # RELAY_JOB_TIMEOUT_MINUTES in scripts/ledger-relay-job-budget.ts, and the
+    # job id is the name that read selects: change neither alone.
     timeout-minutes: 16
     environment: overflow-ledger
     steps:
@@ -110,6 +115,11 @@ jobs:
           GITHUB_WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           GITHUB_WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           RELAY_RERUN_TOKEN: ${{ github.token }}
+          # This run's own id and attempt (default runner variables, stated so
+          # the dependency is visible): the script reads this job's started_at
+          # from them, with RELAY_RERUN_TOKEN, before any write.
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
           LEDGER_DISPATCH_RUN_ID: ${{ inputs.run_id }}
           # A schedule or a dispatch without run_id has no triggering run to
           # mirror. Carry the sweep-only mode so the script fails closed on

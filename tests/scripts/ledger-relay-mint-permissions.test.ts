@@ -1,4 +1,4 @@
-import { appSuiteListing } from "./ledger-relay-check-fixtures.ts";
+import { appSuiteListing, RELAY_OWN_RUN_ENV, relayJobStartListing } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
@@ -83,7 +83,7 @@ function makeFetch(outcomes: Outcome[]) {
   const fn = vi.fn(async (url: unknown, init?: RequestInit) => {
     const rendered = typeof url === "string" ? url : String(url);
     requests.push({ url: rendered, init: init ?? {} });
-      const suites = appSuiteListing(rendered);
+      const suites = appSuiteListing(rendered) ?? relayJobStartListing(rendered);
       if (suites !== undefined) return new Response(JSON.stringify(suites));
     const outcome = outcomes.shift();
     if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
@@ -107,7 +107,7 @@ function makeDelay() {
 
 function relayEnv(over: Record<string, string> = {}): Record<string, string> {
   return {
-    LEDGER_APP_ID: "5118623",
+    ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623",
     LEDGER_INSTALLATION_ID: "166057493",
     LEDGER_APP_KEY: keyPem,
     GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
@@ -281,6 +281,9 @@ function classifyCall(url: string, method: string): string | undefined {
     path.endsWith("/rerun")
   ) {
     return "POST rerun";
+  }
+  if (method === "GET" && /^\/repos\/Nitjsefnie\/Overflow\/actions\/runs\/\d+\/attempts\/\d+\/jobs$/.test(path)) {
+    return "GET own job";
   }
   if (method === "GET" && path.startsWith(`${repo}/actions/runs/`) && path.endsWith("/jobs")) {
     return "GET jobs";
@@ -505,10 +508,12 @@ describe("the relay's installation-token mint (issue 1051)", () => {
         expect(authHeaderOf(request)).not.toBe("Bearer installation-token");
         continue;
       }
-      if (key === "POST rerun") {
-        // The rerun authenticates with the workflow's own RELAY_RERUN_TOKEN
-        // (actions: write, which the App does not hold), so it is the one
-        // relay shape deliberately outside the App token's enumeration.
+      if (key === "POST rerun" || key === "GET own job") {
+        // The rerun and the relay's read of its own job's start authenticate
+        // with the workflow's own RELAY_RERUN_TOKEN (the rerun needs actions:
+        // write, which the App does not hold, and the job-start read precedes
+        // the mint), so they are deliberately outside the App token's
+        // enumeration.
         expect(authHeaderOf(request)).toBe("Bearer rerun-token");
         continue;
       }

@@ -1,4 +1,5 @@
-import { appSuiteListing, appChecksUrl, appSuitesUrl } from "./ledger-relay-check-fixtures.ts";
+import { appSuiteListing, appChecksUrl, appSuitesUrl, RELAY_OWN_RUN_ENV, relayJobStartListing,
+  relayJobStartUrl } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -82,6 +83,7 @@ describe("the committed pin drives runRelay end to end (issue 1149)", () => {
   const RUN_ID = "1149";
   const HTML_URL = `https://github.com/Nitjsefnie/Overflow/actions/runs/${RUN_ID}`;
   const TOKEN_URL = "https://api.github.com/app/installations/166057493/access_tokens";
+  const OWN_JOB_URL = relayJobStartUrl();
   const JOBS_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs/${RUN_ID}/jobs?filter=latest&per_page=100`;
   const CHECK_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/check-runs";
   const SWEEP_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs?per_page=100";
@@ -106,7 +108,7 @@ describe("the committed pin drives runRelay end to end (issue 1149)", () => {
     const fn = vi.fn(async (url: unknown, init?: RequestInit) => {
       const rendered = typeof url === "string" ? url : String(url);
       requests.push({ url: rendered, init: init ?? {} });
-      const suites = appSuiteListing(rendered);
+      const suites = appSuiteListing(rendered) ?? relayJobStartListing(rendered);
       if (suites !== undefined) return new Response(JSON.stringify(suites));
       const outcome = outcomes.shift();
       if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
@@ -120,7 +122,7 @@ describe("the committed pin drives runRelay end to end (issue 1149)", () => {
 
   function relayEnv(over: Record<string, string>): Record<string, string> {
     return {
-      LEDGER_APP_ID: "5118623",
+      ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623",
       LEDGER_INSTALLATION_ID: "166057493",
       LEDGER_APP_KEY: keyPem,
       GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
@@ -171,7 +173,7 @@ describe("the committed pin drives runRelay end to end (issue 1149)", () => {
 
     expect(result.posted).toEqual(contexts);
     expect(fetchStub.requests.map((request) => request.url)).toEqual([
-      TOKEN_URL,
+      OWN_JOB_URL, TOKEN_URL,
       JOBS_URL,
       ...contexts.flatMap(() => [SWEEP_RUNS_URL,
         appSuitesUrl("https://api.github.com/repos/Nitjsefnie/Overflow", HEAD_SHA),

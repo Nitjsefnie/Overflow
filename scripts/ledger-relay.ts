@@ -51,6 +51,7 @@ import {
 import { API_ROOT, API_HEADERS, RUN_DEADLINE_MS, apiCall, sweepApi, assertRunDeadline,
   type RelayHttpOptions } from "./ledger-relay-http.ts";
 import { publishProducerContexts } from "./ledger-relay-publication.ts";
+import { readEffectiveDeadline } from "./ledger-relay-job-budget.ts";
 import { type CheckRunSuppression, type SweepCandidate } from "./ledger-relay-producers.ts";
 import { LEDGER_APP_MINT_PERMISSIONS } from "./ledger-app-mint-permissions.ts";
 // The pure decision layer. Re-exported below, with `.ts` specifiers, so the
@@ -184,8 +185,17 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
   assertShape(repo, /^[^/]+\/[^/]+$/, "GITHUB_REPOSITORY must name OWNER/REPO");
   assertShape(appId, DIGITS, "LEDGER_APP_ID must be the App's numeric id");
   assertShape(installationId, DIGITS, "LEDGER_INSTALLATION_ID must be the numeric installation id");
+  const ownJob = {
+    repo, runId: required(env, "GITHUB_RUN_ID"), runAttempt: required(env, "GITHUB_RUN_ATTEMPT"),
+    workflowToken: required(env, "RELAY_RERUN_TOKEN"),
+  };
+  assertShape(ownJob.runId, DIGITS, "GITHUB_RUN_ID must be the relay run's numeric id");
+  assertShape(ownJob.runAttempt, DIGITS, "GITHUB_RUN_ATTEMPT must be the relay run's numeric attempt");
 
   const pinMap = validatePinMap(await (deps.readPinMap ?? readRawPinMap)());
+  // Before any write, the token mint included: an unknown job start or a
+  // consumed job-start budget ends the start red with nothing written.
+  deps.deadlineMs = await readEffectiveDeadline(deps, ownJob);
 
   const [, repoName] = repo.split("/");
   const token = await mintInstallationToken(deps, appId, appKey, installationId, repoName);
