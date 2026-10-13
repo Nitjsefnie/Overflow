@@ -1,3 +1,4 @@
+import { assertNonEnvelopeCoverage, type NonEnvelopeObservation } from "./http-response-constructions.ts";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +8,9 @@ import ts from "typescript";
  * The failure answers each documented route can give (issue 1056), derived
  * statically for the HTTP surface snapshot's `failures` section.
  *
- * Every HTTP failure answer in src/ is built by `errorResponse` in
+ * Non-envelope constructions must be covered by invoked failure fixtures;
+ * unresolved or unexercised construction sites refuse in the same module walk.
+ * Canonical envelope failure answers in src/ are built by `errorResponse` in
  * src/lib/http/error-response.ts (tests/lib/http/error-response.test.ts keeps
  * it the only envelope implementation). For a route key "METHOD /path" the
  * walk starts at the module Next serves that path from,
@@ -406,7 +409,9 @@ function moduleFailureAnswers(root: string, checker: ts.TypeChecker, source: ts.
   const localNames = new Set([...bindings.keys()].map((symbol) => symbol.name));
   const answers: string[] = [];
   const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node)) return;
+    if (ts.isImportDeclaration(node) || ts.isTypeNode(node) ||
+        (ts.isExportDeclaration(node) && node.isTypeOnly) ||
+        (ts.isExportSpecifier(node) && node.isTypeOnly)) return;
     if (ts.isIdentifier(node) && localNames.has(node.text)) {
       const symbol = ts.isShorthandPropertyAssignment(node.parent)
         ? checker.getShorthandAssignmentValueSymbol(node.parent)
@@ -444,6 +449,7 @@ function moduleFailureAnswers(root: string, checker: ts.TypeChecker, source: ts.
 export function deriveRouteFailures(
   routeKeys: readonly string[],
   root: string = defaultRoot,
+  nonEnvelope: readonly NonEnvelopeObservation[] = [],
 ): Record<string, string[]> {
   const parsed = new Map<string, ts.SourceFile>();
   const edges = new Map<string, string[]>();
@@ -475,6 +481,7 @@ export function deriveRouteFailures(
 
   const files = [...new Set([...reachedByRoute.values()].flatMap((reached) => [...reached]))];
   const program = ts.createProgram(files, { noLib: true, noResolve: true, jsx: ts.JsxEmit.Preserve });
+  assertNonEnvelopeCoverage(root, reachedByRoute, program, nonEnvelope);
   const checker = program.getTypeChecker();
   const helperFile = join(root, helperModule);
   const answersByFile = new Map(files.map((file) => [

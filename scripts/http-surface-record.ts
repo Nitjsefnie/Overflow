@@ -1,18 +1,24 @@
+import { deriveNonEnvelopeFailures } from "./http-surface-non-envelope.ts";
+import { repoRoot } from "./http-surface-derive.ts";
 import { errorEnvelope } from "../src/lib/http/error-response.ts";
 import { deriveHttpSurfaceAnswers, shapeOf } from "./http-surface-derive.ts";
 import { deriveRouteFailures } from "./http-surface-derive-failures.ts";
 import type { DerivedHttpSurface } from "./surface-change.ts";
 
-type FixtureLogOwner = { users: number; original: typeof console.info };
+type FixtureLogOwner = { users: number; original: typeof console.info; error: typeof console.error };
 let fixtureLogOwner: FixtureLogOwner | undefined;
 
 /** Overlapping fixture derivations share one filter and release the original logger together. */
 function acquireFixtureLogFilter(): () => void {
   if (fixtureLogOwner === undefined) {
     const original = console.info;
-    fixtureLogOwner = { users: 0, original };
+    const error = console.error;
+    fixtureLogOwner = { users: 0, original, error };
     console.info = (...args: Parameters<typeof console.info>) => {
       if (args[0] !== "Privileged action") original.apply(console, args);
+    };
+    console.error = (...args: Parameters<typeof console.error>) => {
+      if (typeof args[0] !== "string" || !args[0].startsWith("Readiness probe failed:")) error.apply(console, args);
     };
   }
   const owner = fixtureLogOwner;
@@ -21,16 +27,17 @@ function acquireFixtureLogFilter(): () => void {
     owner.users -= 1;
     if (owner.users === 0) {
       console.info = owner.original;
+      console.error = owner.error;
       fixtureLogOwner = undefined;
     }
   };
 }
 
 /** Fixture calls must not write synthetic actions to the updater's journal output. */
-async function fixtureAnswers(): ReturnType<typeof deriveHttpSurfaceAnswers> {
+async function fixtureAnswers() {
   const release = acquireFixtureLogFilter();
   try {
-    return await deriveHttpSurfaceAnswers();
+    return { answers: await deriveHttpSurfaceAnswers(), nonEnvelope: await deriveNonEnvelopeFailures() };
   } finally {
     release();
   }
@@ -42,17 +49,20 @@ async function fixtureAnswers(): ReturnType<typeof deriveHttpSurfaceAnswers> {
  * the error envelope's shape, read off the real helper; each documented
  * route's success body shape and success status, from the answers its
  * handler gives (scripts/http-surface-derive.ts); and each route's failure
- * answers, derived statically from its import graph
- * (scripts/http-surface-derive-failures.ts).
+ * canonical answers, derived statically from its import graph, and legacy
+ * non-envelope status/body shapes, derived from invoked failure handlers.
+ * The graph walk refuses uncovered non-envelope constructions.
  */
 export async function deriveHttpSurfaceRecord(): Promise<DerivedHttpSurface> {
-  const answers = await fixtureAnswers();
+  const { answers, nonEnvelope } = await fixtureAnswers();
   const keys = Object.keys(answers);
   return {
     snapshotFormat: 2,
     errorEnvelope: shapeOf(errorEnvelope("SAMPLE_CODE", "A sample message.")),
     routes: Object.fromEntries(keys.map((key) => [key, answers[key]!.shape])),
     successStatus: Object.fromEntries(keys.map((key) => [key, answers[key]!.status])),
-    failures: deriveRouteFailures(keys),
+    failures: deriveRouteFailures(keys, repoRoot, nonEnvelope),
+    nonEnvelopeFailures: Object.fromEntries([...new Set(nonEnvelope.map((item) => item.route))].map((route) =>
+      [route, Object.fromEntries(nonEnvelope.filter((item) => item.route === route).map((item) => [item.entry, item.answer]))])),
   };
 }

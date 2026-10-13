@@ -8,9 +8,10 @@ import { shapesCompatible, type HttpShape } from "./http-surface-derive.ts";
  * A snapshot recorded with `snapshotFormat: 2` pins, beside each documented
  * route's success body shape, the error envelope's shape, each route's
  * success status and each route's failure answers ("<status> <CODE>", with
- * " +<key>" per extra envelope field). A snapshot without the marker (format
+ * " +<key>" per extra envelope field), plus non-envelope status/body shapes
+ * derived by failure-handler fixtures. A snapshot without the marker (format
  * 1, what main recorded before issue 1056) pinned routes only, so it has
- * nothing recorded for the other three sections and their first recording
+ * nothing recorded for the additional sections and their first recording
  * is not a change.
  */
 export type RecordedHttpSurface = {
@@ -19,10 +20,12 @@ export type RecordedHttpSurface = {
   routes: Record<string, HttpShape>;
   successStatus?: Record<string, number>;
   failures?: Record<string, string[]>;
+  nonEnvelopeFailures?: Record<string, Record<string, { status: number; shape: HttpShape }>>;
 };
 
-/** The surface as the code derives it today: every section present. */
-export type DerivedHttpSurface = Required<RecordedHttpSurface>;
+/** Existing sections are required; legacy callers may omit the newly introduced raw-answer section. */
+export type DerivedHttpSurface = Required<Omit<RecordedHttpSurface, "nonEnvelopeFailures">> &
+  Pick<RecordedHttpSurface, "nonEnvelopeFailures">;
 
 /** A recorded HTTP surface together with the version it was recorded at. */
 export type HttpSurfaceSnapshot = RecordedHttpSurface & { httpServerVersion: string };
@@ -115,6 +118,24 @@ export function classifyHttpChange(base: RecordedHttpSurface, current: RecordedH
     }
     for (const key of Object.keys(currentStatus)) {
       if (!Object.hasOwn(baseStatus, key)) additive.push(`success status added: ${key}`);
+    }
+
+    const beforeRaw = base.nonEnvelopeFailures ?? {};
+    const currentRaw = currentRecordsAnswers ? current.nonEnvelopeFailures ?? {} : {};
+    for (const [key, entries] of Object.entries(beforeRaw)) {
+      for (const [entry, answer] of Object.entries(entries)) {
+        const now = currentRaw[key]?.[entry];
+        if (!now || now.status !== answer.status || !shapesCompatible(answer.shape, now.shape)) {
+          breaking.push(`non-envelope failure changed or removed: ${key} ${entry}`);
+        } else if (!isDeepStrictEqual(answer.shape, now.shape)) {
+          additive.push(`non-envelope failure shape extended: ${key} ${entry}`);
+        }
+      }
+    }
+    for (const [key, entries] of Object.entries(currentRaw)) {
+      for (const entry of Object.keys(entries)) {
+        if (!Object.hasOwn(beforeRaw[key] ?? {}, entry)) additive.push(`non-envelope failure added: ${key} ${entry}`);
+      }
     }
 
     const baseFailures = base.failures ?? {};

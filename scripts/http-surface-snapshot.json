@@ -1219,5 +1219,16 @@
       "500 MISCONFIGURED",
       "502 UPSTREAM_FAILURE"
     ]
+  },
+  "nonEnvelopeFailures": {
+    "GET /api/readiness": {
+      "unavailable": {
+        "status": 503,
+        "shape": {
+          "reason": "string",
+          "status": "string"
+        }
+      }
+    }
   }
 }
