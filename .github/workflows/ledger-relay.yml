@@ -73,22 +73,28 @@ jobs:
   # tests/ci/required-checks.test.ts.
   relay-required-checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Bound every step: 2 + 2 + 11 = 15 minutes; the job gets 1 minute more.
+    # The relay step must exceed its script budget: 600s deadline + 30s last
+    # request + (1s + 2s) backoff = 633s < 660s (11 minutes).
+    timeout-minutes: 16
     environment: overflow-ledger
     steps:
       # No ref input: under workflow_run the default checkout is the default
       # branch's tip — the trusted main tip the pin map is read from.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 2
         with:
           persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        timeout-minutes: 2
         with:
           node-version: "24.17.0"
 
       # Event data reaches the script through env only, never ${{ }}
       # interpolation in run:.
       - name: Relay the required checks under the ledger App
+        timeout-minutes: 11
         env:
           LEDGER_APP_ID: "5118623"
           LEDGER_INSTALLATION_ID: "166057493"

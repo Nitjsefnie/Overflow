@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { parse } from "yaml";
+import * as relayHttp from "../../scripts/ledger-relay-http.ts";
 
 /**
  * The relay mints its App installation token from the LEDGER_APP_ID and
@@ -19,7 +20,11 @@ import { parse } from "yaml";
  * duplicated literal fails loudly here instead of quietly repointing the
  * relay.
  */
-type WorkflowStep = { name?: string; env?: Record<string, string | undefined> };
+type WorkflowStep = {
+  name?: string;
+  env?: Record<string, string | undefined>;
+  "timeout-minutes"?: number;
+};
 type ParsedWorkflow = {
   on?: {
     schedule?: string[];
@@ -27,7 +32,7 @@ type ParsedWorkflow = {
   };
   permissions?: Record<string, string>;
   concurrency?: { group?: string };
-  jobs?: Record<string, { steps?: WorkflowStep[] }>;
+  jobs?: Record<string, { steps?: WorkflowStep[]; "timeout-minutes"?: number }>;
 };
 
 describe("the ledger relay workflow's pinned App identity", () => {
@@ -44,6 +49,22 @@ describe("the ledger relay workflow's pinned App identity", () => {
   /** Every step-env value the workflow carries for one of the pinned names. */
   const envValues = (name: string): unknown[] =>
     steps.flatMap((step) => (step.env?.[name] === undefined ? [] : [step.env[name]]));
+
+  it("bounds every step so the job cannot cut off an in-flight relay request", () => {
+    const job = workflow.jobs?.["relay-required-checks"];
+    expect(job?.steps?.length).toBeGreaterThan(0);
+    for (const step of job?.steps ?? []) {
+      expect(step["timeout-minutes"], "each relay job step needs its own time bound").toBeTypeOf("number");
+      expect(step["timeout-minutes"]).toBeGreaterThan(0);
+    }
+    const relaySteps = steps.filter((step) => step.env?.LEDGER_APP_ID !== undefined);
+    expect(relaySteps).toHaveLength(1);
+    const worstCaseMs = relayHttp.RUN_DEADLINE_MS + relayHttp.REQUEST_TIMEOUT_MS +
+      relayHttp.BACKOFF_MS.reduce((sum, delay) => sum + delay, 0);
+    expect((relaySteps[0]["timeout-minutes"] ?? 0) * 60_000).toBeGreaterThan(worstCaseMs);
+    const stepMinutes = (job?.steps ?? []).reduce((sum, step) => sum + (step["timeout-minutes"] ?? 0), 0);
+    expect(job?.["timeout-minutes"]).toBeGreaterThanOrEqual(stepMinutes);
+  });
 
   it("carries the ledger App id exactly once, as the literal the gate and tests pin", () => {
     expect(
