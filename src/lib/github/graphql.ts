@@ -170,7 +170,8 @@ export class GitHubGraphqlClient {
       });
 
       if (timedOut) {
-        throw new GitHubGraphqlRequestError("GitHub request timed out.");
+        throw new GitHubGraphqlRequestError("GitHub request timed out.", false, null,
+          response.status, response.headers.get("x-github-request-id"), this.accessToken, response.headers);
       }
 
       if (!response.ok) {
@@ -188,7 +189,7 @@ export class GitHubGraphqlClient {
           ? `${graphqlFailureMessage(payload?.errors, this.accessToken)} Payload missing data.`
           : graphqlFailureMessage(payload?.errors, this.accessToken);
         throw new GitHubGraphqlRequestError(message, rateLimited, retryAfterSeconds,
-          response.status, response.headers.get("x-github-request-id"), this.accessToken);
+          response.status, response.headers.get("x-github-request-id"), this.accessToken, response.headers);
       }
 
       recordGraphqlResponseCost((payload.data as { rateLimit?: unknown } | null)?.rateLimit);
@@ -216,13 +217,16 @@ export class GitHubGraphqlClient {
       }
 
       if (timedOut) {
-        throw new GitHubGraphqlRequestError("GitHub request timed out.");
+        throw new GitHubGraphqlRequestError("GitHub request timed out.", false, null,
+          response?.status ?? null, response?.headers.get("x-github-request-id") ?? null,
+          this.accessToken, response?.headers);
       }
 
       const description = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
       throw new GitHubGraphqlRequestError(
         `GitHub GraphQL request failed. ${boundedErrorText(description, this.accessToken)}`,
         false, null, response?.status ?? null, response?.headers.get("x-github-request-id") ?? null, this.accessToken,
+        response?.headers,
       );
     } finally {
       clearTimeout(timeout);

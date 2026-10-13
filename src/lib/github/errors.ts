@@ -1,6 +1,8 @@
 export interface GitHubRateLimitDetails {
   readonly rateLimited: boolean;
   readonly retryAfterSeconds: number | null;
+  /** Absolute deadline already computed by reconciliation before persisting its cooldown. */
+  readonly notBefore?: Date;
 }
 
 export function isGitHubRateLimitError(error: unknown): error is Error & GitHubRateLimitDetails {
@@ -24,8 +26,9 @@ export function githubRateLimitNotBefore(error: GitHubRateLimitDetails, now: Dat
   const nowMs = now.getTime();
   const retryMs = error.retryAfterSeconds === null ? NaN : nowMs + error.retryAfterSeconds * 1000;
   const retryAt = Number.isFinite(new Date(retryMs).getTime()) ? retryMs : null;
-  const reset = error instanceof GitHubApiError && error.headers["x-ratelimit-remaining"] === "0"
-    ? error.headers["x-ratelimit-reset"] : undefined;
+  const headers = error instanceof GitHubApiError || error instanceof GitHubGraphqlRequestError
+    ? error.headers : undefined;
+  const reset = headers?.["x-ratelimit-remaining"] === "0" ? headers["x-ratelimit-reset"] : undefined;
   const resetMs = reset !== undefined && /^\d+$/.test(reset) && Number.isSafeInteger(Number(reset))
     ? Number(reset) * 1000 : NaN;
   const resetAt = Number.isFinite(new Date(resetMs).getTime()) ? resetMs : null;
@@ -38,7 +41,8 @@ export function githubRateLimitNotBefore(error: GitHubRateLimitDetails, now: Dat
 
 export function findGitHubRateLimitError(error: unknown): (Error & GitHubRateLimitDetails) | null {
   const visited = new Set<unknown>();
-  for (let cause = error; cause !== null && typeof cause === "object" && !visited.has(cause);) {
+  // Bound getter work as well as cycles: a cause accessor can fabricate fresh objects.
+  for (let cause = error, depth = 0; depth < 32 && cause !== null && typeof cause === "object" && !visited.has(cause); depth += 1) {
     if (isGitHubRateLimitError(cause)) return cause;
     visited.add(cause);
     cause = "cause" in cause ? cause.cause : undefined;
@@ -134,6 +138,7 @@ function redactCredentials(value: string, credentials: string | readonly string[
 
 export class GitHubGraphqlRequestError extends Error implements GitHubRateLimitDetails {
   public readonly requestId: string | null;
+  public readonly headers: Readonly<Record<string, string>>;
 
   public constructor(
     message: string,
@@ -142,10 +147,14 @@ export class GitHubGraphqlRequestError extends Error implements GitHubRateLimitD
     public readonly status: number | null = null,
     requestId: string | null = null,
     accessToken: string = "",
+    headers: HeadersInit = {},
   ) {
     super(message);
     this.name = "GitHubGraphqlRequestError";
     this.requestId = requestId === null ? null : redactCredentials(requestId, accessToken).slice(0, 256);
+    this.headers = diagnosticHeaders(headers, accessToken);
+    // Response diagnostics stay in memory for scheduling, out of serialized errors.
+    Object.defineProperty(this, "headers", { enumerable: false });
   }
 }
 

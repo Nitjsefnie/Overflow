@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { GitHubApiError } from "@/lib/github/errors";
+import { GitHubApiError, GitHubGraphqlRequestError } from "@/lib/github/errors";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FAILURE_LOG_QUIET_WINDOW_MS, FailureLogger } from "@/lib/worker/failure-logger";
 import { errorLogToken, logField } from "@/lib/webhooks/log-field";
@@ -37,6 +37,20 @@ const DEFAULTED_CONCURRENCY_MESSAGE =
   "Reconciliation worker concurrency could not be used; drains use the default concurrency instead";
 
 describe("running the next reconciliation job", () => {
+  it("defers a structured GraphQL rate limit beyond the retry table", async () => {
+    const { store, calls } = createFakeStore({ jobs: [job({ attemptCount: 5 })] });
+    const upstream = new GitHubGraphqlRequestError("GraphQL limit", true, 120);
+    expect(await runNextReconciliationJob({
+      store, now: () => new Date("2030-01-02T03:04:05.678Z"),
+      scheduleLeaseRenewal: () => () => {}, onFailure: () => {},
+      reconcile: async () => { throw new Error("Gateway wrapper", { cause: upstream }); },
+    })).toBe("DEFERRED");
+    expect(calls).toEqual([
+      { method: "claim", args: [] },
+      { method: "defer", args: ["job-1", "lease-1", new Date("2030-01-02T03:06:05.678Z")] },
+    ]);
+  });
+
   it.each([
     { name: "retry-after", error: () => new GitHubApiError(403, true, 120, null, { "retry-after": "120" }), expected: "2030-01-02T03:06:05.678Z" },
     { name: "primary reset", error: () => new GitHubApiError(403, true, null, null, { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(new Date("2030-01-02T03:09:05Z").getTime() / 1000) }), expected: "2030-01-02T03:09:05Z" },

@@ -2,7 +2,7 @@ import { reconciliationBudgetHoldUntil, type ReconciliationBudgetDependencies } 
 import type { GitHubIssueListOptions } from "@/lib/github/client";
 import { DEFAULT_GRAPHQL_BUDGET_RESERVE, type GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
-import { GitHubApiError, githubRateLimitNotBefore, isGitHubRateLimitError, isGitHubSubjectNotFoundError } from "@/lib/github/errors";
+import { GitHubApiError, findGitHubRateLimitError, githubRateLimitNotBefore, isGitHubSubjectNotFoundError } from "@/lib/github/errors";
 import { GitHubResponseTooLargeError } from "@/lib/github/response-text";
 import { GitLabApiError } from "@/lib/gitlab/client";
 import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
@@ -472,10 +472,19 @@ async function reconcileRepositoryWhileCoordinated(
       runId,
       carriesCredentialRejection(error) ? FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE : "Reconciliation failed.",
     );
-    if (isGitHubRateLimitError(error)) {
-      await dependencies.store.setReconciliationCooldown(repositoryId, githubRateLimitNotBefore(error, now()));
+    const failure = new Error("Unable to reconcile repository.", { cause: reportedError });
+    const rateLimit = findGitHubRateLimitError(error);
+    if (rateLimit) {
+      const notBefore = rateLimit.notBefore ?? githubRateLimitNotBefore(rateLimit, now());
+      // Carry the decision across awaited persistence/reporting without adding API JSON fields.
+      Object.defineProperties(failure, {
+        rateLimited: { value: true },
+        retryAfterSeconds: { value: rateLimit.retryAfterSeconds },
+        notBefore: { value: notBefore },
+      });
+      await dependencies.store.setReconciliationCooldown(repositoryId, notBefore);
     }
-    throw new Error("Unable to reconcile repository.", { cause: reportedError });
+    throw failure;
   }
 }
 

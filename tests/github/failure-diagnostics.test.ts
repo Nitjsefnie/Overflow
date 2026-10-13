@@ -1,7 +1,7 @@
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
-import { GitHubApiError } from "@/lib/github/errors";
+import { GitHubApiError, GitHubGraphqlRequestError } from "@/lib/github/errors";
 import { GitHubGraphqlClient } from "@/lib/github/graphql";
 import { createAppInstallationTokenResolver } from "@/lib/github/app-installation-auth";
 import { errorLogToken } from "@/lib/webhooks/log-field";
@@ -190,6 +190,30 @@ describe("GitHub failure diagnostics", () => {
     expect((error as GitHubApiError).body).toBe("Denied [REDACTED]");
     expect(errorLogToken(error)).toContain('body="Denied [REDACTED]" retry-after="60"');
     expect(errorLogToken(error)).not.toContain(jwt);
+  });
+
+  it.each(["structured", "malformed"] as const)("captures only bounded redacted response headers for %s GraphQL errors", async (shape) => {
+    const headers = {
+      "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(new Date("2030-01-02T03:09:05Z").getTime() / 1000),
+      "x-github-request-id": `request ${accessToken}`,
+      "x-ratelimit-resource": "r".repeat(400),
+      authorization: accessToken, "x-private": "private-header",
+    };
+    const client = new GitHubGraphqlClient({
+      accessToken,
+      fetch: async () => shape === "structured"
+        ? Response.json({ errors: [{ type: "RATE_LIMITED" }] }, { headers })
+        : new Response("not-json", { headers }),
+    });
+    const error: unknown = await client.query("query {}", {}).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(GitHubGraphqlRequestError);
+    expect((error as GitHubGraphqlRequestError).headers).toEqual({
+      "x-ratelimit-remaining": "0", "x-ratelimit-reset": headers["x-ratelimit-reset"],
+      "x-github-request-id": "request [REDACTED]", "x-ratelimit-resource": "r".repeat(256),
+    });
+    expect(Object.isFrozen((error as GitHubGraphqlRequestError).headers)).toBe(true);
+    expect(JSON.stringify(error)).not.toContain("headers");
+    expect(JSON.stringify(error)).not.toContain(accessToken);
   });
 
   it("keeps parse-failure class and HTTP context for a non-JSON 200", async () => {

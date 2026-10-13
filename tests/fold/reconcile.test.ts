@@ -23,6 +23,48 @@ import { inspect, format } from "node:util";
 import { RECORD_MARKER, withRecordBearingPostgresWrite } from "../support/record-bearing-postgres-error";
 
 describe("reconcileRepository", () => {
+  it.each([false, true])("shares the exact repository and job deadline across advancing clocks, wrapped=%s", async (wrapped) => {
+    const { runNextReconciliationJob } = await import("@/lib/fold/reconciliation-worker");
+    let clock = new Date("2030-01-02T03:04:05.678Z");
+    const now = () => new Date(clock);
+    const upstream = new GitHubApiError(403, true, 120, null, { "retry-after": "120" });
+    const thrown = wrapped ? new Error("Gateway wrapper", { cause: upstream }) : upstream;
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(thrown) } });
+    let cooldown: Date | null = null;
+    vi.mocked(dependencies.store.setReconciliationCooldown).mockImplementation(async (_id, at) => {
+      cooldown = at;
+      clock = new Date(clock.getTime() + 5000);
+    });
+    const deferred: Date[] = [];
+    const failures: unknown[] = [];
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      expect(await runNextReconciliationJob({
+        now, scheduleLeaseRenewal: () => () => {},
+        onFailure: (_id, error) => { failures.push(error); clock = new Date(clock.getTime() + 7000); },
+        store: {
+          claimNextReconciliationJob: async () => ({ id: "job-deadline", repositoryId: "repository", reason: "SWEEP", attemptCount: 5, leaseToken: "lease-deadline", rederivationRequestedAt: null, rederivationGeneration: 0 }),
+          renewReconciliationJobLease: async () => true,
+          completeReconciliationJob: async () => { throw new Error("unexpected completion"); },
+          retryReconciliationJob: async () => { throw new Error("unexpected retry"); },
+          failReconciliationJob: async () => { throw new Error("unexpected failure"); },
+          deferReconciliationJob: async (_id, _lease, at) => { deferred.push(at); return true; },
+          getReconciliationCooldown: async () => cooldown,
+        },
+        reconcile: () => reconcileRepository({ ...dependencies, now }, "repository"),
+      })).toBe("DEFERRED");
+      expect(cooldown).toEqual(new Date("2030-01-02T03:06:05.678Z"));
+      expect(deferred).toEqual([new Date("2030-01-02T03:06:05.678Z")]);
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({ cause: thrown });
+      expect(JSON.stringify(failures[0])).toBe("{}");
+    } finally {
+      logged.mockRestore();
+      info.mockRestore();
+    }
+  });
+
   it("journals the GitHub refusal without the reflected access token", async () => {
     const token = createHash("sha256").update("reconciliation diagnostic fixture").digest("hex");
     const upstream = new GitHubApiError(403, true, 60, `Secondary rate limit: ${token}`, {
