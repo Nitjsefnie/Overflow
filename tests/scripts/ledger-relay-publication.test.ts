@@ -1231,4 +1231,39 @@ describe("panel fix round resolved-attempt ordering", () => {
     expect(observedFloors).toEqual([[], ["9001:2"]]);
     expect(w.state.requests.filter((url) => url.includes("/commits/") && url.includes("/check-suites?"))).toHaveLength(2);
   });
+
+  it.each([["an equal", 2], ["a lower", 1]] as const)(
+    "skips a later candidate whose resolved identity is %s attempt, without another App read or write",
+    async (_order, laterAttempt) => {
+      const w = world();
+      const stale = verify(9001, 8001, "success");
+      w.state.producers = [{ ...stale, run_attempt: 2 }, stale];
+      let resolutions = 0;
+      let jobReads = 0;
+      const { sweepOrphans } = await import("../../scripts/ledger-relay-sweep.ts");
+      const { decideContexts } = await import("../../scripts/ledger-relay-decisions.ts");
+      const { sweepApi } = await import("../../scripts/ledger-relay-http.ts");
+      const api = sweepApi({ fetchFn: (async (input, init) => {
+        const url = String(input);
+        if (url === `${ROOT}/actions/runs/9001`) {
+          resolutions++;
+          return response({ ...stale, run_attempt: resolutions === 1 ? 2 : laterAttempt,
+            conclusion: resolutions === 1 ? "success" : "failure" });
+        }
+        if (url.includes("/9001/jobs?")) {
+          jobReads++;
+          return response({ jobs: [{ name: "verify", run_attempt: 2, status: "completed", conclusion: "success" }] });
+        }
+        return w.fetchFn(input, init);
+      }) as typeof fetch, delayFn: async () => {}, deadlineMs: Date.now() + RUN_DEADLINE_MS },
+      REPO, "5118623", { authorization: `Bearer ${["test", "only"].join("-")}` });
+      const outcome = await sweepOrphans({ api, pinMap: pins, apiRoot: "https://api.github.com", repo: REPO,
+        appId: "5118623", repositoryId: "123456", decide: decideContexts, triggerRunId: "" });
+      expect(resolutions).toBe(2);
+      expect(outcome.relayed).toEqual([{ context: "verify", runId: "9001" }]);
+      expect(w.state.checks.map((c) => `${c.external_id}=${c.conclusion}`)).toEqual(["9001:2=success"]);
+      expect(w.state.requests.filter((url) => url.includes("/commits/") && url.includes("/check-suites?"))).toHaveLength(1);
+      expect(jobReads).toBe(1);
+    },
+  );
 });
