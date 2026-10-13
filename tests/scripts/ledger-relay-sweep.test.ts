@@ -1,3 +1,5 @@
+import { publicationBlockedContexts } from "../../scripts/ledger-relay-producers.ts";
+import { appSuiteListing, appChecksUrl, appSuitesUrl } from "./ledger-relay-check-fixtures.ts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -345,6 +347,8 @@ function fakeApi(handlers: Record<string, unknown>): {
   const api: SweepApi = {
     get: async <T,>(url: string): Promise<T> => {
       record(url, "GET", undefined);
+      const suites = url in handlers ? undefined : appSuiteListing(url);
+      if (suites !== undefined) return suites as T;
       if (!(url in handlers)) throw new Error(`unexpected fetch: ${url}`);
       return handlers[url] as T;
     },
@@ -377,7 +381,7 @@ function appCheckRun(name: string, over: Record<string, unknown> = {}): Record<s
 
 const RUNS_URL = `https://api.github.com/repos/${REPO}/actions/runs?per_page=100`;
 const checkRunsAt = (sha: string) =>
-  `https://api.github.com/repos/${REPO}/commits/${sha}/check-runs?app_id=${APP_ID}&filter=latest&per_page=100`;
+  appChecksUrl(`https://api.github.com/repos/${REPO}`, sha);
 const jobsUrl = (runId: string) =>
   `https://api.github.com/repos/${REPO}/actions/runs/${runId}/jobs?filter=latest&per_page=100`;
 
@@ -525,6 +529,7 @@ describe("sweepOrphans", () => {
     expect(outcome).toEqual({ examined: 1, relayed: [] });
     expect(requests.map((request) => request.url)).toEqual([
       RUNS_URL,
+      appSuitesUrl(`https://api.github.com/repos/${REPO}`, HEAD_SHA),
       checkRunsAt(HEAD_SHA),
     ]);
   });
@@ -591,7 +596,7 @@ describe("sweepOrphans", () => {
     });
     const outcome = await sweepOrphans(deps(api));
     expect(outcome).toEqual({ examined: 1, relayed: [] });
-    expect(requests.map((request) => request.url)).toEqual([RUNS_URL, checkRunsAt(HEAD_SHA)]);
+    expect(requests.map((request) => request.url)).toEqual([RUNS_URL, appSuitesUrl(`https://api.github.com/repos/${REPO}`, HEAD_SHA), checkRunsAt(HEAD_SHA)]);
   });
 
   it("counts only the App's own check-runs as evidence, whatever else is at the commit", async () => {
@@ -647,7 +652,8 @@ describe("sweepOrphans", () => {
       (request) => request.url?.startsWith(`https://api.github.com/repos/${REPO}/commits/`) ?? false,
     );
     expect(headsRead.map((request) => request.url)).toEqual([
-      checkRunsAt(HEAD_SHA), checkRunsAt(OTHER_SHA),
+      appSuitesUrl(`https://api.github.com/repos/${REPO}`, HEAD_SHA),
+      appSuitesUrl(`https://api.github.com/repos/${REPO}`, OTHER_SHA),
     ]);
     // Two jobs listings, four candidates.
     expect(requests.filter((request) => request.url?.includes("/jobs?") ?? false)).toHaveLength(2);
@@ -741,7 +747,7 @@ describe("producer-bound sweep attestation", () => {
     });
     const outcome = await sweepOrphans(deps(api));
     expect(outcome).toEqual({ examined: 1, relayed: [] });
-    expect(requests.map((request) => request.url)).toEqual([RUNS_URL, checkRunsAt(HEAD_SHA)]);
+    expect(requests.map((request) => request.url)).toEqual([RUNS_URL, appSuitesUrl(`https://api.github.com/repos/${REPO}`, HEAD_SHA), checkRunsAt(HEAD_SHA)]);
   });
 
   it("never reposts an older unattested candidate over a newer attested one at the same head", async () => {
@@ -753,7 +759,7 @@ describe("producer-bound sweep attestation", () => {
     });
     const outcome = await sweepOrphans(deps(api));
     expect(outcome).toEqual({ examined: 2, relayed: [] });
-    expect(requests.map((request) => request.url)).toEqual([RUNS_URL, checkRunsAt(HEAD_SHA)]);
+    expect(requests.map((request) => request.url)).toEqual([RUNS_URL, appSuitesUrl(`https://api.github.com/repos/${REPO}`, HEAD_SHA), checkRunsAt(HEAD_SHA)]);
   });
 
   it.each(["verify", "actionlint"])(
@@ -887,5 +893,39 @@ describe("trigger recency and attempt attestation", () => {
     const decision = { context: "verify", status, title: "verify", summary: "producer attempt" };
     const run = { runId: "9002", runAttempt: 2, headSha: HEAD_SHA, htmlUrl: candidate().htmlUrl };
     expect(checkRunBody(decision, run)).toMatchObject({ external_id: "9002:2", head_sha: HEAD_SHA, status });
+  });
+});
+
+
+describe("complete App suite reader", () => {
+  const root = `https://api.github.com/repos/${REPO}`;
+  const suitesUrl = appSuitesUrl(root, HEAD_SHA);
+  const winner = new Map([["actionlint", candidate()]]);
+
+  it("finds the identity floor on a second App suite page", async () => {
+    const handlers: Record<string, unknown> = {
+      [suitesUrl]: { total_count: 101, check_suites: Array.from({ length: 100 }, (_, i) => ({ id: i + 1, app: { id: Number(APP_ID) } })) },
+      [`${suitesUrl}&page=2`]: { total_count: 101, check_suites: [{ id: 101, app: { id: Number(APP_ID) } }] },
+    };
+    for (let id = 1; id <= 101; id++) handlers[`${root}/check-suites/${id}/check-runs?filter=latest&per_page=100`] = {
+      check_runs: id === 101 ? [appCheckRun("actionlint", { external_id: "9900:1" })] : [],
+    };
+    const { api } = fakeApi(handlers);
+    expect(await publicationBlockedContexts(deps(api), HEAD_SHA, winner)).toEqual(new Set(["actionlint"]));
+  });
+
+  it("finds concluded attestation on a second check-run page within an App suite", async () => {
+    const checksUrl = appChecksUrl(root, HEAD_SHA);
+    const { api } = fakeApi({
+      [checksUrl]: { total_count: 101, check_runs: Array.from({ length: 100 }, () => appCheckRun("unrelated")) },
+      [`${checksUrl}&page=2`]: { total_count: 101, check_runs: [appCheckRun("actionlint")] },
+    });
+    expect(await publicationBlockedContexts(deps(api), HEAD_SHA, winner)).toEqual(new Set(["actionlint"]));
+  });
+
+  it.each([{ checkSuites: [] }, { checkSuites: [{ id: 1, app: { id: 15368 } }] }])("has no floor without an App suite: $checkSuites", async ({ checkSuites }) => {
+    const { api, requests } = fakeApi({ [suitesUrl]: { total_count: checkSuites.length, check_suites: checkSuites } });
+    expect(await publicationBlockedContexts(deps(api), HEAD_SHA, winner)).toEqual(new Set());
+    expect(requests.map((r) => r.url)).toEqual([suitesUrl]);
   });
 });

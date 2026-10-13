@@ -1,3 +1,4 @@
+import { appSuiteListing, appChecksUrl, appSuitesUrl } from "./ledger-relay-check-fixtures.ts";
 import { createVerify, generateKeyPairSync } from "node:crypto";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -570,6 +571,8 @@ describe("runRelay", () => {
     const fn = vi.fn(async (url: unknown, init?: RequestInit) => {
       const rendered = typeof url === "string" ? url : String(url);
       requests.push({ url: rendered, init: init ?? {} });
+      const suites = appSuiteListing(rendered);
+      if (suites !== undefined) return new Response(JSON.stringify(suites));
       // The mirror sees no other producers or attestations before its writes.
       // Sweep and heal responses remain explicit in the queued outcomes.
       if (mirrorReady && mirrorContexts > 0 && init?.method === "GET") {
@@ -653,7 +656,7 @@ describe("runRelay", () => {
     expect(fetchStub.requests.map((request) => request.url)).toEqual([
       TOKEN_URL,
       JOBS_URL,
-      SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+      SWEEP_RUNS_URL, CHECK_SUITES_AT_HEAD_URL, CHECK_RUNS_AT_HEAD_URL,
       CHECK_RUNS_URL,
       SWEEP_RUNS_URL,
     ]);
@@ -872,7 +875,7 @@ describe("runRelay", () => {
       TOKEN_URL,
       RUN_URL,
       JOBS_URL,
-      SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+      SWEEP_RUNS_URL, CHECK_SUITES_AT_HEAD_URL, CHECK_RUNS_AT_HEAD_URL,
       CHECK_RUNS_URL,
       SWEEP_RUNS_URL,
     ]);
@@ -1187,7 +1190,7 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        SWEEP_RUNS_URL, CHECK_SUITES_AT_HEAD_URL, CHECK_RUNS_AT_HEAD_URL,
         CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
       ]);
@@ -1210,7 +1213,7 @@ describe("runRelay", () => {
         TOKEN_URL,
         RUN_URL,
         JOBS_URL,
-        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        SWEEP_RUNS_URL, CHECK_SUITES_AT_HEAD_URL, CHECK_RUNS_AT_HEAD_URL,
         CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
       ]);
@@ -1270,7 +1273,7 @@ describe("runRelay", () => {
         expect(fetchStub.requests.map((request) => request.url), runPath).toEqual([
           TOKEN_URL,
           JOBS_URL,
-          SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+          SWEEP_RUNS_URL, CHECK_SUITES_AT_HEAD_URL, CHECK_RUNS_AT_HEAD_URL,
           CHECK_RUNS_URL,
           SWEEP_RUNS_URL,
         ]);
@@ -1500,7 +1503,7 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        SWEEP_RUNS_URL, CHECK_SUITES_AT_HEAD_URL, CHECK_RUNS_AT_HEAD_URL,
         CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
         PULLS_URL,
@@ -1665,7 +1668,7 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        SWEEP_RUNS_URL, CHECK_SUITES_AT_HEAD_URL, CHECK_RUNS_AT_HEAD_URL,
         CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
       ]);
@@ -1709,7 +1712,7 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        SWEEP_RUNS_URL, CHECK_SUITES_AT_HEAD_URL, CHECK_RUNS_AT_HEAD_URL,
         CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
       ]);
@@ -1844,7 +1847,7 @@ describe("runRelay", () => {
         TOKEN_URL,
         RUN_URL,
         JOBS_URL,
-        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        SWEEP_RUNS_URL, CHECK_SUITES_AT_HEAD_URL, CHECK_RUNS_AT_HEAD_URL,
         CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
         PULLS_URL,
@@ -2044,7 +2047,8 @@ describe("runRelay", () => {
   // --- The orphan sweep (issue 885) ---
 
   const SWEEP_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs?per_page=100";
-  const CHECK_RUNS_AT_HEAD_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${HEAD_SHA}/check-runs?app_id=5118623&filter=latest&per_page=100`;
+  const CHECK_RUNS_AT_HEAD_URL = appChecksUrl("https://api.github.com/repos/Nitjsefnie/Overflow", HEAD_SHA);
+  const CHECK_SUITES_AT_HEAD_URL = appSuitesUrl("https://api.github.com/repos/Nitjsefnie/Overflow", HEAD_SHA);
   const APP_ID = "5118623";
 
   /**
@@ -2194,7 +2198,7 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        SWEEP_RUNS_URL, CHECK_SUITES_AT_HEAD_URL, CHECK_RUNS_AT_HEAD_URL,
         CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
       ]);
@@ -2260,9 +2264,10 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        SWEEP_RUNS_URL, CHECK_SUITES_AT_HEAD_URL, CHECK_RUNS_AT_HEAD_URL,
         CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
+        CHECK_SUITES_AT_HEAD_URL,
         CHECK_RUNS_AT_HEAD_URL,
       ]);
       expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(1);
@@ -2306,7 +2311,7 @@ describe("runRelay", () => {
       expect(
         requestsTo(
           fetchStub.requests,
-          `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${otherSha}/check-runs?app_id=${APP_ID}&filter=latest&per_page=100`,
+          appChecksUrl("https://api.github.com/repos/Nitjsefnie/Overflow", otherSha),
         ),
       ).toHaveLength(1);
     });
@@ -2342,9 +2347,10 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        SWEEP_RUNS_URL, CHECK_SUITES_AT_HEAD_URL, CHECK_RUNS_AT_HEAD_URL,
         CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
+        CHECK_SUITES_AT_HEAD_URL,
         CHECK_RUNS_AT_HEAD_URL,
       ]);
     });
@@ -2376,7 +2382,7 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([
         TOKEN_URL,
         JOBS_URL,
-        SWEEP_RUNS_URL, CHECK_RUNS_AT_HEAD_URL,
+        SWEEP_RUNS_URL, CHECK_SUITES_AT_HEAD_URL, CHECK_RUNS_AT_HEAD_URL,
         CHECK_RUNS_URL,
         SWEEP_RUNS_URL,
       ]);

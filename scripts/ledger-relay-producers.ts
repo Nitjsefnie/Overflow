@@ -46,6 +46,40 @@ export interface ProducerDeps {
   repositoryId?: string;
 }
 
+/** Traverse App suites rather than the commit check-run endpoint's 1000-suite view. */
+export async function readAppCheckRuns(
+  deps: Pick<ProducerDeps, "apiRoot" | "repo" | "appId"> & { api: Pick<SweepApi, "get"> },
+  headSha: string,
+): Promise<unknown[] | undefined> {
+  const root = `${deps.apiRoot}/repos/${deps.repo}`;
+  const checks: unknown[] = [];
+  for (let page = 1; ; page += 1) {
+    const suites = await deps.api.get<{ check_suites?: unknown; total_count?: number }>(
+      `${root}/commits/${headSha}/check-suites?app_id=${deps.appId}&per_page=100${page === 1 ? "" : `&page=${page}`}`,
+      `the ledger App's check-suites at ${headSha}`,
+    );
+    if (!Array.isArray(suites?.check_suites)) return;
+    for (const entry of suites.check_suites) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const suite = entry as { id?: unknown; app?: { id?: unknown } };
+      if (String(suite.app?.id ?? "") !== deps.appId) continue;
+      const suiteId = idOf(suite.id);
+      if (!/^[1-9][0-9]*$/.test(suiteId)) continue;
+      for (let runPage = 1; ; runPage += 1) {
+        const runs = await deps.api.get<{ check_runs?: unknown; total_count?: number }>(
+          `${root}/check-suites/${suiteId}/check-runs?filter=latest&per_page=100${runPage === 1 ? "" : `&page=${runPage}`}`,
+          `the ledger App's check-runs in suite ${suiteId} at ${headSha}`,
+        );
+        if (!Array.isArray(runs?.check_runs)) return;
+        checks.push(...runs.check_runs);
+        if (runs.check_runs.length < 100 || (runs.total_count !== undefined && runPage * 100 >= runs.total_count)) break;
+      }
+    }
+    if (suites.check_suites.length < 100 || (suites.total_count !== undefined && page * 100 >= suites.total_count)) break;
+  }
+  return checks;
+}
+
 /** Select eligible pinned completed runs unless unfinished runs are explicitly requested. */
 export function selectSweepCandidates(
   entries: unknown,
@@ -143,13 +177,10 @@ export async function publicationBlockedContexts(
   newest: ReadonlyMap<string, SweepCandidate>,
   historyBounds?: ReadonlyMap<string, string>,
 ): Promise<Set<string>> {
-  const body = await deps.api.get<Record<string, unknown>>(
-    `${deps.apiRoot}/repos/${deps.repo}/commits/${headSha}/check-runs?app_id=${deps.appId}&filter=latest&per_page=100`,
-    `the ledger App's check-runs at ${headSha}`,
-  );
+  const checks = await readAppCheckRuns(deps, headSha);
   const blocked = new Set<string>();
-  if (!Array.isArray(body.check_runs)) return blocked;
-  for (const entry of body.check_runs) {
+  if (checks === undefined) return blocked;
+  for (const entry of checks) {
     if (typeof entry !== "object" || entry === null) continue;
     const checkRun = entry as {
       name?: unknown; status?: unknown; external_id?: unknown; app?: { id?: unknown };

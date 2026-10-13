@@ -1,3 +1,4 @@
+import { appSuiteListing, appChecksUrl, appSuitesUrl } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -105,6 +106,8 @@ describe("the committed pin drives runRelay end to end (issue 1149)", () => {
     const fn = vi.fn(async (url: unknown, init?: RequestInit) => {
       const rendered = typeof url === "string" ? url : String(url);
       requests.push({ url: rendered, init: init ?? {} });
+      const suites = appSuiteListing(rendered);
+      if (suites !== undefined) return new Response(JSON.stringify(suites));
       const outcome = outcomes.shift();
       if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
       return new Response(JSON.stringify(outcome.body), {
@@ -171,7 +174,8 @@ describe("the committed pin drives runRelay end to end (issue 1149)", () => {
       TOKEN_URL,
       JOBS_URL,
       ...contexts.flatMap(() => [SWEEP_RUNS_URL,
-        `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${HEAD_SHA}/check-runs?app_id=5118623&filter=latest&per_page=100`, CHECK_RUNS_URL]),
+        appSuitesUrl("https://api.github.com/repos/Nitjsefnie/Overflow", HEAD_SHA),
+        appChecksUrl("https://api.github.com/repos/Nitjsefnie/Overflow", HEAD_SHA), CHECK_RUNS_URL]),
       SWEEP_RUNS_URL,
     ]);
     const checkRuns = fetchStub.requests.filter((request) => request.url === CHECK_RUNS_URL);

@@ -1,3 +1,4 @@
+import { appSuiteListing } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -110,7 +111,10 @@ function world(kind: "verify" | "pr-gates" = "verify") {
       if (state.listingReadFails) return new Response("producer listing unavailable", { status: 503 });
       return response({ workflow_runs: state.producers });
     }
-    const checksHead = /\/commits\/([^/]+)\/check-runs\?/.exec(url)?.[1];
+    const appSuites = appSuiteListing(url);
+    if (appSuites !== undefined) return response(appSuites);
+    const checkSuite = /\/check-suites\/([0-9]+)\/check-runs\?/.exec(url)?.[1];
+    const checksHead = checkSuite === undefined ? undefined : (BigInt(checkSuite) - 1n).toString(16).padStart(40, "0");
     if (checksHead !== undefined) {
       const latest = new Map<string, Body>();
       for (const check of state.checks) {
@@ -930,12 +934,13 @@ describe("issue 1195 sweep request budget", () => {
     const result = await w.relay("sweep");
     expect(result.sweep.examined).toBe(50);
     expect(result.sweep.relayed).toHaveLength(attested ? 0 : 50);
-    expect(w.state.requests).toHaveLength(attested ? 202 : 502);
+    expect(w.state.requests).toHaveLength(attested ? 252 : 552);
     expect(w.state.requests.filter((url) => url.endsWith("/access_tokens"))).toHaveLength(1);
     expect(w.state.requests.filter((url) => url === `${ROOT}/actions/runs?per_page=100`)).toHaveLength(1);
     expect(w.state.requests.filter((url) => /\/actions\/runs\/[0-9]+$/.test(url))).toHaveLength(attested ? 100 : 200);
     expect(w.state.requests.filter((url) => url.includes("/actions/workflows/pr-suite.yml/runs?"))).toHaveLength(attested ? 50 : 150);
-    expect(w.state.requests.filter((url) => url.includes("/commits/") && url.includes("/check-runs?"))).toHaveLength(50);
+    expect(w.state.requests.filter((url) => url.includes("/commits/") && url.includes("/check-suites?"))).toHaveLength(50);
+    expect(w.state.requests.filter((url) => url.includes("/check-suites/") && url.includes("/check-runs?"))).toHaveLength(50);
     expect(w.state.requests.filter((url) => url.includes("/jobs?"))).toHaveLength(attested ? 0 : 50);
     expect(w.state.requests.filter((url) => url === `${ROOT}/check-runs`)).toHaveLength(attested ? 0 : 50);
   });
@@ -1033,3 +1038,44 @@ describe("trigger validation still recovers displaced completions", () => {
     expect(w.state.checks.some((check) => check.head_sha === HEAD)).toBe(false);
   });
 });
+
+
+describe("panel regression: App suite visibility", () => {
+  it.each([999, 1001])("preserves the newer failure behind %i newer non-App suites", async (laterSuites) => {
+    const w = world("pr-gates");
+    const older = gate(9001, "success"), newer = gate(9002, "failure");
+    w.state.producers = [newer, older];
+    await w.relay("mirror", newer);
+    const before = w.state.checks.length;
+    const suites = [{ id: 1, app: { id: 5118623 } }, ...Array.from({ length: laterSuites }, (_, i) => ({
+      id: i + 2, app: { id: 15368 },
+    }))];
+    let cappedReads = 0;
+    await runRelay({
+      env: { LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
+        GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", LEDGER_DISPATCH_RUN_ID: "9001" },
+      fetchFn: (async (input, init) => {
+        const url = String(input);
+        if (url === `${ROOT}/actions/runs?per_page=100`) return response({ workflow_runs: [] });
+        if (url.includes(`/commits/${HEAD}/check-runs?`)) {
+          // Model the documented cap before App filtering; the complete route
+          // must preserve the floor under either possible filter ordering.
+          cappedReads++;
+          return response({ check_runs: suites.slice(-1000).some((s) => s.id === 1) ? w.state.checks : [] });
+        }
+        if (url.includes(`/commits/${HEAD}/check-suites?`)) {
+          expect(new URL(url).searchParams.get("app_id")).toBe("5118623");
+          return response({ total_count: 1, check_suites: [suites[0]] });
+        }
+        if (url.includes("/check-suites/1/check-runs?")) return response({ check_runs: w.state.checks });
+        return w.fetchFn(input, init);
+      }) as typeof fetch,
+      delayFn: async () => {}, readPinMap: async () => pins,
+    });
+    for (const context of GATE_CONTEXTS) expect(w.state.checks.filter((c) => c.name === context).at(-1))
+      .toMatchObject({ external_id: "9002:1", conclusion: "failure" });
+    expect(w.state.checks).toHaveLength(before);
+    expect(cappedReads).toBe(0);
+  });
+});
+

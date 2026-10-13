@@ -1,3 +1,4 @@
+import { appSuiteListing, appChecksUrl } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -17,7 +18,7 @@ const suiteRunsUrl = (sha = PR_SHA) => `${API}/actions/workflows/pr-suite.yml/ru
 const runUrl = (id: number) => `${API}/actions/runs/${id}`;
 const jobsUrl = (id: number) => `${runUrl(id)}/jobs?filter=latest&per_page=100`;
 const checksUrl = (sha: string) =>
-  `${API}/commits/${sha}/check-runs?app_id=5118623&filter=latest&per_page=100`;
+  appChecksUrl(API, sha);
 
 let keyPem: string;
 beforeAll(() => {
@@ -93,6 +94,8 @@ function harness(over: {
   const fetchFn = (async (input: unknown, init?: RequestInit) => {
     const url = String(input);
     requests.push(url);
+    const suites = appSuiteListing(url);
+    if (suites !== undefined) return new Response(JSON.stringify(suites));
     if (url.endsWith("/access_tokens")) {
       return new Response(JSON.stringify({ token: "installation-token" }), { status: 201 });
     }

@@ -1,3 +1,4 @@
+import { appSuiteListing, appChecksUrl, appSuitesUrl } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -6,7 +7,8 @@ import { renderRelayResult, runRelay, type RelayDeps } from "../../scripts/ledge
 const REPO = "Nitjsefnie/Overflow";
 const ROOT = `https://api.github.com/repos/${REPO}`;
 const HEAD = "b".repeat(40);
-const CHECKS = `${ROOT}/commits/${HEAD}/check-runs?app_id=5118623&filter=latest&per_page=100`;
+const CHECKS = appChecksUrl(ROOT, HEAD);
+const SUITES = appSuitesUrl(ROOT, HEAD);
 const LISTING = `${ROOT}/actions/runs?per_page=100`;
 type Body = Record<string, unknown>;
 let key: string;
@@ -35,6 +37,8 @@ function world() {
       status: "completed", conclusion: "success", event: "push", head_branch: "main",
       html_url: `https://github.com/${REPO}/actions/runs/9001`,
     }] });
+    const suites = appSuiteListing(url);
+    if (suites !== undefined) return response(suites);
     if (url === CHECKS) return response({ check_runs: state.checks.slice(-1) });
     if (url.endsWith("/9001/jobs?filter=latest&per_page=100")) return response({ jobs: [{
       name: "verify", run_attempt: 1, status: "completed", conclusion: "success",
@@ -68,12 +72,12 @@ describe("ledger relay request lifetime", () => {
     const timeout = vi.spyOn(AbortSignal, "timeout");
     try {
       await w.run();
-      expect(w.state.requests).toHaveLength(5);
-      expect(timeout).toHaveBeenCalledTimes(5);
+      expect(w.state.requests).toHaveLength(6);
+      expect(timeout).toHaveBeenCalledTimes(6);
       expect(timeout.mock.calls.every(([ms]) => ms === 30_000)).toBe(true);
       const signals = w.state.requests.map(({ init }) => init.signal);
       for (const signal of signals) expect(signal).toBeInstanceOf(AbortSignal);
-      expect(new Set(signals).size).toBe(5);
+      expect(new Set(signals).size).toBe(6);
     } finally { timeout.mockRestore(); }
   });
 
@@ -114,7 +118,7 @@ describe("ledger relay request lifetime", () => {
     expect(w.state.checks[0]).toMatchObject({ name: "verify", head_sha: HEAD,
       external_id: "9001:1", status: "completed", conclusion: "success" });
     const post = w.state.requests.findIndex(({ url, init }) => url === `${ROOT}/check-runs` && init.method === "POST");
-    expect(w.state.requests[post + 1].url).toBe(CHECKS);
+    expect(w.state.requests[post + 1].url).toBe(SUITES);
     expect(w.state.requests[post + 1].init.headers).toMatchObject({
       "cache-control": "no-cache", authorization: `Bearer ${["test", "only"].join("-")}`,
     });
@@ -134,7 +138,7 @@ describe("ledger relay request lifetime", () => {
     expect(w.state.checks).toHaveLength(1);
     expect(w.state.checks[0]).toMatchObject({ external_id: "9001:1", conclusion: "success" });
     const writes = w.state.requests.flatMap(({ url }, index) => url === `${ROOT}/check-runs` ? [index] : []);
-    expect(w.state.requests.slice(writes[0] + 1, writes[1]).map(({ url }) => url)).toEqual([CHECKS]);
+    expect(w.state.requests.slice(writes[0] + 1, writes[1]).map(({ url }) => url)).toEqual([SUITES, CHECKS]);
     expect(w.state.delays).toEqual([1000]);
   });
 
