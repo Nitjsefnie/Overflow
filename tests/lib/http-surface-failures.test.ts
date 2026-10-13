@@ -177,6 +177,57 @@ export function GET() { return errorResponse(400, CODE, "m"); }
     expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:3:`);
   });
 
+  it.each([
+    ["parentheses", '(require)("@/lib/http/error-response").errorResponse(418, "HIDDEN", "m")'],
+    ["as", '(require as typeof require)("@/lib/http/error-response").errorResponse(418, "HIDDEN", "m")'],
+    ["satisfies", '(require satisfies typeof require)("@/lib/http/error-response").errorResponse(418, "HIDDEN", "m")'],
+    ["non-null", 'require!("@/lib/http/error-response").errorResponse(418, "HIDDEN", "m")'],
+    ["type assertion", '(<typeof require>require)("@/lib/http/error-response").errorResponse(418, "HIDDEN", "m")'],
+    ["IIFE alias", '(() => { const load = require; return load("@/lib/http/error-response").errorResponse(418, "HIDDEN", "m"); })()'],
+    ["stored shorthand", '({ require }).require("@/lib/http/error-response").errorResponse(418, "HIDDEN", "m")'],
+    ["bound loader", 'require.bind(null)("@/lib/http/error-response").errorResponse(418, "HIDDEN", "m")'],
+    ["comma wrapper", '(0, require)("@/lib/http/error-response").errorResponse(418, "HIDDEN", "m")'],
+    ["module loader", 'module.require("@/lib/http/error-response").errorResponse(418, "HIDDEN", "m")'],
+    ["computed module loader", 'module["require"]("@/lib/http/error-response").errorResponse(418, "HIDDEN", "m")'],
+    ["module alias", '(() => { const mod = module; return mod.require("@/lib/http/error-response").errorResponse(418, "HIDDEN", "m"); })()'],
+  ])("refuses an unattributed CommonJS load via %s", (_label, expression) => {
+    const root = tree({ [routeFile]: `export function GET() { return ${expression}; }` });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:1:`);
+  });
+
+  it.each([
+    'import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);',
+    'import { createRequire as factory } from "module";\nconst load = factory(import.meta.url);',
+    'import * as loaders from "node:module";\nconst load = loaders.createRequire(import.meta.url);',
+    'import loaders from "node:module";\nconst { createRequire: factory } = loaders; const load = factory(import.meta.url);',
+    'const loaders = require("node:module");\nconst load = loaders.createRequire(import.meta.url);',
+    'import loaders = require("node:module");\nconst load = loaders.createRequire(import.meta.url);',
+    'const loaders = await import("node:module");\nconst load = loaders.createRequire(import.meta.url);',
+    'const load = createRequire(import.meta.url);',
+  ])("refuses a constructed CommonJS loader: %s", (declaration) => {
+    const root = tree({ [routeFile]: `${declaration}\nexport function GET() { return load("@/lib/http/error-response").errorResponse(418, "HIDDEN", "m"); }` });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(new RegExp(`${routeFile}:\\d+:`));
+  });
+
+  it.each(['(require)', '(require as typeof require)', '(require satisfies typeof require)', 'require!'])(
+    "follows the src module loaded by transparent wrapper %s", (callee) => {
+      const root = tree({
+        [routeFile]: `export function GET() { return ${callee}("@/lib/refuse").refuse(); }`,
+        "src/lib/refuse.ts": `${importHelper}export function refuse() { return errorResponse(418, "HIDDEN", "m"); }`,
+      });
+      expect(deriveRouteFailures(["GET /api/things"], root)).toEqual({ "GET /api/things": ["418 HIDDEN"] });
+    },
+  );
+
+  it("ignores locally bound loader names, property names and erased type references", () => {
+    const root = tree({ [routeFile]: `type Shape = { require: string; module: string };
+export function GET(require: (name: string) => Response, name: string, module: { require: () => Response }, createRequire: () => Response) {
+  const labels = { require: "data", module: "data", createRequire: "data" };
+  return require(name) ?? module.require() ?? createRequire() ?? labels;
+}` });
+    expect(deriveRouteFailures(["GET /api/things"], root)).toEqual({ "GET /api/things": [] });
+  });
+
   it("follows a CommonJS edge to a module with named helper calls", () => {
     const root = tree({
       [routeFile]: 'export function GET() { return require("@/lib/refuse").refuse(); }',
@@ -199,6 +250,20 @@ export function GET() { return errorResponse(400, CODE, "m"); }
   ])("refuses unresolved CommonJS references %s", (source, line) => {
     const root = tree({ [routeFile]: source });
     expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:${line}:`);
+  });
+
+  it("does not mistake unknown object property names for free loader bindings", () => {
+    const root = tree({ [routeFile]: `export function GET(data: any) { return { require: data.require, module: data.module, createRequire: data.createRequire }; }` });
+    expect(deriveRouteFailures(["GET /api/things"], root)).toEqual({ "GET /api/things": [] });
+  });
+
+  it.each([
+    'declare const require: any;\nexport function GET() { const load = require; return load("@/lib/http/error-response"); }',
+    'declare const module: any;\nexport function GET() { return module.require("@/lib/http/error-response"); }',
+    'declare function createRequire(path: string): any;\nconst load = createRequire("route.ts");',
+  ])("refuses ambient loader declarations that create no local runtime binding: %s", (source) => {
+    const root = tree({ [routeFile]: source });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:2:`);
   });
 
   it.each([
