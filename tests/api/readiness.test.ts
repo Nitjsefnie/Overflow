@@ -51,7 +51,7 @@ describe("readiness endpoint", () => {
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
-  it("answers 503 with the redacted cause when the probe rejects, journaling once", async () => {
+  it("answers status-only 503 when the probe rejects, journaling the cause once", async () => {
     const errorSpy = spyOnProbeJournal();
     const handler = createReadinessGetHandler({
       probe: async () => {
@@ -64,13 +64,13 @@ describe("readiness endpoint", () => {
 
     const reason = "database: Error: database unreachable";
     expect(response.status).toBe(503);
-    await expect(response.json()).resolves.toEqual({ status: "unavailable", reason });
+    await expect(response.json()).resolves.toEqual({ status: "unavailable" });
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy.mock.calls[0][0]).toBe(`Readiness probe failed: ${reason}`);
   });
 
-  it("answers 503 with the redacted cause when the probe throws synchronously, journaling once", async () => {
+  it("answers status-only 503 when the probe throws synchronously, journaling the cause once", async () => {
     const errorSpy = spyOnProbeJournal();
     const handler = createReadinessGetHandler({
       probe: () => {
@@ -83,12 +83,12 @@ describe("readiness endpoint", () => {
 
     const reason = "database: Error: probe exploded before returning a promise";
     expect(response.status).toBe(503);
-    await expect(response.json()).resolves.toEqual({ status: "unavailable", reason });
+    await expect(response.json()).resolves.toEqual({ status: "unavailable" });
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy.mock.calls[0][0]).toBe(`Readiness probe failed: ${reason}`);
   });
 
-  it("answers 503 with the hard-cap reason when the probe never settles", async () => {
+  it("answers status-only 503 and journals the hard-cap reason when the probe never settles", async () => {
     const errorSpy = spyOnProbeJournal();
     const handler = createReadinessGetHandler({
       probe: () => new Promise<ReadinessProbeOutcome>(() => {}),
@@ -100,12 +100,12 @@ describe("readiness endpoint", () => {
     const response = await handler();
 
     expect(response.status).toBe(503);
-    await expect(response.json()).resolves.toEqual({ status: "unavailable", reason: hardCapReason });
+    await expect(response.json()).resolves.toEqual({ status: "unavailable" });
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy.mock.calls[0][0]).toBe(`Readiness probe failed: ${hardCapReason}`);
   });
 
-  it("answers 503 with the behind-schema reason a fixture outcome carries, journaling once", async () => {
+  it("answers status-only 503 and journals the behind-schema reason a fixture outcome carries", async () => {
     const errorSpy = spyOnProbeJournal();
     const reason =
       "database: schema is behind the build; missing migrations: 058_api_token_delivery_window.sql";
@@ -117,9 +117,25 @@ describe("readiness endpoint", () => {
     const response = await handler();
 
     expect(response.status).toBe(503);
-    await expect(response.json()).resolves.toEqual({ status: "unavailable", reason });
+    await expect(response.json()).resolves.toEqual({ status: "unavailable" });
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy.mock.calls[0][0]).toBe(`Readiness probe failed: ${reason}`);
+  });
+
+  it("answers status-only 503 and journals the fallback for an outcome without a reason", async () => {
+    const errorSpy = spyOnProbeJournal();
+    const handler = createReadinessGetHandler({
+      probe: async () => ({ status: "unavailable" }),
+      now: () => 0,
+    });
+
+    const response = await handler();
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ status: "unavailable" });
+    expect(errorSpy.mock.calls).toEqual([[
+      "Readiness probe failed: database: an unavailable probe outcome arrived without a reason",
+    ]]);
   });
 
   it("serves twenty concurrent requests from a single in-flight probe", async () => {
@@ -179,6 +195,7 @@ describe("readiness endpoint", () => {
   });
 
   it("serves a cached failure the same as a cached success within its window", async () => {
+    const errorSpy = spyOnProbeJournal();
     let calls = 0;
     const probe = async () => {
       calls += 1;
@@ -192,10 +209,9 @@ describe("readiness endpoint", () => {
     expect(calls).toBe(1);
     expect(first.status).toBe(503);
     expect(second.status).toBe(503);
-    await expect(second.json()).resolves.toEqual({
-      status: "unavailable",
-      reason: "database: Error: database unreachable",
-    });
+    await expect(first.json()).resolves.toEqual({ status: "unavailable" });
+    await expect(second.json()).resolves.toEqual({ status: "unavailable" });
+    expect(errorSpy.mock.calls).toEqual([["Readiness probe failed: database: Error: database unreachable"]]);
   });
 
   it("does not journal a TTL-cached failure again within its window", async () => {
@@ -207,23 +223,22 @@ describe("readiness endpoint", () => {
     };
     const handler = createReadinessGetHandler({ probe, now: () => 0 });
 
-    await handler();
+    const first = await handler();
     const second = await handler();
 
     expect(calls).toBe(1);
     expect(second.status).toBe(503);
-    await expect(second.json()).resolves.toEqual({
-      status: "unavailable",
-      reason: "database: fixture outage",
-    });
-    expect(errorSpy).toHaveBeenCalledTimes(1);
+    await expect(first.json()).resolves.toEqual({ status: "unavailable" });
+    await expect(second.json()).resolves.toEqual({ status: "unavailable" });
+    expect(errorSpy.mock.calls).toEqual([["Readiness probe failed: database: fixture outage"]]);
   });
 
-  it("redacts credential-shaped error text out of the body and the journal line", async () => {
+  it("keeps error details out of the body and redacts credentials in the journal line", async () => {
     const errorSpy = spyOnProbeJournal();
     const handler = createReadinessGetHandler({
       probe: async () => {
-        throw new Error("connect failed: postgresql://overflow:pw@10.0.0.9/overflow");
+        const credentials = ["overflow", "pw"].join(":");
+        throw new Error(`connect failed: postgresql://${credentials}@10.0.0.9/overflow`);
       },
       now: () => 0,
     });
@@ -231,13 +246,11 @@ describe("readiness endpoint", () => {
     const response = await handler();
 
     const body = await response.json();
-    expect(body.status).toBe("unavailable");
-    expect(String(body.reason)).toContain("***@");
-    expect(String(body.reason)).not.toContain("pw@");
-    expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(String(errorSpy.mock.calls[0][0])).toContain("***@");
-    expect(String(errorSpy.mock.calls[0][0])).not.toContain("pw@");
-    expect(errorSpy.mock.calls[0][0]).toBe(`Readiness probe failed: ${body.reason}`);
+    expect(response.status).toBe(503);
+    expect(body).toEqual({ status: "unavailable" });
+    expect(errorSpy.mock.calls).toEqual([[
+      "Readiness probe failed: database: Error: connect failed: postgresql://***@10.0.0.9/overflow",
+    ]]);
   });
 
   it("does not log again when a late race loser settles after the hard cap", async () => {
@@ -261,7 +274,7 @@ describe("readiness endpoint", () => {
       const response = await pending;
 
       expect(response.status).toBe(503);
-      await expect(response.json()).resolves.toEqual({ status: "unavailable", reason: hardCapReason });
+      await expect(response.json()).resolves.toEqual({ status: "unavailable" });
       expect(errorSpy).toHaveBeenCalledTimes(1);
 
       // The loser's settlement lands: consumed without resolving or logging
@@ -301,6 +314,10 @@ describe("readiness endpoint against real databases", () => {
   const originalDatabaseUrl = process.env.DATABASE_URL;
   let container: StartedTestContainer | undefined;
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeAll(async () => {
     const started = await startPostgresContainer({
       database: "readiness_test",
@@ -331,6 +348,7 @@ describe("readiness endpoint against real databases", () => {
   });
 
   it("answers 503 when behind and 200 when equal or ahead without flags", async () => {
+    const errorSpy = spyOnProbeJournal();
     const sql = getSql();
     const newestBundled = bundledMigrationNames[bundledMigrationNames.length - 1];
     const appliedNames = async (): Promise<string[]> =>
@@ -341,7 +359,7 @@ describe("readiness endpoint against real databases", () => {
     // same reset path the black-hole test below spells out.
     const probeResult = async (): Promise<{
       status: number;
-      body: { status: string; reason?: string };
+      body: { status: string };
     }> => {
       const response = await createReadinessGetHandler()();
       return { status: response.status, body: await response.json() };
@@ -351,16 +369,19 @@ describe("readiness endpoint against real databases", () => {
     // which is the state a deploy's migrate step has not yet run against.
     await sql`delete from schema_migrations where name = ${newestBundled}`;
     expect(await appliedNames()).not.toContain(newestBundled);
-    const behind = await probeResult();
-    expect(behind.status).toBe(503);
-    expect(behind.body).toEqual({
-      status: "unavailable",
-      reason: `database: schema is behind the build; missing migrations: ${newestBundled}`,
-    });
+    try {
+      const behind = await probeResult();
+      expect(behind.status).toBe(503);
+      expect(behind.body).toEqual({ status: "unavailable" });
+      expect(errorSpy.mock.calls).toEqual([[
+        `Readiness probe failed: database: schema is behind the build; missing migrations: ${newestBundled}`,
+      ]]);
+    } finally {
+      await sql`insert into schema_migrations (name) values (${newestBundled})`;
+    }
 
     // Equal: restoring the ledger row returns the schema to the migrated
     // state — the migration's objects were never dropped, only its record.
-    await sql`insert into schema_migrations (name) values (${newestBundled})`;
     expect(await appliedNames()).toContain(newestBundled);
     const equal = await probeResult();
     expect(equal.status).toBe(200);
@@ -408,10 +429,7 @@ describe("readiness endpoint against real databases", () => {
       }
       expect(response.status).toBe(status);
       expect(response.headers.get("cache-control")).toBe("no-store");
-      await expect(response.json()).resolves.toEqual(status === 200 ? { status: "ready" } : {
-        status: "unavailable",
-        reason: "database: schema has moved past migrations this build predates and cannot run against: 900_readiness_fixture.sql",
-      });
+      await expect(response.json()).resolves.toEqual(status === 200 ? { status: "ready" } : { status: "unavailable" });
       expect(errorSpy.mock.calls).toEqual(status === 200 ? [] : [[
         "Readiness probe failed: database: schema has moved past migrations this build predates and cannot run against: 900_readiness_fixture.sql",
       ]]);
@@ -423,7 +441,8 @@ describe("readiness endpoint against real databases", () => {
     }
   });
 
-  it("names only ahead flagged filenames in applied-name order, with behind taking precedence", async () => {
+  it("journals only ahead flagged filenames in applied-name order, with behind taking precedence", async () => {
+    const errorSpy = spyOnProbeJournal();
     const sql = getSql();
     const directory = await mkdtemp(path.join(tmpdir(), "overflow-1055-readiness-order-"));
     const later = "902_later.sql";
@@ -438,17 +457,18 @@ describe("readiness endpoint against real databases", () => {
       await runMigrations({ directory });
       const ahead = await createReadinessGetHandler()();
       expect(ahead.status).toBe(503);
-      await expect(ahead.json()).resolves.toEqual({
-        status: "unavailable",
-        reason: "database: schema has moved past migrations this build predates and cannot run against: 901_earlier.sql, 902_later.sql",
-      });
+      await expect(ahead.json()).resolves.toEqual({ status: "unavailable" });
+      expect(errorSpy.mock.calls).toEqual([[
+        "Readiness probe failed: database: schema has moved past migrations this build predates and cannot run against: 901_earlier.sql, 902_later.sql",
+      ]]);
       await sql`delete from schema_migrations where name = ${newestBundled}`;
       const behind = await createReadinessGetHandler()();
       expect(behind.status).toBe(503);
-      await expect(behind.json()).resolves.toEqual({
-        status: "unavailable",
-        reason: `database: schema is behind the build; missing migrations: ${newestBundled}`,
-      });
+      await expect(behind.json()).resolves.toEqual({ status: "unavailable" });
+      expect(errorSpy.mock.calls).toEqual([
+        ["Readiness probe failed: database: schema has moved past migrations this build predates and cannot run against: 901_earlier.sql, 902_later.sql"],
+        [`Readiness probe failed: database: schema is behind the build; missing migrations: ${newestBundled}`],
+      ]);
     } finally {
       await sql`insert into schema_migrations (name) values (${newestBundled}) on conflict do nothing`;
       await sql`delete from schema_migrations where name in (${earlier}, ${later}, ${unflagged})`;
@@ -475,7 +495,7 @@ describe("readiness endpoint against real databases", () => {
       expect.soft(lines).toEqual([`${name}\treview\t${shape}`]);
       expect.soft(flags).toEqual([{ mixed_version_review: true }]);
       expect.soft(response.status).toBe(503);
-      expect.soft(await response.json()).toEqual({ status: "unavailable", reason });
+      expect.soft(await response.json()).toEqual({ status: "unavailable" });
       expect.soft(errorSpy.mock.calls).toEqual([[`Readiness probe failed: ${reason}`]]);
     } finally {
       vi.restoreAllMocks();
@@ -494,7 +514,7 @@ describe("readiness endpoint against real databases", () => {
         const response = await createReadinessGetHandler()();
         const reason = "database: schema has moved past migrations this build predates and cannot run against: <unrecognised migration name>";
         expect(response.status).toBe(503);
-        expect.soft(await response.json()).toEqual({ status: "unavailable", reason });
+        expect.soft(await response.json()).toEqual({ status: "unavailable" });
         expect.soft(errorSpy.mock.calls).toEqual([[`Readiness probe failed: ${reason}`]]);
       } finally {
         vi.restoreAllMocks();
@@ -558,7 +578,7 @@ describe("readiness endpoint against real databases", () => {
       const result = await response;
       const reason = "database: Error: probe query exceeded its 2000 ms budget";
       expect(result.status).toBe(503);
-      await expect(result.json()).resolves.toEqual({ status: "unavailable", reason });
+      await expect(result.json()).resolves.toEqual({ status: "unavailable" });
       expect(errorSpy.mock.calls).toEqual([[`Readiness probe failed: ${reason}`]]);
     } finally {
       vi.useRealTimers();
@@ -570,6 +590,7 @@ describe("readiness endpoint against real databases", () => {
   });
 
   it("answers 503 against a black-holed socket and bounds concurrent probes to one connection", async () => {
+    const errorSpy = spyOnProbeJournal();
     let connections = 0;
     const sockets = new Set<net.Socket>();
     let sawFirstConnection!: () => void;
@@ -586,7 +607,8 @@ describe("readiness endpoint against real databases", () => {
     const port = (blackHole.address() as net.AddressInfo).port;
 
     try {
-      process.env.DATABASE_URL = `postgresql://probe:probe@127.0.0.1:${port}/probe`;
+      const credentials = ["probe", "probe"].join(":");
+      process.env.DATABASE_URL = `postgresql://${credentials}@127.0.0.1:${port}/probe`;
       await closeSql();
 
       // A fresh production handler, not the shared GET export: that export's
@@ -601,11 +623,11 @@ describe("readiness endpoint against real databases", () => {
 
       for (const response of responses) {
         expect(response.status).toBe(503);
-        await expect(response.json()).resolves.toMatchObject({
-          status: "unavailable",
-          reason: expect.any(String),
-        });
+        await expect(response.json()).resolves.toEqual({ status: "unavailable" });
       }
+      expect(errorSpy.mock.calls).toEqual([[
+        "Readiness probe failed: database: Error: probe query exceeded its 2000 ms budget",
+      ]]);
       expect(connections).toBe(1);
     } finally {
       // Destroy the stalled sockets BEFORE ending the client: the pool's end()
