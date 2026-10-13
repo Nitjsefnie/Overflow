@@ -1170,3 +1170,62 @@ it.each([5, 6])("reads at most five repository pages when a producer is on page 
   expect(w.state.checks).toHaveLength(producerPage === 5 ? 4 : 0);
   expect(w.state.requests.filter((url) => url.startsWith(`${ROOT}/actions/runs?per_page=100`))).toHaveLength(5);
 });
+
+describe("panel fix round resolved-attempt ordering", () => {
+  it.each([false, true])("publishes a newer resolved attempt beyond a retained trigger, retained=%s", async (retained) => {
+    const w = world();
+    const stale = verify(9001, 8001, "success");
+    const current = { ...stale, run_attempt: 3, conclusion: "failure" };
+    w.state.producers = [stale];
+    w.state.checks = [{ name: "verify", head_sha: HEAD, external_id: "9001:2",
+      status: "completed", conclusion: "success", app: { id: 5118623 } }];
+    const { sweepOrphans } = await import("../../scripts/ledger-relay-sweep.ts");
+    const { decideContexts } = await import("../../scripts/ledger-relay-decisions.ts");
+    const { sweepApi } = await import("../../scripts/ledger-relay-http.ts");
+    const api = sweepApi({ fetchFn: (async (input, init) => {
+      if (String(input) === `${ROOT}/actions/runs/9001`) return response(current);
+      if (String(input).includes("/9001/jobs?")) return response({ jobs: [{ name: "verify", run_attempt: 3,
+        status: "completed", conclusion: "failure" }] });
+      return w.fetchFn(input, init);
+    }) as typeof fetch, delayFn: async () => {}, deadlineMs: Date.now() + RUN_DEADLINE_MS },
+    REPO, "5118623", { authorization: `Bearer ${["test", "only"].join("-")}` });
+    const outcome = await sweepOrphans({ api, pinMap: pins, apiRoot: "https://api.github.com", repo: REPO,
+      appId: "5118623", repositoryId: "123456", decide: decideContexts,
+      triggerRunId: retained ? "9001" : "", ...(retained ? { triggerRun: {
+        runId: "9001", runAttempt: 2, headSha: HEAD, path: ".github/workflows/ci-pr.yml",
+        conclusion: "success", htmlUrl: String(stale.html_url), status: "completed" as const,
+        workflowRun: true as const, event: "workflow_run",
+      } } : {}) });
+    expect(w.state.checks.at(-1)).toMatchObject({ external_id: "9001:3", status: "completed", conclusion: "failure" });
+    expect(outcome.relayed).toEqual([{ context: "verify", runId: "9001" }]);
+  });
+
+  it("refreshes the App floor before a newer resolved attempt follows this sweep's write", async () => {
+    const w = world();
+    const stale = verify(9001, 8001, "success");
+    w.state.producers = [{ ...stale, run_attempt: 2 }, stale];
+    const observedFloors: unknown[][] = [];
+    const { sweepOrphans } = await import("../../scripts/ledger-relay-sweep.ts");
+    const { decideContexts } = await import("../../scripts/ledger-relay-decisions.ts");
+    const { sweepApi } = await import("../../scripts/ledger-relay-http.ts");
+    const api = sweepApi({ fetchFn: (async (input, init) => {
+      const url = String(input);
+      const attempt = w.state.checks.length === 0 ? 2 : 3;
+      if (url === `${ROOT}/actions/runs/9001`) return response({ ...stale, run_attempt: attempt,
+        conclusion: attempt === 2 ? "success" : "failure" });
+      if (url.includes("/9001/jobs?")) return response({ jobs: [{ name: "verify", run_attempt: attempt,
+        status: "completed", conclusion: attempt === 2 ? "success" : "failure" }] });
+      if (url.includes("/check-suites/") && url.includes("/check-runs?")) {
+        observedFloors.push(w.state.checks.map((c) => c.external_id));
+      }
+      return w.fetchFn(input, init);
+    }) as typeof fetch, delayFn: async () => {}, deadlineMs: Date.now() + RUN_DEADLINE_MS },
+    REPO, "5118623", { authorization: `Bearer ${["test", "only"].join("-")}` });
+    const outcome = await sweepOrphans({ api, pinMap: pins, apiRoot: "https://api.github.com", repo: REPO,
+      appId: "5118623", repositoryId: "123456", decide: decideContexts, triggerRunId: "" });
+    expect(outcome.relayed).toHaveLength(2);
+    expect(w.state.checks.map((c) => `${c.external_id}=${c.conclusion}`)).toEqual(["9001:2=success", "9001:3=failure"]);
+    expect(observedFloors).toEqual([[], ["9001:2"]]);
+    expect(w.state.requests.filter((url) => url.includes("/commits/") && url.includes("/check-suites?"))).toHaveLength(2);
+  });
+});
