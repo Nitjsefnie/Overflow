@@ -21,6 +21,12 @@ service down for a while, which is `systemctl stop overflow.service` and
 nothing else, nor for one person's data, which is the account-deletion path
 in [OPERATING.md](../OPERATING.md#account-deletion-and-export).
 
+The commands and paths below describe the default systemd/host deployment.
+For the optional Compose deployment, use **Container deployments** in
+[phase 1](#1-scope-and-preconditions) instead of running those host commands
+verbatim. The container operator owns retirement and records the actual stores
+and external services supplied for that deployment.
+
 **Every step past the preflight record is irreversible.** The database holds
 the only copy of data that cannot be rebuilt from GitHub — accounts, stored
 credential ciphertext, moderation history, audits, corrections, API-token
@@ -60,6 +66,91 @@ created, whichever their local names. On another host substitute those roles
 everywhere below.
 
 ## 1. Scope and preconditions
+
+**Container deployments (operator supplied).** The committed
+`docker-compose.yml` defines `app` and `postgres`, a persistent
+`overflow-postgres-data` volume, and runtime configuration from `.env`; it
+does not install the systemd units, backup jobs or host directories listed
+below. Use the same Compose directory, project and override options used to
+deploy. Keep the [matching operator checkout](container.md#operator-commands-run-from-a-matching-checkout)
+and database access until the webhook inventory and sweep are finished.
+Apply the nine phases in order with these substitutions:
+
+- **Phases 1–2, scope and preflight:** name the responsible operator; record
+  app/PostgreSQL container IDs, image identities and source revisions, the
+  actual database volume name and any bind mounts, database/role names,
+  backup schedules and destinations, operator checkout, secret-file paths,
+  proxy/TLS configuration and off-host owners. Record secret names and modes,
+  never contents. Take any final backup and move any retained records off the
+  retiring deployment before proceeding. The default Compose database and
+  login role are both `overflow`; `overflow_app` and `overflow_backup` are
+  host-route names, not roles Compose creates. Inventory a separately supplied
+  backup role if there is one. These are read-only inventory commands:
+
+  ```sh
+  docker compose --profile app ps -a
+  postgres_id=$(docker compose --profile app ps -q postgres)
+  test -n "$postgres_id"
+  docker inspect --format '{{json .Mounts}}' "$postgres_id"
+  docker compose exec -T postgres psql -U overflow -d postgres -c '\l'
+  docker compose exec -T postgres psql -U overflow -d postgres -c '\du'
+  ```
+
+- **Phase 3, stop writers:** stop the app with
+  `docker compose --profile app stop app`; disable the operator's backup,
+  reconciliation, monitoring and other scheduled writers at their actual
+  scheduler. Keep PostgreSQL running for phases 4–5. Retire this deployment's
+  proxy route, hostname and TLS renewal arrangement per operator policy;
+  shared proxy infrastructure stays. Do not run `down --volumes` at this point.
+- **Phase 4, webhook and application disposal:** run the phase 2 and phase 4
+  SQL inventories against the container deployment's database. For the default
+  Compose settings, replace `sudo -u postgres psql -d overflow` with
+  `docker compose exec -T postgres psql -U overflow -d overflow`; for an external
+  database, use its operator-supplied administrative connection. Complete
+  the webhook sweep and application deletion before deleting database data.
+  The app container's missing operator scripts are not a reason to skip this
+  phase: administrative commands run from the matching checkout, as
+  [container.md](container.md#operator-commands-run-from-a-matching-checkout)
+  specifies.
+- **Phase 5, database disposal:** on a shared/external server, drop only this
+  deployment's recorded databases and unshared roles using its administrative
+  connection; never delete a shared cluster. For a dedicated two-service
+  Compose deployment, after the sweep and the final-backup decision, remove
+  its containers/network and then only the exact data volume recorded from
+  PostgreSQL's mounts. Check the volume is exclusive to this deployment
+  before deleting it; do not guess its project-prefixed name or prune Docker
+  globally. This destroys the dedicated PostgreSQL cluster's data:
+
+  ```sh
+  docker compose --profile app down
+  docker volume inspect "<recorded-exact-data-volume-name>"
+  docker volume rm "<recorded-exact-data-volume-name>"
+  ```
+
+- **Phase 6, backups:** dispose of every recorded local and off-host dump,
+  snapshot and retained copy through its owner, including restore/drill
+  databases. Use the actual backup locations, not an assumed
+  `/var/backups/overflow`; retention alone is not disposal.
+- **Phase 7, secrets/configuration:** remove the deployment's `.env`, Compose
+  overrides containing credentials, mounted App key material, operator
+  environment files and retained secret copies at their recorded locations.
+  Close the external destinations and revoke credentials as the phase below
+  describes where those integrations were supplied.
+- **Phase 8, remaining stores:** remove the operator checkout, deployment
+  files, exclusive images by recorded image ID, other deployment-owned
+  volumes/bind mounts and log copies. Shared images and shared runtime/proxy
+  infrastructure remain; record log retention/disposal decisions for the
+  operator's logging backend rather than assuming journald owns the logs.
+- **Phase 9, verification:** verify the recorded container IDs and exclusive
+  volumes no longer exist (`docker inspect` and `docker volume inspect` must
+  fail for those exact identifiers); for external PostgreSQL, query that
+  server for the recorded databases/roles. Verify the webhook sweep, deleted
+  applications, backup destinations, scheduler removal, proxy/TLS retirement
+  and secret-file disposal against the preflight inventory. File the results
+  off the retired deployment.
+
+**Default host deployment.** The remaining commands use the systemd units,
+local PostgreSQL cluster and paths of the host route.
 
 This runbook disposes of the deployment's stores. Every store gets a disposal
 step in the phase named here, or a named decision not to dispose:
