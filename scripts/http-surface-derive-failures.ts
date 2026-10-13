@@ -14,7 +14,8 @@ import ts from "typescript";
  * src/app/<path>/route.ts (a "<id>" segment is the "[id]" directory), and
  * follows its import graph:
  *
- * - followed: static `import` and `export … from` declarations, `import x =
+ * - followed: static `import` and `export … from` declarations (including
+ *   declarations with only inline type-marked bindings), `import x =
  *   require(…)`, direct `require(…)` (transparent wrappers are normalized),
  *   and `import(…)` with a literal specifier, whose specifier is
  *   `@/…` (src/), `./…` or `../…` and resolves to a .ts/.tsx module under src/
@@ -28,7 +29,8 @@ import ts from "typescript";
  *   other than direct calls, module.require/module aliases, and createRequire
  *   constructors or loader namespaces are refused. Locally bound names and
  *   erased type references are distinguished by TypeScript symbol identity.
- *   Type-only declarations/specifiers never enter the runtime reference walk;
+ *   Whole type-only declarations and type-marked bindings are erased, but
+ *   inline bindings leave the runtime module edge intact in the updater's Node loader;
  *   globalThis/global/self require properties are refused at their access.
  *
  * In every reached module each call to `errorResponse` is recorded as
@@ -140,11 +142,6 @@ function isFreeLoader(symbol: ts.Symbol | undefined): boolean {
     (ts.getCombinedModifierFlags(declaration) & ts.ModifierFlags.Ambient) !== 0);
 }
 
-/** Inline type specifiers carry no runtime edge; empty import/export lists retain side effects. */
-function onlyTypeSpecifiers(bindings: ts.NamedImports | ts.NamedExports): boolean {
-  return bindings.elements.length > 0 && bindings.elements.every((binding) => binding.isTypeOnly);
-}
-
 function isGlobalHost(expression: ts.Expression, checker: ts.TypeChecker): boolean {
   const host = unwrap(expression);
   if (!ts.isIdentifier(host) || !["globalThis", "global", "self"].includes(host.text)) return false;
@@ -190,16 +187,14 @@ function moduleReferences(
     if (ts.isTypeNode(node) ||
         ((ts.isExportSpecifier(node) || ts.isImportSpecifier(node)) && node.isTypeOnly)) return;
     if (ts.isImportDeclaration(node)) {
-      const clause = node.importClause;
-      const bindings = clause?.namedBindings;
-      if (clause?.isTypeOnly || (!clause?.name && bindings && ts.isNamedImports(bindings) && onlyTypeSpecifiers(bindings))) return;
+      if (node.importClause?.isTypeOnly) return;
       if (ts.isStringLiteral(node.moduleSpecifier)) {
         references.push({ node, specifier: node.moduleSpecifier.text, declaration: node });
       }
       return;
     }
     if (ts.isExportDeclaration(node)) {
-      if (node.isTypeOnly || (node.exportClause && ts.isNamedExports(node.exportClause) && onlyTypeSpecifiers(node.exportClause))) return;
+      if (node.isTypeOnly) return;
       if (node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier)) {
         if (nodeModule(node.moduleSpecifier.text) && (!node.exportClause || !ts.isNamedExports(node.exportClause) ||
             node.exportClause.elements.some((item) => !item.isTypeOnly &&
