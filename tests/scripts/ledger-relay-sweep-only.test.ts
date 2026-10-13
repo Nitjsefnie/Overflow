@@ -1,3 +1,4 @@
+import { appSuiteListing } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -46,6 +47,8 @@ function makeFetch(outcomes: Outcome[]) {
   const fn = (async (url: unknown, init?: RequestInit) => {
     const rendered = typeof url === "string" ? url : String(url);
     requests.push({ url: rendered, init: init ?? {} });
+      const suites = appSuiteListing(rendered);
+      if (suites !== undefined) return new Response(JSON.stringify(suites));
     const outcome = outcomes.shift();
     if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
     if (rendered.endsWith("/check-runs") && init?.method === "POST" && outcome.status === 201) {

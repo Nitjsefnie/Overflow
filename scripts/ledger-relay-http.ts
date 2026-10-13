@@ -1,7 +1,7 @@
 // All relay requests share a run deadline, per-attempt timeout and bounded
 // retries. An ambiguous check-run write is read back before another write.
 import { attestsConcludedCheck, compareProducerIdentities, identityFromExternalId,
-  type CheckRunPostResult, type SweepApi } from "./ledger-relay-producers.ts";
+  readAppCheckRuns, type CheckRunPostResult, type SweepApi } from "./ledger-relay-producers.ts";
 
 export const API_ROOT = "https://api.github.com";
 export const API_HEADERS = {
@@ -96,15 +96,12 @@ export function sweepApi(deps: RelayHttpDeps, repo: string, appId: string, auth:
     postCheckRun: (body, what, historyBound) => apiCall<CheckRunPostResult>(deps, {
       url: `${API_ROOT}/repos/${repo}/check-runs`, method: "POST", headers, body: JSON.stringify(body),
     }, what, true, async () => {
-      const latest = await get<{ check_runs?: unknown }>(
-        `${API_ROOT}/repos/${repo}/commits/${body.head_sha}/check-runs?app_id=${appId}&filter=latest&per_page=100`,
-        `the ledger App's latest check-runs after an ambiguous write of ${body.name}`,
-      );
-      if (!Array.isArray(latest?.check_runs)) throw new Error("the ambiguous-write re-read returned no check_runs array");
+      const latest = await readAppCheckRuns({ api: { get }, apiRoot: API_ROOT, repo, appId }, String(body.head_sha));
+      if (latest === undefined) throw new Error("the ambiguous-write re-read returned no check_runs array");
       const intended = identityFromExternalId(body.external_id);
       if (intended === undefined) throw new Error("the ambiguous write has no intended producer identity");
       let committed = false;
-      for (const entry of latest.check_runs) {
+      for (const entry of latest) {
         if (typeof entry !== "object" || entry === null) continue;
         const check = entry as {
           name?: unknown; external_id?: unknown; status?: unknown; conclusion?: unknown; app?: { id?: unknown };

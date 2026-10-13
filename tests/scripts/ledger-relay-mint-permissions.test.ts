@@ -1,3 +1,4 @@
+import { appSuiteListing } from "./ledger-relay-check-fixtures.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
@@ -39,7 +40,8 @@ const APP_TOKEN_CALL_PERMISSIONS: Record<string, readonly string[]> = {
   "GET run": ["actions:read"],
   "GET jobs": ["actions:read"],
   "GET runs listing": ["actions:read"],
-  "GET commit check-runs": ["checks:read"],
+  "GET commit check-suites": ["checks:read"],
+  "GET suite check-runs": ["checks:read"],
   "POST check-runs": ["checks:write"],
   "GET commit pulls": ["pull_requests:read"],
   "GET fork-head pulls": ["pull_requests:read"],
@@ -81,6 +83,8 @@ function makeFetch(outcomes: Outcome[]) {
   const fn = vi.fn(async (url: unknown, init?: RequestInit) => {
     const rendered = typeof url === "string" ? url : String(url);
     requests.push({ url: rendered, init: init ?? {} });
+      const suites = appSuiteListing(rendered);
+      if (suites !== undefined) return new Response(JSON.stringify(suites));
     const outcome = outcomes.shift();
     if (!outcome) throw new Error(`unexpected fetch: ${rendered}`);
     if ("fail" in outcome) throw outcome.fail;
@@ -283,8 +287,11 @@ function classifyCall(url: string, method: string): string | undefined {
   }
   if (method === "GET" && path.startsWith(`${repo}/actions/runs/`)) return "GET run";
   if (method === "GET" && path === `${repo}/actions/runs`) return "GET runs listing";
-  if (method === "GET" && path.startsWith(`${repo}/commits/`) && path.endsWith("/check-runs")) {
-    return "GET commit check-runs";
+  if (method === "GET" && path.startsWith(`${repo}/commits/`) && path.endsWith("/check-suites")) {
+    return "GET commit check-suites";
+  }
+  if (method === "GET" && path.startsWith(`${repo}/check-suites/`) && path.endsWith("/check-runs")) {
+    return "GET suite check-runs";
   }
   if (method === "GET" && path.startsWith(`${repo}/commits/`) && path.endsWith("/pulls")) {
     return "GET commit pulls";

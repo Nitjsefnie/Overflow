@@ -453,6 +453,7 @@ tests/scripts/*
 !tests/scripts/ledger-relay-upstream.test.ts
 !tests/scripts/ledger-relay-publication.test.ts
 !tests/scripts/ledger-relay-http.test.ts
+!tests/scripts/ledger-relay-check-fixtures.ts
 !tests/scripts/resolve-suite-pull-request.test.ts
 !tests/security/
 tests/security/*
