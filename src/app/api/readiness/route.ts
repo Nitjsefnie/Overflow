@@ -33,17 +33,20 @@ import { describeErrorCause } from "@/lib/repositories/register";
  * runs per handler instance no matter how many requests arrive. Requests
  * landing while a probe is in flight share that probe's result, a completed
  * result is reused with zero probe work until the TTL expires, and a cached
- * failure is served with its reason, exactly like a cached success. In the
+ * failure serves the same status-only body as a fresh failure. In the
  * worst case an attacker costs one query every TTL window.
  *
- * Issue 910 adds the why to a not-ready answer: every failure mode maps to a
- * reason string — a rejection renders its redacted cause through
+ * Every failure mode maps to a reason string — a rejection renders its
+ * redacted cause through
  * `describeErrorCause` (imported from the repositories module, PR 887
  * precedent), a schema behind the build names the migrations it is missing,
  * and a probe that outlives the hard cap names the cap — and the reason
- * reaches both the 503 body and the journal, one `console.error` per failed
- * probe at settlement. A TTL-cached failure served inside its window does
- * not log again: only a probe settlement logs. Status codes, cache-control,
+ * reaches only the journal, one `console.error` per failed probe at settlement.
+ * Issue 1030 reverses issue 910's earlier design of including the reason in
+ * the anonymous 503 body: even redacted causes disclose internal hosts, ports
+ * or migration names. Callers receive only { status: "unavailable" }.
+ * A TTL-cached failure served inside its window does not log again: only a
+ * probe settlement logs. Status codes, cache-control,
  * single-flight and TTL semantics are unchanged.
  */
 
@@ -66,7 +69,7 @@ export type Readiness = "ready" | "unavailable";
  * What one probe run concluded. `reason` is present exactly when `status` is
  * `"unavailable"` (issue 910): it names the failing dependency and why —
  * every reason this module produces starts "database: …" — and is rendered
- * into the 503 body and the journal line.
+ * into the journal line alone, never the anonymous 503 body (issue 1030).
  */
 export type ReadinessProbeOutcome = {
   status: Readiness;
@@ -197,8 +200,8 @@ export function createReadinessGetHandler(
           return;
         }
         decided = true;
-        // One consolidated outcome: the reason fallback lives here, so the
-        // body and the journal line derive from the same string.
+        // Supply a fallback reason for the journal; response bodies expose
+        // only the status, including when this outcome is cached.
         const consolidated: ReadinessProbeOutcome =
           outcome.status === "unavailable" && outcome.reason === undefined
             ? { ...outcome, reason: "database: an unavailable probe outcome arrived without a reason" }
@@ -249,7 +252,7 @@ export function createReadinessGetHandler(
     return Response.json(
       outcome.status === "ready"
         ? { status: "ready" }
-        : { status: "unavailable", reason: outcome.reason },
+        : { status: "unavailable" },
       {
         status: outcome.status === "ready" ? 200 : 503,
         headers: { "cache-control": "no-store" },
