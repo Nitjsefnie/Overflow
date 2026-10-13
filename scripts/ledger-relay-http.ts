@@ -9,8 +9,8 @@ export const API_HEADERS = {
   "x-github-api-version": "2022-11-28",
   "cache-control": "no-cache",
 };
-const BACKOFF_MS = [1_000, 2_000];
-const REQUEST_TIMEOUT_MS = 30_000;
+export const BACKOFF_MS = [1_000, 2_000];
+export const REQUEST_TIMEOUT_MS = 30_000;
 export const RUN_DEADLINE_MS = 10 * 60_000;
 
 export interface RelayHttpOptions {
