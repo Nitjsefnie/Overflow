@@ -4,9 +4,10 @@ name: ledger relay
 # Ledger GitHub App (app id 5118623), so branch protection can pin each
 # required context to the App instead of the github-actions app. Every relay
 # start shares one concurrency group: only one relay run writes at a time
-# across the repository. Every start sweeps for producers whose pending relay
-# start was displaced by a newer arrival, deduplicated against the App's own
-# check-runs at each candidate commit. The sweep also re-dispatches eligible
+# across the repository. Up to 100 pending starts wait in FIFO order (ordering
+# is not guaranteed); a full queue cancels the new arrival. Every start sweeps
+# to attest a cancelled arrival's producer within the sweep window, deduplicated
+# against the App's own check-runs at each candidate commit. The sweep also re-dispatches eligible
 # cancelled producer runs while their pull request's head is still live.
 # A workflow_run runs this workflow's definition from the default branch's
 # tip, in the default branch's context, so the pin map and the script executed
@@ -60,11 +61,11 @@ concurrency:
   # Schedule, dispatch with or without run_id, and workflow_run share one
   # literal group: only one relay run writes at a time across the repository.
   group: ledger-relay
-  # `false` preserves the running start. GitHub keeps at most one pending run
-  # per group, and a newer arrival replaces the pending one. Every start
-  # sweeps, so the start that displaced a pending start attests the displaced
-  # start's producer.
+  # `false` preserves the running start. Up to 100 pending starts wait in FIFO
+  # order (ordering is not guaranteed); a full queue cancels the new arrival.
+  # Every start sweeps to attest a cancelled arrival's producer within the sweep window.
   cancel-in-progress: false
+  queue: max
 
 jobs:
   # Never named after a required context: protection matches a required check
