@@ -2,7 +2,7 @@
 
 This runbook retires a deployment of Overflow for good. It stops the service
 and its timers, deletes the GitHub App and the OAuth application, sweeps the
-webhooks Overflow created on member repositories, drops the database and both
+webhooks Overflow created on member GitHub repositories and GitLab projects, drops the database and both
 database roles, and destroys every store the deployment holds on the host,
 with a disposal step or a recorded non-disposal decision for each. It
 complements the other deployment procedures: [README.md](README.md) stands a
@@ -51,7 +51,7 @@ something that cannot be recovered afterwards:
    stores while their disposal is under way.
 3. The GitHub App and webhook enumeration (phase 4) precedes the database
    drop (phase 5). The local database is the only record of which member
-   repositories carry an Overflow webhook; the drop destroys
+   repositories and GitLab projects carry an Overflow webhook; the drop destroys
    `registered_repositories` and `abandoned_webhook_cleanups`, and GitHub
    offers no reverse index from a deleted app to the repository webhooks its
    tokens created.
@@ -197,11 +197,14 @@ Preconditions:
   fleet's mailbox CLI. The host-side files die in phase 7; the destinations
   themselves are closed off the host, by whoever holds them.
 - A way to remove the webhooks of phase 4: an administrator of each member
-  repository still carrying an Overflow webhook. On a deployment whose
+  GitHub repository or a Maintainer/Owner of each GitLab project still carrying
+  an Overflow webhook, with access to its recorded GitLab instance. On a deployment whose
   registrations live in the sponsors' own repositories, that is the sponsors,
   so the sweep is a request to each sponsor plus an operator sweep for the
-  repositories whose sponsors cannot act. State which arrangement applies in
-  the preflight record.
+  repositories/projects whose sponsors cannot act. State which arrangement applies in
+  the preflight record. For GitLab, arrange an operator-supplied PAT that can
+  delete project hooks on each instance; the phase-4 prompt reads it without
+  echoing or saving it in the record.
 
 Confirm the runbook applies to what is actually on the host before starting,
 read-only:
@@ -244,12 +247,13 @@ du -sh /var/backups/overflow /etc/overflow /srv/overflow \
 # The registrations whose webhooks phase 4 sweeps. Run before anything is
 # destroyed; the output is the sweep list.
 sudo -u postgres psql -d overflow -tAc \
-  "select owner_name, provider, github_repository_id, github_webhook_id
+  "select owner_name, provider, instance_url, forge_project_id, github_repository_id, github_webhook_id
      from registered_repositories where unregistered_at is null order by owner_name"
 
 # Webhooks a failed registration may have orphaned; phase 4 drains these too.
 sudo -u postgres psql -d overflow -tAc \
-  "select owner_name, github_repository_id, webhook_id from abandoned_webhook_cleanups order by created_at"
+  "select owner_name, provider, instance_url, github_repository_id as forge_project_id, webhook_id
+     from abandoned_webhook_cleanups order by created_at"
 
 # The secret files' names and modes — never their contents.
 ls -la /etc/overflow /etc/overflow/github-app
@@ -333,7 +337,7 @@ is host state, not a store of the product.
 ## 4. GitHub App deletion and webhook sweep
 
 Do this before the database drop. The local database is the only record of
-which member repositories carry an Overflow webhook:
+which member repositories and GitLab projects carry an Overflow webhook:
 `registered_repositories` holds one row per registration, and
 `abandoned_webhook_cleanups` holds webhooks a failed registration created
 and never cleaned up — written before the compensating deletion was
@@ -345,47 +349,129 @@ phase re-runs it live and works through it.
 
 ```sh
 sudo -u postgres psql -d overflow -P footer=off -c \
-  "select owner_name, provider, github_repository_id, github_webhook_id
+  "select owner_name, provider, instance_url, forge_project_id, github_repository_id, github_webhook_id
      from registered_repositories where unregistered_at is null order by owner_name"
 
 sudo -u postgres psql -d overflow -P footer=off -c \
-  "select owner_name, github_repository_id, webhook_id
+  "select owner_name, provider, instance_url, github_repository_id as forge_project_id, webhook_id
      from abandoned_webhook_cleanups order by created_at"
 ```
 
 Sweep the webhooks first, while the database is still there to re-run the
-enumeration against. `owner_name` carries the repository's `owner/name`
-path, so each row names its own delete call:
+enumeration against. Branch on `provider`: GitHub addresses `owner_name` as
+`owner/name`; GitLab addresses the recorded `instance_url` and numeric project
+id. A registered GitLab hook's id is stored in `github_webhook_id` too.
+The abandoned table has no `forge_project_id` column: its
+`github_repository_id` carries the GitLab project id, so the select aliases
+it as `forge_project_id`. A null registration hook id means no hook was
+installed; skip that row, not a DELETE with an empty id.
+
+The product normally decrypts the sponsor's stored GitLab PAT from
+`user_forge_identities` for the matching instance and uses Bearer
+authentication to delete the hook. The service is stopped now: use a PAT
+supplied by the operator (or have the sponsor perform the deletion), with
+permission to manage hooks on that project. GitLab's
+[project-webhook API](https://docs.gitlab.com/api/project_webhooks/)
+requires a project Maintainer/Owner or administrator. A token accepted for
+identity linking can have only `read_api`; successful linking alone does not
+prove it can delete hooks. Supply a token with write API access. Do not
+extract member token ciphertext into the preflight record, paste tokens into
+commands/history, or run this block with shell tracing enabled. Run in Bash
+with an interactive terminal; the prompt asks for the correct instance and
+project on each GitLab row and unsets the token after the request.
 
 ```sh
-sudo -u postgres psql -d overflow -tAc \
-  "select owner_name, github_webhook_id from registered_repositories where unregistered_at is null order by owner_name" \
-  | while IFS='|' read -r owner hook_id; do
-      if gh api --method DELETE "repos/${owner}/hooks/${hook_id}" >/dev/null 2>&1; then
-        printf 'deleted webhook %s on %s\n' "$hook_id" "$owner"
-      else
-        printf 'FAILED webhook %s on %s — delete it by hand and record it\n' "$hook_id" "$owner"
-      fi
-    done
+delete_hook() {
+    local owner=$1 provider=$2 instance_url=$3 project_id=$4 hook_id=$5
+    local gitlab_token http_status
+    if [ -z "$hook_id" ]; then
+        printf 'no installed hook on %s (%s)\n' "$owner" "$provider"
+        return 0
+    fi
+    case "$provider" in
+        github)
+            if gh api --method DELETE "repos/${owner}/hooks/${hook_id}" >/dev/null 2>&1; then
+                printf 'deleted GitHub webhook %s on %s\n' "$hook_id" "$owner"
+            else
+                printf 'FAILED GitHub webhook %s on %s — verify/delete by hand and record it\n' "$hook_id" "$owner" >&2
+                return 1
+            fi
+            ;;
+        gitlab)
+            if [ -z "$instance_url" ] || [ -z "$project_id" ]; then
+                printf 'FAILED GitLab target %s — missing instance/project id; investigate before dropping the database\n' "$owner" >&2
+                return 1
+            fi
+            if ! read -r -s -p "GitLab PAT for ${instance_url} project ${project_id} (${owner}): " gitlab_token </dev/tty; then
+                printf 'FAILED to read GitLab PAT for %s\n' "$owner" >&2
+                return 1
+            fi
+            printf '\n' >/dev/tty
+            if ! http_status=$(curl --silent --show-error --max-time 30 \
+                --request DELETE --output /dev/null --write-out '%{http_code}' \
+                --header "Authorization: Bearer ${gitlab_token}" \
+                "${instance_url}/api/v4/projects/${project_id}/hooks/${hook_id}"); then
+                http_status=000
+            fi
+            unset gitlab_token
+            if [[ "$http_status" == 2?? || "$http_status" == 404 ]]; then
+                printf 'deleted/already absent GitLab webhook %s on %s project %s\n' "$hook_id" "$instance_url" "$project_id"
+            else
+                printf 'FAILED GitLab webhook %s on %s project %s (HTTP %s) — delete by hand and record it\n' "$hook_id" "$instance_url" "$project_id" "$http_status" >&2
+                return 1
+            fi
+            ;;
+        *)
+            printf 'FAILED unknown provider %s on %s — investigate before dropping the database\n' "$provider" "$owner" >&2
+            return 1
+            ;;
+    esac
+}
 
-sudo -u postgres psql -d overflow -tAc \
-  "select owner_name, webhook_id from abandoned_webhook_cleanups order by created_at" \
-  | while IFS='|' read -r owner hook_id; do
-      if gh api --method DELETE "repos/${owner}/hooks/${hook_id}" >/dev/null 2>&1; then
-        printf 'deleted abandoned webhook %s on %s\n' "$hook_id" "$owner"
-      else
-        printf 'FAILED abandoned webhook %s on %s — delete it by hand and record it\n' "$hook_id" "$owner"
-      fi
-    done
+if ! registered_hooks=$(sudo -u postgres psql -d overflow -v ON_ERROR_STOP=1 -tAc \
+    "select owner_name, provider, instance_url, forge_project_id, github_webhook_id
+       from registered_repositories where unregistered_at is null order by owner_name"); then
+    printf 'FAILED registration inventory — stop before dropping the database\n' >&2
+    exit 1
+fi
+if ! abandoned_hooks=$(sudo -u postgres psql -d overflow -v ON_ERROR_STOP=1 -tAc \
+    "select owner_name, provider, instance_url, github_repository_id as forge_project_id, webhook_id
+       from abandoned_webhook_cleanups order by created_at"); then
+    printf 'FAILED abandoned-hook inventory — stop before dropping the database\n' >&2
+    exit 1
+fi
+
+sweep_failed=0
+for hooks in "$registered_hooks" "$abandoned_hooks"; do
+    while IFS='|' read -r owner provider instance_url project_id hook_id; do
+        [ -n "$owner" ] || continue
+        if ! delete_hook "$owner" "$provider" "$instance_url" "$project_id" "$hook_id"; then
+            sweep_failed=1
+        fi
+    done <<< "$hooks"
+done
+test "$sweep_failed" -eq 0
 ```
 
-A 404 is a success here — GitHub answers 404 for an absent webhook, and an
-absent webhook is what the sweep wants. Where the token does not administer
-the repository the deletion fails: fall back to the sponsor route — the
-sponsor unregisters from the dashboard, which deletes the webhook through
-the product — or an administrator of that repository deletes the webhook in
-the repository's settings, and the deletion is recorded in the preflight
-record. The record is this phase's auditable artifact.
+GitLab 2xx or 404 completes that row, matching the product's treatment of a
+missing hook/project during unregistration. A 401/403, rate limit, transport
+failure or other status is recorded as a failure. A GitHub CLI deletion
+failure also needs verification, including an already-absent hook. Have the
+sponsor or administrator verify/remove it in the repository/project's
+webhook settings on the recorded instance. A 404 can hide missing access;
+verify with an authorized project/repository administrator before recording
+absence. The dashboard cannot unregister anything after phase 3 stopped the
+service. Keep the database until every inventoried hook is confirmed removed
+or already absent, and record each outcome in the preflight record.
+
+Notify members to **revoke every GitLab PAT they supplied to Overflow on each
+instance**, after any hook deletion that needs that PAT is finished. They
+use that instance's
+[personal access token settings](https://docs.gitlab.com/user/profile/personal_access_tokens/#revoke-a-personal-access-token).
+The database drop destroys the stored token ciphertext; deleting the GitHub
+applications below does not revoke a GitLab PAT. After phase 9 verification,
+revoke any temporary operator PAT created for this sweep as well. Record
+the notice and disposal outcomes, never token values.
 
 Then delete the applications, in GitHub's developer settings:
 
@@ -770,6 +856,32 @@ gh api "repos/<owner>/<name>/hooks" --jq '.[] | .config.url'
 ```text
 No URL in the output carries the deployment's GITHUB_WEBHOOK_URL or a
 hook=<uuid> parameter: no Overflow webhook remains.
+```
+
+For GitLab, use the preflight record's instance and numeric project id,
+including projects that appeared only in the abandoned-hook inventory. List
+their hooks with an authorized PAT, as in phase 4. Read every page: increment
+`page` and repeat the request until it returns an empty array. A failed
+request is not evidence of absence. None of the returned hook URLs may point
+at the retired deployment's `GITLAB_WEBHOOK_URL` (including the `hook=<uuid>`
+parameter registration appends). Leave unrelated hooks alone.
+
+```sh
+instance_url="<recorded GitLab instance URL>"
+project_id="<recorded numeric GitLab project id>"
+page=1
+if ! read -r -s -p "GitLab PAT for ${instance_url}: " gitlab_token </dev/tty; then
+    exit 1
+fi
+printf '\n' >/dev/tty
+if ! curl --fail --silent --show-error --max-time 30 \
+    --header "Authorization: Bearer ${gitlab_token}" \
+    "${instance_url}/api/v4/projects/${project_id}/hooks?per_page=100&page=${page}"; then
+    unset gitlab_token
+    printf 'FAILED GitLab verification — check access and verify with the project administrator\n' >&2
+    exit 1
+fi
+unset gitlab_token
 ```
 
 The applications are gone: neither the GitHub App nor the OAuth application

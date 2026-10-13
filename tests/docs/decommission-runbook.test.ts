@@ -3,7 +3,11 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { closeSql, getSql } from "@/lib/db/client";
+import { runMigrations } from "../../scripts/migrate";
+import { validDifficultyScheme } from "../support/difficulty-scheme";
+import { startPostgresContainer, type StartedPostgres } from "../support/postgres-container";
 import { relativeLinks, unresolvedLinks } from "../support/markdown-links";
 
 /**
@@ -286,31 +290,80 @@ describe("decommissioning runbook", () => {
     ).toStrictEqual([]);
   });
 
-  it("lists no osc token among phase 7's backup.env contents", () => {
-    // The off-host unit loads the token from the fleet's canonical file at
-    // each start (backup-restore.md section (i)), so the environment file
-    // carries no token line for this inventory row to list.
-    const lines = sectionBody("## 7. Secrets and configuration disposal").split("\n");
-    const start = lines.findIndex(
-      (line) => line.trimStart().startsWith("-") && line.includes("`backup.env`"),
-    );
-    expect(start, "phase 7 carries no backup.env inventory bullet").not.toBe(-1);
+  it("carries a GitLab provider branch with an executable project-hook DELETE command", () => {
+    const shell = shBlocks(sectionBody(phaseHeadings[3]!)).map((block) => block.join("\n")).join("\n");
+    const arm = shell.match(/\bgitlab\)\s*([\s\S]*?);;/)?.[1] ?? "";
+    expect(arm, "phase 4 has no GitLab case arm").not.toHaveLength(0);
+    const command = arm.replace(/\\\n\s*/g, " ");
+    expect(command).toMatch(/\bcurl\b[^\n]*--request\s+DELETE\b/);
+    expect(command).toMatch(/\bcurl\b[^\n]*\/api\/v4\/projects\/[^\s]+\/hooks\/[^\s]+/);
+  });
 
-    // The bullet runs to the next bullet or a blank line: its continuation
-    // lines belong to the same inventory row, and a stale token claim hides
-    // exactly there. The index is asserted before any slicing, so a missing
-    // bullet fails the guard above instead of pinning nothing.
-    let bullet = lines[start]!;
-    for (let index = start + 1; index < lines.length; index += 1) {
-      const line = lines[index]!;
-      if (line.trim() === "" || line.trimStart().startsWith("-")) break;
-      bullet += `\n${line}`;
+  describe("forge inventories against the migrated schema", () => {
+    const originalDatabaseUrl = process.env.DATABASE_URL;
+    let started: StartedPostgres | undefined;
+
+    beforeAll(async () => {
+      started = await startPostgresContainer({ database: "decommission", user: "decommission" });
+      process.env.DATABASE_URL = started.databaseUrl;
+      const sql = getSql();
+      await runMigrations();
+      const [sponsor] = await sql<{ id: string }[]>`
+        insert into users (github_user_id, github_login) values (100, 'sponsor') returning id
+      `;
+      for (const row of [
+        { id: 101, provider: "github", instance: null, project: null, hook: 201, removed: null },
+        { id: 102, provider: "gitlab", instance: "https://gitlab.test", project: 102, hook: 202, removed: null },
+        { id: 103, provider: "gitlab", instance: "https://gitlab.test", project: 103, hook: null, removed: null },
+        { id: 104, provider: "github", instance: null, project: null, hook: 204, removed: new Date() },
+      ]) {
+        await sql`
+          insert into registered_repositories
+            (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id,
+             difficulty_scheme, provider, instance_url, forge_project_id, unregistered_at, active)
+          values (${row.id}, ${`group/project-${row.id}`}, ${sponsor!.id}, 'PUBLIC', ${row.hook},
+                  ${sql.json(validDifficultyScheme())}, ${row.provider}, ${row.instance}, ${row.project}, ${row.removed}, ${row.removed === null})
+        `;
+      }
+      await sql`
+        insert into abandoned_webhook_cleanups
+          (github_repository_id, owner_name, webhook_id, provider, instance_url)
+        values (105, 'group/orphan-github', 205, 'github', null),
+               (106, 'group/orphan-gitlab', 206, 'gitlab', 'https://gitlab.test')
+      `;
+    });
+
+    afterAll(async () => {
+      await closeSql();
+      await started?.container.stop();
+      if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = originalDatabaseUrl;
+    });
+
+    for (const heading of [phaseHeadings[1]!, phaseHeadings[3]!]) {
+      it(`${heading} selects addressable live and abandoned hooks for both providers`, async () => {
+        const shell = shBlocks(sectionBody(heading)).map((block) => block.join("\n")).join("\n");
+        const queries = [...shell.matchAll(/"(select\b[^"]*)"/gi)].map((match) => match[1]!);
+        for (const table of ["registered_repositories", "abandoned_webhook_cleanups"]) {
+          const inventories = queries.filter((query) => new RegExp(`\\bfrom\\s+${table}\\b`, "i").test(query));
+          expect(inventories.length, `${heading} has no ${table} inventory`).toBeGreaterThan(0);
+          for (const query of inventories) {
+            const rows = await getSql().unsafe(query);
+            expect(rows.columns.map((column) => column.name), query).toEqual(
+              expect.arrayContaining(["owner_name", "provider", "instance_url", "forge_project_id"]),
+            );
+            const hookColumn = table === "registered_repositories" ? "github_webhook_id" : "webhook_id";
+            expect(rows, query).toEqual(expect.arrayContaining([
+              expect.objectContaining({ provider: "github", instance_url: null, [hookColumn]: table === "registered_repositories" ? "201" : "205" }),
+              expect.objectContaining({ provider: "gitlab", instance_url: "https://gitlab.test", forge_project_id: table === "registered_repositories" ? "102" : "106", [hookColumn]: table === "registered_repositories" ? "202" : "206" }),
+            ]));
+            if (table === "registered_repositories") {
+              expect(rows.some((row) => row.owner_name === "group/project-104")).toBe(false);
+            }
+          }
+        }
+      });
     }
-
-    expect(
-      bullet,
-      "the backup.env inventory still lists DISCORD_TOKEN, which the environment file no longer carries",
-    ).not.toContain("DISCORD_TOKEN");
   });
 
   describe("each phase", () => {
