@@ -15,7 +15,8 @@ import ts from "typescript";
  * follows its import graph:
  *
  * - followed: static `import` and `export … from` declarations, `import x =
- *   require(…)`, bare `require(…)`, and `import(…)` with a literal specifier, whose specifier is
+ *   require(…)`, direct `require(…)` (transparent wrappers are normalized),
+ *   and `import(…)` with a literal specifier, whose specifier is
  *   `@/…` (src/), `./…` or `../…` and resolves to a .ts/.tsx module under src/
  *   (as written, or with .ts, .tsx, /index.ts or /index.tsx appended);
  * - not followed: `import type` / `export type` declarations (erased at
@@ -23,7 +24,10 @@ import ts from "typescript";
  *   files (JSON);
  * - refused (the derivation throws naming file:line): an `import(…)` whose
  *   specifier is not a literal (also refused for `require(…)`), and an
- *   `@/`/relative specifier that resolves to nothing.
+ *   `@/`/relative specifier that resolves to nothing. Free require references
+ *   other than direct calls, module.require/module aliases, and createRequire
+ *   constructors or loader namespaces are refused. Locally bound names and
+ *   erased type references are distinguished by TypeScript symbol identity.
  *
  * In every reached module each call to `errorResponse` is recorded as
  * "<status> <CODE>", plus " +<key>" for each field of a literal `extra`
@@ -94,33 +98,128 @@ function resolveModule(root: string, from: ts.SourceFile, node: ts.Node, specifi
 
 type ModuleReference = { node: ts.Node; specifier: string; declaration?: ts.ImportDeclaration | ts.ExportDeclaration };
 
-/** Every runtime module reference in a file: the edges the walk may follow. */
-function moduleReferences(root: string, source: ts.SourceFile): ModuleReference[] {
+/** Bind the single parsed module before graph traversal; no libraries or unresolved imports are loaded. */
+function sourceChecker(source: ts.SourceFile): ts.TypeChecker {
+  const options: ts.CompilerOptions = { noLib: true, noResolve: true, jsx: ts.JsxEmit.Preserve };
+  const host = ts.createCompilerHost(options);
+  host.getSourceFile = (file) => file === source.fileName ? source : undefined;
+  return ts.createProgram([source.fileName], options, host).getTypeChecker();
+}
+
+/** The enclosing transparent wrappers, so a loader reference can be attributed to its call. */
+function outerExpression(node: ts.Expression): ts.Expression {
+  let outer = node;
+  while ((ts.isParenthesizedExpression(outer.parent) || ts.isAsExpression(outer.parent) ||
+      ts.isSatisfiesExpression(outer.parent) || ts.isTypeAssertionExpression(outer.parent) ||
+      ts.isNonNullExpression(outer.parent)) && outer.parent.expression === outer) {
+    outer = outer.parent;
+  }
+  return outer;
+}
+
+function referenceSymbol(checker: ts.TypeChecker, node: ts.Identifier): ts.Symbol | undefined {
+  return ts.isShorthandPropertyAssignment(node.parent) ? checker.getShorthandAssignmentValueSymbol(node.parent)
+    : ts.isExportSpecifier(node.parent) ? checker.getExportSpecifierLocalTargetSymbol(node.parent)
+      : checker.getSymbolAtLocation(node);
+}
+
+/** Declaration/property names are not references to a free runtime binding. */
+function isRuntimeReference(node: ts.Identifier): boolean {
+  const parent = node.parent;
+  return !((ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+    (ts.isPropertyAssignment(parent) && parent.name === node) ||
+    (ts.isBindingElement(parent) && parent.propertyName === node) ||
+    ((ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isFunctionDeclaration(parent) ||
+      ts.isClassDeclaration(parent)) && parent.name === node));
+}
+
+function isFreeLoader(symbol: ts.Symbol | undefined): boolean {
+  return symbol === undefined || (symbol.declarations ?? []).some((declaration) =>
+    (ts.getCombinedModifierFlags(declaration) & ts.ModifierFlags.Ambient) !== 0);
+}
+
+/** Every runtime module reference, including unsupported Node loader operations that must refuse. */
+function moduleReferences(
+  root: string,
+  source: ts.SourceFile,
+  checker: ts.TypeChecker = sourceChecker(source),
+): ModuleReference[] {
   const references: ModuleReference[] = [];
+  const constructors = new Set<ts.Symbol>();
+  const loaderNamespaces = new Set<ts.Symbol>();
+  const nodeModule = (name: string): boolean => name === "node:module" || name === "module";
+  const refuse = (node: ts.Node, operation: string): never => {
+    throw new Error(`${location(root, source, node)}: ${operation} cannot be attributed to a static module; ` +
+      'use named imports or a direct require("<static specifier>") so HTTP failure answers can be recorded.');
+  };
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly ||
+        !ts.isStringLiteral(statement.moduleSpecifier) || !nodeModule(statement.moduleSpecifier.text)) continue;
+    const clause = statement.importClause;
+    const bindings = clause?.namedBindings;
+    for (const name of [clause?.name, bindings && ts.isNamespaceImport(bindings) ? bindings.name : undefined]) {
+      const symbol = name && checker.getSymbolAtLocation(name);
+      if (symbol) loaderNamespaces.add(symbol);
+    }
+    if (bindings && ts.isNamedImports(bindings)) {
+      for (const binding of bindings.elements) {
+        if (binding.isTypeOnly) continue;
+        const imported = (binding.propertyName ?? binding.name).text;
+        const symbol = checker.getSymbolAtLocation(binding.name);
+        if (symbol && imported === "createRequire") constructors.add(symbol);
+        if (symbol && ["default", "Module", "*"].includes(imported)) loaderNamespaces.add(symbol);
+      }
+    }
+  }
   const visit = (node: ts.Node): void => {
+    if (ts.isTypeNode(node)) return;
     if (ts.isImportDeclaration(node)) {
       if (!node.importClause?.isTypeOnly && ts.isStringLiteral(node.moduleSpecifier)) {
         references.push({ node, specifier: node.moduleSpecifier.text, declaration: node });
       }
-    } else if (ts.isExportDeclaration(node)) {
+      return;
+    }
+    if (ts.isExportDeclaration(node)) {
       if (!node.isTypeOnly && node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier)) {
+        if (nodeModule(node.moduleSpecifier.text) && (!node.exportClause || !ts.isNamedExports(node.exportClause) ||
+            node.exportClause.elements.some((item) => !item.isTypeOnly &&
+              ["createRequire", "Module", "default"].includes((item.propertyName ?? item.name).text)))) {
+          refuse(node, "a re-export of Node's CommonJS loader");
+        }
         references.push({ node, specifier: node.moduleSpecifier.text, declaration: node });
       }
     } else if (ts.isImportEqualsDeclaration(node)) {
       if (!node.isTypeOnly && ts.isExternalModuleReference(node.moduleReference) &&
           ts.isStringLiteral(node.moduleReference.expression)) {
+        if (nodeModule(node.moduleReference.expression.text)) refuse(node, "an import-equals of Node's CommonJS loader");
         references.push({ node, specifier: node.moduleReference.expression.text });
       }
-    } else if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(node.expression) && node.expression.text === "require"))) {
-      const argument = node.arguments[0];
-      if (argument === undefined || !(ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument))) {
-        throw new Error(
-          `${location(root, source, node)}: ${node.expression.getText(source)}() without a literal specifier cannot be followed; ` +
-            "name the module literally so the HTTP surface derivation can record its failure answers.",
-        );
+      return;
+    } else if (ts.isCallExpression(node)) {
+      const callee = unwrap(node.expression);
+      const isRequire = ts.isIdentifier(callee) && callee.text === "require" && isFreeLoader(referenceSymbol(checker, callee));
+      if (callee.kind === ts.SyntaxKind.ImportKeyword || isRequire) {
+        const argument = node.arguments[0];
+        if (argument === undefined || !(ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument))) {
+          return refuse(node, `${isRequire ? "require" : "import"}() without a literal specifier`);
+        }
+        if (nodeModule(argument.text)) return refuse(node, "a dynamic load of Node's CommonJS loader");
+        references.push({ node, specifier: argument.text });
       }
-      references.push({ node, specifier: argument.text });
+    } else if (ts.isIdentifier(node) && isRuntimeReference(node)) {
+      const symbol = referenceSymbol(checker, node);
+      if ((symbol !== undefined && constructors.has(symbol)) || (isFreeLoader(symbol) && node.text === "createRequire")) {
+        return refuse(node, "a createRequire reference");
+      }
+      if ((symbol !== undefined && loaderNamespaces.has(symbol)) || (isFreeLoader(symbol) && node.text === "module")) {
+        return refuse(node, "a Node module loader reference");
+      }
+      if (isFreeLoader(symbol) && node.text === "require") {
+        const expression = outerExpression(node);
+        if (!ts.isCallExpression(expression.parent) || expression.parent.expression !== expression) {
+          return refuse(node, "a require value or alias");
+        }
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -239,7 +338,7 @@ function failureAnswer(
 function moduleFailureAnswers(root: string, checker: ts.TypeChecker, source: ts.SourceFile): string[] {
   const helperFile = join(root, helperModule);
   const bindings = new Map<ts.Symbol, string>();
-  for (const reference of moduleReferences(root, source)) {
+  for (const reference of moduleReferences(root, source, checker)) {
     const declaration = reference.declaration;
     if (resolveModule(root, source, reference.node, reference.specifier) !== helperFile) {
       continue;
