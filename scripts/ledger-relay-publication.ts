@@ -10,6 +10,7 @@ import {
   validateJobs, producerExternalId, type CheckRunPostResult, type CheckRunSuppression,
   type ProducerDeps, type SweepCandidate,
 } from "./ledger-relay-producers.ts";
+import { BACKOFF_MS, REQUEST_TIMEOUT_MS } from "./ledger-relay-http.ts";
 import { resolveWorkflowRunHead, type UpstreamPublicationCheck } from "./ledger-relay-upstream.ts";
 import { readSuiteRuns, SuiteHistoryBoundError, suiteRunsUrl } from "./pr-suite-supersession.ts";
 
@@ -71,17 +72,44 @@ async function writeCheck(
 interface ResolvedCandidate { run: SweepCandidate; check?: UpstreamPublicationCheck; historyBound?: string }
 
 /**
+ * Rule: the mirror starts a selection request (the listing or a newer
+ * candidate's resolution) only while the remaining run budget exceeds this
+ * reserve, so the trigger's own decision can still be posted before the
+ * deadline. Each remaining trigger request counts at its full bound: jobs
+ * read (1), App floor read (check-suites + check-runs, 2), upstream recheck
+ * (upstream run + suite listing, 2) and the POST (1), plus one selection
+ * request already in flight and the retry backoff:
+ * 7 x 30 s + (1 s + 2 s) = 213 s.
+ */
+export const MIRROR_TRIGGER_RESERVE_MS = 7 * REQUEST_TIMEOUT_MS + BACKOFF_MS.reduce((sum, delay) => sum + delay, 0);
+
+/** The mirror's dependencies; `remainingMs` reads the effective run deadline's remaining budget. */
+export type MirrorDeps = ProducerDeps & { remainingMs?: () => number };
+
+class MirrorReserveReached extends Error {}
+
+/**
  * The newest completed eligible producer at this head and context. Only
  * candidates strictly newer than the trigger are resolved, newest-first and
- * one at a time, stopping at the first that resolves to this head; older
- * candidates are left to the sweep. Unfinished runs are ignored.
+ * one at a time, stopping at the first that resolves to this head or at the
+ * budget reserve; older candidates are left to the sweep. Unfinished runs are
+ * ignored.
  */
 async function newestCandidate(
-  deps: ProducerDeps, headSha: string, context: string, trigger: ResolvedCandidate,
+  deps: MirrorDeps, headSha: string, context: string, trigger: ResolvedCandidate,
 ): Promise<ResolvedCandidate | undefined> {
-  const listing = await deps.api.get<Record<string, unknown>>(
-    `${deps.apiRoot}/repos/${deps.repo}/actions/runs?per_page=100`, "the pre-write producer listing",
-  );
+  const triggerResult = trigger.run.status === "completed" ? trigger : undefined;
+  const get = async <T>(url: string, what: string, retryTransient?: boolean): Promise<T> => {
+    if (deps.remainingMs !== undefined && deps.remainingMs() <= MIRROR_TRIGGER_RESERVE_MS) throw new MirrorReserveReached();
+    return deps.api.get<T>(url, what, retryTransient);
+  };
+  let listing: Record<string, unknown>;
+  try {
+    listing = await get(`${deps.apiRoot}/repos/${deps.repo}/actions/runs?per_page=100`, "the pre-write producer listing");
+  } catch (error) {
+    if (error instanceof MirrorReserveReached) return triggerResult;
+    throw error;
+  }
   if (!Array.isArray(listing?.workflow_runs)) throw new Error("the pre-write producer listing returned no runs array");
   // selectSweepCandidates orders by run id, then attempt, newest first.
   const newer = selectSweepCandidates(listing.workflow_runs, { [context]: deps.pinMap[context] }, "")
@@ -90,14 +118,21 @@ async function newestCandidate(
     candidate.status = "completed";
     let entry: ResolvedCandidate = { run: candidate };
     if (candidate.workflowRun === true) {
-      const upstream = await resolveWorkflowRunHead(
-        candidate.runId, deps.repositoryId,
-        (id) => deps.api.get(`${deps.apiRoot}/repos/${deps.repo}/actions/runs/${id}`, `the workflow run ${id}`),
-        undefined,
-        (sha) => readSuiteRuns((page) => deps.api.get(
-          suiteRunsUrl(deps.apiRoot, deps.repo, sha, page), "the suite supersession listing", false,
-        )),
-      );
+      let upstream: Awaited<ReturnType<typeof resolveWorkflowRunHead>>;
+      try {
+        upstream = await resolveWorkflowRunHead(
+          candidate.runId, deps.repositoryId,
+          (id) => get(`${deps.apiRoot}/repos/${deps.repo}/actions/runs/${id}`, `the workflow run ${id}`),
+          undefined,
+          (sha) => readSuiteRuns((page) => get(
+            suiteRunsUrl(deps.apiRoot, deps.repo, sha, page), "the suite supersession listing", false,
+          )),
+        );
+      } catch (error) {
+        // The reserve stops selection; the trigger's decision is posted instead.
+        if (error instanceof MirrorReserveReached) break;
+        throw error;
+      }
       if (upstream.supersededBy !== undefined) continue;
       Object.assign(candidate, {
         headSha: upstream.headSha, runAttempt: upstream.run.runAttempt,
@@ -111,12 +146,12 @@ async function newestCandidate(
     if (compareProducerIdentities(candidate, trigger.run) > 0) return entry;
   }
   // The completed trigger is retained even if the bounded listing omits it.
-  return trigger.run.status === "completed" ? trigger : undefined;
+  return triggerResult;
 }
 
 /** Cohesive mirror publication keeps ledger-relay.ts below its module ceiling. */
 export async function publishProducerContexts(
-  deps: ProducerDeps,
+  deps: MirrorDeps,
   run: SweepCandidate,
   jobsBody: Record<string, unknown>,
   check?: UpstreamPublicationCheck,

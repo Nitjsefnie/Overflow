@@ -259,6 +259,7 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
     );
     const publication = await publishProducerContexts({
       api, pinMap, apiRoot: API_ROOT, repo, appId, repositoryId: env.GITHUB_REPOSITORY_ID,
+      remainingMs: () => deps.deadlineMs - nowFn(),
     }, attestationRun, triggerJobs, recheckPublication, historyBound);
     result.decisions = publication.decisions;
     result.posted = publication.posted;

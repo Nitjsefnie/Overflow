@@ -1338,4 +1338,23 @@ describe("mirror liveness under a slow API", () => {
     expect(result.posted).toEqual(["verify"]);
     expect(w.state.checks.map((check) => `${check.external_id}=${check.conclusion}`)).toEqual(["9003:1=success"]);
   });
+
+  it("posts the oldest dispatch trigger before its deadline at 4 s per response among 49 newer producers", async () => {
+    const { start } = slowWorld(4000);
+
+    const posted = await start({ LEDGER_DISPATCH_RUN_ID: "9001" });
+
+    expect(posted[0]).toBe("9001:1");
+  });
+
+  it("still resolves newer candidates at zero latency and posts a newer producer at the trigger's head", async () => {
+    const { w, start } = slowWorld(0);
+    // 9030 is a rerun of 9001's pr suite, so it resolves to the trigger's head.
+    w.state.producers = w.state.producers.map((run) => run.id === 9030 ? verify(9030, 8001, "failure") : run);
+
+    const posted = await start({ LEDGER_DISPATCH_RUN_ID: "9001" });
+
+    expect(posted[0]).toBe("9030:1");
+    expect(w.state.checks.filter((check) => check.external_id === "9001:1")).toEqual([]);
+  });
 });
