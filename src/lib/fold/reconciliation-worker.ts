@@ -271,7 +271,8 @@ export async function runNextReconciliationJob(
       const rateLimit = findGitHubRateLimitError(error);
       if (rateLimit) {
         // Deferral refunds the claim: GitHub's limit must not exhaust job attempts.
-        await store.deferReconciliationJob(job.id, job.leaseToken, githubRateLimitNotBefore(rateLimit, now()));
+        const notBefore = rateLimit.notBefore ?? githubRateLimitNotBefore(rateLimit, now());
+        await store.deferReconciliationJob(job.id, job.leaseToken, notBefore);
         return "DEFERRED";
       }
       const delayMs = RECONCILIATION_RETRY_DELAYS_MS[job.attemptCount - 1];

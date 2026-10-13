@@ -1,9 +1,26 @@
 import { describe, expect, it } from "vitest";
+import { GitHubGraphqlRequestError, githubRateLimitNotBefore } from "@/lib/github/errors";
 import { GitHubGraphqlClient } from "@/lib/github/graphql";
 
 const query = "query { viewer { login } }";
 
 describe("HTTP 200 GraphQL rate-limit classification", () => {
+  // https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api#exceeding-the-rate-limit
+  it.each([undefined, "120"])("honours the primary reset captured from a real HTTP 200 structured limit, retry-after=%s", async (retryAfter) => {
+    const resetAt = new Date("2030-01-02T03:09:05Z");
+    const headers: Record<string, string> = { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(resetAt.getTime() / 1000) };
+    if (retryAfter !== undefined) headers["retry-after"] = retryAfter;
+    const client = new GitHubGraphqlClient({
+      accessToken: "fixture-token",
+      fetch: async () => Response.json({ errors: [{ type: "RATE_LIMITED" }] }, { status: 200, headers }),
+    });
+    const error: unknown = await client.query(query, {}).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(GitHubGraphqlRequestError);
+    expect(githubRateLimitNotBefore(error as GitHubGraphqlRequestError, new Date("2030-01-02T03:04:05.678Z")))
+      .toEqual(new Date("2030-01-02T03:09:05Z"));
+    expect(error).toMatchObject({ headers });
+  });
+
   it.each([
     { type: "RATE_LIMIT" },
     { type: "RATE_LIMITED" },

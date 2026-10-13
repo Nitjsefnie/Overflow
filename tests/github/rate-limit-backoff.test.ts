@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyGitHubRateLimit, GitHubApiError, GitHubGraphqlRequestError,
-  githubRateLimitNotBefore,
+  githubRateLimitNotBefore, findGitHubRateLimitError,
 } from "@/lib/github/errors";
 
 const now = new Date("2030-01-02T03:04:05.678Z");
@@ -45,5 +45,22 @@ describe("documented GitHub rate-limit shapes", () => {
   ])("classifies $name", ({ status, headers, body, limited, seconds }) => {
     expect(classifyGitHubRateLimit(status, new Headers(headers), body))
       .toEqual({ rateLimited: limited, retryAfterSeconds: seconds });
+  });
+});
+
+describe("bounded rate-limit cause detection", () => {
+  it("stops a fresh-object cause getter before its fuse trips", () => {
+    let reads = 0;
+    const freshCause = (): Error => Object.defineProperty(new Error("Wrapper"), "cause", {
+      get: () => {
+        reads += 1;
+        if (reads > 64) throw new Error("cause traversal fuse tripped");
+        return freshCause();
+      },
+    });
+    let result: ReturnType<typeof findGitHubRateLimitError> | undefined;
+    expect(() => { result = findGitHubRateLimitError(freshCause()); }).not.toThrow();
+    expect(result).toBeNull();
+    expect(reads).toBeLessThanOrEqual(32);
   });
 });
