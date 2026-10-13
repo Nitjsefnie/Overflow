@@ -78,6 +78,7 @@ export function serializedSnapshot(version: string, derived: DerivedHttpSurface)
     routes: derived.routes,
     successStatus: derived.successStatus,
     failures: derived.failures,
+    ...(derived.nonEnvelopeFailures === undefined ? {} : { nonEnvelopeFailures: derived.nonEnvelopeFailures }),
   };
   return `${JSON.stringify(snapshot, null, 2)}\n`;
 }

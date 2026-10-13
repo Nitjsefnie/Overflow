@@ -28,6 +28,21 @@ function tree(files: Record<string, string>): string {
 const routeFile = "src/app/api/things/route.ts";
 
 describe("HTTP failure-answer derivation", () => {
+  it.each(["Response", "NextResponse"])("refuses an imported %s constructor alias outside the helper", (constructor) => {
+    const root = tree({ [routeFile]: `import { ${constructor} as Reply } from "some-package";
+export function GET() { return new Reply("bad", {status: 400}); }` });
+    expect(() => deriveRouteFailures(["GET /api/things"], root)).toThrow(`${routeFile}:2:`);
+  });
+  it.each([
+    'export type ReviewFailure = typeof errorResponse;',
+    'const value: typeof errorResponse | undefined = undefined;',
+    'type Shape = { handler: typeof errorResponse }; interface Other { handler: typeof errorResponse }',
+    'const value = null as unknown as typeof errorResponse;',
+    'const value = null satisfies typeof errorResponse | null;',
+  ])("ignores erased helper references: %s", (annotation) => {
+    const root = tree({ [routeFile]: `${importHelper}${annotation}\nexport const GET = () => errorResponse(401, "UNAUTHENTICATED", "m");` });
+    expect(deriveRouteFailures(["GET /api/things"], root)).toEqual({ "GET /api/things": ["401 UNAUTHENTICATED"] });
+  });
   it.each([
     ["GET /api/version", "src/app/api/version/route.ts"],
     ["GET /api/settlements/<id>", "src/app/api/settlements/[id]/route.ts"],

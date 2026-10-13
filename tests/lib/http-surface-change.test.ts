@@ -218,6 +218,31 @@ const cases: readonly {
 ];
 
 describe("HTTP surface change classification", () => {
+  it("serializes the runtime-derived non-envelope section without losing status or shape", async () => {
+    const { serializedSnapshot } = await import("../../scripts/update-http-surface-snapshot.ts");
+    const surface = { ...recorded(), nonEnvelopeFailures: { "GET /ready": { unavailable: {status:503,shape:{reason:"string" as const,status:"string" as const}} } } };
+    expect(JSON.parse(serializedSnapshot("1.1.0", surface as import("../../scripts/surface-change.ts").DerivedHttpSurface)).nonEnvelopeFailures).toEqual(surface.nonEnvelopeFailures);
+  });
+
+  it.each([
+    { label: "changed status", edit: (answer: {status:number; shape:Record<string,string>}) => { answer.status = 500; }, kind: "breaking" },
+    { label: "removed field", edit: (answer: {status:number; shape:Record<string,string>}) => { delete answer.shape.status; }, kind: "breaking" },
+    { label: "retyped field", edit: (answer: {status:number; shape:Record<string,string>}) => { answer.shape.reason = "number"; }, kind: "breaking" },
+    { label: "added field", edit: (answer: {status:number; shape:Record<string,string>}) => { answer.shape.extra = "boolean"; }, kind: "additive" },
+  ])("classifies a non-envelope $label", ({ edit, kind }) => {
+    const base = { ...recorded(), nonEnvelopeFailures: { "GET /ready": { unavailable: { status: 503, shape: { status: "string" as const, reason: "string" as const } } } } };
+    const current = structuredClone(base);
+    edit(current.nonEnvelopeFailures["GET /ready"].unavailable);
+    expect(classifyHttpChange(base, current).kind).toBe(kind);
+  });
+
+  it("classifies removed and added non-envelope entries and ignores first recording against format 1", () => {
+    const current = { ...recorded(), nonEnvelopeFailures: { "GET /ready": { unavailable: { status: 503, shape: { status: "string" as const, reason: "string" as const } } } } };
+    expect(classifyHttpChange(current, recorded()).kind).toBe("breaking");
+    expect(classifyHttpChange(recorded(), current).kind).toBe("additive");
+    expect(classifyHttpChange(formatOne(), current).kind).toBe("none");
+  });
+
   it.each(cases)("classifies $label as $kind", ({ base, current, kind, names }) => {
     const change = classifyHttpChange(base(), current());
     expect(change.kind).toBe(kind);
