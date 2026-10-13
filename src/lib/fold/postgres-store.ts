@@ -17,7 +17,7 @@ import type { WebhookDeliveryClaim, WebhookDeliveryStore, WebhookReceiptScope, W
 import { PostgresWebhookDeliveryStore } from "@/lib/webhooks/postgres-delivery-store";
 
 export { claimGitHubIdentity, claimForgeIdentity } from "@/lib/fold/identity-claims";
-export { repositoryLockNamespace } from "@/lib/fold/repository-coordination";
+export { repositoryLockNamespace, reclaimCoordinationConnection } from "@/lib/fold/repository-coordination";
 export type { RepositoryFoldRevisionCounts, RepositoryRederivationRequest } from "@/lib/fold/fold-materialization-store";
 
 export class PostgresFoldStore implements ReconciliationStore, WebhookDeliveryStore {
