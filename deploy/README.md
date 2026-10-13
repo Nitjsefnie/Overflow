@@ -123,10 +123,10 @@ example, the production host currently caps `client_max_body_size` at 64k on
 its moderation and overrides locations.
 
 systemd reads `EnvironmentFile=` as PID 1, before it drops to `User=overflow`,
-so the service account does not need to read the file and is not given a way
-to. Root-only is therefore the narrowest setting that still works, and it is
-what makes code execution inside the web process a dead end for the secrets:
-there is no on-disk read path from the service account to any of them.
+so the service account does not need to read `overflow.env` directly. Keep that
+file `0600 root:root`: the process receives its values in the environment,
+but cannot reread the file. This restriction applies to `overflow.env`;
+reconciliation separately reads the GitHub App private-key file described below.
 
 ```bash
 install -d -o root -g root -m 0700 /etc/overflow
@@ -246,9 +246,9 @@ release's type entries, and type-checks those validators. The fingerprint allows
 those specific additions. Preparation accepts TypeScript config comments and
 trailing commas using the installed TypeScript parser. It requires an explicit
 `include` array of strings and rejects `extends` and `references` with a diagnostic
-naming the unsupported property: Next 16.3.4 skips automatic type-include updates
-for those shapes. Keep the tracked config self-contained. `releaseConfig` is
-reserved for the generated preparation metadata.
+naming the unsupported property. Keep the tracked config self-contained; the
+pinned Next 16.3.8 updates the generated type includes in the prepared config.
+`releaseConfig` is reserved for the generated preparation metadata.
 
 Next also regenerates the ignored `next-env.d.ts`. Release builds leave the
 tracked `tsconfig.json` untouched, including on failure, so no restore step is
@@ -2128,8 +2128,29 @@ Everything above is built around one route leaving the host:
 smarthost, the smarthost delivers to one mailbox — and the subsection above is
 what establishes that it does. Nothing on that route reports its own failure,
 so a route that stopped delivering looks exactly like a host with nothing to
-report. `overflow-canary.service`, started daily by `overflow-canary.timer`,
-is what breaks that symmetry.
+report. When enabled, `overflow-canary.timer` starts `overflow-canary.service`
+daily at 03:20 UTC to check that route.
+
+**On the documented deployment the timer has been disabled since 2026-10-01
+by maintainer decision**, because the daily mail was noise; the maintainer
+accepted the consequence. The scheduled check does not run, so a silent
+mail-path failure is no longer checked automatically by the canary. The unit
+files still ship, and the install and verification instructions below remain
+available for an operator who chooses to restore that check.
+
+With the canary installed and its host files configured, run one check by hand
+and inspect its verdict:
+
+```bash
+systemctl start overflow-canary.service
+journalctl -u overflow-canary.service --no-pager -n 20
+```
+
+To resume the daily check, run `systemctl enable --now overflow-canary.timer`,
+then `systemctl list-timers overflow-canary.timer --no-pager` and
+`systemctl is-enabled overflow-canary.timer`. The persistent timer can also
+catch up a missed check when activated. The install block below enables the
+timer too; running it on the documented deployment ends the suspension.
 
 The canary runs the same script and the same route, then reads the verdict
 from somewhere the route cannot fake: it submits with `curl -v`, takes the
