@@ -84,6 +84,14 @@ describe("GitHub failure diagnostics", () => {
     expect(line).not.toContain("r".repeat(257));
   });
 
+  it.each(["REST", "GraphQL"] as const)("redacts a known token in an allowed header over %s", async (transport) => {
+    const error = await httpFailure(transport, "Denied", { "x-github-request-id": `request ${accessToken}` });
+    expect(error.headers["x-github-request-id"]).toBe("request [REDACTED]");
+    const line = errorLogToken(error);
+    expect(line).toContain('x-github-request-id="request [REDACTED]"');
+    expect(line).not.toContain(accessToken);
+  });
+
   it.each(["configure", "ensure"])("preserves diagnostics when %s re-wraps an HTTP error", async (operation) => {
     const secret = randomBytes(20).toString("base64url");
     const gateway = new GitHubGateway({ accessToken, fetch: async () => new Response(`Denied ${secret}`, {
@@ -97,6 +105,33 @@ describe("GitHub failure diagnostics", () => {
     expect(line).toContain('body="Denied [REDACTED]"');
     expect(line).toContain('x-github-request-id="request-webhook"');
     expect(line).not.toContain(secret);
+  });
+
+  it.each([
+    ["configure", "GET"], ["configure", "PATCH"],
+    ["ensure", "GET"], ["ensure", "PATCH"], ["create", "POST"],
+  ])("redacts crossing-boundary credentials during %s %s", async (operation, method) => {
+    const secret = randomBytes(24).toString("base64url");
+    const configuration = { callbackUrl: "https://example.test", secret };
+    const gateway = new GitHubGateway({ accessToken, fetch: async (_input, init) => {
+      if ((init?.method ?? "GET") !== method) return Response.json({
+        type: "Repository", id: 81, name: "web", active: true, events: ["issues"],
+        config: { url: configuration.callbackUrl, secret: "********", content_type: "json", insecure_ssl: "0" },
+      });
+      return new Response(`${"b".repeat(490)}${secret}`, {
+        status: 403, headers: { "x-github-request-id": `${"r".repeat(240)}${secret}`, "x-ratelimit-resource": accessToken },
+      });
+    } });
+    const result = operation === "configure" ? gateway.configureWebhook(repository, 81, configuration)
+      : operation === "ensure" ? gateway.ensureWebhookEvents(repository, 81, secret)
+        : gateway.createWebhook(repository, configuration);
+    const error = await result.catch((error: unknown) => error);
+    expect(errorLogToken(error)).not.toContain(secret.slice(0, 16));
+    expect(errorLogToken(error)).not.toContain(accessToken);
+    expect(error).toMatchObject({
+      body: `${"b".repeat(490)}[REDACTED]`,
+      headers: { "x-github-request-id": `${"r".repeat(240)}[REDACTED]`, "x-ratelimit-resource": "[REDACTED]" },
+    });
   });
 
   it("captures workflow-read HTTP diagnostics", async () => {
