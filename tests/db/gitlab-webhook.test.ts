@@ -4,7 +4,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
-import { parseGitLabWebhookDelivery } from "@/lib/gitlab/webhook-schema";
+import { parseGitLabWebhookDeliveryDetailed } from "@/lib/gitlab/webhook-schema";
 import { processWebhook } from "@/lib/webhooks/processor";
 import { startPostgresContainer } from "../support/postgres-container";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
@@ -47,7 +47,7 @@ async function insertIssue(repositoryId: string, githubIssueId: number) {
 }
 
 function issueDelivery(options: { projectId: number; instanceUrl: string; uuid: string; issueId: number; title?: string; body?: string }) {
-  return parseGitLabWebhookDelivery("Issue Hook", options.uuid, {
+  const result = parseGitLabWebhookDeliveryDetailed("Issue Hook", options.uuid, {
     object_kind: "issue",
     event_type: "issue",
     project: {
@@ -66,11 +66,13 @@ function issueDelivery(options: { projectId: number; instanceUrl: string; uuid: 
       url: `${options.instanceUrl}/gl-group/p/-/issues/23`,
       action: "close",
     },
-  })!;
+  });
+  if (result.status !== "ok") throw new Error("Invalid test delivery");
+  return result.delivery;
 }
 
 function mergeRequestDelivery(options: { projectId: number; instanceUrl: string; uuid: string; mergeRequestId: number }) {
-  return parseGitLabWebhookDelivery("Merge Request Hook", options.uuid, {
+  const result = parseGitLabWebhookDeliveryDetailed("Merge Request Hook", options.uuid, {
     object_kind: "merge_request",
     event_type: "merge_request",
     project: {
@@ -89,7 +91,9 @@ function mergeRequestDelivery(options: { projectId: number; instanceUrl: string;
       url: `${options.instanceUrl}/gl-group/p/-/merge_requests/7`,
       action: "approved",
     },
-  })!;
+  });
+  if (result.status !== "ok") throw new Error("Invalid test delivery");
+  return result.delivery;
 }
 
 async function deliver(repositoryId: string, delivery: ReturnType<typeof issueDelivery>) {

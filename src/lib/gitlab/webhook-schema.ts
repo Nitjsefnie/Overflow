@@ -236,13 +236,3 @@ function repositoryPrivateOf(project: { visibility_level?: number }): { reposito
   if (project.visibility_level === undefined || project.visibility_level === 20) return {};
   return { repositoryPrivate: true };
 }
-
-export function parseGitLabWebhookDelivery(
-  eventName: string | null,
-  deliveryUuid: string | null,
-  payload: unknown,
-  messageHeaders: GitLabMessageHeaders = {},
-): GitHubWebhookDelivery | null {
-  const result = parseGitLabWebhookDeliveryDetailed(eventName, deliveryUuid, payload, messageHeaders);
-  return result.status === "ok" ? result.delivery : null;
-}

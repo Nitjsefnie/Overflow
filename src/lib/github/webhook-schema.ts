@@ -147,15 +147,6 @@ export function parseGitHubWebhookDeliveryDetailed(
   };
 }
 
-export function parseGitHubWebhookDelivery(
-  eventName: string | null,
-  deliveryId: string | null,
-  payload: unknown,
-): GitHubWebhookDelivery | null {
-  const result = parseGitHubWebhookDeliveryDetailed(eventName, deliveryId, payload);
-  return result.status === "ok" ? result.delivery : null;
-}
-
 function isSupportedEvent(value: string): value is SupportedGitHubWebhookEvent {
   return Object.hasOwn(supportedActions, value);
 }

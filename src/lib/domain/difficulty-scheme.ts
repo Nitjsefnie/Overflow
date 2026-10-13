@@ -30,15 +30,6 @@ export type DifficultySchemeVersion = {
   effectiveFrom: string;
 };
 
-export type OpeningDifficulty =
-  | {
-      kind: "ok";
-      label: string;
-      comparisonPoints: number;
-      reservePoints: number;
-    }
-  | { kind: "none" | "ambiguous" };
-
 export type ActualDifficulty =
   | { kind: "ok"; label: string; points: number }
   | { kind: "none" | "ambiguous" };
@@ -101,61 +92,6 @@ export function validateDifficultyScheme(scheme: DifficultyScheme): DifficultySc
   }
 
   return { ok: true };
-}
-
-export function parseOpeningDifficulty(labels: string[], scheme: DifficultyScheme): OpeningDifficulty {
-  if (!validateDifficultyScheme(scheme).ok) {
-    return { kind: "none" };
-  }
-
-  const openingByLabel = new Map(scheme.openingLabels.map((openingLabel) => [openingLabel.label, openingLabel]));
-  const matches = labels.flatMap((label) => {
-    const openingLabel = openingByLabel.get(label);
-    return openingLabel === undefined ? [] : [openingLabel];
-  });
-
-  if (matches.length === 0) {
-    return { kind: "none" };
-  }
-
-  if (matches.length > 1) {
-    return { kind: "ambiguous" };
-  }
-
-  const [openingLabel] = matches;
-  return {
-    kind: "ok",
-    label: openingLabel.label,
-    comparisonPoints: openingLabel.comparisonPoints,
-    reservePoints: openingLabel.reservePoints,
-  };
-}
-
-export function parseActualDifficulty(labels: string[], scheme: DifficultyScheme): ActualDifficulty {
-  if (!validateDifficultyScheme(scheme).ok) {
-    return { kind: "none" };
-  }
-
-  const actualByLabel = new Map(scheme.actualLabels.map((actualLabel) => [actualLabel.label, actualLabel]));
-  const matches = labels.flatMap((label) => {
-    const actualLabel = actualByLabel.get(label);
-    return actualLabel === undefined ? [] : [actualLabel];
-  });
-
-  if (matches.length === 0) {
-    return { kind: "none" };
-  }
-
-  if (matches.length > 1) {
-    return { kind: "ambiguous" };
-  }
-
-  const [actualLabel] = matches;
-  return {
-    kind: "ok",
-    label: actualLabel.label,
-    points: actualLabel.points,
-  };
 }
 
 function isPointsValue(value: number): boolean {

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  parseGitHubWebhookDelivery,
   parseGitHubWebhookDeliveryDetailed,
   type GitHubWebhookParseResult,
 } from "@/lib/github/webhook-schema";
@@ -48,9 +47,12 @@ describe("webhook issue views", () => {
 describe("webhook delivery classification", () => {
   it("trims a 255-character delivery header for both receipt and execution identity", () => {
     const header = "x".repeat(255);
-    expect(parseGitHubWebhookDelivery("issues", ` ${header} `, {
+    const result = parseGitHubWebhookDeliveryDetailed("issues", ` ${header} `, {
       action: "edited", repository: { id: 42, full_name: "octo/example" }, issue,
-    })).toMatchObject({ deliveryId: header, executionId: header });
+    });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.delivery).toMatchObject({ deliveryId: header, executionId: header });
   });
 
   it("rejects a 256-character delivery header", () => {
@@ -116,22 +118,6 @@ describe("webhook delivery classification", () => {
       repository: { id: 42, full_name: "octo/example" }, issue: issueValue,
     })).toEqual({ status: "invalid" });
   });
-
-  it("preserves the wrapper contract: ok yields the delivery, ignored and invalid yield null", () => {
-    const ok = parseDetailed("issues", issue);
-    expect(ok.status).toBe("ok");
-    if (ok.status !== "ok") return;
-    expect(parseGitHubWebhookDelivery("issues", "delivery", {
-      action: "edited", repository: { id: 42, full_name: "octo/example" }, issue,
-    })).toEqual(ok.delivery);
-    expect(parseGitHubWebhookDelivery("issues", "delivery", {
-      action: "edited", repository: { id: 42, full_name: "octo/example" },
-      issue: { ...issue, pull_request: { url: "https://api.github.com/repos/octo/example/pulls/11" } },
-    })).toBeNull();
-    expect(parseGitHubWebhookDelivery("issues", "delivery", {
-      action: "  ", repository: { id: 42, full_name: "octo/example" }, issue,
-    })).toBeNull();
-  });
 });
 
 describe("webhook repository visibility", () => {
@@ -171,8 +157,6 @@ function parseDetailed(event: string, value: unknown): GitHubWebhookParseResult 
 }
 
 function parse(event: string, value: unknown) {
-  return parseGitHubWebhookDelivery(event, "delivery", {
-    action: event === "issues" ? "edited" : "created",
-    repository: { id: 42, full_name: "octo/example" }, issue: value,
-  });
+  const result = parseDetailed(event, value);
+  return result.status === "ok" ? result.delivery : null;
 }
