@@ -275,15 +275,15 @@ function identityErrorResponse(error: unknown): Response {
   if (error instanceof ForgeIdentityError) {
     switch (error.code) {
       case "INVALID_INPUT":
-        return errorResponse(400, error.code, error.message);
+        return errorResponse(400, "INVALID_INPUT", error.message);
       case "UNVERIFIED":
-        return errorResponse(401, error.code, error.message);
+        return errorResponse(401, "UNVERIFIED", error.message);
       case "NOT_FOUND":
-        return errorResponse(404, error.code, error.message);
+        return errorResponse(404, "NOT_FOUND", error.message);
       case "FORBIDDEN":
-        return errorResponse(403, error.code, error.message);
+        return errorResponse(403, "FORBIDDEN", error.message);
       case "UPSTREAM_FAILURE":
-        return errorResponse(502, error.code, error.message);
+        return errorResponse(502, "UPSTREAM_FAILURE", error.message);
     }
   }
   return errorResponse(502, "UPSTREAM_FAILURE", "The forge identity operation could not complete.");

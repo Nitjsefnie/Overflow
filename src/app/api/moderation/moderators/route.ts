@@ -124,13 +124,15 @@ function moderationErrorResponse(error: unknown): Response {
   }
   switch (error.code) {
     case "FORBIDDEN":
-      return errorResponse(403, error.code, error.message);
+      return errorResponse(403, "FORBIDDEN", error.message);
     case "NOT_FOUND":
-      return errorResponse(404, error.code, error.message);
+      return errorResponse(404, "NOT_FOUND", error.message);
     case "CONFLICT":
-      return errorResponse(409, error.code, error.message);
-    default:
-      return errorResponse(422, error.code, error.message);
+      return errorResponse(409, "CONFLICT", error.message);
+    case "INVALID_INPUT":
+      return errorResponse(422, "INVALID_INPUT", error.message);
+    case "INSUFFICIENT_SAMPLES":
+      return errorResponse(422, "INSUFFICIENT_SAMPLES", error.message);
   }
 }
 

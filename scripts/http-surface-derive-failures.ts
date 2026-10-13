@@ -1,0 +1,350 @@
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
+
+/**
+ * The failure answers each documented route can give (issue 1056), derived
+ * statically for the HTTP surface snapshot's `failures` section.
+ *
+ * Every HTTP failure answer in src/ is built by `errorResponse` in
+ * src/lib/http/error-response.ts (tests/lib/http/error-response.test.ts keeps
+ * it the only envelope implementation). For a route key "METHOD /path" the
+ * walk starts at the module Next serves that path from,
+ * src/app/<path>/route.ts (a "<id>" segment is the "[id]" directory), and
+ * follows its import graph:
+ *
+ * - followed: static `import` and `export … from` declarations, `import x =
+ *   require(…)`, and `import(…)` with a literal specifier, whose specifier is
+ *   `@/…` (src/), `./…` or `../…` and resolves to a .ts/.tsx module under src/
+ *   (as written, or with .ts, .tsx, /index.ts or /index.tsx appended);
+ * - not followed: `import type` / `export type` declarations (erased at
+ *   runtime), package specifiers, modules outside src/, and non-TypeScript
+ *   files (JSON);
+ * - refused (the derivation throws naming file:line): an `import(…)` whose
+ *   specifier is not a literal, and an `@/`/relative specifier that resolves
+ *   to nothing.
+ *
+ * In every reached module each call to `errorResponse` is recorded as
+ * "<status> <CODE>", plus " +<key>" for each field of a literal `extra`
+ * option, sorted. The status and code must each be a literal or an
+ * identifier bound to a `const` with a literal initializer in the same
+ * module; anything else — a parameter, an `error.code`, an imported const, a
+ * spread, a non-literal options or extra object — throws naming file:line,
+ * and the remedy is to make the call site literal. The helper referenced
+ * other than by a direct named-import call (passed as a value, imported as a
+ * namespace, re-exported) throws too, as does any use of the envelope
+ * builder `errorEnvelope` outside the helper module: either would answer a
+ * failure the walk cannot see.
+ *
+ * The granularity is the module, not the code path: every helper call in
+ * every module a route reaches counts for that route, whichever handler or
+ * branch actually makes it. So a route module's methods share one set, and a
+ * shared module (the origin guard, the member gate) contributes every answer
+ * it can give to every route that imports it. That over-inclusion is
+ * conservative: an answer recorded for a route is one its code can reach,
+ * and removing it from the recording is a breaking change.
+ */
+
+const defaultRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const helperModule = "src/lib/http/error-response.ts";
+const helperName = "errorResponse";
+const builderName = "errorEnvelope";
+
+/** The module Next serves a route key's path from, relative to the repository root. */
+export function routeModulePath(routeKey: string): string {
+  const path = routeKey.split(" ")[1];
+  if (path === undefined || !path.startsWith("/")) {
+    throw new Error(`Unrecognized route key ${JSON.stringify(routeKey)}; expected "METHOD /path".`);
+  }
+  return `src/app${path.replace(/<([^>/]+)>/g, "[$1]")}/route.ts`;
+}
+
+function location(root: string, source: ts.SourceFile, node: ts.Node): string {
+  const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
+  return `${relative(root, source.fileName).split(sep).join("/")}:${line + 1}`;
+}
+
+function parse(file: string): ts.SourceFile {
+  const kind = file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  return ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, kind);
+}
+
+/** The followed module a specifier names, or undefined when the walk does not follow it. */
+function resolveModule(root: string, from: ts.SourceFile, node: ts.Node, specifier: string): string | undefined {
+  let base: string;
+  if (specifier.startsWith("@/")) {
+    base = join(root, "src", specifier.slice(2));
+  } else if (specifier.startsWith("./") || specifier.startsWith("../")) {
+    base = resolve(dirname(from.fileName), specifier);
+  } else {
+    return undefined;
+  }
+  if (!base.startsWith(join(root, "src") + sep)) return undefined;
+  for (const candidate of [base, `${base}.ts`, `${base}.tsx`, join(base, "index.ts"), join(base, "index.tsx")]) {
+    if (existsSync(candidate) && statSync(candidate).isFile()) {
+      return /\.tsx?$/.test(candidate) ? candidate : undefined;
+    }
+  }
+  throw new Error(`${location(root, from, node)}: import ${JSON.stringify(specifier)} resolves to no module.`);
+}
+
+type ModuleReference = { node: ts.Node; specifier: string; declaration?: ts.ImportDeclaration | ts.ExportDeclaration };
+
+/** Every runtime module reference in a file: the edges the walk may follow. */
+function moduleReferences(root: string, source: ts.SourceFile): ModuleReference[] {
+  const references: ModuleReference[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) {
+      if (!node.importClause?.isTypeOnly && ts.isStringLiteral(node.moduleSpecifier)) {
+        references.push({ node, specifier: node.moduleSpecifier.text, declaration: node });
+      }
+    } else if (ts.isExportDeclaration(node)) {
+      if (!node.isTypeOnly && node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier)) {
+        references.push({ node, specifier: node.moduleSpecifier.text, declaration: node });
+      }
+    } else if (ts.isImportEqualsDeclaration(node)) {
+      if (!node.isTypeOnly && ts.isExternalModuleReference(node.moduleReference) &&
+          ts.isStringLiteral(node.moduleReference.expression)) {
+        references.push({ node, specifier: node.moduleReference.expression.text });
+      }
+    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const argument = node.arguments[0];
+      if (argument === undefined || !(ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument))) {
+        throw new Error(
+          `${location(root, source, node)}: a dynamic import() without a literal specifier cannot be followed; ` +
+            "name the module literally so the HTTP surface derivation can record its failure answers.",
+        );
+      }
+      references.push({ node, specifier: argument.text });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return references;
+}
+
+function unwrap(expression: ts.Expression): ts.Expression {
+  return ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) ||
+      ts.isSatisfiesExpression(expression) || ts.isTypeAssertionExpression(expression) ||
+      ts.isNonNullExpression(expression)
+    ? unwrap(expression.expression)
+    : expression;
+}
+
+function literalOf(expression: ts.Expression, kind: "number" | "string"): number | string | undefined {
+  const node = unwrap(expression);
+  if (kind === "number" && ts.isNumericLiteral(node)) return Number(node.text);
+  if (kind === "string" && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))) return node.text;
+  return undefined;
+}
+
+/** A literal argument, or an identifier bound to a same-module const with a literal initializer. */
+function staticArgument(
+  checker: ts.TypeChecker,
+  source: ts.SourceFile,
+  expression: ts.Expression,
+  kind: "number" | "string",
+): number | string | undefined {
+  const direct = literalOf(expression, kind);
+  if (direct !== undefined) return direct;
+  const node = unwrap(expression);
+  if (!ts.isIdentifier(node)) return undefined;
+  const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration;
+  if (
+    declaration === undefined || !ts.isVariableDeclaration(declaration) ||
+    declaration.getSourceFile() !== source || declaration.initializer === undefined ||
+    !ts.isVariableDeclarationList(declaration.parent) ||
+    (declaration.parent.flags & ts.NodeFlags.Const) === 0
+  ) {
+    return undefined;
+  }
+  return literalOf(declaration.initializer, kind);
+}
+
+function staticName(name: ts.PropertyName | undefined): string | undefined {
+  if (name === undefined) return undefined;
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNoSubstitutionTemplateLiteral(name) ||
+      ts.isNumericLiteral(name)) {
+    return name.text;
+  }
+  if (ts.isComputedPropertyName(name)) return literalOf(name.expression, "string") as string | undefined;
+  return undefined;
+}
+
+/** The extra envelope field names a call's literal options pass. */
+function extraKeys(root: string, source: ts.SourceFile, call: ts.CallExpression): string[] {
+  const options = call.arguments[3];
+  if (options === undefined) return [];
+  const refuse = (node: ts.Node, what: string): never => {
+    throw new Error(
+      `${location(root, source, node)}: ${helperName}'s ${what}; pass a literal options object ` +
+        "so the HTTP surface derivation can record the failure answer's extra fields.",
+    );
+  };
+  const literal = unwrap(options);
+  if (!ts.isObjectLiteralExpression(literal)) return refuse(options, "options are not an object literal");
+  const keys: string[] = [];
+  for (const property of literal.properties) {
+    if (ts.isSpreadAssignment(property)) return refuse(property, "options spread another object");
+    const name = staticName(property.name);
+    if (name === undefined) return refuse(property, "options name a computed property");
+    if (name !== "extra") continue;
+    const extra = ts.isPropertyAssignment(property) ? unwrap(property.initializer) : undefined;
+    if (extra === undefined || !ts.isObjectLiteralExpression(extra)) {
+      return refuse(property, "extra option is not an object literal");
+    }
+    for (const field of extra.properties) {
+      if (ts.isSpreadAssignment(field)) return refuse(field, "extra option spreads another object");
+      const key = staticName(field.name);
+      if (key === undefined) return refuse(field, "extra option names a computed field");
+      keys.push(key);
+    }
+  }
+  return [...new Set(keys)].sort();
+}
+
+function failureAnswer(
+  root: string,
+  checker: ts.TypeChecker,
+  source: ts.SourceFile,
+  call: ts.CallExpression,
+): string {
+  const [status, code] = call.arguments;
+  if (call.arguments.some(ts.isSpreadElement) || status === undefined || code === undefined) {
+    throw new Error(
+      `${location(root, source, call)}: ${helperName} is called without a literal status and code; ` +
+        "make the call site literal so the HTTP surface derivation can record the failure answer.",
+    );
+  }
+  const statusValue = staticArgument(checker, source, status, "number");
+  const codeValue = staticArgument(checker, source, code, "string");
+  for (const [value, argument, what] of [[statusValue, status, "status"], [codeValue, code, "code"]] as const) {
+    if (value === undefined) {
+      throw new Error(
+        `${location(root, source, argument)}: ${helperName}'s ${what} is not a literal or a same-module ` +
+          "const with a literal initializer; make the call site literal so the HTTP surface derivation " +
+          "can record the failure answer.",
+      );
+    }
+  }
+  return [`${statusValue} ${codeValue}`, ...extraKeys(root, source, call).map((key) => `+${key}`)].join(" ");
+}
+
+/** The failure answers one module's own helper calls give. */
+function moduleFailureAnswers(root: string, checker: ts.TypeChecker, source: ts.SourceFile): string[] {
+  const helperFile = join(root, helperModule);
+  const bindings = new Map<ts.Symbol, string>();
+  for (const reference of moduleReferences(root, source)) {
+    const declaration = reference.declaration;
+    if (declaration === undefined ||
+        resolveModule(root, source, reference.node, reference.specifier) !== helperFile) {
+      continue;
+    }
+    if (ts.isExportDeclaration(declaration)) {
+      throw new Error(
+        `${location(root, source, declaration)}: re-exports from ${helperModule}; call ${helperName} directly ` +
+          "so the HTTP surface derivation can record the failure answer.",
+      );
+    }
+    const named = declaration.importClause?.namedBindings;
+    if (declaration.importClause?.name !== undefined || (named !== undefined && !ts.isNamedImports(named))) {
+      throw new Error(
+        `${location(root, source, declaration)}: imports ${helperModule} other than by name; ` +
+          `import { ${helperName} } so the HTTP surface derivation can record the failure answers.`,
+      );
+    }
+    for (const specifier of named?.elements ?? []) {
+      const imported = (specifier.propertyName ?? specifier.name).text;
+      const symbol = checker.getSymbolAtLocation(specifier.name);
+      if (!specifier.isTypeOnly && symbol !== undefined && (imported === helperName || imported === builderName)) {
+        bindings.set(symbol, imported);
+      }
+    }
+  }
+  if (bindings.size === 0) return [];
+
+  const localNames = new Set([...bindings.keys()].map((symbol) => symbol.name));
+  const answers: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) return;
+    if (ts.isIdentifier(node) && localNames.has(node.text)) {
+      const symbol = ts.isShorthandPropertyAssignment(node.parent)
+        ? checker.getShorthandAssignmentValueSymbol(node.parent)
+        : ts.isExportSpecifier(node.parent)
+          ? checker.getExportSpecifierLocalTargetSymbol(node.parent)
+          : checker.getSymbolAtLocation(node);
+      const imported = symbol === undefined ? undefined : bindings.get(symbol);
+      if (imported === builderName) {
+        throw new Error(
+          `${location(root, source, node)}: uses ${builderName} outside ${helperModule}; answer the failure ` +
+            `with ${helperName} so the HTTP surface derivation can record it.`,
+        );
+      }
+      if (imported === helperName) {
+        if (!ts.isCallExpression(node.parent) || node.parent.expression !== node) {
+          throw new Error(
+            `${location(root, source, node)}: references ${helperName} other than by calling it; call it ` +
+              "directly so the HTTP surface derivation can record the failure answer.",
+          );
+        }
+        answers.push(failureAnswer(root, checker, source, node.parent));
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return answers;
+}
+
+/**
+ * The sorted, de-duplicated failure answers of each route key, from the
+ * route's module and every module its imports reach within src/. `root` is
+ * the repository root holding src/ (the default is this checkout).
+ */
+export function deriveRouteFailures(
+  routeKeys: readonly string[],
+  root: string = defaultRoot,
+): Record<string, string[]> {
+  const parsed = new Map<string, ts.SourceFile>();
+  const edges = new Map<string, string[]>();
+  const reachedByRoute = new Map<string, Set<string>>();
+  for (const key of routeKeys) {
+    const entry = join(root, routeModulePath(key));
+    if (!existsSync(entry)) {
+      throw new Error(`${key}: no route module at ${routeModulePath(key)}.`);
+    }
+    const reached = new Set<string>([entry]);
+    const queue = [entry];
+    while (queue.length > 0) {
+      const file = queue.shift()!;
+      if (!edges.has(file)) {
+        const source = parsed.get(file) ?? parse(file);
+        parsed.set(file, source);
+        edges.set(file, moduleReferences(root, source).flatMap((reference) =>
+          resolveModule(root, source, reference.node, reference.specifier) ?? []));
+      }
+      for (const next of edges.get(file)!) {
+        if (!reached.has(next)) {
+          reached.add(next);
+          queue.push(next);
+        }
+      }
+    }
+    reachedByRoute.set(key, reached);
+  }
+
+  const files = [...new Set([...reachedByRoute.values()].flatMap((reached) => [...reached]))];
+  const program = ts.createProgram(files, { noLib: true, noResolve: true, jsx: ts.JsxEmit.Preserve });
+  const checker = program.getTypeChecker();
+  const helperFile = join(root, helperModule);
+  const answersByFile = new Map(files.map((file) => [
+    file,
+    file === helperFile ? [] : moduleFailureAnswers(root, checker, program.getSourceFile(file)!),
+  ]));
+
+  return Object.fromEntries(routeKeys.map((key) => [
+    key,
+    [...new Set([...reachedByRoute.get(key)!].flatMap((file) => answersByFile.get(file)!))].sort(),
+  ]));
+}
