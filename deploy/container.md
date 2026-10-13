@@ -95,6 +95,151 @@ every sign-in route, and so does an operator `AUTH_URL` mis-set to a blank
 value; a parseable but wrong `APP_URL` passes the sign-in routes
 and fails later, at GitHub's OAuth redirect.
 
+## Operator ownership
+
+The container route supplies an application image and a Compose database, not
+the host deployment's systemd units. Before installing it, name the operator
+and record the arrangements below in the deployment notes. Each owner is
+**operator supplied**; building the image does not install these services.
+
+| Responsibility | Owner and procedure |
+| --- | --- |
+| Install | Operator supplied: build and record provenance, configure Compose and secrets, then start the single app instance as above. |
+| Health | Operator supplied: monitor the app's `/api/readiness` healthcheck, collect container logs and arrange alerts. Compose supplies the probe and restart policy, not alert delivery. |
+| Update | Operator supplied: take a database backup, preserve the previous image identity and configuration, build the reviewed revision, redeploy with Compose and verify readiness. Run the webhook upgrade below after the new release is healthy; keep its output and exit status with the deployment record. |
+| Backup | Operator supplied: schedule database dumps, retention, off-host copies and failure alerts; keep custody of the keys needed to decrypt restored credentials. See [Backup and recovery](#backup-and-recovery). |
+| Recovery | Operator supplied: own restore drills, database access/ownership, configuration and key recovery, and the decision to restore data or redeploy a compatible recorded image. See [Backup and recovery](#backup-and-recovery) and [rollback](#decisions). |
+| Reverse proxy and TLS | Operator supplied: provide the public HTTPS endpoint, proxy to the loopback app listener, renew certificates and verify sign-in and forge callback reachability. Compose supplies neither a reverse proxy nor TLS. Follow the [proxy requirements](README.md#reverse-proxy-requirements) for the application routes. |
+| Webhook upgrade | Operator supplied: run `pnpm webhooks:upgrade` from the matching operator checkout below with this deployment's database, keys and callback URLs. Container startup runs migrations, not this upgrade. |
+| Decommission | Operator supplied: follow the container mapping in [decommission.md phase 1](decommission.md#1-scope-and-preconditions), including webhook/application removal, database volume, backups, configuration, proxy/TLS and off-host destinations. |
+
+## Operator commands run from a matching checkout
+
+The runtime image is not an operator toolbox. It copies the built application,
+database code and migration entry points, but not `scripts/account.ts`,
+`scripts/reconcile.ts`, `scripts/upgrade-webhooks.ts`,
+`scripts/reencrypt-credentials.ts` or `scripts/register-path-aliases.ts` and
+their source dependencies. The package scripts advertised in its `package.json`
+do not make those files available. Run the procedures below on an operator
+machine from a separate checkout of the **running image's revision**, with its
+own dependencies installed; do not run them with `docker compose exec app`.
+
+Find the revision from the image actually used by the running app, rather than
+from the mutable `overflow-app` tag. Run this in the deployment's Compose
+directory, with the same project and override options used to deploy:
+
+```sh
+set -e
+container_id=$(docker compose --profile app ps -q app)
+test -n "$container_id"
+image_id=$(docker inspect --format '{{.Image}}' "$container_id")
+revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_id")
+test "${#revision}" -eq 40
+case "$revision" in
+  *[!0-9a-f]*) echo 'Missing or malformed source revision label' >&2; exit 1 ;;
+esac
+printf 'Running image revision: %s\n' "$revision"
+```
+
+`Dockerfile` records that OCI label from `SOURCE_SHA`;
+`scripts/container-build.sh` exports the clean commit, verifies the label and
+prints the same revision with the image ID. If the app is stopped or the local
+image is unavailable, use the provenance record saved at build/deploy time to
+select the image and its revision. An absent label or missing source commit
+must be investigated before choosing an operator checkout.
+
+With `revision` set to that full commit, prepare a new operator checkout:
+
+```sh
+git clone https://github.com/Nitjsefnie/Overflow.git overflow-operator
+cd overflow-operator
+git fetch origin "$revision"
+git checkout --detach "$revision"
+test "$(git rev-parse HEAD)" = "$revision"
+pnpm install --frozen-lockfile
+```
+
+Use the Node and pnpm versions recorded in that checkout's `package.json`.
+Keep this checkout separate from the Compose deployment directory so checking
+out an older revision cannot replace the live Compose configuration. Repeat
+the revision selection and dependency install after every image change.
+
+Load an operator-owned, private, shell-compatible environment file outside the
+checkout before invoking the commands; these package scripts do not load
+Compose's `.env` themselves:
+
+```sh
+set -a
+. /absolute/path/container-operator.env
+set +a
+```
+
+Its `DATABASE_URL` must reach the **same database** from the operator machine.
+Compose's `postgres` hostname is for the app's container network; on the Docker
+host use the published database address and `POSTGRES_HOST_PORT` (loopback and
+5432 by default), with that database's credentials. Do not assume the URL in
+the deployment's `.env` is the app's URL: Compose overrides it. For a remote
+operator machine, arrange a private connection to that database.
+
+Supply the same `TOKEN_ENCRYPTION_KEY`, any configured
+`TOKEN_ENCRYPTION_KEY_PREVIOUS`, callback URLs and other relevant deployment
+variables. When GitHub App authentication is configured, make the **same
+private-key file** readable on the operator machine and set
+`GITHUB_APP_PRIVATE_KEY_PATH` to its local path, with the same `GITHUB_APP_ID`;
+the container's mount path need not exist on that machine. Do not generate
+replacement keys merely to make a command start, or store credentials in the
+checkout or deployment record.
+
+| Procedure | Run in the prepared operator checkout |
+| --- | --- |
+| Credential encryption-key rotation | `pnpm credentials:reencrypt`, followed by `pnpm credentials:reencrypt --check`. Follow the key overlap, backup, verification and retirement order in [README section 11](README.md#11-rotating-the-credential-encryption-key), substituting the container's secret configuration and app recreation for the host environment edits and systemd restarts. Keep app and operator keys synchronized throughout. |
+| Account export or deletion; forge-person export or removal | Run the `node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts ...` commands in [OPERATING.md](../OPERATING.md#running-the-commands). Substitute this checkout and environment for `/srv/overflow` and `/etc/overflow/overflow.env`; preserve the dry run and `--confirm` steps. |
+| Manual reconciliation | `pnpm reconcile` for every active registration, or `pnpm reconcile --repository <owner>/<name>` for one; see [OPERATING.md](../OPERATING.md#reconciliation). |
+| Existing webhook upgrade | `pnpm webhooks:upgrade` after deploying and verifying the image; follow [OPERATING.md](../OPERATING.md#upgrade-existing-webhook-subscriptions) for prerequisites, failures and output. |
+| Database backup and restore | Run `scripts/db-backup.sh` and `scripts/db-restore.sh` from this checkout with PostgreSQL client tools and database access as below; neither script is in the app image. |
+
+## Backup and recovery
+
+The named `overflow-postgres-data` volume persists database files; it is not a
+backup. Compose defines no backup job. The operator supplies scheduling,
+storage, retention, off-host copies, key custody and alerts, independently of
+the app container. The host-specific units and paths in
+[backup-restore.md](backup-restore.md) are a reference, not something this
+Compose route installs.
+
+From the matching operator checkout, install PostgreSQL client tools matching
+the deployment's server major (17 in the committed Compose file). With a
+backup-role `DATABASE_URL` pointing at that deployment and a private backup
+directory selected, run:
+
+```sh
+sh scripts/db-backup.sh --output-dir /absolute/path/private-backups
+```
+
+For a restore drill, provision a separate target database and a role that can
+restore into it, set `DATABASE_URL` for that server/role, then run:
+
+```sh
+sh scripts/db-restore.sh overflow_restore_drill /absolute/path/private-backups/selected.dump
+```
+
+The restore script substitutes the target database name in `DATABASE_URL` and
+refuses to overwrite the database the URL names unless `--allow-live` is
+passed. It restores with `--no-owner --no-privileges`; the operator must supply
+the target, role and grants. Use the [restore drill and replacement procedure](backup-restore.md#e-restoring)
+for the data/schema checks, adapting its local PostgreSQL commands and service
+control to this deployment. Run any required `pnpm db:migrate` from the
+matching checkout against the **restore target**, not the live database.
+
+For live recovery, stop the app and operator jobs before replacing data;
+keep PostgreSQL available until the restore and validation are complete.
+Restore the deployment configuration and keys alongside the database, recreate
+the app with that configuration, and verify readiness, sign-in and webhook
+processing before resuming jobs. Image rollback preserves the existing database
+volume and does not undo migrations; verify schema compatibility with the
+selected image, or restore the corresponding pre-update backup first. The
+operator owns this recovery decision and records the drill and recovery results.
+
 ## Decisions
 
 **Migrations run at container start, before the server binds.** The start
@@ -105,14 +250,14 @@ This presumes a SINGLE instance per database — two containers starting against
 one database race their migrations — so scale to one app container and let the
 platform's restart policy, not replicas, absorb failures.
 
-**Configuration is environment-only.** The image carries no values and reads
-no files for configuration: everything arrives through the environment, the
-same variables the host path keeps in `/etc/overflow/overflow.env`. A container
-built from this repository can be inspected, shared and re-tagged without
-leaking a secret. Private `.env` files are untracked and stay out of the build
-context because the script exports only committed files with `git archive`;
-the tracked placeholder `.env.example` does enter. Compose supplies `.env`
-variables at runtime through `env_file`; it does not build an image.
+**Configuration arrives at runtime.** Compose supplies `.env` variables through
+`env_file` and overrides `DATABASE_URL`. When GitHub App authentication is
+configured, the code also reads the private-key file named by
+`GITHUB_APP_PRIVATE_KEY_PATH`: the operator must supply a read-only mount in a
+Compose override and make it readable by the runtime user. The committed
+Compose file does not mount it. Private `.env` files stay out of the build
+context because the script exports only committed files with `git archive`.
+Keep key files outside the tracked source and build context too.
 
 **The image builds in-image on `node:24.21.0-bookworm-slim`.** The same base
 that compiles the bundle serves it — both `FROM` lines pinned by digest — and
