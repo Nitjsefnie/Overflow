@@ -1267,3 +1267,75 @@ describe("panel fix round resolved-attempt ordering", () => {
     },
   );
 });
+
+/**
+ * The claim-3 re-check's slow-API probe: 50 completed verify producers on
+ * distinct heads, sequential starts, the clock advanced per response. The
+ * mirror must not resolve the whole listing before its first write.
+ */
+describe("mirror liveness under a slow API", () => {
+  function slowWorld(latency: number) {
+    const w = world();
+    w.state.producers = Array.from({ length: 50 }, (_, i) => verify(9050 - i, 8050 - i, "success"));
+    w.state.suites = Array.from({ length: 50 }, (_, i) => ({
+      ...suite(8050 - i, "success"), head_sha: (50 - i).toString(16).padStart(40, "0"),
+    }));
+    let now = 0;
+    const env = { ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493",
+      LEDGER_APP_KEY: key, GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456" };
+    const start = async (extra: Record<string, string>) => {
+      const before = w.state.checks.length;
+      await runRelay({
+        env: { ...env, ...extra }, nowFn: () => now,
+        fetchFn: (async (input, init) => {
+          const reply = await w.fetchFn(input, init);
+          now += latency;
+          return reply;
+        }) as typeof fetch,
+        delayFn: async () => {}, readPinMap: async () => pins,
+      }).catch(() => undefined);
+      return w.state.checks.slice(before).map((check) => String(check.external_id));
+    };
+    return { w, start };
+  }
+
+  it("posts a completion start's own newest producer at 4 s per response after earlier starts", async () => {
+    const { w, start } = slowWorld(4000);
+    await start({ LEDGER_SWEEP_ONLY: "true" });
+    await start({ LEDGER_DISPATCH_RUN_ID: "9001" });
+    await start({ LEDGER_SWEEP_ONLY: "true" });
+    const fresh = verify(9051, 8051, "success");
+    w.state.producers = [fresh, ...w.state.producers];
+    w.state.suites = [{ ...suite(8051, "success"), head_sha: (51).toString(16).padStart(40, "0") }, ...w.state.suites];
+
+    const posted = await start({
+      GITHUB_WORKFLOW_RUN_ID: "9051", GITHUB_WORKFLOW_RUN_HEAD_SHA: String(fresh.head_sha),
+      GITHUB_WORKFLOW_RUN_PATH: String(fresh.path), GITHUB_WORKFLOW_RUN_CONCLUSION: "success",
+      GITHUB_WORKFLOW_RUN_HTML_URL: String(fresh.html_url), GITHUB_WORKFLOW_RUN_EVENT: "workflow_run",
+      GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main", GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
+    });
+
+    expect(posted[0]).toBe("9051:1");
+  });
+
+  it("posts a mid-window dispatch start's trigger at 4 s per response without resolving older producers", async () => {
+    const { w, start } = slowWorld(4000);
+
+    const posted = await start({ LEDGER_DISPATCH_RUN_ID: "9025" });
+
+    expect(posted[0]).toBe("9025:1");
+    // Older candidates are the sweep's: the mirror never fetches them.
+    const resolvedBeforeWrite = w.state.requests.slice(0, w.state.requests.indexOf(`${ROOT}/check-runs`));
+    for (let id = 9001; id < 9025; id++) expect(resolvedBeforeWrite).not.toContain(`${ROOT}/actions/runs/${id}`);
+  });
+
+  it("posts the newest of several newer producers at the trigger's head, not the first one resolved", async () => {
+    const w = world();
+    w.state.producers = [verify(9002, 8001, "failure"), verify(9003, 8001, "success"), oldVerify];
+
+    const result = await w.relay("mirror");
+
+    expect(result.posted).toEqual(["verify"]);
+    expect(w.state.checks.map((check) => `${check.external_id}=${check.conclusion}`)).toEqual(["9003:1=success"]);
+  });
+});
