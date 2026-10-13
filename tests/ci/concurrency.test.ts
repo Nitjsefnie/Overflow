@@ -254,10 +254,10 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     "ledger-relay.yml",
     {
       reason:
-        "The relay posts the check-runs branch protection requires. Every schedule, workflow_dispatch (with or without run_id), and workflow_run start shares the literal ledger-relay group, so only one relay run writes at a time across the repository. cancel-in-progress false preserves the running start. GitHub keeps at most one pending start and a newer arrival replaces it; every start sweeps, so the displacing start attests the displaced start's producer.",
+        "The relay posts the check-runs branch protection requires. Every schedule, workflow_dispatch (with or without run_id), and workflow_run start shares the literal ledger-relay group, so only one relay run writes at a time across the repository. cancel-in-progress false preserves the running start. Up to 100 pending starts wait in FIFO order (ordering is not guaranteed); a full queue cancels the new arrival. Every start sweeps to attest a cancelled arrival's producer within the sweep window.",
       group: "ledger-relay",
       "cancel-in-progress": false,
-      queue: undefined,
+      queue: "max",
     },
   ],
   [

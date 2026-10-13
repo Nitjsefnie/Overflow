@@ -3,6 +3,7 @@ import { appSuiteListing, RELAY_OWN_RUN_ENV, relayJobStartListing,
 import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 
 import { renderRelayResult, runRelay } from "../../scripts/ledger-relay.ts";
 import { RUN_DEADLINE_MS } from "../../scripts/ledger-relay-http.ts";
@@ -722,19 +723,32 @@ describe("completed producer and bound selection", () => {
   });
 });
 
-/** One running start and one pending slot; replaced starts are never invoked. */
-function concurrencyGroup() {
+type QueueMode = "single" | "max";
+
+function workflowQueue(): QueueMode {
+  const workflow = parse(readFileSync(".github/workflows/ledger-relay.yml", "utf8"));
+  const queue: unknown = workflow.concurrency?.queue;
+  if (queue === undefined || queue === "single") return "single";
+  if (queue === "max") return "max";
+  throw new Error(`unsupported ledger-relay concurrency.queue: ${String(queue)}`);
+}
+
+/** One running start; cancelled starts never run. Explicit orders model GitHub's unordered dequeue. */
+function concurrencyGroup(mode: QueueMode, dequeueOrder: readonly string[] = []) {
   type Start = { name: string; run: () => Promise<unknown> };
   let running: Promise<void> | undefined;
-  let pending: Start | undefined;
+  const pending: Start[] = [];
+  const order = [...dequeueOrder];
   const started: string[] = [], displaced: string[] = [];
   const errors: unknown[] = [];
   function launch(start: Start) {
     started.push(start.name);
     running = (async () => {
       try { await start.run(); } catch (error) { errors.push(error); }
-      const next = pending;
-      pending = undefined;
+      const name = order.shift();
+      const index = name === undefined ? 0 : pending.findIndex((start) => start.name === name);
+      if (index < 0) throw new Error(`dequeue order names a start that is not pending: ${name}`);
+      const [next] = pending.splice(index, 1);
       running = undefined;
       if (next !== undefined) launch(next);
     })();
@@ -743,9 +757,10 @@ function concurrencyGroup() {
     started, displaced, errors,
     enqueue(name: string, run: () => Promise<unknown>) {
       if (running === undefined) launch({ name, run });
+      else if (mode === "max" && pending.length === 100) displaced.push(name);
       else {
-        if (pending !== undefined) displaced.push(pending.name);
-        pending = { name, run };
+        if (mode === "single" && pending.length > 0) displaced.push(pending.pop()!.name);
+        pending.push({ name, run });
       }
     },
     async drain() { while (running !== undefined) await running; },
@@ -799,7 +814,8 @@ describe("issue 1195 pending-start displacement", () => {
     "attests the burst by the next start cycle when the survivor is %s", async (survivor) => {
       const w = world("pr-gates");
       w.state.blockOldWrite = true;
-      const group = concurrencyGroup();
+      // Model the sweep fallback after queue overflow or a failed start.
+      const group = concurrencyGroup("single");
       group.enqueue("in-flight", () => w.relay("sweep"));
       await w.blocked.promise;
       // Keep the promised 50-producer workload when a mutant shrinks the
@@ -827,7 +843,8 @@ describe("issue 1195 pending-start displacement", () => {
     "documents the burst bound: SWEEP_RUN_LIMIT + 1 leaves exactly the oldest unattested with %s", async (survivor) => {
       const w = world("pr-gates");
       w.state.blockOldWrite = true;
-      const group = concurrencyGroup();
+      // Model the sweep fallback after queue overflow or a failed start.
+      const group = concurrencyGroup("single");
       group.enqueue("in-flight", () => w.relay("sweep"));
       await w.blocked.promise;
       const burst = burstProducers(w, SWEEP_RUN_LIMIT + 1, false);
@@ -1423,5 +1440,103 @@ describe("mirror reserve scope", () => {
 
     expect(posts).toBeGreaterThanOrEqual(2);
     expect(w.state.checks[0]).toMatchObject({ external_id: "9001:1", conclusion: "success" });
+  });
+});
+
+
+describe("issue 1207 queued late completions", () => {
+  it.each([
+    { priorCount: 50, burstCount: 1, survivor: "completion" },
+    { priorCount: 50, burstCount: 1, survivor: "sweep-only" },
+    { priorCount: 50, burstCount: 1, survivor: "refused" },
+    { priorCount: 45, burstCount: 10, survivor: "completion" },
+    { priorCount: 45, burstCount: 10, survivor: "sweep-only" },
+    { priorCount: 45, burstCount: 10, survivor: "refused" },
+  ])("attests $burstCount late producers behind $priorCount attested producers with $survivor", async ({ priorCount, burstCount, survivor }) => {
+    const w = world("pr-gates");
+    const prior = Array.from({ length: priorCount }, (_, i) => ({
+      ...gate(9500 + i, "success"), head_sha: (9500 + i).toString(16).padStart(40, "0"),
+    }));
+    // Twenty higher-id, unpinned listing rows must not consume the eligible window.
+    w.state.producers = prior.flatMap((producer, i) => i < 20 ? [producer, unrelated(20000 + i)] : [producer]);
+    await w.relay("sweep");
+    expect(unattested(w, prior)).toEqual([]);
+    expect(w.state.checks).toHaveLength(priorCount * GATE_CONTEXTS.length);
+    expect(w.state.checks.every((check) => (check.app as Body).id === 5118623)).toBe(true);
+
+    const inFlight = { ...gate(9600, "success"), head_sha: (9600).toString(16).padStart(40, "0") };
+    w.state.producers.unshift(inFlight);
+    w.state.blockOldWrite = true;
+    w.state.blockWriteId = "9600:1";
+    // The real workflow chooses the queue: removing queue: max must reproduce the orphan.
+    const group = concurrencyGroup(workflowQueue());
+    group.enqueue("in-flight", () => w.relay("mirror", inFlight));
+    await Promise.race([w.blocked.promise, group.drain().then(() => { throw new Error("9600 POST was not held"); })]);
+    const burst = burstProducers(w, burstCount, false);
+    enqueueBurst(w, group, burst, survivor === "completion" ? "none" : survivor);
+    if (survivor === "completion") {
+      const later = { ...gate(9700, "success"), head_sha: (9700).toString(16).padStart(40, "0") };
+      w.state.producers.unshift(later);
+      group.enqueue("9700", () => w.relay("mirror", later));
+    }
+    // Completion time does not move a lower run id ahead of later-created runs.
+    w.state.producers.sort((a, b) => Number(b.id) - Number(a.id));
+    w.released.resolve();
+    await group.drain();
+
+    expect(unattested(w, burst)).toEqual([]);
+    for (const producer of burst) for (const context of GATE_CONTEXTS) {
+      expect(w.state.checks.filter((check) => check.head_sha === producer.head_sha && check.name === context).at(-1))
+        .toMatchObject({ external_id: `${producer.id}:1`, app: { id: 5118623 }, status: "completed", conclusion: "success" });
+    }
+    expect(group.started).toEqual(["in-flight", ...burst.map((producer) => String(producer.id)),
+      survivor === "completion" ? "9700" : survivor]);
+    expect(group.displaced).toEqual([]);
+    expect(group.errors).toHaveLength(survivor === "refused" ? 1 : 0);
+    if (survivor === "refused") expect(String(group.errors[0])).toContain("did not execute the base branch's workflow definition");
+  });
+
+  it.each([
+    ["older", "newer"],
+    ["newer", "older"],
+  ])("keeps the newer failure when pending starts dequeue %s then %s", async (first, second) => {
+    const w = world("pr-gates");
+    const inFlight = { ...gate(9600, "success"), head_sha: (9600).toString(16).padStart(40, "0") };
+    w.state.producers = [inFlight];
+    w.state.blockOldWrite = true;
+    w.state.blockWriteId = "9600:1";
+    const group = concurrencyGroup("max", [first, second]);
+    group.enqueue("in-flight", () => w.relay("mirror", inFlight));
+    await Promise.race([w.blocked.promise, group.drain().then(() => { throw new Error("9600 POST was not held"); })]);
+    const older = gate(9002, "success"), newer = gate(9003, "failure");
+    w.state.producers.unshift(newer, older);
+    group.enqueue("older", () => w.relay("mirror", older));
+    group.enqueue("newer", () => w.relay("mirror", newer));
+    w.released.resolve();
+    await group.drain();
+
+    expect(group.started).toEqual(["in-flight", first, second]);
+    expect(group.errors).toEqual([]);
+    for (const context of GATE_CONTEXTS) {
+      const checks = w.state.checks.filter((check) => check.head_sha === HEAD && check.name === context);
+      expect(checks.at(-1)).toMatchObject({ external_id: "9003:1", conclusion: "failure", app: { id: 5118623 } });
+      const newerIndex = checks.findIndex((check) => check.external_id === "9003:1");
+      expect(newerIndex).toBeGreaterThanOrEqual(0);
+      expect(checks.slice(newerIndex + 1).some((check) => check.external_id === "9002:1")).toBe(false);
+    }
+  });
+});
+
+describe("relay queue simulator", () => {
+  it("cancels a new arrival at 100 pending starts and drains the accepted starts FIFO", async () => {
+    const held = deferred();
+    const group = concurrencyGroup("max");
+    group.enqueue("in-flight", () => held.promise);
+    for (let i = 0; i <= 100; i++) group.enqueue(String(i), async () => {});
+    held.resolve();
+    await group.drain();
+    expect(group.started).toEqual(["in-flight", ...Array.from({ length: 100 }, (_, i) => String(i))]);
+    expect(group.displaced).toEqual(["100"]);
+    expect(group.errors).toEqual([]);
   });
 });

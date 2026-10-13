@@ -3,14 +3,11 @@
 // scripts/ledger-relay.ts in a finally after every mirror path, including
 // refusals. The sweep also carries the rerun-heal for displaced starts.
 //
-// GitHub keeps at most one PENDING run per concurrency group and cancels the
-// previous pending run whenever a newer one arrives — whatever
-// `cancel-in-progress` says, so `cancel-in-progress: false` in
-// .github/workflows/ledger-relay.yml does NOT protect a queued relay run. When
-// two producer runs complete within seconds of each other, one relay instance
-// is destroyed while still pending: it posts no check-run, and the completion
-// that triggered it is orphaned forever. Nothing else ever notices, because
-// that relay instance is the only thing that would have attested the run.
+// The ledger-relay concurrency group runs one start at a time and preserves
+// it with cancel-in-progress: false. Up to 100 pending starts wait in FIFO
+// order (ordering is not guaranteed); a full queue cancels the new arrival.
+// Every start still sweeps to attest a cancelled arrival's producer within
+// the sweep window.
 //
 // So every relay start sweeps the repository for such orphans: recent completed
 // runs of a pinned workflow, deduplicated against the App's OWN check-runs at
