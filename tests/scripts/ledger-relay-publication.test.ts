@@ -108,14 +108,17 @@ function world(kind: "verify" | "pr-gates" = "verify") {
         ? { total_count: 1001, workflow_runs: Array.from({ length: 100 }, (_, i) => suite(8002 - i, "failure")) }
         : { total_count: atHead.length, workflow_runs: atHead });
     }
-    if (url === `${ROOT}/actions/runs?per_page=100`) {
+    if (url === `${ROOT}/actions/runs?per_page=100` || url.startsWith(`${ROOT}/actions/runs?per_page=100&page=`)) {
       if (state.listingReadFails) return new Response("producer listing unavailable", { status: 503 });
-      return response({ workflow_runs: state.producers });
+      const page = Number(new URL(url).searchParams.get("page") ?? 1);
+      return response({ total_count: state.producers.length, workflow_runs: state.producers.slice((page - 1) * 100, page * 100) });
     }
     const appSuites = appSuiteListing(url);
     if (appSuites !== undefined) return response(appSuites);
     const checkSuite = /\/check-suites\/([0-9]+)\/check-runs\?/.exec(url)?.[1];
-    const checksHead = checkSuite === undefined ? undefined : (BigInt(checkSuite) - 1n).toString(16).padStart(40, "0");
+    const checksHead = checkSuite === undefined
+      ? /\/commits\/([^/]+)\/check-runs\?/.exec(url)?.[1]
+      : (BigInt(checkSuite) - 1n).toString(16).padStart(40, "0");
     if (checksHead !== undefined) {
       const latest = new Map<string, Body>();
       for (const check of state.checks) {
@@ -747,52 +750,92 @@ function concurrencyGroup() {
   };
 }
 
+/** Unpinned runs are real listing rows, and must not consume producer capacity. */
+function unrelated(id: number): Body {
+  return { ...gate(id, "success"), path: ".github/workflows/unpinned.yml" };
+}
+
+function burstProducers(w: ReturnType<typeof world>, count: number, mixed = true): Body[] {
+  return Array.from({ length: count }, (_, i) => {
+    const head = mixed && i === 0 ? HEAD : (i + 100).toString(16).padStart(40, "0");
+    if (mixed && i % 2 === 1) {
+      w.state.suites.push({ ...suite(8002 + i, "success"), head_sha: head });
+      return verify(9002 + i, 8002 + i, "success");
+    }
+    return { ...gate(9002 + i, mixed && i === 0 ? "failure" : "success"), head_sha: head };
+  });
+}
+
+function enqueueBurst(w: ReturnType<typeof world>, group: ReturnType<typeof concurrencyGroup>, burst: Body[], survivor: string) {
+  for (const producer of burst) {
+    w.state.producers.unshift(producer, ...Array.from({ length: 3 }, (_, i) => unrelated(20000 + Number(producer.id) * 3 + i)));
+    group.enqueue(String(producer.id), () => w.relay("mirror", producer));
+  }
+  if (survivor === "sweep-only") group.enqueue(survivor, () => w.relay("sweep"));
+  if (survivor === "refused") {
+    const refused = { ...gate(10000, "success"), event: "pull_request" };
+    w.state.producers.unshift(refused);
+    group.enqueue(survivor, () => w.relay("mirror", refused));
+  }
+}
+
+function unattested(w: ReturnType<typeof world>, burst: Body[]): unknown[] {
+  return burst.filter((producer) => {
+    const head = producer.event === "workflow_run"
+      ? w.state.suites.find((s) => s.id === Number(String(producer.display_title).split(" ").at(-1)))?.head_sha
+      : producer.head_sha;
+    const contexts = producer.event === "workflow_run" ? ["verify"] : GATE_CONTEXTS;
+    return contexts.some((context) => {
+      const latest = w.state.checks.filter((c) => c.head_sha === head && c.name === context).at(-1);
+      return latest?.external_id !== `${producer.id}:1` || latest.status !== "completed" || latest.conclusion !== producer.conclusion;
+    });
+  }).map((producer) => producer.id);
+}
+
 describe("issue 1195 pending-start displacement", () => {
   it.each(["completion", "sweep-only", "refused"] as const)(
     "attests the burst by the next start cycle when the survivor is %s", async (survivor) => {
-      const w = world();
+      const w = world("pr-gates");
       w.state.blockOldWrite = true;
       const group = concurrencyGroup();
       group.enqueue("in-flight", () => w.relay("sweep"));
       await w.blocked.promise;
-      // Five completions while the original sweep's POST is held. The next
-      // cycle must cover two PR heads and the non-verify pr-gates contexts.
-      const secondHead = "c".repeat(40);
-      const burst = [
-        verify(9002, 8001, "success"), verify(9003, 8001, "failure"),
-        verify(9004, 8002, "success"), gate(9005, "success"), gate(9006, "failure"),
-      ];
-      w.state.suites.push({ ...suite(8002, "success"), head_sha: secondHead });
-      for (const producer of burst) {
-        w.state.producers.unshift(producer);
-        group.enqueue(String(producer.id), () => w.relay("mirror", producer));
-      }
-      if (survivor === "sweep-only") group.enqueue(survivor, () => w.relay("sweep"));
-      if (survivor === "refused") {
-        const refused = { ...gate(9007, "success"), event: "pull_request" };
-        w.state.producers.unshift(refused);
-        group.enqueue(survivor, () => w.relay("mirror", refused));
-      }
-      const latest = (head: string, name: string) => w.state.checks
-        .filter((check) => check.head_sha === head && check.name === name).at(-1);
+      // Keep the promised 50-producer workload when a mutant shrinks the
+      // implementation limit; growing the configured window grows the burst.
+      const burst = burstProducers(w, Math.max(SWEEP_RUN_LIMIT, 50));
+      enqueueBurst(w, group, burst, survivor);
       let failurePosted = false;
       w.state.onCommit = () => {
-        if (latest(HEAD, "verify")?.external_id === "9003:1") failurePosted = true;
-        if (failurePosted) expect(latest(HEAD, "verify"))
-          .toMatchObject({ external_id: "9003:1", conclusion: "failure" });
+        const latest = w.state.checks.filter((c) => c.head_sha === HEAD && c.name === "actionlint").at(-1);
+        if (latest?.external_id === "9002:1") failurePosted = true;
+        if (failurePosted) expect(latest).toMatchObject({ external_id: "9002:1", conclusion: "failure" });
       };
       w.released.resolve();
       await group.drain();
-      expect(group.started).toEqual(["in-flight", survivor === "completion" ? "9006" : survivor]);
-      expect(group.displaced).toEqual(survivor === "completion"
-        ? ["9002", "9003", "9004", "9005"] : ["9002", "9003", "9004", "9005", "9006"]);
-      expect(latest(HEAD, "verify")).toMatchObject({ external_id: "9003:1", conclusion: "failure" });
-      expect(latest(secondHead, "verify")).toMatchObject({ external_id: "9004:1", conclusion: "success" });
-      for (const context of GATE_CONTEXTS) expect(latest(HEAD, context))
-        .toMatchObject({ external_id: "9006:1", conclusion: "failure" });
+      expect(group.started).toEqual(["in-flight", survivor === "completion" ? String(burst.at(-1)?.id) : survivor]);
+      expect(group.displaced).toEqual(burst.slice(0, survivor === "completion" ? -1 : undefined).map((p) => String(p.id)));
+      expect(unattested(w, burst)).toEqual([]);
       expect(failurePosted).toBe(true);
       expect(group.errors).toHaveLength(survivor === "refused" ? 1 : 0);
       if (survivor === "refused") expect(String(group.errors[0])).toContain("did not execute the base branch's workflow definition");
+    },
+  );
+
+  it.each(["completion", "sweep-only", "refused"] as const)(
+    "documents the burst bound: SWEEP_RUN_LIMIT + 1 leaves exactly the oldest unattested with %s", async (survivor) => {
+      const w = world("pr-gates");
+      w.state.blockOldWrite = true;
+      const group = concurrencyGroup();
+      group.enqueue("in-flight", () => w.relay("sweep"));
+      await w.blocked.promise;
+      const burst = burstProducers(w, SWEEP_RUN_LIMIT + 1, false);
+      enqueueBurst(w, group, burst, survivor);
+      w.released.resolve();
+      await group.drain();
+      expect(group.started).toEqual(["in-flight", survivor === "completion" ? String(burst.at(-1)?.id) : survivor]);
+      expect(group.errors).toHaveLength(survivor === "refused" ? 1 : 0);
+      expect(unattested(w, burst)).toEqual([9002]);
+      expect(w.state.checks.some((c) => c.head_sha === burst[0].head_sha)).toBe(false);
     },
   );
 });
@@ -921,29 +964,31 @@ describe("issue 1195 sweep rerun-heal", () => {
 });
 
 describe("issue 1195 sweep request budget", () => {
-  it.each([false, true])("pins all requests for 50 distinct workflow_run heads, attested=%s", async (attested) => {
-    const w = world();
-    w.state.producers = [];
-    w.state.suites = [];
-    for (let index = 0; index < 50; index++) {
-      const head = (index + 1).toString(16).padStart(40, "0");
-      w.state.suites.push({ ...suite(8001 + index, "success"), head_sha: head });
-      w.state.producers.push(verify(9001 + index, 8001 + index, "success"));
-      if (attested) w.state.checks.push({ name: "verify", head_sha: head, external_id: `${9001 + index}:1`,
-        status: "completed", conclusion: "success", app: { id: 5118623 } });
-    }
-    const result = await w.relay("sweep");
-    expect(result.sweep.examined).toBe(50);
-    expect(result.sweep.relayed).toHaveLength(attested ? 0 : 50);
-    expect(w.state.requests).toHaveLength(attested ? 252 : 552);
-    expect(w.state.requests.filter((url) => url.endsWith("/access_tokens"))).toHaveLength(1);
-    expect(w.state.requests.filter((url) => url === `${ROOT}/actions/runs?per_page=100`)).toHaveLength(1);
-    expect(w.state.requests.filter((url) => /\/actions\/runs\/[0-9]+$/.test(url))).toHaveLength(attested ? 100 : 200);
-    expect(w.state.requests.filter((url) => url.includes("/actions/workflows/pr-suite.yml/runs?"))).toHaveLength(attested ? 50 : 150);
-    expect(w.state.requests.filter((url) => url.includes("/commits/") && url.includes("/check-suites?"))).toHaveLength(50);
-    expect(w.state.requests.filter((url) => url.includes("/check-suites/") && url.includes("/check-runs?"))).toHaveLength(50);
-    expect(w.state.requests.filter((url) => url.includes("/jobs?"))).toHaveLength(attested ? 0 : 50);
-    expect(w.state.requests.filter((url) => url === `${ROOT}/check-runs`)).toHaveLength(attested ? 0 : 50);
+  it.each([false, true].flatMap((attested) => [1, 2, 5].map((pages) => ({ attested, pages }))))(
+    "pins requests for 50 distinct workflow_run heads across $pages pages, attested=$attested", async ({ attested, pages }) => {
+      const w = world();
+      w.state.producers = [];
+      w.state.suites = [];
+      for (let index = 0; index < 50; index++) {
+        const head = (index + 1).toString(16).padStart(40, "0");
+        w.state.suites.push({ ...suite(8001 + index, "success"), head_sha: head });
+        w.state.producers.push(verify(9001 + index, 8001 + index, "success"),
+          ...Array.from({ length: pages === 1 ? 0 : pages === 2 ? 3 : 8 }, (_, i) => unrelated(20000 + index * 10 + i)));
+        if (attested) w.state.checks.push({ name: "verify", head_sha: head, external_id: `${9001 + index}:1`,
+          status: "completed", conclusion: "success", app: { id: 5118623 } });
+      }
+      const result = await w.relay("sweep");
+      expect(result.sweep.examined).toBe(50);
+      expect(result.sweep.relayed).toHaveLength(attested ? 0 : 50);
+      expect(w.state.requests).toHaveLength((attested ? 251 : 551) + pages);
+      expect(w.state.requests.filter((url) => url.endsWith("/access_tokens"))).toHaveLength(1);
+      expect(w.state.requests.filter((url) => url.startsWith(`${ROOT}/actions/runs?per_page=100`))).toHaveLength(pages);
+      expect(w.state.requests.filter((url) => /\/actions\/runs\/[0-9]+$/.test(url))).toHaveLength(attested ? 100 : 200);
+      expect(w.state.requests.filter((url) => url.includes("/actions/workflows/pr-suite.yml/runs?"))).toHaveLength(attested ? 50 : 150);
+      expect(w.state.requests.filter((url) => url.includes("/commits/") && url.includes("/check-suites?"))).toHaveLength(50);
+      expect(w.state.requests.filter((url) => url.includes("/check-suites/") && url.includes("/check-runs?"))).toHaveLength(50);
+      expect(w.state.requests.filter((url) => url.includes("/jobs?"))).toHaveLength(attested ? 0 : 50);
+      expect(w.state.requests.filter((url) => url === `${ROOT}/check-runs`)).toHaveLength(attested ? 0 : 50);
   });
 });
 
@@ -1113,4 +1158,15 @@ describe("panel regression: incremental sweep deadline", () => {
     );
     expect(startedAt.every((time) => time < RUN_DEADLINE_MS)).toBe(true);
   });
+});
+
+it.each([5, 6])("reads at most five repository pages when a producer is on page %i", async (producerPage) => {
+  const w = world("pr-gates");
+  w.state.producers = [
+    ...Array.from({ length: (producerPage - 1) * 100 }, (_, i) => unrelated(20000 + i)),
+    gate(9002, "failure"),
+  ];
+  await w.relay("sweep");
+  expect(w.state.checks).toHaveLength(producerPage === 5 ? 4 : 0);
+  expect(w.state.requests.filter((url) => url.startsWith(`${ROOT}/actions/runs?per_page=100`))).toHaveLength(5);
 });

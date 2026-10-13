@@ -39,10 +39,11 @@ import { resolveWorkflowRunHead, type UpstreamPublicationCheck } from "./ledger-
 
 import {
   publicationBlockedContexts, idOf, newestProducersFor, compareProducerIdentities,
-  selectSweepCandidates, validateJobs, type CheckRunSuppression, type ProducerDeps, type SweepCandidate,
+  selectSweepCandidates, validateJobs, SWEEP_RUN_LIMIT, SWEEP_RUN_PAGE_LIMIT,
+  type CheckRunSuppression, type ProducerDeps, type SweepCandidate,
 } from "./ledger-relay-producers.ts";
 import { historyBoundDecision, postProducerCheck, publicationState } from "./ledger-relay-publication.ts";
-export { checkRunBody, selectSweepCandidates, validateJobs, SWEEP_RUN_LIMIT } from "./ledger-relay-producers.ts";
+export { checkRunBody, selectSweepCandidates, validateJobs, SWEEP_RUN_LIMIT, SWEEP_RUN_PAGE_LIMIT } from "./ledger-relay-producers.ts";
 export type { SweepApi, SweepCandidate } from "./ledger-relay-producers.ts";
 
 export interface SweepOutcome {
@@ -101,28 +102,32 @@ export function missingContextsFor(
  * Attestation skips publication jobs and writes, never cancellation healing.
  */
 export async function sweepOrphans(deps: SweepDeps): Promise<SweepOutcome> {
-  const listing = await deps.api.get<Record<string, unknown>>(
-    `${deps.apiRoot}/repos/${deps.repo}/actions/runs?per_page=100`,
-    "the repository's workflow-run listing for the orphan sweep",
-  );
-  // Guarded like the check-runs listing below, and for the same reason: apiCall
-  // answers undefined on an empty success body, so a 200 with no payload must
-  // read as "no runs" rather than throw a TypeError on the property access.
-  const candidates = selectSweepCandidates(
-    Array.isArray(listing?.workflow_runs) ? listing.workflow_runs : [],
-    deps.pinMap,
-    deps.triggerRunId,
-  );
+  const entries: unknown[] = [];
+  for (let page = 1; page <= SWEEP_RUN_PAGE_LIMIT; page += 1) {
+    const listing = await deps.api.get<Record<string, unknown>>(
+      `${deps.apiRoot}/repos/${deps.repo}/actions/runs?per_page=100${page === 1 ? "" : `&page=${page}`}`,
+      "the repository's workflow-run listing for the orphan sweep",
+    );
+    // An empty success body is an empty listing, never a property-access error.
+    const runs = Array.isArray(listing?.workflow_runs) ? listing.workflow_runs : [];
+    entries.push(...runs);
+    if (selectSweepCandidates(entries, deps.pinMap, "").length >= SWEEP_RUN_LIMIT || runs.length < 100 ||
+      (typeof listing.total_count === "number" && page * 100 >= listing.total_count)) break;
+  }
+  // Count the trigger inside the eligible window before excluding its mirror
+  // work. The mirror still retains a resolved trigger outside this window.
+  const candidates = selectSweepCandidates(entries, deps.pinMap, "")
+    .filter((candidate) => candidate.runId !== deps.triggerRunId);
   let triggerRun = deps.triggerRun;
   // The mirror supplies resolved identity even if the trigger is absent from
   // this bounded listing. Other callers can recover a listed trigger through
   // the same validation/resolution path as orphans, without posting it.
   const listedTrigger = deps.skipTrigger !== true && deps.triggerRunId !== ""
     ? selectSweepCandidates(
-      Array.isArray(listing?.workflow_runs) ? listing.workflow_runs.filter((entry: unknown) =>
+      entries.filter((entry: unknown) =>
         typeof entry === "object" && entry !== null &&
         idOf((entry as { id?: unknown }).id) === deps.triggerRunId,
-      ) : [], deps.pinMap, "",
+      ), deps.pinMap, "",
     )[0]
     : undefined;
   // Built as a mutable array and narrowed on return: SweepOutcome is readonly

@@ -6,6 +6,8 @@ import { normalizedAttempt } from "./ledger-relay-trigger.ts";
 
 /** A bounded recent-producer window; the trigger is retained independently. */
 export const SWEEP_RUN_LIMIT = 50;
+/** Unrelated workflow runs may fill pages; bound repository listing work too. */
+export const SWEEP_RUN_PAGE_LIMIT = 5;
 
 export interface SweepCandidate {
   runId: string;
@@ -108,7 +110,6 @@ export function selectSweepCandidates(
     if (runId === "" || runId === triggerRunId) continue;
     if (typeof run.head_sha !== "string" || run.head_sha === "") continue;
     if (typeof run.html_url !== "string" || run.html_url === "") continue;
-    if (candidates.length === SWEEP_RUN_LIMIT) break;
     candidates.push({
       runId,
       runAttempt: normalizedAttempt(
@@ -124,7 +125,7 @@ export function selectSweepCandidates(
       ...(includeUnfinished ? { status: typeof run.status === "string" ? run.status : "" } : {}),
     });
   }
-  return candidates;
+  return candidates.sort((first, second) => compareProducerIdentities(second, first)).slice(0, SWEEP_RUN_LIMIT);
 }
 
 /** Highest numeric producer id, then attempt, across every pinned path at one resolved SHA. */

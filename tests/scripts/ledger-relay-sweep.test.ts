@@ -142,15 +142,15 @@ describe("selectSweepCandidates", () => {
     expect(selected.map((entry) => entry.runId)).toEqual(["9009", "9008", "9007"]);
   });
 
-  it("caps at SWEEP_RUN_LIMIT candidates, taking the first in listing order", () => {
+  it("caps at SWEEP_RUN_LIMIT candidates after sorting newest first", () => {
     const many = Array.from({ length: SWEEP_RUN_LIMIT + 9 }, (_unused, index) =>
       runEntry({ id: 9000 + index, path: PATH_ACTIONLINT }),
     );
     const selected = selectSweepCandidates(many, PIN_MAP, "1");
     expect(selected).toHaveLength(SWEEP_RUN_LIMIT);
-    // The first SWEEP_RUN_LIMIT in listing order, so the newest completions.
-    expect(selected[0]?.runId).toBe("9000");
-    expect(selected[SWEEP_RUN_LIMIT - 1]?.runId).toBe(String(9000 + SWEEP_RUN_LIMIT - 1));
+    // Sort before truncating even when the API listing is oldest first.
+    expect(selected[0]?.runId).toBe(String(9000 + many.length - 1));
+    expect(selected[SWEEP_RUN_LIMIT - 1]?.runId).toBe(String(9000 + many.length - SWEEP_RUN_LIMIT));
   });
 
   it("drops a completed pinned run carrying no head SHA or no html_url, because nothing could be posted for it", () => {
@@ -187,7 +187,7 @@ describe("selectSweepCandidates", () => {
       PIN_MAP,
       "9001",
     );
-    expect(selected.map((entry) => entry.runId)).toEqual(["9010", "9011", "9012", "9013"]);
+    expect(selected.map((entry) => entry.runId)).toEqual(["9013", "9012", "9011", "9010"]);
   });
 
   // Issue 1090's shape, at the sweep's own door. Flattening list pins is what
@@ -238,7 +238,7 @@ describe("selectSweepCandidates", () => {
       TWO_PATH_PIN_MAP,
       "1",
     );
-    expect(selected.map((entry) => entry.runId)).toEqual(["9420", "9421"]);
+    expect(selected.map((entry) => entry.runId)).toEqual(["9421", "9420"]);
   });
 
   it("fails closed on a run whose event or head branch is absent or not a string", () => {
@@ -828,7 +828,7 @@ describe("producer-bound sweep attestation", () => {
 });
 
 describe("trigger recency and attempt attestation", () => {
-  it("retains a listed trigger beyond the orphan cap without reducing that cap", async () => {
+  it("counts a listed newest trigger inside the eligible producer window", async () => {
     const { api, requests } = fakeApi({
       [RUNS_URL]: { workflow_runs: [
         ...Array.from({ length: SWEEP_RUN_LIMIT }, (_, n) => runEntry({ id: 8000 + n, path: PATH_ACTIONLINT })),
@@ -838,7 +838,7 @@ describe("trigger recency and attempt attestation", () => {
       [jobsUrl("8019")]: { jobs: [] },
     });
     const outcome = await sweepOrphans(deps(api, { triggerRunId: "9003" }));
-    expect(outcome).toEqual({ examined: SWEEP_RUN_LIMIT, relayed: [] });
+    expect(outcome).toEqual({ examined: SWEEP_RUN_LIMIT - 1, relayed: [] });
     expect(requests.some((request) => request.url?.includes("/jobs?"))).toBe(false);
   });
 
