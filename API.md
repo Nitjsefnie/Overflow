@@ -20,6 +20,10 @@ major version. Failure answers — the error envelope, each route's status codes
 and error codes — are documented shapes under the same version rule. A breaking
 change requires a new major version and at least 30 days' notice, and during
 the notice window the served old shape keeps working unchanged.
+A breaking change made to close a security problem may ship without the 30-day
+notice window. It still takes the major version bump that semantic versioning
+requires, and the same release carries a changelog or deprecation entry stating
+the security reason and the change.
 
 **Current deprecations:**
 
