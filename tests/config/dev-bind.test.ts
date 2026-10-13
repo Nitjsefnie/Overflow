@@ -6,10 +6,6 @@ describe("development server binding", () => {
     const { scripts } = JSON.parse(
       readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
     );
-    const args = scripts.dev.trim().split(/\s+/);
-    const hostnameFlag = args.lastIndexOf("--hostname");
-
-    expect(hostnameFlag).toBeGreaterThan(-1);
-    expect(args[hostnameFlag + 1]).toBe("127.0.0.1");
+    expect(scripts.dev).toBe("next dev --hostname 127.0.0.1");
   });
 });
