@@ -121,6 +121,67 @@ Both forges must be able to reach their callback URLs over public HTTPS. Every r
 
 The production deployment runs the application as a dedicated unprivileged system account rather than as root, under a systemd unit that keeps the filesystem read-only apart from the one cache directory Next writes at runtime. `deploy/overflow.service` is that unit, and `deploy/README.md` is the procedure that stands it up on a host, deploys a new revision under it, and rolls it back. `tests/deploy/unit-file.test.ts` fails if the unit loses any of that hardening.
 
+### Starting, healthy and degraded states
+
+Read the service state, the loopback probe and the journal together:
+
+```bash
+systemctl status overflow.service --no-pager
+curl --connect-timeout 5 --max-time 5 -sS -w '\n%{http_code}\n' http://127.0.0.1:3000/api/readiness
+journalctl -u overflow.service --since '30 minutes ago' --no-pager
+```
+
+Readiness checks the database and migration compatibility only. A `200` does
+not prove that GitHub or GitLab is reachable, that webhook credentials can be
+decrypted, or that reconciliation is progressing. A `503` response contains
+only `{"status":"unavailable"}`; its reason is in the journal. These are
+operational states, not separate readiness response values:
+
+| State | Signal | Journal message (static text to search for) | Next step |
+| --- | --- | --- | --- |
+| Starting | Immediately after start or restart, systemd may already say `active` while the listener still refuses connections. | No dedicated application startup-success message. `Reconciliation sweep` shows the startup sweep ran; `Could not finalize abandoned reconciliation runs on startup` reports a failed recovery step. | Use the bounded retries in [deployment verification](deploy/README.md#7-verify). If startup never reaches readiness, inspect the journal and database rather than treating `active` as ready. |
+| Healthy | Readiness `200`, successful webhook deliveries, and completed folds when work is due. | `Reconciliation sweep` with `failed: 0`; `Reconciliation drain` with `RECONCILED` when work completes or `IDLE` when no job is claimable. After a queue outage, `recovered:` names the recovered failure site. | Check recent work and the queue below. A successful sweep only enqueues work, and a recovered drain does not prove every repository folded successfully. |
+| Degraded | Readiness can remain `200` while repositories fall behind, jobs retry or wait for budget, or webhook credential lookup answers `503`. | `Reconciliation failed for repository`; `Reconciliation drain` with `RETRY_SCHEDULED`, `FAILED` or `BUDGET_HELD`; `Reconciliation GraphQL budget state changed`; `Webhook credential lookup failed (phase credential lookup, selector ` | Match the repository/selector and failure class to the queue and forge delivery history. For upstream failures, check forge availability and sponsor access. For `BELOW_RESERVE`, inspect the moderator budget panel and reset time. For credential lookup failure, check the encryption-key configuration using [section 11](deploy/README.md#11-rotating-the-credential-encryption-key); do not overwrite stored credentials to bypass it. |
+| Disconnected | Loopback readiness `503` for a database/schema failure, or no loopback response if the service is down. If loopback works but the public origin fails, inspect the proxy path. | `Readiness probe failed:` carries the database reason; `Reconciliation worker could not drain the job queue` reports a drain outage. `still failing:` counts continued failures. A request stopped before the application may leave no application journal line. | Check PostgreSQL/service state and the reported migration mismatch. Compare the public and loopback paths, then check nginx and the [reverse-proxy requirements](deploy/README.md#reverse-proxy-requirements). Use the deployment or rollback procedure for a release/schema mismatch. |
+| Irrecoverable by automatic restart | The service is `failed` after exhausting the unit's five starts in 300 seconds; automatic restarts have stopped. This does not by itself mean data is lost. | Inspect the application error preceding the stop; a configured invalid App key can report `does not contain a parseable private key.` or `does not contain an RSA private key (received `. There is no single application message for every terminal startup failure. | Correct the cause or follow [rollback](deploy/README.md#9-rolling-back). Then reset the start limit with `systemctl reset-failed overflow.service` and start the service. If database recovery is required, follow [backup/restore](deploy/backup-restore.md). |
+
+`Reconciliation drain` emits nonroutine outcomes immediately; routine `IDLE`
+and `DEFERRED` counts are aggregated until a drain at or after the 15-minute
+interval. A queue-drain outage prints its first failure, then counted summaries
+on continued failures at least 60 seconds apart, and `recovered:` on the first
+successful drain. Silence inside either interval is not proof of health. If automatic reconciliation is
+disabled with `OVERFLOW_DISABLE_RECONCILIATION_SWEEP`, neither the worker nor
+the sweep starts; queued jobs remain outstanding.
+
+### Inspect failed or retrying reconciliation jobs
+
+Run this read-only query with a database connection configured for the instance
+you intend to inspect:
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+select r.owner_name, r.active, j.repository_id, j.state, j.reason,
+       j.attempt_count, j.run_after, j.last_failure_at
+from repository_reconciliation_jobs j
+join registered_repositories r on r.id = j.repository_id
+where j.state = 'FAILED'
+   or (j.state = 'PENDING' and j.last_failure_at is not null)
+order by j.run_after, j.repository_id;
+SQL
+```
+
+The queue has `PENDING`, `RUNNING` and `FAILED` states, not a `RETRYING` state.
+The query includes failed jobs and pending jobs with a recorded failure; the
+latter may be waiting for retry backoff or a later deferral. `run_after` is the
+earliest scheduled claim time, not a completion deadline. The cause is in the
+journal, not an error-text column. Ordinary fold failures get retries after
+one, five, fifteen and sixty minutes, then remain `FAILED` on the fifth failed
+attempt. The startup/six-hour sweep can revive failed jobs for active
+repositories; a failed job is not permanently irrecoverable. After correcting
+the cause, the explicit reconciliation command in [Reconciliation](#reconciliation)
+can re-read upstream history. An empty result does not prove health: this
+query omits new pending work and running jobs.
+
 ### Data retention
 
 Webhook delivery receipts and reconciliation run history are pruned automatically, so neither grows without bound. Three windows cover webhook receipts: a PROCESSED receipt is deleted 30 days after it was processed, a FAILED one 90 days after, and an abandoned PENDING receipt — one whose delivery was never finalized and whose processing lease has expired — 90 days after it was received. Reconciliation run history keeps terminal runs (COMPLETED or FAILED) for 90 days after completion, together with their `reconciliation_changes` rows, which go first because the foreign key to the run has no cascade.
