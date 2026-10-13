@@ -6,9 +6,9 @@ import {
   serializedSnapshot,
   surfaceUpdateInputs,
 } from "../../scripts/update-http-surface-snapshot.ts";
-import type { RecordedHttpSurface } from "../../scripts/surface-change.ts";
+import type { DerivedHttpSurface } from "../../scripts/surface-change.ts";
 
-function derived(): RecordedHttpSurface & { snapshotFormat: 2 } {
+function derived(): DerivedHttpSurface {
   return {
     snapshotFormat: 2,
     errorEnvelope: { error: { code: "string", message: "string" } },

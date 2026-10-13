@@ -1,7 +1,7 @@
 import { errorEnvelope } from "../src/lib/http/error-response.ts";
 import { deriveHttpSurfaceAnswers, shapeOf } from "./http-surface-derive.ts";
 import { deriveRouteFailures } from "./http-surface-derive-failures.ts";
-import type { RecordedHttpSurface } from "./surface-change.ts";
+import type { DerivedHttpSurface } from "./surface-change.ts";
 
 /**
  * The whole recorded HTTP surface as the code derives it (issue 1056), in
@@ -12,7 +12,7 @@ import type { RecordedHttpSurface } from "./surface-change.ts";
  * answers, derived statically from its import graph
  * (scripts/http-surface-derive-failures.ts).
  */
-export async function deriveHttpSurfaceRecord(): Promise<RecordedHttpSurface & { snapshotFormat: 2 }> {
+export async function deriveHttpSurfaceRecord(): Promise<DerivedHttpSurface> {
   const answers = await deriveHttpSurfaceAnswers();
   const keys = Object.keys(answers);
   return {
