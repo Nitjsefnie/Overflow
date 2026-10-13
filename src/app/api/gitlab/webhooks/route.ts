@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { parseGitLabWebhookDeliveryDetailed } from "@/lib/gitlab/webhook-schema";
 import { verifyGitLabWebhookToken } from "@/lib/gitlab/webhook-token";
-import { PostgresFoldStore } from "@/lib/fold/postgres-store";
+import { PostgresWebhookDeliveryStore } from "@/lib/webhooks/postgres-delivery-store";
 import { processWebhook, type WebhookProcessingResult, type WebhookReceiptScope } from "@/lib/webhooks/processor";
 import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
@@ -179,7 +179,7 @@ export async function POST(request: Request): Promise<Response> {
     checkRateLimit: () => webhookRateLimiter.admit(),
     lookupCredential: (selector, provider) => new PostgresRepositoryStore().findWebhookCredential(selector, provider),
     processWebhook: async (delivery, scope) => {
-      const store = new PostgresFoldStore();
+      const store = new PostgresWebhookDeliveryStore();
       return processWebhook({
         store,
         enqueueReconciliation: (repositoryId, event) => store.enqueueWebhookReconciliation(repositoryId, event),

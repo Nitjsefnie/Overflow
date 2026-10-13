@@ -4,7 +4,7 @@ import {
   type GitHubWebhookDelivery,
 } from "@/lib/github/webhook-schema";
 import { verifyGitHubWebhookSignature } from "@/lib/github/webhook-signature";
-import { PostgresFoldStore } from "@/lib/fold/postgres-store";
+import { PostgresWebhookDeliveryStore } from "@/lib/webhooks/postgres-delivery-store";
 import { processWebhook, type WebhookProcessingResult, type WebhookReceiptScope } from "@/lib/webhooks/processor";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { githubPayloadRepositoryId, webhookSelector, type WebhookCredentialLookup } from "@/lib/webhooks/credentials";
@@ -171,7 +171,7 @@ export async function POST(request: Request): Promise<Response> {
     checkRateLimit: () => webhookRateLimiter.admit(),
     lookupCredential: (selector, provider) => new PostgresRepositoryStore().findWebhookCredential(selector, provider),
     processWebhook: async (delivery, scope) => {
-      const store = new PostgresFoldStore();
+      const store = new PostgresWebhookDeliveryStore();
       return processWebhook({
         store,
         enqueueReconciliation: (repositoryId, event) => store.enqueueWebhookReconciliation(repositoryId, event),
