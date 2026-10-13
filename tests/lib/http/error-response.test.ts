@@ -60,6 +60,7 @@ function envelopeCopies(source: ts.SourceFile, checker: ts.TypeChecker): string[
       keys.unshift(access.key);
       target = access.object;
     }
+    target = unwrap(target);
     if (!ts.isIdentifier(target)) return;
     const symbol = checker.getSymbolAtLocation(target);
     if (symbol === undefined) return;
@@ -69,7 +70,8 @@ function envelopeCopies(source: ts.SourceFile, checker: ts.TypeChecker): string[
   };
   const isAssign = (node: ts.CallExpression) => {
     const access = member(node.expression);
-    return access?.key === "assign" && ts.isIdentifier(access.object) && access.object.text === "Object";
+    const receiver = access === undefined ? undefined : unwrap(access.object);
+    return access?.key === "assign" && receiver !== undefined && ts.isIdentifier(receiver) && receiver.text === "Object";
   };
   const collectWrites = (node: ts.Node) => {
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
@@ -208,9 +210,10 @@ function envelopeCopies(source: ts.SourceFile, checker: ts.TypeChecker): string[
     if (ts.isCallExpression(node)) {
       if (isAssign(node)) check(node, resolve(node));
       const access = member(node.expression);
-      if (access !== undefined && ts.isIdentifier(access.object) &&
-          ((access.object.text === "Response" && access.key === "json") ||
-           (access.object.text === "JSON" && access.key === "stringify")) && node.arguments[0] !== undefined) {
+      const receiver = access === undefined ? undefined : unwrap(access.object);
+      if (access !== undefined && receiver !== undefined && ts.isIdentifier(receiver) &&
+          ((receiver.text === "Response" && access.key === "json") ||
+           (receiver.text === "JSON" && access.key === "stringify")) && node.arguments[0] !== undefined) {
         check(node, resolve(node.arguments[0]));
       }
     }
@@ -248,6 +251,11 @@ const bypasses = [
   ["helper parameter forwarding", 'function wrap(detail) { return { error: detail }; } Response.json(wrap({ code: "REJECTED", message: "Denied." }));'],
   ["reordered differently named helper", 'function copiedFailure(status, code, message) { const detail = { message, code }; return Response.json({ error: detail }, { status }); }'],
   ["static computed and template keys", 'const detail = { ["code"]: "REJECTED", [`message`]: "Denied." }; Response.json({ [`error`]: detail });'],
+  ["inner properties written through a cast target", 'const detail = {}; (detail as Record<string, string>).code = "REJECTED"; (detail as Record<string, string>).message = "Denied."; Response.json({ error: detail });'],
+  ["inner properties written through a non-null target", 'const detail = {}; detail!.code = "REJECTED"; detail!.message = "Denied."; Response.json({ error: detail });'],
+  ["Object.assign into a cast target", 'const detail = {}; Object.assign(detail as object, { code: "REJECTED", message: "Denied." }); Response.json({ error: detail });'],
+  ["Object.assign through a cast receiver", 'const detail = {}; (Object as ObjectConstructor).assign(detail, { code: "REJECTED", message: "Denied." }); Response.json({ error: detail });'],
+  ["Response.json through a cast receiver", 'function wrap(detail) { return { error: detail }; } (Response as typeof Response).json(wrap({ code: "REJECTED", message: "Denied." }));'],
 ] as const;
 
 const monotoneCases = [
