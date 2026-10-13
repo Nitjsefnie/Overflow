@@ -119,7 +119,14 @@ affect every later `docker compose up`. That password is committed and well know
 address other than a loopback one publishes a database with known credentials
 to everything that can route to this machine. To reach it from elsewhere,
 forward the loopback port over SSH — `ssh -L 5432:127.0.0.1:5432 <host>` —
-instead of widening the bind address. Then install, migrate and run:
+instead of widening the bind address.
+
+The other quickstart listener is the application: `pnpm dev` binds to
+`127.0.0.1`, so it is reachable only on this machine by default. To expose it
+deliberately, use `pnpm dev --hostname 0.0.0.0`; that listens on all IPv4
+interfaces, allowing other hosts that can reach this machine to connect. Use a
+trusted development network and set `APP_URL` and the OAuth callback URL to
+the host and port those clients use. Then install, migrate and run:
 
 ```bash
 pnpm install --frozen-lockfile
@@ -127,7 +134,8 @@ pnpm db:migrate
 pnpm dev
 ```
 
-The development server binds port 3000 by default. To use another port, pass
+Open `http://127.0.0.1:3000` (port 3000 by default, or the port set by `PORT`).
+To use another port, pass
 Next.js's `--port` flag, for example `pnpm dev --port 3130`.
 If you override `POSTGRES_HOST_PORT`, set `DATABASE_URL` to use that host port
 too. If the dev server uses another port, set `APP_URL` and the GitHub OAuth
@@ -155,6 +163,33 @@ itself. Trip `014`'s opening-authority precondition, for instance, and `013`
 stays applied, having already dropped the `users_github_login_key` constraint;
 that is the intended resting place until the data the precondition names is
 corrected.
+
+### Removing the local development copy
+
+Stop `pnpm dev` with Ctrl-C in its terminal. If you started PostgreSQL with
+Compose, run this from the same checkout, using the same Compose project name
+if you overrode it during setup:
+
+```bash
+docker compose down -v
+```
+
+This removes the project's containers and network and deletes the declared
+`overflow-postgres-data` volume, including its database contents. Docker
+prefixes that volume's name with the Compose project name. Omit `-v` to keep
+the database for a later restart. If you used an existing PostgreSQL server,
+Compose does not remove that database; remove only the database dedicated to
+this development copy with that server's own tools.
+
+Remove the local environment file and generated files from the checkout:
+
+```bash
+rm -f .env next-env.d.ts tsconfig.tsbuildinfo
+rm -rf .next node_modules
+```
+
+The source checkout remains; installing dependencies and running the setup
+again recreates the development copy.
 
 ## The checks
 
@@ -200,6 +235,13 @@ node scripts/check-prerendered-routes.ts
 node scripts/check-page-geometry.mjs
 node scripts/check-perf-budget.ts
 ```
+
+The optional geometry command starts a separate production-mode application
+listener on all interfaces at port 3219 by default (`LAYOUT_CHECK_PORT`
+overrides the port), plus a Chrome DevTools listener on an automatically
+allocated port. Pass `--base-url http://127.0.0.1:3000` (adjust the port if
+needed) to reuse the loopback application listener instead; Chrome still
+starts.
 
 The order is CI's, and it is the useful one: the migration runs first because
 the database suites migrate a container of their own and a broken migration

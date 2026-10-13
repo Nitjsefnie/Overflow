@@ -28,6 +28,13 @@ These steps stand up a local copy of the application against a local PostgreSQL 
 
    That service publishes PostgreSQL on loopback only by default at host port 5432, and its password is a committed, well-known string. `POSTGRES_HOST_BIND` widens that binding, while `POSTGRES_HOST_PORT` overrides the host port; the container port stays 5432. Compose reads both values from your shell or the root `.env`, so any non-loopback bind publishes a database with known credentials to everything that can route to this machine. To reach it from another host, forward the loopback port over SSH — `ssh -L 5432:127.0.0.1:5432 <host>` — instead of widening the bind address.
 
+   The other quickstart listener is the application: `pnpm dev` binds to
+   `127.0.0.1`, so it is reachable only on this machine by default. To expose
+   it deliberately, use `pnpm dev --hostname 0.0.0.0`; that listens on all
+   IPv4 interfaces, allowing other hosts that can reach this machine to
+   connect. Use a trusted development network and set `APP_URL` and the OAuth
+   callback URL to the host and port those clients use.
+
 3. Point `DATABASE_URL` at that database, then install and migrate:
 
    ```bash
@@ -43,7 +50,8 @@ These steps stand up a local copy of the application against a local PostgreSQL 
    pnpm dev
    ```
 
-   The development server binds port 3000 by default. To use another port,
+   Open `http://127.0.0.1:3000` (port 3000 by default, or the port set by
+   `PORT`). To use another port,
    pass Next.js's `--port` flag, for example `pnpm dev --port 3130`.
    Set `APP_URL` and the GitHub OAuth callback URL
    (`<APP_URL>/api/auth/callback/github`) to use that port too; sign-in and
@@ -59,7 +67,41 @@ pnpm build
 node scripts/check-page-geometry.mjs
 ```
 
+The optional geometry command starts a separate production-mode application
+listener on all interfaces at port 3219 by default (`LAYOUT_CHECK_PORT`
+overrides the port), plus a Chrome DevTools listener on an automatically
+allocated port. To reuse the loopback application listener instead of starting
+another app server, pass `--base-url http://127.0.0.1:3000` (adjust the port if
+needed); Chrome still starts.
+
 `CONTRIBUTING.md` covers the rest of the development surface, including the conventions that reject work silently.
+
+### Removing the local development copy
+
+Stop `pnpm dev` with Ctrl-C in its terminal. If you started PostgreSQL with
+Compose, run the following from the same checkout, using the same Compose
+project name if you overrode it during setup:
+
+```bash
+docker compose down -v
+```
+
+This removes the project's containers and network and deletes the declared
+`overflow-postgres-data` volume, including its database contents. Docker
+prefixes that volume's name with the Compose project name. Omit `-v` if you
+want to keep the database for a later restart. If you used an existing
+PostgreSQL server instead, Compose does not remove that database; remove only
+the database dedicated to this development copy with that server's own tools.
+
+Then remove the local environment file and generated files from the checkout:
+
+```bash
+rm -f .env next-env.d.ts tsconfig.tsbuildinfo
+rm -rf .next node_modules
+```
+
+The source checkout remains; installing dependencies and running the setup
+again recreates the development copy.
 
 ## Operating an instance: GitHub OAuth and webhooks
 
