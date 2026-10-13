@@ -7,10 +7,13 @@ import {
   useTrustedOrigin,
 } from "../support/trusted-origin";
 
-const { productionAuth, productionRole } = vi.hoisted(() => ({
-  productionAuth: vi.fn(),
-  productionRole: vi.fn(),
-}));
+const { productionAuth, productionRole } = await vi.hoisted(async () => {
+  // A preceding suite can warm these handlers before this file installs its role mock.
+  await import("@/app/api/moderation/[id]/route");
+  await import("@/app/api/moderation/cohort/route");
+  vi.resetModules();
+  return { productionAuth: vi.fn(), productionRole: vi.fn() };
+});
 
 vi.mock("@/auth", () => ({ auth: productionAuth }));
 vi.mock("@/lib/moderation/current-role", () => ({ getCurrentUserRole: productionRole }));
