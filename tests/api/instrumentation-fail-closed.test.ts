@@ -22,7 +22,8 @@ const { resolverFactory, startSweep, startWorker, drain, sweep, finalizeRuns, wo
   coordinationSql: vi.fn(),
 }));
 
-vi.mock("@/lib/github/app-installation-auth", () => ({
+vi.mock("@/lib/github/app-installation-auth", async (importActual) => ({
+  ...await importActual<typeof import("@/lib/github/app-installation-auth")>(),
   appInstallationTokenResolverFromEnv: resolverFactory,
 }));
 

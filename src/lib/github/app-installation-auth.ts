@@ -14,7 +14,12 @@ import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
 
 export type GitHubAppAuthConfig = { appId: string; privateKey: string };
 
-export type AppInstallationToken = { token: string; installationId: number };
+export type AppInstallationToken = {
+  token: string;
+  installationId: number;
+  /** Absent on a direct resolver: the original ledger App authentication path. */
+  app?: "ledger" | "registration";
+};
 
 /**
  * Null means "no App installation for this repository" — the caller falls

@@ -15,6 +15,7 @@ import type { ClaimedReconciliationJob, ReconciliationJobReason } from "@/lib/fo
 import type { GitHubWebhookDelivery, GitHubWebhookIssue } from "@/lib/github/webhook-schema";
 import type { WebhookDeliveryClaim, WebhookDeliveryStore, WebhookReceiptScope, WebhookRepositoryRegistration } from "@/lib/webhooks/processor";
 import { PostgresWebhookDeliveryStore } from "@/lib/webhooks/postgres-delivery-store";
+import type { RegisteredRepository } from "@/lib/repositories/register";
 
 export { claimGitHubIdentity, claimForgeIdentity } from "@/lib/fold/identity-claims";
 export { repositoryLockNamespace, reclaimCoordinationConnection } from "@/lib/fold/repository-coordination";
@@ -84,7 +85,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return this.repositoryLookup.markRepositoryUnavailable(input);
   }
 
-  public async findRepositoryByOwnerName(ownerName: string): Promise<{ id: string } | null> {
+  public async findRepositoryByOwnerName(ownerName: string): Promise<Pick<RegisteredRepository, "id" | "registrationMethod"> | null> {
     return this.repositoryLookup.findRepositoryByOwnerName(ownerName);
   }
 
