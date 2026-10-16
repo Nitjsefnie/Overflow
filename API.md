@@ -25,6 +25,12 @@ notice window. It still takes the major version bump that semantic versioning
 requires, and the same release carries a changelog or deprecation entry stating
 the security reason and the change.
 
+**Version history:**
+
+- 1.2.0: `POST /api/repositories` accepts the optional `registrationMethod`
+  selector for GitHub App registration; `DELETE /api/repositories` adds the
+  optional `appAccessRemains` guidance for App-registered repositories.
+
 **Current deprecations:**
 
 - `POST /api/account/export`, `account.avatarUrl` — always `null` since
@@ -110,11 +116,21 @@ Failures use `{ "error": { "code": "...", "message": "..." } }`:
 ### Submit a repository
 
 Send `POST /api/repositories` with `Authorization: Bearer <token>` and
-`Content-Type: application/json`. Use the Overflow-issued token; registration
-uses the account's stored GitHub OAuth credential for its GitHub operations.
-The repository must be public, and that account must have GitHub administrator
-permission for it. The catalog labels must already exist on the repository;
-registration checks them and installs a webhook.
+`Content-Type: application/json`. Use the Overflow-issued token. Both GitHub
+registration methods read the repository and its labels with the account's
+stored GitHub OAuth credential. The repository must be public, that account
+must have GitHub administrator permission for it, and the catalog labels must
+already exist on the repository.
+
+The default `oauth_hook` method creates a repository webhook. To use `app`,
+install this instance's least-privilege registration GitHub App on the
+submitted repository first; the instance must have that App configured.
+App registration uses the public-identity sign-in and requests no OAuth
+webhook-administration scope (`admin:repo_hook`). It skips the granted-scope
+probe and creates neither a per-repository webhook nor a webhook credential.
+GitHub must still report `permissions.admin: true` on the sponsor's repository
+read; an absent permissions object or an admin flag that is not true refuses
+registration.
 
 A bearer-token request is exempt from the origin check — a script is not a
 browser and sends no `Origin` header — but it is not exempt from the content
@@ -122,12 +138,13 @@ type: `Content-Type: application/json` is required either way. The same endpoint
 reached with a browser session cookie instead of a bearer token is
 same-origin only, so its `Origin` must equal the origin of `APP_URL`.
 
-The JSON body contains exactly these required fields. Extra fields, including
-extra fields inside label objects, are rejected.
+The JSON body contains these fields, required unless marked optional. Extra
+fields, including extra fields inside label objects, are rejected.
 
 | Field | Type and requirements |
 | --- | --- |
 | `repositoryUrl` | String: one `owner/name` or canonical GitHub repository URL. |
+| `registrationMethod` | Optional string: `"oauth_hook"` (the default when omitted) or `"app"`. App registration is available only for GitHub repositories; `provider: "gitlab"` with `registrationMethod: "app"` is rejected. |
 | `openingName` | Nonblank string: opening catalog display name. |
 | `actualName` | Nonblank string: actual catalog display name. |
 | `openingLabels` | Nonempty array of `{ "label": string, "comparisonPoints": number, "reservePoints": number }`. Both point values must be integers from 1 through 10. |
@@ -323,7 +340,9 @@ runtime.
 
 ### Registration responses
 
-Success is HTTP `201`. Example body (identifiers vary):
+Success is HTTP `201`. The example below shows an OAuth-hook registration
+(identifiers vary). App registration returns the same fields with
+`repository.githubWebhookId: null`; no webhook credential is returned.
 
 ```json
 {
@@ -349,7 +368,14 @@ sweep brings its existing work in later, or arrange a
 never the remedy.
 
 Errors have `{ "error": { "code": "...", "message": "..." } }`. Match the HTTP
-status and code, then use the message to distinguish causes:
+status and code, then use the message to distinguish causes. App registration
+shares the authentication, request, catalog, public-visibility, account,
+conflict and persistence checks. Repository and label reads still use the
+sponsor's stored OAuth authorization, so their OAuth recovery rows apply to
+both methods. Only `oauth_hook` runs the granted-scope probe, creates a
+repository webhook or performs webhook rollback. The separate messages for
+the App-authenticated installation lookup name the instance's registration
+App credential and operator instead.
 
 | HTTP | Code | Exact message | Meaning / next step |
 | --- | --- | --- | --- |
@@ -359,19 +385,19 @@ status and code, then use the message to distinguish causes:
 | 400 | `INVALID_INPUT` | Catalog validation message listed below. | Correct the catalog names, labels, or points. |
 | 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid token format or is unknown (including a revoked token, and an expired one — an unused token whose 30-minute delivery window closed, or a confirmed token past the 90 days its first use started, so an expired token is refused exactly like an unknown one). Check the copied token or generate a replacement in the browser. |
 | 401 | `UNAUTHENTICATED` | `Sign in is required.` | No recognized bearer credential and no signed-in session. Supply the bearer header or sign in. |
-| 401 | `GITHUB_CREDENTIALS` | `GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to <step>. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry registration.` | GitHub rejected the stored GitHub authorization for the account (expired or revoked); the account's Overflow session is fine. Refresh the authorization by signing out and back in, then retry the registration. `<step>` is `read its granted permissions` when the rejection came from the granted-scope check that precedes every GitHub registration, otherwise the lookup, label-read, or webhook-create step that died. |
+| 401 | `GITHUB_CREDENTIALS` | `GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to <step>. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry registration.` | GitHub rejected the stored GitHub authorization for the account (expired or revoked); the account's Overflow session is fine. Refresh the authorization by signing out and back in, then retry the registration. `<step>` is `read its granted permissions` when the rejection came from the granted-scope check that precedes OAuth-hook GitHub registration, otherwise the lookup, label-read, or webhook-create step that died. |
 | 403 | `FORBIDDEN` | `The request origin is not allowed.` | A browser (session-cookie) request carried no `Origin` header or one that is not the origin of `APP_URL`. A bearer-token request never reaches this: its origin is not consulted. |
 | 403 | `FORBIDDEN` | `The account is not eligible to register repositories.` | The account is banned or recalibrating. Resolve the account restriction; regenerating the token does not remove it. |
-| 403 | `GITHUB_WEBHOOK_SCOPE_REQUIRED` | `The GitHub authorization Overflow holds for your account cannot administer repository webhooks: registration needs the admin:repo_hook scope. Use "Sign in to register a repository" to authorize webhook administration with the same GitHub account, then register again.` | The account signed in as a contributor, which grants GitHub nothing beyond public identity, and the scopes GitHub reports for the stored authorization (its `X-OAuth-Scopes`) include neither `admin:repo_hook` nor a scope that subsumes it for public repositories (`repo`, `public_repo`). Answered before any repository or webhook request, for session and bearer callers alike. In the browser, use the landing page's "Sign in to register a repository" or the same action on the registration page; GitHub keeps the account and adds the grant. A bearer token then works without being regenerated: it resolves to the account's stored authorization. |
+| 403 | `GITHUB_WEBHOOK_SCOPE_REQUIRED` | `The GitHub authorization Overflow holds for your account cannot administer repository webhooks: registration needs the admin:repo_hook scope. Use "Sign in to register a repository" to authorize webhook administration with the same GitHub account, then register again.` | For `registrationMethod: "oauth_hook"` only: the account signed in as a contributor, which grants GitHub nothing beyond public identity, and the scopes GitHub reports for the stored authorization (its `X-OAuth-Scopes`) include neither `admin:repo_hook` nor a scope that subsumes it for public repositories (`repo`, `public_repo`). Answered before any repository or webhook request, for session and bearer callers alike. In the browser, use the landing page's "Sign in to register a repository" or the same action on the registration page; GitHub keeps the account and adds the grant. A bearer token then works without being regenerated: it resolves to the account's stored authorization. |
 | 403 | `FORBIDDEN` | `Only public GitHub repositories can be registered.` | Choose a public repository. |
-| 403 | `FORBIDDEN` | `GitHub administrator permission is required for the submitted repository.` | Use an account with administrator permission for that repository. |
+| 403 | `FORBIDDEN` | `GitHub administrator permission is required for the submitted repository.` | The OAuth-hook method requires administrator permission for that repository. App-specific refusals below use different wording. |
 | 403 | `GITHUB_ACCESS` | `GitHub refused to <step> (HTTP 403). GitHub answers 403 both when the Overflow OAuth application is not yet authorized and when it is temporarily limiting requests, and this response carries nothing that separates the two causes. Wait a minute and retry registration before changing anything. <cause> Review Overflow's authorization at https://github.com/settings/applications, then retry registration.` | GitHub refused a setup step without rate-limit evidence, so the answer cannot separate a missing Overflow OAuth authorization from a temporary limit; wait a minute and retry first. `<step>` is the lookup, label-read, or webhook-create step that died, and `<cause>` names the missing authorization — for an organization-owned repository, the owner approval the Overflow application needs there. |
 | 403 | `GITHUB_ACCESS` | `GitHub answered 404 for the request to <step>. GitHub returns 404 rather than 403 when it will not reveal a resource, which can indicate missing authorization. The repository may also have been renamed, moved or deleted<since it was looked up>. <cause> Review Overflow's authorization at https://github.com/settings/applications, then retry registration.` | GitHub hid the resource the setup step asked for, which it does instead of refusing it; treat the step as unauthorized until checked. `<since it was looked up>` appears when the repository had already been looked up, and `<cause>` again names the missing authorization, with the organization-owned variant as above. |
 | 409 | `CONFLICT` | `This GitHub repository is already registered.` | Use the existing registration. |
 | 409 | `CONFLICT` | `The GitHub path <owner/name> is claimed by a different registration. The submitted repository is not registered, and it cannot be registered while another registration holds that path.` | The submitted repository has never been registered, but another registration holds its `owner/name`. Retrying repeats the same collision; the registration holding the path has to be resolved first. |
 | 409 | `CONFLICT` | `The GitHub webhook created for the submitted repository collided with one a different registration already records. The submitted repository is not registered. Registering again requests a new webhook from GitHub, so retry once before treating this as stored state that has to be resolved.` | The submitted repository has never been registered. The collision is on the webhook id GitHub returned for the hook this attempt created, and registering again requests another webhook, so retry once first. Only a collision that repeats points at stored state that has to be resolved. |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` | The request declared a `Content-Type` that is not `application/json`. This applies to bearer-token requests too, and is answered before the token is looked up. |
-| 429 | `GITHUB_RATE_LIMITED` | `GitHub rate-limited the request to <step> (HTTP <status>). Please retry registration later.` | GitHub limited a setup step. `<status>` is 429, or 403 carrying rate-limit evidence; GitHub may append a `Retry after <N> seconds.` sentence when it supplies a delay, and the message ends with the retry instruction either way. Wait out the delay if given, then retry. `<step>` is `read its granted permissions` when the limit hit the granted-scope check that precedes every GitHub registration, otherwise the lookup, label-read, or webhook-create step. |
+| 429 | `GITHUB_RATE_LIMITED` | `GitHub rate-limited the request to <step> (HTTP <status>). Please retry registration later.` | GitHub limited a setup step. `<status>` is 429, or 403 carrying rate-limit evidence; GitHub may append a `Retry after <N> seconds.` sentence when it supplies a delay, and the message ends with the retry instruction either way. Wait out the delay if given, then retry. `<step>` is `read its granted permissions` when the limit hit the granted-scope check that precedes OAuth-hook GitHub registration, otherwise the lookup, label-read, or webhook-create step. |
 | 429 | `RATE_LIMITED` | `Too many requests of this kind. Retry after the number of seconds the Retry-After header names.` | The credential's hourly bound of repository changes (`RATE_LIMIT_REPOSITORIES_PER_HOUR`, default 10) is spent; registration, catalog change and unregistration draw on it together, keyed by the credential that acts. Wait out the response's `Retry-After` interval, then retry. |
 | 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | The deployment's `APP_URL` is missing or malformed. Only a browser request reaches this; a bearer-token request does not read `APP_URL`. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to initialize repository registration.` | Credential/session lookup or registration setup failed; check service configuration and account GitHub access before retrying. |
@@ -380,6 +406,19 @@ status and code, then use the message to distinguish causes:
 | 502 | `UPSTREAM_FAILURE` | `Unable to create the repository webhook on GitHub.` | Creating the webhook failed after the repository was found and its labels verified; check GitHub access and availability. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to save the repository registration.` | Database lookup or saving the registration failed; check service health before retrying. |
 | 503 | `ROLLBACK_INCOMPLETE` | `The repository registration could not be saved, and the webhook Overflow created for it could not be deleted on GitHub. Nothing was registered; retry the registration, and a later successful registration or unregistration removes the abandoned webhook.` | The save failed and the compensating webhook deletion failed too, so a webhook Overflow created still exists on GitHub. Nothing was registered and nothing is lost by retrying; the recorded webhook is cleaned up by a later successful registration or unregistration. |
+| 400 | `INVALID_INPUT` | `Install the registration App on this repository first, then retry registration.` | App installation lookup returned no installation for the submitted repository (GitHub 404). Install this instance's registration App on that repository, then retry. |
+| 400 | `INVALID_INPUT` | `Registration through the App is not available on this instance.` | The instance has no configured registration App. Contact its operator. |
+| 400 | `INVALID_INPUT` | `Registration through the App is only available for GitHub repositories.` | `provider: "gitlab"` was combined with `registrationMethod: "app"`; choose GitHub or the supported GitLab hook registration. |
+| 401 | `GITHUB_CREDENTIALS` | `GitHub rejected this instance's registration App credential (HTTP 401) while trying to check the registration App installation. Contact the instance operator to verify the registration App ID and private key, then retry registration.` | The App-authenticated installation lookup was rejected. The instance operator must check the registration App credential; refreshing the sponsor's OAuth authorization does not change it. |
+| 403 | `FORBIDDEN` | `GitHub did not report you as an administrator of this repository. Install the registration App on this repository and ensure you hold administrator permission, then retry registration.` | App registration fails closed when the sponsor's repository read omits `permissions`, or when `permissions.admin` is false or otherwise not exactly true. Both cases intentionally share this exact response. |
+| 403 | `GITHUB_ACCESS` | `GitHub refused to check the registration App installation (HTTP 403). GitHub answers 403 both when the registration App installation lookup is refused and when it is temporarily limiting requests, and this response carries nothing that separates the two causes. Wait a minute and retry registration before changing anything. If the refusal persists, contact the instance operator to check the registration App configuration and its installation on this repository.` | The App installation lookup returned 403 without rate-limit evidence. Retry before changing configuration; persistent refusals need the instance operator's App checks. |
+| 403 | `FORBIDDEN` | `A member account is required.` | The live-account lookup no longer resolves the credential's account. Applies to either method. |
+| 409 | `CONFLICT` | `GitHub repository <id> collides with forge id <id> already registered as provider '<provider>'. An id's forge history never migrates between forges; registration refused.` | A different forge already holds the submitted GitHub repository id. Applies to either method, including inactive registrations; resolve that stored registration first. |
+| 413 | `PAYLOAD_TOO_LARGE` | `The request body is too large.` | The registration body exceeded 128 KiB. Applies to either method. |
+| 429 | `GITHUB_RATE_LIMITED` | `GitHub rate-limited the request to check the registration App installation (HTTP <status>). Please retry registration later.` | The App lookup was rate-limited: `<status>` is 429, or 403 with rate-limit evidence. No retry-after delay was supplied. |
+| 429 | `GITHUB_RATE_LIMITED` | `GitHub rate-limited the request to check the registration App installation (HTTP <status>). Retry after 1 second. Please retry registration later.` | The App lookup supplied a one-second retry-after delay; `<status>` is 403 or 429. |
+| 429 | `GITHUB_RATE_LIMITED` | `GitHub rate-limited the request to check the registration App installation (HTTP <status>). Retry after <N> seconds. Please retry registration later.` | The App lookup supplied a retry-after delay other than one second; `<status>` is 403 or 429 and `<N>` is the supplied delay. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to check the registration App installation on GitHub.` | The App installation lookup failed in another way, such as a transport error, malformed successful response or unclassified GitHub status. Check GitHub availability and the instance's App setup before retrying. |
 
 Angle-bracketed text in the `Exact message` column is a value substituted at runtime.
 
@@ -431,19 +470,25 @@ GitLab project by `provider: "gitlab"`, `instanceUrl`, and `project` (the
 numeric id or its path with namespace) — the reference fields a GitLab
 registration takes, and nothing else; extra fields are rejected.
 
-Unregistration removes the registration from the ledger and deletes the
-webhook Overflow installed on the forge. Only the registration's sponsor can
-issue it — not another member, and not a moderator — and the sponsor check
-runs before anything is touched on the forge, so a refusal leaves the
-registration and its webhook exactly as they were. A GitLab unregistration
-resolves the submitter's verified linked identity for the instance exactly as
-a GitLab registration does, and is refused the same way without one.
+Unregistration removes the registration from the ledger. For a hook-based
+registration, it also deletes the webhook Overflow installed on the forge.
+Only the registration's sponsor can issue it — not another member, and not a
+moderator — and the sponsor check runs before anything is touched on the
+forge, so a refusal leaves the registration and its webhook exactly as they
+were. A GitLab unregistration resolves the submitter's verified linked
+identity for the instance exactly as a GitLab registration does, and is
+refused the same way without one.
+
+An App registration is deactivated locally without any GitHub API call. This
+does not remove the GitHub installation's access to the repository. The
+optional `appAccessRemains` response directs the sponsor to
+https://github.com/settings/installations to manage that access.
 
 The flow is idempotent: unregistering an already-unregistered registration
 succeeds and reports it, so a repeated request is never an error.
 
 Success is HTTP `200` with the repository projection registration returns,
-plus two flags:
+two flags, and App-only access guidance:
 
 ```json
 {
@@ -453,11 +498,20 @@ plus two flags:
 }
 ```
 
+| Field | Type and meaning |
+| --- | --- |
+| `repository` | Object: the same repository projection registration returns. |
+| `webhookDeleted` | Boolean: whether this request deleted the forge webhook. Always `false` for an App registration. |
+| `alreadyUnregistered` | Boolean: `true` when the registration was already unregistered before this request. |
+| `appAccessRemains` | Optional `{ "message": string, "url": string }`, present only for App-registered rows and omitted for OAuth-hook and GitLab rows. Local deactivation leaves the GitHub App's installation access in place. |
+| `appAccessRemains.message` | `The GitHub App still has access to this repository. Manage its access in your GitHub installation settings.` |
+| `appAccessRemains.url` | `https://github.com/settings/installations`: the sponsor's GitHub installation-management page. |
+
 `webhookDeleted` reports whether this request deleted the forge webhook: the
 forge answering 404 for the hook — it was already gone — is the desired end
 state, so the unregistration proceeds and reports `false`, and a registration
-from before the webhook path has nothing to delete and reports `false` the
-same way. `alreadyUnregistered` is `true` when the row had been unregistered
+from before the webhook path or an App registration has nothing to delete
+and reports `false` the same way. `alreadyUnregistered` is `true` when the row had been unregistered
 before the request arrived.
 
 Errors use the registration error envelope. The authentication, origin,
