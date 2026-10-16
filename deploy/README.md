@@ -103,14 +103,15 @@ The last command must print `10.33.0`, the version `package.json` pins.
 The environment file holds `DATABASE_URL`, `AUTH_SECRET`, the OAuth credentials,
 `TOKEN_ENCRYPTION_KEY` (with `TOKEN_ENCRYPTION_KEY_PREVIOUS` beside it only
 while section 11's key rotation is under way), and the public callback URLs in
-`GITHUB_WEBHOOK_URL` and `GITLAB_WEBHOOK_URL`. Each registration gets its own
-webhook secret, generated at registration time; the environment file does not
-carry a shared webhook secret. The [Environment reference in `OPERATING.md`](../OPERATING.md#environment-reference)
+`GITHUB_WEBHOOK_URL` and `GITLAB_WEBHOOK_URL`. Registrations using repository
+webhooks get their own secret, generated at registration time; App-based
+registration uses the separate App secret described below.
+The [Environment reference in `OPERATING.md`](../OPERATING.md#environment-reference)
 describes each variable. This section is only about where the file lives and who
 may read it.
 
 The reverse proxy must allow request bodies of at least 25 MiB on
-`/api/github/webhooks` and `/api/gitlab/webhooks`, matching the application's
+`/api/github/webhooks`, `/api/github/app-webhook` and `/api/gitlab/webhooks`, matching the application's
 delivery limit. The [reverse-proxy requirements](#reverse-proxy-requirements)
 below cover body caps and the address, origin and resource bounds that must
 accompany them.
@@ -135,7 +136,7 @@ there. Populate the file before section 5 — its migration step reads
 `DATABASE_URL` out of it.
 
 Two optional variables configure GitHub App installation authentication for
-reconciliation (issue 804): `GITHUB_APP_ID` is the App's id and
+reconciliation of OAuth webhook registrations (issue 804): `GITHUB_APP_ID` is the App's id and
 `GITHUB_APP_PRIVATE_KEY_PATH` is the path to the App's PEM private key, at the
 host value `/etc/overflow/github-app/private-key.pem`. With both set, a GitHub
 repository that has the App installed folds with that installation's token,
@@ -144,6 +145,33 @@ unset or empty is the OAuth-only posture. Both are read at wiring time — when
 the reconciliation background starts, or when the `pnpm reconcile` CLI builds
 its production dependencies — and a configured but unreadable key file fails
 there, before any fold.
+
+App-based registration uses a separate GitHub App with three optional variables:
+
+| Variable | Value |
+| --- | --- |
+| `GITHUB_REGISTRATION_APP_ID` | The registration App's id. |
+| `GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH` | Path to its PEM RSA private key, readable by the `overflow` service account. |
+| `GITHUB_REGISTRATION_APP_WEBHOOK_SECRET` | The webhook secret configured on that App, used to authenticate its deliveries. |
+
+Leave these unset to keep the feature off: App-based registration is unavailable,
+and App webhook deliveries receive HTTP `503` (fail-closed). Either the App id
+or key path unset or empty disables App-based registration; an unset or empty
+webhook secret makes the receiver answer `503`. With the id and key path
+configured, an unreadable, unparseable or non-RSA key throws at wiring time.
+Keep this App's credentials separate from `GITHUB_APP_ID` and
+`GITHUB_APP_PRIVATE_KEY_PATH` above.
+
+Configure the registration App's webhook URL as
+`https://<public-host>/api/github/app-webhook` (receiver:
+`POST /api/github/app-webhook`). Subscribe to exactly `issues`, `issue_comment`,
+`pull_request` and `pull_request_review`, the events exported as
+`githubWebhookEvents` in [webhook-schema.ts](../src/lib/github/webhook-schema.ts).
+Grant repository permissions `metadata: read`, `issues: read` and
+`pull_requests: read`. Install the App on repositories that will register
+through it; those registrations use App deliveries instead of creating a
+repository webhook. App-registered repositories also reconcile through this
+App's installation token.
 
 On a host that also runs the required-checks relay the directory is one
 deliberate deviation from the block above: `/etc/overflow` must stay
@@ -180,8 +208,8 @@ probe. Preserve them when constructing or changing a vhost:
   origin; the application's cookie-authenticated mutation guard compares the
   request's `Origin` to that configured origin.
 - **Body caps.** The required proxy body caps are 25 MiB
-  (`client_max_body_size 25m`) on `/api/github/webhooks` and
-  `/api/gitlab/webhooks`, and 64 KiB (`64k`) on `/api/moderation` and
+  (`client_max_body_size 25m`) on `/api/github/webhooks`,
+  `/api/github/app-webhook` and `/api/gitlab/webhooks`, and 64 KiB (`64k`) on `/api/moderation` and
   `/api/overrides`, including their subpaths, matching the host configuration.
   The application's limits on moderation and overrides are 8 or 32 KiB.
   Other routes retain their own application streaming body limits: 4 KiB on

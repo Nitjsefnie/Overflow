@@ -115,7 +115,26 @@ GITHUB_WEBHOOK_URL=https://<public-host>/api/github/webhooks
 GITLAB_WEBHOOK_URL=https://<public-host>/api/gitlab/webhooks
 ```
 
-Both forges must be able to reach their callback URLs over public HTTPS. Every registration gets an independent secret and a callback UUID in the `hook` query parameter. Secrets are encrypted with `TOKEN_ENCRYPTION_KEY`; they are never returned by the repository API. A credential authenticates only its registered provider, immutable repository/project ID, and GitLab instance. Receivers reject deliveries larger than 25 MiB with HTTP 413.
+Both forges must be able to reach their callback URLs over public HTTPS. Registrations using repository webhooks get an independent secret and a callback UUID in the `hook` query parameter. Secrets are encrypted with `TOKEN_ENCRYPTION_KEY`; they are never returned by the repository API. A credential authenticates only its registered provider, immutable repository/project ID, and GitLab instance. Receivers reject deliveries larger than 25 MiB with HTTP 413.
+
+For App-based GitHub registration, configure a separate registration App with
+`GITHUB_REGISTRATION_APP_ID`, `GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH` and
+`GITHUB_REGISTRATION_APP_WEBHOOK_SECRET`. Its public HTTPS receiver is
+`POST /api/github/app-webhook`; use the same webhook secret in the App's settings
+and the environment. Subscribe to exactly `issues`, `issue_comment`,
+`pull_request` and `pull_request_review`, and grant repository permissions
+`metadata: read`, `issues: read` and `pull_requests: read`. Install the App on
+the repositories it will register. These registrations use the App's webhook
+instead of a repository webhook with a `hook` query parameter. The receiver
+authenticates the App signature and processes only active App registrations;
+authenticated deliveries for other repositories are ignored with HTTP `204`.
+
+Leave the registration App variables unset to keep App-based registration off;
+App webhook deliveries then receive HTTP `503` (fail-closed). An unset or empty
+App id or key path disables App-based registration; an unset or empty webhook
+secret makes the receiver answer `503`. A configured but unreadable, unparseable
+or non-RSA key throws at wiring time. See [deployment section 4](deploy/README.md#4-create-the-environment-file)
+for the key's service-account access and the separate reconciliation App credentials.
 
 ## Operating an instance: the production service
 
@@ -559,7 +578,9 @@ Neither table covers variables read only by surrounding tooling: the shell's
 | `JOURNAL_STREAM` | Optional systemd journal stream identity (`device:inode`); only a valid value matching stderr enables journal priorities for `console.error` (3) and `console.warn` (4). Unset, malformed or mismatched values leave the console unchanged |
 | `NEXT_DIST_DIR` | Also read at runtime by the third-party-notices route: selects the release directory containing `third-party-notices.txt`, trimming the value and defaulting to `.next` when unset or blank. The resolved release is pinned at first use. Keep it unset for the documented production service; its build use is described below |
 | `GITHUB_WEBHOOK_URL`, `GITLAB_WEBHOOK_URL` | Public callback base URLs; registration adds a scoped `hook` UUID |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` | Optional pair for GitHub App installation authentication in reconciliation: the App id and path to its PEM private-key file. Either unset or empty leaves OAuth-only authentication. With both set, wiring reads the key and fails if it is unreadable, unparseable or not RSA-family; repositories without an App installation fall back to sponsor OAuth. See [deploy/README.md section 4](deploy/README.md#4-create-the-environment-file) for the service account's file access |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` | Optional pair for GitHub App installation authentication when reconciling OAuth webhook registrations: the App id and path to its PEM private-key file. Either unset or empty leaves those registrations using OAuth-only authentication. With both set, wiring reads the key and fails if it is unreadable, unparseable or not RSA-family; repositories without an App installation fall back to sponsor OAuth. See [deploy/README.md section 4](deploy/README.md#4-create-the-environment-file) for the service account's file access |
+| `GITHUB_REGISTRATION_APP_ID`, `GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH` | Optional separate registration App id and PEM RSA key path. Either unset or empty disables App-based registration. A configured unreadable, unparseable or non-RSA key throws at wiring time. App registrations reconcile through this App's installation token. See [GitHub OAuth and webhooks](#operating-an-instance-github-oauth-and-webhooks) for setup |
+| `GITHUB_REGISTRATION_APP_WEBHOOK_SECRET` | Secret shared with the registration App's webhook settings for `POST /api/github/app-webhook`. Unset or empty answers deliveries with HTTP `503` (fail-closed) |
 | `PUBLIC_DESTINATION_DENY_CIDRS` | Optional override of the outbound fetch guard's deployment deny list: comma-separated bare IP addresses or CIDR subnets, trimmed, with invalid entries rejected. Empty or blank explicitly selects an empty list. Unset defaults to the host's public interface addresses; unavailable interface enumeration warns and defaults to an empty list, so restricted deployments must supply their public addresses explicitly |
 | `CONTROLLER_NAME`, `CONTROLLER_ISSUES_URL`, `CONTROLLER_SENSITIVE_URL` | Optional controller identity and request channels the legal pages (`/account-data`, `/terms`) render; the defaults are the hosted instance's — the maintainer personally, the project's public issue tracker, and GitHub's private vulnerability reporting form — and they render only where `APP_URL`'s origin is `https://overflow.nitjsefni.eu`, so any other origin renders the plain self-hosted statement plus exactly the channels configured here, and an unset variable publishes nothing rather than the maintainer's channel. Blank values read as unset |
 | `MODERATOR_GITHUB_USER_IDS` | Comma-separated moderator GitHub account ids (`gh api users/<login> --jq .id`); replaces `MODERATOR_GITHUB_LOGINS`, which is no longer read |

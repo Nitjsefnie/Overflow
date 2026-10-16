@@ -100,6 +100,23 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 afterAll(() => { vi.resetModules(); rmSync(directory, { recursive: true }); });
 
+it("routes the composite through a distinct injected registration-method lookup", async () => {
+  row.method = "oauth_hook";
+  const { createReconciliationAppTokenResolver } = await import("@/lib/github/reconciliation-app-auth");
+  const injectedLookup = vi.fn(async () => "app" as const);
+  const resolve = createReconciliationAppTokenResolver({
+    lookupRegistrationMethod: injectedLookup,
+    ledgerResolver: async () => ({ token: ledgerToken, installationId: 11 }),
+    registrationResolver: async () => ({ token: registrationToken, installationId: 22 }),
+  });
+
+  await expect(resolve!("example/repository")).resolves.toEqual({
+    token: registrationToken, installationId: 22, app: "registration",
+  });
+  expect(injectedLookup).toHaveBeenCalledExactlyOnceWith("example/repository");
+  expect(lookup).not.toHaveBeenCalled();
+});
+
 for (const wiring of ["worker", "cli"] as const) {
   describe(`${wiring} reconciliation App routing`, () => {
     async function reconcile() {

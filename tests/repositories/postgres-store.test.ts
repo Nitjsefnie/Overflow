@@ -86,6 +86,15 @@ describe("registering a repository against the real registered_repositories cons
     }
   });
 
+  it("rejects an invalid registration method at the database constraint", async () => {
+    const created = (await store.createRepository(newRepository({ sponsorId: await sponsor() })))!;
+    await expect(sql`
+      update registered_repositories set registration_method = 'invalid' where id = ${created.id}
+    `).rejects.toMatchObject({ code: "23514", constraint_name: "registered_repositories_registration_method_check" });
+    const [row] = await sql`select registration_method from registered_repositories where id = ${created.id}`;
+    expect(row.registration_method).toBe("oauth_hook");
+  });
+
   it.each(["app", "oauth_hook"] as const)("moves the registration method to %s on reactivation", async (registrationMethod) => {
     const submission = newRepository({ sponsorId: await sponsor(),
       registrationMethod: registrationMethod === "app" ? "oauth_hook" : "app", githubWebhookId: null,
