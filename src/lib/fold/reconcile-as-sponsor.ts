@@ -155,7 +155,7 @@ export function sponsorGateway(
         if (appToken !== null) {
           console.info("Reconciliation authentication", {
             repositoryId,
-            authPath: "github-app-installation",
+            authPath: appToken.app === "registration" ? "registration-app-installation" : "github-app-installation",
             installationId: appToken.installationId,
           });
           return createGateway(appToken.token, repository.sponsor.id);

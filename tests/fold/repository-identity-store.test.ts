@@ -57,6 +57,21 @@ describe("registered repository identity verification", () => {
     });
   });
 
+  it.each(["oauth_hook", "app"] as const)("looks up registration method %s by owner/name", async (registrationMethod) => {
+    const { repositoryId, ownerName } = await registeredRepository();
+    await sql`update registered_repositories set registration_method = ${registrationMethod} where id = ${repositoryId}`;
+
+    await expect(store.findRepositoryByOwnerName(ownerName)).resolves.toEqual({ id: repositoryId, registrationMethod });
+  });
+
+  it("does not resolve a registration method for inactive or unknown owner/names", async () => {
+    const { repositoryId, ownerName } = await registeredRepository();
+    await sql`update registered_repositories set active = false where id = ${repositoryId}`;
+
+    await expect(store.findRepositoryByOwnerName(ownerName)).resolves.toBeNull();
+    await expect(store.findRepositoryByOwnerName("identity/unregistered")).resolves.toBeNull();
+  });
+
   it("keeps the first observation of an unbroken unavailability and moves it when the reason changes", async () => {
     const { repositoryId } = await registeredRepository();
     await staleTimestamps(repositoryId);

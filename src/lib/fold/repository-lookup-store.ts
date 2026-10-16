@@ -6,6 +6,7 @@ import type { ReconciliationRepository, RepositoryUnavailableReason } from "@/li
 import type { RepositoryCoordinator } from "@/lib/fold/repository-coordination";
 import type { FoldForgeIdentity, FoldUser } from "@/lib/fold/repository-fold";
 import { logField } from "@/lib/webhooks/log-field";
+import type { RegisteredRepository } from "@/lib/repositories/register";
 
 type RepositoryRow = {
   id: string;
@@ -216,9 +217,9 @@ export class PostgresRepositoryLookupStore {
     });
   }
 
-  public async findRepositoryByOwnerName(ownerName: string): Promise<{ id: string } | null> {
-    const [row] = await this.sql<{ id: string }[]>`
-      select id
+  public async findRepositoryByOwnerName(ownerName: string): Promise<Pick<RegisteredRepository, "id" | "registrationMethod"> | null> {
+    const [row] = await this.sql<Pick<RegisteredRepository, "id" | "registrationMethod">[]>`
+      select id, registration_method as "registrationMethod"
       from registered_repositories
       where owner_name = ${ownerName} and active = true
       limit 1

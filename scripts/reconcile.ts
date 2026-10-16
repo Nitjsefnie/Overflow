@@ -2,7 +2,12 @@ import { closeSql } from "../src/lib/db/client.ts";
 import { PostgresFoldStore } from "../src/lib/fold/postgres-store.ts";
 import { type ReconciliationSummary } from "../src/lib/fold/reconcile.ts";
 import { reconcileRepositoryAsSponsor } from "../src/lib/fold/reconcile-as-sponsor.ts";
-import { appInstallationTokenResolverFromEnv } from "../src/lib/github/app-installation-auth.ts";
+import {
+  appInstallationTokenResolverFromEnv,
+  createAppInstallationTokenResolver,
+  readGitHubRegistrationAppAuthConfig,
+} from "../src/lib/github/app-installation-auth.ts";
+import { createReconciliationAppTokenResolver } from "../src/lib/github/reconciliation-app-auth.ts";
 
 export type ReconcileCliDependencies = {
   store: Pick<PostgresFoldStore, "findRepositoryByOwnerName" | "listActiveRepositoryIds">;
@@ -59,18 +64,18 @@ async function repositoryIdsForOwnerName(
 
 function productionDependencies(): ReconcileCliDependencies {
   const store = new PostgresFoldStore();
-  // GitHub repositories fold as the sponsor's GitHub App installation when the
-  // App is configured (issue 804), instead of the sponsor's OAuth token.
-  // Unconfigured — either variable unset or empty — the option stays unwired
-  // and every fold reads the sponsor's OAuth token exactly as before;
-  // configured with a key file that cannot be read or parsed, or that is not
-  // an RSA-family key, the factory throws here, failing the CLI run before
-  // any fold (fail-closed, the GitLab credential precedent). Unconfigured
-  // reading as null from the factory, unwired reading
-  // as undefined on the options — both leave the option off, so
-  // `?? undefined` carries the factory's null across.
-  const resolveAppInstallationToken =
-    appInstallationTokenResolverFromEnv(process.env) ?? undefined;
+  // Invalid configured keys fail before any fold; unconfigured Apps leave
+  // their registrations on the existing sponsor OAuth fallback path.
+  const ledgerResolver = appInstallationTokenResolverFromEnv(process.env);
+  const registrationConfig = readGitHubRegistrationAppAuthConfig(process.env);
+  const registrationResolver = registrationConfig === null
+    ? null : createAppInstallationTokenResolver({ config: registrationConfig });
+  const resolveAppInstallationToken = createReconciliationAppTokenResolver({
+    ledgerResolver,
+    registrationResolver,
+    lookupRegistrationMethod: async (ownerName) =>
+      (await store.findRepositoryByOwnerName(ownerName))?.registrationMethod ?? null,
+  });
   return {
     store,
     reconcile: (repositoryId) =>

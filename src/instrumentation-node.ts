@@ -9,7 +9,12 @@ import {
 } from "@/lib/fold/sweep";
 import { FailureLogger } from "@/lib/worker/failure-logger";
 import { DrainSummaryLogger } from "@/lib/logging/drain-summary-logger";
-import { appInstallationTokenResolverFromEnv } from "@/lib/github/app-installation-auth";
+import {
+  appInstallationTokenResolverFromEnv,
+  createAppInstallationTokenResolver,
+  readGitHubRegistrationAppAuthConfig,
+} from "@/lib/github/app-installation-auth";
+import { createReconciliationAppTokenResolver } from "@/lib/github/reconciliation-app-auth";
 import { errorLogToken } from "@/lib/webhooks/log-field";
 import { installJournalLevels } from "@/lib/logging/journal-levels";
 
@@ -35,19 +40,12 @@ export async function registerNodejs(): Promise<void> {
     return;
   }
 
-  // GitHub repositories fold as the sponsor's GitHub App installation when the
-  // App is configured (issue 804), instead of the sponsor's OAuth token. The
-  // resolver is built once at wiring time, never per fold: unconfigured —
-  // either variable unset or empty — it is undefined and every fold reads the
-  // sponsor's OAuth token exactly as before; configured with a key file that
-  // cannot be read or parsed, or that is not an RSA-family key, it throws
-  // here, failing the start before any fold (fail-closed, the GitLab
-  // credential precedent). Unconfigured reading
-  // as null from the factory, unwired reading as undefined on the options —
-  // both leave the
-  // option off, so `?? undefined` carries the factory's null across.
-  const resolveAppInstallationToken =
-    appInstallationTokenResolverFromEnv(process.env) ?? undefined;
+  // Construct both App resolvers once. Invalid configured keys fail startup;
+  // an unconfigured App leaves its registrations on the OAuth fallback path.
+  const ledgerResolver = appInstallationTokenResolverFromEnv(process.env);
+  const registrationConfig = readGitHubRegistrationAppAuthConfig(process.env);
+  const registrationResolver = registrationConfig === null
+    ? null : createAppInstallationTokenResolver({ config: registrationConfig });
 
   const { PostgresFoldStore } = await import("@/lib/fold/postgres-store");
   const { finalizeAbandonedRuns } = await import("@/lib/fold/abandoned-runs");
@@ -56,6 +54,12 @@ export async function registerNodejs(): Promise<void> {
   const { pruneExpiredMaintenanceRows } = await import("@/lib/retention/prune");
   const { getSql, getCoordinationSql } = await import("@/lib/db/client");
   const store = new PostgresFoldStore();
+  const resolveAppInstallationToken = createReconciliationAppTokenResolver({
+    ledgerResolver,
+    registrationResolver,
+    lookupRegistrationMethod: async (ownerName) =>
+      (await store.findRepositoryByOwnerName(ownerName))?.registrationMethod ?? null,
+  });
   try {
     await finalizeAbandonedRuns(getSql(), getCoordinationSql());
   } catch (error) {
