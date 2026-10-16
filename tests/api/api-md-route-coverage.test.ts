@@ -27,6 +27,7 @@ const apiDocPath = join(repoRoot, "API.md");
 const ALLOWED_UNDOCUMENTED: Record<string, string> = {
   // Forge delivery receivers are operator material, documented in OPERATING.md ("GitHub OAuth and webhooks").
   "/api/github/webhooks": "OPERATING.md",
+  "/api/github/app-webhook": "OPERATING.md",
   "/api/gitlab/webhooks": "OPERATING.md",
   // Auth.js OAuth flow machinery is described in OPERATING.md ("GitHub OAuth and webhooks", the OAuth callback setup).
   "/api/auth/[...nextauth]": "OPERATING.md",

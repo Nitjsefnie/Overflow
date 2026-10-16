@@ -227,7 +227,7 @@ interface KeyedBucket {
 
 export interface ReceiverRateLimiterOptions {
   /** Which receiver the gate serves; the decline line names it verbatim. */
-  receiver: "github" | "gitlab";
+  receiver: "github" | "gitlab" | "github-app";
   /** Maximum tokens held at once; the bucket starts full. */
   capacity: number;
   /** Tokens restored per 60,000 ms of elapsed time, capped at capacity. */
