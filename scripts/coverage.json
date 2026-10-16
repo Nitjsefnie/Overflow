@@ -3,8 +3,8 @@
   "hysteresis": 0.5,
   "languages": {
     "typescript": {
-      "measured": 94.2,
-      "floor": 93.2
+      "measured": 94.86,
+      "floor": 93.86
     }
   }
 }
