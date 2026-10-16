@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
@@ -5,7 +6,9 @@ import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 import { GitHubGateway } from "@/lib/github/client";
-import { GitHubApiError } from "@/lib/github/errors";
+import { createAppRegistration } from "@/lib/github/app-registration";
+import type { GitHubRepository } from "@/lib/github/types";
+import { registerGitHubAppRepository } from "@/lib/repositories/github-registration-flow";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import {
   registerRepository, unregisterRepository, RepositoryOwnerNameConflictError,
@@ -19,6 +22,8 @@ let sql: Sql;
 let store: PostgresRepositoryStore;
 let externalId = 9_920_000;
 const originalDatabaseUrl = process.env.DATABASE_URL;
+const privateKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey
+  .export({ type: "pkcs8", format: "pem" }).toString();
 
 beforeAll(async () => {
   const started = await startPostgresContainer({ database: "app_registration", user: "app_registration" });
@@ -133,18 +138,48 @@ describe("registration through the GitHub App", () => {
     expect(await row(h.githubRepositoryId)).toBeNull();
   });
 
-  it.each([
-    { status: 401, code: "GITHUB_CREDENTIALS" }, { status: 403, code: "GITHUB_ACCESS" },
-    { status: 429, code: "GITHUB_RATE_LIMITED" }, { status: 503, code: "UPSTREAM_FAILURE" },
-  ])("maps an installation lookup HTTP $status through the existing GitHub failure catalog", async ({ status, code }) => {
+  it.each<{ status: number; headers: Record<string, string>; code: string; message: string }>([
+    { status: 401, headers: {}, code: "GITHUB_CREDENTIALS",
+      message: "GitHub rejected this instance's registration App credential (HTTP 401) while trying to check the registration App installation. Contact the instance operator to verify the registration App ID and private key, then retry registration." },
+    { status: 403, headers: {}, code: "GITHUB_ACCESS",
+      message: "GitHub refused to check the registration App installation (HTTP 403). GitHub answers 403 both when the registration App installation lookup is refused and when it is temporarily limiting requests, and this response carries nothing that separates the two causes. Wait a minute and retry registration before changing anything. If the refusal persists, contact the instance operator to check the registration App configuration and its installation on this repository." },
+    { status: 403, headers: { "x-ratelimit-remaining": "0", "retry-after": "17" }, code: "GITHUB_RATE_LIMITED",
+      message: "GitHub rate-limited the request to check the registration App installation (HTTP 403). Retry after 17 seconds. Please retry registration later." },
+    { status: 429, headers: { "retry-after": "1" }, code: "GITHUB_RATE_LIMITED",
+      message: "GitHub rate-limited the request to check the registration App installation (HTTP 429). Retry after 1 second. Please retry registration later." },
+    { status: 429, headers: {}, code: "GITHUB_RATE_LIMITED",
+      message: "GitHub rate-limited the request to check the registration App installation (HTTP 429). Please retry registration later." },
+    { status: 404, headers: {}, code: "INVALID_INPUT",
+      message: "Install the registration App on this repository first, then retry registration." },
+    { status: 503, headers: {}, code: "UPSTREAM_FAILURE",
+      message: "Unable to check the registration App installation on GitHub." },
+  ])("gives the registration App remedy for installation HTTP $status with $headers before any write", async ({ status, headers, code, message }) => {
     const h = await harness();
-    h.dependencies.registrationApp = { async lookupInstallation() {
-      throw new GitHubApiError(status, status === 429);
-    } };
-    await expect(registerRepository(h.dependencies, h.input)).rejects.toMatchObject({ code,
-      message: expect.stringContaining("check the registration App installation"),
+    const requests: Request[] = [];
+    h.dependencies.registrationApp = createAppRegistration({ config: { appId: "202", privateKey },
+      fetch: async (input, init) => {
+        requests.push(new Request(input, init));
+        return Response.json({ message: "Installation lookup failed" }, { status, headers });
+      },
     });
-    expect(await row(h.githubRepositoryId)).toBeNull();
+    const submitted = { owner: "app-owner", name: `repo-${h.githubRepositoryId}` };
+    const repository: GitHubRepository = { ...submitted, id: h.githubRepositoryId, fullName: h.ownerName,
+      ownerType: "ORGANIZATION", visibility: "PUBLIC", url: `https://github.com/${h.ownerName}`, canAdminister: true };
+    const write = vi.spyOn(h.dependencies.store, "createRepository");
+    try {
+      const error = await registerGitHubAppRepository(h.dependencies, submitted, repository, h.input)
+        .catch((error: unknown) => error);
+      expect(write).not.toHaveBeenCalled();
+      expect(await row(h.githubRepositoryId)).toBeNull();
+      expect(h.requests).toEqual([]);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.url).toBe(`https://api.github.com/repos/${h.ownerName}/installation`);
+      expect(requests[0]!.method).toBe("GET");
+      expect(requests[0]!.headers.get("authorization")).toMatch(/^Bearer ey/);
+      expect(error).toMatchObject({ code, message });
+    } finally {
+      write.mockRestore();
+    }
   });
 
   it.each([

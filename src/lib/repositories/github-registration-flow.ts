@@ -27,7 +27,7 @@ export async function registerGitHubAppRepository(
   try {
     installation = await dependencies.registrationApp.lookupInstallation(`${submittedRepository.owner}/${submittedRepository.name}`);
   } catch (error) {
-    throw githubSetupError(error, repository, "check the registration App installation");
+    throw registrationAppLookupError(error);
   }
   if (installation === null) {
     throw new RepositoryRegistrationError("INVALID_INPUT", "Install the registration App on this repository first, then retry registration.");
@@ -54,6 +54,34 @@ export async function registerGitHubAppRepository(
     throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
   }
   return created;
+}
+
+/** Installation lookup authenticates as the instance's registration App, not its sponsor. */
+function registrationAppLookupError(error: unknown): RepositoryRegistrationError {
+  const step = "check the registration App installation";
+  if (error instanceof GitHubApiError) {
+    const failure = classifyGitHubApiFailure(error);
+    if (failure === "CREDENTIALS") {
+      return new RepositoryRegistrationError("GITHUB_CREDENTIALS",
+        `GitHub rejected this instance's registration App credential (HTTP 401) while trying to ${step}. `
+        + "Contact the instance operator to verify the registration App ID and private key, then retry registration.");
+    }
+    if (failure === "ACCESS") {
+      const uncertainty = error.status === 403
+        ? "GitHub answers 403 both when the registration App installation lookup is refused and when it is temporarily limiting requests, "
+          + "and this response carries nothing that separates the two causes. Wait a minute and retry registration before changing anything. "
+        : "";
+      return new RepositoryRegistrationError("GITHUB_ACCESS",
+        `GitHub refused to ${step} (HTTP ${error.status}). ` + uncertainty
+        + "If the refusal persists, contact the instance operator to check the registration App configuration and its installation on this repository.");
+    }
+    if (failure === "RATE_LIMITED") {
+      const delay = error.retryAfterSeconds === null ? "" : ` Retry after ${error.retryAfterSeconds} ${plural(error.retryAfterSeconds, "second")}.`;
+      return new RepositoryRegistrationError("GITHUB_RATE_LIMITED",
+        `GitHub rate-limited the request to ${step} (HTTP ${error.status}).${delay} Please retry registration later.`);
+    }
+  }
+  return new RepositoryRegistrationError("UPSTREAM_FAILURE", `Unable to ${step} on GitHub.`);
 }
 
 /** Complete local unregistration with the cleanup and guidance for its GitHub method. */
