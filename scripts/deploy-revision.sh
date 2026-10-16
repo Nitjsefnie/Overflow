@@ -69,7 +69,8 @@ map_refusal_prefix='Could not read a valid .github/required-checks.json at %s (a
 # blessed. Runs against the fetched SHA before the fast-forward, so every
 # refusal below leaves HEAD, the index and the working tree untouched; only
 # the fetch's refs (FETCH_HEAD, origin/main) have moved. The required
-# contexts come from main's branch protection; .github/required-checks.json,
+# contexts are the union of main's branch protection and branch rules; an
+# empty union or a read failure other than HTTP 404 refuses. .github/required-checks.json,
 # read from the deployed SHA itself, pins each one to the workflow file whose
 # job produces it, and a context with no pin refuses at once. The map is
 # parsed with the tree's own scripts/required-checks-parse.jq, the tracked
@@ -118,6 +119,7 @@ map_refusal_prefix='Could not read a valid .github/required-checks.json at %s (a
 # run is.
 required_checks_gate() {
   local remote_url repo required pins check check_pins unmapped check_runs runs run_id run_path run_event run_head_branch run_jobs jobs
+  local classic_required rules_required required_stderr
   local map map_status tree_parse_status fallback_parser fallback_read_status fallback_parse_status
   local job_line job_run job_path job_id job_name job_attempt job_status job_conclusion
   local run_eligible excluded_ids
@@ -134,10 +136,35 @@ required_checks_gate() {
     printf 'Could not parse an OWNER/REPO GitHub slug from remote.origin.url (%s); refusing to deploy.\n' "$remote_url" >&2
     exit 1
   fi
-  if ! required=$(gh api "repos/$repo/branches/main/protection" \
-      --jq '([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]') \
-    || [ -z "$required" ]; then
-    printf 'could not determine required checks for main; refusing to deploy\n' >&2
+  required_stderr=$(mktemp)
+  if ! classic_required=$(gh api "repos/$repo/branches/main/protection" \
+      --jq '([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]' 2>"$required_stderr"); then
+    if [[ "$(<"$required_stderr")" != *'HTTP 404'* ]]; then
+      rm -f "$required_stderr"
+      printf 'could not determine required checks for main: branch-protection read failed; refusing to deploy\n' >&2
+      exit 1
+    fi
+    classic_required=
+  fi
+  if ! rules_required=$(gh api "repos/$repo/rules/branches/main" \
+      --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]? | (.context? // .)] | unique | .[]' 2>"$required_stderr"); then
+    if [[ "$(<"$required_stderr")" != *'HTTP 404'* ]]; then
+      rm -f "$required_stderr"
+      printf 'could not determine required checks for main: rules read failed; refusing to deploy\n' >&2
+      exit 1
+    fi
+    rules_required=
+  fi
+  rm -f "$required_stderr"
+  required=
+  while IFS= read -r check; do
+    [ -n "$check" ] || continue
+    if [[ $'\n'"$required"$'\n' != *$'\n'"$check"$'\n'* ]]; then
+      required+="${required:+$'\n'}$check"
+    fi
+  done <<<"$classic_required"$'\n'"$rules_required"
+  if [ -z "$required" ]; then
+    printf 'could not determine required checks for main: main publishes no required checks in either source; refusing to deploy\n' >&2
     exit 1
   fi
   # The pin map as `check<TAB>workflow path` lines, one line per path: a check

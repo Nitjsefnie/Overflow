@@ -33,6 +33,10 @@ describe("ordinary deployment webhook upgrade", () => {
         }
         gh() {
           case "$2" in
+            */rules/branches/main)
+              printf 'gh: Not Found (HTTP 404)\\n' >&2
+              return 1
+              ;;
             */branches/main/protection) printf 'build\\n';;
             */check-runs*) printf '101\\tbuild\\tcompleted\\tsuccess\\n';;
             *) return 2;;

@@ -134,6 +134,10 @@ async function writeShims(fixture: Fixture): Promise<void> {
     fixture,
     "gh",
   `case "$2" in
+  */rules/branches/main)
+    printf 'gh: Not Found (HTTP 404)\\n' >&2
+    exit 1
+    ;;
   */branches/main/protection)
     printf 'build\\ndeploy-gate\\n'
     ;;
