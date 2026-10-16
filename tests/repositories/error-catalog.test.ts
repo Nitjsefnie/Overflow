@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GitHubApiError } from "@/lib/github/errors";
+import { GitHubGateway } from "@/lib/github/client";
+import { createRepositoryPostHandler } from "@/app/api/repositories/route";
+import { mintApiToken } from "@/lib/security/api-token";
 import type { GitHubRepository } from "@/lib/github/types";
 import type {
   RepositoryRegistrationDependencies,
@@ -10,6 +13,7 @@ import type {
 import {
   RepositoryOwnerNameConflictError,
   RepositoryRegistrationError,
+  RepositoryRegistrationEnforcementError,
   RepositoryWebhookIdConflictError,
   registerRepository,
 } from "@/lib/repositories/register";
@@ -165,18 +169,18 @@ const githubAccessReviewTail = " Review Overflow's authorization at https://gith
 
 // The rate-limit message substitutes the step and the HTTP status, and appends a retry-after
 // sentence only when GitHub supplied a delay. The published row carries <step> and <status>, so
-// compare the fixed skeleton: drop the delay sentence, then hold the text on either side of the
-// step against the cell, resolving the status placeholder before comparing the tail.
+// drop the optional delay, resolve both declared placeholders, and compare the whole message.
+// A literal App step must never match an unrelated OAuth step through a shared prefix/suffix.
 function rateLimitMatcher(surfaced: string, stepText: string, status: number): (cell: string) => boolean {
   const withoutDelay = surfaced.replace(/ Retry after \d+ seconds?\./, "");
   const segments = withoutDelay.split(stepText);
   expect(segments, `The surfaced message names the step ${stepText} other than once: ${surfaced}`).toHaveLength(2);
-  const [before, after] = segments as [string, string];
+  const [, after] = segments as [string, string];
   expect(
     after.startsWith(` (HTTP ${status}).`),
     `The surfaced message does not state the raised status after the step: ${surfaced}`,
   ).toBe(true);
-  return (cell) => cell.startsWith(before) && cell.replace("<status>", String(status)).endsWith(after);
+  return (cell) => cell.replace("<step>", stepText).replace("<status>", String(status)) === withoutDelay;
 }
 
 // A GitHub 403 carrying no rate-limit evidence refuses a gateway step ambiguously — it cannot
@@ -351,6 +355,113 @@ const registrationRefusals: RegistrationFailure[] = [
   },
 ];
 
+function exactMessage(surfaced: string): (cell: string) => boolean {
+  return (cell) => cell === surfaced;
+}
+
+function appSubmission(input: RepositoryRegistrationInput): RepositoryRegistrationInput {
+  return { ...input, registrationMethod: "app" };
+}
+
+function installedRegistrationApp(dependencies: RepositoryRegistrationDependencies): void {
+  dependencies.registrationApp = { async lookupInstallation() { return { installationId: 7 }; } };
+}
+
+const appRegistrationRefusals: RegistrationFailure[] = [
+  {
+    what: "App registration without instance configuration", status: invalidInputStatus,
+    raise(dependencies) { dependencies.registrationApp = null; },
+    submit: appSubmission, publishes: exactMessage,
+  },
+  {
+    what: "App registration without a repository installation", status: invalidInputStatus,
+    raise(dependencies) { dependencies.registrationApp = { async lookupInstallation() { return null; } }; },
+    submit: appSubmission, publishes: exactMessage,
+  },
+  {
+    what: "a GitLab submission selecting App registration", status: invalidInputStatus,
+    raise() {}, submit: (input) => ({ ...appSubmission(input), provider: "gitlab" }), publishes: exactMessage,
+  },
+  ...[
+    { label: "absent repository permissions", permissions: null },
+    { label: "repository admin false", permissions: { admin: false } },
+  ].map(({ label, permissions }): RegistrationFailure => ({
+    what: `App registration with ${label}`, status: forbiddenStatus,
+    raise(dependencies) {
+      const repository = githubRepositoryFixture();
+      const github = new GitHubGateway({ accessToken: "synthetic-public-identity", fetch: async () => Response.json({
+        id: repository.id, name: repository.name, full_name: repository.fullName,
+        private: false, html_url: repository.url, owner: { login: repository.owner, type: "User" },
+        ...(permissions === null ? {} : { permissions }),
+      }) });
+      dependencies.github.getRepository = (reference) => github.getRepository(reference);
+    },
+    submit: appSubmission, publishes: exactMessage,
+  })),
+  ...[
+    { status: 401, response: githubCredentialsStatus },
+    { status: 403, response: githubAccessStatus },
+    { status: 503, response: upstreamFailureStatus },
+  ].map(({ status, response }): RegistrationFailure => ({
+    what: `an App installation lookup HTTP ${status}`, status: response,
+    raise(dependencies) {
+      dependencies.registrationApp = { async lookupInstallation() { throw new GitHubApiError(status); } };
+    },
+    submit: appSubmission, publishes: exactMessage,
+  })),
+  ...[403, 429].flatMap((status) => [null, 1, 17].map((delay): RegistrationFailure => ({
+    what: `an App installation rate limit HTTP ${status} with retry delay ${delay}`, status: githubRateLimitedStatus,
+    raise(dependencies) {
+      dependencies.registrationApp = { async lookupInstallation() { throw new GitHubApiError(status, status === 403, delay); } };
+    },
+    submit: appSubmission,
+    publishes: (surfaced) => (cell) => cell.replace("<status>", String(status)).replace("<N>", String(delay)) === surfaced,
+  }))),
+  {
+    what: "an App installation lookup transport failure", status: upstreamFailureStatus,
+    raise(dependencies) {
+      dependencies.registrationApp = { async lookupInstallation() { throw new Error("installation transport failed"); } };
+    },
+    submit: appSubmission, publishes: exactMessage,
+  },
+  ...["oauth_hook", "app"].map((registrationMethod): RegistrationFailure => ({
+    what: `a cross-forge id collision during ${registrationMethod} registration`, status: conflictStatus,
+    raise(dependencies) { dependencies.store.findRepositoryProviderById = async () => "gitlab"; },
+    submit: (input) => ({ ...input, registrationMethod: registrationMethod as "oauth_hook" | "app" }),
+    publishes: (surfaced) => (cell) => cell.replaceAll("<id>", "42").replace("<provider>", "gitlab") === surfaced,
+  })),
+  {
+    what: "an App registration declined by the numeric-id arbiter", status: conflictStatus,
+    raise(dependencies) { installedRegistrationApp(dependencies); dependencies.store.createRepository = async () => null; },
+    submit: appSubmission, publishes: exactMessage,
+  },
+  {
+    what: "an App registration colliding with another owner/name", status: conflictStatus,
+    raise(dependencies) {
+      installedRegistrationApp(dependencies);
+      dependencies.store.createRepository = async () => { throw new RepositoryOwnerNameConflictError(claimedOwnerName); };
+    },
+    submit: appSubmission,
+    publishes: (surfaced) => (cell) => cell.replace("<owner/name>", claimedOwnerName) === surfaced,
+  },
+  {
+    what: "an App registration whose sponsor becomes ineligible at the store", status: forbiddenStatus,
+    raise(dependencies) {
+      installedRegistrationApp(dependencies);
+      dependencies.store.createRepository = async () => { throw new RepositoryRegistrationEnforcementError(); };
+    },
+    submit: appSubmission, publishes: exactMessage,
+  },
+  {
+    what: "an App registration save failure", status: upstreamFailureStatus,
+    raise(dependencies) {
+      installedRegistrationApp(dependencies);
+      dependencies.store.createRepository = async () => { throw new Error("registration store unavailable"); };
+    },
+    submit: appSubmission, publishes: exactMessage,
+  },
+];
+
 const registrationFailures = [
   ...registrationConflicts,
   ...githubCredentialRejections,
@@ -360,6 +471,7 @@ const registrationFailures = [
   ...githubOutages,
   ...missingLabelRefusals,
   ...registrationRefusals,
+  ...appRegistrationRefusals,
 ];
 
 // Exact-message rows the corpus deliberately does not raise, each explained by the
@@ -378,6 +490,13 @@ const routeLevelAnswers: Record<string, string> = {
   "Too many requests of this kind. Retry after the number of seconds the Retry-After header names.":
     "the route's expensive-route bound (issue 1054, src/lib/security/route-rate-limit.ts) answers before registerRepository runs; pinned by tests/api/route-rate-limits.test.ts",
 };
+
+const routeRegistrationRefusals = [
+  { what: "a registration whose live account disappeared", status: "403", code: "FORBIDDEN", liveRole: null,
+    body: () => JSON.stringify(appSubmission(registrationInput())), publishes: exactMessage },
+  { what: "an oversized registration body", status: "413", code: "PAYLOAD_TOO_LARGE", liveRole: "MEMBER",
+    body: () => JSON.stringify({ ...appSubmission(registrationInput()), openingName: "x".repeat(128 * 1024) }), publishes: exactMessage },
+] as const;
 
 // One submission per catalog-validation message, each crafted so validating it fails on exactly
 // that message; the shapes follow tests/repositories/register.test.ts. These are raised through
@@ -478,6 +597,16 @@ describe("the registration error catalog API.md publishes", () => {
     });
   }
 
+  for (const failure of routeRegistrationRefusals) {
+    it(`publishes the status, code and message ${failure.what} surfaces`, async () => {
+      const surfaced = await surfacedRouteFailure(failure);
+      expect({ status: surfaced.status, code: surfaced.code }).toEqual({ status: failure.status, code: failure.code });
+      const matched = registrationCatalogRows().filter((row) => failure.publishes(surfaced.message)(row.message));
+      expect(matched).toHaveLength(1);
+      expect(matched[0]).toEqual(surfaced);
+    });
+  }
+
   it("publishes a row per conflict, so no conflict is answered with another's message", async () => {
     const claimed: string[] = [];
     for (const conflict of registrationConflicts) {
@@ -496,10 +625,16 @@ describe("the registration error catalog API.md publishes", () => {
   // registerRepository. A row that is neither claimed nor listed fails this check, so a future
   // row cannot slip in without either a raised failure or a stated reason.
   it("publishes no exact-message row that no raised failure answers and no allowlist entry explains", async () => {
-    const raised = await Promise.all(registrationFailures.map(async (failure) => ({
-      failure,
-      surfaced: await surfacedFailure(failure),
-    })));
+    const raised = [
+      ...await Promise.all(registrationFailures.map(async (failure) => ({
+        failure,
+        surfaced: await surfacedFailure(failure),
+      }))),
+      ...await Promise.all(routeRegistrationRefusals.map(async (failure) => ({
+        failure,
+        surfaced: await surfacedRouteFailure(failure),
+      }))),
+    ];
 
     const unclaimed = registrationCatalogRows().filter((row) => {
       const claimants = raised.filter(({ failure, surfaced }) =>
@@ -978,6 +1113,27 @@ function catalogRowsUnder(catalogHeading: string): CatalogRow[] {
 
 function withoutCodeSpan(cell: string): string {
   return cell.startsWith("`") && cell.endsWith("`") ? cell.slice(1, -1) : cell;
+}
+
+async function surfacedRouteFailure(
+  failure: (typeof routeRegistrationRefusals)[number],
+): Promise<{ status: string; code: string; message: string }> {
+  const createRegistrationDependencies = vi.fn(async (): Promise<never> => {
+    throw new Error("A refused request reached registration setup.");
+  });
+  const handler = createRepositoryPostHandler({
+    getSession: async () => null,
+    findAccountByTokenHash: async () => ({ id: "sponsor-id", tokenId: "catalog-token", role: "MEMBER", enforcementState: "ACTIVE" }),
+    getCurrentRole: async () => failure.liveRole,
+    createRegistrationDependencies,
+  });
+  const response = await handler(new Request("https://overflow.example/api/repositories", {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${mintApiToken().token}` },
+    body: failure.body(),
+  }));
+  expect(createRegistrationDependencies).not.toHaveBeenCalled();
+  const body = await response.json() as { error: { code: string; message: string } };
+  return { status: String(response.status), code: body.error.code, message: body.error.message };
 }
 
 async function surfacedFailure(failure: RegistrationFailure): Promise<{ code: string; message: string }> {
