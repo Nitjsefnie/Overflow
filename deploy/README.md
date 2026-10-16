@@ -1188,7 +1188,11 @@ if required_response=$(gh api "repos/$repo/branches/main/protection" --include 2
     required_body=${required_body#*$'\n'}
     [ -n "${required_header%$'\r'}" ] || break
   done
-  classic_required=$(jq -r '([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]' <<<"${required_body}" 2>"${required_stderr}") || required_status=$?
+  if required_body=$(jq -e 'if type == "object" then . else error("expected a protection object") end' <<<"${required_body}" 2>"${required_stderr}"); then
+    classic_required=$(jq -r '([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]' <<<"${required_body}" 2>"${required_stderr}") || required_status=$?
+  else
+    required_status=$?
+  fi
 elif [[ "${required_response%%$'\n'*}" =~ ^HTTP/[0-9]+[.][0-9]+[[:space:]]+404[[:space:]] ]]; then
   classic_required=
 else
@@ -1209,7 +1213,11 @@ if required_response=$(gh api "repos/$repo/rules/branches/main" --include 2>"${r
     required_body=${required_body#*$'\n'}
     [ -n "${required_header%$'\r'}" ] || break
   done
-  rules_required=$(jq -r '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks | if type == "array" then .[] else error("required_status_checks must be an array") end | (.context? // .)] | unique | .[]' <<<"${required_body}" 2>"${required_stderr}") || required_status=$?
+  if required_body=$(jq -e 'if type == "array" then . else error("expected a rules array") end' <<<"${required_body}" 2>"${required_stderr}"); then
+    rules_required=$(jq -r '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks | if type == "array" then .[] else error("required_status_checks must be an array") end | (.context? // .)] | unique | .[]' <<<"${required_body}" 2>"${required_stderr}") || required_status=$?
+  else
+    required_status=$?
+  fi
 elif [[ "${required_response%%$'\n'*}" =~ ^HTTP/[0-9]+[.][0-9]+[[:space:]]+404[[:space:]] ]]; then
   rules_required=
 else

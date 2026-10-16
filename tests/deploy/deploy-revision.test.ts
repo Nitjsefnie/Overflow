@@ -1477,11 +1477,14 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
   });
 
   describe.each(["script", "manual"])("%s discovery failures", (target) => {
-    it.each(["protection-http500", "rules-http500", "protection-jq404", "rules-jq404", "malformed-rules"])(
+    it.each(["protection-http500", "rules-http500", "protection-jq404", "rules-jq404", "malformed-rules", "protection-whitespace", "rules-whitespace"])(
       "refuses %s without shrinking the required set", async (failure) => {
         await expectDiscoveryRefusal(target, failure);
       },
     );
+    it.each(["protection-empty", "rules-empty"])("keeps %s on the empty-union refusal", async (failure) => {
+      await expectDiscoveryRefusal(target, failure);
+    });
   });
 
   it("skips the entire gate under OVERFLOW_DEPLOY_CI_GATE=skip, with a loud warning", async () => {
