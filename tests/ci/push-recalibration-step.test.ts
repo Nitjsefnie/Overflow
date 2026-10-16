@@ -327,6 +327,24 @@ describe("push-recalibration's push step, executed", () => {
     assertClean();
   });
 
+  it("falls back to a token push without a key, simulation or override and reports refusal visibly", () => {
+    seedRemote(rejectAlways);
+    const env = pushEnv();
+    delete env.PUSH_REMOTE_URL;
+    // Rewrite the selected token URL so the fallback attempts a local remote.
+    git(checkout, "config", `url.${origin}.insteadOf`,
+      `https://x-access-token:${env.GH_TOKEN}@github.com/${env.GITHUB_REPOSITORY}.git`);
+    const result = runStep(pushRun, checkout, env);
+
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(output).toContain("branch protection refuses this push");
+    expect(result.status).not.toBe(0);
+    expect(output).toContain("::error::");
+    expect(output).toContain("Remedy: record the raise by hand");
+    expect(output).toContain("node scripts/calibrate-coverage.ts");
+    assertClean();
+  });
+
   it("commits the exported document as the bot and pushes to a permissive remote", () => {
     seedRemote("");
     const before = git(origin, "rev-parse", "main");
