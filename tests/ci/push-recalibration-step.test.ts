@@ -383,7 +383,8 @@ describe("push-recalibration's push step, executed", () => {
     // Recorded floor at HEAD^1 and measured floor in the committed doc.
     expect(output).toContain("72.46");
     expect(output).toContain("77.46");
-    expect(output).toContain("refuses pushes from GITHUB_TOKEN");
+    expect(output).toContain("protection refused the push");
+    expect(output).toContain("without the deploy key, the push uses GITHUB_TOKEN");
     expect(output).toContain("node scripts/calibrate-coverage.ts");
     expect(git(origin, "rev-parse", "main")).toBe(before);
     assertClean();

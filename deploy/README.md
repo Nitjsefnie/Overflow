@@ -1177,25 +1177,48 @@ if [ "${repo_valid}" -ne 0 ]; then
   exit 1
 fi
 required_stderr=$(mktemp)
+# Read HTTP status independently of diagnostic text; parse only successful bodies.
+classic_required=
 required_status=0
-classic_required=$(gh api "repos/$repo/branches/main/protection" --jq '([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]' 2>"${required_stderr}") || required_status=$?
-if [ "${required_status}" -ne 0 ]; then
-  if [[ "$(<"${required_stderr}")" != *'HTTP 404'* ]]; then
-    rm -f "${required_stderr}"
-    printf 'could not determine required checks for main: branch-protection read failed; refusing to deploy\n' >&2
-    exit 1
-  fi
+if required_response=$(gh api "repos/$repo/branches/main/protection" --include 2>"${required_stderr}"); then
+  # Drop the status line and headers through the first blank line (LF or CRLF).
+  required_body=${required_response#*$'\n'}
+  while [[ "${required_body}" == *$'\n'* ]]; do
+    required_header=${required_body%%$'\n'*}
+    required_body=${required_body#*$'\n'}
+    [ -n "${required_header%$'\r'}" ] || break
+  done
+  classic_required=$(jq -r '([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]' <<<"${required_body}" 2>"${required_stderr}") || required_status=$?
+elif [[ "${required_response%%$'\n'*}" =~ ^HTTP/[0-9]+[.][0-9]+[[:space:]]+404[[:space:]] ]]; then
   classic_required=
+else
+  required_status=1
 fi
-required_status=0
-rules_required=$(gh api "repos/$repo/rules/branches/main" --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]? | (.context? // .)] | unique | .[]' 2>"${required_stderr}") || required_status=$?
 if [ "${required_status}" -ne 0 ]; then
-  if [[ "$(<"${required_stderr}")" != *'HTTP 404'* ]]; then
-    rm -f "${required_stderr}"
-    printf 'could not determine required checks for main: rules read failed; refusing to deploy\n' >&2
-    exit 1
-  fi
+  rm -f "${required_stderr}"
+  printf 'could not determine required checks for main: branch-protection read failed; refusing to deploy\n' >&2
+  exit 1
+fi
+rules_required=
+required_status=0
+if required_response=$(gh api "repos/$repo/rules/branches/main" --include 2>"${required_stderr}"); then
+  # Drop the status line and headers through the first blank line (LF or CRLF).
+  required_body=${required_response#*$'\n'}
+  while [[ "${required_body}" == *$'\n'* ]]; do
+    required_header=${required_body%%$'\n'*}
+    required_body=${required_body#*$'\n'}
+    [ -n "${required_header%$'\r'}" ] || break
+  done
+  rules_required=$(jq -r '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks | if type == "array" then .[] else error("required_status_checks must be an array") end | (.context? // .)] | unique | .[]' <<<"${required_body}" 2>"${required_stderr}") || required_status=$?
+elif [[ "${required_response%%$'\n'*}" =~ ^HTTP/[0-9]+[.][0-9]+[[:space:]]+404[[:space:]] ]]; then
   rules_required=
+else
+  required_status=1
+fi
+if [ "${required_status}" -ne 0 ]; then
+  rm -f "${required_stderr}"
+  printf 'could not determine required checks for main: rules read failed; refusing to deploy\n' >&2
+  exit 1
 fi
 rm -f "${required_stderr}"
 required=

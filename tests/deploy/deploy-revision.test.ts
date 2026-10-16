@@ -26,11 +26,13 @@ import {
   cleanupLiveFixture,
   describeEntry,
   expectGateRefused,
+  expectDiscoveryRefusal,
   expectTreeNotMoved,
   gateLog,
   gateReads,
   listedOffenders,
   makeFixture,
+  missingGhPath,
   parser,
   readLog,
   refusalFor,
@@ -1220,7 +1222,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     expectGateRefused(entries);
   });
 
-  it("refuses, naming the map and the SHA, when jq is not installed", async () => {
+  it("refuses discovery when jq is not installed", async () => {
     const fixture = await makeFixture();
     // Every shim plus only the real binaries the run touches up to the gate:
     // bash and env for the shebangs, readlink for the anchor, cat for the
@@ -1252,10 +1254,9 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     const result = await runDeploy(fixture, { PATH: noJqBins });
 
     expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain(MAP_PATH);
-    expect(result.stderr).toContain(FIXTURE_HASH);
+    expect(result.stderr).toContain("branch-protection read failed");
     const entries = await readLog(fixture.shimLog);
-    expect(gateLog(entries)).toEqual(gateReads(FIXTURE_HASH).slice(0, 3));
+    expect(gateLog(entries)).toEqual(gateReads(FIXTURE_HASH).slice(0, 1));
     expectGateRefused(entries);
   });
 
@@ -1400,24 +1401,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     // and mktemp/rm for the ignored-listing capture).
     // On this host gh also lives in /usr/bin, so dropping that directory is
     // required, not just /usr/local/bin.
-    const noGhBins = path.join(fixture.dir, "bins-no-gh");
-    await mkdir(noGhBins);
-    for (const name of ALL_SHIMS.filter((name) => name !== "gh")) {
-      const { envKeys, dispatch } = SHIM_DISPATCH[name]!;
-      const file = path.join(noGhBins, name);
-      await writeFile(file, shimBody(name, envKeys, dispatch));
-      await chmod(file, 0o755);
-    }
-    for (const [link, target] of [
-      ["bash", "/bin/bash"],
-      ["env", "/usr/bin/env"],
-      ["readlink", "/usr/bin/readlink"],
-      ["mktemp", "/usr/bin/mktemp"],
-      ["rm", "/usr/bin/rm"],
-    ] as const) {
-      await symlink(target, path.join(noGhBins, link));
-    }
-    const gatePath = `${noGhBins}:${fixture.dir}`;
+    const gatePath = await missingGhPath(fixture);
     // The premise: with exactly this PATH, nothing named gh is reachable.
     expect(
       spawnSync("sh", ["-c", "command -v gh"], { encoding: "utf8", env: { ...process.env, PATH: gatePath } }).status,
@@ -1442,7 +1426,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
   it("refuses when main's protection reads but declares no required checks", async () => {
     const fixture = await makeFixture();
     const empty = path.join(fixture.dir, "protection-empty.txt");
-    await writeFile(empty, "");
+    await writeFile(empty, JSON.stringify({ required_status_checks: { contexts: [], checks: [] } }));
     const result = await runDeploy(fixture, { GH_SHIM_PROTECTION_JSON: empty });
 
     expect(result.status, result.stderr).not.toBe(0);
@@ -1464,7 +1448,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
 
   it("unions overlapping protection and branch rules, listing a pending check only once", async () => {
     const fixture = await makeFixture();
-    await writeFile(fixture.protectionJson, "deploy-gate\n\n");
+    await writeFile(fixture.protectionJson, JSON.stringify({ required_status_checks: { contexts: ["deploy-gate", ""] } }));
     const rules = await writeBranchRules(fixture, ["verify", "deploy-gate", "verify", ""]);
     const pending = await writeCheckRuns(fixture, "gate-union-pending", [["verify", "in_progress"], ["deploy-gate", "in_progress"]]);
     const refused = await runDeploy(fixture, {
@@ -1490,6 +1474,14 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     const entries = await readLog(fixture.shimLog);
     expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(2);
     expectGateRefused(entries);
+  });
+
+  describe.each(["script", "manual"])("%s discovery failures", (target) => {
+    it.each(["protection-http500", "rules-http500", "protection-jq404", "rules-jq404", "malformed-rules"])(
+      "refuses %s without shrinking the required set", async (failure) => {
+        await expectDiscoveryRefusal(target, failure);
+      },
+    );
   });
 
   it("skips the entire gate under OVERFLOW_DEPLOY_CI_GATE=skip, with a loud warning", async () => {

@@ -87,8 +87,6 @@ export const FIXTURE_URL = "http://127.0.0.1:39999/deploy-fixture";
 export const FIXTURE_HASH = "abc1234";
 export const FIXTURE_REPO = "overflow-fixture/overflow-fixture";
 export const FIXTURE_REMOTE_URL = `git@github.com:${FIXTURE_REPO}.git`;
-export const JQ_PROTECTION = `([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]`;
-export const JQ_RULES = `[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]? | (.context? // .)] | unique | .[]`;
 export const JQ_CHECKRUNS = `.check_runs[] | [.id, .name, (.app.id // 0), (.status // "unknown"), (.conclusion // "")] | map(if . == null or . == "" then "[missing]" else . end) | @tsv`;
 export const JQ_RUNS = `.workflow_runs[] | [.id, .path, .event, .head_branch] | map(if . == null or . == "" then "[missing]" else . end) | @tsv`;
 export const JQ_JOBS = `.jobs[] | [.id, (if (.name // "") == "" then "(unnamed)" else .name end), (.run_attempt // 0), (.status // "unknown"), (.conclusion // "")] | map(if . == null or . == "" then "[missing]" else . end) | @tsv`;
@@ -124,8 +122,8 @@ export const LEDGER_APP_ID = 5118623;
  */
 export function gateReads(sha: string): string[] {
   return [
-    `gh api repos/${FIXTURE_REPO}/branches/main/protection --jq ${JQ_PROTECTION}`,
-    `gh api repos/${FIXTURE_REPO}/rules/branches/main --jq ${JQ_RULES}`,
+    `gh api repos/${FIXTURE_REPO}/branches/main/protection --include`,
+    `gh api repos/${FIXTURE_REPO}/rules/branches/main --include`,
     `git show ${sha}:${MAP_PATH}`,
     `gh api repos/${FIXTURE_REPO}/commits/${sha}/check-runs?filter=all&per_page=100 --paginate --jq ${JQ_CHECKRUNS}`,
     `gh api repos/${FIXTURE_REPO}/actions/runs?head_sha=${sha}&per_page=100 --paginate --jq ${JQ_RUNS}`,
@@ -354,12 +352,12 @@ export async function makeFixture(options: {
   const bins = path.join(dir, "bins");
   await mkdir(logDir);
   await mkdir(bins);
-  // The protection shim yields required-check names; each gate state directory
-  // holds JSON projected by real jq with the deploy script's actual query.
-  // The argv-shape assertions below still pin that the script passes those
-  // exact --jq programs. The git shim serves requiredChecks as the pin map.
-  const protectionJson = path.join(dir, "protection.txt");
-  await writeFile(protectionJson, "verify\ndeploy-gate\n");
+  // Discovery returns raw JSON with HTTP headers; the real gate parses it.
+  // Later gate-state reads retain gh's --jq projection with real jq.
+  const protectionJson = path.join(dir, "protection.json");
+  await writeFile(protectionJson, JSON.stringify({ required_status_checks: {
+    contexts: ["verify", "deploy-gate"], checks: [],
+  } }));
   const requiredChecks = path.join(dir, "required-checks.json");
   await writeFile(requiredChecks, JSON.stringify(FIXTURE_PINS, null, 2) + "\n");
   const gateSuccess = await writeCheckRuns({ dir }, "gate-success", [
@@ -475,7 +473,7 @@ exit 0
 `,
   },
   gh: {
-    envKeys: ["GH_SHIM_PROTECTION_JSON", "GH_SHIM_PROTECTION_404", "GH_SHIM_RULES_JSON", "GH_SHIM_RULES_ERROR", "GH_SHIM_GATE_SEQUENCE", "GH_SHIM_STATUS", "GH_SHIM_FAIL_MATCH"],
+    envKeys: ["GH_SHIM_PROTECTION_JSON", "GH_SHIM_PROTECTION_404", "GH_SHIM_RULES_JSON", "GH_SHIM_RULES_ERROR", "GH_SHIM_DISCOVERY_FAILURE", "GH_SHIM_GATE_SEQUENCE", "GH_SHIM_STATUS", "GH_SHIM_FAIL_MATCH"],
     dispatch: `
 if [ -n "\${GH_SHIM_STATUS:-}" ] && [ "\$GH_SHIM_STATUS" != 0 ]; then exit "\$GH_SHIM_STATUS"; fi
 path=""
@@ -485,25 +483,45 @@ for a in "\$@"; do
   prev="\$a"
 done
 if [ -n "\${GH_SHIM_FAIL_MATCH:-}" ] && [[ "\$path" == *"\$GH_SHIM_FAIL_MATCH"* ]]; then exit 1; fi
+failure="\${GH_SHIM_DISCOVERY_FAILURE:-}"
+source=
+case "\$path" in
+  */branches/main/protection) source=protection ;;
+  */rules/branches/main) source=rules ;;
+esac
+if [[ "\$failure" == "\$source-http500" ]]; then
+  printf 'HTTP/1.1 500 Internal Server Error\\r\\nContent-Type: application/json\\r\\n\\r\\n{"message":"Upstream HTTP 404 while reading rules"}'
+  printf 'gh: Upstream HTTP 404 while reading rules (HTTP 500)\\n' >&2
+  exit 1
+fi
+if [[ "\$failure" == "\$source-jq404" ]]; then
+  printf 'HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n"HTTP 404"'
+  exit 0
+fi
 # The check-runs read opens each poll iteration, so it advances the gate
 # state sequence; the runs and jobs reads that follow serve the same state.
 state_file="\${SHIM_LOG:?}.gh-state"
 case "\$path" in
   */branches/main/protection)
     if [ "\${GH_SHIM_PROTECTION_404:-}" = 1 ]; then
+      printf 'HTTP/2.0 404 Not Found\\r\\nContent-Type: application/json\\r\\n\\r\\n{}'
       printf 'gh: Not Found (HTTP 404)\\n' >&2
       exit 1
     fi
+    printf 'HTTP/2.0 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n'
     cat "\${GH_SHIM_PROTECTION_JSON:?}"
     ;;
   */rules/branches/main)
     if [ "\${GH_SHIM_RULES_ERROR:-}" = 1 ]; then
+      printf 'HTTP/2.0 500 Internal Server Error\\nContent-Type: application/json\\n\\n{}'
       printf 'gh: Internal Server Error (HTTP 500)\\n' >&2
       exit 1
     fi
     if [ -n "\${GH_SHIM_RULES_JSON:-}" ]; then
-      jq -r "\${!#}" "$GH_SHIM_RULES_JSON"
+      printf 'HTTP/1.1 200 OK\\nContent-Type: application/json\\n\\n'
+      cat "$GH_SHIM_RULES_JSON"
     else
+      printf 'HTTP/2.0 404 Not Found\\r\\nContent-Type: application/json\\r\\n\\r\\n{}'
       printf 'gh: Not Found (HTTP 404)\\n' >&2
       exit 1
     fi
@@ -657,4 +675,53 @@ export async function runDeploy(
       ...extraEnv,
     },
   });
+}
+
+/** Builds the existing shim PATH with no reachable gh binary. */
+export async function missingGhPath(fixture: Fixture): Promise<string> {
+  const noGhBins = path.join(fixture.dir, "bins-no-gh");
+  await mkdir(noGhBins);
+  for (const name of ALL_SHIMS.filter((name) => name !== "gh")) {
+    const { envKeys, dispatch } = SHIM_DISPATCH[name]!;
+    const file = path.join(noGhBins, name);
+    await writeFile(file, shimBody(name, envKeys, dispatch));
+    await chmod(file, 0o755);
+  }
+  for (const [link, target] of [
+    ["bash", "/bin/bash"],
+    ["env", "/usr/bin/env"],
+    ["readlink", "/usr/bin/readlink"],
+    ["mktemp", "/usr/bin/mktemp"],
+    ["rm", "/usr/bin/rm"],
+  ] as const) {
+    await symlink(target, path.join(noGhBins, link));
+  }
+  return `${noGhBins}:${fixture.dir}`;
+}
+
+/** Runs the real discovery gate from the deploy script or the manual procedure. */
+export async function expectDiscoveryRefusal(target: string, failure: string): Promise<void> {
+  const fixture = await makeFixture();
+  const extraEnv: Record<string, string> = { GH_SHIM_DISCOVERY_FAILURE: failure };
+  if (failure === "malformed-rules") {
+    const rules = path.join(fixture.dir, "malformed-rules.json");
+    await writeFile(rules, JSON.stringify([{ type: "required_status_checks",
+      parameters: { required_status_checks: "deploy-gate" } }]));
+    extraEnv.GH_SHIM_RULES_JSON = rules;
+  } else if (failure.startsWith("protection")) {
+    extraEnv.GH_SHIM_RULES_JSON = await writeBranchRules(fixture, ["verify", "deploy-gate"]);
+  }
+  let scriptPath = script;
+  if (target === "manual") {
+    const markdown = await readFile(new URL("../../deploy/README.md", import.meta.url), "utf8");
+    const section = markdown.split("## 10. Deploying a new revision")[1]!;
+    const gate = section.slice(section.indexOf("required_stderr=$(mktemp)"), section.indexOf("check_runs_status=0"));
+    scriptPath = path.join(fixture.dir, "manual-discovery.sh");
+    await writeFile(scriptPath, `repo=${FIXTURE_REPO}\n${gate}\npnpm install\n`);
+  }
+  const result = await runDeploy(fixture, extraEnv, { scriptPath });
+  expect(result.status, `${target}/${failure}: ${result.stderr}`).toBe(1);
+  expect(result.stderr).toContain("could not determine required checks for main");
+  expect(result.stderr).toContain(failure.startsWith("protection") ? "branch-protection read failed" : "rules read failed");
+  expectGateRefused(await readLog(fixture.shimLog));
 }
