@@ -711,6 +711,16 @@ export async function expectDiscoveryRefusal(target: string, failure: string): P
   } else if (failure.startsWith("protection")) {
     extraEnv.GH_SHIM_RULES_JSON = await writeBranchRules(fixture, ["verify", "deploy-gate"]);
   }
+  if (failure.endsWith("-whitespace") || failure.endsWith("-empty")) {
+    const body = path.join(fixture.dir, "discovery-body.json");
+    const protection = failure.startsWith("protection");
+    await writeFile(body, failure.endsWith("-whitespace") ? "  \n" : protection ? "{}" : "[]");
+    extraEnv[protection ? "GH_SHIM_PROTECTION_JSON" : "GH_SHIM_RULES_JSON"] = body;
+    if (failure.endsWith("-empty")) {
+      if (protection) delete extraEnv.GH_SHIM_RULES_JSON;
+      else await writeFile(fixture.protectionJson, "{}");
+    }
+  }
   let scriptPath = script;
   if (target === "manual") {
     const markdown = await readFile(new URL("../../deploy/README.md", import.meta.url), "utf8");
@@ -722,6 +732,11 @@ export async function expectDiscoveryRefusal(target: string, failure: string): P
   const result = await runDeploy(fixture, extraEnv, { scriptPath });
   expect(result.status, `${target}/${failure}: ${result.stderr}`).toBe(1);
   expect(result.stderr).toContain("could not determine required checks for main");
-  expect(result.stderr).toContain(failure.startsWith("protection") ? "branch-protection read failed" : "rules read failed");
+  if (failure.endsWith("-empty")) {
+    expect(result.stderr).toContain("main publishes no required checks in either source");
+    expect(result.stderr).not.toContain("read failed");
+  } else {
+    expect(result.stderr).toContain(failure.startsWith("protection") ? "branch-protection read failed" : "rules read failed");
+  }
   expectGateRefused(await readLog(fixture.shimLog));
 }
