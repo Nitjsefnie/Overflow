@@ -529,7 +529,7 @@ describe("POST /api/repositories", () => {
         ownerName: "octo/overflow",
         sponsorId: "moderator-id",
         visibility: "PUBLIC",
-        githubWebhookId: 501, registrationMethod: "oauth_hook" as const,
+        githubWebhookId: 501,
       },
       initialImportScheduled: true,
       claimPath: "NO_EVIDENCE_FOUND",
@@ -566,7 +566,7 @@ describe("POST /api/repositories", () => {
           ownerName: "octo/overflow",
           sponsorId: "moderator-id",
           visibility: "PUBLIC",
-          githubWebhookId: 501, registrationMethod: "oauth_hook" as const,
+          githubWebhookId: 501,
         },
         initialImportScheduled: true,
         claimPath,
@@ -847,7 +847,7 @@ describe("Overflow token registration", () => {
         ownerName: "octo/overflow",
         sponsorId: account.id,
         visibility: "PUBLIC",
-        githubWebhookId: 501, registrationMethod: "oauth_hook" as const,
+        githubWebhookId: 501,
       },
       initialImportScheduled: true,
       claimPath: "NO_EVIDENCE_FOUND",
@@ -1557,7 +1557,7 @@ describe("PATCH /api/repositories", () => {
         ownerName: "octo/overflow",
         sponsorId: "moderator-id",
         visibility: "PUBLIC",
-        githubWebhookId: 501, registrationMethod: "oauth_hook" as const,
+        githubWebhookId: 501,
       },
       changed: true,
       versionNumber: 2,
@@ -1839,7 +1839,7 @@ describe("DELETE /api/repositories", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      repository: registeredTarget(),
+      repository: { id: "repository-id", githubRepositoryId: 42, ownerName: "octo/overflow", sponsorId: "moderator-id", visibility: "PUBLIC", githubWebhookId: 501 },
       webhookDeleted: true,
       alreadyUnregistered: false,
     });
@@ -1860,7 +1860,7 @@ describe("DELETE /api/repositories", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      repository: registeredTarget(),
+      repository: { id: "repository-id", githubRepositoryId: 42, ownerName: "octo/overflow", sponsorId: "moderator-id", visibility: "PUBLIC", githubWebhookId: 501 },
       webhookDeleted: true,
       alreadyUnregistered: true,
     });
@@ -1900,7 +1900,7 @@ describe("DELETE /api/repositories", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      repository: gitlabTarget(),
+      repository: { id: "gitlab-repository-id", githubRepositoryId: 4242, ownerName: "group/subgroup/project", sponsorId: "moderator-id", visibility: "PUBLIC", githubWebhookId: null },
       webhookDeleted: false,
       alreadyUnregistered: false,
     });
@@ -2072,7 +2072,7 @@ describe("DELETE /api/repositories", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      repository: { ...registeredTarget("token-account-id") },
+      repository: { id: "repository-id", githubRepositoryId: 42, ownerName: "octo/overflow", sponsorId: "token-account-id", visibility: "PUBLIC", githubWebhookId: 501 },
       webhookDeleted: true,
       alreadyUnregistered: false,
     });
