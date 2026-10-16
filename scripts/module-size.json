@@ -14,7 +14,7 @@
     "src/lib/fold/repository-fold.ts": 1460,
     "src/lib/github/client.ts": 1487,
     "src/lib/moderation/credit-adjustment-store.ts": 827,
-    "src/lib/repositories/register.ts": 2046,
+    "src/lib/repositories/register.ts": 2004,
     "tests/db/schema.test.ts": 5074,
     "tests/github/graphql.test.ts": 3018
   }
