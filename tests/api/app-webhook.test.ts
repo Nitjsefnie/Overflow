@@ -12,12 +12,13 @@ import { WEBHOOK_RATE_LIMIT_CAPACITY } from "@/lib/webhooks/rate-limit";
 import { runMigrations } from "../../scripts/migrate";
 import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { startPostgresContainer } from "../support/postgres-container";
+import { webhookCredential } from "../support/webhook-credential";
 
 vi.hoisted(() => { vi.resetModules(); });
 afterAll(() => { vi.resetModules(); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
-const secret = randomUUID();
+const secret = webhookCredential("github").secret;
 const limit = 25 * 1024 * 1024;
 let sql: Sql;
 let container: StartedTestContainer | undefined;
@@ -25,9 +26,10 @@ let dependencies: GitHubAppWebhookRouteDependencies;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
 function request(body = payload(), overrides: Record<string, string | null> = {}): Request {
+  const signature = createHmac("sha256", secret).update(body).digest("hex");
   const headers = new Headers({
     "x-github-event": "pull_request", "x-github-delivery": randomUUID(),
-    "x-hub-signature-256": `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`,
+    "x-hub-signature-256": `sha256=${signature}`,
   });
   for (const [key, value] of Object.entries(overrides)) {
     if (value === null) headers.delete(key);
@@ -41,9 +43,9 @@ function payload(repositoryId = 42, fullName = "owner/project"): string {
     pull_request: { id: 201, number: 11 } });
 }
 
-async function fixture(method: "app" | "oauth_hook" = "app") {
+async function fixture(oauthHook = false) {
   const result = await materializeRepositoryFixture(sql);
-  const [row] = await sql`update registered_repositories set registration_method = ${method}
+  const [row] = await sql`update registered_repositories set registration_method = ${oauthHook ? "oauth_hook" : "app"}
     where id = ${result.repositoryId} returning github_repository_id`;
   return { ...result, githubId: Number(row.github_repository_id) };
 }
@@ -159,7 +161,7 @@ describe("registration App webhook receiver", () => {
   });
 
   it.each(["missing", "oauth_hook", "unregistered", "inactive", "gitlab"])("ignores %s registrations with zero processing effects", async (state) => {
-    const repo = await fixture(state === "oauth_hook" ? "oauth_hook" : "app");
+    const repo = await fixture(state === "oauth_hook");
     if (state === "unregistered") await sql`update registered_repositories set unregistered_at = now(), active = false where id = ${repo.repositoryId}`;
     if (state === "inactive") await sql`update registered_repositories set active = false where id = ${repo.repositoryId}`;
     if (state === "gitlab") await sql`update registered_repositories set provider = 'gitlab' where id = ${repo.repositoryId}`;
