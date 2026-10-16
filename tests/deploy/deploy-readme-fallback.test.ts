@@ -135,11 +135,12 @@ async function writeShims(fixture: Fixture): Promise<void> {
     "gh",
   `case "$2" in
   */rules/branches/main)
+    printf 'HTTP/1.1 404 Not Found\\nContent-Type: application/json\\n\\n{}'
     printf 'gh: Not Found (HTTP 404)\\n' >&2
     exit 1
     ;;
   */branches/main/protection)
-    printf 'build\\ndeploy-gate\\n'
+    printf 'HTTP/1.1 200 OK\\nContent-Type: application/json\\n\\n{"required_status_checks":{"contexts":["build","deploy-gate"]}}'
     ;;
   */check-runs*)
     cat "\${CHECK_RUNS_FILE:?}"

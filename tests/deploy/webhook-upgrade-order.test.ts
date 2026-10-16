@@ -34,10 +34,11 @@ describe("ordinary deployment webhook upgrade", () => {
         gh() {
           case "$2" in
             */rules/branches/main)
+              printf 'HTTP/1.1 404 Not Found\\nContent-Type: application/json\\n\\n{}'
               printf 'gh: Not Found (HTTP 404)\\n' >&2
               return 1
               ;;
-            */branches/main/protection) printf 'build\\n';;
+            */branches/main/protection) printf 'HTTP/1.1 200 OK\\nContent-Type: application/json\\n\\n{"required_status_checks":{"contexts":["build"]}}';;
             */check-runs*) printf '101\\tbuild\\tcompleted\\tsuccess\\n';;
             *) return 2;;
           esac

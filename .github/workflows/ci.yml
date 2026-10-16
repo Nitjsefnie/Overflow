@@ -27,9 +27,10 @@ name: ci
 # — which is what makes a privileged dispatch safe here.
 #
 # calibrate stays in this file because it `needs: verify` for the `docs_only`
-# output: the push leg's verify job must be in the same workflow. No secret is
-# referenced anywhere in this file — the App key lives only in the ledger
-# relay's environment, and the relay posts the required contexts only from
+# output: the push leg's verify job must be in the same workflow. The
+# push-recalibration job reads its deploy key from the main-push environment;
+# the App key stays in the ledger relay's environment. The relay posts the
+# required contexts only from
 # trusted runs (API-validated ci-pr workflow_run, pull_request_target, or
 # push/dispatch/schedule on main), never
 # from a pull_request run.
@@ -423,9 +424,9 @@ jobs:
             echo "Simulated raise deliberately skips the deploy key so protection refuses the push." >&2
             PUSH_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           elif [ -n "${MASTER_PUSH_DEPLOY_KEY:-}" ]; then
-            # Fail closed when the environment is missing its secret: with no key
-            # there is nothing to authenticate the push with, and the fallback must
-            # never be a token.
+            # Use SSH when the environment supplies the deploy key. With no key,
+            # the fallback below uses GITHUB_TOKEN; a simulated refusal above
+            # deliberately forces that token path even when the key is present.
             eval "$(ssh-agent -s)" >/dev/null
             # The agent is stopped when this step ends, whatever its outcome: the key
             # never outlives the step that loaded it.
@@ -473,7 +474,7 @@ jobs:
             else
               floors="the floors could not be read from HEAD^1 and HEAD (shallow checkout?)"
             fi
-            echo "::error::coverage-floor recalibration refused ($1): ${floors}. Cause: main's branch protection refuses pushes from GITHUB_TOKEN — a bot commit can never carry the required checks. Remedy: record the raise by hand: run the suite with coverage, run node scripts/calibrate-coverage.ts, commit scripts/coverage.json, open an ordinary pull request — CONTRIBUTING.md, 'Coverage is floored'."
+            echo "::error::coverage-floor recalibration refused ($1): ${floors}. Cause: main's branch protection refused the push; without the deploy key, the push uses GITHUB_TOKEN. Remedy: record the raise by hand: run the suite with coverage, run node scripts/calibrate-coverage.ts, commit scripts/coverage.json, open an ordinary pull request — CONTRIBUTING.md, 'Coverage is floored'."
             exit 1
           }
 
