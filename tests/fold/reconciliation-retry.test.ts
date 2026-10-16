@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ReconciliationGateway } from "@/lib/fold/reconcile";
 import { withTransientRequestRetry, transientRetryDelayMs } from "@/lib/fold/reconciliation-retry";
 import { GitHubApiError, GitHubGraphqlRequestError, isTransientGitHubRequestError } from "@/lib/github/errors";
@@ -57,6 +57,37 @@ describe("withTransientRequestRetry", () => {
     expect(await wrapped.getPullRequestDiff(reference, 11)).toBe("recovered diff");
     expect(attempts).toBe(2);
     expect(delays).toEqual([250]);
+  });
+
+  it("waits for the default 250ms backoff before retrying", async () => {
+    vi.useFakeTimers();
+    try {
+      let attempts = 0;
+      let completed = false;
+      const gateway = retryGateway();
+      gateway.getPullRequestDiff = async () => {
+        attempts += 1;
+        if (attempts === 1) throw new GitHubApiError(503);
+        return "recovered diff";
+      };
+      const result = withTransientRequestRetry(gateway).getPullRequestDiff(reference, 11).then((value) => {
+        completed = true;
+        return value;
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(attempts).toBe(1);
+      expect(completed).toBe(false);
+      await vi.advanceTimersByTimeAsync(249);
+      expect(attempts).toBe(1);
+      expect(completed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(completed).toBe(true);
+      await expect(result).resolves.toBe("recovered diff");
+      expect(attempts).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("throws the last failure after three attempts and only two waits", async () => {
