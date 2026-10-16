@@ -216,6 +216,34 @@ leaves_host() {
 # stands keeps driving the shimmed client, which opens no socket either way.
 smtp_url=${OVERFLOW_ALERT_SMTP_URL:-smtp://127.0.0.1:25}
 
+# Journal lines can exceed SMTP's 998-octet limit. MIME base64 keeps those
+# lines intact when decoded, including multibyte UTF-8. RFC 2045 section 6.8
+# requires canonical CRLF text before encoding and at most 76 encoded columns.
+# Bare base64 works on both GNU and BSD; its default wrapping differs, so the
+# last stage bounds either form and emits CRLF transport lines explicitly.
+#
+# Check each stage BEFORE submitting: POSIX sh only reports the last command's
+# pipeline status, so an encoder piped straight into curl could fail after
+# partial output and still record a successful send. No failed encoding may
+# reach curl or update the throttle. The CR at each text stage's end survives
+# command substitution; printf restores the one final LF it removes.
+if ! body=$(
+  {
+    printf 'The systemd unit %s failed on host %s at %s.\n\n' \
+      "$unit" "$fqdn" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    echo "Last journal entries for the failed unit (current boot):"
+    journalctl -b -u "$unit" --no-pager -n 200 || echo "(reading the journal failed)"
+  } | LC_ALL=C awk '{ sub(/\r$/, ""); printf "%s\r\n", $0 }'
+) || ! body=$(printf '%s\n' "$body" | base64) || ! body=$(
+  printf '%s\n' "$body" | LC_ALL=C awk '{
+    for (at = 1; at <= length($0); at += 76)
+      printf "%s\r\n", substr($0, at, 76)
+  }'
+); then
+  echo "overflow-alert.sh: could not encode the alert body; the send is NOT recorded, so the next failure for $unit alerts again" >&2
+  exit 1
+fi
+
 # curl -v writes its conversation with the daemon to stderr; the message itself
 # is piped in on stdin. The redirections take stderr into the substitution and
 # discard stdout, so what is left to read below is the trace and nothing else.
@@ -229,12 +257,10 @@ smtp_url=${OVERFLOW_ALERT_SMTP_URL:-smtp://127.0.0.1:25}
 submit_status=0
 trace=$(
   {
-    printf 'From: overflow-alert@%s\nTo: %s\nSubject: [overflow] %s failed on %s\n\n' \
+    printf 'From: overflow-alert@%s\r\nTo: %s\r\nSubject: [overflow] %s failed on %s\r\n' \
       "$fqdn" "$recipient" "$unit" "$fqdn"
-    printf 'The systemd unit %s failed on host %s at %s.\n\n' \
-      "$unit" "$fqdn" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-    echo "Last journal entries for the failed unit (current boot):"
-    journalctl -b -u "$unit" --no-pager -n 200 || echo "(reading the journal failed)"
+    printf 'MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n'
+    printf '%s\n' "$body"
   } | curl -v --no-progress-meter --max-time 30 --connect-timeout 5 \
     --url "$smtp_url" \
     --mail-from "overflow-alert@$fqdn" \
