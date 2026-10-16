@@ -238,6 +238,7 @@ describe("PostgreSQL account moderation transitions", () => {
         sponsorId: targetId,
         visibility: "PUBLIC",
         githubWebhookId: nextExternalId(),
+        registrationMethod: "oauth_hook" as const,
         difficultyScheme: difficultyScheme(),
       }),
     ).rejects.toBeInstanceOf(RepositoryRegistrationEnforcementError);
@@ -992,6 +993,7 @@ describe("PostgreSQL account moderation transitions", () => {
       sponsorId,
       visibility: "PUBLIC" as const,
       githubWebhookId: nextExternalId(),
+      registrationMethod: "oauth_hook" as const,
       difficultyScheme: difficultyScheme(),
     };
 

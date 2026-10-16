@@ -69,6 +69,7 @@ describe("changing a repository's difficulty catalog", () => {
       ownerName: `catalog/repo-${repositoryGitHubId}`,
       visibility: "PUBLIC",
       githubWebhookId: externalId++,
+      registrationMethod: "oauth_hook" as const,
       sponsorId,
       difficultyScheme: catalogV1(),
     });

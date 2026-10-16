@@ -145,6 +145,7 @@ describe("migration 038: forge identities and provider columns", () => {
       sponsorId: row!.sponsor_id,
       visibility: "PUBLIC",
       githubWebhookId: null,
+      registrationMethod: "oauth_hook" as const,
       difficultyScheme: validDifficultyScheme(),
     });
     expect(created).not.toBeNull();
@@ -172,6 +173,7 @@ describe("migration 038: forge identities and provider columns", () => {
       sponsorId: row!.sponsor_id,
       visibility: "PUBLIC",
       githubWebhookId: null,
+      registrationMethod: "oauth_hook" as const,
       difficultyScheme: validDifficultyScheme(),
     });
     expect(created).not.toBeNull();

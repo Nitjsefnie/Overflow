@@ -1003,6 +1003,7 @@ async function surfacedFailure(failure: RegistrationFailure): Promise<{ code: st
       async deleteWebhook() {},
     },
     store: {
+      async findActiveAppRegistrationByGitHubRepositoryId() { return null; },
       async findRepositoryByGitHubId() {
         return null;
       },

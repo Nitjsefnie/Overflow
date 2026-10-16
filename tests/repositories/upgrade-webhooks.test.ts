@@ -6,6 +6,7 @@ import type { RegisteredRepository } from "@/lib/repositories/register";
 import type { WebhookCredentialRecord } from "@/lib/webhooks/credentials";
 
 const registration: RegisteredRepository = {
+  registrationMethod: "oauth_hook",
   id: "registration-1", githubRepositoryId: 42, githubWebhookId: 81,
   ownerName: "old-owner/old-name", sponsorId: "sponsor-1", visibility: "PUBLIC",
 };

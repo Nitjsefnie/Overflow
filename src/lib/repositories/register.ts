@@ -40,12 +40,9 @@ export type RegisteredRepository = {
   ownerName: string;
   sponsorId: string;
   visibility: "PUBLIC" | "PRIVATE";
-  /**
-   * Null for a repository registered without a webhook — a GitLab
-   * registration (contract items 27/28 PARTIAL; webhook ingestion deferred).
-   * Every GitHub-side webhook operation must treat null as "nothing to
-   * operate on", never as an id.
-   */
+  registrationMethod: "oauth_hook" | "app";
+  /** Null for hookless GitLab or GitHub App registrations; webhook operations
+   * must treat null as nothing to operate on. */
   githubWebhookId: number | null;
 };
 
@@ -134,6 +131,7 @@ export type AbandonedWebhookCleanup = {
 
 export type RepositoryRegistrationStore = {
   findRepositoryByGitHubId(githubRepositoryId: number): Promise<RegisteredRepository | null>;
+  findActiveAppRegistrationByGitHubRepositoryId(githubRepositoryId: number): Promise<{ repositoryId: string } | null>;
   /**
    * The stored forge provider for the row holding this forge repository id —
    * 'github', 'gitlab', or null when nothing is registered under it. The
@@ -444,6 +442,7 @@ export async function registerRepository(
       sponsorId: dependencies.actor.id,
       visibility: repository.visibility,
       githubWebhookId: webhook.id,
+      registrationMethod: "oauth_hook",
       webhookCredential,
       difficultyScheme,
     });
@@ -738,6 +737,7 @@ async function registerGitLabRepository(
       sponsorId: dependencies.actor.id,
       visibility: repository.visibility,
       githubWebhookId: webhook.id,
+      registrationMethod: "oauth_hook",
       webhookCredential,
       difficultyScheme,
       provider: "gitlab",

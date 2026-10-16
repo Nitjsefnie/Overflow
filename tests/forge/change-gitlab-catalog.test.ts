@@ -60,6 +60,7 @@ function registeredRow(): RegisteredRepository {
     sponsorId: "sponsor-1",
     visibility: "PUBLIC",
     githubWebhookId: null,
+    registrationMethod: "oauth_hook",
   };
 }
 
