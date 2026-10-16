@@ -1396,7 +1396,7 @@ until it is minted again: sponsors sign in again, forge identities are linked
 again, webhook secrets are replaced. For the same reason, never run
 `pnpm credentials:reencrypt` against the production database outside this
 procedure. The reconciliation App private key is a different credential with its own
-rotation, which [section 14](#14-rotating-the-reconciliation-app-private-key) carries;
+rotation, which [section 14](#14-rotating-github-app-private-keys) carries;
 this section's steps do not extend to it and must not be applied to it.
 
 The rotation runs while the service keeps serving, and costs two restarts. It
@@ -2979,12 +2979,19 @@ nginx recorded. A later vhost edit that drops the header, or a value changed
 on one side only, shows up the same way: entries keep arriving, marked
 unverified.
 
-## 14. Rotating the reconciliation App private key
+## 14. Rotating GitHub App private keys
+
+The reconciliation App and the check-publishing App are separate identities
+with separate keys. Rotate each by its own procedure below. A rotation of
+one App does not replace the other App's credential. Section 11 owns
+`TOKEN_ENCRYPTION_KEY`; neither procedure below applies to that key.
+
+### Reconciliation App: host-only
 
 The read-only reconciliation App's private key signs the RS256 JWT used to
 mint its installation token. This App has Metadata, Issues and Pull requests
 read access and no webhook. The reconciliation path reads the PEM file
-`GITHUB_APP_PRIVATE_KEY_PATH` names, alongside `GITHUB_APP_ID`. This section
+`GITHUB_APP_PRIVATE_KEY_PATH` names, alongside `GITHUB_APP_ID`. This procedure
 is the only sanctioned way to change that App's private key; it does not
 extend to `TOKEN_ENCRYPTION_KEY`, which section 11 owns.
 
@@ -2995,7 +3002,7 @@ The PEM lives at the path
 with the ownership and readability discipline that section records. The
 service reads it at wiring time, at each start, never later.
 
-### The overlap, and the fact that bounds the rollback
+#### The overlap, and the fact that bounds the rollback
 
 GitHub Apps hold up to 25 private keys at once, and a JWT verifies against
 whichever registered public half it was signed by. While two keys are
@@ -3019,7 +3026,7 @@ Expect a short base64 string matching the fingerprint the App settings'
 key-pairs page shows for that key. Keep the fingerprints with the rotation
 record.
 
-### Step 1: record the old key's fingerprint and stage a rollback copy
+#### Step 1: record the old key's fingerprint and stage a rollback copy
 
 Run every block as root on the deployment host, in a fresh shell. This
 block stages the rollback copy every later step requires and refuses
@@ -3043,7 +3050,7 @@ does not, the host file and the App's registered key have already diverged:
 stop and use [incident-response.md](incident-response.md) before starting a
 rotation on top of an unknown state.
 
-### Step 2: generate the new key in the App settings and stage it on the host
+#### Step 2: generate the new key in the App settings and stage it on the host
 
 On the App's settings page (Settings → Developer settings → GitHub Apps →
 the reconciliation App → Credentials → Key pairs), click **New key**.
@@ -3076,7 +3083,7 @@ key-pairs page. Record both fingerprints. The App now holds two keys and
 reconciliation keeps working with the old host key, so a pause before
 step 3 is safe.
 
-### Step 3: replace the host key and restart the service
+#### Step 3: replace the host key and restart the service
 
 This block replaces the live PEM in place. Redirection into the existing
 file preserves its owner, group and mode. It requires root, a matching
@@ -3117,7 +3124,7 @@ Expect `active`, `200` and two different `MainPID` values. The reconciliation
 worker now mints from the new key's bytes; both keys still verify during
 the overlap window.
 
-### Step 4: verify under the new key, before the old key dies
+#### Step 4: verify under the new key, before the old key dies
 
 Run one reconciliation explicitly. The CLI reads the host file fresh at
 wiring time. Use an OAuth webhook registration with the reconciliation App
@@ -3146,7 +3153,7 @@ psql "$DATABASE_URL" -tAc "select status, completed_at is not null from reconcil
 Expect `COMPLETED|t`. With reconciliation completed, step 5 may retire the
 old key.
 
-### Step 5: delete the old key and dispose of the staged files
+#### Step 5: delete the old key and dispose of the staged files
 
 In the App settings' key-pairs page, delete the entry whose fingerprint
 matches step 1's. The rollback window is now closed: GitHub cannot re-add a
@@ -3161,7 +3168,7 @@ rm /etc/overflow/github-reconcile-app/private-key.new.pem /etc/overflow/github-r
 )
 ```
 
-### Rolling back
+#### Rolling back
 
 Everything before step 5 rolls back because the old key still verifies.
 Nothing below restores a deleted key. After step 5, repair the host
@@ -3193,3 +3200,100 @@ test "$(openssl rsa -in /etc/overflow/github-reconcile-app/private-key.pem -pubo
 Then run step 3's restart block. Leave the staged new-key file in place
 until the new key has been deleted in the App settings and the rotation is
 closed out; step 5's disposal block then removes it.
+
+
+### Check-publishing App: CI-secret-only
+
+The Overflow Ledger App publishes the required checks. Its private key is
+stored as the `LEDGER_APP_KEY` secret in the repository's `overflow-ledger`
+GitHub environment. Both
+[ledger-relay.yml](../.github/workflows/ledger-relay.yml) and
+[event-policy.yml](../.github/workflows/event-policy.yml) read that secret.
+This App has no credential on the deployment host. Perform this procedure
+from the operator's machine with `gh` authenticated as a repository admin;
+the downloaded PEM files below are operator-side staging and rollback
+material, never deployment-host files.
+
+#### CI step 1: record the old key and generate the replacement
+
+On the check-publishing App's settings page (Settings → Developer settings
+→ GitHub Apps → the Overflow Ledger App → Credentials → Key pairs), record
+the current key's fingerprint. Keep that key's previously downloaded PEM
+available on the operator's machine for rollback: GitHub does not return
+an Actions secret's value or fingerprint, so the old PEM cannot be
+recovered from `LEDGER_APP_KEY`.
+
+Click **New key** on this App's key-pairs page and retain the downloaded
+PEM locally as `/local/path/to/the-downloaded.pem` in the command below.
+Record the new key's fingerprint from the key-pairs page, distinct from the
+old one. While both keys remain registered, either key's JWT verifies.
+
+#### CI step 2: replace the environment secret
+
+Set `LEDGER_APP_KEY` from the downloaded key through stdin, never an inline
+value, so key material appears nowhere on a command line:
+
+```bash
+(
+set -e
+gh secret set LEDGER_APP_KEY --repo Nitjsefnie/Overflow --env overflow-ledger < /local/path/to/the-downloaded.pem
+gh secret list --repo Nitjsefnie/Overflow --env overflow-ledger
+)
+```
+
+Expect the list to name `LEDGER_APP_KEY` with an `Updated at` of the current
+time. The value cannot be read back. The timestamp and the verification
+below are the evidence that the secret holds the replacement key. Keep
+the downloaded key and the previous PEM until the rotation is complete.
+
+#### CI step 3: verify before retiring the old key
+
+The relay probe mints an installation token before sweeping. A dispatch
+with no run id is a sweep-only start and exits nonzero if that mint fails:
+
+```bash
+gh workflow run ledger-relay.yml --repo Nitjsefnie/Overflow
+run_id=$(gh run list --repo Nitjsefnie/Overflow --workflow ledger-relay.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+printf 'relay probe run: %s\n' "$run_id"
+gh run watch "$run_id" --repo Nitjsefnie/Overflow --exit-status
+```
+
+If the list prints nothing, the dispatched run is not registered yet; wait
+a moment and run the lookup again. Expect `watch` to exit 0 on a green run.
+A red run naming the installation-token mint means the secret does not
+hold a working replacement key: repeat CI step 2, then verify again.
+
+The next merge to `main` verifies check publication. Read the required
+contexts back, filtered to the App's identity:
+
+```bash
+gh api 'repos/Nitjsefnie/Overflow/commits/MERGE-COMMIT-SHA/check-runs?filter=all&per_page=100' --paginate \
+  --jq '.check_runs[] | select(.app.id == 5118623) | {name: .name, status: .status, conclusion: .conclusion}'
+```
+
+Expect one line per pinned context, each `completed` and `success`. The
+pin map ([`.github/required-checks.json`](../.github/required-checks.json))
+names the contexts. Diagnose a missing or failed line before retiring the
+old key.
+
+#### CI step 4: retire the old key
+
+After the probe and check publication are green, delete the old key in the
+check-publishing App's settings using the fingerprint recorded in CI
+step 1. GitHub cannot re-add a deleted key, so this closes the rollback
+window. Confirm the next merge's required checks with the same readback
+from CI step 3, then dispose of the operator-side staged PEM files.
+
+#### CI rollback
+
+While the old key is still registered, restore the environment secret from
+the previous key's retained PEM on the operator's machine:
+
+```bash
+gh secret set LEDGER_APP_KEY --repo Nitjsefnie/Overflow --env overflow-ledger < /local/path/to/the-previous.pem
+```
+
+Rerun CI step 3 under the old key before deleting the replacement key in
+the App settings. If the previous PEM is unavailable, the secret cannot be
+restored from GitHub; repair forward with a working replacement key and
+repeat CI step 3. After the old key is deleted, repair is forward-only.

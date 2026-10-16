@@ -24,8 +24,10 @@ const guideSource = readFileSync(new URL("../../deploy/README.md", import.meta.u
 const guideLines = guideSource.split("\n");
 
 /** The section the procedure lives in, by its literal heading. */
-const sectionHeading = "## 14. Rotating the reconciliation App private key";
-const sectionAnchor = "#14-rotating-the-reconciliation-app-private-key";
+const sectionHeading = "## 14. Rotating GitHub App private keys";
+const sectionAnchor = "#14-rotating-github-app-private-keys";
+const hostHeading = "### Reconciliation App: host-only";
+const ciHeading = "### Check-publishing App: CI-secret-only";
 
 /**
  * Step 9's body: the `9. ` list item and every indented line under it, up to
@@ -77,6 +79,19 @@ function sectionLines(): string[] {
   return guideLines.slice(start);
 }
 
+function procedureText(heading: string): string {
+  const lines = sectionLines();
+  const start = lines.indexOf(heading);
+  if (start === -1) return "";
+  const rest = lines.slice(start + 1);
+  let fenced = false;
+  for (const [offset, line] of rest.entries()) {
+    if (/^```/.test(line)) fenced = !fenced;
+    else if (!fenced && /^###\s/.test(line)) return rest.slice(0, offset).join("\n");
+  }
+  return rest.join("\n");
+}
+
 describe("incident response step 9 — the App-key rotation pointer", () => {
   it("has a step 9 under ## Recover to pin", () => {
     expect(stepNine(), `no "9. " list item found under "## Recover" in ${runbook}`).not.toHaveLength(0);
@@ -113,16 +128,38 @@ describe("deploy guide section 14 — the App-key rotation procedure", () => {
   });
 
   it("carries the ten host-only rotation command blocks", () => {
-    const bash = fencedBlocks(sectionLines().join("\n")).filter((block) => block.tag === "bash");
+    const bash = fencedBlocks(procedureText(hostHeading)).filter((block) => block.tag === "bash");
     expect(bash).toHaveLength(10);
   });
 
-  it("does not invoke CI secret, workflow or check-publication operations", () => {
-    const commands = fencedBlocks(sectionLines().join("\n"))
+  it("keeps CI operations out of the host-only procedure", () => {
+    const commands = fencedBlocks(procedureText(hostHeading))
       .filter((block) => block.tag === "bash")
       .flatMap((block) => block.body)
       .map((line) => line.trim().split(/\s+/));
     expect(commands.filter(([executable]) => executable === "gh")).toEqual([]);
+  });
+
+  it("restores CI secret replacement, relay verification and rollback command logic", () => {
+    const bash = fencedBlocks(procedureText(ciHeading)).filter((block) => block.tag === "bash");
+    expect(bash.map((block) => block.body.join("\n"))).toEqual([
+      [
+        "(", "set -e",
+        "gh secret set LEDGER_APP_KEY --repo Nitjsefnie/Overflow --env overflow-ledger < /local/path/to/the-downloaded.pem",
+        "gh secret list --repo Nitjsefnie/Overflow --env overflow-ledger", ")",
+      ].join("\n"),
+      [
+        "gh workflow run ledger-relay.yml --repo Nitjsefnie/Overflow",
+        "run_id=$(gh run list --repo Nitjsefnie/Overflow --workflow ledger-relay.yml --limit 1 --json databaseId --jq '.[0].databaseId')",
+        "printf 'relay probe run: %s\\n' \"$run_id\"",
+        "gh run watch \"$run_id\" --repo Nitjsefnie/Overflow --exit-status",
+      ].join("\n"),
+      [
+        "gh api 'repos/Nitjsefnie/Overflow/commits/MERGE-COMMIT-SHA/check-runs?filter=all&per_page=100' --paginate \\",
+        "  --jq '.check_runs[] | select(.app.id == 5118623) | {name: .name, status: .status, conclusion: .conclusion}'",
+      ].join("\n"),
+      "gh secret set LEDGER_APP_KEY --repo Nitjsefnie/Overflow --env overflow-ledger < /local/path/to/the-previous.pem",
+    ]);
   });
 
   it("resolves every relative link in the section", () => {
