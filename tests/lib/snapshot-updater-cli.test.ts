@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { repoRoot } from "../../scripts/http-surface-derive.ts";
+import { replaceConstAssignment } from "../../scripts/update-http-surface-snapshot.ts";
 import type { HttpSurfaceSnapshot, McpSurfaceSnapshot } from "../../scripts/surface-change.ts";
 
 const versionSites = ["src/lib/version.ts", "src/lib/mcp/protocol.ts",
@@ -12,6 +13,17 @@ const versionSites = ["src/lib/version.ts", "src/lib/mcp/protocol.ts",
 function fixture(changed: boolean = true): string {
   const root = mkdtempSync(join(repoRoot, ".next-release-snapshot-fixture-"));
   for (const path of ["src", "scripts", "package.json"]) cpSync(join(repoRoot, path), join(root, path), { recursive: true });
+  // The scenarios start at 1.1.0 independently of the repository's current release.
+  for (const [site, name] of [[versionSites[0]!, "SERVER_VERSION"], [versionSites[1]!, "MCP_SERVER_VERSION"]]) {
+    const path = join(root, site!);
+    writeFileSync(path, replaceConstAssignment(readFileSync(path, "utf8"), name!, "1.1.0"));
+  }
+  for (const [site, name] of [[versionSites[2]!, "httpServerVersion"], [versionSites[3]!, "mcpServerVersion"]]) {
+    const path = join(root, site!);
+    const snapshot = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    snapshot[name!] = "1.1.0";
+    writeFileSync(path, JSON.stringify(snapshot, null, 2));
+  }
   if (!changed) return root;
   const route = join(root, "src/app/api/version/route.ts");
   writeFileSync(route, readFileSync(route, "utf8").replace("{ version: SERVER_VERSION }", "{ version: SERVER_VERSION, added: true }"));

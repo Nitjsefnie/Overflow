@@ -172,7 +172,7 @@ function fixture(options: {
 describe("GitLab repository registration", () => {
   it("sends a scoped callback and token matching the persisted credential", async () => {
     const f = fixture();
-    f.dependencies.webhook.callbackUrl += "?deployment=test";
+    f.dependencies.webhook!.callbackUrl += "?deployment=test";
     await registerRepository(f.dependencies, input());
     const body = await f.hookRequests[0]!.json() as { url: string; token: string };
     const callback = new URL(body.url);
