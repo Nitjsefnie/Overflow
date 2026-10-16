@@ -712,7 +712,7 @@ action, and as of this writing it has not been done.
    Then return to [Contain](#contain) for whatever containment the compromise
    case required, and record the whole of it under [Record](#record).
 9. Rotating the reconciliation App's private key has a written procedure:
-   [deploy/README.md section 14](README.md#14-rotating-the-reconciliation-app-private-key)
+   [deploy/README.md section 14](README.md#14-rotating-github-app-private-keys)
    covers generating the new key in the App settings, replacing the host PEM,
    verifying reconciliation under the new key, and the rollback that is
    possible while the old key still exists. The reconciliation App's key is

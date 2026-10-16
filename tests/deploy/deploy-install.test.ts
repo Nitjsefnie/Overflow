@@ -275,11 +275,11 @@ const otherShellLines = new Set([
   "rm /etc/systemd/system/overflow-bounce.service",
   "sed -i -e '/^overflow-canary:/d' -e '/^overflow-alert:/d' /etc/aliases",
   "rm -rf /var/lib/overflow-bounce",
-  // Section 14's reconciliation App private-key rotation (issue 1032): the fingerprint
+  // Section 14's separate App private-key rotations (issue 1032): the fingerprint
   // computation GitHub's documentation prescribes (three spellings, one per
   // key file the procedure fingerprints), the guarded key-file moves, the
-  // restart is section 7's already above, and reconciliation verification
-  // under the new key.
+  // restart is section 7's already above, reconciliation verification, and
+  // the CI secret replacement, relay verification and secret rollback.
   "test \"$(id -u)\" = 0 || { echo \"Refusing: run as root.\" >&2; exit 1; }",
   "test ! -e /etc/overflow/github-reconcile-app/private-key.pem.rotation-backup || { echo \"Refusing: private-key.pem.rotation-backup already exists; finish or roll back the interrupted rotation first.\" >&2; exit 1; }",
   "printf 'old key fingerprint: '",
@@ -300,6 +300,14 @@ const otherShellLines = new Set([
   "test \"$new_fp\" != \"$old_fp\" || { echo \"Refusing: private-key.new.pem holds the same key as the live file.\" >&2; exit 1; }",
   "cat /etc/overflow/github-reconcile-app/private-key.new.pem > /etc/overflow/github-reconcile-app/private-key.pem",
   "test \"$(openssl rsa -in /etc/overflow/github-reconcile-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)\" = \"$new_fp\" || { echo \"The replaced file does not read back as the staged key; restore from the rollback copy as Rolling back describes.\" >&2; exit 1; }",
+  "gh secret set LEDGER_APP_KEY --repo Nitjsefnie/Overflow --env overflow-ledger < /local/path/to/the-downloaded.pem",
+  "gh secret list --repo Nitjsefnie/Overflow --env overflow-ledger",
+  "gh workflow run ledger-relay.yml --repo Nitjsefnie/Overflow",
+  "run_id=$(gh run list --repo Nitjsefnie/Overflow --workflow ledger-relay.yml --limit 1 --json databaseId --jq '.[0].databaseId')",
+  "printf 'relay probe run: %s\\n' \"$run_id\"",
+  "gh run watch \"$run_id\" --repo Nitjsefnie/Overflow --exit-status",
+  "gh api 'repos/Nitjsefnie/Overflow/commits/MERGE-COMMIT-SHA/check-runs?filter=all&per_page=100' --paginate --jq '.check_runs[] | select(.app.id == 5118623) | {name: .name, status: .status, conclusion: .conclusion}'",
+  "gh secret set LEDGER_APP_KEY --repo Nitjsefnie/Overflow --env overflow-ledger < /local/path/to/the-previous.pem",
   "pnpm reconcile --repository Nitjsefnie/Overflow",
   "psql \"$DATABASE_URL\" -tAc \"select status, completed_at is not null from reconciliation_runs where id = 'REPLACE-WITH-THE-RUNID'\"",
   "rm /etc/overflow/github-reconcile-app/private-key.new.pem /etc/overflow/github-reconcile-app/private-key.pem.rotation-backup",
