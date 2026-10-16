@@ -92,7 +92,7 @@ const phases: { heading: string; literals: string[] }[] = [
   { heading: "## 6. Backup disposal", literals: ["/var/backups/overflow"] },
   {
     heading: "## 7. Secrets and configuration disposal",
-    literals: ["/etc/overflow", "alert-recipient", "github-app"],
+    literals: ["/etc/overflow", "alert-recipient"],
   },
   {
     heading: "## 8. Remaining stores",

@@ -159,7 +159,7 @@ step in the phase named here, or a named decision not to dispose:
 | --- | --- | --- |
 | PostgreSQL database `overflow`, roles `overflow_app` and `overflow_backup` | dropped | [phase 5](#5-database-disposal) |
 | `/var/backups/overflow` — dump files, drill log, deploy records | destroyed | [phase 6](#6-backup-disposal) |
-| `/etc/overflow` — environment, secrets, `github-app/` key material | destroyed | [phase 7](#7-secrets-and-configuration-disposal) |
+| `/etc/overflow` — environment, secrets, `github-reconcile-app/` key material | destroyed | [phase 7](#7-secrets-and-configuration-disposal) |
 | `/srv/overflow` — deployment tree, releases, Next cache | destroyed | [phase 8](#8-remaining-stores) |
 | `/var/log/overflow` — deploy logs | destroyed | [phase 8](#8-remaining-stores) |
 | journald entries for the deployment's units | aged out or vacuumed, by decision | [phase 8](#8-remaining-stores) |
@@ -256,7 +256,7 @@ sudo -u postgres psql -d overflow -tAc \
      from abandoned_webhook_cleanups order by created_at"
 
 # The secret files' names and modes — never their contents.
-ls -la /etc/overflow /etc/overflow/github-app
+ls -la /etc/overflow /etc/overflow/github-reconcile-app
 
 # The off-host mail destinations, to be closed by whoever holds them. These
 # two files carry mail addresses, not credentials, and the off-host closure
@@ -287,7 +287,7 @@ record is where the decision is written:
   leaves them to age out. Write which way this went into the record here.
 
 The credential-bearing files — `overflow.env`, `backup.env`,
-`canary-discord-webhook`, everything under `github-app/` — are recorded by
+`canary-discord-webhook`, everything under `github-reconcile-app/` — are recorded by
 name and mode only, never read: the record is a survivor document, and a
 secret that outlives the product is a leak that outlives the product. The
 two mail addresses are the exception the block above records, because the
@@ -475,10 +475,13 @@ the notice and disposal outcomes, never token values.
 
 Then delete the applications, in GitHub's developer settings:
 
-- **The GitHub App** — the ledger relay app, if this deployment configured
+- **The reconciliation App** — the read-only GitHub App, if this deployment configured
   one: Developer settings → GitHub Apps → the app → Delete. Deletion ends
   its installations and invalidates its private key server-side; the local
-  copy under `/etc/overflow/github-app/` is destroyed in phase 7.
+  copy under `/etc/overflow/github-reconcile-app/` is destroyed in phase 7.
+- **The check-publishing GitHub App** — the ledger relay app, if configured:
+  delete it separately in Developer settings → GitHub Apps. It has no
+  credential on the deployment host.
 - **The OAuth application** member sign-in uses: Developer settings → OAuth
   Apps → the app → Delete. Deleting it invalidates its client secret and
   ends every authorization members granted it; a member who wants the grant
@@ -645,9 +648,9 @@ kill "$connector_pid" 2>/dev/null || :
 rm -rf /etc/overflow
 ```
 
-`/etc/overflow` is the whole secret store. On a deployment running the
-required-checks relay it is `0750 root:overflow` — traversable by the service
-account so the ledger app's key stays readable — and the files within it are
+`/etc/overflow` is the whole secret store. On a deployment using the
+reconciliation App it is `0750 root:overflow` — traversable by the service
+account so the reconciliation App's key stays readable — and the files within it are
 `0600`:
 
 - `overflow.env` — `DATABASE_URL` with the database role's password, the
@@ -672,7 +675,7 @@ account so the ledger app's key stays readable — and the files within it are
   canary probes are sent to, off this host.
 - `canary-discord-webhook` — the Discord webhook URL the canary reports
   failures to and the bounce watcher reports dead alert routes to.
-- `github-app/` — the ledger relay app's `private-key.pem`, the one file
+- `github-reconcile-app/` — the read-only reconciliation App's `private-key.pem`, the one file
   [README.md section 4](README.md#4-create-the-environment-file) documents
   at that path; the OAuth client credentials live in `overflow.env`, as
   stated above. The App was deleted in phase 4, which invalidated the key

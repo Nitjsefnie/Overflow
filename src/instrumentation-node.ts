@@ -42,7 +42,7 @@ export async function registerNodejs(): Promise<void> {
 
   // Construct both App resolvers once. Invalid configured keys fail startup;
   // an unconfigured App leaves its registrations on the OAuth fallback path.
-  const ledgerResolver = appInstallationTokenResolverFromEnv(process.env);
+  const reconciliationResolver = appInstallationTokenResolverFromEnv(process.env);
   const registrationConfig = readGitHubRegistrationAppAuthConfig(process.env);
   const registrationResolver = registrationConfig === null
     ? null : createAppInstallationTokenResolver({ config: registrationConfig });
@@ -55,7 +55,7 @@ export async function registerNodejs(): Promise<void> {
   const { getSql, getCoordinationSql } = await import("@/lib/db/client");
   const store = new PostgresFoldStore();
   const resolveAppInstallationToken = createReconciliationAppTokenResolver({
-    ledgerResolver,
+    reconciliationResolver,
     registrationResolver,
     lookupRegistrationMethod: async (ownerName) =>
       (await store.findRepositoryByOwnerName(ownerName))?.registrationMethod ?? null,
