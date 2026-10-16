@@ -610,9 +610,15 @@ describe("the verify workflows' untrusted-code boundary", () => {
     }
   }
 
-  it("references no secret anywhere in either workflow", () => {
+  it("confines secrets to ci.yml's push-recalibration job and references none in ci-pr.yml", () => {
     const secretRefs: string[] = [];
-    for (const [label, parsed] of [["ci.yml", workflow], ["ci-pr.yml", prWorkflow]] as const) {
+    const ciOutsidePush = {
+      ...workflow,
+      jobs: Object.fromEntries(
+        Object.entries(workflow.jobs ?? {}).filter(([name]) => name !== "push-recalibration"),
+      ),
+    };
+    for (const [label, parsed] of [["ci.yml", ciOutsidePush], ["ci-pr.yml", prWorkflow]] as const) {
       visitStrings(parsed, (text) => {
         if (text.includes("secrets.")) secretRefs.push(`${label}: ${text}`);
       });
@@ -622,10 +628,10 @@ describe("the verify workflows' untrusted-code boundary", () => {
       secretRefs,
       "ci-pr.yml runs workflow_run and must therefore reference no secret — " +
         "a `${{ secrets.… }}` in any with:/env: value would hand PR-authored input " +
-        "the run's secret context; only the ledger relay holds the App key. ci.yml is " +
-        "asserted on the same terms: it is the sibling that keeps the push-recalibration " +
-        "job's contents: write, so a secret added beside it would be one step away from " +
-        "a workflow the pull-request leg runs beside.",
+        "the run's secret context. ci.yml may reference secrets only inside " +
+        "push-recalibration: calibrate gates it on a push to main or workflow_dispatch, " +
+        "and the push job executes no repository code. No other job or workflow-level " +
+        "setting may reference a secret.",
     ).toEqual([]);
   });
 

@@ -242,6 +242,91 @@ describe("push-recalibration's push step, executed", () => {
     expect(existsSync(join(checkout, ".git", "rebase-apply"))).toBe(false);
   };
 
+  function sshFixture() {
+    const scratch = mkdtempSync(join(root, "ssh-"));
+    const home = join(scratch, "home");
+    const bin = join(scratch, "bin");
+    const key = join(scratch, "deploy-key");
+    const sshLog = join(scratch, "ssh.log");
+    mkdirSync(home);
+    mkdirSync(bin);
+    const generated = spawnSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", key], {
+      encoding: "utf8",
+    });
+    expect(generated.status, generated.stderr).toBe(0);
+    writeFileSync(
+      join(bin, "ssh"),
+      '#!/bin/sh\nprintf \'%s\\n\' "$@" >> "$SSH_LOG"\nexit 1\n',
+    );
+    chmodSync(join(bin, "ssh"), 0o755);
+    return {
+      env: {
+        MASTER_PUSH_DEPLOY_KEY: readFileSync(key, "utf8"),
+        HOME: home,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        SSH_LOG: sshLog,
+      },
+      knownHosts: join(home, ".ssh", "known_hosts"),
+      sshLog,
+    };
+  }
+
+  it.each(["", "false"])("uses SSH with the deploy key when simulation is '%s' and fails visibly on refusal", (simulation) => {
+    seedRemote("");
+    const fixture = sshFixture();
+    const env = { ...pushEnv(), ...fixture.env, SIMULATE_REFUSED_RAISE: simulation };
+    delete env.PUSH_REMOTE_URL;
+    // A missing SSH branch must fail locally too, without reaching GitHub.
+    git(checkout, "config", `url.https://127.0.0.1:1/.insteadOf`, "https://x-access-token:");
+    const result = runStep(pushRun, checkout, env);
+
+    expect(existsSync(fixture.sshLog)).toBe(true);
+    expect(readFileSync(fixture.sshLog, "utf8")).toContain("git@github.com");
+    expect(existsSync(fixture.knownHosts)).toBe(true);
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(output).not.toContain("x-access-token");
+    expect(output).not.toContain(env.GH_TOKEN);
+    expect(result.status).not.toBe(0);
+    expect(output).toContain("::error::");
+    assertClean();
+  });
+
+  it("keeps a simulated refusal on the local remote override without loading the key", () => {
+    seedRemote(rejectAlways);
+    const fixture = sshFixture();
+    const result = runStep(pushRun, checkout, {
+      ...pushEnv(),
+      ...fixture.env,
+      SIMULATE_REFUSED_RAISE: "true",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain("::error::");
+    expect(existsSync(fixture.knownHosts)).toBe(false);
+    expect(existsSync(fixture.sshLog)).toBe(false);
+    assertClean();
+  });
+
+  it.each(["true", "yes"])("deliberately uses the token path for simulation '%s' even with a deploy key", (simulation) => {
+    seedRemote(rejectAlways);
+    const fixture = sshFixture();
+    const env = { ...pushEnv(), ...fixture.env, SIMULATE_REFUSED_RAISE: simulation };
+    delete env.PUSH_REMOTE_URL;
+    // Exercise token URL selection without network access or PUSH_REMOTE_URL.
+    git(checkout, "config", `url.${origin}.insteadOf`,
+      `https://x-access-token:${env.GH_TOKEN}@github.com/${env.GITHUB_REPOSITORY}.git`);
+    const result = runStep(pushRun, checkout, env);
+
+    expect(result.status).not.toBe(0);
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(output).toContain("::error::");
+    expect(output).toContain("branch protection refuses this push");
+    expect(output).not.toContain(env.GH_TOKEN);
+    expect(existsSync(fixture.knownHosts)).toBe(false);
+    expect(existsSync(fixture.sshLog)).toBe(false);
+    assertClean();
+  });
+
   it("commits the exported document as the bot and pushes to a permissive remote", () => {
     seedRemote("");
     const before = git(origin, "rev-parse", "main");
