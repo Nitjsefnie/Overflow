@@ -154,26 +154,28 @@ function fixtureRegistrationGateway(): RepositoryRegistrationGateway {
   };
 }
 
-function fixtureRegistrationStore(): RepositoryRegistrationStore {
+function fixtureRegistrationStore(registrationMethod: "oauth_hook" | "app"): RepositoryRegistrationStore {
+  const repository = { ...fixtureRepository, registrationMethod,
+    githubWebhookId: registrationMethod === "app" ? null : fixtureRepository.githubWebhookId };
   return {
-    findRepositoryByGitHubId: async () => fixtureRepository,
+    findRepositoryByGitHubId: async () => repository,
     findActiveAppRegistrationByGitHubRepositoryId: async () => null,
     // "github" passes every flow's cross-forge guard: POST refuses only a
     // non-github holder, PATCH/DELETE demand the row be github-held.
     findRepositoryProviderById: async () => "github",
-    createRepository: async () => fixtureRepository,
+    createRepository: async () => repository,
     appendDifficultySchemeVersion: async () => ({
       changed: true,
       versionNumber: 2,
       effectiveFrom: new Date(fixtureNowMs).toISOString(),
     }),
     findRepositoryRegistrationStateByOwnerName: async () => ({
-      repository: fixtureRepository,
+      repository,
       unregisteredAt: null,
     }),
     findRepositoryRegistrationStateByForgeIdentity: async () => null,
     findRepositoryRegistrationState: async () => null,
-    unregisterRepository: async () => ({ kind: "UNREGISTERED", repository: fixtureRepository }),
+    unregisterRepository: async () => ({ kind: "UNREGISTERED", repository }),
     findGitLabWebhookTargetByOwnerName: async () => null,
     saveAbandonedWebhookCleanup: async () => undefined,
     listAbandonedWebhookCleanups: async () => [],
@@ -182,7 +184,7 @@ function fixtureRegistrationStore(): RepositoryRegistrationStore {
 }
 
 /** The POST/PATCH/DELETE /api/repositories route's dependencies. */
-export function fixtureRepositoryRouteDependencies(): RepositoryRouteDependencies {
+export function fixtureRepositoryRouteDependencies(registrationMethod: "oauth_hook" | "app" = "oauth_hook"): RepositoryRouteDependencies {
   return {
     getSession: async () => ({ user: { id: fixtureMemberId, role: "MEMBER" } }),
     findAccountByTokenHash: async () => null,
@@ -190,7 +192,7 @@ export function fixtureRepositoryRouteDependencies(): RepositoryRouteDependencie
     createRegistrationDependencies: async () => ({
       actor: { id: fixtureMemberId, role: "MEMBER" },
       github: fixtureRegistrationGateway(),
-      store: fixtureRegistrationStore(),
+      store: fixtureRegistrationStore(registrationMethod),
       webhook: { callbackUrl: "https://overflow.example/api/webhooks/github" },
       scheduleInitialImport: async () => undefined,
     }),

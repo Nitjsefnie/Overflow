@@ -1,6 +1,6 @@
 {
   "snapshotFormat": 2,
-  "httpServerVersion": "1.1.0",
+  "httpServerVersion": "1.2.0",
   "errorEnvelope": {
     "error": {
       "code": "string",
@@ -55,7 +55,11 @@
         "sponsorId": "string",
         "visibility": "string"
       },
-      "webhookDeleted": "boolean"
+      "webhookDeleted": "boolean",
+      "appAccessRemains": {
+        "message": "string",
+        "url": "string"
+      }
     },
     "GET /api/repositories/labels": {
       "labels": "string"

@@ -22,6 +22,7 @@ import type {
 
 export type RepositoryRegistrationInput = {
   repositoryUrl: string;
+  registrationMethod?: "oauth_hook" | "app";
   openingName: string;
   actualName: string;
   openingLabels: OpeningDifficultyLabel[];
@@ -232,20 +233,13 @@ export type RepositoryRegistrationDependencies = {
   actor: { id: string; role: UserRole; enforcementState?: EnforcementState };
   github: RepositoryRegistrationGateway;
   store: RepositoryRegistrationStore;
-  webhook: { callbackUrl: string };
+  /** Hook registrations require a callback; App registrations have no hook. */
+  webhook?: { callbackUrl: string };
+  registrationApp?: { lookupInstallation(ownerName: string): Promise<{ installationId: number } | null> } | null;
   scheduleInitialImport?: (repositoryId: string) => Promise<unknown>;
-  /**
-   * The submitter's verified linked identity for the submitted instance —
-   * the PAT the GitLab path uses as its gateway credential. Required for a
-   * GitLab registration, absent (and unused) for GitHub.
-   */
+  /** The submitter's verified GitLab PAT on the submitted instance. */
   forgeIdentity?: { instanceUrl: string; token: string } | null;
-  /**
-   * A user's decrypted GitLab PAT for a normalized instance, or null when no
-   * verified identity is linked there (production:
-   * PostgresForgeIdentityStore.getForgeToken). The GitLab unregistration's
-   * forge-first hook deletion reads the sponsor's credential through it.
-   */
+  /** Resolves the sponsor's verified GitLab PAT for forge-first hook deletion. */
   getForgeToken?: (userId: string, instanceUrl: string) => Promise<{ token: string; identityId: string } | null>;
   /** Injectable transport for the GitLab gateway; production refuses non-public instances. */
   forgeFetch?: typeof fetch;
@@ -273,6 +267,7 @@ export type RepositoryUnregisterApiResult = {
   webhookDeleted: boolean;
   /** True when the local row was already sponsor-unregistered (idempotent repeat). */
   alreadyUnregistered: boolean;
+  appAccessRemains?: { message: string; url: string };
 };
 
 export class RepositoryRegistrationError extends Error {
@@ -377,6 +372,9 @@ export async function registerRepository(
   }
 
   if (input.provider === "gitlab") {
+    if (input.registrationMethod === "app") {
+      throw new RepositoryRegistrationError("INVALID_INPUT", "Registration through the App is only available for GitHub repositories.");
+    }
     return registerGitLabRepository(dependencies, input, difficultyScheme);
   }
 
@@ -401,21 +399,19 @@ export async function registerRepository(
   if (!repository.canAdminister) {
     throw new RepositoryRegistrationError(
       "FORBIDDEN",
-      "GitHub administrator permission is required for the submitted repository.",
+      input.registrationMethod === "app"
+        ? "GitHub did not report you as an administrator of this repository. Install the registration App on this repository and ensure you hold administrator permission, then retry registration."
+        : "GitHub administrator permission is required for the submitted repository.",
     );
   }
 
-  // An unregistered row is not a conflict: the resubmission reactivates it (the
-  // store's conditional on-conflict update), so only a row still holding the
-  // registration stands in the way.
+  // Only sponsor-unregistered rows may reactivate; an existing registration conflicts.
   const existing = await findExistingRepository(dependencies.store, repository.id);
   if (existing !== null && existing.unregisteredAt === null) {
     throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
   }
 
-  // The reverse cross-forge guard: a GitHub registration may not take over an
-  // id a GitLab registration has held (registered or unregistered) — the
-  // forge history never migrates between forges.
+  // Forge history never migrates between providers, even after unregistration.
   const existingProvider = await dependencies.store.findRepositoryProviderById(repository.id);
   if (existingProvider !== null && existingProvider !== "github") {
     throw new RepositoryRegistrationError("CONFLICT", forgeCollisionMessage("github", repository.id, existingProvider, "registration"));
@@ -423,11 +419,48 @@ export async function registerRepository(
 
   await verifySchemeLabelsExist(dependencies.github, submittedRepository, repository, difficultyScheme, "register again");
 
+  if (input.registrationMethod === "app") {
+    if (dependencies.registrationApp == null) {
+      throw new RepositoryRegistrationError("INVALID_INPUT", "Registration through the App is not available on this instance.");
+    }
+    let installation: { installationId: number } | null;
+    try {
+      installation = await dependencies.registrationApp.lookupInstallation(`${submittedRepository.owner}/${submittedRepository.name}`);
+    } catch (error) {
+      throw githubSetupError(error, repository, "check the registration App installation");
+    }
+    if (installation === null) {
+      throw new RepositoryRegistrationError("INVALID_INPUT", "Install the registration App on this repository first, then retry registration.");
+    }
+    let created: RegisteredRepository | null;
+    try {
+      created = await dependencies.store.createRepository({
+        githubRepositoryId: repository.id, ownerName: repository.fullName, sponsorId: dependencies.actor.id,
+        visibility: repository.visibility, registrationMethod: "app", githubWebhookId: null,
+        webhookCredential: null, difficultyScheme,
+      });
+    } catch (error) {
+      if (error instanceof RepositoryOwnerNameConflictError) {
+        throw new RepositoryRegistrationError("CONFLICT",
+          `The GitHub path ${error.ownerName} is claimed by a different registration. `
+          + "The submitted repository is not registered, and it cannot be registered while another registration holds that path.");
+      }
+      if (error instanceof RepositoryRegistrationEnforcementError) {
+        throw new RepositoryRegistrationError("FORBIDDEN", "The account is not eligible to register repositories.");
+      }
+      throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to save the repository registration.");
+    }
+    if (created === null) {
+      throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
+    }
+    return completeGitHubRegistration(dependencies, submittedRepository, created);
+  }
+
   const webhookCredential = generateWebhookCredential();
   let webhook: GitHubWebhook;
   try {
     webhook = await dependencies.github.createWebhook(submittedRepository, {
-      callbackUrl: webhookCallbackUrl(dependencies.webhook.callbackUrl, webhookCredential.id),
+      callbackUrl: webhookCallbackUrl(dependencies.webhook?.callbackUrl ?? "", webhookCredential.id),
       secret: webhookCredential.secret,
     });
   } catch (error) {
@@ -447,13 +480,7 @@ export async function registerRepository(
       difficultyScheme,
     });
   } catch (error) {
-    // Every route out of this catch abandons the registration, so the webhook this call
-    // created has no repository to deliver to. The try holds only the store call, so
-    // compensating for the webhook once here covers every failure the store can raise,
-    // including one raised as a RepositoryRegistrationError by a store, decorator or retry
-    // wrapper the interface does not constrain. The cleanup record is written before the
-    // deletion is attempted (issue 451), so even a webhook whose deletion never completes
-    // stays known to Overflow and reachable by the drain.
+    // Persist cleanup before compensation so a failed deletion stays drainable.
     const abandonment = await abandonCreatedWebhook(
       dependencies,
       submittedRepository,
@@ -466,11 +493,7 @@ export async function registerRepository(
       throw new RepositoryRegistrationError("ROLLBACK_INCOMPLETE", rollbackIncompleteMessage);
     }
 
-    // The submitted repository is genuinely absent from the table: another registration holds
-    // the owner/name path, so the insert failed on that unique constraint rather than on the
-    // numeric GitHub id. Saying "already registered" here would name the wrong row, and
-    // answering an upstream failure would invite a retry that can only fail the same way,
-    // because the path is read off the submission and is the same on every attempt.
+    // Owner-name collisions are durable; the submitted numeric id is unregistered.
     if (error instanceof RepositoryOwnerNameConflictError) {
       throw new RepositoryRegistrationError(
         "CONFLICT",
@@ -480,11 +503,7 @@ export async function registerRepository(
       );
     }
 
-    // The same collision on a different constraint, and the opposite advice: the colliding
-    // value is the id GitHub returned for the hook this call created, that hook was abandoned
-    // above, and the next attempt asks GitHub for another one. What GitHub will return for that
-    // one is not this module's to know, so a retry is worth making before the collision is
-    // treated as durable, rather than being the one action ruled out.
+    // A new attempt requests a fresh webhook id, so this collision may be retried.
     if (error instanceof RepositoryWebhookIdConflictError) {
       throw new RepositoryRegistrationError(
         "CONFLICT",
@@ -505,19 +524,9 @@ export async function registerRepository(
     throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to save the repository registration.");
   }
 
-  // An absent row has two causes, and both leave a registration the resubmission cannot
-  // reopen. Either the numeric GitHub id the on-conflict arbiter watches was already
-  // taken by a row still registered — active, so the where clause skipped it — and the
-  // registration the sponsor submitted belongs to the row that holds it; or the held row
-  // is moderation-deactivated (unregistered_at is null there too), which only a
-  // moderation reactivation may bring back, never a resubmission. Both are the same
-  // answer to the sponsor: this GitHub repository is already registered.
+  // An active or moderation-deactivated row cannot be reopened by registration.
   if (created === null) {
-    // The registration did not complete, so the webhook just created has no repository to
-    // deliver to; the same durable-before-delete compensation applies as in the catch above.
-    // No exception exists here — the store answered null — so the arbiter-decline phrase
-    // stands in for a rendered error: the operator must not read this diagnostic as
-    // "save error unknown".
+    // The arbiter declined without an exception; record that cause before deletion.
     const abandonment = await abandonCreatedWebhook(
       dependencies,
       submittedRepository,
@@ -532,29 +541,23 @@ export async function registerRepository(
     throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
   }
 
-  // The registration is committed by this point. Work that already exists in the
-  // repository only enters the ledger through a reconciliation, and a webhook can
-  // never deliver it because it was created after that work. So schedule that import
-  // durably here rather than holding the response open for a full crawl, and report a
-  // failure to schedule it to the sponsor rather than undoing a registration that stands.
-  const initialImportScheduled = await scheduleInitialImport(dependencies, created.id);
+  return completeGitHubRegistration(dependencies, submittedRepository, created);
+}
 
-  // Report the claim-path verdict after registration rather than enforce it: workflow
-  // text supplies evidence, not proof, and may carry a claim path this check cannot
-  // recognise. Refusing registration on that basis would block a legitimate one.
-  // A failed check likewise cannot undo or fail the registration that already stands.
+async function completeGitHubRegistration(
+  dependencies: RepositoryRegistrationDependencies,
+  submittedRepository: GitHubRepositoryReference,
+  created: RegisteredRepository,
+): Promise<RepositoryRegistrationResult> {
+  // Registration stands: import scheduling and workflow reads cannot undo it.
+  const initialImportScheduled = await scheduleInitialImport(dependencies, created.id);
   let claimPath: RepositoryRegistrationResult["claimPath"];
   try {
     claimPath = assessClaimPath(await dependencies.github.listWorkflowFiles(submittedRepository));
   } catch {
     claimPath = "NOT_CHECKED";
   }
-
-  // The registration stands, so this is the moment a webhook recorded for cleanup by an
-  // earlier failed registration can be retired: drain the cleanup table best-effort before
-  // answering, so a retry the sponsor makes after a ROLLBACK_INCOMPLETE also cleans up.
   await drainAbandonedWebhooks(dependencies);
-
   return { ...created, initialImportScheduled, claimPath };
 }
 
@@ -722,7 +725,7 @@ async function registerGitLabRepository(
   let webhook: GitHubWebhook;
   try {
     webhook = await gateway.createWebhook({ owner: repository.owner, name: repository.name }, {
-      callbackUrl: webhookCallbackUrl(dependencies.webhook.callbackUrl, webhookCredential.id),
+      callbackUrl: webhookCallbackUrl(dependencies.webhook?.callbackUrl ?? "", webhookCredential.id),
       secret: webhookCredential.secret,
     });
   } catch (error) {
@@ -922,6 +925,7 @@ async function abandonCreatedGitLabWebhook(
  */
 export async function drainAbandonedWebhooks(
   dependencies: Pick<RepositoryRegistrationDependencies, "github" | "store" | "forgeIdentity" | "forgeFetch">,
+  allowGitHubRequests = true,
 ): Promise<void> {
   let records: AbandonedWebhookCleanup[];
   try {
@@ -931,6 +935,8 @@ export async function drainAbandonedWebhooks(
   }
 
   for (const record of records) {
+    // A hookless unregistration leaves GitHub cleanup queued for a later hook-capable flow.
+    if (!allowGitHubRequests && record.provider === "github") continue;
     try {
       const state = await dependencies.store.findRepositoryRegistrationState(record.githubRepositoryId);
       if (
@@ -1115,10 +1121,7 @@ export async function unregisterRepository(
     );
   }
 
-  // The target lookup matches the stored owner name, which is not
-  // forge-qualified, so a GitLab row can resolve here; the guard runs before
-  // the webhook deletion and before the store write, so a GitHub-shaped
-  // unregistration never deactivates a registration another forge holds.
+  // Owner names are not forge-qualified; refuse a cross-forge target before any side effects.
   const storedProvider = await dependencies.store.findRepositoryProviderById(state.repository.githubRepositoryId);
   if (storedProvider !== null && storedProvider !== "github") {
     throw new RepositoryRegistrationError(
@@ -1127,11 +1130,7 @@ export async function unregisterRepository(
     );
   }
 
-  // The sponsor check precedes every GitHub request: an outsider asking for
-  // an unregistration must not move anything on GitHub, and the stored
-  // sponsor is already in hand from the lookup above. The store re-checks
-  // inside its transaction; this check keeps the common refusal free of
-  // side effects.
+  // Refuse outsiders before any GitHub request; the transaction rechecks the sponsor.
   if (state.repository.sponsorId !== dependencies.actor.id) {
     throw new RepositoryRegistrationError(
       "FORBIDDEN",
@@ -1139,10 +1138,9 @@ export async function unregisterRepository(
     );
   }
 
-  // A null webhook id — a GitLab registration — has no hook to delete, so
-  // nothing is called and the result honestly reports no deletion happened.
+  // App registrations have no hook, even if stale data carries an id.
   let webhookDeleted = false;
-  if (state.repository.githubWebhookId !== null) {
+  if (state.repository.registrationMethod !== "app" && state.repository.githubWebhookId !== null) {
     webhookDeleted = true;
     try {
       await dependencies.github.deleteWebhook(submittedRepository, state.repository.githubWebhookId);
@@ -1183,15 +1181,17 @@ export async function unregisterRepository(
     throw new RepositoryRegistrationError("FORBIDDEN", "Only the repository's sponsor can unregister it.");
   }
 
-  // The unregistration stands, so this is the other moment the cleanup table can be
-  // drained best-effort (issue 451): any webhook an earlier failed registration recorded
-  // is retired here, and the drain never disturbs the answer that unregistration gave.
-  await drainAbandonedWebhooks(dependencies);
+  // App unregistration leaves GitHub cleanup queued: it must make no GitHub requests.
+  await drainAbandonedWebhooks(dependencies, state.repository.registrationMethod !== "app");
 
   return {
     repository: outcome.repository,
     webhookDeleted,
     alreadyUnregistered: outcome.kind === "ALREADY_UNREGISTERED",
+    ...(outcome.repository.registrationMethod === "app" ? { appAccessRemains: {
+      message: "The GitHub App still has access to this repository. Manage its access in your GitHub installation settings.",
+      url: "https://github.com/settings/installations",
+    } } : {}),
   };
 }
 
@@ -1763,7 +1763,7 @@ async function verifySchemeLabelsExist(
 function githubSetupError(
   error: unknown,
   repository: GitHubRepository | null,
-  step: "retrieve the submitted GitHub repository" | "read the repository difficulty labels" | "create the repository webhook" | "delete the repository webhook",
+  step: "check the registration App installation" | "retrieve the submitted GitHub repository" | "read the repository difficulty labels" | "create the repository webhook" | "delete the repository webhook",
 ): RepositoryRegistrationError {
   // Issue 93: a 401 means GitHub rejected Overflow's own authorization — not retryable, unlike a 403/404.
   if (error instanceof GitHubApiError && classifyGitHubApiFailure(error) === "CREDENTIALS") {

@@ -581,13 +581,20 @@ async function derivePatchRepositories(): Promise<DerivedAnswer> {
 }
 
 async function deriveDeleteRepositories(): Promise<DerivedAnswer> {
-  return withAppUrl(async () =>
-    derivedAnswer(
-      await createRepositoryDeleteHandler(fixtureRepositoryRouteDependencies())(
+  return withAppUrl(async () => {
+    const answer = async (method: "oauth_hook" | "app") => derivedAnswer(
+      await createRepositoryDeleteHandler(fixtureRepositoryRouteDependencies(method))(
         mutationRequest("/api/repositories", "DELETE", { repositoryUrl: "octo/overflow" }),
       ),
-    ),
-  );
+    );
+    const hook = await answer("oauth_hook");
+    const app = await answer("app");
+    if (!isShapeObject(hook.shape) || !isShapeObject(app.shape) || app.shape.appAccessRemains === undefined) {
+      throw new Error("App unregistration must serve installation-management guidance.");
+    }
+    // Pin the optional App guidance from its real response and retain the hook's existing scalar pins.
+    return { ...hook, shape: { ...hook.shape, appAccessRemains: app.shape.appAccessRemains } };
+  });
 }
 
 async function deriveGetRepositoryLabels(): Promise<DerivedAnswer> {

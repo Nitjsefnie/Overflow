@@ -1,3 +1,5 @@
+import { readGitHubRegistrationAppAuthConfig } from "@/lib/github/app-installation-auth";
+import { createAppRegistration } from "@/lib/github/app-registration";
 import { errorResponse } from "@/lib/http/error-response";
 import { z } from "zod";
 import {
@@ -50,9 +52,14 @@ import {
  */
 const REPOSITORIES_BODY_LIMIT_BYTES = 128 * 1024; // 128 KiB
 
+// Resolve the independent registration identity once at Node wiring time.
+const registrationAppConfig = readGitHubRegistrationAppAuthConfig(process.env);
+const registrationApp = registrationAppConfig === null ? null : createAppRegistration({ config: registrationAppConfig });
+
 const registrationSchema = z
   .object({
     repositoryUrl: z.string(),
+    registrationMethod: z.enum(["oauth_hook", "app"]).optional(),
     provider: z.enum(["gitlab"]).optional(),
     instanceUrl: z.string().optional(),
     project: z.string().optional(),
@@ -319,6 +326,7 @@ export function createRepositoryDeleteHandler(dependencies: RepositoryRouteDepen
         repository: repositoryResponse(result.repository),
         webhookDeleted: result.webhookDeleted,
         alreadyUnregistered: result.alreadyUnregistered,
+        ...(result.appAccessRemains === undefined ? {} : { appAccessRemains: result.appAccessRemains }),
       }, { status: 200 });
     } catch (error) {
       if (error instanceof RepositoryRegistrationError) {
@@ -425,7 +433,7 @@ export const POST = createRepositoryPostHandler({
       },
       // Registration is the flow that creates a webhook, so it alone asks
       // GitHub whether the stored token may (issue 599).
-      requireWebhookAdministration: true,
+      requireWebhookAdministration: input.registrationMethod !== "app",
     });
   },
 });
@@ -552,6 +560,9 @@ async function buildRegistrationDependencies(
     requireWebhookAdministration?: boolean;
   },
 ): Promise<RepositoryRegistrationDependencies> {
+  if (input.provider === "gitlab" && input.registrationMethod === "app") {
+    throw new RepositoryRegistrationError("INVALID_INPUT", "Registration through the App is only available for GitHub repositories.");
+  }
   const store = new PostgresRepositoryStore();
   const accessToken = await store.getGitHubAccessToken(session.user.id);
   const enforcementState = await store.getEnforcementState(session.user.id);
@@ -566,6 +577,7 @@ async function buildRegistrationDependencies(
   if (
     extras.requireWebhookAdministration === true &&
     input.provider !== "gitlab" &&
+    input.registrationMethod !== "app" &&
     isParticipationEligible(enforcementState)
   ) {
     await requireWebhookAdministration(accessToken);
@@ -591,7 +603,8 @@ async function buildRegistrationDependencies(
     actor: { ...session.user, enforcementState },
     github: new GitHubGateway({ accessToken, owner: session.user.id }),
     store,
-    webhook: requiredWebhookConfiguration(input.provider),
+    webhook: extras.requireWebhookAdministration === true ? requiredWebhookConfiguration(input.provider) : undefined,
+    registrationApp,
     scheduleInitialImport: extras.scheduleInitialImport,
     forgeIdentity,
     getForgeToken,

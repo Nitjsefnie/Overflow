@@ -106,6 +106,13 @@ describe("HTTP surface snapshot", () => {
     expect(shapesCompatible(recorded, derived)).toBe(compatible);
   });
 
+  it("records the App unregistration guidance alongside the existing hook response fields", async () => {
+    expect((await derivedSurface()).routes["DELETE /api/repositories"]).toMatchObject({
+      appAccessRemains: { message: "string", url: "string" },
+      repository: { githubWebhookId: "number" },
+    });
+  });
+
   it("records exactly the derived surface: shapes, error envelope, success statuses and failure answers", async () => {
     expect(
       recordedSurface(snapshot),
