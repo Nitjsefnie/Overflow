@@ -41,29 +41,15 @@ type RepositoryFormProps = {
   initialValues?: RepositoryFormValues;
   /**
    * `registration` registers a new repository (POST); `catalog-change` submits
-   * a replacement catalog for one already-registered repository (PATCH, issue
-   * 180). The fields are the same because the payload is the same: the sponsor
-   * edits the catalog they know, and settled work keeps its price either way.
+   * a replacement catalog for one registered repository (PATCH). Both edit
+   * the same catalog fields; settled work keeps its price.
    */
   variant?: "registration" | "catalog-change";
-  /**
-   * The server action that sends the sponsor through GitHub authorization
-   * again for webhook administration (issue 599). Rendered as its own form
-   * whenever the GitHub path is gated (`canAdministerGitHubWebhooks` false)
-   * and beside the route's scope refusal: the gate reads a JWT hint, so a
-   * session whose grant was since revoked or narrowed still reaches the
-   * fields and learns of it only from that refusal.
-   */
+  /** Webhook-administration sign-in, offered at the OAuth gate or scope refusal. */
   reauthorizeAction?: () => Promise<void>;
-  /**
-   * Whether the session's GitHub grant covers webhook administration, as the
-   * JWT hint recorded it (issue 599). False gates the GitHub registration
-   * path — the explanation and `reauthorizeAction` replace the GitHub fields
-   * and submit — and nothing else: the Forge choice stays, and a GitLab
-   * registration proceeds, since its hook is created with the linked
-   * identity's PAT. Absent means ungated (the catalog-change form, and any
-   * caller without a session to read).
-   */
+  /** Public-identity sign-in returning to this page for App registration. */
+  appSignInAction?: () => Promise<void>;
+  /** JWT hint gates only OAuth-hook registration; absent means ungated. */
   canAdministerGitHubWebhooks?: boolean;
 };
 
@@ -126,6 +112,7 @@ export function RepositoryForm({
   initialValues = defaultValues,
   variant = "registration",
   reauthorizeAction,
+  appSignInAction,
   canAdministerGitHubWebhooks,
 }: RepositoryFormProps) {
   const nextOpeningRowId = useRef(initialValues.openingLabels.length);
@@ -135,6 +122,8 @@ export function RepositoryForm({
   const isCatalogChange = variant === "catalog-change";
   const text = isCatalogChange ? copy["catalog-change"] : copy.registration;
   const [provider, setProvider] = useState<ForgeProvider>("github");
+  const [registrationMethod, setRegistrationMethod] = useState<"oauth_hook" | "app">("oauth_hook");
+  const appRegistration = !isCatalogChange && provider === "github" && registrationMethod === "app";
   const [instanceUrl, setInstanceUrl] = useState("");
   const [project, setProject] = useState("");
   const [gitlabIdentities, setGitlabIdentities] = useState<ForgeIdentityOption[]>([]);
@@ -176,11 +165,8 @@ export function RepositoryForm({
     };
   }, [provider, instanceUrl, project, referenceKey, referenceOwner, referenceName]);
 
-  // The linked identities feed the Instance select. The read is spent once,
-  // on the first GitLab selection and never on the GitHub path the catalog
-  // change stays on; the status is what the submit refusals read, so a read
-  // still in flight is never mistaken for an account without identities and
-  // a failed read names the remedy that actually re-runs it: a page reload.
+  // Read identities once on first GitLab selection. Loading and failure stay
+  // distinct from an account without identities; a reload retries a failure.
   useEffect(() => {
     if (provider !== "gitlab" || identitiesRequested.current) {
       return;
@@ -219,15 +205,9 @@ export function RepositoryForm({
     })();
   }, [provider]);
 
-  // The selectboxes can only offer labels the referenced repository has, so
-  // they read them from the labels route once the reference is complete — one
-  // read for the reference that has settled, never one per keystroke. A
-  // changed reference changes the vocabulary: earlier selections are cleared
-  // immediately and the pending read is cancelled, so only the newest
-  // reference is ever requested. The sequence counter discards any stale
-  // response from a reference that has since been edited. The selections
-  // survive the initial mount, so initialValues keeps working. The GitLab
-  // path plugs its instance/project reference into the same discipline.
+  // Read labels once the reference settles. A reference change clears the
+  // selections and cancels the debounce; sequence checks discard stale reads.
+  // Initial selections survive mount for initialValues callers on either forge.
   useEffect(() => {
     if (lastReferenceKey.current !== undefined && lastReferenceKey.current !== labelsRequest?.key) {
       setValues(clearLabelSelections);
@@ -279,12 +259,8 @@ export function RepositoryForm({
     event.preventDefault();
     setFeedback(null);
     if (provider === "gitlab") {
-      // Client-side refusals mirror the registration rule (register.ts); the
-      // server stays the backstop. The identities read has to have answered
-      // before its emptiness means anything: while it is in flight the submit
-      // is refused without claiming identities are missing, and a failed read
-      // names the only action that re-runs it — a reload. "Link one … then
-      // reload" stays accurate because linking happens on another page.
+      // Mirror the server refusals without treating pending or failed reads
+      // as missing identities. Linking on another page requires a reload.
       if (identitiesStatus === "loading" || identitiesStatus === "idle") {
         setFeedback({
           kind: "error",
@@ -336,7 +312,7 @@ export function RepositoryForm({
             repositoryUrl: project.trim(),
             ...toCatalogInput(values),
           }
-        : toRegistrationInput(values);
+        : { ...toRegistrationInput(values), ...(appRegistration ? { registrationMethod: "app" } : {}) };
       const response = await fetch("/api/repositories", {
         method: isCatalogChange ? "PATCH" : "POST",
         headers: { "content-type": "application/json" },
@@ -373,11 +349,10 @@ export function RepositoryForm({
     }
   }
 
-  // The GitHub registration path alone is gated on the hint: the Forge
-  // choice above it stays reachable, and the GitLab path needs no GitHub
-  // permission at all.
-  const githubGated = !isCatalogChange && provider === "github" && canAdministerGitHubWebhooks === false;
-  const offersReauthorization = reauthorizeAction !== undefined
+  // Only OAuth-hook registration needs the webhook-administration hint.
+  const githubGated = !isCatalogChange && provider === "github" && !appRegistration && canAdministerGitHubWebhooks === false;
+  const offersAppSignIn = appRegistration && appSignInAction !== undefined;
+  const offersReauthorization = provider === "github" && !appRegistration && reauthorizeAction !== undefined
     && (githubGated || (feedback?.kind === "error" && feedback.code === WEBHOOK_SCOPE_REQUIRED_CODE));
 
   const registrationForm = (
@@ -401,6 +376,28 @@ export function RepositoryForm({
             <option value="gitlab">GitLab</option>
           </select>
         </label>
+      ) : null}
+
+      {!isCatalogChange && provider === "github" ? (
+        <label className="field">
+          <span>GitHub registration method</span>
+          <select
+            value={registrationMethod}
+            onChange={(event) => {
+              setRegistrationMethod(event.target.value === "app" ? "app" : "oauth_hook");
+              setFeedback(null);
+            }}
+          >
+            <option value="oauth_hook">OAuth webhook authorization</option>
+            <option value="app">GitHub App</option>
+          </select>
+        </label>
+      ) : null}
+      {appRegistration ? (
+        <p className="field-help">
+          Install the least-privilege GitHub App on the repositories you select. Sign-in uses public identity only;
+          no webhook-administration scope is requested.
+        </p>
       ) : null}
 
       {provider === "gitlab" ? (
@@ -594,19 +591,22 @@ export function RepositoryForm({
     </form>
   );
 
-  if (!offersReauthorization) {
+  if (!offersReauthorization && !offersAppSignIn) {
     return registrationForm;
   }
-  // The widening action is its own form, a sibling of the registration form:
-  // a form cannot nest, and submitting it must not resubmit the registration.
   return (
     <>
       {registrationForm}
-      <form className="repository-form-remedy" action={reauthorizeAction}>
-        <button className="action-button" type="submit">
-          Authorize webhook administration on GitHub
-        </button>
-      </form>
+      {offersReauthorization ? (
+        <form className="repository-form-remedy" action={reauthorizeAction}>
+          <button className="action-button" type="submit">Authorize webhook administration on GitHub</button>
+        </form>
+      ) : null}
+      {offersAppSignIn ? (
+        <form className="repository-form-remedy" action={appSignInAction}>
+          <button className="action-button" type="submit">Sign in with GitHub for App registration</button>
+        </form>
+      ) : null}
     </>
   );
 }

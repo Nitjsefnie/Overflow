@@ -10,6 +10,7 @@ type UnregisterRepositoryControlProps = {
 
 type UnregisterResponse = {
   error?: { message?: string };
+  appAccessRemains?: { message: string; url: string };
 };
 
 /**
@@ -25,7 +26,7 @@ export function UnregisterRepositoryControl({ ownerName }: UnregisterRepositoryC
   const router = useRouter();
   const [confirming, setConfirming] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [feedback, setFeedback] = useState<{ kind: "error" | "success"; message: string } | null>(null);
+  const [feedback, setFeedback] = useState<{ kind: "error" | "success"; message: string; appAccessRemains?: UnregisterResponse["appAccessRemains"] } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const keepRegisteredRef = useRef<HTMLButtonElement>(null);
   const wasConfirmingRef = useRef(false);
@@ -94,6 +95,7 @@ export function UnregisterRepositoryControl({ ownerName }: UnregisterRepositoryC
       setFeedback({
         kind: "success",
         message: `${ownerName} is no longer registered.`,
+        appAccessRemains: body?.appAccessRemains,
       });
       router.refresh();
     } catch {
@@ -144,7 +146,16 @@ export function UnregisterRepositoryControl({ ownerName }: UnregisterRepositoryC
         </button>
       )}
       {feedback?.kind === "error" ? <p className="feedback error" role="alert">{feedback.message}</p> : null}
-      {feedback?.kind === "success" ? <p className="feedback success" role="status">{feedback.message}</p> : null}
+      {feedback?.kind === "success" ? (
+        <p className="feedback success" role="status">
+          {feedback.message}
+          {feedback.appAccessRemains ? (
+            <> {feedback.appAccessRemains.message}{" "}
+              <a href={feedback.appAccessRemains.url}>Manage GitHub App installations</a>
+            </>
+          ) : null}
+        </p>
+      ) : null}
     </>
   );
 }

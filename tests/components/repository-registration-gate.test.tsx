@@ -48,6 +48,7 @@ beforeEach(() => {
   spyOnConsoleOutput();
   mocks.getTokenSummary.mockReset().mockResolvedValue(null);
   mocks.signInForRepositoryRegistration.mockReset();
+  mocks.confirmSignInForApiToken.mockReset();
   vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
     if (String(input).includes("/api/forge-identities")) {
       return Response.json({ identities: [gitlabIdentity] });
@@ -72,6 +73,30 @@ afterEach(() => {
 // does not — its hook is created with the linked identity's PAT — so the
 // Forge choice and the GitLab path stay reachable regardless.
 describe("repository registration page scope gate", () => {
+  it("uses the public-identity sign-in for App registration and restores the OAuth gate when selected", async () => {
+    mocks.requireMemberPageSession.mockResolvedValue(memberSession(false));
+    render(await NewRepositoryPage());
+
+    const choice = within(registrationForm()).getByRole("combobox", { name: "GitHub registration method" });
+    fireEvent.change(choice, { target: { value: "app" } });
+
+    expect(within(registrationForm()).getByRole("textbox", { name: "GitHub repository" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Register repository" })).toBeEnabled();
+    expect(scopeNotice()).toBeNull();
+    expect(authorizeButton()).toBeNull();
+    const signIn = screen.getByRole("button", { name: "Sign in with GitHub for App registration" });
+    expect(signIn.closest("form")).not.toBe(registrationForm());
+    fireEvent.click(signIn);
+    await waitFor(() => expect(mocks.confirmSignInForApiToken).toHaveBeenCalledTimes(1));
+    expect(mocks.signInForRepositoryRegistration).not.toHaveBeenCalled();
+
+    fireEvent.change(choice, { target: { value: "oauth_hook" } });
+    expect(scopeNotice()).not.toBeNull();
+    expect(authorizeButton()).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in with GitHub for App registration" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Register repository" })).not.toBeInTheDocument();
+  });
+
   it("keeps the Forge choice for a hookless session and gates only the GitHub path", async () => {
     mocks.requireMemberPageSession.mockResolvedValue(memberSession(false));
 

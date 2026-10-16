@@ -35,9 +35,10 @@ export async function signInForRepositoryRegistration(): Promise<void> {
 }
 
 /**
- * Re-confirms a signed-in member's identity so the session may mint an API
- * token (src/app/api/tokens/route.ts), without requesting any scope; lands
- * back on the registration page that holds the token panel. GitHub issues the
+ * Public-identity sign-in for GitHub App repository registration, also used
+ * to re-confirm a member before minting an API token (src/app/api/tokens/route.ts).
+ * Both request no scope and return to the registration page with the token panel.
+ * GitHub issues the
  * new authorization with only the scopes this sign-in requested — none — so
  * webhook administration a member granted earlier survives only through the
  * storage path's continuity ruling (src/auth.ts).
