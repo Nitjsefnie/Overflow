@@ -73,6 +73,19 @@ export function isGitHubSubjectNotFoundError(error: unknown): boolean {
       || error.message.includes("Could not resolve to a PullRequest"));
 }
 
+// Only transport failures and server refusals can recover within the same run.
+// GraphQL payload errors share the network wrapper's prefix but carry status
+// 200; those are definitive failures. Rate limits keep the run-level cooldown
+// path rather than spending more requests during the same run.
+export function isTransientGitHubRequestError(error: unknown): boolean {
+  if (!(error instanceof Error) || isGitHubRateLimitError(error)) return false;
+  if (error instanceof GitHubApiError) return error.status >= 500;
+  return error.message === "GitHub request timed out."
+    || error.message.startsWith("GitHub request failed: ")
+    || (error instanceof GitHubGraphqlRequestError && error.status !== 200
+      && error.message.startsWith("GitHub GraphQL request failed."));
+}
+
 export class GitHubApiError extends Error implements GitHubRateLimitDetails {
   public readonly body: string | null;
   public readonly headers: Readonly<Record<string, string>>;

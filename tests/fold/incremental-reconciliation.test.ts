@@ -475,7 +475,10 @@ describe("incremental reconciliation", () => {
     expect(await f.store.getReconciliationEvidence(f.id)).toEqual(before);
     expect(await f.store.getDirtyReconciliationSubjects(f.id)).toEqual(dirty);
     expect(await derived(f.id)).toEqual(rows);
-    if (failure === "issue page two") expect(f.failedPageCursors).toEqual([null, "page-two"]);
+    // A failed read restarts pagination on each of its three bounded attempts.
+    if (failure === "issue page two") expect(f.failedPageCursors).toEqual([
+      null, "page-two", null, "page-two", null, "page-two",
+    ]);
     expect(await sql`select status from reconciliation_runs where repository_id = ${f.id} order by started_at`)
       .toEqual([{ status: "COMPLETED" }, { status: "FAILED" }]);
     expect(await sql`select graphql_cost, graphql_cost_sponsor_id, graphql_observed_responses, graphql_unmeasured_responses

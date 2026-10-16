@@ -23,6 +23,38 @@ import { inspect, format } from "node:util";
 import { RECORD_MARKER, withRecordBearingPostgresWrite } from "../support/record-bearing-postgres-error";
 
 describe("reconcileRepository", () => {
+  it("completes with evidence after a transient review read recovers", async () => {
+    const reviews = [{ id: 301, state: "APPROVED" as const, submittedAt: "2026-09-01T11:00:00Z", dismissal: null }];
+    const dependencies = reconciliationDependencies({
+      github: { getPullRequestReviews: vi.fn().mockRejectedValueOnce(new GitHubApiError(503)).mockResolvedValue(reviews) },
+    });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({
+        runId: "run-1", skipped: false, adds: 1,
+      });
+      expect(dependencies.github.getPullRequestReviews).toHaveBeenCalledTimes(2);
+      expect(dependencies.store.materialize).toHaveBeenCalledWith(expect.objectContaining({
+        synchronization: expect.objectContaining({ pullRequests: [{ id: 201, reviews, rawDiff: "diff" }] }),
+      }));
+      expect(dependencies.store.failRun).not.toHaveBeenCalled();
+    } finally { logged.mockRestore(); }
+  });
+
+  it("fails the run immediately when a review read rejects the credential", async () => {
+    const failure = new GitHubApiError(401);
+    const dependencies = reconciliationDependencies({
+      github: { getPullRequestReviews: vi.fn().mockRejectedValue(failure) },
+    });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ cause: failure });
+      expect(dependencies.github.getPullRequestReviews).toHaveBeenCalledOnce();
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.materialize).not.toHaveBeenCalled();
+    } finally { logged.mockRestore(); }
+  });
+
   it.each(["cause", "deadline", "headers"] as const)("records an ordinary failure when %s guidance is unreadable", async (field) => {
     const upstream = field === "cause" ? new Error("Upstream failure") : new GitHubApiError(403, true, 120);
     Object.defineProperty(upstream, field === "deadline" ? "notBefore" : field, {
