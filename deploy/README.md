@@ -815,8 +815,10 @@ gate parses `.github/required-checks.json` at the deployed SHA with the tree's
 the target SHA's own copy of the same file, so a map-shape change cannot
 deadlock a tree whose parser predates it. Right
 after the fetch it resolves the exact SHA being deployed and, once the
-tree-cleanliness gate passes, reads main's required checks from the branch
-protection; every required check's latest run on that SHA must conclude
+tree-cleanliness gate passes, reads main's required checks from branch
+protection and the branch-rules endpoint (`repos/OWNER/REPO/rules/branches/main`).
+The gate uses their union, refusing when it is empty or either read fails for
+a reason other than not-found (HTTP 404). Every required check's latest run on that SHA must conclude
 `success` before the fast-forward, and so before install, migrations, build,
 switch or restart. A failed, cancelled or otherwise non-successful conclusion refuses
 immediately, and a check whose latest run is queued, in progress or has not
@@ -1174,10 +1176,37 @@ if [ "${repo_valid}" -ne 0 ]; then
   printf 'Could not parse an OWNER/REPO GitHub slug from remote.origin.url (%s); refusing to deploy.\n' "${remote_url}" >&2
   exit 1
 fi
+required_stderr=$(mktemp)
 required_status=0
-required=$(gh api "repos/${repo}/branches/main/protection" --jq '([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]') || required_status=$?
-if [ "${required_status}" -ne 0 ] || [ -z "${required}" ]; then
-  printf 'could not determine required checks for main; refusing to deploy\n' >&2
+classic_required=$(gh api "repos/$repo/branches/main/protection" --jq '([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]' 2>"${required_stderr}") || required_status=$?
+if [ "${required_status}" -ne 0 ]; then
+  if [[ "$(<"${required_stderr}")" != *'HTTP 404'* ]]; then
+    rm -f "${required_stderr}"
+    printf 'could not determine required checks for main: branch-protection read failed; refusing to deploy\n' >&2
+    exit 1
+  fi
+  classic_required=
+fi
+required_status=0
+rules_required=$(gh api "repos/$repo/rules/branches/main" --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]? | (.context? // .)] | unique | .[]' 2>"${required_stderr}") || required_status=$?
+if [ "${required_status}" -ne 0 ]; then
+  if [[ "$(<"${required_stderr}")" != *'HTTP 404'* ]]; then
+    rm -f "${required_stderr}"
+    printf 'could not determine required checks for main: rules read failed; refusing to deploy\n' >&2
+    exit 1
+  fi
+  rules_required=
+fi
+rm -f "${required_stderr}"
+required=
+while IFS= read -r check; do
+  [ -n "${check}" ] || continue
+  if [[ $'\n'"${required}"$'\n' != *$'\n'"${check}"$'\n'* ]]; then
+    required+="${required:+$'\n'}${check}"
+  fi
+done <<<"${classic_required}"$'\n'"${rules_required}"
+if [ -z "${required}" ]; then
+  printf 'could not determine required checks for main: main publishes no required checks in either source; refusing to deploy\n' >&2
   exit 1
 fi
 check_runs_status=0

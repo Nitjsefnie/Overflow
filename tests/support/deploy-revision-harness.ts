@@ -88,6 +88,7 @@ export const FIXTURE_HASH = "abc1234";
 export const FIXTURE_REPO = "overflow-fixture/overflow-fixture";
 export const FIXTURE_REMOTE_URL = `git@github.com:${FIXTURE_REPO}.git`;
 export const JQ_PROTECTION = `([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]`;
+export const JQ_RULES = `[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]? | (.context? // .)] | unique | .[]`;
 export const JQ_CHECKRUNS = `.check_runs[] | [.id, .name, (.app.id // 0), (.status // "unknown"), (.conclusion // "")] | map(if . == null or . == "" then "[missing]" else . end) | @tsv`;
 export const JQ_RUNS = `.workflow_runs[] | [.id, .path, .event, .head_branch] | map(if . == null or . == "" then "[missing]" else . end) | @tsv`;
 export const JQ_JOBS = `.jobs[] | [.id, (if (.name // "") == "" then "(unnamed)" else .name end), (.run_attempt // 0), (.status // "unknown"), (.conclusion // "")] | map(if . == null or . == "" then "[missing]" else . end) | @tsv`;
@@ -118,12 +119,13 @@ export const LEDGER_APP_ID = 5118623;
 
 /**
  * The gate's reads in call order when one poll iteration settles it on `sha`
- * with the fixture's pinned runs (100 and 200): protection, the pin map at the
+ * with the fixture's pinned runs (100 and 200): protection, branch rules, the pin map at the
  * SHA, every check-run, the workflow runs, and the jobs of each pinned run.
  */
 export function gateReads(sha: string): string[] {
   return [
     `gh api repos/${FIXTURE_REPO}/branches/main/protection --jq ${JQ_PROTECTION}`,
+    `gh api repos/${FIXTURE_REPO}/rules/branches/main --jq ${JQ_RULES}`,
     `git show ${sha}:${MAP_PATH}`,
     `gh api repos/${FIXTURE_REPO}/commits/${sha}/check-runs?filter=all&per_page=100 --paginate --jq ${JQ_CHECKRUNS}`,
     `gh api repos/${FIXTURE_REPO}/actions/runs?head_sha=${sha}&per_page=100 --paginate --jq ${JQ_RUNS}`,
@@ -226,6 +228,17 @@ export async function writeCheckRuns(
     runs.set(workflow, run);
   }
   return writeGateState(fixture, name, [...runs.values()]);
+}
+
+/** A branch-rules response projected by the gh shim with the real jq query. */
+export async function writeBranchRules(fixture: Pick<Fixture, "dir">, contexts: string[]): Promise<string> {
+  const file = path.join(fixture.dir, "rules.json");
+  await writeFile(file, JSON.stringify([
+    { type: "required_status_checks", parameters: { required_status_checks:
+      contexts.map((context) => ({ context, integration_id: 123 })) } },
+    { type: "pull_request", parameters: {} },
+  ]));
+  return file;
 }
 
 export const RELEASE_GRAMMAR = /^\.next-release-\d{8}T\d{6}Z-[a-f0-9]{7,40}$/;
@@ -462,7 +475,7 @@ exit 0
 `,
   },
   gh: {
-    envKeys: ["GH_SHIM_PROTECTION_JSON", "GH_SHIM_GATE_SEQUENCE", "GH_SHIM_STATUS", "GH_SHIM_FAIL_MATCH"],
+    envKeys: ["GH_SHIM_PROTECTION_JSON", "GH_SHIM_PROTECTION_404", "GH_SHIM_RULES_JSON", "GH_SHIM_RULES_ERROR", "GH_SHIM_GATE_SEQUENCE", "GH_SHIM_STATUS", "GH_SHIM_FAIL_MATCH"],
     dispatch: `
 if [ -n "\${GH_SHIM_STATUS:-}" ] && [ "\$GH_SHIM_STATUS" != 0 ]; then exit "\$GH_SHIM_STATUS"; fi
 path=""
@@ -477,7 +490,23 @@ if [ -n "\${GH_SHIM_FAIL_MATCH:-}" ] && [[ "\$path" == *"\$GH_SHIM_FAIL_MATCH"* 
 state_file="\${SHIM_LOG:?}.gh-state"
 case "\$path" in
   */branches/main/protection)
+    if [ "\${GH_SHIM_PROTECTION_404:-}" = 1 ]; then
+      printf 'gh: Not Found (HTTP 404)\\n' >&2
+      exit 1
+    fi
     cat "\${GH_SHIM_PROTECTION_JSON:?}"
+    ;;
+  */rules/branches/main)
+    if [ "\${GH_SHIM_RULES_ERROR:-}" = 1 ]; then
+      printf 'gh: Internal Server Error (HTTP 500)\\n' >&2
+      exit 1
+    fi
+    if [ -n "\${GH_SHIM_RULES_JSON:-}" ]; then
+      jq -r "\${!#}" "$GH_SHIM_RULES_JSON"
+    else
+      printf 'gh: Not Found (HTTP 404)\\n' >&2
+      exit 1
+    fi
     ;;
   */commits/*/check-runs*)
     idx_file="\${SHIM_LOG:?}.gh-seq"

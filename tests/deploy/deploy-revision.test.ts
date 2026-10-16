@@ -37,6 +37,7 @@ import {
   runDeploy,
   script,
   shimBody,
+  writeBranchRules,
   writeCheckRuns,
   writeGateState,
   type Fixture,
@@ -521,14 +522,13 @@ exit 0
 
   it("only removes the temporary captures outside release:prune", async () => {
     const source = await readFile(script, "utf8");
-    // The mktemp captures' own cleanups and nothing else: the ignored-files
-    // gate's listing (one cleanup) and the parser-skew fallback's copy of the
-    // target SHA's parser (two: the failed-read path and the post-parse
-    // path). No other rm anywhere, and no -delete; release deletion happens
-    // only through release:prune.
+    // Only mktemp captures may be removed here: the ignored listing, discovery
+    // stderr, and fallback parser. Each failure and success cleanup is pinned;
+    // release deletion happens only through release:prune.
     const cleanups: Array<[string, number]> = [
       ['rm -f "$ignored_listing"', 1],
       ['rm -f "$fallback_parser"', 2],
+      ['rm -f "$required_stderr"', 3],
     ];
     const lines = source.split("\n").map((line) => line.trim());
     for (const [cleanup, count] of cleanups) {
@@ -556,6 +556,7 @@ exit 0
   it("gates the deploy on main's required checks for the deployed SHA", async () => {
     const source = await readFile(script, "utf8");
     expect(source).toContain('gh api "repos/$repo/branches/main/protection"');
+    expect(source).toContain('gh api "repos/$repo/rules/branches/main"');
     expect(source).toContain('git show "$full_sha:.github/required-checks.json"');
     // The parser is a tracked file beside the script, run as `jq -rs -f`
     // against the tree's copy; when that parse fails with jq itself present,
@@ -1012,8 +1013,8 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain("deploy-gate");
     const entries = await readLog(fixture.shimLog);
-    // Nothing is polled: the protection read and the map read, then refusal.
-    expect(gateLog(entries)).toEqual(gateReads(FIXTURE_HASH).slice(0, 2));
+    // Nothing is polled: both required-check sources and the map read, then refusal.
+    expect(gateLog(entries)).toEqual(gateReads(FIXTURE_HASH).slice(0, 3));
     expectGateRefused(entries);
   });
 
@@ -1137,7 +1138,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
       // before any parser read; a map that read but did not parse attempts
       // the fallback's parser read at the target SHA even when it finds
       // nothing there, and only then refuses.
-      const expectedGateLog = [...gateReads(FIXTURE_HASH).slice(0, 2)];
+      const expectedGateLog = [...gateReads(FIXTURE_HASH).slice(0, 3)];
       if (env.GIT_SHIM_SHOW_RC === undefined) {
         expectedGateLog.push(`git show ${FIXTURE_HASH}:scripts/required-checks-parse.jq`);
       }
@@ -1177,9 +1178,9 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     const entries = await readLog(fixture.shimLog);
     const reads = gateReads(FIXTURE_HASH);
     expect(gateLog(entries)).toEqual([
-      ...reads.slice(0, 2),
+      ...reads.slice(0, 3),
       parserRead(FIXTURE_HASH),
-      ...reads.slice(2),
+      ...reads.slice(3),
     ]);
     expect(entries.some((entry) => entry.args[0] === "release:switch")).toBe(true);
   });
@@ -1195,7 +1196,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     expect(result.stderr).toContain("the target SHA carries no copy of that file to fall back to (git show exited 128)");
     const entries = await readLog(fixture.shimLog);
     expect(gateLog(entries)).toEqual([
-      ...gateReads(FIXTURE_HASH).slice(0, 2),
+      ...gateReads(FIXTURE_HASH).slice(0, 3),
       parserRead(FIXTURE_HASH),
     ]);
     expectGateRefused(entries);
@@ -1213,7 +1214,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     expect(result.stderr).toContain("the target SHA's own copy exited");
     const entries = await readLog(fixture.shimLog);
     expect(gateLog(entries)).toEqual([
-      ...gateReads(FIXTURE_HASH).slice(0, 2),
+      ...gateReads(FIXTURE_HASH).slice(0, 3),
       parserRead(FIXTURE_HASH),
     ]);
     expectGateRefused(entries);
@@ -1254,7 +1255,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     expect(result.stderr).toContain(MAP_PATH);
     expect(result.stderr).toContain(FIXTURE_HASH);
     const entries = await readLog(fixture.shimLog);
-    expect(gateLog(entries)).toEqual(gateReads(FIXTURE_HASH).slice(0, 2));
+    expect(gateLog(entries)).toEqual(gateReads(FIXTURE_HASH).slice(0, 3));
     expectGateRefused(entries);
   });
 
@@ -1385,6 +1386,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
 
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("could not determine required checks");
+    expect(result.stderr).toContain("branch-protection read failed");
     const entries = await readLog(fixture.shimLog);
     expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(1);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
@@ -1445,9 +1447,49 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
 
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("could not determine required checks");
+    expect(result.stderr).toContain("main publishes no required checks in either source");
     const entries = await readLog(fixture.shimLog);
-    expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(1);
+    expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(2);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
+  });
+
+  it("deploys from branch rules when classic protection is not found", async () => {
+    const fixture = await makeFixture();
+    const rules = await writeBranchRules(fixture, ["verify", "deploy-gate"]);
+    const result = await runDeploy(fixture, { GH_SHIM_RULES_JSON: rules, GH_SHIM_PROTECTION_404: "1" });
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.stdout).toContain("Webhook upgrade exit status: 0");
+    expect(result.stderr).not.toContain("HTTP 404");
+  });
+
+  it("unions overlapping protection and branch rules, listing a pending check only once", async () => {
+    const fixture = await makeFixture();
+    await writeFile(fixture.protectionJson, "deploy-gate\n\n");
+    const rules = await writeBranchRules(fixture, ["verify", "deploy-gate", "verify", ""]);
+    const pending = await writeCheckRuns(fixture, "gate-union-pending", [["verify", "in_progress"], ["deploy-gate", "in_progress"]]);
+    const refused = await runDeploy(fixture, {
+      GH_SHIM_RULES_JSON: rules, GH_SHIM_GATE_SEQUENCE: pending, OVERFLOW_DEPLOY_CI_TIMEOUT: "0",
+    });
+
+    expect(refused.status, refused.stderr).toBe(1);
+    const pendingLine = refused.stderr.split("\n").find((line) => line.startsWith("Required checks still pending"));
+    expect(pendingLine!.match(/deploy-gate \(in_progress\)/g)).toHaveLength(1);
+    expect(pendingLine!.match(/verify \(in_progress\)/g)).toHaveLength(1);
+    expectGateRefused(await readLog(fixture.shimLog));
+
+    const result = await runDeploy(fixture, { GH_SHIM_RULES_JSON: rules });
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+  });
+
+  it("refuses when the branch rules read fails for a reason other than not-found", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, { GH_SHIM_RULES_ERROR: "1" });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("could not determine required checks for main");
+    expect(result.stderr).toContain("rules read failed");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(2);
+    expectGateRefused(entries);
   });
 
   it("skips the entire gate under OVERFLOW_DEPLOY_CI_GATE=skip, with a loud warning", async () => {
