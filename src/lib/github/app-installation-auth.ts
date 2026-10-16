@@ -3,13 +3,13 @@ import { readFileSync } from "node:fs";
 import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
 
 /**
- * GitHub App installation authentication for the Node reconciliation path.
+ * GitHub App installation authentication for Node reconciliation and registration.
  *
  * Mints a per-lookup RS256 JWT from the App's private key, resolves a
  * repository's installation, and caches that installation's short-lived
- * access token until shortly before it expires. Imported only from the Node
- * reconciliation wiring (instrumentation-node, scripts/reconcile, the fold's
- * sponsor gateway) — never from the page/Edge tree or `client.ts`.
+ * access token until shortly before it expires. Imported from Node wiring
+ * (reconciliation and the registration API route) — never from the page/Edge
+ * tree or `client.ts`.
  */
 
 export type GitHubAppAuthConfig = { appId: string; privateKey: string };
@@ -52,7 +52,7 @@ const installationTokenPermissions = {
 } as const;
 
 /**
- * The two environment variables this module reads, spelled structurally so
+ * The environment variables this module reads, spelled structurally so
  * `process.env`, any subset of it, and bare test literals are all assignable.
  * `Pick`ing the keys off `NodeJS.ProcessEnv` would make both required, Next's
  * `ProcessEnv` augmentation requires `NODE_ENV` (so a `ProcessEnv` parameter
@@ -63,6 +63,8 @@ type GitHubAppAuthEnv = {
   readonly [key: string]: string | undefined;
   readonly GITHUB_APP_ID?: string | undefined;
   readonly GITHUB_APP_PRIVATE_KEY_PATH?: string | undefined;
+  readonly GITHUB_REGISTRATION_APP_ID?: string | undefined;
+  readonly GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH?: string | undefined;
 };
 
 /**
@@ -76,12 +78,36 @@ export function readGitHubAppAuthConfig(
   env: GitHubAppAuthEnv,
   readFile: (path: string) => string = (path) => readFileSync(path, "utf8"),
 ): GitHubAppAuthConfig | null {
-  const appId = env.GITHUB_APP_ID;
-  const keyPath = env.GITHUB_APP_PRIVATE_KEY_PATH;
+  return readAppAuthConfig(env, "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_PATH", readFile);
+}
+
+/** Separate registration App identity; never falls back to reconciliation credentials. */
+export function readGitHubRegistrationAppAuthConfig(
+  env: GitHubAppAuthEnv,
+  readFile: (path: string) => string = (path) => readFileSync(path, "utf8"),
+): GitHubAppAuthConfig | null {
+  return readAppAuthConfig(env, "GITHUB_REGISTRATION_APP_ID", "GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH", readFile);
+}
+
+function readAppAuthConfig(
+  env: GitHubAppAuthEnv,
+  appIdVariable: string,
+  keyPathVariable: string,
+  readFile: (path: string) => string,
+): GitHubAppAuthConfig | null {
+  const appId = env[appIdVariable];
+  const keyPath = env[keyPathVariable];
   if (appId === undefined || appId.length === 0 || keyPath === undefined || keyPath.length === 0) {
     return null;
   }
-  const pem = readFile(keyPath);
+  let pem: string;
+  try {
+    pem = readFile(keyPath);
+  } catch (cause) {
+    // Preserve the existing reconciliation reader's original filesystem error.
+    if (keyPathVariable === "GITHUB_APP_PRIVATE_KEY_PATH") throw cause;
+    throw new Error(`${keyPathVariable} (${keyPath}) could not be read.`, { cause });
+  }
   let key: KeyObject;
   try {
     key = createPrivateKey(pem);
@@ -89,7 +115,7 @@ export function readGitHubAppAuthConfig(
     // The message carries the variable and the path, never the file's
     // contents: a key file's text must not reach a log through this error.
     throw new Error(
-      `GITHUB_APP_PRIVATE_KEY_PATH (${keyPath}) does not contain a parseable private key.`,
+      `${keyPathVariable} (${keyPath}) does not contain a parseable private key.`,
       { cause },
     );
   }
@@ -98,7 +124,7 @@ export function readGitHubAppAuthConfig(
   // at this same wiring-time gate. rsa-pss signs fine and is admitted.
   if (key.asymmetricKeyType !== "rsa" && key.asymmetricKeyType !== "rsa-pss") {
     throw new Error(
-      `GITHUB_APP_PRIVATE_KEY_PATH (${keyPath}) does not contain an RSA private key (received ${key.asymmetricKeyType}).`,
+      `${keyPathVariable} (${keyPath}) does not contain an RSA private key (received ${key.asymmetricKeyType}).`,
     );
   }
   return { appId, privateKey: pem };
@@ -107,14 +133,30 @@ export function readGitHubAppAuthConfig(
 /** One response of the two App JWT requests: an installation lookup or a mint. */
 type JwtAppResponse = { status: number; headers: Headers; body: string | null };
 
-export function createAppInstallationTokenResolver(options: {
+export type AppInstallationAuthOptions = {
   config: GitHubAppAuthConfig;
   apiUrl?: string;
   fetch?: typeof fetch;
   now?: () => Date;
   /** Reserved for wiring-site diagnostics; today the resolver emits nothing. */
   logger?: (message: string) => void;
-}): AppInstallationTokenResolver {
+};
+
+export function createAppInstallationTokenResolver(options: AppInstallationAuthOptions): AppInstallationTokenResolver {
+  return createAppInstallationAuth(options).resolveInstallationToken;
+}
+
+/** Looks up an installation without minting an installation access token. */
+export function createAppInstallationLookup(options: AppInstallationAuthOptions):
+  (ownerName: string) => Promise<{ installationId: number } | null> {
+  const auth = createAppInstallationAuth(options);
+  return async (ownerName) => {
+    const result = await auth.lookupInstallation(ownerName);
+    return result === null ? null : { installationId: result.installationId };
+  };
+}
+
+function createAppInstallationAuth(options: AppInstallationAuthOptions) {
   const config = options.config;
   const apiUrl = (options.apiUrl ?? defaultApiUrl).replace(/\/$/, "");
   const fetchImplementation = options.fetch ?? fetch;
@@ -122,18 +164,18 @@ export function createAppInstallationTokenResolver(options: {
   const tokenCache = new Map<number, { token: string; expiresAt: number }>();
   const mintsInFlight = new Map<number, Promise<AppInstallationToken>>();
 
-  return async (ownerName) => {
-    const [owner, repo] = parseOwnerName(ownerName);
-    return resolveInstallationToken(owner, repo);
-  };
+  return { lookupInstallation, resolveInstallationToken };
 
-  async function resolveInstallationToken(owner: string, repo: string): Promise<AppInstallationToken | null> {
+  async function lookupInstallation(ownerName: string): Promise<{ installationId: number; jwt: string } | null> {
+    const [owner, repo] = parseOwnerName(ownerName);
     const jwt = mintJwt(clock());
     const installationId = await lookupInstallationId(owner, repo, jwt);
-    if (installationId === null) {
-      return null;
-    }
-    return cachedOrMintedToken(installationId, jwt);
+    return installationId === null ? null : { installationId, jwt };
+  }
+
+  async function resolveInstallationToken(ownerName: string): Promise<AppInstallationToken | null> {
+    const result = await lookupInstallation(ownerName);
+    return result === null ? null : cachedOrMintedToken(result.installationId, result.jwt);
   }
 
   async function cachedOrMintedToken(installationId: number, jwt: string): Promise<AppInstallationToken> {
