@@ -66,12 +66,12 @@ function productionDependencies(): ReconcileCliDependencies {
   const store = new PostgresFoldStore();
   // Invalid configured keys fail before any fold; unconfigured Apps leave
   // their registrations on the existing sponsor OAuth fallback path.
-  const ledgerResolver = appInstallationTokenResolverFromEnv(process.env);
+  const reconciliationResolver = appInstallationTokenResolverFromEnv(process.env);
   const registrationConfig = readGitHubRegistrationAppAuthConfig(process.env);
   const registrationResolver = registrationConfig === null
     ? null : createAppInstallationTokenResolver({ config: registrationConfig });
   const resolveAppInstallationToken = createReconciliationAppTokenResolver({
-    ledgerResolver,
+    reconciliationResolver,
     registrationResolver,
     lookupRegistrationMethod: async (ownerName) =>
       (await store.findRepositoryByOwnerName(ownerName))?.registrationMethod ?? null,

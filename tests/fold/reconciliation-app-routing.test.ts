@@ -55,7 +55,7 @@ const keyPath = join(directory, "app.pem");
 writeFileSync(keyPath, generateKeyPairSync("rsa", { modulusLength: 2048 })
   .privateKey.export({ type: "pkcs8", format: "pem" }));
 const registrationToken = randomBytes(24).toString("base64url");
-const ledgerToken = randomBytes(24).toString("base64url");
+const reconciliationToken = randomBytes(24).toString("base64url");
 const sponsorToken = randomBytes(24).toString("base64url");
 let lookupStatus: number;
 let requests: { method: string; path: string; issuer: string | null; authorization: string | null }[];
@@ -90,7 +90,7 @@ beforeEach(() => {
         : new Response(null, { status: lookupStatus });
     }
     if (request.method === "POST") return Response.json({
-      token: issuer === "202" ? registrationToken : ledgerToken,
+      token: issuer === "202" ? registrationToken : reconciliationToken,
       expires_at: new Date(Date.now() + 3_600_000).toISOString(),
     }, { status: 201 });
     return new Response(null, { status: 404 });
@@ -106,7 +106,7 @@ it("routes the composite through a distinct injected registration-method lookup"
   const injectedLookup = vi.fn(async () => "app" as const);
   const resolve = createReconciliationAppTokenResolver({
     lookupRegistrationMethod: injectedLookup,
-    ledgerResolver: async () => ({ token: ledgerToken, installationId: 11 }),
+    reconciliationResolver: async () => ({ token: reconciliationToken, installationId: 11 }),
     registrationResolver: async () => ({ token: registrationToken, installationId: 22 }),
   });
 
@@ -115,6 +115,19 @@ it("routes the composite through a distinct injected registration-method lookup"
   });
   expect(injectedLookup).toHaveBeenCalledExactlyOnceWith("example/repository");
   expect(lookup).not.toHaveBeenCalled();
+});
+
+it.each(["oauth_hook", null] as const)("names the reconciliation App in the composite result for method %s", async (method) => {
+  const { createReconciliationAppTokenResolver } = await import("@/lib/github/reconciliation-app-auth");
+  const resolve = createReconciliationAppTokenResolver({
+    lookupRegistrationMethod: async () => method,
+    reconciliationResolver: async () => ({ token: reconciliationToken, installationId: 11 }),
+    registrationResolver: async () => ({ token: registrationToken, installationId: 22 }),
+  });
+
+  await expect(resolve!("example/repository")).resolves.toEqual({
+    token: reconciliationToken, installationId: 11, app: "reconciliation",
+  });
 });
 
 for (const wiring of ["worker", "cli"] as const) {
@@ -149,18 +162,18 @@ for (const wiring of ["worker", "cli"] as const) {
       }]);
     });
 
-    it.each(["oauth_hook", null] as const)("keeps the ledger App path for method %s", async (method) => {
+    it.each(["oauth_hook", null] as const)("keeps the reconciliation App path for method %s", async (method) => {
       row.method = method;
       await reconcile();
       expect(appRequests().map(({ issuer }) => issuer)).toEqual(["101", "101"]);
-      expect(readAuthorization()).toBe(`Bearer ${ledgerToken}`);
+      expect(readAuthorization()).toBe(`Bearer ${reconciliationToken}`);
       expect(oauth).not.toHaveBeenCalled();
       expect(authPaths()).toEqual([{
         repositoryId: "repository-1", authPath: "github-app-installation", installationId: 11,
       }]);
     });
 
-    it.each(["oauth_hook", null] as const)("keeps the OAuth fallback after a ledger 404 for method %s", async (method) => {
+    it.each(["oauth_hook", null] as const)("keeps the OAuth fallback after a reconciliation App 404 for method %s", async (method) => {
       row.method = method;
       lookupStatus = 404;
       await reconcile();
@@ -170,7 +183,7 @@ for (const wiring of ["worker", "cli"] as const) {
       expect(authPaths()).toEqual([{ repositoryId: "repository-1", authPath: "sponsor-oauth-fallback" }]);
     });
 
-    it("falls back to OAuth when the registration App is unconfigured without trying the ledger App", async () => {
+    it("falls back to OAuth when the registration App is unconfigured without trying the reconciliation App", async () => {
       vi.stubEnv("GITHUB_REGISTRATION_APP_ID", "");
       await reconcile();
       expect(appRequests()).toEqual([]);

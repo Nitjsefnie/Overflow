@@ -17,8 +17,8 @@ export type GitHubAppAuthConfig = { appId: string; privateKey: string };
 export type AppInstallationToken = {
   token: string;
   installationId: number;
-  /** Absent on a direct resolver: the original ledger App authentication path. */
-  app?: "ledger" | "registration";
+  /** Absent on a direct resolver: the reconciliation App authentication path. */
+  app?: "reconciliation" | "registration";
 };
 
 /**

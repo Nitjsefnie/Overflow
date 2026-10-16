@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { relativeLinks, unresolvedLinks } from "../support/markdown-links";
 
 /**
- * Issue 1032: the Ledger App private-key rotation lacked a runbook.
+ * Issue 1032: the reconciliation App private-key rotation lacked a runbook.
  * `deploy/incident-response.md` step 9 pointed at deploy/README.md section 11,
  * which does not apply to this key. Section 14 of the deploy guide now carries
  * the procedure.
@@ -24,8 +24,8 @@ const guideSource = readFileSync(new URL("../../deploy/README.md", import.meta.u
 const guideLines = guideSource.split("\n");
 
 /** The section the procedure lives in, by its literal heading. */
-const sectionHeading = "## 14. Rotating the Ledger App private key";
-const sectionAnchor = "#14-rotating-the-ledger-app-private-key";
+const sectionHeading = "## 14. Rotating the reconciliation App private key";
+const sectionAnchor = "#14-rotating-the-reconciliation-app-private-key";
 
 /**
  * Step 9's body: the `9. ` list item and every indented line under it, up to
@@ -112,12 +112,17 @@ describe("deploy guide section 14 — the App-key rotation procedure", () => {
     expect(links, `the section does not link README.md#4-create-the-environment-file`).toHaveLength(1);
   });
 
-  it("carries copy-pasteable commands in bash fences", () => {
+  it("carries the ten host-only rotation command blocks", () => {
     const bash = fencedBlocks(sectionLines().join("\n")).filter((block) => block.tag === "bash");
-    expect(
-      bash.length,
-      `${sectionHeading} carries fewer than three bash-fenced command blocks`,
-    ).toBeGreaterThanOrEqual(3);
+    expect(bash).toHaveLength(10);
+  });
+
+  it("does not invoke CI secret, workflow or check-publication operations", () => {
+    const commands = fencedBlocks(sectionLines().join("\n"))
+      .filter((block) => block.tag === "bash")
+      .flatMap((block) => block.body)
+      .map((line) => line.trim().split(/\s+/));
+    expect(commands.filter(([executable]) => executable === "gh")).toEqual([]);
   });
 
   it("resolves every relative link in the section", () => {
