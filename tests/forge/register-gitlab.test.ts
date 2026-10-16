@@ -94,6 +94,7 @@ function fixture(options: {
         sponsorId: repository.sponsorId,
         visibility: repository.visibility,
         githubWebhookId: repository.githubWebhookId,
+        registrationMethod: repository.registrationMethod,
       };
     },
     async saveAbandonedWebhookCleanup(record: Parameters<RepositoryRegistrationStore["saveAbandonedWebhookCleanup"]>[0]) {
@@ -181,6 +182,7 @@ describe("GitLab repository registration", () => {
     expect(callback.pathname).toBe("/api/gitlab/webhooks");
     expect(Buffer.from(body.token, "base64url")).toHaveLength(32);
     expect(f.calls.find((call) => call.op === "createRepository")!.args).toMatchObject({
+      registrationMethod: "oauth_hook",
       webhookCredential: { id: callback.searchParams.get("hook"), secret: body.token },
     });
   });

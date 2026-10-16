@@ -34,6 +34,7 @@ type RepositoryRow = {
   owner_name: string;
   sponsor_id: string;
   visibility: "PUBLIC" | "PRIVATE";
+  registration_method: "oauth_hook" | "app";
   github_webhook_id: number | string | null;
 };
 
@@ -172,15 +173,22 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
     };
   }
 
+  public async findActiveAppRegistrationByGitHubRepositoryId(githubRepositoryId: number): Promise<{ repositoryId: string } | null> {
+    const [row] = await this.sql<{ id: string }[]>`
+      select id from registered_repositories
+      where github_repository_id = ${githubRepositoryId}
+        and active = true and unregistered_at is null
+        and registration_method = 'app' and provider = 'github'
+      limit 1
+    `;
+    return row === undefined ? null : { repositoryId: row.id };
+  }
+
   public async findRepositoryByGitHubId(githubRepositoryId: number): Promise<RegisteredRepository | null> {
     const [row] = await this.sql<RepositoryRow[]>`
       select
-        id,
-        github_repository_id,
-        owner_name,
-        sponsor_id,
-        visibility,
-        github_webhook_id
+        id, github_repository_id, owner_name, sponsor_id,
+        visibility, github_webhook_id, registration_method
       from registered_repositories
       where github_repository_id = ${githubRepositoryId}
       limit 1
@@ -191,12 +199,8 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
   public async findRepositoryRegistrationStateByOwnerName(ownerName: string): Promise<RepositoryRegistrationState | null> {
     const [row] = await this.sql<RepositoryStateRow[]>`
       select
-        id,
-        github_repository_id,
-        owner_name,
-        sponsor_id,
-        visibility,
-        github_webhook_id,
+        id, github_repository_id, owner_name, sponsor_id,
+        visibility, github_webhook_id, registration_method,
         unregistered_at
       from registered_repositories
       where owner_name = ${ownerName}
@@ -235,12 +239,8 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
   public async findRepositoryRegistrationState(githubRepositoryId: number): Promise<RepositoryRegistrationState | null> {
     const [row] = await this.sql<RepositoryStateRow[]>`
       select
-        id,
-        github_repository_id,
-        owner_name,
-        sponsor_id,
-        visibility,
-        github_webhook_id,
+        id, github_repository_id, owner_name, sponsor_id,
+        visibility, github_webhook_id, registration_method,
         unregistered_at
       from registered_repositories
       where github_repository_id = ${githubRepositoryId}
@@ -259,12 +259,8 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
     if (input.forgeProjectId !== undefined) {
       const [row] = await this.sql<RepositoryStateRow[]>`
         select
-          id,
-          github_repository_id,
-          owner_name,
-          sponsor_id,
-          visibility,
-          github_webhook_id,
+          id, github_repository_id, owner_name, sponsor_id,
+          visibility, github_webhook_id, registration_method,
           unregistered_at
         from registered_repositories
         where provider = ${input.provider}
@@ -285,12 +281,8 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
 
     const [row] = await this.sql<RepositoryStateRow[]>`
       select
-        id,
-        github_repository_id,
-        owner_name,
-        sponsor_id,
-        visibility,
-        github_webhook_id,
+        id, github_repository_id, owner_name, sponsor_id,
+        visibility, github_webhook_id, registration_method,
         unregistered_at
       from registered_repositories
       where provider = ${input.provider}
@@ -314,12 +306,8 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
       // interleave between them.
       const [row] = await transaction<UnregisterLockRow[]>`
         select
-          id,
-          github_repository_id,
-          owner_name,
-          sponsor_id,
-          visibility,
-          github_webhook_id,
+          id, github_repository_id, owner_name, sponsor_id,
+          visibility, github_webhook_id, registration_method,
           unregistered_at,
           provider
         from registered_repositories
@@ -356,12 +344,8 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
           webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null
         where id = ${row.id} and sponsor_id = ${input.sponsorId}
         returning
-          id,
-          github_repository_id,
-          owner_name,
-          sponsor_id,
-          visibility,
-          github_webhook_id
+          id, github_repository_id, owner_name, sponsor_id,
+          visibility, github_webhook_id, registration_method
       `;
       // Unreachable through the flow above — the lock guarantees the row —
       // but a zero-row write after a passed sponsor lock must not read as
@@ -411,6 +395,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
             sponsor_id,
             visibility,
             github_webhook_id,
+            registration_method,
             difficulty_scheme,
             provider,
             instance_url,
@@ -425,6 +410,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
             eligible_sponsor.id,
             ${repository.visibility},
             ${repository.githubWebhookId},
+            ${repository.registrationMethod},
             ${this.sql.json(repository.difficultyScheme)},
             ${repository.provider ?? "github"},
             ${repository.instanceUrl ?? null},
@@ -438,6 +424,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
             sponsor_id = excluded.sponsor_id,
             visibility = excluded.visibility,
             github_webhook_id = excluded.github_webhook_id,
+            registration_method = excluded.registration_method,
             difficulty_scheme = excluded.difficulty_scheme,
             provider = excluded.provider,
             instance_url = excluded.instance_url,
@@ -451,12 +438,8 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
             updated_at = now()
           where registered_repositories.unregistered_at is not null
           returning
-            id,
-            github_repository_id,
-            owner_name,
-            sponsor_id,
-            visibility,
-            github_webhook_id
+            id, github_repository_id, owner_name, sponsor_id,
+            visibility, github_webhook_id, registration_method
         ),
         first_version as (
           insert into repository_difficulty_scheme_versions (
@@ -477,12 +460,8 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
           from inserted
         )
         select
-          id,
-          github_repository_id,
-          owner_name,
-          sponsor_id,
-          visibility,
-          github_webhook_id
+          id, github_repository_id, owner_name, sponsor_id,
+          visibility, github_webhook_id, registration_method
         from inserted
       `;
       if (row === undefined) {
@@ -619,7 +598,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
 
   public async findActiveRepositoryById(repositoryId: string): Promise<RegisteredRepository | null> {
     const [row] = await this.sql<RepositoryRow[]>`
-      select id, github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id
+      select id, github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, registration_method
       from registered_repositories
       where id = ${repositoryId} and active = true
       limit 1
@@ -721,6 +700,7 @@ function toRegisteredRepository(row: RepositoryRow): RegisteredRepository {
     ownerName: row.owner_name,
     sponsorId: row.sponsor_id,
     visibility: row.visibility,
+    registrationMethod: row.registration_method,
     githubWebhookId: row.github_webhook_id === null ? null : toSafeInteger(row.github_webhook_id),
   };
 }

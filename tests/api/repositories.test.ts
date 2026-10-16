@@ -529,7 +529,7 @@ describe("POST /api/repositories", () => {
         ownerName: "octo/overflow",
         sponsorId: "moderator-id",
         visibility: "PUBLIC",
-        githubWebhookId: 501,
+        githubWebhookId: 501, registrationMethod: "oauth_hook" as const,
       },
       initialImportScheduled: true,
       claimPath: "NO_EVIDENCE_FOUND",
@@ -566,7 +566,7 @@ describe("POST /api/repositories", () => {
           ownerName: "octo/overflow",
           sponsorId: "moderator-id",
           visibility: "PUBLIC",
-          githubWebhookId: 501,
+          githubWebhookId: 501, registrationMethod: "oauth_hook" as const,
         },
         initialImportScheduled: true,
         claimPath,
@@ -801,7 +801,7 @@ function registeredTarget(sponsorId = "moderator-id"): RegisteredRepository {
     ownerName: "octo/overflow",
     sponsorId,
     visibility: "PUBLIC",
-    githubWebhookId: 501,
+    githubWebhookId: 501, registrationMethod: "oauth_hook" as const,
   };
 }
 
@@ -812,7 +812,7 @@ function gitlabTarget(sponsorId = "moderator-id"): RegisteredRepository {
     ownerName: "group/subgroup/project",
     sponsorId,
     visibility: "PUBLIC",
-    githubWebhookId: null,
+    githubWebhookId: null, registrationMethod: "oauth_hook" as const,
   };
 }
 
@@ -847,7 +847,7 @@ describe("Overflow token registration", () => {
         ownerName: "octo/overflow",
         sponsorId: account.id,
         visibility: "PUBLIC",
-        githubWebhookId: 501,
+        githubWebhookId: 501, registrationMethod: "oauth_hook" as const,
       },
       initialImportScheduled: true,
       claimPath: "NO_EVIDENCE_FOUND",
@@ -1060,7 +1060,7 @@ describe("Overflow token registration", () => {
         ownerName: repository.ownerName,
         sponsorId: repository.sponsorId,
         visibility: repository.visibility,
-        githubWebhookId: repository.githubWebhookId,
+        githubWebhookId: repository.githubWebhookId, registrationMethod: repository.registrationMethod,
       }));
     vi.spyOn(PostgresFoldStore.prototype, "enqueueReconciliationJob").mockResolvedValue(undefined as never);
     const gitlabFetch = vi.fn<typeof fetch>(async (input, init) => {
@@ -1557,7 +1557,7 @@ describe("PATCH /api/repositories", () => {
         ownerName: "octo/overflow",
         sponsorId: "moderator-id",
         visibility: "PUBLIC",
-        githubWebhookId: 501,
+        githubWebhookId: 501, registrationMethod: "oauth_hook" as const,
       },
       changed: true,
       versionNumber: 2,
@@ -2209,7 +2209,7 @@ function successfulDependencies(
         }
       },
     },
-    store: {
+    store: { async findActiveAppRegistrationByGitHubRepositoryId() { return null; },
       findRepositoryProviderById: async () => null,
       async findRepositoryByGitHubId() {
         return options.existingRepository
@@ -2219,7 +2219,7 @@ function successfulDependencies(
               ownerName: "octo/overflow",
               sponsorId: "moderator-id",
               visibility: "PUBLIC" as const,
-              githubWebhookId: 501,
+              githubWebhookId: 501, registrationMethod: "oauth_hook" as const,
             }
           : null;
       },
@@ -2238,7 +2238,7 @@ function successfulDependencies(
                 ownerName: "octo/overflow",
                 sponsorId: "moderator-id",
                 visibility: "PUBLIC" as const,
-                githubWebhookId: 501,
+                githubWebhookId: 501, registrationMethod: "oauth_hook" as const,
               },
               unregisteredAt: null,
             }
@@ -2269,7 +2269,7 @@ function successfulDependencies(
           ownerName: "octo/overflow",
           sponsorId: repository.sponsorId,
           visibility: "PUBLIC",
-          githubWebhookId: 501,
+          githubWebhookId: 501, registrationMethod: "oauth_hook" as const,
         };
       },
       async saveAbandonedWebhookCleanup() {},

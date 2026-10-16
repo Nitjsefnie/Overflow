@@ -10,7 +10,7 @@ function fixture() {
       stageWebhookCredential: async () => { throw new Error("must not stage without sponsor credentials"); },
       finalizeWebhookCredential: async () => false,
       listActiveRepositoryIds: async () => ["repository-1", "repository-2"],
-      findActiveRepositoryById: async (id) => ({ id, githubRepositoryId: 42, githubWebhookId: 81, ownerName: "octo/old", sponsorId: id, visibility: "PUBLIC" }),
+      findActiveRepositoryById: async (id) => ({ id, githubRepositoryId: 42, githubWebhookId: 81, registrationMethod: "oauth_hook", ownerName: "octo/old", sponsorId: id, visibility: "PUBLIC" }),
       findActiveRepositoryForgeById: async () => ({ provider: "github", instanceUrl: null }),
       getGitHubAccessToken: async () => null,
       getForgeToken: async () => { throw new Error("must not read a forge identity for a GitHub registration"); },

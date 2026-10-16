@@ -57,6 +57,62 @@ describe("registering a repository against the real registered_repositories cons
     }
   });
 
+  it.each(["oauth_hook", "app"] as const)("stores a %s registration with its webhook state", async (registrationMethod) => {
+    const credential = { id: randomUUID(), secret: "registration-method-test-secret" };
+    const submission = newRepository({ sponsorId: await sponsor(), registrationMethod,
+      ...(registrationMethod === "app" ? { githubWebhookId: null, webhookCredential: null } : { webhookCredential: credential }),
+    });
+    const created = (await store.createRepository(submission))!;
+    const [row] = await sql`
+      select registration_method, github_webhook_id, webhook_credential_id, encrypted_webhook_secret, webhook_configured_at
+      from registered_repositories where id = ${created.id}
+    `;
+    expect(row.registration_method).toBe(registrationMethod);
+    expect(row.github_webhook_id === null ? null : Number(row.github_webhook_id)).toBe(submission.githubWebhookId);
+    if (registrationMethod === "app") {
+      expect(row).toMatchObject({ webhook_credential_id: null, encrypted_webhook_secret: null, webhook_configured_at: null });
+      expect(await store.findWebhookCredential(credential.id, "github")).toBeNull();
+    } else {
+      expect(row.webhook_credential_id).toBe(credential.id);
+      expect(row.encrypted_webhook_secret).toBeInstanceOf(Buffer);
+      expect(row.webhook_configured_at).toBeInstanceOf(Date);
+      expect(await store.findWebhookCredential(credential.id, "github")).toMatchObject({ secret: credential.secret });
+    }
+    for (const repository of [created, await store.findRepositoryByGitHubId(submission.githubRepositoryId),
+      await store.findActiveRepositoryById(created.id),
+      (await store.findRepositoryRegistrationState(submission.githubRepositoryId))?.repository,
+      (await store.findRepositoryRegistrationStateByOwnerName(submission.ownerName))?.repository]) {
+      expect(repository).toMatchObject({ id: created.id, registrationMethod });
+    }
+  });
+
+  it.each(["app", "oauth_hook"] as const)("moves the registration method to %s on reactivation", async (registrationMethod) => {
+    const submission = newRepository({ sponsorId: await sponsor(),
+      registrationMethod: registrationMethod === "app" ? "oauth_hook" : "app", githubWebhookId: null,
+    });
+    const created = (await store.createRepository(submission))!;
+    expect(await store.unregisterRepository({ ...submission, provider: "github" })).toMatchObject({
+      kind: "UNREGISTERED", repository: { registrationMethod: submission.registrationMethod },
+    });
+    const revived = await store.createRepository({ ...submission, registrationMethod });
+    expect(revived).toMatchObject({ id: created.id, registrationMethod });
+    const [row] = await sql`select registration_method from registered_repositories where id = ${created.id}`;
+    expect(row.registration_method).toBe(registrationMethod);
+  });
+
+  it.each(["active", "unregistered", "oauth_hook", "gitlab", "inactive"] as const)("finds only an active GitHub App registration: %s", async (state) => {
+    const submission = newRepository({ sponsorId: await sponsor(), registrationMethod: "app", githubWebhookId: null });
+    const created = (await store.createRepository(submission))!;
+    if (state === "unregistered") await store.unregisterRepository({ ...submission, provider: "github" });
+    if (state === "oauth_hook") await sql`update registered_repositories set registration_method = 'oauth_hook' where id = ${created.id}`;
+    // Deliberately inconsistent row: prove provider filtering independently of the method filter.
+    if (state === "gitlab") await sql`update registered_repositories set provider = 'gitlab' where id = ${created.id}`;
+    if (state === "inactive") await sql`update registered_repositories set active = false where id = ${created.id}`;
+    expect(await store.findActiveAppRegistrationByGitHubRepositoryId(submission.githubRepositoryId))
+      .toEqual(state === "active" ? { repositoryId: created.id } : null);
+    expect(await store.findActiveAppRegistrationByGitHubRepositoryId(externalId++)).toBeNull();
+  });
+
   it("reads the persisted webhook and sponsor only for an active registration", async () => {
     const created = await store.createRepository(newRepository({ sponsorId: await sponsor() }));
     expect(created).not.toBeNull();
@@ -91,7 +147,7 @@ describe("registering a repository against the real registered_repositories cons
     expect(row.webhook_configured_at).toBeInstanceOf(Date);
     for (const value of [created, await store.findActiveRepositoryById(created!.id)]) {
       expect(Object.keys(value!)).toEqual([
-        "id", "githubRepositoryId", "ownerName", "sponsorId", "visibility", "githubWebhookId",
+        "id", "githubRepositoryId", "ownerName", "sponsorId", "visibility", "registrationMethod", "githubWebhookId",
       ]);
       expect(JSON.stringify(value)).not.toContain(submission.webhookCredential.secret);
     }
@@ -1447,6 +1503,7 @@ function newRepository(
     ownerName: `registration/repo-${githubRepositoryId}`,
     visibility: "PUBLIC",
     githubWebhookId: externalId++,
+    registrationMethod: "oauth_hook",
     webhookCredential: null,
     difficultyScheme: difficultyScheme(),
     ...overrides,

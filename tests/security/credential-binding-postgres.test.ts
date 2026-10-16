@@ -47,6 +47,7 @@ async function registerWithWebhook(store: PostgresRepositoryStore, sponsorId: st
     sponsorId,
     visibility: "PUBLIC",
     githubWebhookId: externalId++,
+    registrationMethod: "oauth_hook" as const,
     webhookCredential: { id: credentialId, secret },
     difficultyScheme: validDifficultyScheme(),
   });

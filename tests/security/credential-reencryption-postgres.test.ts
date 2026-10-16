@@ -83,6 +83,7 @@ async function registerRepository(sealingKey: string, sponsorId: string, secret:
     sponsorId,
     visibility: "PUBLIC",
     githubWebhookId: externalId++,
+    registrationMethod: "oauth_hook" as const,
     webhookCredential: secret === null ? null : { id: credentialId, secret },
     difficultyScheme: validDifficultyScheme(),
   });

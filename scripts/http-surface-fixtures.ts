@@ -110,6 +110,7 @@ const fixtureRepository: RegisteredRepository = {
   sponsorId: fixtureMemberId,
   visibility: "PUBLIC",
   githubWebhookId: 987654321,
+  registrationMethod: "oauth_hook",
 };
 
 const fixtureGitHubRepository = {
@@ -156,6 +157,7 @@ function fixtureRegistrationGateway(): RepositoryRegistrationGateway {
 function fixtureRegistrationStore(): RepositoryRegistrationStore {
   return {
     findRepositoryByGitHubId: async () => fixtureRepository,
+    findActiveAppRegistrationByGitHubRepositoryId: async () => null,
     // "github" passes every flow's cross-forge guard: POST refuses only a
     // non-github holder, PATCH/DELETE demand the row be github-held.
     findRepositoryProviderById: async () => "github",

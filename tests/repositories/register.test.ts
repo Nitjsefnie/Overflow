@@ -42,6 +42,7 @@ describe("explicit repository registration", () => {
     const b = second.createdRepositories[0] as typeof second.createdRepositories[0] & {
       webhookCredential?: { id: string; secret: string };
     };
+    expect(a).toMatchObject({ registrationMethod: "oauth_hook" });
     expect(a.webhookCredential).toEqual({ id: expect.any(String), secret: expect.any(String) });
     expect(a.webhookCredential!.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(Buffer.from(a.webhookCredential!.secret, "base64url")).toHaveLength(32);
@@ -873,6 +874,7 @@ describe("unregistering a registered repository", () => {
         sponsorId: "moderator-id",
         visibility: "PUBLIC",
         githubWebhookId: 501,
+        registrationMethod: "oauth_hook",
       },
       webhookDeleted: true,
       alreadyUnregistered: false,
@@ -2066,6 +2068,7 @@ function createHarness(options: HarnessOptions = {}) {
       },
     },
     store: {
+      async findActiveAppRegistrationByGitHubRepositoryId() { return null; },
       async findRepositoryByGitHubId(githubRepositoryId) {
         duplicateLookupIds.push(githubRepositoryId);
         return options.existing ?? null;
@@ -2253,6 +2256,7 @@ function registeredRepository(): RegisteredRepository {
     sponsorId: "moderator-id",
     visibility: "PUBLIC",
     githubWebhookId: 501,
+    registrationMethod: "oauth_hook",
   };
 }
 
@@ -2265,6 +2269,7 @@ function registeredGitLabRepository(): RegisteredRepository {
     sponsorId: "moderator-id",
     visibility: "PUBLIC",
     githubWebhookId: null,
+    registrationMethod: "oauth_hook",
   };
 }
 
