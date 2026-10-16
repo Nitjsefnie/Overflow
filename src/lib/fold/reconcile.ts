@@ -2,6 +2,7 @@ import { reconciliationBudgetHoldUntil, type ReconciliationBudgetDependencies } 
 import type { GitHubIssueListOptions } from "@/lib/github/client";
 import { DEFAULT_GRAPHQL_BUDGET_RESERVE, type GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
+import { withTransientRequestRetry } from "@/lib/fold/reconciliation-retry";
 import { GitHubApiError, findGitHubRateLimitError, githubRateLimitNotBefore, isGitHubSubjectNotFoundError, MAX_ERROR_CAUSE_READS } from "@/lib/github/errors";
 import { GitHubResponseTooLargeError } from "@/lib/github/response-text";
 import { GitLabApiError } from "@/lib/gitlab/client";
@@ -149,7 +150,7 @@ export async function reconcileRepository(
   // Forward every dependency lazily: a spread would read each property (the
   // budget getter included) before the coordinated run reads it, and a getter
   // that throws there escapes the admission path that tolerates it.
-  const sanitizedGateway = sanitizeReconciliationGateway(() => dependencies.github);
+  const sanitizedGateway = sanitizeReconciliationGateway(() => withTransientRequestRetry(dependencies.github));
   const sanitizedDependencies = new Proxy(dependencies, {
     get: (target, property, receiver) => property === "github"
       ? sanitizedGateway
