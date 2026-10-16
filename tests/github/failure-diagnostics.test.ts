@@ -216,14 +216,17 @@ describe("GitHub failure diagnostics", () => {
     expect(JSON.stringify(error)).not.toContain(accessToken);
   });
 
-  it("keeps parse-failure class and HTTP context for a non-JSON 200", async () => {
+  it("keeps parse-failure diagnostics and request-id without a payload status for a non-JSON 200", async () => {
     const client = new GitHubGraphqlClient({ accessToken, fetch: async () => new Response(`not-json ${accessToken}`, {
       headers: { "x-github-request-id": "request-parse" },
     }) });
     const error = await client.query("query {}", {}).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(GitHubGraphqlRequestError);
+    expect(error).toMatchObject({ status: null, requestId: "request-parse" });
     const line = errorLogToken(new Error("Unable to reconcile repository.", { cause: error }));
     expect(line).toContain("SyntaxError:");
-    expect(line).toContain('status=200 x-github-request-id="request-parse"');
+    expect(line).toContain('x-github-request-id="request-parse"');
+    expect(line).not.toContain("status=");
     expect(line).not.toContain(accessToken);
   });
 
@@ -232,9 +235,11 @@ describe("GitHub failure diagnostics", () => {
       headers: { "x-github-request-id": "request-prefix" },
     }) });
     const failure = await client.query("query {}", {}).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ status: null });
     const line = errorLogToken(failure);
     expect(line).toContain("SyntaxError:");
-    expect(line).toContain('status=200 x-github-request-id="request-prefix"');
+    expect(line).toContain('x-github-request-id="request-prefix"');
+    expect(line).not.toContain("status=");
     expect(line).not.toContain(accessToken.slice(0, 8));
   });
 
