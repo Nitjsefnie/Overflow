@@ -274,7 +274,7 @@ describe("push-recalibration's push step, executed", () => {
   it.each(["", "false"])("uses SSH with the deploy key when simulation is '%s' and fails visibly on refusal", (simulation) => {
     seedRemote("");
     const fixture = sshFixture();
-    const env = { ...pushEnv(), ...fixture.env, SIMULATE_REFUSED_RAISE: simulation };
+    const env: Record<string, string> = { ...pushEnv(), ...fixture.env, SIMULATE_REFUSED_RAISE: simulation };
     delete env.PUSH_REMOTE_URL;
     // A missing SSH branch must fail locally too, without reaching GitHub.
     git(checkout, "config", `url.https://127.0.0.1:1/.insteadOf`, "https://x-access-token:");
@@ -310,7 +310,7 @@ describe("push-recalibration's push step, executed", () => {
   it.each(["true", "yes"])("deliberately uses the token path for simulation '%s' even with a deploy key", (simulation) => {
     seedRemote(rejectAlways);
     const fixture = sshFixture();
-    const env = { ...pushEnv(), ...fixture.env, SIMULATE_REFUSED_RAISE: simulation };
+    const env: Record<string, string> = { ...pushEnv(), ...fixture.env, SIMULATE_REFUSED_RAISE: simulation };
     delete env.PUSH_REMOTE_URL;
     // Exercise token URL selection without network access or PUSH_REMOTE_URL.
     git(checkout, "config", `url.${origin}.insteadOf`,
