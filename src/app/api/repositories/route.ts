@@ -37,6 +37,7 @@ import {
   unregisterRepository,
   RepositoryRegistrationError,
   registerRepository,
+  type RegisteredRepository,
   type RepositoryRegistrationDependencies,
   type RepositoryRegistrationInput,
   type RepositoryUnregisterInput,
@@ -126,6 +127,17 @@ const repositoryRateGate = createRouteRateGate({
   limits: resolveRouteRateLimit(process.env, EXPENSIVE_ROUTE_RATE_CLASSES.repositories),
 });
 
+function repositoryResponse(repository: RegisteredRepository) {
+  return {
+    id: repository.id,
+    githubRepositoryId: repository.githubRepositoryId,
+    ownerName: repository.ownerName,
+    sponsorId: repository.sponsorId,
+    visibility: repository.visibility,
+    githubWebhookId: repository.githubWebhookId,
+  };
+}
+
 export function createRepositoryPostHandler(dependencies: RepositoryRouteDependencies) {
   return async function postRepository(request: Request): Promise<Response> {
     const authorized = await authorizeRepositoryRequest(request, dependencies);
@@ -155,11 +167,15 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
         authorized.session,
         input,
       );
-      const { initialImportScheduled, claimPath, ...repository } = await registerRepository(
+      const registration = await registerRepository(
         registrationDependencies,
         input,
       );
-      return Response.json({ repository, initialImportScheduled, claimPath }, { status: 201 });
+      return Response.json({
+        repository: repositoryResponse(registration),
+        initialImportScheduled: registration.initialImportScheduled,
+        claimPath: registration.claimPath,
+      }, { status: 201 });
     } catch (error) {
       if (error instanceof RepositoryRegistrationError) {
         return registrationErrorResponse(error);
@@ -240,7 +256,12 @@ export function createRepositoryPatchHandler(dependencies: RepositoryRouteDepend
         input,
       );
       const change = await changeRepositoryCatalog(registrationDependencies, input);
-      return Response.json(change, { status: 200 });
+      return Response.json({
+        changed: change.changed,
+        versionNumber: change.versionNumber,
+        effectiveFrom: change.effectiveFrom,
+        repository: repositoryResponse(change.repository),
+      }, { status: 200 });
     } catch (error) {
       if (error instanceof RepositoryRegistrationError) {
         return registrationErrorResponse(error);
@@ -294,7 +315,11 @@ export function createRepositoryDeleteHandler(dependencies: RepositoryRouteDepen
         input,
       );
       const result = await unregisterRepository(registrationDependencies, input);
-      return Response.json(result, { status: 200 });
+      return Response.json({
+        repository: repositoryResponse(result.repository),
+        webhookDeleted: result.webhookDeleted,
+        alreadyUnregistered: result.alreadyUnregistered,
+      }, { status: 200 });
     } catch (error) {
       if (error instanceof RepositoryRegistrationError) {
         return registrationErrorResponse(error);

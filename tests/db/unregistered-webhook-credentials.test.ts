@@ -78,9 +78,13 @@ describe(`upgrading across ${backfillMigration}`, () => {
       // Migration 060 adds the nullable sanction-deactivation flag with no
       // backfill, so every row leaves the upgrade with the column at null.
       sanction_deactivated_at: null,
+      // Migration 066 defaults every existing registration to OAuth hooks.
+      registration_method: "oauth_hook",
     });
     for (const untouched of [moderated, active, legacyUnregistered]) {
-      expect(after.get(untouched)).toEqual({ ...before.get(untouched), sanction_deactivated_at: null });
+      expect(after.get(untouched)).toEqual({
+        ...before.get(untouched), sanction_deactivated_at: null, registration_method: "oauth_hook",
+      });
     }
     expect(before.get(moderated)!.webhook_credential_id).not.toBeNull();
     expect(before.get(active)!.webhook_credential_id).not.toBeNull();
