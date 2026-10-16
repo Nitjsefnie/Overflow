@@ -18,6 +18,47 @@ afterEach(() => {
 });
 
 describe("unregister repository control", () => {
+  it("renders the returned App access guidance and installation settings link after unregistration", async () => {
+    const message = `Remaining installation access (${crypto.randomUUID()})`;
+    const url = "https://github.com/settings/installations";
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      repository: { ownerName: "co-op/harbour" },
+      webhookDeleted: false,
+      alreadyUnregistered: false,
+      appAccessRemains: { message, url },
+    })));
+    render(<UnregisterRepositoryControl ownerName="co-op/harbour" />);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Unregister co-op/harbour" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm unregister" }));
+
+    const feedback = await screen.findByRole("status");
+    expect(feedback).toHaveTextContent(message);
+    const link = screen.getByRole("link");
+    expect(link).toBeVisible();
+    expect(link).toHaveAttribute("href", url);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["github", "gitlab"])("keeps %s hook unregistration feedback free of App guidance", async (provider) => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      repository: { ownerName: "co-op/harbour", provider },
+      webhookDeleted: true,
+      alreadyUnregistered: false,
+    })));
+    render(<UnregisterRepositoryControl ownerName="co-op/harbour" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Unregister co-op/harbour" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm unregister" }));
+
+    const feedback = await screen.findByRole("status");
+    expect(feedback).toHaveClass("feedback", "success");
+    expect(feedback.querySelector("a")).toBeNull();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
   it("renders an Unregister button naming the repository it would remove", () => {
     render(<UnregisterRepositoryControl ownerName="co-op/harbour" />);
 

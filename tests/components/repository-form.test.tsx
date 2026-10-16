@@ -231,6 +231,28 @@ describe("points stamp stylesheet", () => {
 });
 
 describe("repository registration form", () => {
+  it.each([
+    ["app", { ...initialValues, registrationMethod: "app" }],
+    ["oauth_hook", initialValues],
+  ])("submits the selected GitHub registration method %s", async (method, expected) => {
+    const { submitCalls } = stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }));
+    render(<RepositoryForm initialValues={initialValues} />);
+
+    const choice = screen.getByRole("combobox", { name: "GitHub registration method" });
+    expect(choice).toHaveValue("oauth_hook");
+    expect(within(choice).getByRole("option", { name: "GitHub App" })).toBeInTheDocument();
+    fireEvent.change(choice, { target: { value: "app" } });
+    if (method === "oauth_hook") {
+      fireEvent.change(choice, { target: { value: "oauth_hook" } });
+    }
+    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+
+    await screen.findByRole("status");
+    expect(submitCalls).toHaveLength(1);
+    expect(submitCalls[0]!.init.method).toBe("POST");
+    expect(JSON.parse(String(submitCalls[0]!.init.body))).toEqual(expected);
+  });
+
   describe.each([
     ["EVIDENCE_FOUND", "success", ""],
     ["NO_EVIDENCE_FOUND", "warning", " No workflow assigning the author of an issue comment was found in this repository. Without such a workflow, contributors cannot claim issues themselves by commenting; someone with write access must assign them before any credit is reserved. Add a workflow triggered by issue_comment that assigns the commenter; Overflow's own .github/workflows/claim.yml is a working example."],
@@ -737,7 +759,9 @@ describe("repository form forge selection", () => {
       () => Response.json({ identities: [githubIdentity, gitlabIdentity] }),
     );
     render(<RepositoryForm />);
+    fireEvent.change(screen.getByRole("combobox", { name: "GitHub registration method" }), { target: { value: "app" } });
     fireEvent.change(screen.getByLabelText("Forge"), { target: { value: "gitlab" } });
+    expect(screen.queryByRole("combobox", { name: "GitHub registration method" })).not.toBeInTheDocument();
     const instance = await waitFor(() => {
       const select = screen.getByLabelText("Instance") as HTMLSelectElement;
       expect(within(select).getByRole("option", { name: "https://gitlab.example (gl-user)" })).toBeInTheDocument();
@@ -779,6 +803,7 @@ describe("repository form forge selection", () => {
     stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }));
     render(<RepositoryForm variant="catalog-change" />);
 
+    expect(screen.queryByRole("combobox", { name: "GitHub registration method" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Forge")).toBeNull();
     expect(screen.getByLabelText("GitHub repository")).toBeInTheDocument();
   });

@@ -13,6 +13,7 @@ export default async function NewRepositoryPage() {
       <RepositoryForm
         canAdministerGitHubWebhooks={session.user.canAdministerWebhooks}
         reauthorizeAction={signInForRepositoryRegistration}
+        appSignInAction={confirmSignInForApiToken}
       />
       <RepositoryForm variant="catalog-change" />
       <ApiTokenPanel
