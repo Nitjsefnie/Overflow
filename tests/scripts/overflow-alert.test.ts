@@ -200,6 +200,8 @@ const curlShim = [
   `printf '%s\\n' "$0" > "$OVERFLOW_TEST_CLIENT"`,
   `printf '%s\\n' "$@" > "$OVERFLOW_TEST_CURL_ARGV"`,
   `cat > "$OVERFLOW_TEST_MAIL"`,
+  // Match exim's DATA limit in octets, excluding CRLF, without a socket.
+  `LC_ALL=C awk '{ sub(/\\r$/, ""); if (length($0) > 998) exit 8 }' "$OVERFLOW_TEST_MAIL" || exit 8`,
   `if [ "\${OVERFLOW_TEST_NO_ID:-0}" -eq 0 ]; then`,
   `  echo '* Connected to 127.0.0.1 port 25' >&2`,
   `  echo '> EHLO ${fqdn}' >&2`,
@@ -302,8 +304,7 @@ const journalctlShim = [
   'if [ "${FAKE_JOURNALCTL_RC:-0}" -ne 0 ]; then',
   '  exit "$FAKE_JOURNALCTL_RC"',
   "fi",
-  "echo journal-stub-line-1",
-  "echo journal-stub-line-2",
+  'cat "$OVERFLOW_TEST_JOURNAL"',
   "",
 ].join("\n");
 
@@ -356,6 +357,9 @@ function runAlert(
     args?: string[];
     curlStatus?: number;
     journalStatus?: number;
+    journal?: string;
+    /** Override the encoder only to exercise failure and wrapping behavior. */
+    base64Shim?: string;
     /**
      * The throttle state directory to hand the script through
      * OVERFLOW_ALERT_STATE_DIR. Absent: a scratch directory inside this run's
@@ -443,6 +447,10 @@ function runAlert(
     shim("date", dateShim);
     shim("journalctl", journalctlShim);
     shim("hostname", hostnameShim);
+    if (options.base64Shim) shim("base64", options.base64Shim);
+
+    const journalPath = join(directory, "journal");
+    writeFileSync(journalPath, options.journal ?? "journal-stub-line-1\njournal-stub-line-2\n");
 
     const recipientFile = join(directory, "alert-recipient");
     if (options.recipient !== undefined) writeFileSync(recipientFile, options.recipient);
@@ -516,6 +524,7 @@ function runAlert(
       OVERFLOW_TEST_LOG_APPEND: logAppendPath,
       OVERFLOW_TEST_LOG_APPENDED: join(directory, "mainlog-appended"),
       OVERFLOW_TEST_MAIL: mailPath,
+      OVERFLOW_TEST_JOURNAL: journalPath,
       OVERFLOW_TEST_MESSAGE_ID: messageId,
       OVERFLOW_TEST_NO_ID: options.noId ? "1" : "0",
       OVERFLOW_TEST_SLEEP_CALLS: sleepCallsPath,
@@ -649,6 +658,49 @@ function seedState(stateDir: string, unit: string, timestamp: number): void {
 
 /** The valid single-line recipient every send-path test starts from. */
 const validRecipient = `${recipientAddress}\n`;
+
+/** Check the captured SMTP payload before decoding; Buffer alone accepts malformed base64. */
+function decodeMail(mail: string): Buffer {
+  expect(mail).not.toMatch(/(?<!\r)\n|\r(?!\n)/);
+  expect(mail.endsWith("\r\n")).toBe(true);
+  for (const line of mail.split("\r\n")) {
+    expect(Buffer.byteLength(line)).toBeLessThanOrEqual(998);
+  }
+  const parts = mail.split("\r\n\r\n");
+  expect(parts).toHaveLength(2);
+  const [headers, encoded] = parts;
+  expect(headers.split("\r\n")).toEqual([
+    `From: overflow-alert@${fqdn}`,
+    `To: ${recipientAddress}`,
+    `Subject: [overflow] overflow.service failed on ${fqdn}`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+  ]);
+  const lines = encoded.split("\r\n").slice(0, -1);
+  expect(lines.length).toBeGreaterThan(0);
+  for (const line of lines) {
+    expect(Buffer.byteLength(line)).toBeLessThanOrEqual(76);
+    expect(line).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+  }
+  const joined = lines.join("");
+  const decoded = Buffer.from(joined, "base64");
+  expect(decoded.toString("base64")).toBe(joined);
+  return decoded;
+}
+
+function expectJournal(mail: string, journal: string): void {
+  const body = decodeMail(mail);
+  const intro = body.toString("utf8").match(
+    /^The systemd unit overflow\.service failed on host alert\.test\.example at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\.\r\n\r\nLast journal entries for the failed unit \(current boot\):\r\n/,
+  );
+  expect(intro).not.toBeNull();
+  // Compare bytes, including every blank line and trailing space. Only the
+  // text's line endings change to MIME's canonical CRLF representation.
+  expect(body.subarray(Buffer.byteLength(intro![0]))).toEqual(
+    Buffer.from(journal.replace(/\r?\n/g, "\r\n")),
+  );
+}
 
 /**
  * The verdict token the run's reason names, or `undefined` when it names none.
@@ -819,28 +871,126 @@ describe("overflow-alert.sh send stage", () => {
     const run = runAlert({ recipient: validRecipient });
 
     expect(run.status).toBe(0);
-    const mail = run.mail;
-    expect(mail).toContain(`From: overflow-alert@${fqdn}\n`);
-    expect(mail).toContain(`To: ${recipientAddress}\n`);
-    expect(mail).toContain(`Subject: [overflow] overflow.service failed on ${fqdn}\n`);
-    expect(mail).toContain(`The systemd unit overflow.service failed on host ${fqdn} at `);
-    expect(mail).toContain("journal-stub-line-1");
-    expect(mail).toContain("journal-stub-line-2");
+    expectJournal(run.mail, "journal-stub-line-1\njournal-stub-line-2\n");
   });
 
   it("still mails, with a fallback note, when journalctl fails", () => {
     const run = runAlert({ recipient: validRecipient, journalStatus: 1 });
 
     expect(run.status).toBe(0);
-    const mail = run.mail;
-    expect(mail).toContain("(reading the journal failed)");
-    expect(mail).not.toContain("journal-stub-line-1");
+    expectJournal(run.mail, "(reading the journal failed)\n");
   });
 
   it("propagates the submission failure as its own exit status", () => {
     const run = runAlert({ recipient: validRecipient, curlStatus: 7 });
 
     expect(run.status).toBe(7);
+  });
+});
+
+describe("overflow-alert.sh MIME body", () => {
+  it.each([997, 998, 999, 1123, 1131, 1200, 8192, 32768])(
+    "preserves a %i-octet journal line within SMTP's wire limit",
+    (length) => {
+      const journal = `${"x".repeat(length)}\n`;
+      const run = runAlert({ recipient: validRecipient, journal });
+
+      expect(run.status).toBe(0);
+      expectJournal(run.mail, journal);
+    },
+  );
+
+  it.each([
+    [998, "é".repeat(499)],
+    [999, "é".repeat(499) + "x"],
+    [999, "界".repeat(333)],
+    [1200, "🦊".repeat(300)],
+  ])("preserves multibyte UTF-8 across the %i-octet boundary", (octets, line) => {
+    expect(Buffer.byteLength(line)).toBe(octets);
+    expect(line.length).toBeLessThan(998);
+    const journal = `${line}\n`;
+    const run = runAlert({ recipient: validRecipient, journal });
+
+    expect(run.status).toBe(0);
+    expectJournal(run.mail, journal);
+  });
+
+  it.each(["", "\n\n", ".\n..leading dots\nFrom: journal text\nspaces  \t\nback\\slash\n\n", "already CRLF\r\n\r\n"])(
+    "preserves blank lines, whitespace and SMTP-looking journal text (%j)",
+    (journal) => {
+      const run = runAlert({ recipient: validRecipient, journal });
+
+      expect(run.status).toBe(0);
+      expectJournal(run.mail, journal);
+    },
+  );
+
+  it.each([
+    ["unwrapped", "/usr/bin/base64 | tr -d '\\n'"],
+    ["64-column", "/usr/bin/base64 | tr -d '\\n' | fold -w 64"],
+    ["76-column", "/usr/bin/base64 | tr -d '\\n' | fold -w 76"],
+  ])("bounds %s encoder output without changing its decoded bytes", (_name, command) => {
+    const journal = `${"long journal entry 界🦊 ".repeat(100)}\n`;
+    const run = runAlert({ recipient: validRecipient, journal, base64Shim: `#!/bin/sh\n${command}\n` });
+
+    expect(run.status).toBe(0);
+    expectJournal(run.mail, journal);
+  });
+
+  it.each([1, 2, 127])("does not submit or throttle an encoder failure (exit %i)", (status) => {
+    const stateDir = makeStateDir();
+    const failed = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      base64Shim: `#!/bin/sh\ncat >/dev/null\nprintf 'cGFydGlhbA==\\n'\nexit ${status}\n`,
+    });
+
+    expect(failed.status).toBe(1);
+    expect(failed.sent).toBe(false);
+    expect(failed.stderr).toContain("could not encode the alert body");
+    expect(existsSync(join(stateDir, "overflow.service"))).toBe(false);
+    const retry = runAlert({ recipient: validRecipient, stateDir });
+    expect(retry.status).toBe(0);
+    expect(retry.sent).toBe(true);
+  });
+
+  it("retries a rejected long-line alert and throttles only after confirmed delivery", () => {
+    const stateDir = makeStateDir();
+    const journal = `${"pg_dump: LOCK TABLE ".repeat(100)}\n`;
+    const options = { recipient: validRecipient, stateDir, journal };
+    const rejected = runAlert({ ...options, curlStatus: 8 });
+
+    expect(rejected.status).toBe(8);
+    expect(rejected.sent).toBe(true);
+    expectJournal(rejected.mail, journal);
+    expect(existsSync(join(stateDir, "overflow.service"))).toBe(false);
+
+    const retry = runAlert(options);
+    expect(retry.status).toBe(0);
+    expect(retry.sent).toBe(true);
+    expectJournal(retry.mail, journal);
+    const recorded = readFileSync(join(stateDir, "overflow.service"), "utf8");
+    expect(recorded).toMatch(/^\d+\n$/);
+
+    const suppressed = runAlert(options);
+    expect(suppressed.status).toBe(0);
+    expect(suppressed.sent).toBe(false);
+    expect(readFileSync(join(stateDir, "overflow.service"), "utf8")).toBe(recorded);
+  });
+
+  it("does not refresh an expired throttle record when encoding fails", () => {
+    const stateDir = makeStateDir();
+    const expired = Math.floor(Date.now() / 1000) - 2000;
+    seedState(stateDir, "overflow.service", expired);
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      base64Shim: "#!/bin/sh\ncat >/dev/null\nexit 1\n",
+    });
+
+    expect(run.status).toBe(1);
+    expect(run.sent).toBe(false);
+    expect(readFileSync(join(stateDir, "overflow.service"), "utf8")).toBe(`${expired}\n`);
   });
 });
 
