@@ -1,5 +1,5 @@
 import { createVerify, generateKeyPairSync } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAppRegistration } from "@/lib/github/app-registration";
 import { GitHubApiError } from "@/lib/github/errors";
 
@@ -17,6 +17,17 @@ function setup(response: () => Response | Promise<Response>, apiUrl?: string) {
 }
 
 describe("registration App installation lookup", () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it("uses the supplied App config despite conflicting ambient App ids", async () => {
+    vi.stubEnv("GITHUB_APP_ID", "909");
+    vi.stubEnv("GITHUB_REGISTRATION_APP_ID", "808");
+    const { registration, requests } = setup(() => Response.json({ id: 123 }));
+    await expect(registration.lookupInstallation("octo/overflow")).resolves.toEqual({ installationId: 123 });
+    const jwt = requests[0]!.headers.get("authorization")!.slice("Bearer ".length);
+    expect(JSON.parse(Buffer.from(jwt.split(".")[1]!, "base64url").toString())).toMatchObject({ iss: "202" });
+  });
+
   it("returns the installation id using a verifiable JWT for the supplied App without minting a token", async () => {
     const { registration, requests } = setup(() => Response.json({ id: 123 }));
     await expect(registration.lookupInstallation("octo/overflow")).resolves.toEqual({ installationId: 123 });
