@@ -112,16 +112,23 @@ describe("repository App route wiring", () => {
     expect(h.save).not.toHaveBeenCalled();
   });
 
-  it.each(["app", "oauth_hook"] as const)("unregisters a %s row with its method-specific HTTP answer", async (registrationMethod) => {
+  it.each([
+    { label: "App", registrationMethod: "app", githubWebhookId: null },
+    { label: "App with a stale webhook id", registrationMethod: "app", githubWebhookId: 501 },
+    { label: "OAuth hook", registrationMethod: "oauth_hook", githubWebhookId: 501 },
+  ] as const)("unregisters an $label row with its method-specific HTTP answer", async ({ registrationMethod, githubWebhookId }) => {
     const h = await wiring();
     if (registrationMethod === "oauth_hook") vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
-    const stored = { ...repository, registrationMethod, githubWebhookId: registrationMethod === "app" ? null : 501 };
+    const stored = { ...repository, registrationMethod, githubWebhookId };
     vi.spyOn(h.proto, "findRepositoryRegistrationStateByOwnerName").mockResolvedValue({ repository: stored, unregisteredAt: null });
     const deactivate = vi.spyOn(h.proto, "unregisterRepository").mockResolvedValue({ kind: "UNREGISTERED", repository: stored });
     const { GitHubGateway } = await import("@/lib/github/client");
     const deleteWebhook = vi.spyOn(GitHubGateway.prototype, "deleteWebhook").mockResolvedValue(undefined);
     const response = await h.DELETE(request({ repositoryUrl: "octo/overflow" }, "DELETE"));
     expect(response.status).toBe(200);
+    if (registrationMethod === "app") expect(deleteWebhook).not.toHaveBeenCalled();
+    else expect(deleteWebhook).toHaveBeenCalledExactlyOnceWith({ owner: "octo", name: "overflow" }, 501);
+    expect(h.calls).toEqual([]);
     expect(await response.text()).toBe(JSON.stringify({ repository: { id: "repository-id", githubRepositoryId: 42,
       ownerName: "octo/overflow", sponsorId: "sponsor-id", visibility: "PUBLIC", githubWebhookId: stored.githubWebhookId },
     webhookDeleted: registrationMethod === "oauth_hook", alreadyUnregistered: false,
@@ -130,8 +137,5 @@ describe("repository App route wiring", () => {
       url: "https://github.com/settings/installations",
     } } : {}) }));
     expect(deactivate).toHaveBeenCalledExactlyOnceWith({ ownerName: "octo/overflow", sponsorId: "sponsor-id", provider: "github" });
-    if (registrationMethod === "app") expect(deleteWebhook).not.toHaveBeenCalled();
-    else expect(deleteWebhook).toHaveBeenCalledExactlyOnceWith({ owner: "octo", name: "overflow" }, 501);
-    expect(h.calls).toEqual([]);
   });
 });

@@ -68,7 +68,7 @@ export function createLabelsGetHandler(dependencies: LabelsRouteDependencies) {
     // Issue 327: a 401 is GitHub rejecting the authorization Overflow holds —
     // the token expired or was revoked, so retrying cannot fix it. Same
     // credential vocabulary as the registration endpoint's githubSetupError
-    // (register.ts); the message names the one remedy that refreshes the token.
+    // (github-registration-flow.ts); the message names the one remedy that refreshes the token.
     if (error instanceof GitHubApiError && classifyGitHubApiFailure(error) === "CREDENTIALS") {
       return errorResponse(401, "GITHUB_CREDENTIALS", "GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to read the repository labels. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry.");
     }
@@ -76,7 +76,7 @@ export function createLabelsGetHandler(dependencies: LabelsRouteDependencies) {
     // or withholding the labels read — GitHub answers 404 rather than 403 when
     // it will not reveal a resource, and a bare 403 cannot separate a missing
     // application authorization from a secondary rate limit. Same access
-    // vocabulary as the registration endpoint's githubSetupError (register.ts);
+    // vocabulary as the registration endpoint's githubSetupError (github-registration-flow.ts);
     // a 403 that does carry rate-limit evidence falls through to the
     // rate-limit arm below.
     if (error instanceof GitHubApiError && classifyGitHubApiFailure(error) === "ACCESS") {
