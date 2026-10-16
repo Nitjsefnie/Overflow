@@ -150,6 +150,7 @@ export class GitHubGraphqlClient {
     const controller = new AbortController();
     let timedOut = false;
     let response: Response | undefined;
+    let readingBody = false;
     const timeout = setTimeout(() => {
       timedOut = true;
       controller.abort();
@@ -180,6 +181,7 @@ export class GitHubGraphqlClient {
         throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body, response.headers, this.accessToken);
       }
 
+      readingBody = true;
       const body = await boundedResponseText(response, MAX_SUCCESS_BODY_BYTES, controller.signal);
       if (body === null) throw new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES);
       let payload: { data?: TData; errors?: unknown };
@@ -189,6 +191,7 @@ export class GitHubGraphqlClient {
         // Engine excerpts can truncate credentials before redaction can match them.
         throw new SyntaxError("Invalid JSON response.");
       }
+      readingBody = false;
       if (payload?.data === undefined || payload.errors !== undefined) {
         const { rateLimited, retryAfterSeconds } = classifyGitHubGraphqlRateLimit(payload?.errors, response.headers);
         const message = payload?.data === undefined && payload?.errors === undefined
@@ -229,9 +232,12 @@ export class GitHubGraphqlClient {
       }
 
       const description = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      // A broken stream or invalid JSON behind successful headers is a body
+      // failure, not a payload verdict. Keep it status-less so it can retry;
+      // parsed GraphQL errors throw directly with status 200 and stay definitive.
       throw new GitHubGraphqlRequestError(
         `GitHub GraphQL request failed. ${boundedErrorText(description, this.accessToken)}`,
-        false, null, response?.status ?? null, response?.headers.get("x-github-request-id") ?? null, this.accessToken,
+        false, null, readingBody ? null : (response?.status ?? null), response?.headers.get("x-github-request-id") ?? null, this.accessToken,
         response?.headers,
       );
     } finally {

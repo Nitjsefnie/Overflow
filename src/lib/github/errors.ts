@@ -75,8 +75,8 @@ export function isGitHubSubjectNotFoundError(error: unknown): boolean {
 
 // Only transport failures and server refusals can recover within the same run.
 // GraphQL payload errors share the network wrapper's prefix but carry status
-// 200; those are definitive failures. Rate limits keep the run-level cooldown
-// path rather than spending more requests during the same run.
+// 200; body-phase transport failures carry null instead. Payload verdicts stay
+// definitive, and rate limits keep the run-level cooldown path.
 export function isTransientGitHubRequestError(error: unknown): boolean {
   if (!(error instanceof Error) || isGitHubRateLimitError(error)) return false;
   if (error instanceof GitHubApiError) return error.status >= 500;
