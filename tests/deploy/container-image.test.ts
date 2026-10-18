@@ -15,22 +15,16 @@ const dockerignore = readFileSync(
   "utf8",
 );
 
-/**
- * The base image both FROM lines build on, pinned by digest (issue 461): the
- * tag stays for readability, the digest is what Docker actually pulls, so the
- * same source always resolves the same base bytes. One constant here pins
- * both the FROM lines and the `base.digest` label below — they are a shared
- * literal, and a digest that drifts between them names a different image.
- */
-const NODE_BASE_TAG = "node:24.21.0-bookworm-slim";
-const NODE_BASE_DIGEST =
-  "sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6";
-
 describe("Dockerfile", () => {
   it("pins the deps and runtime stages to the bookworm-slim base image by digest", () => {
-    const pinnedFrom = `${NODE_BASE_TAG}@${NODE_BASE_DIGEST}`;
-    const occurrences = dockerfile.split(pinnedFrom).length - 1;
-    expect(occurrences).toBeGreaterThanOrEqual(2);
+    const references = [...dockerfile.matchAll(/^FROM\s+(node:\d+\.\d+\.\d+-bookworm-slim\S*)/gm)]
+      .map((match) => match[1]);
+    expect(references.length, "the deps and runtime node FROM lines").toBeGreaterThanOrEqual(2);
+    for (const reference of references) {
+      expect(reference, "each node FROM reference must be digest-pinned")
+        .toMatch(/^node:\d+\.\d+\.\d+-bookworm-slim@sha256:[a-fA-F0-9]{64}$/);
+    }
+    expect(new Set(references).size, "all node stages must use the same tag and digest").toBe(1);
   });
 
   it("bakes no secret into an ENV or ARG line", () => {
@@ -197,8 +191,13 @@ describe("image provenance (issue 461)", () => {
     expect(runtime, "the runtime FROM line").toBeGreaterThanOrEqual(0);
     expect(arg, "ARG SOURCE_SHA in the runtime stage").toBeGreaterThan(runtime);
     expect(label, "the revision LABEL using $SOURCE_SHA").toBeGreaterThan(arg);
-    expect(dockerfile).toContain(`org.opencontainers.image.base.name="docker.io/library/${NODE_BASE_TAG}"`);
-    expect(dockerfile).toContain(`org.opencontainers.image.base.digest="${NODE_BASE_DIGEST}"`);
+    const runtimeStage = dockerfile.split("\n").slice(runtime).join("\n").split(/\nFROM\s/)[0];
+    const runtimeFrom = /^FROM\s+node:\d+\.\d+\.\d+-bookworm-slim@(sha256:[a-fA-F0-9]{64})\s+AS\s+runtime\s*$/m.exec(runtimeStage);
+    expect(runtimeFrom, "the runtime stage's digest-pinned node FROM line").not.toBeNull();
+    expect(runtimeStage).toMatch(/org\.opencontainers\.image\.base\.name="docker\.io\/library\/node:\d+\.\d+\.\d+-bookworm-slim"/);
+    const baseDigest = /org\.opencontainers\.image\.base\.digest="(sha256:[a-fA-F0-9]{64})"/.exec(runtimeStage);
+    expect(baseDigest, "the runtime stage's base.digest label").not.toBeNull();
+    expect(baseDigest![1], "the base.digest label must match the runtime FROM digest").toBe(runtimeFrom![1]);
   });
 
   it("refuses a build invoked without the SOURCE_SHA provenance, naming the build arg", () => {
