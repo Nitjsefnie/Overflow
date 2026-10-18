@@ -194,7 +194,8 @@ describe("image provenance (issue 461)", () => {
     const runtimeStage = dockerfile.split("\n").slice(runtime).join("\n").split(/\nFROM\s/)[0];
     const runtimeFrom = /^FROM\s+node:\d+\.\d+\.\d+-bookworm-slim@(sha256:[a-fA-F0-9]{64})\s+AS\s+runtime\s*$/m.exec(runtimeStage);
     expect(runtimeFrom, "the runtime stage's digest-pinned node FROM line").not.toBeNull();
-    expect(runtimeStage).toMatch(/org\.opencontainers\.image\.base\.name="docker\.io\/library\/node:\d+\.\d+\.\d+-bookworm-slim"/);
+    const runtimeTag = runtimeFrom![0].split(/\s+/)[1].split("@")[0];
+    expect(runtimeStage).toContain(`org.opencontainers.image.base.name="docker.io/library/${runtimeTag}"`);
     const baseDigest = /org\.opencontainers\.image\.base\.digest="(sha256:[a-fA-F0-9]{64})"/.exec(runtimeStage);
     expect(baseDigest, "the runtime stage's base.digest label").not.toBeNull();
     expect(baseDigest![1], "the base.digest label must match the runtime FROM digest").toBe(runtimeFrom![1]);
