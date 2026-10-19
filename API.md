@@ -577,7 +577,7 @@ origin of `APP_URL`; a declared `Content-Type` must be `application/json`
 `POST /api/account/export` needs no request body. Success is `200` with a
 download named `overflow-account-export.json`, `Content-Type:
 application/json; charset=utf-8`, and `Cache-Control: no-store`. Its JSON
-document has `formatVersion`, `exportedAt`, `account`, `apiToken`,
+document has `formatVersion` (value `2`), `exportedAt`, `account`, `apiToken`,
 `forgeIdentities`, `sponsoredRepositories`, and the account's ledger,
 moderation and reconciliation sections. Stored credentials appear only as
 presence booleans; token hashes and webhook secrets are omitted. The

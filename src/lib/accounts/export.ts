@@ -91,7 +91,7 @@ export type AccountExport = {
  * version — consumers read it as a present-or-absent key — so the sections
  * this document gains do not bump it.
  */
-export const ACCOUNT_EXPORT_FORMAT_VERSION = 1 as const;
+export const ACCOUNT_EXPORT_FORMAT_VERSION = 2 as const;
 
 /** The shared representation used by the operator CLI and member download. */
 export function formatAccountExport(document: AccountExport): string {

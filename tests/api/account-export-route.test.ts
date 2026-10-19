@@ -25,7 +25,7 @@ vi.mock("@/lib/accounts/export", async (importOriginal) => ({
 useTrustedOrigin();
 const requests = guardedRequests("/api/account/export");
 const sql = {} as SqlClient;
-const document = { formatVersion: 1, account: { githubLogin: "alice" } } as AccountExport;
+const document = { formatVersion: 2, account: { githubLogin: "alice" } } as AccountExport;
 
 afterEach(() => {
   vi.restoreAllMocks();

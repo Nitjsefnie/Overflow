@@ -449,7 +449,7 @@ describe("account deletion as pseudonymisation", () => {
     const document = await exportAccount(sql, contributor.githubUserId);
     expect(document).not.toBeNull();
     const exported = document!;
-    expect(exported.formatVersion).toBe(1);
+    expect(exported.formatVersion).toBe(2);
     expect(new Date(exported.exportedAt).toISOString()).toEqual(exported.exportedAt);
     expect(exported.account.githubLogin).toBe(`contributor-${contributor.githubUserId}`);
     expect(exported.account.githubUserId).toBe(contributor.githubUserId);
