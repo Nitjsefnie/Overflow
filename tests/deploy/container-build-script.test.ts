@@ -40,10 +40,18 @@ describe("scripts/container-build.sh", () => {
     expect(script).toContain('image="${1:-overflow-app}"');
   });
 
-  it("verifies the revision label landed, comparing against git rev-parse HEAD, and refuses an unlabelled image", () => {
-    expect(script).toContain('index .Config.Labels "org.opencontainers.image.revision"');
-    expect(script).toContain('if [ "$landed" != "$source_sha" ]');
-    expect(script).toContain("do not deploy it");
+  it.each(["revision", "base.name", "base.digest"].flatMap((key) =>
+    ["wrong", "missing"].map((value) => ({ key: `org.opencontainers.image.${key}`, value })),
+  ))("refuses a $value $key label on the built image", async ({ key, value }) => {
+    await withBuildFixture(async (fixture) => {
+      await writeFile(path.join(fixture.shimDir, "bad-label"), key);
+      await writeFile(path.join(fixture.shimDir, "bad-value"), value === "missing" ? "" : "wrong");
+      const result = runBuild(fixture);
+      expect(result.status, result.stdout).not.toBe(0);
+      expect(result.stderr).toContain(key);
+      expect(result.stderr).toContain("do not deploy it");
+      expect(result.stdout).not.toContain("Provenance record");
+    });
   });
 
   it("prints the immutable provenance record rollback selects", () => {
@@ -62,7 +70,8 @@ const HERMETIC_GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: 
 
 // Stands in for docker: `build` records its argv, saves the context it was
 // handed on stdin and the SOURCE_SHA build arg; `image inspect` answers the
-// revision label with that recorded SHA, and plausible values for the rest.
+// labels with the values recorded from the build, and plausible values for
+// the rest. Tests can override one landed label to exercise verification.
 const DOCKER_SHIM = `#!/usr/bin/env bash
 set -eu
 case "$1" in
@@ -71,13 +80,23 @@ case "$1" in
     cat > "$SHIM_DIR/context.tar"
     for arg in "$@"; do
       case "$arg" in SOURCE_SHA=*) printf '%s' "\${arg#SOURCE_SHA=}" > "$SHIM_DIR/source-sha" ;; esac
+      case "$arg" in
+        org.opencontainers.image.base.name=*) printf '%s' "\${arg#*=}" > "$SHIM_DIR/base-name" ;;
+        org.opencontainers.image.base.digest=*) printf '%s' "\${arg#*=}" > "$SHIM_DIR/base-digest" ;;
+      esac
     done
     ;;
   image)
+    if [ -f "$SHIM_DIR/bad-label" ] && [[ "$4" == *"$(cat "$SHIM_DIR/bad-label")"* ]]; then
+      cat "$SHIM_DIR/bad-value"
+      exit 0
+    fi
     case "$4" in
       *org.opencontainers.image.revision*) cat "$SHIM_DIR/source-sha" ;;
+      *org.opencontainers.image.base.name*) cat "$SHIM_DIR/base-name" ;;
+      *org.opencontainers.image.base.digest*) cat "$SHIM_DIR/base-digest" ;;
       '{{.Created}}') echo 2026-01-01T00:00:00Z ;;
-      '{{.Id}}') echo sha256:0000000000000000000000000000000000000000000000000000000000000000 ;;
+      '{{.Id}}') printf 'sha256:%064d\\n' 0 ;;
       '{{json .RepoDigests}}') echo '[]' ;;
       *) echo >&2 "docker shim: unexpected inspect format $4"; exit 2 ;;
     esac
@@ -102,6 +121,7 @@ const FIXTURE_GITIGNORE = [
   "!scripts/",
   "scripts/*",
   "!scripts/container-build.sh",
+  "!scripts/container-base-labels.ts",
   "!src/",
   "src/*",
   "!src/app/",
@@ -153,12 +173,13 @@ async function makeBuildFixture(dir: string): Promise<BuildFixture> {
   };
   git("init", "-q", "-b", "main");
   await writeFile(path.join(repo, ".gitignore"), FIXTURE_GITIGNORE);
-  await writeFile(path.join(repo, "Dockerfile"), "FROM scratch\nCOPY . /app\n");
+  await copyFile(new URL("../../Dockerfile", import.meta.url), path.join(repo, "Dockerfile"));
   await copyFile(scriptPath, path.join(repo, "scripts", "container-build.sh"));
+  await copyFile(new URL("../../scripts/container-base-labels.ts", import.meta.url), path.join(repo, "scripts", "container-base-labels.ts"));
   await chmod(path.join(repo, "scripts", "container-build.sh"), 0o755);
   await mkdir(path.join(repo, "src", "app", "zz-probe"), { recursive: true });
   await writeFile(path.join(repo, PAGE), PAGE_AT_ROOT);
-  git("add", ".gitignore", "Dockerfile", "scripts/container-build.sh", PAGE);
+  git("add", ".gitignore", "Dockerfile", "scripts/container-build.sh", "scripts/container-base-labels.ts", PAGE);
   git("commit", "-q", "-m", "fixture root");
   await writeFile(path.join(repo, PAGE), PAGE_AT_HEAD);
   git("add", PAGE);

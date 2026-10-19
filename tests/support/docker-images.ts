@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { writeSync } from "node:fs";
+import { readFileSync, writeSync } from "node:fs";
+import path from "node:path";
+import { containerBaseLabels } from "../../scripts/container-base-labels.ts";
 
 export type CommandRunner = (
   command: string,
@@ -32,11 +34,15 @@ export function createDockerImageSuite(
   }
 
   function withBuiltImage<T>(baseName: string, repoRoot: string, sourceSha: string, body: (tag: string) => T): T {
+    const { baseName: baseImageName, baseDigest } = containerBaseLabels(readFileSync(path.join(repoRoot, "Dockerfile"), "utf8"));
     const tag = `${baseName}:${runId}`;
     let failed = false;
     let primaryError: unknown;
     try {
-      run("docker", ["build", "--build-arg", `SOURCE_SHA=${sourceSha}`, "--label", `overflow.test-run=${runId}`, "-t", tag, "."], {
+      run("docker", ["build", "--build-arg", `SOURCE_SHA=${sourceSha}`,
+        "--label", `org.opencontainers.image.base.name=${baseImageName}`,
+        "--label", `org.opencontainers.image.base.digest=${baseDigest}`,
+        "--label", `overflow.test-run=${runId}`, "-t", tag, "."], {
         cwd: repoRoot,
         stdio: ["ignore", "pipe", "pipe"],
       });

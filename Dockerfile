@@ -46,15 +46,14 @@ FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea41952009
 # SHA it wants is `git rev-parse HEAD` of a clean tree
 # (scripts/container-build.sh does both). A bare `docker build` without
 # provenance fails here, loudly, instead of producing exactly the unlabelled
-# image the issue reports.
+# image the issue reports. The build script derives the base image labels
+# from the FROM references at build time (issue 1251).
 ARG SOURCE_SHA
 RUN if [ -z "$SOURCE_SHA" ]; then \
       echo >&2 "ERROR: the SOURCE_SHA build arg is empty — an image without it carries no source revision. Build with scripts/container-build.sh, or pass --build-arg SOURCE_SHA=<git rev-parse HEAD of a clean tree>."; \
       exit 1; \
     fi
-LABEL org.opencontainers.image.revision=$SOURCE_SHA \
-      org.opencontainers.image.base.name="docker.io/library/node:24.21.0-bookworm-slim" \
-      org.opencontainers.image.base.digest="sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6"
+LABEL org.opencontainers.image.revision=$SOURCE_SHA
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
