@@ -30,7 +30,7 @@ beforeEach(() => {
   vi.mocked(getSql).mockReset().mockReturnValue(sqlStub as unknown as ReturnType<typeof getSql>);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 const apiToken = `ovf_${"recognisable-api-credential".padEnd(43, "_")}`;
 const tokenAccount = {
@@ -57,6 +57,50 @@ function authorizedRequest(body: unknown) {
 }
 
 describe("repository route internal failures", () => {
+  it("keeps an exported POST scope-probe transport rejection upstream and logs the original error", async () => {
+    readSession.mockResolvedValue({ user: { id: "member-id", role: "MEMBER" } });
+    vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken").mockResolvedValue("synthetic-identity-token");
+    vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState").mockResolvedValue("ACTIVE");
+    vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+    const error = new TypeError("fetch failed");
+    const fetchGitHub = vi.fn<typeof fetch>().mockRejectedValue(error);
+    vi.stubGlobal("fetch", fetchGitHub);
+
+    const response = await POST(jsonRequest(validInput()));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: {
+      code: "UPSTREAM_FAILURE", message: "Unable to initialize repository registration.",
+    } });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("Repository registration failed.", error);
+    expect(fetchGitHub).toHaveBeenCalledExactlyOnceWith("https://api.github.com/user", expect.any(Object));
+  });
+
+  it("keeps the exported POST real scope-probe deadline upstream and logs its whole error", async () => {
+    vi.useFakeTimers();
+    readSession.mockResolvedValue({ user: { id: "member-id", role: "MEMBER" } });
+    vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken").mockResolvedValue("synthetic-identity-token");
+    vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState").mockResolvedValue("ACTIVE");
+    vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+    const fetchGitHub = vi.fn<typeof fetch>(() => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetchGitHub);
+
+    const pending = POST(jsonRequest(validInput()));
+    await vi.advanceTimersByTimeAsync(10_000);
+    const response = await pending;
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: {
+      code: "UPSTREAM_FAILURE", message: "Unable to initialize repository registration.",
+    } });
+    expect(fetchGitHub).toHaveBeenCalledExactlyOnceWith("https://api.github.com/user", expect.any(Object));
+    const signal = fetchGitHub.mock.calls[0]![1]!.signal!;
+    expect(signal.aborted).toBe(true);
+    expect(signal.reason).toBeInstanceOf(Error);
+    expect(signal.reason.message).toBe("GitHub /user granted-scope probe timed out.");
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("Repository registration failed.", signal.reason);
+  });
+
   it("logs the real POST wiring failure when DATABASE_URL is unset", async () => {
     vi.stubEnv("DATABASE_URL", undefined);
     readSession.mockResolvedValue({ user: { id: "member-id", role: "MEMBER" } });
@@ -153,13 +197,14 @@ describe("repository route internal failures", () => {
     expect(console.error).toHaveBeenCalledExactlyOnceWith("Repository registration failed.", error);
   });
   it.each([false, true])("answers an internal error and logs a redacted role-read cause for bearer=%s", async (bearer) => {
+    const causeId = bearer ? "bearer-role-lookup" : "cookie-role-lookup";
     const githubToken = `ghp_${"role-lookup-credential".replaceAll("-", "")}`;
     const connectionUrl = `postgres://member:${"database-password"}@localhost/overflow`;
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => (bearer ? tokenAccount : null),
       getSession: async () => (bearer ? null : { user: { id: "member-id", role: "MEMBER" } }),
       getCurrentRole: async () => {
-        throw new Error(`role lookup unavailable: ${apiToken} ${githubToken} ${connectionUrl}`);
+        throw new Error(`role lookup unavailable (${causeId}): ${apiToken} ${githubToken} ${connectionUrl}`);
       },
       createRegistrationDependencies: async () => { throw new Error("Unexpected registration setup."); },
     });
@@ -171,9 +216,10 @@ describe("repository route internal failures", () => {
       code: "INTERNAL_ERROR", message: "Unable to initialize repository registration.",
     } });
     expect(console.error).toHaveBeenCalledExactlyOnceWith(
-      "Repository authorization failed: Error: role lookup unavailable: ovf_*** ghp_*** postgres://***@localhost/overflow",
+      `Repository authorization failed: Error: role lookup unavailable (${causeId}): ovf_*** ghp_*** postgres://***@localhost/overflow`,
     );
-    const output = JSON.stringify(vi.mocked(console.error).mock.calls);
+    const output = vi.mocked(console.error).mock.calls.flat().map(String).join("\n");
+    expect(output).toContain(causeId);
     for (const credential of [apiToken, githubToken, connectionUrl, "database-password"]) {
       expect(output).not.toContain(credential);
     }

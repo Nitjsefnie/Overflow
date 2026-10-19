@@ -917,7 +917,7 @@ describe("Overflow token registration", () => {
     expect(console.error).toHaveBeenCalledExactlyOnceWith(
       "Repository authorization failed: Error: token lookup unavailable: ovf_***",
     );
-    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(apiToken);
+    expect(vi.mocked(console.error).mock.calls.flat().map(String).join("\n")).not.toContain(apiToken);
     expect(fixture.getSession).toHaveBeenCalledTimes(0);
     expect(fixture.createRegistrationDependencies).toHaveBeenCalledTimes(0);
   });
@@ -981,7 +981,7 @@ describe("Overflow token registration", () => {
     const response = await fixture.handler(authorizedRequest(input));
     if (failure === "initialization") {
       expect(console.error).toHaveBeenCalledExactlyOnceWith("Repository registration failed: Error: ovf_***");
-      expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(apiToken);
+      expect(vi.mocked(console.error).mock.calls.flat().map(String).join("\n")).not.toContain(apiToken);
     }
     expect(fixture.getSession).toHaveBeenCalledTimes(0);
     expect(response.status).toBe(status);
