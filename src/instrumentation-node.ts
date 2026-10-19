@@ -1,3 +1,6 @@
+import { PostgresSweepRoundStore } from "@/lib/fold/sweep-round-store";
+import { PostgresSweepPassStore } from "@/lib/fold/sweep-pass-store";
+import { readSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import {
   drainReconciliationJobs,
   startReconciliationWorker,
@@ -54,6 +57,12 @@ export async function registerNodejs(): Promise<void> {
   const { pruneExpiredMaintenanceRows } = await import("@/lib/retention/prune");
   const { getSql, getCoordinationSql } = await import("@/lib/db/client");
   const store = new PostgresFoldStore();
+  const sweepRound = new PostgresSweepRoundStore();
+  const sweepPasses = new PostgresSweepPassStore();
+  const sweep = {
+    spend: () => sweepRound.spend(new Date(), readSweepRequestBudget(process.env)),
+    openPass: sweepPasses.open.bind(sweepPasses),
+  };
   const resolveAppInstallationToken = createReconciliationAppTokenResolver({
     reconciliationResolver,
     registrationResolver,
@@ -93,6 +102,7 @@ export async function registerNodejs(): Promise<void> {
         reconcile: (repositoryId, options) =>
           reconcileRepositoryAsSponsor(store, repositoryId, undefined, {
             ...options,
+            sweep,
             resolveAppInstallationToken,
             resolveForgeToken,
             markCredentialRejected: async (identityId) => {
@@ -132,9 +142,14 @@ export async function registerNodejs(): Promise<void> {
     },
   });
 
+  let nextMaintenanceAt = 0;
   startReconciliationSweep({
-    finalizeAbandonedRuns: () => finalizeAbandonedRuns(getSql(), getCoordinationSql()),
+    intervalMs: 15_000,
+    finalizeAbandonedRuns: () => Date.now() < nextMaintenanceAt
+      ? Promise.resolve() : finalizeAbandonedRuns(getSql(), getCoordinationSql()),
     pruneRetention: async () => {
+      if (Date.now() < nextMaintenanceAt) return;
+      nextMaintenanceAt = Date.now() + 6 * 60 * 60_000;
       const result = await pruneExpiredMaintenanceRows(getSql());
       // One line per tick, so an operator sees the prune ran rather than
       // inferring it from the absence of complaints.
@@ -143,6 +158,7 @@ export async function registerNodejs(): Promise<void> {
     },
     runSweep: async () => {
       const summary = await sweepReconciliations({
+        round: sweepRound,
         listActiveRepositoryIds: () => store.listActiveRepositoryIds(),
         enqueue: (repositoryId) => store.enqueueReconciliationJob(repositoryId, "SWEEP"),
         onFailure: (repositoryId, error) => {

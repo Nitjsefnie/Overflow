@@ -33,8 +33,8 @@ export class PostgresReconciliationJobStore {
     // repository has been failing. An event arriving mid-fold leaves the RUNNING
     // job alone and records `follow_up_requested` instead, because the fold in
     // flight may have read GitHub before the event happened. The update never
-    // touches the lease columns, so it cannot violate the lease check. `reason`
-    // is left as first recorded: it says why the repository entered the queue.
+    // touches the lease columns. A sweep upgrades the reason so the queued
+    // job can repair a missing cache; later events preserve that authority.
     // The cast on the state arm is required: a `case` whose branches are both
     // bare literals resolves to text, which will not assign to an enum column.
     await this.sql`
@@ -78,6 +78,7 @@ export class PostgresReconciliationJobStore {
   /** Shared lifecycle policy for ordinary events and explicit re-derivation requests. */
   private reconciliationJobConflictUpdate() {
     return this.sql`
+      reason = case when excluded.reason = 'SWEEP' then excluded.reason else repository_reconciliation_jobs.reason end,
       state = case when repository_reconciliation_jobs.state = 'RUNNING' then 'RUNNING' else 'PENDING' end::repository_reconciliation_job_state,
           follow_up_requested = case when repository_reconciliation_jobs.state = 'RUNNING' then true else repository_reconciliation_jobs.follow_up_requested end,
           attempt_count = case when repository_reconciliation_jobs.state = 'FAILED' then 0 else repository_reconciliation_jobs.attempt_count end,

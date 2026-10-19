@@ -43,7 +43,7 @@ describe("repository re-derivation", () => {
   it.each([requestedAt, null])("passes the claimed request %s to the fold and completion", async (request) => {
     const { worker, store } = fixture(request);
     expect(await runNextReconciliationJob(worker)).toBe("RECONCILED");
-    expect(worker.reconcile).toHaveBeenCalledExactlyOnceWith("repo-1", { rederive: request !== null });
+    expect(worker.reconcile).toHaveBeenCalledExactlyOnceWith("repo-1", { rederive: request !== null, reason: "SWEEP" });
     expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", request === null ? 0 : 1);
     expect(store.beginRun).toHaveBeenCalledExactlyOnceWith("repo-1", { rederivation: request !== null });
   });
@@ -61,7 +61,7 @@ describe("repository re-derivation", () => {
       adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0,
     });
     expect(await runNextReconciliationJob(worker)).toBe(hold === "budget" ? "BUDGET_HELD" : "DEFERRED");
-    expect(worker.reconcile).toHaveBeenCalledExactlyOnceWith("repo-1", { rederive: true });
+    expect(worker.reconcile).toHaveBeenCalledExactlyOnceWith("repo-1", { rederive: true, reason: "SWEEP" });
     expect(store.beginRun).not.toHaveBeenCalled();
     expect(store.hasDerivedRowsBelowFoldRevision).not.toHaveBeenCalled();
     expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", heldUntil);
@@ -77,7 +77,7 @@ describe("repository re-derivation", () => {
     const { worker, store } = fixture(requestedAt, attemptCount);
     worker.reconcile.mockRejectedValue(new Error("GitHub unavailable"));
     expect(await runNextReconciliationJob(worker)).toBe(outcome);
-    expect(worker.reconcile).toHaveBeenCalledExactlyOnceWith("repo-1", { rederive: true });
+    expect(worker.reconcile).toHaveBeenCalledExactlyOnceWith("repo-1", { rederive: true, reason: "SWEEP" });
     expect(store[method]).toHaveBeenCalledOnce();
     expect(store.completeReconciliationJob).not.toHaveBeenCalled();
     expect(store.deferReconciliationJob).not.toHaveBeenCalled();

@@ -1,9 +1,13 @@
+import type { PostgresSweepRoundStore } from "@/lib/fold/sweep-round-store";
+import { readSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import { callGuarded } from "@/lib/fold/guarded-callback";
 import { errorLogToken } from "@/lib/webhooks/log-field";
 
 export type ReconciliationSweepDependencies = {
   listActiveRepositoryIds(): Promise<string[]>;
   enqueue(repositoryId: string): Promise<unknown>;
+  round?: Pick<PostgresSweepRoundStore, "enqueueNext">;
+  now?: () => Date;
   /**
    * Reports one repository this sweep could not queue, as distinct from the
    * whole-sweep `onSweepFailure` on the schedule. A hook that fails costs
@@ -113,7 +117,8 @@ export function shouldStartReconciliationBackground(
 }
 
 /**
- * Offers every active repository to the reconciliation queue, one at a time.
+ * Offers the durable round's next due slot to the reconciliation queue.
+ * Callers without round storage retain the serial whole-list helper.
  *
  * The sweep enqueues unconditionally rather than deciding which repositories
  * are worth reconciling. The enqueue is an upsert on one row per repository, so
@@ -132,7 +137,7 @@ export async function sweepReconciliations(
   let enqueued = 0;
   let failed = 0;
 
-  for (const repositoryId of repositoryIds) {
+  const enqueue = async (repositoryId: string) => {
     try {
       await dependencies.enqueue(repositoryId);
       enqueued += 1;
@@ -140,6 +145,12 @@ export async function sweepReconciliations(
       failed += 1;
       reportRepositoryFailure(dependencies, repositoryId, error);
     }
+  };
+  if (dependencies.round !== undefined) {
+    await dependencies.round.enqueueNext(repositoryIds, (dependencies.now ?? (() => new Date()))(),
+      readSweepRequestBudget(process.env), enqueue);
+  } else {
+    for (const repositoryId of repositoryIds) await enqueue(repositoryId);
   }
 
   return { attempted: enqueued + failed, enqueued, failed };
@@ -208,8 +219,9 @@ function logRepositoryFailure(repositoryId: string, error: unknown): void {
 /**
  * Runs a sweep now (unless explicitly suppressed) and then on a fixed interval.
  *
- * The immediate sweep is what queues a repository registered before ingestion
- * existed, and it also repairs any webhook delivery that was missed while the
+ * The immediate tick resumes the current durable round; its due slot queues a
+ * repository registered before ingestion
+ * existed, and later slots repair webhook deliveries missed while the
  * server was down.
  *
  * A tick that arrives while the previous sweep is still running is dropped, not

@@ -123,7 +123,7 @@ describe("durable repository re-derivation requests", () => {
     await store.requestRepositoryRederivation(repositoryId, first);
     const [before] = await rows();
     await store.enqueueReconciliationJob(repositoryId, reason);
-    expect(await rows()).toEqual([before]);
+    expect(await rows()).toEqual([{ ...before, reason: reason === "SWEEP" ? "SWEEP" : before.reason }]);
   });
 
   it("returns the outstanding timestamp at claim time", async () => {

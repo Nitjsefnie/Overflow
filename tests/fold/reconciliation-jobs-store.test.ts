@@ -166,6 +166,17 @@ async function claimAsOldBuild(): Promise<{ id: string; lease_token: string; att
 }
 
 describe("PostgreSQL reconciliation job queue", () => {
+  it("upgrades a queued webhook to sweep authority without moving its place or backoff", async () => {
+    const id = await insertRepository();
+    await store.enqueueReconciliationJob(id, "WEBHOOK");
+    const [before] = await sql`select id, run_after, created_at from repository_reconciliation_jobs where repository_id = ${id}`;
+    await store.enqueueReconciliationJob(id, "SWEEP");
+    await store.enqueueReconciliationJob(id, "WEBHOOK");
+    const [after] = await sql`select id, run_after, created_at, reason from repository_reconciliation_jobs where repository_id = ${id}`;
+    expect(after).toEqual({ ...before, reason: "SWEEP" });
+    expect((await store.claimNextReconciliationJob())?.reason).toBe("SWEEP");
+  });
+
   beforeAll(async () => {
     const started = await startPostgresContainer({
       database: "overflow_reconciliation_jobs_test",

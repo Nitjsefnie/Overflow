@@ -1,3 +1,5 @@
+import { checkpointSweepRequest } from "@/lib/fold/sweep-pass";
+import { checkSweepRequestBudget, SweepBudgetSpent } from "@/lib/fold/sweep-request-budget";
 import { classifyGitHubGraphqlRateLimit, classifyGitHubRateLimit, GitHubApiError, GitHubGraphqlRequestError } from "@/lib/github/errors";
 import { gitHubGraphqlBudget, readGraphqlBudgetPayload, type GitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
 import { checkGraphqlRequestBudget, GraphqlBudgetHeld } from "@/lib/github/graphql-request-budget";
@@ -147,6 +149,12 @@ export class GitHubGraphqlClient {
   }
 
   public async query<TData>(query: string, variables: Record<string, unknown>): Promise<TData> {
+    checkGraphqlRequestBudget();
+    return checkpointSweepRequest(["graphql", this.endpoint, query, variables], () => this.queryUncached<TData>(query, variables));
+  }
+
+  private async queryUncached<TData>(query: string, variables: Record<string, unknown>): Promise<TData> {
+    await checkSweepRequestBudget();
     const controller = new AbortController();
     let timedOut = false;
     let response: Response | undefined;
@@ -220,7 +228,7 @@ export class GitHubGraphqlClient {
       checkGraphqlRequestBudget();
       return payload.data;
     } catch (error) {
-      if (error instanceof GraphqlBudgetHeld || error instanceof GitHubApiError
+      if (error instanceof SweepBudgetSpent || error instanceof GraphqlBudgetHeld || error instanceof GitHubApiError
         || error instanceof GitHubGraphqlRequestError || error instanceof GitHubResponseTooLargeError) {
         throw error;
       }

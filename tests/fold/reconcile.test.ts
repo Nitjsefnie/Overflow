@@ -23,6 +23,62 @@ import { inspect, format } from "node:util";
 import { RECORD_MARKER, withRecordBearingPostgresWrite } from "../support/record-bearing-postgres-error";
 
 describe("reconcileRepository", () => {
+  it.each(["WEBHOOK", "REGISTRATION", "REDERIVATION", "OVERRIDE"] as const)("leaves a missing cache for the sweep on %s", async (reason) => {
+    const dependencies = reconciliationDependencies();
+    dependencies.store.getGitHubAccessToken = async () => null;
+    const result = await reconcileRepository(dependencies, "repository", { reason, rederive: true });
+    expect(result.skipped).toBe(true);
+    expect(dependencies.github.getRepositoryById).not.toHaveBeenCalled();
+    expect(dependencies.store.materialize).not.toHaveBeenCalled();
+  });
+
+  it.each(["old-format", "omitted", "stale", "rederive"] as const)("gates the %s full-pass trigger on a webhook", async (trigger) => {
+    const dependencies = reconciliationDependencies();
+    const at = new Date("2030-01-02T10:00:00Z");
+    dependencies.now = () => at;
+    dependencies.store.getReconciliationEvidence = async () => ({
+      version: 1, formatVersion: trigger === "old-format" ? 0 : RECONCILIATION_EVIDENCE_FORMAT,
+      omittedOversizedFacts: trigger === "omitted" ? 1 : 0,
+      checkpoint: at, lastFullPassAt: trigger === "stale" ? new Date("2030-01-01T00:00:00Z") : at, issues: [], pullRequests: [],
+    });
+    const result = await reconcileRepository(dependencies, "repository", { reason: "WEBHOOK", rederive: trigger === "rederive" });
+    if (trigger === "old-format" || trigger === "omitted") {
+      expect(result.skipped).toBe(true);
+      expect(dependencies.github.listIssues).not.toHaveBeenCalled();
+    } else {
+      expect(result.skipped).toBe(false);
+      expect(dependencies.github.listIssues).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ since: "2030-01-02T09:59:00.000Z" }));
+      expect(dependencies.store.materialize).toHaveBeenCalledWith(expect.objectContaining({ synchronization: expect.objectContaining({ full: false }) }));
+      expect(dependencies.store.beginRun).toHaveBeenCalledWith("repository", { rederivation: false });
+    }
+  });
+
+  it("discards a failed full-pass snapshot so the next sweep can refetch corrected upstream data", async () => {
+    const dependencies = reconciliationDependencies({ github: { listIssues: async () => { throw new Error("invalid upstream page"); } } });
+    const complete = vi.fn(async () => {});
+    dependencies.sweep = {
+      spend: async () => null,
+      openPass: async (input) => ({ id: "pass", scanStartedAt: input.scanStartedAt, dirtySubjects: input.dirtySubjects,
+        read: async () => undefined, write: async () => {}, complete }),
+    };
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).rejects.toThrow();
+      expect(complete).toHaveBeenCalledOnce();
+    } finally { logged.mockRestore(); }
+  });
+
+  it("turns a sweep request hold into a skipped run rather than a repository failure", async () => {
+    const { SweepBudgetSpent } = await import("@/lib/fold/sweep-request-budget");
+    const resetAt = new Date("2030-01-02T12:00:00Z");
+    const dependencies = reconciliationDependencies({ github: { listIssues: async () => { throw new SweepBudgetSpent(resetAt); } } });
+    const result = await reconcileRepository(dependencies, "repository", { reason: "SWEEP" });
+    expect(result).toMatchObject({ skipped: true, sweepHeldUntil: resetAt });
+    expect(dependencies.store.failRun).toHaveBeenCalledOnce();
+    expect(dependencies.store.materialize).not.toHaveBeenCalled();
+    expect(dependencies.store.markRepositoryUnavailable).not.toHaveBeenCalled();
+  });
+
   it("completes with evidence after a transient review read recovers", async () => {
     const reviews = [{ id: 301, state: "APPROVED" as const, submittedAt: "2026-09-01T11:00:00Z", dismissal: null }];
     const dependencies = reconciliationDependencies({

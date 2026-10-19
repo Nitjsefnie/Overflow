@@ -152,41 +152,17 @@ describe("resolving the default branch from local refs alone", () => {
     );
   });
 
-  it("passes the shipped tree against the real default-branch listing", (ctx) => {
-    if (resolvedDefaultBranchRef === undefined) {
-      return; // No local ref resolved, so there is no listing to compare against here.
-    }
-
-    // The leg's premise is a default-branch-shaped shipped tree, which only the default
-    // branch's own checkout guarantees. On any other host — a migration-carrying branch above
-    // all (issue 522) — the assertion would fail by construction, and the CLI legs carry the
-    // guard's real coverage there instead. The yield goes through ctx.skip() rather than an
-    // early return so the RUNNER reports it: a passed leg's console output is suppressed under
-    // the default reporter, so the skip must surface in the reported counts (issue 522 review).
-    const hostBranchName = gitOutput(repositoryRoot, "rev-parse", "--abbrev-ref", "HEAD");
-    const defaultBranchName = resolvedDefaultBranchRef.replace(
-      /^refs\/(?:remotes|heads)\/(?:origin\/)?/,
-      "",
-    );
-    if (hostBranchName !== defaultBranchName) {
-      ctx.skip(
-        `the checked-out branch (${hostBranchName}) is not ${defaultBranchName}, so the ` +
-          "shipped tree is not default-branch-shaped and the leg's premise does not hold " +
-          "(issue 522); the CLI legs carry the guard's coverage on a branch.",
-      );
-    }
-
+  it("checks the shipped tree against the real default-branch listing", () => {
+    if (resolvedDefaultBranchRef === undefined) return;
     const treeMigrationNames = listMigrationNames(readdirSync(migrationsDirectory));
-    const defaultBranchMigrationNames = listDefaultBranchMigrationNames(
-      resolvedDefaultBranchRef,
-      repositoryRoot,
-    );
-
+    const defaultBranchMigrationNames = listDefaultBranchMigrationNames(resolvedDefaultBranchRef, repositoryRoot);
     expect(treeMigrationNames.length).toBeGreaterThan(0);
     expect(defaultBranchMigrationNames.length).toBeGreaterThan(0);
-    expect(() => {
-      assertMigrationsOnDefaultBranch(treeMigrationNames, defaultBranchMigrationNames, resolvedDefaultBranchRef);
-    }).not.toThrow();
+    const check = () => assertMigrationsOnDefaultBranch(treeMigrationNames, defaultBranchMigrationNames, resolvedDefaultBranchRef);
+    // A feature branch carrying a new migration must exercise the refusal;
+    // a shipped/default tree must pass. Both hosts run the real guard.
+    if (treeMigrationNames.some((name) => !defaultBranchMigrationNames.includes(name))) expect(check).toThrow();
+    else expect(check).not.toThrow();
   });
 });
 

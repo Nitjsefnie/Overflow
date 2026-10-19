@@ -15,7 +15,7 @@ const { startWorker, startSweep, lookup, oauth, row } = vi.hoisted(() => ({
 vi.mock("@/lib/fold/reconciliation-worker", () => ({
   startReconciliationWorker: startWorker,
   drainReconciliationJobs: async (dependencies: ReconciliationWorkerDependencies) => {
-    await dependencies.reconcile("repository-1", { rederive: false });
+    await dependencies.reconcile("repository-1", { rederive: false, reason: "SWEEP" });
     return [];
   },
 }));
