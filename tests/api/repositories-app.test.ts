@@ -32,6 +32,7 @@ async function wiring(configured = true) {
   vi.stubEnv("GITHUB_REGISTRATION_APP_ID", "202");
   vi.stubEnv("GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH", "/synthetic/registration-key.pem");
   vi.stubEnv("GITHUB_WEBHOOK_URL", "");
+  vi.stubEnv("DATABASE_URL", "postgres://overflow:overflow@127.0.0.1:1/overflow");
   const calls: { path: string; method: string; authorization: string | null }[] = [];
   vi.stubGlobal("fetch", async (url: RequestInfo | URL, init?: RequestInit) => {
     const path = new URL(String(url)).pathname;
