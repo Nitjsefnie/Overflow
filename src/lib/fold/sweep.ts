@@ -127,8 +127,8 @@ export function shouldStartReconciliationBackground(
  * exists to perform. Whether the fold should actually run is the worker's
  * decision, taken against the cooldown at the moment it folds.
  *
- * A repository that fails is counted and skipped rather than aborting the
- * sweep, so one bad row cannot stop every other repository being queued.
+ * An enqueue failure is counted and reported. A paced slot stays due for the
+ * next poll; the unpaced helper continues with the remaining repositories.
  */
 export async function sweepReconciliations(
   dependencies: ReconciliationSweepDependencies,
@@ -141,9 +141,11 @@ export async function sweepReconciliations(
     try {
       await dependencies.enqueue(repositoryId);
       enqueued += 1;
+      return true;
     } catch (error) {
       failed += 1;
       reportRepositoryFailure(dependencies, repositoryId, error);
+      return false;
     }
   };
   if (dependencies.round !== undefined) {

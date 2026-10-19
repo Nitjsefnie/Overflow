@@ -53,7 +53,7 @@ describe("paused full-pass pages", () => {
       spend: () => new PostgresSweepRoundStore(sql).spend(clock, 2),
       openPass: new PostgresSweepPassStore(sql).open.bind(new PostgresSweepPassStore(sql)),
     };
-    const first = await reconcileRepository({ store: f.store, github, sweep, now: () => clock }, f.repositoryId, { reason: "SWEEP" });
+    const first = await reconcileRepository({ store: f.store, github, sweep, now: () => clock, onBudgetChange: () => {} }, f.repositoryId, { reason: "SWEEP" });
     expect(first).toMatchObject({ skipped: true, sweepHeldUntil: new Date("2030-01-01T06:00:00Z") });
     expect(await f.store.getReconciliationEvidence(f.repositoryId)).toBeNull();
     expect(await sql`select walk_cursor from reconciliation_sweep_passes where repository_id = ${f.repositoryId}`)
@@ -62,7 +62,7 @@ describe("paused full-pass pages", () => {
     await sql`insert into repository_reconciliation_dirty_subjects (repository_id, kind, github_subject_id, subject_number)
       values (${f.repositoryId}, 'ISSUE', ${subject.githubIssueId}, ${subject.number})`;
     clock = new Date("2030-01-01T06:00:00Z");
-    const resumed = await reconcileRepository({ store: f.store, github, sweep, now: () => clock }, f.repositoryId, { reason: "SWEEP" });
+    const resumed = await reconcileRepository({ store: f.store, github, sweep, now: () => clock, onBudgetChange: () => {} }, f.repositoryId, { reason: "SWEEP" });
     expect(resumed.skipped).toBe(false);
     expect(requests).toEqual(["verify", "first-page", "verify", "next-page"]);
     expect((await f.store.getReconciliationEvidence(f.repositoryId))?.checkpoint).toEqual(at);
@@ -84,7 +84,7 @@ describe("paused full-pass pages", () => {
     } });
     const rounds = new PostgresSweepRoundStore(sql);
     const passes = new PostgresSweepPassStore(sql);
-    const dependencies = { store: f.store, github, now: () => at,
+    const dependencies = { store: f.store, github, now: () => at, onBudgetChange: () => {},
       sweep: { spend: () => rounds.spend(at, 3), openPass: passes.open.bind(passes) } };
     await reconcileRepository(dependencies, f.repositoryId, { reason: "SWEEP" });
     expect(sent).toBe(2);
