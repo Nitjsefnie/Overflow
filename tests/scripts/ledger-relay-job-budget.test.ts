@@ -2,7 +2,7 @@ import { appSuiteListing, appChecksUrl } from "./ledger-relay-check-fixtures.ts"
 import { generateKeyPairSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 
 import { REQUEST_TIMEOUT_MS } from "../../scripts/ledger-relay-http.ts";
@@ -125,6 +125,66 @@ describe("the ledger relay's job-start budget", () => {
     // Not even the sweep or the token mint starts: the job read is the only request.
     expect(w.state.requests.map(({ url }) => url)).toEqual([JOB_START]);
     expect(w.state.checks).toEqual([]);
+  });
+
+  it.each([0, 600])(
+    "sweeps normally with one job-start read when the listing reports the queue time and entry is delayed by %i s",
+    async (entryDelaySeconds) => {
+      const queueTime = Date.UTC(2026, 9, 19, 15, 35, 10);
+      const entryTime = Date.UTC(2026, 9, 19, 15, 58, 15) + seconds(entryDelaySeconds);
+      const w = world(entryTime);
+      w.state.jobStart = async () => response({ jobs: [ownJob({ started_at: new Date(queueTime).toISOString() })] });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        const result = await w.run();
+
+        expect(result.sweep.relayed).toHaveLength(1);
+        expect(w.state.checks).toHaveLength(1);
+        expect(w.state.requests.filter(({ url }) => url === JOB_START)).toHaveLength(1);
+        expect(writesOf(w.state.requests).some(({ url }) => url === `${ROOT}/check-runs`)).toBe(true);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(new Date(queueTime).toISOString()));
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+
+  it("uses the entry deadline when the listed start is exactly one job timeout before now", async () => {
+    const entryTime = JOB_STARTED_AT + seconds(930);
+    const startedAt = new Date(entryTime - seconds(960)).toISOString();
+    const w = world(entryTime, 0);
+    w.state.jobStart = async () => response({ jobs: [ownJob({ started_at: startedAt })] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await w.run();
+
+      expect(result.sweep.relayed).toHaveLength(1);
+      expect(w.state.checks).toHaveLength(1);
+      expect(w.state.requests.filter(({ url }) => url === JOB_START)).toHaveLength(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(startedAt));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("exits red without writing when the listed start is one second fresher than the job timeout bound", async () => {
+    const entryTime = JOB_STARTED_AT + seconds(930);
+    const w = world(entryTime, 0);
+    w.state.jobStart = async () => response({ jobs: [ownJob({
+      started_at: new Date(entryTime - seconds(959)).toISOString(),
+    })] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await expect(w.run()).rejects.toThrow(/job-start budget/);
+
+      expect(w.state.requests.map(({ url }) => url)).toEqual([JOB_START]);
+      expect(w.state.checks).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("ends the job-start budget one request bound and the stated margin before the job timeout", () => {
