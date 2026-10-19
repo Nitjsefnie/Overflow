@@ -303,8 +303,8 @@ describe("reviewed shared claim action evidence", () => {
   });
 
   it.each([
-    ["fake owner", "someone-else/claim@cd8ffd8227e94cdf60ed2580016187353b055cf4"],
-    ["suffixed action", "Nitjsefnie-Actions/claim-extra@cd8ffd8227e94cdf60ed2580016187353b055cf4"],
+    ["fake owner", "someone-else/claim@4c781a9b0ce62ff263a65226f6005d412cea6ae1"],
+    ["suffixed action", "Nitjsefnie-Actions/claim-extra@4c781a9b0ce62ff263a65226f6005d412cea6ae1"],
     // v2.0.4 was the previous reviewed SHA; the v2.0.5 bump is the recognition boundary.
     // Rejecting an obsolete pin keeps the gate from reporting it as the
     // currently reviewed action.

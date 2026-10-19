@@ -50,8 +50,8 @@ type Workflow = {
 // What this file asserts is derived structure, never a dependency value: the
 // workflows' triggers, permissions, step identities, behavioural commands, and
 // the cross-file agreements (one revision per action family across the
-// workflow files, both actionlint legs' toolchain env, the CONTRIBUTING claim
-// pin). A legitimate dependency bump moves the tree and these follow it
+// workflow files and both actionlint legs' toolchain env). A legitimate
+// dependency bump moves the tree and these follow it
 // (fleet-rules, "Merging and CI"); which revision is the RIGHT one is zizmor's
 // and Dependabot's to hold — no network fetch happens here. Read a green run
 // as "structure intact", never as "this pin is the right fork".
