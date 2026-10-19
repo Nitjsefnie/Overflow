@@ -370,6 +370,7 @@ describe("the pull request suite workflow", () => {
     const required = Object.keys(requiredChecks);
     expect(required.sort()).toEqual([
       "actionlint",
+      "comment-share",
       "dependency-audit",
       "ratchet-guard",
       "secret-scan",

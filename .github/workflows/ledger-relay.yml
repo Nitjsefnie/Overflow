@@ -1,6 +1,6 @@
 name: ledger relay
 
-# Re-posts the five required contexts as check-runs owned by the Overflow
+# Re-posts the six required contexts as check-runs owned by the Overflow
 # Ledger GitHub App (app id 5118623), so branch protection can pin each
 # required context to the App instead of the github-actions app. Every relay
 # start shares one concurrency group: only one relay run writes at a time
@@ -23,7 +23,7 @@ on:
   # through ${{ }} interpolation in run:.
   workflow_run:  # zizmor: ignore[dangerous-triggers]
     # The filter matches name: fields. Main-push producers, verify's
-    # PR producer, and the four-job privileged PR aggregate all relay.
+    # PR producer, comment share, and the four-job privileged PR aggregate all relay.
     workflows:
       - "ci"
       - "actionlint"
@@ -32,6 +32,7 @@ on:
       - "secret scan"
       - "dependency audit"
       - "pr gates"
+      - "comment share"
     types: [completed]
   workflow_dispatch:
     inputs:
