@@ -484,7 +484,7 @@ const routeLevelAnswers: Record<string, string> = {
   "The request origin is not allowed.": "the route's origin check answers before registerRepository runs",
   "The request must use the application/json content type.": "the route's content-type gate answers before the token is read",
   "The server is not configured to accept this request.": "answered by src/lib/security/request-origin.ts when APP_URL is missing or malformed, before registerRepository runs; pinned by tests/security/request-origin.test.ts",
-  "Unable to initialize repository registration.": "the route's catch-all answers when registration itself fails unexpectedly",
+  "Unable to initialize repository registration.": "the route answers internal authorization/wiring failures with 500 INTERNAL_ERROR and unclassified forge failures with 502 UPSTREAM_FAILURE; pinned by tests/api/repositories.test.ts",
   "The GitHub authorization Overflow holds for your account cannot administer repository webhooks: registration needs the admin:repo_hook scope. Use \"Sign in to register a repository\" to authorize webhook administration with the same GitHub account, then register again.":
     "the route's granted-scope check (issue 599, src/lib/auth/github-granted-scopes.ts) answers before registerRepository runs; pinned by tests/api/repositories.test.ts",
   "Too many requests of this kind. Retry after the number of seconds the Retry-After header names.":
@@ -975,7 +975,7 @@ const gitlabFailures: RegistrationFailure[] = [
 // GitLab rows the corpus deliberately does not raise, answered at the route rather than by
 // registerRepository — the same allowlist discipline as routeLevelAnswers.
 const gitlabRouteLevelAnswers: Record<string, string> = {
-  "Unable to initialize repository registration.": "the route's catch-all answers a GitLab read the gateway could not complete, and an unavailable GitHub credential",
+  "Unable to initialize repository registration.": "the route's catch-all answers a GitLab read the gateway could not complete; an unavailable GitHub credential is a separate 500 INTERNAL_ERROR",
 };
 
 describe("the GitLab registration answers API.md publishes", () => {

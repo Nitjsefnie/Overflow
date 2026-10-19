@@ -22,7 +22,7 @@ import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import type { ApiTokenAccount } from "@/lib/tokens/postgres-store";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import type { RepositoryRouteDependencies, RepositoryRouteSession } from "@/app/api/repositories/route";
-import { GitHubWebhookScopeError } from "@/lib/auth/github-granted-scopes";
+import { GitHubScopeProbeError, GitHubWebhookScopeError } from "@/lib/auth/github-granted-scopes";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql } from "@/lib/db/client";
@@ -111,6 +111,77 @@ afterEach(() => {
 const ambiguitySentence = "GitHub answers 403 both when the Overflow OAuth application is not yet authorized and when it is temporarily limiting requests, and this response carries nothing that separates the two causes.";
 const waitInstruction = "Wait a minute and retry registration before changing anything.";
 const ambiguous403Advice = `${ambiguitySentence} ${waitInstruction}`;
+
+describe("repository route internal failures", () => {
+  it.each([
+    { method: "POST", createHandler: createRepositoryPostHandler },
+    { method: "PATCH", createHandler: createRepositoryPatchHandler },
+  ])("logs a $method wiring failure and answers a fixed internal error", async ({ method, createHandler }) => {
+    consoleOutputAllowed.add("error");
+    const handler = createHandler({
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
+      getSession: async () => ({ user: { id: "member-id", role: "MEMBER" } }),
+      createRegistrationDependencies: async () => {
+        throw new Error("GitHub webhook configuration must be set.");
+      },
+    });
+
+    const response = await handler(jsonRequest(validInput(), method));
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: {
+      code: "INTERNAL_ERROR", message: "Unable to initialize repository registration.",
+    } });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith(
+      "Repository registration failed: Error: GitHub webhook configuration must be set.",
+    );
+  });
+
+  it.each([
+    { method: "PATCH", createHandler: createRepositoryPatchHandler, operation: "catalog change", message: "Unable to initialize repository registration." },
+    { method: "DELETE", createHandler: createRepositoryDeleteHandler, operation: "unregistration", message: "Unable to unregister the repository." },
+  ])("logs an unclassified $method flow failure whole and keeps the upstream answer", async ({ method, createHandler, operation, message }) => {
+    consoleOutputAllowed.add("error");
+    const error = new Error("Repository provider lookup failed.");
+    const dependencies = successfulDependencies(undefined, {
+      existingRepository: true,
+      unregisterTarget: registeredTarget(),
+    });
+    dependencies.store.findRepositoryProviderById = async () => { throw error; };
+    const handler = createHandler({
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => dependencies,
+    });
+
+    const response = await handler(jsonRequest(method === "DELETE" ? validUnregisterInput() : validInput(), method));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: { code: "UPSTREAM_FAILURE", message } });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith(`Repository ${operation} failed.`, error);
+  });
+
+  it("logs the whole unclassified forge error and keeps the upstream answer", async () => {
+    consoleOutputAllowed.add("error");
+    const error = new GitHubScopeProbeError(500);
+    const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
+      getSession: async () => ({ user: { id: "member-id", role: "MEMBER" } }),
+      createRegistrationDependencies: async () => { throw error; },
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: {
+      code: "UPSTREAM_FAILURE", message: "Unable to initialize repository registration.",
+    } });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("Repository registration failed.", error);
+  });
+});
 
 describe("POST /api/repositories", () => {
   it("returns a structured 400 when the request does not contain exactly one repository configuration", async () => {
@@ -904,15 +975,20 @@ describe("Overflow token registration", () => {
   });
 
   it("sanitizes a token lookup failure without consulting the cookie or registration factory", async () => {
+    consoleOutputAllowed.add("error");
     const fixture = tokenFixture();
-    fixture.findAccountByTokenHash.mockRejectedValue(new Error(apiToken));
+    fixture.findAccountByTokenHash.mockRejectedValue(new Error(`token lookup unavailable: ${apiToken}`));
     const response = await fixture.handler(authorizedRequest());
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(500);
     const body = await response.json();
     expect(body).toEqual({ error: {
-      code: "UPSTREAM_FAILURE", message: "Unable to initialize repository registration.",
+      code: "INTERNAL_ERROR", message: "Unable to initialize repository registration.",
     } });
     expect(JSON.stringify(body)).not.toContain(apiToken);
+    expect(console.error).toHaveBeenCalledExactlyOnceWith(
+      "Repository authorization failed: Error: token lookup unavailable: ovf_***",
+    );
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(apiToken);
     expect(fixture.getSession).toHaveBeenCalledTimes(0);
     expect(fixture.createRegistrationDependencies).toHaveBeenCalledTimes(0);
   });
@@ -928,8 +1004,9 @@ describe("Overflow token registration", () => {
     ["permissions", 403, "FORBIDDEN", "GitHub administrator permission is required for the submitted repository."],
     ["conflict", 409, "CONFLICT", "This GitHub repository is already registered."],
     ["github", 502, "UPSTREAM_FAILURE", "Unable to create the repository webhook on GitHub."],
-    ["initialization", 502, "UPSTREAM_FAILURE", "Unable to initialize repository registration."],
+    ["initialization", 500, "INTERNAL_ERROR", "Unable to initialize repository registration."],
   ] as const)("does not expose the token on %s failure", async (failure, status, code, message) => {
+    if (failure === "initialization") consoleOutputAllowed.add("error");
     const fixture = tokenFixture();
     fixture.createRegistrationDependencies.mockImplementation(async (session) => {
       if (failure === "initialization") {
@@ -973,6 +1050,10 @@ describe("Overflow token registration", () => {
       ...validInput(), repositoryUrl: failure === "domain input" ? apiToken : validInput().repositoryUrl,
     };
     const response = await fixture.handler(authorizedRequest(input));
+    if (failure === "initialization") {
+      expect(console.error).toHaveBeenCalledExactlyOnceWith("Repository registration failed: Error: ovf_***");
+      expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(apiToken);
+    }
     expect(fixture.getSession).toHaveBeenCalledTimes(0);
     expect(response.status).toBe(status);
     const body = await response.json();
@@ -1256,6 +1337,7 @@ describe("Overflow token registration", () => {
   // GitLabApiError must reach the route's catch-all and answer 502 — never a
   // 404 that reads as "no such project" (issue 566).
   it("answers 502 UPSTREAM_FAILURE when a GitLab path lookup fails upstream", async () => {
+    consoleOutputAllowed.add("error");
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MEMBER",
@@ -1280,6 +1362,7 @@ describe("Overflow token registration", () => {
     await expect(response.json()).resolves.toEqual({
       error: { code: "UPSTREAM_FAILURE", message: "Unable to initialize repository registration." },
     });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("Repository registration failed.", expect.any(Error));
   });
 });
 
@@ -1444,6 +1527,7 @@ describe("POST /api/repositories granted-scope check", () => {
   });
 
   it("keeps a 403 without rate-limit evidence on the generic upstream path", async () => {
+    consoleOutputAllowed.add("error");
     wireStores();
     readSession.mockResolvedValue({ user: { id: "sponsor-id", role: "MEMBER" } });
     const fetchGitHub = githubAnswering("admin:repo_hook", 403);
@@ -1453,6 +1537,7 @@ describe("POST /api/repositories granted-scope check", () => {
 
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toMatchObject({ error: { code: "UPSTREAM_FAILURE" } });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("Repository registration failed.", expect.any(GitHubScopeProbeError));
   });
 
   it("keeps the credentials refusal ahead of rate-limit evidence on a 401", async () => {
@@ -1468,6 +1553,7 @@ describe("POST /api/repositories granted-scope check", () => {
   });
 
   it("answers 502 when the scope probe itself fails upstream", async () => {
+    consoleOutputAllowed.add("error");
     wireStores();
     readSession.mockResolvedValue({ user: { id: "sponsor-id", role: "MEMBER" } });
     const fetchGitHub = githubAnswering("admin:repo_hook", 503);
@@ -1478,6 +1564,7 @@ describe("POST /api/repositories granted-scope check", () => {
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toMatchObject({ error: { code: "UPSTREAM_FAILURE" } });
     expect(requestedUrls(fetchGitHub)).toEqual([userUrl]);
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("Repository registration failed.", expect.any(GitHubScopeProbeError));
   });
 });
 
@@ -2012,7 +2099,8 @@ describe("DELETE /api/repositories", () => {
     });
   });
 
-  it("returns a structured 502 when the route's registration dependencies cannot be built", async () => {
+  it("returns a structured 500 when the route's registration dependencies cannot be built", async () => {
+    consoleOutputAllowed.add("error");
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MEMBER",
@@ -2024,10 +2112,13 @@ describe("DELETE /api/repositories", () => {
 
     const response = await handler(jsonRequest(validUnregisterInput(), "DELETE"));
 
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(500);
     await expect(response.json()).resolves.toEqual({
-      error: { code: "UPSTREAM_FAILURE", message: "Unable to unregister the repository." },
+      error: { code: "INTERNAL_ERROR", message: "Unable to unregister the repository." },
     });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith(
+      "Repository unregistration failed: Error: GitHub webhook configuration must be set.",
+    );
   });
 
   // A cross-site form post carries the session cookie by itself, so a forged
@@ -2466,23 +2557,32 @@ describe("repository writes for a deleted account (issue 733)", () => {
     });
   });
 
-  it("answers the route's own 502 when the role read fails, on either credential path", async () => {
-    const refusal = { error: { code: "UPSTREAM_FAILURE", message: "Unable to initialize repository registration." } };
-    const handlerFor = (bearer: boolean) =>
-      createRepositoryPostHandler({
-        findAccountByTokenHash: async () => (bearer ? tokenAccount : null),
-        getSession: async () => (bearer ? null : { user: { id: "member-id", role: "MEMBER" } }),
-        getCurrentRole: async () => {
-          throw new Error("role lookup unavailable");
-        },
-        createRegistrationDependencies: async () => successfulDependencies(),
-      });
-    const cookieResponse = await handlerFor(false)(jsonRequest(validInput()));
-    const bearerResponse = await handlerFor(true)(authorizedRequest(validInput()));
-    expect(cookieResponse.status).toBe(502);
-    expect(bearerResponse.status).toBe(502);
-    await expect(cookieResponse.json()).resolves.toEqual(refusal);
-    await expect(bearerResponse.json()).resolves.toEqual(refusal);
+  it.each([false, true])("answers an internal error and logs a redacted role-read cause for bearer=%s", async (bearer) => {
+    consoleOutputAllowed.add("error");
+    const githubToken = `ghp_${"role-lookup-credential".replaceAll("-", "")}`;
+    const connectionUrl = `postgres://member:${"database-password"}@localhost/overflow`;
+    const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => (bearer ? tokenAccount : null),
+      getSession: async () => (bearer ? null : { user: { id: "member-id", role: "MEMBER" } }),
+      getCurrentRole: async () => {
+        throw new Error(`role lookup unavailable: ${apiToken} ${githubToken} ${connectionUrl}`);
+      },
+      createRegistrationDependencies: async () => successfulDependencies(),
+    });
+
+    const response = await handler(bearer ? authorizedRequest(validInput()) : jsonRequest(validInput()));
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: {
+      code: "INTERNAL_ERROR", message: "Unable to initialize repository registration.",
+    } });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith(
+      "Repository authorization failed: Error: role lookup unavailable: ovf_*** ghp_*** postgres://***@localhost/overflow",
+    );
+    const output = JSON.stringify(vi.mocked(console.error).mock.calls);
+    for (const credential of [apiToken, githubToken, connectionUrl, "database-password"]) {
+      expect(output).not.toContain(credential);
+    }
   });
 
   it("lets a live account through, consulting the role read once", async () => {
