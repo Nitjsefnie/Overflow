@@ -31,11 +31,42 @@ describe("released claim action revisions", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it.each([null, {}, { refs: [] }, { prefix: "refs/tags/", refs: {} }, { prefix: "refs/heads/", refs: [] }, "wrong"])(
+  it.each([null, {}, { refs: [] }, { prefix: "refs/tags/", refs: {} }, { prefix: "refs/heads/", refs: [ref("v2.0.5", current), { ref: "refs/heads/main", object: { sha: previous, type: "commit" } }] }, "wrong"])(
     "fails closed for malformed collection %j", async (body) => {
       expect(await resolveClaimActionReleases(gateway(async () => Response.json(body)))).toEqual(new Set());
     },
   );
+
+  it.each([
+    ["abbreviated", "0123456"],
+    ["overlong", "a".repeat(41)],
+  ])("rejects an %s hexadecimal commit SHA in matching refs", async (_kind, invalidSha) => {
+    const refs = [ref("v2.0.5", current), ref("v2.0.4", invalidSha)];
+    expect(await resolveClaimActionReleases(gateway(async () => Response.json(refs))))
+      .toEqual(new Set([current]));
+  });
+
+  it.each([
+    ["abbreviated", "0123456"],
+    ["overlong", "a".repeat(41)],
+  ])("rejects an %s hexadecimal commit SHA after peeling an annotated tag", async (_kind, invalidSha) => {
+    const fetch: typeof globalThis.fetch = async (input) => Response.json(
+      String(input).endsWith("/matching-refs/tags/v")
+        ? [ref("v2.0.5", current), ref("v2.0.4", tagSha, "tag")]
+        : { object: { type: "commit", sha: invalidSha } },
+    );
+    expect(await resolveClaimActionReleases(gateway(fetch))).toEqual(new Set([current]));
+  });
+
+  it("keeps only v-prefixed tag refs from an envelope containing mixed ref prefixes", async () => {
+    const refs = [
+      { ref: "refs/heads/main", object: { sha: previous, type: "commit" } },
+      ref("notv2.0.4", tagSha),
+      ref("v2.0.5", current),
+    ];
+    expect(await resolveClaimActionReleases(gateway(async () => Response.json({ prefix: "refs/tags/", refs }))))
+      .toEqual(new Set([current]));
+  });
 
   it("ignores unusable entries, non-v tags and non-commit objects", async () => {
     const body = [ref("v2.0.5", current), null, {}, { ref: "refs/tags/v2", object: {} },
