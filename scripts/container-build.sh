@@ -2,8 +2,8 @@
 # Build the application image with immutable provenance (issue 461).
 #
 # The committed mechanical build path for the container route: builds the
-# Dockerfile with its mandatory SOURCE_SHA build arg, verifies the revision
-# label actually landed on the built image, and prints the immutable
+# Dockerfile with its mandatory SOURCE_SHA build arg and derived base labels,
+# verifies all three labels landed on the built image, and prints the immutable
 # provenance record. That record line is what rollback selects — keep it with
 # the deployment notes and roll back by re-deploying the recorded image ID
 # (or, once the image is pushed to a registry, its registry digest).
@@ -26,6 +26,9 @@ fi
 
 source_sha="$(git rev-parse HEAD)"
 image="${1:-overflow-app}"
+base_labels="$(node scripts/container-base-labels.ts)"
+base_name="$(node -p 'JSON.parse(process.argv[1]).baseName' "$base_labels")"
+base_digest="$(node -p 'JSON.parse(process.argv[1]).baseDigest' "$base_labels")"
 
 echo "Building $image from revision $source_sha ..."
 # The build context is an export of the commit, streamed as a tar on stdin,
@@ -37,16 +40,23 @@ echo "Building $image from revision $source_sha ..."
 # on (observed not to apply to a stdin context with docker 26.1.5). pipefail
 # makes a failed export fail the script instead of building whatever arrived.
 git archive --format=tar "$source_sha" \
-  | docker build --build-arg SOURCE_SHA="$source_sha" -t "$image" -
+  | docker build --build-arg SOURCE_SHA="$source_sha" \
+      --label "org.opencontainers.image.base.name=$base_name" \
+      --label "org.opencontainers.image.base.digest=$base_digest" -t "$image" -
 
-# Prove the label landed: a build that skipped it would reproduce the
-# unlabelled image the issue reports, only silently. The comparison is
-# against the same full git rev-parse HEAD the build arg carried.
-landed="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")"
-if [ "$landed" != "$source_sha" ]; then
-  echo >&2 "ERROR: the org.opencontainers.image.revision label on $image is '${landed:-<absent>}' — expected $source_sha. The image carries no usable provenance; do not deploy it."
-  exit 1
-fi
+# Prove the labels landed, comparing against the source SHA and the base
+# reference derived from the same Dockerfile that the build consumes.
+verify_label() {
+  local key="$1" expected="$2" landed
+  landed="$(docker image inspect --format "{{index .Config.Labels \"$key\"}}" "$image")"
+  if [ "$landed" != "$expected" ]; then
+    echo >&2 "ERROR: the $key label on $image is '${landed:-<absent>}' — expected $expected. The image carries no usable provenance; do not deploy it."
+    exit 1
+  fi
+}
+verify_label org.opencontainers.image.revision "$source_sha"
+verify_label org.opencontainers.image.base.name "$base_name"
+verify_label org.opencontainers.image.base.digest "$base_digest"
 
 # The immutable provenance record. RepoDigests stays [] until the image is
 # pushed to a registry; until then the image ID is the immutable identity.

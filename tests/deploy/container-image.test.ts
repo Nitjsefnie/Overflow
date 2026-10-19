@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, writeSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { containerBaseLabels } from "../../scripts/container-base-labels.ts";
 import { createDockerImageSuite } from "../support/docker-images";
 
 const dockerfile = readFileSync(
@@ -14,6 +15,13 @@ const dockerignore = readFileSync(
   new URL("../../.dockerignore", import.meta.url),
   "utf8",
 );
+
+// Parse the runtime FROM independently of the production label derivation.
+function expectedBaseLabels(): { baseName: string; baseDigest: string } {
+  const runtimeFrom = /^FROM\s+(node:\d+\.\d+\.\d+-bookworm-slim)@(sha256:[a-fA-F0-9]{64})\s+AS\s+runtime\s*$/m.exec(dockerfile);
+  expect(runtimeFrom, "the runtime stage's digest-pinned node FROM line").not.toBeNull();
+  return { baseName: `docker.io/library/${runtimeFrom![1]}`, baseDigest: runtimeFrom![2] };
+}
 
 describe("Dockerfile", () => {
   it("pins the deps and runtime stages to the bookworm-slim base image by digest", () => {
@@ -191,14 +199,32 @@ describe("image provenance (issue 461)", () => {
     expect(runtime, "the runtime FROM line").toBeGreaterThanOrEqual(0);
     expect(arg, "ARG SOURCE_SHA in the runtime stage").toBeGreaterThan(runtime);
     expect(label, "the revision LABEL using $SOURCE_SHA").toBeGreaterThan(arg);
-    const runtimeStage = dockerfile.split("\n").slice(runtime).join("\n").split(/\nFROM\s/)[0];
-    const runtimeFrom = /^FROM\s+node:\d+\.\d+\.\d+-bookworm-slim@(sha256:[a-fA-F0-9]{64})\s+AS\s+runtime\s*$/m.exec(runtimeStage);
-    expect(runtimeFrom, "the runtime stage's digest-pinned node FROM line").not.toBeNull();
-    const runtimeTag = runtimeFrom![0].split(/\s+/)[1].split("@")[0];
-    expect(runtimeStage).toContain(`org.opencontainers.image.base.name="docker.io/library/${runtimeTag}"`);
-    const baseDigest = /org\.opencontainers\.image\.base\.digest="(sha256:[a-fA-F0-9]{64})"/.exec(runtimeStage);
-    expect(baseDigest, "the runtime stage's base.digest label").not.toBeNull();
-    expect(baseDigest![1], "the base.digest label must match the runtime FROM digest").toBe(runtimeFrom![1]);
+    expect(containerBaseLabels(dockerfile)).toEqual(expectedBaseLabels());
+    expect(dockerfile).not.toContain("org.opencontainers.image.base.name=");
+    expect(dockerfile).not.toContain("org.opencontainers.image.base.digest=");
+  });
+
+  it("rejects Dockerfiles without a pinned node base image", () => {
+    expect(() => containerBaseLabels("FROM scratch AS runtime\n")).toThrow();
+    const unpinned = dockerfile.replace(/@sha256:[a-fA-F0-9]{64}/g, "");
+    expect(() => containerBaseLabels(unpinned)).toThrow();
+  });
+
+  it.each(["tag", "digest"])("rejects node stages with a different %s", (field) => {
+    const { baseName, baseDigest } = expectedBaseLabels();
+    const tag = baseName.replace("docker.io/library/", "");
+    const changed = field === "tag"
+      ? `${tag.replace(/\d+/, (major) => String(Number(major) + 1))}@${baseDigest}`
+      : `${tag}@sha256:${"f".repeat(64) === baseDigest.slice(7) ? "e".repeat(64) : "f".repeat(64)}`;
+    const mismatched = dockerfile.replace(`${tag}@${baseDigest}`, changed);
+    expect(() => containerBaseLabels(mismatched)).toThrow();
+  });
+
+  it("prints the derived labels as JSON when run directly", () => {
+    const output = execFileSync(process.execPath, [
+      fileURLToPath(new URL("../../scripts/container-base-labels.ts", import.meta.url)),
+    ], { encoding: "utf8" });
+    expect(JSON.parse(output)).toEqual(expectedBaseLabels());
   });
 
   it("refuses a build invoked without the SOURCE_SHA provenance, naming the build arg", () => {
@@ -286,6 +312,16 @@ describe("built image", () => {
         const [uid] = configUser.split(":");
         expect(uid.toLowerCase(), "the image runtime user").not.toBe("root");
         expect(uid, "the image runtime uid").not.toBe("0");
+        const labels = JSON.parse(execFileSync("docker", [
+          "image", "inspect", "--format", "{{json .Config.Labels}}", tag,
+        ], { encoding: "utf8" })) as Record<string, string>;
+        const expected = expectedBaseLabels();
+        expect(labels["org.opencontainers.image.base.name"]).toBe(expected.baseName);
+        expect(labels["org.opencontainers.image.base.digest"]).toBe(expected.baseDigest);
+        writeSync(2, `Built image base labels: ${JSON.stringify({
+          baseName: labels["org.opencontainers.image.base.name"],
+          baseDigest: labels["org.opencontainers.image.base.digest"],
+        })}\n`);
       });
     },
   );

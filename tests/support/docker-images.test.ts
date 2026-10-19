@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { createDockerImageSuite } from "./docker-images";
 
 type Command = { command: string; args: string[] };
 const silentLog = () => {};
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 function recorder() {
   const commands: Command[] = [];
@@ -26,7 +29,7 @@ describe("Docker image suite", () => {
     const records: unknown[] = [];
 
     createDockerImageSuite(run, (record) => records.push(record))
-      .withBuiltImage("overflow-576-license", "/repo", "source", () => {});
+      .withBuiltImage("overflow-576-license", repoRoot, "source", () => {});
 
     expect(records).toEqual([{ event: "built", tag: builtTag(commands), imageId: "sha256:built-image" }]);
   });
@@ -35,8 +38,8 @@ describe("Docker image suite", () => {
     const first = recorder();
     const second = recorder();
 
-    createDockerImageSuite(first.run, silentLog).withBuiltImage("overflow-576-license", "/repo", "source", () => {});
-    createDockerImageSuite(second.run, silentLog).withBuiltImage("overflow-576-license", "/repo", "source", () => {});
+    createDockerImageSuite(first.run, silentLog).withBuiltImage("overflow-576-license", repoRoot, "source", () => {});
+    createDockerImageSuite(second.run, silentLog).withBuiltImage("overflow-576-license", repoRoot, "source", () => {});
 
     const firstTag = builtTag(first.commands);
     const secondTag = builtTag(second.commands);
@@ -45,8 +48,16 @@ describe("Docker image suite", () => {
     expect(firstTag).not.toBe(secondTag);
     for (const commands of [first.commands, second.commands]) {
       const build = commands.find(({ args }) => args[0] === "build")!;
-      const label = build.args[build.args.indexOf("--label") + 1]!;
-      expect(label).toBe(`overflow.test-run=${builtTag(commands).split(":")[1]}`);
+      const labels = build.args.flatMap((arg, index) => arg === "--label" ? [build.args[index + 1]] : []);
+      const runtime = /^FROM\s+(node:[^@\s]+)@([^\s]+)\s+AS\s+runtime$/m.exec(
+        readFileSync(new URL("../../Dockerfile", import.meta.url), "utf8"),
+      );
+      expect(runtime).not.toBeNull();
+      expect(labels).toEqual(expect.arrayContaining([
+        `overflow.test-run=${builtTag(commands).split(":")[1]}`,
+        `org.opencontainers.image.base.name=docker.io/library/${runtime![1]}`,
+        `org.opencontainers.image.base.digest=${runtime![2]}`,
+      ]));
     }
   });
 
@@ -56,7 +67,7 @@ describe("Docker image suite", () => {
     const inspected: string[] = [];
 
     for (const base of ["overflow-576-license", "overflow-444-configuser", "overflow-688-prod-only"]) {
-      suite.withBuiltImage(base, "/repo", "source", (tag) => inspected.push(tag));
+      suite.withBuiltImage(base, repoRoot, "source", (tag) => inspected.push(tag));
     }
 
     expect(inspected).toEqual(commands.filter(({ args }) => args[0] === "build").map(({ args }) => args[args.indexOf("-t") + 1]));
@@ -71,7 +82,7 @@ describe("Docker image suite", () => {
     let threw = false;
 
     try {
-      createDockerImageSuite(run, silentLog).withBuiltImage("overflow-576-license", "/repo", "source", () => {
+      createDockerImageSuite(run, silentLog).withBuiltImage("overflow-576-license", repoRoot, "source", () => {
         throw failure;
       });
     } catch (error) {
@@ -99,7 +110,7 @@ describe("Docker image suite", () => {
     };
 
     try {
-      createDockerImageSuite(run, silentLog).withBuiltImage("overflow-576-license", "/repo", "source", () => {});
+      createDockerImageSuite(run, silentLog).withBuiltImage("overflow-576-license", repoRoot, "source", () => {});
     } catch (error) {
       threw = true;
       caught = error;
@@ -119,7 +130,7 @@ describe("Docker image suite", () => {
     };
 
     try {
-      createDockerImageSuite(run, silentLog).withBuiltImage("overflow-576-license", "/repo", "source", () => {});
+      createDockerImageSuite(run, silentLog).withBuiltImage("overflow-576-license", repoRoot, "source", () => {});
     } catch (error) {
       threw = true;
       caught = error;
@@ -139,7 +150,7 @@ describe("Docker image suite", () => {
     let caught: unknown;
     let threw = false;
     try {
-      createDockerImageSuite(run, silentLog).withBuiltImage("overflow-576-license", "/repo", "source", () => {
+      createDockerImageSuite(run, silentLog).withBuiltImage("overflow-576-license", repoRoot, "source", () => {
         throw bodyFailure;
       });
     } catch (error) {
