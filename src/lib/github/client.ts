@@ -839,7 +839,7 @@ export class GitHubGateway implements ForgeGateway {
     return page;
   }
 
-  private async request(path: string, init: RequestInit = {}, additionalCredentials: readonly string[] = []): Promise<GitHubRestResponse> {
+  public async request(path: string, init: RequestInit = {}, additionalCredentials: readonly string[] = []): Promise<GitHubRestResponse> {
     const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     // One absolute deadline covers headers and body: require progress within

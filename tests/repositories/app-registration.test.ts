@@ -65,6 +65,7 @@ async function harness(permissions: { admin?: boolean } | null = { admin: true }
       [...input.openingLabels, ...input.actualLabels].map(({ label }) => ({ name: label })),
     );
     if (path === `/repos/${ownerName}/contents/.github/workflows`) return Response.json([]);
+    if (path === "/repos/Nitjsefnie-Actions/claim/git/matching-refs/tags/v") return Response.json([]);
     throw new Error(`Unexpected GitHub call: ${path}`);
   };
   const lookups: string[] = [];
@@ -96,7 +97,8 @@ describe("registration through the GitHub App", () => {
     expect(h.lookups).toEqual([h.ownerName]);
     expect(h.imports).toEqual([result.id]);
     expect(h.requests).toEqual([`GET /repos/${h.ownerName}`, `GET /repos/${h.ownerName}/labels`,
-      `GET /repos/${h.ownerName}/contents/.github/workflows`]);
+      `GET /repos/${h.ownerName}/contents/.github/workflows`,
+      "GET /repos/Nitjsefnie-Actions/claim/git/matching-refs/tags/v"]);
   });
 
   it("refuses a repository without an installation before writing anything", async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { GitHubGateway } from "@/lib/github/client";
 import { classifyGitHubRateLimit, GitHubApiError, isUnclassifiedGitHubFailure } from "@/lib/github/errors";
 import { CollectionWalkBound, MAX_WALK_ITEMS } from "@/lib/github/collection-walk-bound";
 import type { GitHubRepository } from "@/lib/github/types";
@@ -817,6 +818,42 @@ describe("explicit repository registration", () => {
     });
     expect(harness.workflowReadRepositoryCounts).toEqual([1]);
     expect(harness.githubCalls.at(-1)).toBe("listWorkflowFiles:octo/overflow");
+  });
+
+  it("resolves releases once per registration for all workflows and refreshes for the next registration", async () => {
+    const sha = "cd8ffd8227e94cdf60ed2580016187353b055cf4";
+    let requests = 0;
+    const harness = createHarness({ workflows: [
+      { path: "ci.yml", content: "on: push" },
+      { path: "claim.yml", content: `on: issue_comment\njobs:\n  claim:\n    steps:\n      - uses: Nitjsefnie-Actions/claim@${sha}` },
+    ] });
+    const transport = new GitHubGateway({ accessToken: "test-token", fetch: async (input) => {
+      expect(String(input)).toBe("https://api.github.com/repos/Nitjsefnie-Actions/claim/git/matching-refs/tags/v");
+      requests += 1;
+      return Response.json(requests === 1 ? [{ ref: "refs/tags/v2.0.4", object: { sha, type: "commit" } }] : []);
+    } });
+    Object.assign(harness.dependencies.github, { request: transport.request.bind(transport) });
+    await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({ claimPath: "EVIDENCE_FOUND" });
+    expect(requests).toBe(1);
+    await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({ claimPath: "NO_EVIDENCE_FOUND" });
+    expect(requests).toBe(2);
+  });
+
+  it.each(["network", "http", "malformed", "timeout"])("keeps text evidence and registration when release lookup has a %s failure", async (failure) => {
+    for (const [workflows, expected] of [[ [claimWorkflow], "EVIDENCE_FOUND" ], [ [], "NO_EVIDENCE_FOUND" ]] as const) {
+      const harness = createHarness({ workflows: [...workflows] });
+      const transport = new GitHubGateway({ accessToken: "test-token", timeoutMs: 20, fetch: async () => {
+        if (failure === "network") throw new Error("offline");
+        if (failure === "timeout") return new Promise(() => {});
+        return failure === "http" ? new Response("bad gateway", { status: 502 }) : Response.json({ bad: "shape" });
+      } });
+      const request = vi.spyOn(transport, "request");
+      Object.assign(harness.dependencies.github, { request: request.bind(transport) });
+      await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
+        id: "registered-repository-id", initialImportScheduled: true, claimPath: expected,
+      });
+      expect(request).toHaveBeenCalledTimes(1);
+    }
   });
 
   it.each([

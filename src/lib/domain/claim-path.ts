@@ -1,7 +1,8 @@
 /*
  * NO_EVIDENCE_FOUND is the reliable, actionable answer: no workflow both reacts
- * to issue comments and references issue assignment. It is the warning signal.
- * EVIDENCE_FOUND means only that a workflow mentions both, not that it assigns
+ * to issue comments and references issue assignment or a released shared claim
+ * action SHA. Released SHAs are resolved once per registration from v* tags.
+ * EVIDENCE_FOUND means only that a workflow has both signals, not that it assigns
  * the commenter. It deliberately causes no warning: a wrong EVIDENCE_FOUND
  * leaves the sponsor where they were before this check, while a wrong
  * NO_EVIDENCE_FOUND warns about a fix they may already have.
@@ -33,12 +34,14 @@ export type ClaimPathVerdict = ClaimPathAssessment | "NOT_CHECKED";
 const assigneesCollection = /(?<![\w.~%+:=$-])issues\/[^/\r\n]+\/assignees(?=$|[\s"'`;&|)<>?#\\])/;
 const additiveCall = /\baddAssigneesToAssignable\b|\bissues\s*\.\s*addAssignees\b/;
 const deletion = /(?:-X\s*|--method(?:\s+|=))["']?DELETE\b|\bremoveAssignees(?:FromAssignable)?\b/i;
-// The reviewed revision of the shared claim action (v2.0.5), matched exactly.
-// Bumping the pin in .github/workflows/claim.yml is another edit here, or this
-// repository's own claim path stops being recognised as evidence of one.
-const reviewedClaimAction = "Nitjsefnie-Actions/claim@4c781a9b0ce62ff263a65226f6005d412cea6ae1";
+// Only the exact shared action name and a SHA in the registration's release
+// set qualify. Tag and branch refs never enter that set.
+const claimActionPrefix = "Nitjsefnie-Actions/claim@";
 
-export function assessClaimPath(workflows: readonly ClaimPathEvidence[]): ClaimPathAssessment {
+export function assessClaimPath(
+  workflows: readonly ClaimPathEvidence[],
+  releasedClaimShas: ReadonlySet<string>,
+): ClaimPathAssessment {
   for (const { content } of workflows) {
     let document: unknown;
     try {
@@ -71,11 +74,13 @@ export function assessClaimPath(workflows: readonly ClaimPathEvidence[]): ClaimP
       || (trigger instanceof Map && trigger.has("issue_comment"));
 
     const jobs: unknown = document.get("jobs");
-    const usesReviewedClaimAction = jobs instanceof Map && [...jobs.values()].some((job: unknown) => {
+    const usesReleasedClaimAction = jobs instanceof Map && [...jobs.values()].some((job: unknown) => {
       const steps: unknown = job instanceof Map ? job.get("steps") : undefined;
-      return Array.isArray(steps) && steps.some(
-        (step: unknown) => step instanceof Map && step.get("uses") === reviewedClaimAction,
-      );
+      return Array.isArray(steps) && steps.some((step: unknown) => {
+        const uses: unknown = step instanceof Map ? step.get("uses") : undefined;
+        return typeof uses === "string" && uses.startsWith(claimActionPrefix)
+          && releasedClaimShas.has(uses.slice(claimActionPrefix.length));
+      });
     });
 
     // Join shell continuations before splitting commands for the REST deletion scan.
@@ -84,7 +89,7 @@ export function assessClaimPath(workflows: readonly ClaimPathEvidence[]): ClaimP
     const referencesAssignment = additiveCall.test(content) || content.replace(/\\\r?\n/g, "").split(/\r?\n/).some(
       (line) => line.split(/&&|\|\||[;|&]/).some((segment) => assigneesCollection.test(segment) && !deletion.test(segment)),
     );
-    if (reactsToComments && (usesReviewedClaimAction || referencesAssignment)) {
+    if (reactsToComments && (usesReleasedClaimAction || referencesAssignment)) {
       return "EVIDENCE_FOUND";
     }
   }
