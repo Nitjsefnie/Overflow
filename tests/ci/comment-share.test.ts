@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -76,6 +77,16 @@ describe("the comment-share measurement and privileged handoff", () => {
     expect(steps.some((step) => /^actions\/checkout(?:@|$)/.test(step.uses ?? ""))).toBe(false);
     const push = steps.find((step) => Object.hasOwn(step.env ?? {}, "MASTER_PUSH_DEPLOY_KEY"));
     expect(push).toBeDefined();
-    expect(push!.run).toMatch(/if \[ -z "\$\{MASTER_PUSH_DEPLOY_KEY:-\}" \]; then[\s\S]*?exit 1/);
+    // Execute only this guard: a later artifact failure must not stand in
+    // for rejecting an empty key, and no privileged side effect may run.
+    const guard = push!.run!.match(/^if \[ -z "\$\{MASTER_PUSH_DEPLOY_KEY:-\}" \]; then\n[\s\S]*?^fi$/m);
+    expect(guard, "the empty-key guard must be present as a complete block").not.toBeNull();
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-c", guard![0]], {
+      env: { PATH: process.env.PATH, MASTER_PUSH_DEPLOY_KEY: "" },
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, "an empty deploy key must fail in its own guard").toBe(1);
   });
 });
