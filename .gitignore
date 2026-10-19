@@ -260,6 +260,10 @@ src/lib/fold/*
 !src/lib/fold/*.ts
 !src/lib/fold/reconciliation-evidence.ts
 !src/lib/fold/reconciliation-fairness.ts
+!src/lib/fold/sweep-request-budget.ts
+!src/lib/fold/sweep-round-store.ts
+!src/lib/fold/sweep-pass.ts
+!src/lib/fold/sweep-pass-store.ts
 !src/lib/fold/policy-violation-record.ts
 !src/lib/github/
 src/lib/github/*
@@ -319,6 +323,7 @@ db/migrations/*
 !db/migrations/026_incremental_reconciliation.sql
 !db/migrations/028_repository_reconciliation_cost.sql
 !db/migrations/052_repository_policy_violations.sql
+!db/migrations/067_reconciliation_sweep_round.sql
 
 !deploy/
 deploy/*
@@ -405,6 +410,8 @@ tests/dashboard/*
 !tests/db/
 tests/db/*
 !tests/db/*.ts
+!tests/db/sweep-round-store.test.ts
+!tests/db/sweep-pass-store.test.ts
 !tests/db/postgres-url-host.test.ts
 !tests/db/reconciliation-evidence.test.ts
 !tests/db/reconciliation-cost.test.ts
@@ -424,6 +431,7 @@ tests/domain/*
 tests/fold/*
 !tests/fold/*.ts
 !tests/fold/reconciliation-fairness.test.ts
+!tests/fold/sweep-request-budget.test.ts
 !tests/fold/incremental-reconciliation.test.ts
 !tests/github/
 tests/github/*

@@ -1,3 +1,5 @@
+import type { ReconciliationSweepControl } from "@/lib/fold/sweep-pass";
+import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import type { ReconciliationGateway, ReconciliationStore } from "@/lib/fold/reconcile";
 import {
   reconcileRepository,
@@ -32,6 +34,8 @@ import type { AppInstallationTokenResolver } from "@/lib/github/app-installation
  */
 export type ReconcileAsSponsorOptions = {
   rederive?: boolean;
+  reason?: ReconciliationJobReason;
+  sweep?: ReconciliationSweepControl;
   /** Decrypts the linked identity's PAT for a GitLab repository's instance. */
   resolveForgeToken?: (userId: string, instanceUrl: string) => Promise<{ token: string; identityId: string } | null>;
   /**
@@ -65,6 +69,7 @@ export function reconcileRepositoryAsSponsor(
   return reconcileRepository(
     {
       store,
+      sweep: options?.sweep,
       github: sponsorGateway(
         store,
         repositoryId,
@@ -75,7 +80,7 @@ export function reconcileRepositoryAsSponsor(
       ),
     },
     repositoryId,
-    { rederive: options?.rederive },
+    { rederive: options?.rederive, reason: options?.reason },
   );
 }
 

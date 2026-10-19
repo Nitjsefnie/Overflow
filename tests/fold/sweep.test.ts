@@ -190,6 +190,22 @@ describe("scheduled reconciliation sweep", () => {
     },
   );
 
+  it("offers only the durable round's next slot on a paced sweep tick", async () => {
+    const offered: string[] = [];
+    const ticks: Date[] = [];
+    const summary = await sweepReconciliations({
+      listActiveRepositoryIds: async () => ["a", "b", "c"],
+      now: () => new Date("2030-01-01T00:00:00Z"),
+      round: { enqueueNext: async (ids, now, _limit, enqueue) => {
+        expect(ids).toEqual(["a", "b", "c"]); ticks.push(now); await enqueue("b"); return "b";
+      } },
+      enqueue: async (id) => { offered.push(id); },
+    });
+    expect(offered).toEqual(["b"]);
+    expect(ticks).toEqual([new Date("2030-01-01T00:00:00Z")]);
+    expect(summary).toEqual({ attempted: 1, enqueued: 1, failed: 0 });
+  });
+
   it("enqueues every active repository", async () => {
     const enqueued: string[] = [];
 

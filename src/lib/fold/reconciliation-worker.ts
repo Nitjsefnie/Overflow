@@ -1,7 +1,7 @@
 import { findGitHubRateLimitError, githubRateLimitNotBefore } from "@/lib/github/errors";
 import { callGuarded } from "@/lib/fold/guarded-callback";
 import { errorLogToken } from "@/lib/webhooks/log-field";
-import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
+import type { ClaimedReconciliationJob, ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import { FailureLogger } from "@/lib/worker/failure-logger";
 
 /**
@@ -26,7 +26,7 @@ type LeaseRenewalCancellation = () => void | PromiseLike<unknown>;
 
 export type ReconciliationWorkerDependencies = {
   store: ReconciliationWorkerStore;
-  reconcile(repositoryId: string, options: { rederive: boolean }): Promise<{ skipped?: boolean; budgetHeldUntil?: Date; fairnessHeldUntil?: Date } | void>;
+  reconcile(repositoryId: string, options: { rederive: boolean; reason: ReconciliationJobReason }): Promise<{ skipped?: boolean; budgetHeldUntil?: Date; fairnessHeldUntil?: Date; sweepHeldUntil?: Date; sweepPending?: boolean } | void>;
   now?: () => Date;
   /** Setup owns its cleanup; stopping awaits even a cancellation handle delivered late. */
   scheduleLeaseRenewal?(
@@ -261,9 +261,9 @@ export async function runNextReconciliationJob(
     stopRenewal = startLeaseRenewal(dependencies, job);
     const now = dependencies.now ?? (() => new Date());
 
-    let result: { skipped?: boolean; budgetHeldUntil?: Date; fairnessHeldUntil?: Date } | void;
+    let result: { skipped?: boolean; budgetHeldUntil?: Date; fairnessHeldUntil?: Date; sweepHeldUntil?: Date; sweepPending?: boolean } | void;
     try {
-      result = await dependencies.reconcile(job.repositoryId, { rederive: job.rederivationRequestedAt !== null });
+      result = await dependencies.reconcile(job.repositoryId, { rederive: job.rederivationRequestedAt !== null, reason: job.reason });
     } catch (error) {
       // One unreachable repository must not stop the worker draining the rest, so
       // the failure is recorded on its own job and never propagated to the drain.
@@ -293,13 +293,13 @@ export async function runNextReconciliationJob(
       return "RETRY_SCHEDULED";
     }
 
-    if (result?.skipped) {
+    if (result?.skipped && !result.sweepPending) {
       await store.deferReconciliationJob(
         job.id,
         job.leaseToken,
-        result.budgetHeldUntil ?? result.fairnessHeldUntil ?? await deferralTime(store, job.repositoryId, now()),
+        result.sweepHeldUntil ?? result.budgetHeldUntil ?? result.fairnessHeldUntil ?? await deferralTime(store, job.repositoryId, now()),
       );
-      return result.budgetHeldUntil ? "BUDGET_HELD" : "DEFERRED";
+      return result.sweepHeldUntil || result.budgetHeldUntil ? "BUDGET_HELD" : "DEFERRED";
     }
 
     await store.completeReconciliationJob(job.id, job.leaseToken, job.rederivationGeneration);

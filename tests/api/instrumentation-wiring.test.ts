@@ -94,7 +94,7 @@ beforeEach(() => {
   startWorker.mockReset();
   sweep.mockReset();
   drain.mockReset().mockImplementation(async (dependencies: ReconciliationWorkerDependencies) => {
-    await dependencies.reconcile("repository-1", { rederive: false });
+    await dependencies.reconcile("repository-1", { rederive: false, reason: "SWEEP" });
     return [];
   });
   resolveToken.mockReset().mockResolvedValue({ token: "token-a", identityId: "identity-a" });

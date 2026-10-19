@@ -1,3 +1,4 @@
+import { checkSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import { createPrivateKey, createSign, type KeyObject } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
@@ -260,6 +261,7 @@ function createAppInstallationAuth(options: AppInstallationAuthOptions) {
     jwt: string,
     requestBody: string | undefined,
   ): Promise<JwtAppResponse> {
+    await checkSweepRequestBudget();
     let response: Response;
     try {
       response = await fetchImplementation(`${apiUrl}${path}`, {

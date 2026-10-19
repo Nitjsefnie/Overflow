@@ -37,6 +37,18 @@ const DEFAULTED_CONCURRENCY_MESSAGE =
   "Reconciliation worker concurrency could not be used; drains use the default concurrency instead";
 
 describe("running the next reconciliation job", () => {
+  it("passes the persisted reason and defers a sweep-budget hold without burning attempts", async () => {
+    const { store, calls } = createFakeStore({ jobs: [job({ reason: "WEBHOOK", attemptCount: 5 })] });
+    const resetAt = new Date("2030-01-02T12:00:00Z");
+    let reason: string | undefined;
+    const outcome = await runNextReconciliationJob({ store, scheduleLeaseRenewal: () => () => {},
+      reconcile: async (_id, options) => { reason = options.reason; return { skipped: true, sweepHeldUntil: resetAt }; },
+    });
+    expect(reason).toBe("WEBHOOK");
+    expect(outcome).toBe("BUDGET_HELD");
+    expect(calls).toEqual([{ method: "claim", args: [] }, { method: "defer", args: ["job-1", "lease-1", resetAt] }]);
+  });
+
   it.each(["cause", "rateLimited", "retryAfterSeconds", "deadline", "headers", "instanceof", "has"] as const)(
     "keeps ordinary FAILED bookkeeping when %s cannot be read", async (field) => {
       let failure: Error = new Error("Upstream failure");

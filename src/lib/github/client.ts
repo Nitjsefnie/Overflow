@@ -1,4 +1,6 @@
+import { checkpointSweepRestRequest } from "@/lib/fold/sweep-pass";
 import { z } from "zod";
+import { checkSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import { CollectionWalkBound } from "@/lib/github/collection-walk-bound";
 import { githubWebhookEvents } from "@/lib/github/webhook-schema";
@@ -840,10 +842,12 @@ export class GitHubGateway implements ForgeGateway {
   }
 
   public async request(path: string, init: RequestInit = {}, additionalCredentials: readonly string[] = []): Promise<GitHubRestResponse> {
+    return checkpointSweepRestRequest(["rest", this.apiUrl, path, init.method, init.body], () => this.requestUncached(path, init, additionalCredentials));
+  }
+  private async requestUncached(path: string, init: RequestInit, additionalCredentials: readonly string[]): Promise<GitHubRestResponse> {
+    await checkSweepRequestBudget();
     const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
-    // One absolute deadline covers headers and body: require progress within
-    // timeoutMs, not just liveness from trickling bytes. Never reset per chunk.
     const deadline = new Promise<never>((_resolve, reject) => {
       timeout = setTimeout(() => {
         const error = new Error("GitHub request timed out.");
@@ -851,7 +855,6 @@ export class GitHubGateway implements ForgeGateway {
         reject(error);
       }, this.timeoutMs);
     });
-    // Injected transports can ignore abort, so race both headers and body reads.
     const beforeDeadline = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, deadline]);
 
     try {
@@ -860,7 +863,6 @@ export class GitHubGateway implements ForgeGateway {
         headers: githubHeaders(this.accessToken, init.headers),
         signal: controller.signal,
       }).then((received) => {
-        // An abort-ignoring transport can still deliver a body after the deadline.
         if (controller.signal.aborted) {
           void received.body?.cancel().catch(() => undefined);
           controller.signal.throwIfAborted();
@@ -869,15 +871,13 @@ export class GitHubGateway implements ForgeGateway {
       }));
 
       if (!response.ok) {
-        // HTTP failure intentionally takes precedence over a body timeout; pinned by
-        // "preserves the HTTP failure when reading its body is aborted" in graphql.test.ts.
+        // Preserve HTTP failures when reading the body times out.
         const body = await beforeDeadline(boundedResponseText(response, Infinity, controller.signal)).catch(() => null);
         const { rateLimited, retryAfterSeconds } = classifyGitHubRateLimit(response.status, response.headers, body);
         throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body, response.headers, [this.accessToken, ...additionalCredentials]);
       }
 
-      // Drain successful bodies even when callers only need the status. Past the
-      // success-path cap the request rejects; the body is never silently emptied.
+      // Drain successful bodies, rejecting those past the success-path cap.
       const body = await beforeDeadline(boundedResponseText(response, MAX_SUCCESS_BODY_BYTES, controller.signal));
       if (body === null) {
         throw new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES);
