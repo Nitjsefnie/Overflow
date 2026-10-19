@@ -7,7 +7,7 @@ name: claim
 # only the commenter's OWN assignment.
 
 on:
-  issue_comment:
+  issue_comment:  # zizmor: ignore[dangerous-triggers]
     types: [created]
 
 concurrency:
@@ -45,7 +45,7 @@ jobs:
       pull-requests: write
 
     steps:
-      - uses: Nitjsefnie-Actions/claim@cd8ffd8227e94cdf60ed2580016187353b055cf4 # v2.0.4
+      - uses: Nitjsefnie-Actions/claim@4c781a9b0ce62ff263a65226f6005d412cea6ae1 # v2.0.5
         with:
           # The claim policy, from the action's own reference block. Without it the limits are
           # unenforced: one account can hold an unbounded number of claims, so a handful of
