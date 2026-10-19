@@ -170,10 +170,26 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
     }
 
     try {
-      const registrationDependencies = await dependencies.createRegistrationDependencies(
-        authorized.session,
-        input,
-      );
+      let registrationDependencies: RepositoryRegistrationDependencies;
+      try {
+        registrationDependencies = await dependencies.createRegistrationDependencies(
+          authorized.session,
+          input,
+        );
+      } catch (error) {
+        // Domain refusals and classified forge failures keep their existing
+        // mappings below; unexpected setup failures belong to this server.
+        if (
+          error instanceof RepositoryRegistrationError ||
+          error instanceof ForgeIdentityError ||
+          error instanceof GitHubWebhookScopeError ||
+          error instanceof GitHubScopeProbeError
+        ) {
+          throw error;
+        }
+        console.error(`Repository registration failed: ${describeErrorCause(error)}`);
+        return errorResponse(500, "INTERNAL_ERROR", "Unable to initialize repository registration.");
+      }
       const registration = await registerRepository(
         registrationDependencies,
         input,
@@ -221,6 +237,7 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
         return forgeIdentityErrorResponse(error);
       }
 
+      console.error("Repository registration failed.", error);
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
     }
   };
@@ -258,10 +275,26 @@ export function createRepositoryPatchHandler(dependencies: RepositoryRouteDepend
     }
 
     try {
-      const registrationDependencies = await dependencies.createRegistrationDependencies(
-        authorized.session,
-        input,
-      );
+      let registrationDependencies: RepositoryRegistrationDependencies;
+      try {
+        registrationDependencies = await dependencies.createRegistrationDependencies(
+          authorized.session,
+          input,
+        );
+      } catch (error) {
+        // Domain refusals and classified forge failures keep their existing
+        // mappings below; unexpected setup failures belong to this server.
+        if (
+          error instanceof RepositoryRegistrationError ||
+          error instanceof ForgeIdentityError ||
+          error instanceof GitHubWebhookScopeError ||
+          error instanceof GitHubScopeProbeError
+        ) {
+          throw error;
+        }
+        console.error(`Repository registration failed: ${describeErrorCause(error)}`);
+        return errorResponse(500, "INTERNAL_ERROR", "Unable to initialize repository registration.");
+      }
       const change = await changeRepositoryCatalog(registrationDependencies, input);
       return Response.json({
         changed: change.changed,
@@ -277,6 +310,7 @@ export function createRepositoryPatchHandler(dependencies: RepositoryRouteDepend
         return forgeIdentityErrorResponse(error);
       }
 
+      console.error("Repository catalog change failed.", error);
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
     }
   };
@@ -317,10 +351,26 @@ export function createRepositoryDeleteHandler(dependencies: RepositoryRouteDepen
     }
 
     try {
-      const registrationDependencies = await dependencies.createRegistrationDependencies(
-        authorized.session,
-        input,
-      );
+      let registrationDependencies: RepositoryRegistrationDependencies;
+      try {
+        registrationDependencies = await dependencies.createRegistrationDependencies(
+          authorized.session,
+          input,
+        );
+      } catch (error) {
+        // Domain refusals and classified forge failures keep their existing
+        // mappings below; unexpected setup failures belong to this server.
+        if (
+          error instanceof RepositoryRegistrationError ||
+          error instanceof ForgeIdentityError ||
+          error instanceof GitHubWebhookScopeError ||
+          error instanceof GitHubScopeProbeError
+        ) {
+          throw error;
+        }
+        console.error(`Repository unregistration failed: ${describeErrorCause(error)}`);
+        return errorResponse(500, "INTERNAL_ERROR", "Unable to unregister the repository.");
+      }
       const result = await unregisterRepository(registrationDependencies, input);
       return Response.json({
         repository: repositoryResponse(result.repository),
@@ -340,6 +390,7 @@ export function createRepositoryDeleteHandler(dependencies: RepositoryRouteDepen
         return forgeIdentityErrorResponse(error);
       }
 
+      console.error("Repository unregistration failed.", error);
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to unregister the repository.");
     }
   };
@@ -396,15 +447,17 @@ async function authorizeRepositoryRequest(
     let role: UserRole | null;
     try {
       role = await dependencies.getCurrentRole(resolved.session.user.id);
-    } catch {
-      return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
+    } catch (error) {
+      console.error(`Repository authorization failed: ${describeErrorCause(error)}`);
+      return errorResponse(500, "INTERNAL_ERROR", "Unable to initialize repository registration.");
     }
     if (role === null) {
       return errorResponse(403, "FORBIDDEN", "A member account is required.");
     }
     return resolved;
-  } catch {
-    return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
+  } catch (error) {
+    console.error(`Repository authorization failed: ${describeErrorCause(error)}`);
+    return errorResponse(500, "INTERNAL_ERROR", "Unable to initialize repository registration.");
   }
 }
 
