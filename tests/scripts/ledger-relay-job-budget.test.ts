@@ -5,8 +5,8 @@ import { resolve } from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 
-import { REQUEST_TIMEOUT_MS } from "../../scripts/ledger-relay-http.ts";
-import { JOB_DEADLINE_MARGIN_MS, RELAY_JOB_TIMEOUT_MINUTES, jobStartDeadline } from "../../scripts/ledger-relay-job-budget.ts";
+import { REQUEST_TIMEOUT_MS, type RelayHttpDeps } from "../../scripts/ledger-relay-http.ts";
+import { JOB_DEADLINE_MARGIN_MS, RELAY_JOB_TIMEOUT_MINUTES, jobStartDeadline, readEffectiveDeadline } from "../../scripts/ledger-relay-job-budget.ts";
 import { runRelay, type RelayDeps } from "../../scripts/ledger-relay.ts";
 
 /**
@@ -93,6 +93,43 @@ function world(entryMs: number, stepMs = seconds(5)) {
 }
 
 const writesOf = (requests: Recorded[]) => requests.filter(({ method }) => method === "POST");
+
+describe("the ledger relay's effective deadline", () => {
+  it("returns the supplied entry deadline unchanged when the listed job start is stale", async () => {
+    const nowMs = JOB_STARTED_AT + seconds(1385);
+    const deps: RelayHttpDeps = {
+      deadlineMs: nowMs + seconds(600), nowFn: () => nowMs,
+      fetchFn: async () => response({ jobs: [ownJob()] }), delayFn: async () => undefined,
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const deadline = await readEffectiveDeadline(deps, {
+        repo: REPO, runId: RUN_ID, runAttempt: ATTEMPT, workflowToken: WORKFLOW_TOKEN,
+      });
+
+      expect(deadline).toBe(deps.deadlineMs);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.each([30, 600])(
+    "returns the earlier of the entry and job-start deadlines when the relay enters %i s after a fresh job start",
+    async (entrySeconds) => {
+      const nowMs = JOB_STARTED_AT + seconds(entrySeconds);
+      const deps: RelayHttpDeps = {
+        deadlineMs: nowMs + seconds(600), nowFn: () => nowMs,
+        fetchFn: async () => response({ jobs: [ownJob()] }), delayFn: async () => undefined,
+      };
+
+      const deadline = await readEffectiveDeadline(deps, {
+        repo: REPO, runId: RUN_ID, runAttempt: ATTEMPT, workflowToken: WORKFLOW_TOKEN,
+      });
+
+      expect(deadline).toBe(Math.min(deps.deadlineMs, jobStartDeadline(JOB_STARTED_AT)));
+    },
+  );
+});
 
 describe("the ledger relay's job-start budget", () => {
   it("reads its own job's start with the workflow token before any other request", async () => {
