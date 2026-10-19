@@ -513,11 +513,6 @@ section names and order and removing its instruction comments. Claim the issue
 before submitting, confirm its assignment, and put closing references under
 Related Issues and Pull Requests.
 
-Overflow's [caller workflow](.github/workflows/pr-gate.yml) uses the
-[shared admission action at the reviewed revision](https://github.com/Nitjsefnie-Actions/pr-gate/tree/829cef9e10e31b48ce1590181d5cf82d6b5cbfa9).
-That SHA-pinned action is the implementation authority; its documentation
-describes the admission and recovery rules.
-
 If the gate comments or closes your PR, correct the reported items and edit
 that same PR body. Every corrective edit reruns the caller. Once checks pass,
 the shared action can reopen a PR it closed itself.
@@ -555,12 +550,6 @@ Environment / Context and Suggested Fix are optional; keep them only when
 version, configuration or data conditions genuinely matter.
 
 ### Claim it before you start
-
-The [claim caller](.github/workflows/claim.yml) uses the
-[shared claim action at the reviewed revision](https://github.com/Nitjsefnie-Actions/claim/tree/4c781a9b0ce62ff263a65226f6005d412cea6ae1).
-That SHA-pinned action is the implementation authority for the claim and release
-commands; the caller retains this repository's event, permission, concurrency and
-claim policy.
 
 Comment `/claim` on an open, unassigned issue and
 [`.github/workflows/claim.yml`](.github/workflows/claim.yml) assigns you. You do
