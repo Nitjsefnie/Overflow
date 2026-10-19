@@ -2028,25 +2028,6 @@ describe("DELETE /api/repositories", () => {
     });
   });
 
-  it("returns a structured 500 when the route's registration dependencies cannot be built", async () => {
-    consoleOutputAllowed.add("error");
-    const handler = createRepositoryDeleteHandler({
-      findAccountByTokenHash: async () => null,
-      getCurrentRole: async () => "MEMBER",
-      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
-      createRegistrationDependencies: async () => {
-        throw new Error("GitHub webhook configuration must be set.");
-      },
-    });
-
-    const response = await handler(jsonRequest(validUnregisterInput(), "DELETE"));
-
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({
-      error: { code: "INTERNAL_ERROR", message: "Unable to unregister the repository." },
-    });
-    expect(console.error).toHaveBeenCalledExactlyOnceWith("Repository unregistration failed: Error: GitHub webhook configuration must be set.");
-  });
 
   // A cross-site form post carries the session cookie by itself, so a forged
   // unregistration must cost the server nothing: no token lookup, no session

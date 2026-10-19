@@ -57,6 +57,37 @@ function authorizedRequest(body: unknown) {
 }
 
 describe("repository route internal failures", () => {
+  it.each([
+    { causeId: "webhook-configuration", message: "GitHub webhook configuration must be set.", secret: false },
+    { causeId: "repository-store", message: "Repository store setup failed.", secret: true },
+  ])("logs the current DELETE wiring cause $causeId and redacts credentials", async ({ causeId, message, secret }) => {
+    const githubToken = `ghp_${"delete-wiring-credential".replaceAll("-", "")}`;
+    const connectionUrl = `postgres://member:${"database-password"}@localhost/overflow`;
+    const credentials = secret ? ` ${apiToken} ${githubToken} ${connectionUrl}` : "";
+    const handler = createRepositoryDeleteHandler({
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => { throw new Error(`${message} cause=${causeId}${credentials}`); },
+    });
+
+    const response = await handler(jsonRequest(validUnregisterInput(), "DELETE"));
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INTERNAL_ERROR", message: "Unable to unregister the repository." },
+    });
+    const redacted = secret ? " ovf_*** ghp_*** postgres://***@localhost/overflow" : "";
+    expect(console.error).toHaveBeenCalledExactlyOnceWith(
+      `Repository unregistration failed: Error: ${message} cause=${causeId}${redacted}`,
+    );
+    const output = vi.mocked(console.error).mock.calls.flat().map(String).join("\n");
+    expect(output).toContain(causeId);
+    for (const credential of [apiToken, githubToken, connectionUrl, "database-password"]) {
+      expect(output).not.toContain(credential);
+    }
+  });
+
   it("keeps an exported POST scope-probe transport rejection upstream and logs the original error", async () => {
     readSession.mockResolvedValue({ user: { id: "member-id", role: "MEMBER" } });
     vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken").mockResolvedValue("synthetic-identity-token");
