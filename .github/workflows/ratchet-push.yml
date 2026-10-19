@@ -1,0 +1,175 @@
+name: ratchet push
+
+# Measurement stays keyless. Only this data-only job enters main-push and
+# authenticates using its deploy key. No fetched source is checked out or run.
+# Three-way merges preserve intervening records; stale conflicts wait for the
+# next main measurement. A rejected push on unchanged main is a hard error.
+on:
+  # This definition comes from main. Only successful push runs on main enter
+  # the environment, and only their records artifact is downloaded as data.
+  workflow_run:  # zizmor: ignore[dangerous-triggers]
+    workflows: [comment share]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  # Preserve an in-flight commit and push. A newer pending measurement may
+  # replace an older pending one; it will merge against freshly fetched main.
+  group: ratchet-push
+  cancel-in-progress: false
+
+jobs:
+  push:
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success'
+    environment: main-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+    steps:
+      - name: List the triggering run's artifacts
+        id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          # A failed API call is an error, never evidence of unchanged records.
+          # Pagination and uncached reads cover every live artifact of this run.
+          set -o pipefail
+          names="$(gh api -H 'Cache-Control: no-cache' --paginate \
+            "repos/$REPO/actions/runs/$RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.expired != true) | .name' \
+            | sort -u)"
+          records=false
+          # No artifact is the normal no-tightening result and needs no key.
+          if printf '%s\n' "$names" | grep -qx 'comment-share-ratchet'; then
+            records=true
+          fi
+          echo "records=$records" >> "$GITHUB_OUTPUT"
+
+      - name: Download the comment-share records
+        # Cross-run download is bound to the triggering run and its read token.
+        if: steps.list.outputs.records == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: comment-share-ratchet
+          path: ${{ runner.temp }}/comment-share-data
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Push the tightened record to main
+        if: steps.list.outputs.records == 'true'
+        env:
+          MASTER_PUSH_DEPLOY_KEY: ${{ secrets.MASTER_PUSH_DEPLOY_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Fail closed: the environment key is the only push credential.
+          # Missing configuration must never fall back to the workflow token.
+          if [ -z "${MASTER_PUSH_DEPLOY_KEY:-}" ]; then
+            echo "MASTER_PUSH_DEPLOY_KEY is empty: the main-push environment is missing its secret" >&2
+            exit 1
+          fi
+          # Absence was handled by the listing step. A selected but incomplete
+          # artifact is a broken handoff, not an unchanged-records decision.
+          if [ ! -f "$RUNNER_TEMP/comment-share-data/comment-share.json" ]; then
+            echo "artifact comment-share-ratchet is missing comment-share.json" >&2
+            exit 1
+          fi
+          eval "$(ssh-agent -s)" >/dev/null
+          # Scope key lifetime to this step, including every early-exit path.
+          trap 'kill "$SSH_AGENT_PID" 2>/dev/null || true' EXIT
+          ssh-add <(printf '%s\n' "$MASTER_PUSH_DEPLOY_KEY") >/dev/null
+          mkdir -p ~/.ssh
+          # Trust only GitHub's host keys published by its HTTPS Meta endpoint.
+          # Fetch failure aborts before git connects; strict host checking stays on.
+          gh api -H 'Cache-Control: no-cache' meta \
+            --jq '.ssh_keys[] | "github.com " + .' >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=yes'
+          remote="git@github.com:${REPO}.git"
+          scratch="$RUNNER_TEMP/ratchet-repo"
+          # Bare plumbing preserves every other main blob without materializing
+          # a fetched worktree. Validation runs outside source with isolated Python.
+          cd "$RUNNER_TEMP"
+          git init --bare -q "$scratch"
+          git -C "$scratch" remote add origin "$remote"
+          git -C "$scratch" fetch --quiet origin main
+          fetched="$(git -C "$scratch" rev-parse FETCH_HEAD)"
+          git -C "$scratch" read-tree "$fetched"
+          if [ ! -s "$RUNNER_TEMP/comment-share-data/base.txt" ]; then
+            echo "the comment-share data carried no base; the measuring job is broken" >&2
+            exit 1
+          fi
+          base="$(cat "$RUNNER_TEMP/comment-share-data/base.txt")"
+          current="$RUNNER_TEMP/current-records.json"
+          # Adoption commits the seed. A missing file on current main is
+          # a deletion requiring review, never permission to auto-create it.
+          if ! git -C "$scratch" show "$fetched:.github/comment-share.json" > "$current"; then
+            echo "Current main has no comment-share records; deletion requires review" >&2
+            exit 1
+          fi
+          # Merge data alone so an intervening hand-tightened record survives.
+          # Conflicts and unreadable ancestors defer to the next main measurement.
+          if [ "$fetched" != "$base" ]; then
+            if ! git -C "$scratch" show "$base:.github/comment-share.json" > "$RUNNER_TEMP/base-records.json"; then
+              echo "::notice::Ancestor records are unreadable; the next main push measures again"
+              {
+                echo "### Dropped: ancestor records could not be read"
+                echo "This run's tightening is dropped; the next main push measures again."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            if ! git merge-file "$current" "$RUNNER_TEMP/base-records.json" \
+              "$RUNNER_TEMP/comment-share-data/comment-share.json"; then
+              echo "::notice::Records changes conflict; the next main push measures again"
+              {
+                echo "### Dropped: records merge conflicted"
+                echo "This run's tightening is dropped; the next main push measures again."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          else
+            cp "$RUNNER_TEMP/comment-share-data/comment-share.json" "$current"
+          fi
+          # JSON syntax is validated before a blob can reach the index.
+          # Invalid merged data is discarded with an audit trail in the run summary.
+          if ! python3 -I -m json.tool "$current" >/dev/null; then
+            echo "::notice::Merged records are invalid; the next main push measures again"
+            {
+              echo "### Dropped: records failed JSON validation"
+              echo "This run's tightening is dropped; the next main push measures again."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          blob="$(git -C "$scratch" hash-object -w "$current")"
+          git -C "$scratch" update-index --add --cacheinfo 100644 "$blob" .github/comment-share.json
+          message='chore(ratchet): tighten comment-share records (automated)'
+          # Reuse the complete fetched tree; only the records index entry changed.
+          # An identical tree needs no commit and cannot continue the push chain.
+          tree="$(git -C "$scratch" write-tree)"
+          if [ "$tree" = "$(git -C "$scratch" rev-parse "$fetched^{tree}")" ]; then
+            echo "No ratchet move is justified by this run: nothing to commit."
+            exit 0
+          fi
+          git -C "$scratch" config user.name 'github-actions[bot]'
+          git -C "$scratch" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          commit="$(git -C "$scratch" commit-tree "$tree" -p "$fetched" -m "$message")"
+          # A concurrent main update is safe to drop: that push measures anew.
+          # Rejection without movement is a permission or protection error to fix.
+          if ! git -C "$scratch" push origin "$commit:refs/heads/main"; then
+            git -C "$scratch" fetch --quiet origin main
+            if [ "$fetched" = "$(git -C "$scratch" rev-parse FETCH_HEAD)" ]; then
+              echo "the ratchet push was rejected while main stood still" >&2
+              exit 1
+            fi
+            echo "::notice::Main moved before the push landed; the next main push measures again"
+            {
+              echo "### Dropped: main moved before the push landed"
+              echo "This run's tightening is dropped; the next main push measures again."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

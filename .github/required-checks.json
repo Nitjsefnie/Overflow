@@ -18,5 +18,8 @@
   "verify": [
     ".github/workflows/ci.yml",
     ".github/workflows/ci-pr.yml"
+  ],
+  "comment-share": [
+    ".github/workflows/comment-share.yml"
   ]
 }
