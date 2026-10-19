@@ -315,9 +315,9 @@ describe("each wired route declines past its bound", () => {
         }),
       request: () => requests.json({}, "DELETE", { authorization: `Bearer ${bearerToken}` }),
       // The unregistration schema accepts an empty object (every field is
-      // optional), so the flow is reached and the stubbed wiring throws — the
+      // optional), so the stubbed wiring throws an internal error — the
       // answer an admitted request receives before the bound matters.
-      admittedStatus: 502,
+      admittedStatus: 500,
     },
     {
       name: "POST /api/tokens",

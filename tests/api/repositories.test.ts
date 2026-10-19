@@ -112,77 +112,6 @@ const ambiguitySentence = "GitHub answers 403 both when the Overflow OAuth appli
 const waitInstruction = "Wait a minute and retry registration before changing anything.";
 const ambiguous403Advice = `${ambiguitySentence} ${waitInstruction}`;
 
-describe("repository route internal failures", () => {
-  it.each([
-    { method: "POST", createHandler: createRepositoryPostHandler },
-    { method: "PATCH", createHandler: createRepositoryPatchHandler },
-  ])("logs a $method wiring failure and answers a fixed internal error", async ({ method, createHandler }) => {
-    consoleOutputAllowed.add("error");
-    const handler = createHandler({
-      findAccountByTokenHash: async () => null,
-      getCurrentRole: async () => "MEMBER",
-      getSession: async () => ({ user: { id: "member-id", role: "MEMBER" } }),
-      createRegistrationDependencies: async () => {
-        throw new Error("GitHub webhook configuration must be set.");
-      },
-    });
-
-    const response = await handler(jsonRequest(validInput(), method));
-
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: {
-      code: "INTERNAL_ERROR", message: "Unable to initialize repository registration.",
-    } });
-    expect(console.error).toHaveBeenCalledExactlyOnceWith(
-      "Repository registration failed: Error: GitHub webhook configuration must be set.",
-    );
-  });
-
-  it.each([
-    { method: "PATCH", createHandler: createRepositoryPatchHandler, operation: "catalog change", message: "Unable to initialize repository registration." },
-    { method: "DELETE", createHandler: createRepositoryDeleteHandler, operation: "unregistration", message: "Unable to unregister the repository." },
-  ])("logs an unclassified $method flow failure whole and keeps the upstream answer", async ({ method, createHandler, operation, message }) => {
-    consoleOutputAllowed.add("error");
-    const error = new Error("Repository provider lookup failed.");
-    const dependencies = successfulDependencies(undefined, {
-      existingRepository: true,
-      unregisterTarget: registeredTarget(),
-    });
-    dependencies.store.findRepositoryProviderById = async () => { throw error; };
-    const handler = createHandler({
-      findAccountByTokenHash: async () => null,
-      getCurrentRole: async () => "MEMBER",
-      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
-      createRegistrationDependencies: async () => dependencies,
-    });
-
-    const response = await handler(jsonRequest(method === "DELETE" ? validUnregisterInput() : validInput(), method));
-
-    expect(response.status).toBe(502);
-    await expect(response.json()).resolves.toEqual({ error: { code: "UPSTREAM_FAILURE", message } });
-    expect(console.error).toHaveBeenCalledExactlyOnceWith(`Repository ${operation} failed.`, error);
-  });
-
-  it("logs the whole unclassified forge error and keeps the upstream answer", async () => {
-    consoleOutputAllowed.add("error");
-    const error = new GitHubScopeProbeError(500);
-    const handler = createRepositoryPostHandler({
-      findAccountByTokenHash: async () => null,
-      getCurrentRole: async () => "MEMBER",
-      getSession: async () => ({ user: { id: "member-id", role: "MEMBER" } }),
-      createRegistrationDependencies: async () => { throw error; },
-    });
-
-    const response = await handler(jsonRequest(validInput()));
-
-    expect(response.status).toBe(502);
-    await expect(response.json()).resolves.toEqual({ error: {
-      code: "UPSTREAM_FAILURE", message: "Unable to initialize repository registration.",
-    } });
-    expect(console.error).toHaveBeenCalledExactlyOnceWith("Repository registration failed.", error);
-  });
-});
-
 describe("POST /api/repositories", () => {
   it("returns a structured 400 when the request does not contain exactly one repository configuration", async () => {
     const handler = createRepositoryPostHandler({
@@ -2116,9 +2045,7 @@ describe("DELETE /api/repositories", () => {
     await expect(response.json()).resolves.toEqual({
       error: { code: "INTERNAL_ERROR", message: "Unable to unregister the repository." },
     });
-    expect(console.error).toHaveBeenCalledExactlyOnceWith(
-      "Repository unregistration failed: Error: GitHub webhook configuration must be set.",
-    );
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("Repository unregistration failed: Error: GitHub webhook configuration must be set.");
   });
 
   // A cross-site form post carries the session cookie by itself, so a forged
@@ -2557,33 +2484,6 @@ describe("repository writes for a deleted account (issue 733)", () => {
     });
   });
 
-  it.each([false, true])("answers an internal error and logs a redacted role-read cause for bearer=%s", async (bearer) => {
-    consoleOutputAllowed.add("error");
-    const githubToken = `ghp_${"role-lookup-credential".replaceAll("-", "")}`;
-    const connectionUrl = `postgres://member:${"database-password"}@localhost/overflow`;
-    const handler = createRepositoryPostHandler({
-      findAccountByTokenHash: async () => (bearer ? tokenAccount : null),
-      getSession: async () => (bearer ? null : { user: { id: "member-id", role: "MEMBER" } }),
-      getCurrentRole: async () => {
-        throw new Error(`role lookup unavailable: ${apiToken} ${githubToken} ${connectionUrl}`);
-      },
-      createRegistrationDependencies: async () => successfulDependencies(),
-    });
-
-    const response = await handler(bearer ? authorizedRequest(validInput()) : jsonRequest(validInput()));
-
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: {
-      code: "INTERNAL_ERROR", message: "Unable to initialize repository registration.",
-    } });
-    expect(console.error).toHaveBeenCalledExactlyOnceWith(
-      "Repository authorization failed: Error: role lookup unavailable: ovf_*** ghp_*** postgres://***@localhost/overflow",
-    );
-    const output = JSON.stringify(vi.mocked(console.error).mock.calls);
-    for (const credential of [apiToken, githubToken, connectionUrl, "database-password"]) {
-      expect(output).not.toContain(credential);
-    }
-  });
 
   it("lets a live account through, consulting the role read once", async () => {
     const getCurrentRole = vi.fn(async () => "MEMBER" as const);

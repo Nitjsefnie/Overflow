@@ -1,6 +1,6 @@
 {
   "snapshotFormat": 2,
-  "httpServerVersion": "1.2.0",
+  "httpServerVersion": "1.3.0",
   "errorEnvelope": {
     "error": {
       "code": "string",
@@ -836,6 +836,7 @@
       "415 UNSUPPORTED_MEDIA_TYPE",
       "429 GITHUB_RATE_LIMITED",
       "429 RATE_LIMITED",
+      "500 INTERNAL_ERROR",
       "500 MISCONFIGURED",
       "502 UPSTREAM_FAILURE",
       "503 ROLLBACK_INCOMPLETE"
@@ -855,6 +856,7 @@
       "415 UNSUPPORTED_MEDIA_TYPE",
       "429 GITHUB_RATE_LIMITED",
       "429 RATE_LIMITED",
+      "500 INTERNAL_ERROR",
       "500 MISCONFIGURED",
       "502 UPSTREAM_FAILURE",
       "503 ROLLBACK_INCOMPLETE"
@@ -874,6 +876,7 @@
       "415 UNSUPPORTED_MEDIA_TYPE",
       "429 GITHUB_RATE_LIMITED",
       "429 RATE_LIMITED",
+      "500 INTERNAL_ERROR",
       "500 MISCONFIGURED",
       "502 UPSTREAM_FAILURE",
       "503 ROLLBACK_INCOMPLETE"
