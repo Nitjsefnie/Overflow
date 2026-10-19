@@ -39,11 +39,16 @@ is `overflow-app`, which the compose app service runs:
 scripts/container-build.sh
 ```
 
-The script refuses a dirty tree (the revision label must name reviewed
-committed source), builds with `SOURCE_SHA="$(git rev-parse HEAD)"`, verifies
-the revision label actually landed on the image, and prints the immutable
-provenance record — revision, image ID, RepoDigests, created timestamp. Keep
-that record with the deployment notes: it is what rollback selects.
+The script requires Node on the build host to run
+`scripts/container-base-labels.ts`, which derives
+`org.opencontainers.image.base.name` and `org.opencontainers.image.base.digest`
+from the Dockerfile's digest-pinned `FROM` references. It refuses a dirty tree
+(the revision label must name reviewed committed source), builds with
+`SOURCE_SHA="$(git rev-parse HEAD)"` and both derived base labels, verifies
+the revision and both base labels actually landed on the image with the
+expected values, and prints the immutable provenance record — revision,
+image ID, RepoDigests, created timestamp. Keep that record with the deployment
+notes: it is what rollback selects.
 
 The script builds from an export of that commit (`git archive`), streamed to
 `docker build` as its context, not from the working directory. So untracked
@@ -334,9 +339,11 @@ attestations**: nothing here signs an image or attaches build attestations.
 **Automated digest bumps**: these pins go stale the moment a base image is
 rebuilt upstream. Docker Dependabot scans only the root Dockerfile and proposes
 tag-and-digest updates to its `FROM` lines; Node majors remain ignored pending
-review on/after 2026-10-28. A person completes the provenance `LABEL` and test
-constant in the same change. The compose and CI service PostgreSQL digests
-have no proposal lane and remain hand edits.
+review on/after 2026-10-28. Both build paths derive the base provenance labels
+from those `FROM` references automatically, and the tests derive their
+expectations from the runtime `FROM` line; no manual label or test constant
+update is needed. The compose and CI service PostgreSQL digests have no
+proposal lane and remain hand edits.
 
 ## The default path
 
