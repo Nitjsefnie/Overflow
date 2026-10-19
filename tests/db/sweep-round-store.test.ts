@@ -4,6 +4,7 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
+import { sweepReconciliations } from "@/lib/fold/sweep";
 import { PostgresSweepRoundStore } from "@/lib/fold/sweep-round-store";
 import { startPostgresContainer } from "../support/postgres-container";
 
@@ -26,6 +27,61 @@ afterAll(async () => {
 });
 
 describe("durable sweep round", () => {
+  it("offers every repository within six hours at the production 15-second poll cadence", async () => {
+    const store = new PostgresSweepRoundStore(sql);
+    const ids = Array.from({ length: 100 }, (_, index) => String(index).padStart(3, "0"));
+    const offered: string[] = [];
+    for (let elapsed = 0; elapsed < 6 * 60 * 60_000; elapsed += 15_000) {
+      const now = new Date(at.getTime() + elapsed);
+      const summary = await sweepReconciliations({
+        round: store, now: () => now, listActiveRepositoryIds: async () => ids,
+        enqueue: async (id) => { offered.push(id); },
+      });
+      expect(summary.enqueued).toBeLessThanOrEqual(1);
+      if (summary.enqueued === 1) {
+        await store.spend(now, 3000);
+        await store.spend(now, 3000);
+      }
+    }
+    expect(offered).toEqual(ids);
+    expect(await sql`select spent from reconciliation_sweep_round`).toEqual([{ spent: 200 }]);
+  });
+
+  it("restarts the deadline chain after a long outage without emitting a catch-up burst", async () => {
+    const store = new PostgresSweepRoundStore(sql);
+    const ids = Array.from({ length: 100 }, (_, index) => String(index).padStart(3, "0"));
+    const offered: string[] = [];
+    const offer = async (id: string) => { offered.push(id); };
+    await store.enqueueNext(ids, at, 3000, offer);
+    const resumedAt = new Date(at.getTime() + 900_000);
+    expect(await store.enqueueNext(ids, resumedAt, 3000, offer)).toBe("001");
+    expect(await store.enqueueNext(ids, resumedAt, 3000, offer)).toBeNull();
+    expect(await store.enqueueNext(ids, new Date(at.getTime() + 915_000), 3000, offer)).toBeNull();
+    expect(await store.enqueueNext(ids, new Date(at.getTime() + 1_110_000), 3000, offer)).toBeNull();
+    expect(await store.enqueueNext(ids, new Date(at.getTime() + 1_125_000), 3000, offer)).toBe("002");
+    expect(await sql`select next_enqueue_at from reconciliation_sweep_round`)
+      .toEqual([{ next_enqueue_at: new Date(at.getTime() + 1_332_000) }]);
+    expect(offered).toEqual(["000", "001", "002"]);
+  });
+
+  it("retries the same durable slot after the production sweep reports an enqueue failure", async () => {
+    const store = new PostgresSweepRoundStore(sql);
+    const attempted: string[] = [];
+    const failures: string[] = [];
+    let reject = true;
+    const tick = (now: Date) => sweepReconciliations({
+      round: store, now: () => now, listActiveRepositoryIds: async () => ["a", "b"],
+      enqueue: async (id) => { attempted.push(id); if (reject) throw new Error("queue unavailable"); },
+      onFailure: (id) => { failures.push(id); },
+    });
+    expect(await tick(at)).toEqual({ attempted: 1, enqueued: 0, failed: 1 });
+    reject = false;
+    expect(await tick(new Date(at.getTime() + 15_000))).toEqual({ attempted: 1, enqueued: 1, failed: 0 });
+    expect(attempted).toEqual(["a", "a"]);
+    expect(failures).toEqual(["a"]);
+    expect(await sql`select rotation_cursor from reconciliation_sweep_round`).toEqual([{ rotation_cursor: "a" }]);
+  });
+
   it("atomically admits exactly the ceiling under concurrent stores and survives restart", async () => {
     const stores = Array.from({ length: 16 }, () => new PostgresSweepRoundStore(sql));
     const holds = await Promise.all(Array.from({ length: 64 }, (_, index) => stores[index % 16]!.spend(at, 17)));

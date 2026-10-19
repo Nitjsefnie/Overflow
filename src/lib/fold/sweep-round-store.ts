@@ -42,10 +42,15 @@ export class PostgresSweepRoundStore {
       const ids = [...new Set(repositoryIds)].sort();
       if (ids.length === 0 || round.spent >= limit || now < round.next_enqueue_at) return null;
       const next = ids.find((id) => round.rotation_cursor === null || id > round.rotation_cursor) ?? ids[0]!;
-      await enqueue(next);
+      // An explicit unsuccessful enqueue retains this slot for the next poll.
+      if (await enqueue(next) === false) return null;
       const interval = Math.max(15_000, Math.floor(SWEEP_WINDOW_MS / ids.length));
+      // Preserve fractional poll timing; after a long outage restart from this
+      // admission instead of replaying missed slots in a catch-up burst.
+      const deadline = round.next_enqueue_at.getTime();
+      const anchor = now.getTime() - deadline > interval ? now.getTime() : deadline;
       await transaction`update reconciliation_sweep_round set rotation_cursor = ${next},
-        next_enqueue_at = ${new Date(now.getTime() + interval)}`;
+        next_enqueue_at = ${new Date(anchor + interval)}`;
       return next;
     }) as Promise<string | null>;
   }
