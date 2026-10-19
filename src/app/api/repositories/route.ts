@@ -145,6 +145,13 @@ function repositoryResponse(repository: RegisteredRepository) {
   };
 }
 
+/** Marks the remote probe boundary while retaining its original failure for classification and logging. */
+class RepositoryScopeProbeFailure extends Error {
+  constructor(cause: unknown) {
+    super("The GitHub granted-scope probe failed.", { cause });
+  }
+}
+
 export function createRepositoryPostHandler(dependencies: RepositoryRouteDependencies) {
   return async function postRepository(request: Request): Promise<Response> {
     const authorized = await authorizeRepositoryRequest(request, dependencies);
@@ -177,6 +184,7 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
           input,
         );
       } catch (error) {
+        if (error instanceof RepositoryScopeProbeFailure) throw error.cause;
         // Domain refusals and classified forge failures keep their existing
         // mappings below; unexpected setup failures belong to this server.
         if (
@@ -282,6 +290,7 @@ export function createRepositoryPatchHandler(dependencies: RepositoryRouteDepend
           input,
         );
       } catch (error) {
+        if (error instanceof RepositoryScopeProbeFailure) throw error.cause;
         // Domain refusals and classified forge failures keep their existing
         // mappings below; unexpected setup failures belong to this server.
         if (
@@ -358,6 +367,7 @@ export function createRepositoryDeleteHandler(dependencies: RepositoryRouteDepen
           input,
         );
       } catch (error) {
+        if (error instanceof RepositoryScopeProbeFailure) throw error.cause;
         // Domain refusals and classified forge failures keep their existing
         // mappings below; unexpected setup failures belong to this server.
         if (
@@ -633,7 +643,11 @@ async function buildRegistrationDependencies(
     input.registrationMethod !== "app" &&
     isParticipationEligible(enforcementState)
   ) {
-    await requireWebhookAdministration(accessToken);
+    try {
+      await requireWebhookAdministration(accessToken);
+    } catch (error) {
+      throw new RepositoryScopeProbeFailure(error);
+    }
   }
 
   let forgeIdentity: { instanceUrl: string; token: string } | null = null;
