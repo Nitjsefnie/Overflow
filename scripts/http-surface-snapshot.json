@@ -1,6 +1,6 @@
 {
   "snapshotFormat": 2,
-  "httpServerVersion": "1.11.0",
+  "httpServerVersion": "2.0.0",
   "errorEnvelope": {
     "error": {
       "code": "string",
@@ -93,7 +93,6 @@
     },
     "POST /api/account/export": {
       "account": {
-        "avatarUrl": "null",
         "confirmedMiscalibrationCount": "number",
         "createdAt": "string",
         "deletedAt": "null",

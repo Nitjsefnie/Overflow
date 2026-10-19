@@ -27,6 +27,8 @@ the security reason and the change.
 
 **Version history:**
 
+- 2.0.0: `POST /api/account/export` no longer carries `account.avatarUrl`
+  (removed after its 1.1.0 deprecation; issue 1177).
 - 1.11.0: A settlement's `status` gains the value `DONATED` on
   `GET /api/settlements`, `GET /api/settlements/<id>` and the dashboard's
   recent settlements: work the contributor gave away with `/donate`, priced
@@ -60,15 +62,6 @@ the security reason and the change.
 - 1.2.0: `POST /api/repositories` accepts the optional `registrationMethod`
   selector for GitHub App registration; `DELETE /api/repositories` adds the
   optional `appAccessRemains` guidance for App-registered repositories.
-
-**Current deprecations:**
-
-- `POST /api/account/export`, `account.avatarUrl` — always `null` since
-  1.1.0: Overflow stopped collecting the GitHub avatar URL (issue 1075),
-  so nothing writes or reads the stored value anymore; the key stays so
-  the export document keeps the shape clients already parse. Deprecation
-  announced 2026-10-08; the earliest removal is 2026-11-07, in the next
-  major version (2.0.0).
 
 The advertised version is independent of package.json's `version` field: it
 moves only as this section's policy moves it, never with npm release
