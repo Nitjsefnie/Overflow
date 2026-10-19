@@ -199,7 +199,7 @@ logPrivilegedAction({ action: "audit.open", actorId: "fixture-actor", credential
   ])("fails $label against a synthetic base without a version move", ({ edit }) => {
     const base = structuredClone(snapshot);
     edit(base);
-    expect(() => assertNoBreakingRecordedChange(commitSnapshotFixture(base))).toThrow(/needs 2\.0\.0/);
+    expect(() => assertNoBreakingRecordedChange(commitSnapshotFixture(base))).toThrow(/needs 3\.0\.0/);
   });
 
   it("tolerates a base recorded before the envelope, statuses and failures were", () => {
