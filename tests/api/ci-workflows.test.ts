@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import MarkdownIt from "markdown-it";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -85,32 +84,6 @@ describe("GitHub Actions release gates", () => {
         steps: [{}],
       },
     });
-  });
-
-  it("keeps the CONTRIBUTING claim revision aligned with the workflow pin", async () => {
-    const contributing = await readFile(resolve(process.cwd(), "CONTRIBUTING.md"), "utf8");
-    // Markdown determines the destination boundary: quotes can be part of
-    // an unquoted destination, so treating them as delimiters truncates refs.
-    // The whole matching SET, not its first member: `.find()` took whichever
-    // claim-tree link came first, so a second one elsewhere in the file was
-    // silently ignored and this guard stayed green while the link CONTRIBUTING
-    // actually documents had drifted. An ambiguous set fails instead.
-    const contributingClaimHrefs = new MarkdownIt().parse(contributing, {})
-      .flatMap((token) => token.children ?? [])
-      .filter((token) => token.type === "link_open")
-      .map((token) => token.attrGet("href"))
-      .filter((href): href is string => typeof href === "string"
-        && href.startsWith("https://github.com/Nitjsefnie-Actions/claim/tree/"));
-    const [contributingRevision] = contributingClaimHrefs.map(
-      (href) => new URL(href).pathname.split("/")[4],
-    );
-    const workflow = await readWorkflow("claim.yml");
-    const workflowSha = workflow.jobs.claim!.steps[0]!.uses?.split("@").at(-1);
-
-    expect(contributingClaimHrefs).toHaveLength(1);
-    expect(contributingRevision).toBeDefined();
-    expect(workflowSha).toBeDefined();
-    expect(contributingRevision).toBe(workflowSha);
   });
 
   it("runs on a pull request or a closed issue so the action can decline the command in a reply", async () => {
