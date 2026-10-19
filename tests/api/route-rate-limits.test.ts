@@ -263,7 +263,7 @@ describe("each wired route declines past its bound", () => {
           getSession: sessionSequence([identityA, identityA, identityA, identityB]),
           getSql: () => ({}) as SqlClient,
           findIdentity: async () => ({ githubUserId: 42, githubLogin: "alice" }),
-          exportAccount: async () => ({ formatVersion: 1 } as AccountExport),
+          exportAccount: async () => ({ formatVersion: 2 } as AccountExport),
           rateGate,
         });
         return handler;
@@ -401,7 +401,7 @@ describe("the production wiring derives the bound from the environment", () => {
       const route = await import("@/app/api/account/export/route");
       productionAuth.mockResolvedValue({ user: { id: "member-id", role: "MEMBER" } });
       productionFindIdentity.mockResolvedValue({ githubUserId: 42, githubLogin: "alice" });
-      productionExportAccount.mockResolvedValue({ formatVersion: 1 });
+      productionExportAccount.mockResolvedValue({ formatVersion: 2 });
 
       const first = await route.POST(requests.json({}));
       expect(first.status).toBe(200);

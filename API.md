@@ -27,18 +27,11 @@ the security reason and the change.
 
 **Version history:**
 
+- 2.0.0: `POST /api/account/export` no longer carries `account.avatarUrl`
+  (removed after its 1.1.0 deprecation; issue 1177).
 - 1.2.0: `POST /api/repositories` accepts the optional `registrationMethod`
   selector for GitHub App registration; `DELETE /api/repositories` adds the
   optional `appAccessRemains` guidance for App-registered repositories.
-
-**Current deprecations:**
-
-- `POST /api/account/export`, `account.avatarUrl` — always `null` since
-  1.1.0: Overflow stopped collecting the GitHub avatar URL (issue 1075),
-  so nothing writes or reads the stored value anymore; the key stays so
-  the export document keeps the shape clients already parse. Deprecation
-  announced 2026-10-08; the earliest removal is 2026-11-07, in the next
-  major version (2.0.0).
 
 The advertised version is independent of package.json's `version` field: it
 moves only as this section's policy moves it, never with npm release
@@ -584,7 +577,7 @@ origin of `APP_URL`; a declared `Content-Type` must be `application/json`
 `POST /api/account/export` needs no request body. Success is `200` with a
 download named `overflow-account-export.json`, `Content-Type:
 application/json; charset=utf-8`, and `Cache-Control: no-store`. Its JSON
-document has `formatVersion`, `exportedAt`, `account`, `apiToken`,
+document has `formatVersion` (value `2`), `exportedAt`, `account`, `apiToken`,
 `forgeIdentities`, `sponsoredRepositories`, and the account's ledger,
 moderation and reconciliation sections. Stored credentials appear only as
 presence booleans; token hashes and webhook secrets are omitted. The

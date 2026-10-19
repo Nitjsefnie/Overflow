@@ -89,15 +89,21 @@ describe("self-service account data on Postgres", () => {
     expect(await findLiveAccountIdentity(sql, account.id)).toBeNull();
   });
 
-  it("exports account.avatarUrl as a stable null, whatever the row carries (issue 1075 deprecation window)", async () => {
-    // The row is seeded through raw SQL with an avatar value — the pre-1075
-    // shape the migration nulls — so the pin holds even against a row that
-    // still carries one when the export runs: the key stays for shape
-    // compatibility (API.md deprecations), and its value is constant null.
+  it("omits account.avatarUrl even when the row still carries an avatar URL (issue 1177)", async () => {
+    // insertUser seeds a non-null avatar_url through raw SQL, representing a
+    // legacy row whose avatar must stay out of the export.
     const account = await insertUser("export-no-avatar");
+    const [beforeExport] = await sql<{ avatar_url: string | null }[]>`
+      select avatar_url from users where id = ${account.id}
+    `;
+    expect(beforeExport).toEqual({ avatar_url: "https://example.test/avatar" });
     const document = await exportAccount(sql, account.githubUserId);
     expect(document).not.toBeNull();
-    expect(Object.hasOwn(document!.account, "avatarUrl")).toBe(true);
-    expect(document!.account.avatarUrl).toBeNull();
+    expect(Object.hasOwn(document!.account, "avatarUrl")).toBe(false);
+    expect(document!.account).toMatchObject({ githubLogin: "export-no-avatar", role: "MEMBER" });
+    const [afterExport] = await sql<{ avatar_url: string | null }[]>`
+      select avatar_url from users where id = ${account.id}
+    `;
+    expect(afterExport).toEqual(beforeExport);
   });
 });
