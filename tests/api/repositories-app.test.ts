@@ -46,6 +46,7 @@ async function wiring(configured = true) {
     if (path === "/repos/octo/overflow/contents/.github/workflows") return Response.json([]);
     if (path === "/repos/octo/overflow") return Response.json({ id: 42, name: "overflow", full_name: "octo/overflow",
       private: false, html_url: "https://github.com/octo/overflow", owner: { login: "octo" }, permissions: { admin: true } });
+    if (path === "/repos/Nitjsefnie-Actions/claim/git/matching-refs/tags/v") return Response.json([]);
     throw new Error(`Unexpected GitHub request: ${method} ${path}`);
   });
   const route = await import("@/app/api/repositories/route");
@@ -77,6 +78,7 @@ describe("repository App route wiring", () => {
     expect(h.calls.map(({ path, method }) => `${method} ${path}`)).toEqual([
       "GET /repos/octo/overflow", "GET /repos/octo/overflow/labels", "GET /repos/octo/overflow/installation",
       "GET /repos/octo/overflow/contents/.github/workflows",
+      "GET /repos/Nitjsefnie-Actions/claim/git/matching-refs/tags/v",
     ]);
     expect(h.calls[0]!.authorization).toBe("Bearer synthetic-public-identity-token");
     expect(h.calls[2]!.authorization).toMatch(/^Bearer ey/);

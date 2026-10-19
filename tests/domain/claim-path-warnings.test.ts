@@ -79,7 +79,7 @@ function expectClean(captured: CapturedWarning[]): void {
 describe("assessClaimPath emits no process warnings from contributor YAML", () => {
   it(`captures the %TAG warning for ${AUDIT_WORKFLOW} instead of emitting decoded control bytes`, async () => {
     const evidence = [{ path: AUDIT_WORKFLOW, content: PROBE }];
-    const { captured, result } = await captureWarnings(() => assessClaimPath(evidence));
+    const { captured, result } = await captureWarnings(() => assessClaimPath(evidence, new Set()));
 
     expectClean(captured);
     expect(result).toBe("NO_EVIDENCE_FOUND");
@@ -87,7 +87,7 @@ describe("assessClaimPath emits no process warnings from contributor YAML", () =
 
   it("emits nothing for the percent-encoded form without the %TAG handle", async () => {
     const evidence = [{ path: AUDIT_WORKFLOW, content: ENCODED_WITHOUT_TAG }];
-    const { captured, result } = await captureWarnings(() => assessClaimPath(evidence));
+    const { captured, result } = await captureWarnings(() => assessClaimPath(evidence, new Set()));
 
     expectClean(captured);
     expect(captured).toEqual([]);
@@ -96,7 +96,7 @@ describe("assessClaimPath emits no process warnings from contributor YAML", () =
 
   it("suppresses a clean parse's warning without emitting it anywhere", async () => {
     const evidence = [{ path: AUDIT_WORKFLOW, content: WARNING_ONLY }];
-    const { captured, result } = await captureWarnings(() => assessClaimPath(evidence));
+    const { captured, result } = await captureWarnings(() => assessClaimPath(evidence, new Set()));
 
     expect(captured).toEqual([]);
     expect(result).toBe("NO_EVIDENCE_FOUND");

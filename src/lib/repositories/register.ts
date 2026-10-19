@@ -1,5 +1,6 @@
 import { isParticipationEligible, type EnforcementState, type UserRole } from "@/lib/db/types";
 import { GitHubApiError } from "@/lib/github/errors";
+import { resolveClaimActionReleases, type ClaimActionReleaseGateway } from "@/lib/github/claim-action-releases";
 import { assessClaimPath, type ClaimPathEvidence, type ClaimPathVerdict } from "@/lib/domain/claim-path";
 import {
   validateDifficultyScheme,
@@ -85,8 +86,7 @@ export type RepositoryUnregisterOutcome =
    * the write is refused rather than deactivated across forges.
    */
   | { kind: "PROVIDER_CONFLICT"; githubRepositoryId: number; storedProvider: string };
-
-export type RepositoryRegistrationGateway = {
+export type RepositoryRegistrationGateway = ClaimActionReleaseGateway & {
   getRepository(repository: GitHubRepositoryReference): Promise<GitHubRepository>;
   /**
    * Reads the repository by its immutable GitHub numeric id — the drain's
@@ -569,7 +569,7 @@ async function completeGitHubRegistration(
   // A failed check likewise cannot undo or fail the registration that already stands.
   let claimPath: RepositoryRegistrationResult["claimPath"];
   try {
-    claimPath = assessClaimPath(await dependencies.github.listWorkflowFiles(submittedRepository));
+    claimPath = assessClaimPath(await dependencies.github.listWorkflowFiles(submittedRepository), await resolveClaimActionReleases(dependencies.github));
   } catch {
     claimPath = "NOT_CHECKED";
   }
