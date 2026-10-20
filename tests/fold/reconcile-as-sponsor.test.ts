@@ -509,7 +509,9 @@ describe("sponsor quota admission through transport, fold and worker", () => {
       skipped: true, budgetHeldUntil: new Date("2026-09-07T11:00:00Z"),
     });
     expect(harness.store.materialize).not.toHaveBeenCalled();
-    expect(harness.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for GraphQL budget.", "GRAPHQL_BUDGET");
+    expect(harness.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for GraphQL budget.", "GRAPHQL_BUDGET", {
+      sponsorId: "sponsor-1", observedCost: null, observedResponses: 0, unmeasuredResponses: 1,
+    });
     expect(harness.calls).not.toContain("failRun");
     expect(harness.calls).not.toContain("completeRun");
     expect(request).toHaveBeenCalledTimes(2);

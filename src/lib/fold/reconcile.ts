@@ -121,8 +121,8 @@ export type ReconciliationStore = {
   beginRun(repositoryId: string, options?: { rederivation: boolean }): Promise<string>;
   completeRun(runId: string): Promise<void>;
   materialize(input: { repositoryId: string; runId: string; fold: FoldResult; synchronization?: ReconciliationSynchronization; cost?: ReconciliationCostCharge }): Promise<ReconciliationDeltas>;
-  failRun(runId: string, errorMessage: string): Promise<void>;
-  holdRun(runId: string, message: string, heldBy: ReconciliationHeldBy): Promise<void>;
+  failRun(runId: string, errorMessage: string, cost?: Omit<ReconciliationCostCharge, "completedAt"> | null): Promise<void>;
+  holdRun(runId: string, message: string, heldBy: ReconciliationHeldBy, cost?: Omit<ReconciliationCostCharge, "completedAt"> | null): Promise<void>;
   recordVerifiedRepositoryIdentity(input: {
     repositoryId: string;
     ownerName: string;
@@ -272,6 +272,7 @@ async function reconcileRepositoryWhileCoordinated(
   const rederive = allowsFull && (options?.rederive === true
     || await dependencies.store.hasDerivedRowsBelowFoldRevision(repositoryId, FOLD_REVISION));
   const runId = await dependencies.store.beginRun(repositoryId, { rederivation: rederive });
+  let failedCost: Omit<ReconciliationCostCharge, "completedAt"> | null = null;
   let pass: SweepPass | undefined;
   const discardPass = async () => {
     try { await pass?.complete(); } catch { console.error("Could not discard reconciliation sweep checkpoints."); }
@@ -285,217 +286,225 @@ async function reconcileRepositoryWhileCoordinated(
     }
 
     const collected = await withGraphqlFoldCost<ReconciliationSummary>(async (readCost) => {
-      // Advance to scan start only after successful materialization. Completion
-      // time could skip changes made while these upstream reads were in flight.
-      let scanStartedAt = now();
-      const [cached, observedDirtySubjects] = await Promise.all([
-        dependencies.store.getReconciliationEvidence(repositoryId),
-        dependencies.store.getDirtyReconciliationSubjects(repositoryId),
-      ]);
-      let dirtySubjects = observedDirtySubjects;
-      // While the most recent write omitted oversized facts the cache has
-      // holes; reading a hole as upstream absence would destroy the subject's
-      // materialized rows on a quiet partial pass. Fold full passes until a
-      // pass re-observes everything within the limit and clears the flag.
-      const unsafeCache = cached === null || cached.formatVersion !== RECONCILIATION_EVIDENCE_FORMAT
-        || cached.omittedOversizedFacts > 0;
-      if (!allowsFull && unsafeCache) {
-        await dependencies.store.completeRun(runId);
-        return { repositoryId, runId: null, skipped: true, sweepPending: true,
-          adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 };
-      }
-      const accessToken = await dependencies.store.getGitHubAccessToken(repository.sponsor.id);
-      if (accessToken === null) {
-        throw new Error("GitHub access token was not available.");
-      }
+      try {
+        // Advance to scan start only after successful materialization. Completion
+        // time could skip changes made while these upstream reads were in flight.
+        let scanStartedAt = now();
+        const [cached, observedDirtySubjects] = await Promise.all([
+          dependencies.store.getReconciliationEvidence(repositoryId),
+          dependencies.store.getDirtyReconciliationSubjects(repositoryId),
+        ]);
+        let dirtySubjects = observedDirtySubjects;
+        // While the most recent write omitted oversized facts the cache has
+        // holes; reading a hole as upstream absence would destroy the subject's
+        // materialized rows on a quiet partial pass. Fold full passes until a
+        // pass re-observes everything within the limit and clears the flag.
+        const unsafeCache = cached === null || cached.formatVersion !== RECONCILIATION_EVIDENCE_FORMAT
+          || cached.omittedOversizedFacts > 0;
+        if (!allowsFull && unsafeCache) {
+          await dependencies.store.completeRun(runId);
+          return { repositoryId, runId: null, skipped: true, sweepPending: true,
+            adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 };
+        }
+        const accessToken = await dependencies.store.getGitHubAccessToken(repository.sponsor.id);
+        if (accessToken === null) {
+          throw new Error("GitHub access token was not available.");
+        }
 
-      const full = allowsFull && (options?.reason === "SWEEP" || unsafeCache || rederive
-        || scanStartedAt.getTime() - cached!.lastFullPassAt.getTime() >= reconciliationFullRepairMs);
+        const full = allowsFull && (options?.reason === "SWEEP" || unsafeCache || rederive
+          || scanStartedAt.getTime() - cached!.lastFullPassAt.getTime() >= reconciliationFullRepairMs);
 
-      pass = full && dependencies.sweep !== undefined
-        ? await dependencies.sweep.openPass({ repositoryId,
-          evidenceVersion: JSON.stringify([cached?.version ?? null, FOLD_REVISION, repository.difficultyScheme]),
-          scanStartedAt, dirtySubjects }) : undefined;
-      if (pass !== undefined) {
-        scanStartedAt = pass.scanStartedAt;
-        dirtySubjects = pass.dirtySubjects;
-      }
-      // The stored path is a display name GitHub reassigns to whoever takes it after a
-      // rename or transfer, so every read below is aimed by the numeric identity instead.
-      const verified = await dependencies.github.getRepositoryById(repository.githubRepositoryId);
-      if (verified === null) {
-        await discardPass();
-        return declineCrawl(dependencies, repositoryId, runId, "NOT_FOUND", now());
-      }
-      // GitHub answering for an id other than the one asked for should be impossible;
-      // decline rather than materialize whatever it did answer with.
-      if (verified.id !== repository.githubRepositoryId) {
-        await discardPass();
-        return declineCrawl(dependencies, repositoryId, runId, "IDENTITY_MISMATCH", now());
-      }
-      // Only public repositories can be registered, and one that stopped being public
-      // stops being crawled. This is nearly unobservable in production: the sponsor's
-      // token carries only `admin:repo_hook`, so a repository that went private answers 404
-      // and lands in NOT_FOUND above. The branch is kept for a broader-scoped token,
-      // where materializing a private repository would be worse than declining.
-      if (verified.visibility !== "PUBLIC") {
-        await discardPass();
-        return declineCrawl(dependencies, repositoryId, runId, "NOT_PUBLIC", now());
-      }
+        pass = full && dependencies.sweep !== undefined
+          ? await dependencies.sweep.openPass({ repositoryId,
+            evidenceVersion: JSON.stringify([cached?.version ?? null, FOLD_REVISION, repository.difficultyScheme]),
+            scanStartedAt, dirtySubjects }) : undefined;
+        if (pass !== undefined) {
+          scanStartedAt = pass.scanStartedAt;
+          dirtySubjects = pass.dirtySubjects;
+        }
+        // The stored path is a display name GitHub reassigns to whoever takes it after a
+        // rename or transfer, so every read below is aimed by the numeric identity instead.
+        const verified = await dependencies.github.getRepositoryById(repository.githubRepositoryId);
+        if (verified === null) {
+          await discardPass();
+          return declineCrawl(dependencies, repositoryId, runId, "NOT_FOUND", now());
+        }
+        // GitHub answering for an id other than the one asked for should be impossible;
+        // decline rather than materialize whatever it did answer with.
+        if (verified.id !== repository.githubRepositoryId) {
+          await discardPass();
+          return declineCrawl(dependencies, repositoryId, runId, "IDENTITY_MISMATCH", now());
+        }
+        // Only public repositories can be registered, and one that stopped being public
+        // stops being crawled. This is nearly unobservable in production: the sponsor's
+        // token carries only `admin:repo_hook`, so a repository that went private answers 404
+        // and lands in NOT_FOUND above. The branch is kept for a broader-scoped token,
+        // where materializing a private repository would be worse than declining.
+        if (verified.visibility !== "PUBLIC") {
+          await discardPass();
+          return declineCrawl(dependencies, repositoryId, runId, "NOT_PUBLIC", now());
+        }
 
-      await dependencies.store.recordVerifiedRepositoryIdentity({
-        repositoryId,
-        ownerName: verified.fullName,
-        visibility: verified.visibility,
-      });
-      return withSweepPass(pass, async () => {
-        const reference: GitHubRepositoryReference = { owner: verified.owner, name: verified.name };
-        const { githubIssues, pullRequestEvidence } = await withGraphqlRequestBudget(
-          () => reconciliationBudgetHoldUntil(dependencies, repository.sponsor.id, now),
-          async () => {
-            const changed = new Map((await dependencies.github.listIssues(reference, {
-              ...(full ? {} : { since: new Date(cached!.checkpoint.getTime() - reconciliationOverlapMs).toISOString() }),
-              timelineCriticalLabels: new Set(repository.difficultyScheme.actualLabels.map(({ label }) => label)),
-              timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
-            })).map((issue) => [issue.id, issue]));
-            const retained = new Map((full ? [] : cached!.issues).map((issue) => [issue.id, issue]));
-            if (!full) {
-              const affected = new Map<number, GitHubSubject>();
-              for (const subject of dirtySubjects) {
-                if (subject.kind === "ISSUE") {
-                  affected.set(subject.id, subject);
-                } else {
-                  // Both sides matter when a PR edits away an old closing reference.
-                  for (const issue of [...retained.values(), ...changed.values()]) {
-                    if (issue.closingPullRequests.some((pr) => pr.id === subject.id && belongsToRegisteredRepository(repository, pr))) {
-                      affected.set(issue.id, issue);
-                    }
-                  }
-                  try {
-                    const references = await dependencies.github.getPullRequestClosingIssues(reference, subject);
-                    for (const issue of references) {
-                      if (belongsToRegisteredRepository(repository, issue)) affected.set(issue.id, issue);
-                    }
-                  } catch (error) {
-                    if (!(await discardUnresolvableSubject(error, subject.kind, subject, subject))) throw error;
-                  }
-                }
-              }
-              const dirtyIssueSubjects = new Map(dirtySubjects
-                .filter(({ kind }) => kind === "ISSUE")
-                .map((subject) => [subject.id, subject]));
-              for (const subject of affected.values()) {
-                if (changed.has(subject.id)) continue;
-                let issue: GitHubIssue | null;
-                try {
-                  issue = await dependencies.github.getIssue(reference, subject);
-                } catch (error) {
-                  if (!(await discardUnresolvableSubject(error, "ISSUE", subject, dirtyIssueSubjects.get(subject.id), issueDiscardReason))) {
-                    throw error;
-                  }
-                  continue;
-                }
-                if (issue !== null) changed.set(issue.id, issue);
-              }
-            }
-            for (const issue of changed.values()) retained.set(issue.id, issue);
-            const githubIssues = [...retained.values()];
-            const pullRequestEvidence = new Map((full ? [] : cached!.pullRequests)
-              .map(({ id, reviews, rawDiff }) => [id, { reviews, rawDiff }]));
-            const referencedPullRequests = githubIssues.flatMap(({ closingPullRequests }) => closingPullRequests);
-            const dirtyPullRequestSubjects = new Map(dirtySubjects
-              .filter(({ kind }) => kind === "PULL_REQUEST")
-              .map((subject) => [subject.id, subject]));
-            const refreshedEvidence = await collectPullRequestEvidence(
-              dependencies.github,
-              reference,
-              repository,
-              full ? referencedPullRequests : [
-                ...[...changed.values()].flatMap(({ closingPullRequests }) => closingPullRequests),
-                ...referencedPullRequests.filter(({ id }) => dirtyPullRequestSubjects.has(id) || !pullRequestEvidence.has(id)),
-              ],
-              discardUnresolvableSubject,
-              dirtyPullRequestSubjects,
-            );
-            for (const [id, evidence] of refreshedEvidence) pullRequestEvidence.set(id, evidence);
-            const retainedPrIds = new Set(referencedPullRequests.filter((pr) => pr.state === "MERGED" && pr.mergedAt !== null
-              && belongsToRegisteredRepository(repository, pr)).map(({ id }) => id));
-            for (const id of pullRequestEvidence.keys()) if (!retainedPrIds.has(id)) pullRequestEvidence.delete(id);
-            return { githubIssues, pullRequestEvidence };
-          },
-        );
-        // The same boundary the evidence fetch draws: an author is looked up
-        // because their pull request might be credited here, and a pull request in
-        // another repository never can be.
-        const authorGitHubUserIds = [...new Set(
-          githubIssues
-            .flatMap(({ closingPullRequests }) => closingPullRequests)
-            .filter((pullRequest) => belongsToRegisteredRepository(repository, pullRequest))
-            .map((pullRequest) => pullRequest.authorGitHubUserId)
-            .filter((githubUserId): githubUserId is number => githubUserId !== null),
-        )];
-        // GitLab authors resolve through linked identities on this repository's
-        // provider and instance, not through the users table's GitHub ids.
-        const forgeIdentities = repository.provider === "gitlab"
-          ? await dependencies.store.findForgeIdentitiesByForgeUserIds?.(
-              repositoryId,
-              authorGitHubUserIds,
-            )
-          : undefined;
-        const users = repository.provider === "gitlab"
-          ? []
-          : await dependencies.store.findUsersByGitHubUserIds(authorGitHubUserIds);
-        const snapshot: RepositoryFoldSnapshot = {
-          // The stored path can still carry the pre-rename name on the run that
-          // first observes the rename — recordVerifiedRepositoryIdentity above
-          // refreshes the database, not this in-memory value — so the fresh
-          // verify rides along and the fold can name the current path beside the
-          // stale one in a cross-repository reason.
-          repository: {
-            ...repository,
-            observedOwnerName: verified.fullName,
-          },
-          users,
-          forgeIdentities,
-          issues: githubIssues.map((issue) => ({
-            ...issue,
-            claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin,
-            claimAssigneeGitHubUserId: issue.claimAssigneeGitHubUserId,
-            closingPullRequests: issue.closingPullRequests.map((pullRequest) => ({
-              ...pullRequest,
-              reviews: pullRequestEvidence.get(pullRequest.id)?.reviews ?? [],
-              rawDiff: pullRequestEvidence.get(pullRequest.id)?.rawDiff ?? "",
-            })),
-          })),
-        };
-        const fold = foldRepository(snapshot);
-        const cost: ReconciliationCostCharge = { ...readCost(), sponsorId: repository.sponsor.id, completedAt: now() };
-        const deltas = await dependencies.store.materialize({ repositoryId, runId, fold, cost, synchronization: {
-          expectedVersion: cached?.version ?? null, scanStartedAt, full, issues: githubIssues,
-          pullRequests: [...pullRequestEvidence].map(([id, evidence]) => ({ id, ...evidence })), dirtySubjects,
-        } });
-
-        await discardPass();
-        return {
+        await dependencies.store.recordVerifiedRepositoryIdentity({
           repositoryId,
-          runId,
-          skipped: false,
-          ...deltas,
-          added: deltas.adds,
-          changed: deltas.changes,
-          removed: deltas.removals,
-        };
-      });
+          ownerName: verified.fullName,
+          visibility: verified.visibility,
+        });
+        return await withSweepPass(pass, async () => {
+          const reference: GitHubRepositoryReference = { owner: verified.owner, name: verified.name };
+          const { githubIssues, pullRequestEvidence } = await withGraphqlRequestBudget(
+            () => reconciliationBudgetHoldUntil(dependencies, repository.sponsor.id, now),
+            async () => {
+              const changed = new Map((await dependencies.github.listIssues(reference, {
+                ...(full ? {} : { since: new Date(cached!.checkpoint.getTime() - reconciliationOverlapMs).toISOString() }),
+                timelineCriticalLabels: new Set(repository.difficultyScheme.actualLabels.map(({ label }) => label)),
+                timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
+              })).map((issue) => [issue.id, issue]));
+              const retained = new Map((full ? [] : cached!.issues).map((issue) => [issue.id, issue]));
+              if (!full) {
+                const affected = new Map<number, GitHubSubject>();
+                for (const subject of dirtySubjects) {
+                  if (subject.kind === "ISSUE") {
+                    affected.set(subject.id, subject);
+                  } else {
+                    // Both sides matter when a PR edits away an old closing reference.
+                    for (const issue of [...retained.values(), ...changed.values()]) {
+                      if (issue.closingPullRequests.some((pr) => pr.id === subject.id && belongsToRegisteredRepository(repository, pr))) {
+                        affected.set(issue.id, issue);
+                      }
+                    }
+                    try {
+                      const references = await dependencies.github.getPullRequestClosingIssues(reference, subject);
+                      for (const issue of references) {
+                        if (belongsToRegisteredRepository(repository, issue)) affected.set(issue.id, issue);
+                      }
+                    } catch (error) {
+                      if (!(await discardUnresolvableSubject(error, subject.kind, subject, subject))) throw error;
+                    }
+                  }
+                }
+                const dirtyIssueSubjects = new Map(dirtySubjects
+                  .filter(({ kind }) => kind === "ISSUE")
+                  .map((subject) => [subject.id, subject]));
+                for (const subject of affected.values()) {
+                  if (changed.has(subject.id)) continue;
+                  let issue: GitHubIssue | null;
+                  try {
+                    issue = await dependencies.github.getIssue(reference, subject);
+                  } catch (error) {
+                    if (!(await discardUnresolvableSubject(error, "ISSUE", subject, dirtyIssueSubjects.get(subject.id), issueDiscardReason))) {
+                      throw error;
+                    }
+                    continue;
+                  }
+                  if (issue !== null) changed.set(issue.id, issue);
+                }
+              }
+              for (const issue of changed.values()) retained.set(issue.id, issue);
+              const githubIssues = [...retained.values()];
+              const pullRequestEvidence = new Map((full ? [] : cached!.pullRequests)
+                .map(({ id, reviews, rawDiff }) => [id, { reviews, rawDiff }]));
+              const referencedPullRequests = githubIssues.flatMap(({ closingPullRequests }) => closingPullRequests);
+              const dirtyPullRequestSubjects = new Map(dirtySubjects
+                .filter(({ kind }) => kind === "PULL_REQUEST")
+                .map((subject) => [subject.id, subject]));
+              const refreshedEvidence = await collectPullRequestEvidence(
+                dependencies.github,
+                reference,
+                repository,
+                full ? referencedPullRequests : [
+                  ...[...changed.values()].flatMap(({ closingPullRequests }) => closingPullRequests),
+                  ...referencedPullRequests.filter(({ id }) => dirtyPullRequestSubjects.has(id) || !pullRequestEvidence.has(id)),
+                ],
+                discardUnresolvableSubject,
+                dirtyPullRequestSubjects,
+              );
+              for (const [id, evidence] of refreshedEvidence) pullRequestEvidence.set(id, evidence);
+              const retainedPrIds = new Set(referencedPullRequests.filter((pr) => pr.state === "MERGED" && pr.mergedAt !== null
+                && belongsToRegisteredRepository(repository, pr)).map(({ id }) => id));
+              for (const id of pullRequestEvidence.keys()) if (!retainedPrIds.has(id)) pullRequestEvidence.delete(id);
+              return { githubIssues, pullRequestEvidence };
+            },
+          );
+          // The same boundary the evidence fetch draws: an author is looked up
+          // because their pull request might be credited here, and a pull request in
+          // another repository never can be.
+          const authorGitHubUserIds = [...new Set(
+            githubIssues
+              .flatMap(({ closingPullRequests }) => closingPullRequests)
+              .filter((pullRequest) => belongsToRegisteredRepository(repository, pullRequest))
+              .map((pullRequest) => pullRequest.authorGitHubUserId)
+              .filter((githubUserId): githubUserId is number => githubUserId !== null),
+          )];
+          // GitLab authors resolve through linked identities on this repository's
+          // provider and instance, not through the users table's GitHub ids.
+          const forgeIdentities = repository.provider === "gitlab"
+            ? await dependencies.store.findForgeIdentitiesByForgeUserIds?.(
+                repositoryId,
+                authorGitHubUserIds,
+              )
+            : undefined;
+          const users = repository.provider === "gitlab"
+            ? []
+            : await dependencies.store.findUsersByGitHubUserIds(authorGitHubUserIds);
+          const snapshot: RepositoryFoldSnapshot = {
+            // The stored path can still carry the pre-rename name on the run that
+            // first observes the rename — recordVerifiedRepositoryIdentity above
+            // refreshes the database, not this in-memory value — so the fresh
+            // verify rides along and the fold can name the current path beside the
+            // stale one in a cross-repository reason.
+            repository: {
+              ...repository,
+              observedOwnerName: verified.fullName,
+            },
+            users,
+            forgeIdentities,
+            issues: githubIssues.map((issue) => ({
+              ...issue,
+              claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin,
+              claimAssigneeGitHubUserId: issue.claimAssigneeGitHubUserId,
+              closingPullRequests: issue.closingPullRequests.map((pullRequest) => ({
+                ...pullRequest,
+                reviews: pullRequestEvidence.get(pullRequest.id)?.reviews ?? [],
+                rawDiff: pullRequestEvidence.get(pullRequest.id)?.rawDiff ?? "",
+              })),
+            })),
+          };
+          const fold = foldRepository(snapshot);
+          const cost: ReconciliationCostCharge = { ...readCost(), sponsorId: repository.sponsor.id, completedAt: now() };
+          const deltas = await dependencies.store.materialize({ repositoryId, runId, fold, cost, synchronization: {
+            expectedVersion: cached?.version ?? null, scanStartedAt, full, issues: githubIssues,
+            pullRequests: [...pullRequestEvidence].map(([id, evidence]) => ({ id, ...evidence })), dirtySubjects,
+          } });
+
+          await discardPass();
+          return {
+            repositoryId,
+            runId,
+            skipped: false,
+            ...deltas,
+            added: deltas.adds,
+            changed: deltas.changes,
+            removed: deltas.removals,
+          };
+        });
+      } catch (error) {
+        // Capture before the scope rejects; the outer handlers persist only the run outcome.
+        const observation = readCost();
+        failedCost = observation.observedResponses > 0 || observation.unmeasuredResponses > 0
+          ? { ...observation, sponsorId: repository.sponsor.id } : null;
+        throw error;
+      }
     });
     return collected.value;
   } catch (error) {
     if (error instanceof SweepBudgetSpent) {
-      await dependencies.store.holdRun(runId, "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET");
+      await dependencies.store.holdRun(runId, "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", failedCost);
       return { repositoryId, runId: null, skipped: true, sweepHeldUntil: error.resetAt,
         adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 };
     }
     if (error instanceof GraphqlBudgetHeld) {
-      await dependencies.store.holdRun(runId, "Reconciliation held for GraphQL budget.", "GRAPHQL_BUDGET");
+      await dependencies.store.holdRun(runId, "Reconciliation held for GraphQL budget.", "GRAPHQL_BUDGET", failedCost);
       return { repositoryId, runId: null, skipped: true, budgetHeldUntil: error.resetAt,
         adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 };
     }
@@ -515,6 +524,7 @@ async function reconcileRepositoryWhileCoordinated(
     await dependencies.store.failRun(
       runId,
       carriesCredentialRejection(error) ? FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE : "Reconciliation failed.",
+      failedCost,
     );
     const failure = new Error("Unable to reconcile repository.", { cause: reportedError });
     const rateLimit = findGitHubRateLimitError(error);

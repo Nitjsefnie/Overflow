@@ -124,12 +124,14 @@ describe("reconciliation budget holds under the repository lock", () => {
     }));
   });
 
-  it("keeps costs unpublished when the final page reaches the reserve", async () => {
+  it("records accumulated costs when the final page reaches the reserve", async () => {
     const f = fixture(4000);
     const materialize = pagedCostGateway(f, [2, 3], 499);
     await expect(runNextReconciliationJob(f.worker)).resolves.toBe("BUDGET_HELD");
     expect(materialize).not.toHaveBeenCalled();
-    expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for GraphQL budget.", "GRAPHQL_BUDGET");
+    expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for GraphQL budget.", "GRAPHQL_BUDGET", {
+      sponsorId: "sponsor-1", observedCost: 5, observedResponses: 2, unmeasuredResponses: 0,
+    });
     expect(f.fold.store.failRun).not.toHaveBeenCalled();
     expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
   });
@@ -146,10 +148,36 @@ describe("reconciliation budget holds under the repository lock", () => {
     };
     await expect(runNextReconciliationJob(f.worker)).resolves.toBe("BUDGET_HELD");
     expect(f.fold.store.beginRun).toHaveBeenCalledExactlyOnceWith("repository-1", { rederivation: false });
-    expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET");
+    expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", {
+      sponsorId: "sponsor-1", observedCost: 2, observedResponses: 1, unmeasuredResponses: 0,
+    });
     expect(f.fold.store.failRun).not.toHaveBeenCalled();
     expect(materialize).not.toHaveBeenCalled();
     expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
+  });
+
+  it("records no cost when a budget recheck holds before any GraphQL response", async () => {
+    const f = fixture(4000);
+    pagedCostGateway(f, [2]);
+    f.fold.store.recordVerifiedRepositoryIdentity = async () => {
+      f.budgetStore.record("sponsor-1", reading(499));
+    };
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("BUDGET_HELD");
+    expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith(
+      "run-1", "Reconciliation held for GraphQL budget.", "GRAPHQL_BUDGET", null,
+    );
+  });
+
+  it("records accumulated costs when publication fails after the crawl", async () => {
+    const f = fixture(4000);
+    pagedCostGateway(f, [2, 3]);
+    vi.spyOn(f.fold.store, "materialize").mockRejectedValue(new Error("publication failed"));
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(reconcileRepository(f.fold, "repository-1")).rejects.toThrow("Unable to reconcile repository.");
+    expect(f.fold.store.failRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation failed.", {
+      sponsorId: "sponsor-1", observedCost: 5, observedResponses: 2, unmeasuredResponses: 0,
+    });
+    logged.mockRestore();
   });
 
   it("defers fairness for 30 seconds before credentials or run creation and retains rederivation", async () => {
@@ -380,7 +408,9 @@ describe("reconciliation budget holds under the repository lock", () => {
     expect(materialize).not.toHaveBeenCalled();
     expect(result).toBe("BUDGET_HELD");
     expect(runStates).toEqual(["RUNNING", "HELD"]);
-    expect(fold.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for GraphQL budget.", "GRAPHQL_BUDGET");
+    expect(fold.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for GraphQL budget.", "GRAPHQL_BUDGET", {
+      sponsorId: "sponsor-1", observedCost: null, observedResponses: 0, unmeasuredResponses: 1,
+    });
     expect({ state, attempts, runAfter }).toEqual({ state: "PENDING", attempts: 0, runAfter: resetAt });
     expect(cooldown).not.toHaveBeenCalled();
     expect(worker.store.retryReconciliationJob).not.toHaveBeenCalled();
