@@ -80,10 +80,13 @@ describe(`upgrading across ${backfillMigration}`, () => {
       sanction_deactivated_at: null,
       // Migration 066 defaults every existing registration to OAuth hooks.
       registration_method: "oauth_hook",
+      reconciliation_auth_path: null,
+      reconciliation_auth_path_at: null,
     });
     for (const untouched of [moderated, active, legacyUnregistered]) {
       expect(after.get(untouched)).toEqual({
         ...before.get(untouched), sanction_deactivated_at: null, registration_method: "oauth_hook",
+        reconciliation_auth_path: null, reconciliation_auth_path_at: null,
       });
     }
     expect(before.get(moderated)!.webhook_credential_id).not.toBeNull();

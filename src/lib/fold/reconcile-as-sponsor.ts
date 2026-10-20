@@ -1,3 +1,4 @@
+import type { ReconciliationAuthPath } from "@/lib/fold/reconciliation-auth-path";
 import type { ReconciliationSweepControl } from "@/lib/fold/sweep-pass";
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import type { ReconciliationGateway, ReconciliationStore } from "@/lib/fold/reconcile";
@@ -52,6 +53,8 @@ export type ReconcileAsSponsorOptions = {
    * precedent). Logged once per memoized gateway resolution, never per read.
    */
   resolveAppInstallationToken?: AppInstallationTokenResolver;
+  /** Records the resolved GitHub authentication path; failure never fails the fold. */
+  recordAuthPath?: (repositoryId: string, authPath: ReconciliationAuthPath) => Promise<void>;
 };
 
 export function reconcileRepositoryAsSponsor(
@@ -77,6 +80,7 @@ export function reconcileRepositoryAsSponsor(
         options?.resolveForgeToken,
         options?.markCredentialRejected,
         options?.resolveAppInstallationToken,
+        options?.recordAuthPath,
       ),
     },
     repositoryId,
@@ -117,7 +121,15 @@ export function sponsorGateway(
   resolveForgeToken?: (userId: string, instanceUrl: string) => Promise<{ token: string; identityId: string } | null>,
   markCredentialRejected?: (identityId: string) => Promise<void>,
   resolveAppInstallationToken?: AppInstallationTokenResolver,
+  recordAuthPath?: (repositoryId: string, authPath: ReconciliationAuthPath) => Promise<void>,
 ): ReconciliationGateway {
+  const record = async (authPath: ReconciliationAuthPath): Promise<void> => {
+    try {
+      await recordAuthPath?.(repositoryId, authPath);
+    } catch (error) {
+      console.error(`Recording reconciliation authentication failed for repository ${repositoryId}.`, error);
+    }
+  };
   let resolving: Promise<ReconciliationGateway> | undefined;
   const gateway = (): Promise<ReconciliationGateway> => {
     resolving ??= (async () => {
@@ -158,14 +170,18 @@ export function sponsorGateway(
       if (resolveAppInstallationToken !== undefined) {
         const appToken = await resolveAppInstallationToken(repository.ownerName);
         if (appToken !== null) {
+          const authPath = appToken.app === "registration" ? "registration-app-installation" : "github-app-installation";
           console.info("Reconciliation authentication", {
             repositoryId,
-            authPath: appToken.app === "registration" ? "registration-app-installation" : "github-app-installation",
+            authPath,
             installationId: appToken.installationId,
           });
+          await record(authPath);
           return createGateway(appToken.token, repository.sponsor.id);
         }
-        console.info("Reconciliation authentication", { repositoryId, authPath: "sponsor-oauth-fallback" });
+        const authPath = "sponsor-oauth-fallback";
+        console.info("Reconciliation authentication", { repositoryId, authPath });
+        await record(authPath);
       }
       const accessToken = await store.getGitHubAccessToken(repository.sponsor.id);
       if (accessToken === null) {
