@@ -232,7 +232,7 @@ function guardGitHubAppCredential(
       if (!(error instanceof GitHubApiError || error instanceof GitHubGraphqlRequestError) || error.status !== 401) {
         throw error;
       }
-      console.warn("Reconciliation authentication refreshed mid-fold", { repositoryId });
+      console.warn("Refreshing reconciliation authentication mid-fold", { repositoryId });
       gateway = await refresh();
       return read(gateway);
     }
