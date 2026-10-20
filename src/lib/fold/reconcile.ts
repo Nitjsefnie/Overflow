@@ -79,6 +79,8 @@ export type ReconciliationDeltas = {
   removals: number;
 };
 
+export type ReconciliationHeldBy = "SWEEP_REQUEST_BUDGET" | "GRAPHQL_BUDGET";
+
 export type ReconciliationStore = {
   withRepositoryReconciliation<T>(repositoryId: string, work: () => Promise<T>): Promise<T>;
   getRepository(repositoryId: string): Promise<ReconciliationRepository | null>;
@@ -120,6 +122,7 @@ export type ReconciliationStore = {
   completeRun(runId: string): Promise<void>;
   materialize(input: { repositoryId: string; runId: string; fold: FoldResult; synchronization?: ReconciliationSynchronization; cost?: ReconciliationCostCharge }): Promise<ReconciliationDeltas>;
   failRun(runId: string, errorMessage: string): Promise<void>;
+  holdRun(runId: string, message: string, heldBy: ReconciliationHeldBy): Promise<void>;
   recordVerifiedRepositoryIdentity(input: {
     repositoryId: string;
     ownerName: string;
@@ -487,12 +490,12 @@ async function reconcileRepositoryWhileCoordinated(
     return collected.value;
   } catch (error) {
     if (error instanceof SweepBudgetSpent) {
-      await dependencies.store.failRun(runId, "Reconciliation held for the sweep request budget.");
+      await dependencies.store.holdRun(runId, "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET");
       return { repositoryId, runId: null, skipped: true, sweepHeldUntil: error.resetAt,
         adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 };
     }
     if (error instanceof GraphqlBudgetHeld) {
-      await dependencies.store.failRun(runId, "Reconciliation held for GraphQL budget.");
+      await dependencies.store.holdRun(runId, "Reconciliation held for GraphQL budget.", "GRAPHQL_BUDGET");
       return { repositoryId, runId: null, skipped: true, budgetHeldUntil: error.resetAt,
         adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 };
     }

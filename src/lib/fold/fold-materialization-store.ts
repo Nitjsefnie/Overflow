@@ -9,7 +9,7 @@ import { nullableTimestampToIso, timestampToIso, toSafeInteger, recordChange, re
 import type { RepositoryCoordinator } from "@/lib/fold/repository-coordination";
 import { scrubSuppressedForgeData } from "@/lib/fold/data-subject-suppression";
 import type { FoldResult } from "@/lib/fold/repository-fold";
-import type { ReconciliationDeltas } from "@/lib/fold/reconcile";
+import type { ReconciliationDeltas, ReconciliationHeldBy } from "@/lib/fold/reconcile";
 import { materializeSettlements, loadGrantedSettlementOverrides, loadExistingSettlements, materializeSelfWorkCalibrations, loadExistingSelfWorkCalibrations, materializeUnwritableClosures } from "@/lib/fold/derived-row-materialization";
 
 type RepositoryFoldRevisionCountsRow = {
@@ -196,6 +196,14 @@ export class PostgresFoldMaterializationStore {
     await this.sql`
       update reconciliation_runs
       set status = ${"FAILED"}, completed_at = now(), error_message = ${"Reconciliation failed."}
+      where id = ${runId} and status = 'PENDING'
+    `;
+  }
+
+  public async holdRun(runId: string, message: string, heldBy: ReconciliationHeldBy): Promise<void> {
+    await this.sql`
+      update reconciliation_runs
+      set status = ${"HELD"}, completed_at = now(), error_message = ${message}, held_by = ${heldBy}
       where id = ${runId} and status = 'PENDING'
     `;
   }

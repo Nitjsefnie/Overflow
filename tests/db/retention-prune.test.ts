@@ -369,7 +369,7 @@ async function seedReceipt(seed: ReceiptSeed): Promise<string> {
 }
 
 interface RunSeed {
-  status: "PENDING" | "COMPLETED" | "FAILED";
+  status: "PENDING" | "COMPLETED" | "FAILED" | "HELD";
   startedDaysAgo?: number;
   completedDaysAgo?: number;
 }

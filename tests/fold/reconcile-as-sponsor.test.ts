@@ -413,6 +413,9 @@ function createHarness(options: {
     failRun: async () => {
       calls.push("failRun");
     },
+    holdRun: vi.fn(async () => {
+      calls.push("holdRun");
+    }),
     materializeRepositoryFold: async () => ({ adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 }),
     markRepositoryUnavailable: async () => {
       calls.push("markRepositoryUnavailable");
@@ -506,7 +509,8 @@ describe("sponsor quota admission through transport, fold and worker", () => {
       skipped: true, budgetHeldUntil: new Date("2026-09-07T11:00:00Z"),
     });
     expect(harness.store.materialize).not.toHaveBeenCalled();
-    expect(harness.calls).toContain("failRun");
+    expect(harness.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for GraphQL budget.", "GRAPHQL_BUDGET");
+    expect(harness.calls).not.toContain("failRun");
     expect(harness.calls).not.toContain("completeRun");
     expect(request).toHaveBeenCalledTimes(2);
     expect(gitHubGraphqlBudget().owners()).toEqual(["sponsor-1"]);

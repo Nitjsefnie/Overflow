@@ -18,7 +18,7 @@ export interface RetentionPruneResult {
   failedReceipts: number;
   /** webhook_deliveries PENDING rows with an expired lease, deleted. */
   abandonedPendingReceipts: number;
-  /** reconciliation_runs COMPLETED/FAILED rows past the window, deleted. */
+  /** reconciliation_runs COMPLETED/FAILED/HELD rows past the window, deleted. */
   expiredRuns: number;
   /** The reconciliation_changes rows of those runs, deleted first. */
   changesOfExpiredRuns: number;
@@ -59,7 +59,7 @@ export async function pruneExpiredMaintenanceRows(sql: SqlClient): Promise<Reten
     const batch = await sql.begin(async (tx) => {
       const runs = await tx<{ id: string }[]>`
         select id from reconciliation_runs
-        where status in ('COMPLETED', 'FAILED')
+        where status in ('COMPLETED', 'FAILED', 'HELD')
           and completed_at < now() - ${RUN_TERMINAL_RETENTION_DAYS} * interval '1 day'
           ${runCursor === undefined ? tx`` : tx`and id > ${runCursor}`}
         order by id limit ${RETENTION_PRUNE_BATCH_SIZE} for update

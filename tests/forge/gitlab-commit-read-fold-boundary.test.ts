@@ -83,6 +83,7 @@ describe("a credential failure on the GitLab MR commits read never folds a settl
       completeRun,
       materialize,
       failRun,
+      holdRun: async () => {},
       recordVerifiedRepositoryIdentity: async () => {},
       markRepositoryUnavailable: async () => {},
     };
