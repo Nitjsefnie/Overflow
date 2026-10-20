@@ -99,6 +99,7 @@ export const bundledMigrationNames: readonly string[] = [
   "067_reconciliation_sweep_round.sql",
   "068_reconciliation_sweep_authority.sql",
   "069_repository_reconciliation_auth_path.sql",
+  "070_reconciliation_held_status.sql",
 ];
 
 /**
