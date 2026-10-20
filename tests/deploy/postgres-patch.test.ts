@@ -11,8 +11,8 @@ import { describe, expect, it } from "vitest";
  *
  * - a tree whose install drifted (or was never re-installed after the patch
  *   moved) runs the whole suite against a build that does not match
- *   `patches/postgres@3.4.9.patch` and passes, and
- * - a tree resolving to an UNPATCHED postgres@3.4.9 fails exactly one db suite
+ *   the lockfile-declared postgres patch and passes, and
+ * - a tree resolving to an UNPATCHED postgres fails exactly one db suite
  *   with a 120-second timeout that reads like a regression in the branch under
  *   work.
  *
@@ -52,10 +52,9 @@ import { describe, expect, it } from "vitest";
  * hunks' post-image surface, not whole-file fidelity.
  */
 
-const PACKAGE = "postgres@3.4.9";
-const PATCH_PATH = "patches/postgres@3.4.9.patch";
 const LOCKFILE_PATH = "pnpm-lock.yaml";
 const INSTALLED_ROOT = "node_modules/postgres";
+const patchEntry = patchedDependenciesEntry(readFileSync(resolve(LOCKFILE_PATH), "utf8"));
 
 interface PatchHunk {
   /** 1-based ordinal within the hunk's file. */
@@ -113,7 +112,7 @@ function parsePatch(patch: string): PatchFile[] {
       const body = lines[++i];
       if (body === undefined) {
         throw new Error(
-          `${PATCH_PATH} ends inside the hunk headed "${line}" — not a whole unified diff`,
+          `${patchEntry.path} ends inside the hunk headed "${line}" — not a whole unified diff`,
         );
       }
 
@@ -141,7 +140,7 @@ function parsePatch(patch: string): PatchFile[] {
       }
 
       throw new Error(
-        `${PATCH_PATH}: unparseable line inside the hunk headed "${line}": ${JSON.stringify(body)}`,
+        `${patchEntry.path}: unparseable line inside the hunk headed "${line}": ${JSON.stringify(body)}`,
       );
     }
 
@@ -169,7 +168,7 @@ function patchedDependenciesEntry(lock: string): { hash: string; path: string } 
     const line = lines[i]!;
     if (line.length > 0 && !/^\s/.test(line)) break; // next top-level key: section ended
 
-    if (!/^ {2}postgres@3\.4\.9:$/.test(line)) continue;
+    if (!/^ {2}postgres(?:@[^:\s]+)?:$/.test(line)) continue;
 
     let hash: string | undefined;
     let path: string | undefined;
@@ -182,14 +181,29 @@ function patchedDependenciesEntry(lock: string): { hash: string; path: string } 
 
     if (!hash || !path) {
       throw new Error(
-        `${LOCKFILE_PATH}'s patchedDependencies entry for ${PACKAGE} is missing its hash:/path: pair`,
+        `${LOCKFILE_PATH}'s patchedDependencies entry for postgres is missing its hash:/path: pair`,
       );
     }
 
     return { hash, path };
   }
 
-  throw new Error(`${LOCKFILE_PATH}'s patchedDependencies section names no ${PACKAGE} entry`);
+  throw new Error(`${LOCKFILE_PATH}'s patchedDependencies section names no postgres entry`);
+}
+
+/**
+ * Collection needs the patch to enumerate hunk tests. Name the declaring entry
+ * and its repair when the file cannot be read, rather than exposing a bare ENOENT.
+ */
+function readPatch(): Buffer {
+  try {
+    return readFileSync(resolve(patchEntry.path));
+  } catch (error) {
+    throw new Error(
+      `${LOCKFILE_PATH} declares the postgres patch at ${patchEntry.path}, but it is unreadable ` +
+        `(${(error as Error).message}) — restore the patch or regenerate its patchedDependencies hash:/path: pair`,
+    );
+  }
 }
 
 /** First index at which `needle` appears in `haystack` as a contiguous block, or -1. */
@@ -232,29 +246,22 @@ function readInstalledLines(relativePath: string): string[] {
   return lines;
 }
 
-describe("postgres@3.4.9 patch guard", () => {
+describe("postgres patch guard", () => {
   describe("committed pair", () => {
     it("patch file is byte-identical to the hash pnpm-lock.yaml pins", () => {
-      const entry = patchedDependenciesEntry(readFileSync(resolve(LOCKFILE_PATH), "utf8"));
-
-      expect(
-        entry.path,
-        `${LOCKFILE_PATH} pins the patch at ${entry.path}, but this guard hashes ${PATCH_PATH}`,
-      ).toBe(PATCH_PATH);
-
-      const digest = sha256Hex(readFileSync(resolve(PATCH_PATH)));
+      const digest = sha256Hex(readPatch());
       expect(
         digest,
-        `sha256(${PATCH_PATH}) is ${digest}, but ${LOCKFILE_PATH} pins ${entry.hash} under ` +
+        `sha256(${patchEntry.path}) is ${digest}, but ${LOCKFILE_PATH} pins ${patchEntry.hash} under ` +
           "patchedDependencies — the patch was edited without regenerating pnpm-lock.yaml " +
           "(or the lockfile was regenerated without the patch); redo whichever half moved",
-      ).toBe(entry.hash);
+      ).toBe(patchEntry.hash);
     });
   });
 
   describe("resolved build", () => {
     it("node_modules/postgres resolves to the patched build pnpm-lock.yaml names", () => {
-      const { hash } = patchedDependenciesEntry(readFileSync(resolve(LOCKFILE_PATH), "utf8"));
+      const { hash } = patchEntry;
 
       let resolved: string;
       try {
@@ -276,10 +283,10 @@ describe("postgres@3.4.9 patch guard", () => {
   });
 
   describe("installed surface", () => {
-    const files = parsePatch(readFileSync(resolve(PATCH_PATH), "utf8"));
+    const files = parsePatch(readPatch().toString("utf8"));
 
     it("patch names at least one file to check", () => {
-      expect(files.length, `${PATCH_PATH} parsed to no file headers`).toBeGreaterThan(0);
+      expect(files.length, `${patchEntry.path} parsed to no file headers`).toBeGreaterThan(0);
     });
 
     it("patches the ESM host parser that the IPv6 behavior tests exercise", () => {
@@ -300,7 +307,7 @@ describe("postgres@3.4.9 patch guard", () => {
               `${file.path} hunk ${hunk.index} (${hunk.header}) post-image is absent from ` +
                 `installed ${INSTALLED_ROOT}/${file.path} — expected around installed line ` +
                 `${hunk.newStart}; the patch's change starts "${change.trim()}". The installed ` +
-                "postgres does not match patches/postgres@3.4.9.patch (drifted or stale " +
+                `postgres does not match ${patchEntry.path} (drifted or stale ` +
                 "node_modules — the db suites still pass against it); run pnpm install --frozen-lockfile",
             ).toBeGreaterThanOrEqual(0);
           });
@@ -323,8 +330,8 @@ describe("postgres@3.4.9 patch guard", () => {
         probe.status,
         `node -e "require('postgres')" exited ${probe.status} with output ` +
           `${JSON.stringify(output.trim())} — the stock CJS build loaded silently, so any ` +
-          "CommonJS consumer would run the unpatched client; patches/postgres@3.4.9.patch " +
-          "must make cjs/src/index.js throw at load (pnpm patch postgres@3.4.9, then " +
+          `CommonJS consumer would run the unpatched client; ${patchEntry.path} ` +
+          "must make cjs/src/index.js throw at load (pnpm patch postgres, then " +
           "pnpm patch-commit)",
       ).not.toBe(0);
 
