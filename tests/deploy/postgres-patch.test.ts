@@ -21,9 +21,7 @@ import { describe, expect, it } from "vitest";
  * whether or not the patch is applied; and a `_patch_hash=` suffix proves *a*
  * patch, not *this* one — the store keeps one directory per patch revision.
  *
- * So this guard pins all four links of the chain, each with a failure message
- * that names its own mismatch, so a drifted install is distinguishable at a
- * glance from a db-suite timeout:
+ * Four checks distinguish install drift from a db-suite timeout:
  *
  * 1. the committed pair — sha256 of the patch file equals the `hash:` pnpm
  *    pins under `patchedDependencies` (catches one half edited without the
@@ -191,10 +189,7 @@ function patchedDependenciesEntry(lock: string): { hash: string; path: string } 
   throw new Error(`${LOCKFILE_PATH}'s patchedDependencies section names no postgres entry`);
 }
 
-/**
- * Collection needs the patch to enumerate hunk tests. Name the declaring entry
- * and its repair when the file cannot be read, rather than exposing a bare ENOENT.
- */
+/** Read the patch with context for collection-time failures. */
 function readPatch(): Buffer {
   try {
     return readFileSync(resolve(patchEntry.path));
