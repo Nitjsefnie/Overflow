@@ -3,6 +3,7 @@ import { z } from "zod";
 import { checkSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import { CollectionWalkBound } from "@/lib/github/collection-walk-bound";
+import { drainIssueReads } from "@/lib/github/drain-issue-reads";
 import { githubWebhookEvents } from "@/lib/github/webhook-schema";
 import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
 import { checkGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
@@ -905,23 +906,10 @@ export class GitHubGateway implements ForgeGateway {
   }
 }
 
-/** Drain started reads before their caller snapshots cost, retaining the first rejection. */
-async function drainIssueReads<T extends readonly unknown[] | []>(
-  reads: T,
-): Promise<{ -readonly [K in keyof T]: Awaited<T[K]> }> {
-  try {
-    return await Promise.all(reads);
-  } catch (error) {
-    await Promise.allSettled(reads);
-    throw error;
-  }
-}
-
 /** What every actor/author selection reports: a `login`, plus a `databaseId` when the account is a User. */
 type GitHubGraphqlAccount = { login: string; databaseId?: number | null };
 
-type GitHubGraphqlLabel = { name: string };
-type GitHubGraphqlLabelConnection = GitHubGraphqlPage<GitHubGraphqlLabel>;
+type GitHubGraphqlLabelConnection = GitHubGraphqlPage<{ name: string }>;
 
 type GitHubGraphqlIssueNode = {
   databaseId: number | null;
