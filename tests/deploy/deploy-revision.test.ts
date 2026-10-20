@@ -1514,10 +1514,13 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
   });
 
-  it("refuses when remote.origin.url does not parse to an owner/repo pair", async () => {
+  it.each([
+    "https://gitlab.com/overflow-fixture/overflow-fixture.git",
+    "https://github.com/a/b\nc/d.git",
+  ])("refuses when remote.origin.url does not parse to an owner/repo pair: %s", async (remoteUrl) => {
     const fixture = await makeFixture();
     const result = await runDeploy(fixture, {
-      GIT_SHIM_REMOTE_URL: "https://gitlab.com/overflow-fixture/overflow-fixture.git",
+      GIT_SHIM_REMOTE_URL: remoteUrl,
     });
 
     expect(result.status, result.stderr).not.toBe(0);
