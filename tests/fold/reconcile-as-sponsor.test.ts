@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GitHubGraphqlClient } from "@/lib/github/graphql";
+import { GitHubApiError } from "@/lib/github/errors";
+import type { AppInstallationTokenResolver } from "@/lib/github/app-installation-auth";
 import { createGitHubGraphqlBudgetStore, gitHubGraphqlBudget } from "@/lib/github/rate-limit-budget";
 import { runNextReconciliationJob, drainReconciliationJobs, type ReconciliationWorkerStore } from "@/lib/fold/reconciliation-worker";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
@@ -170,6 +172,142 @@ describe("reconciling a repository as its sponsor", () => {
     expect(authLogLines(informed)).toEqual([]);
   });
 });
+
+describe("App credential refresh during reconciliation", () => {
+  it("completes a fold that outlives its App token with one auth-path record and one refresh log", async () => {
+    const harness = createExpiringAppHarness();
+
+    await expect(harness.run()).resolves.toMatchObject({ skipped: false, runId: "run-1" });
+
+    expect(harness.store.materialize).toHaveBeenCalledTimes(1);
+    expect(harness.calls).not.toContain("failRun");
+    expect(harness.readIssues.mock.calls).toEqual([[harness.tokenA], [harness.tokenB]]);
+    expect(harness.createGateway.mock.calls).toEqual([
+      [harness.tokenA, "sponsor-1"], [harness.tokenB, "sponsor-1"],
+    ]);
+    expect(harness.resolveAppInstallationToken.mock.calls).toEqual([
+      ["example/repository"], ["example/repository"],
+    ]);
+    expect(harness.recordAuthPath).toHaveBeenCalledExactlyOnceWith("repo-1", "github-app-installation");
+    expect(harness.warned).toHaveBeenCalledExactlyOnceWith(expect.any(String), { repositoryId: "repo-1" });
+  });
+
+  it("propagates the second 401 without another refresh or retry", async () => {
+    const harness = createExpiringAppHarness();
+    const rejected = new GitHubApiError(401);
+    harness.readIssues.mockRejectedValueOnce(new GitHubApiError(401)).mockRejectedValue(rejected);
+
+    await expect(harness.run()).rejects.toMatchObject({ cause: rejected });
+
+    expect(harness.readIssues.mock.calls).toEqual([[harness.tokenA], [harness.tokenB]]);
+    expect(harness.resolveAppInstallationToken).toHaveBeenCalledTimes(2);
+    expect(harness.recordAuthPath).toHaveBeenCalledTimes(1);
+    expect(harness.calls).toContain("failRun");
+    expect(harness.store.materialize).not.toHaveBeenCalled();
+    expect(harness.warned).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries with sponsor OAuth when the installation disappears during the fold", async () => {
+    const harness = createExpiringAppHarness();
+    harness.resolveAppInstallationToken.mockResolvedValue(null);
+
+    await expect(harness.run()).resolves.toMatchObject({ skipped: false, runId: "run-1" });
+
+    expect(harness.readIssues.mock.calls).toEqual([[harness.tokenA], [harness.oauthToken]]);
+    expect(harness.createGateway).toHaveBeenLastCalledWith(harness.oauthToken, "sponsor-1");
+    expect(harness.resolveAppInstallationToken).toHaveBeenCalledTimes(2);
+    expect(harness.store.materialize).toHaveBeenCalledTimes(1);
+    expect(harness.recordAuthPath).toHaveBeenCalledExactlyOnceWith("repo-1", "github-app-installation");
+    expect(harness.warned).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an OAuth-only 401 as a failed fold without a refresh", async () => {
+    const harness = createExpiringAppHarness();
+    const rejected = new GitHubApiError(401);
+    harness.readIssues.mockRejectedValue(rejected);
+
+    await expect(reconcileRepositoryAsSponsor(harness.store, "repo-1", harness.createGateway))
+      .rejects.toMatchObject({ cause: rejected });
+
+    expect(harness.readIssues.mock.calls).toEqual([[harness.oauthToken]]);
+    expect(harness.resolveAppInstallationToken).not.toHaveBeenCalled();
+    expect(harness.recordAuthPath).not.toHaveBeenCalled();
+    expect(harness.warned).not.toHaveBeenCalled();
+    expect(harness.calls).toContain("failRun");
+  });
+
+  it.each([403, 404, 500])("does not refresh an App credential on HTTP %i", async (status) => {
+    const harness = createExpiringAppHarness(new GitHubApiError(status));
+
+    await expect(harness.run()).rejects.toThrow("Unable to reconcile repository.");
+
+    expect(harness.resolveAppInstallationToken).toHaveBeenCalledExactlyOnceWith("example/repository");
+    expect(harness.createGateway).toHaveBeenCalledExactlyOnceWith(harness.tokenA, "sponsor-1");
+    expect(harness.warned).not.toHaveBeenCalled();
+  });
+
+  it("refreshes on the GitHubApiError thrown by a GraphQL HTTP 401", async () => {
+    const harness = createExpiringAppHarness();
+    harness.readIssues.mockImplementation(async (token) => {
+      const client = new GitHubGraphqlClient({
+        accessToken: token,
+        fetch: async () => token === harness.tokenA
+          ? Response.json({ message: "Bad credentials" }, { status: 401 })
+          : Response.json({ data: { issues: [] } }),
+      });
+      const data = await client.query<{ issues: [] }>("query { issues }", {});
+      return data.issues;
+    });
+
+    await expect(harness.run()).resolves.toMatchObject({ skipped: false, runId: "run-1" });
+
+    expect(harness.readIssues.mock.calls).toEqual([[harness.tokenA], [harness.tokenB]]);
+    expect(harness.resolveAppInstallationToken).toHaveBeenCalledTimes(2);
+    expect(harness.recordAuthPath).toHaveBeenCalledTimes(1);
+    expect(harness.warned).toHaveBeenCalledTimes(1);
+  });
+});
+
+function createExpiringAppHarness(readError = new GitHubApiError(401)) {
+  vi.spyOn(console, "info").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const tokenA = ["test", "old", "credential"].join("-");
+  const tokenB = ["test", "fresh", "credential"].join("-");
+  const oauthToken = ["test", "oauth", "credential"].join("-");
+  const harness = createHarness({ active: true, accessToken: oauthToken });
+  harness.store.findUsersByGitHubUserIds = async () => [];
+  harness.store.materialize = vi.fn(async () => ({ adds: 0, changes: 0, removals: 0 }));
+  let expired = false;
+  const readIssues = vi.fn(async (token: string) => {
+    if (token === tokenA && expired) throw readError;
+    return [];
+  });
+  const createGateway = vi.fn<(token: string, owner: string) => ReconciliationGateway>((token) => ({
+    getRepositoryById: async () => {
+      // Initial read succeeds; the credential expires before the next fold read.
+      expired = true;
+      return {
+        id: 4242, owner: "example", ownerType: "USER", name: "repository", fullName: "example/repository",
+        visibility: "PUBLIC", url: "https://github.com/example/repository", canAdminister: true,
+      };
+    },
+    listIssues: async () => readIssues(token),
+    getIssue: async () => null,
+    getPullRequestClosingIssues: async () => [],
+    getPullRequestReviews: async () => [],
+    getPullRequestDiff: async () => "",
+  }));
+  const resolveAppInstallationToken = vi.fn<AppInstallationTokenResolver>()
+    .mockResolvedValueOnce({ token: tokenA, installationId: 7777 })
+    .mockResolvedValue({ token: tokenB, installationId: 7777 });
+  const recordAuthPath = vi.fn(async () => {});
+  const run = () => reconcileRepositoryAsSponsor(harness.store, "repo-1", createGateway, {
+    resolveAppInstallationToken, recordAuthPath,
+  });
+  return { ...harness, tokenA, tokenB, oauthToken, readIssues, createGateway,
+    resolveAppInstallationToken, recordAuthPath, warned, run };
+}
 
 /**
  * The authentication log lines are identified by their payload's `authPath`
