@@ -1,6 +1,7 @@
+import { repositoryLockNamespace } from "@/lib/fold/repository-coordination";
 import { randomUUID } from "node:crypto";
 import { getSql } from "@/lib/db/client";
-import type { SqlClient } from "@/lib/db/types";
+import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import type { DirtyReconciliationSubject } from "@/lib/fold/reconciliation-evidence";
 import type { SweepPass, SweepPassInput } from "@/lib/fold/sweep-pass";
 
@@ -8,6 +9,19 @@ type PassRow = { pass_id: string; scan_started_at: Date; dirty_subjects: DirtyRe
 export class PostgresSweepPassStore {
   public constructor(private readonly connection?: SqlClient) {}
   private get sql(): SqlClient { return this.connection ?? getSql(); }
+
+  /** The caller holds repository coordination; deletion cascades staged pages. */
+  public async discardByRepository(repositoryId: string, transaction?: TransactionClient): Promise<void> {
+    const sql = transaction ?? this.sql;
+    await sql`delete from reconciliation_sweep_passes where repository_id = ${repositoryId}`;
+  }
+
+  /** Unregistration owns its row transaction; take coordination without waiting on a live fold. */
+  public async discardIfIdle(repositoryId: string, transaction: TransactionClient): Promise<void> {
+    const [lock] = await transaction<{ acquired: boolean }[]>`select
+      pg_try_advisory_xact_lock(hashtextextended(${repositoryId}, ${repositoryLockNamespace})) as acquired`;
+    if (lock?.acquired === true) await this.discardByRepository(repositoryId, transaction);
+  }
 
   public async open(input: SweepPassInput): Promise<SweepPass> {
     const row = await this.sql.begin(async (transaction) => {

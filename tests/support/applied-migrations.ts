@@ -73,4 +73,5 @@ export const appliedMigrationNames: readonly string[] = [
   "065_retention_foreign_key_indexes.sql",
   "066_repository_registration_method.sql",
   "067_reconciliation_sweep_round.sql",
+  "068_reconciliation_sweep_authority.sql",
 ];

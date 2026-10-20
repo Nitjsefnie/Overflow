@@ -1,19 +1,21 @@
 import { randomBytes } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresSweepPassStore } from "@/lib/fold/sweep-pass-store";
-import { withSweepPass } from "@/lib/fold/sweep-pass";
+import { withSweepPass, type SweepPass } from "@/lib/fold/sweep-pass";
 import { withSweepRequestBudget, SweepBudgetSpent } from "@/lib/fold/sweep-request-budget";
 import { PostgresSweepRoundStore } from "@/lib/fold/sweep-round-store";
 import { GitHubGraphqlClient, collectCursorPages } from "@/lib/github/graphql";
 import { GitHubGateway } from "@/lib/github/client";
 import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
-import { reconcileRepository } from "@/lib/fold/reconcile";
+import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import { verifiedRepositoryPayload } from "../support/verified-repository";
+import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
+import { verifiedRepositoryAt } from "../support/verified-repository";
 import { startPostgresContainer } from "../support/postgres-container";
 
 let sql: Sql;
@@ -32,6 +34,48 @@ afterAll(async () => {
 });
 
 describe("paused full-pass pages", () => {
+  it("disposes paused pass pages on coordinated unregistration and inactive completion", async () => {
+    const f = await pausedFixture();
+    expect(await stagedCounts(f.repositoryId, f.state.pass!.id)).toEqual({ passes: 1, pages: 1 });
+    expect((await new PostgresRepositoryStore(sql).unregisterRepository(f.registration)).kind).toBe("UNREGISTERED");
+    const afterUnregister = await stagedCounts(f.repositoryId, f.state.pass!.id);
+    expect((await reconcileRepository(f.dependencies, f.repositoryId, { reason: "SWEEP" })).skipped).toBe(false);
+    expect(afterUnregister).toEqual({ passes: 0, pages: 0 });
+    expect(await stagedCounts(f.repositoryId, f.state.pass!.id)).toEqual({ passes: 0, pages: 0 });
+    expect(f.state.opens).toBe(1);
+  });
+
+  it("discards by repository on inactive completion without opening another pass", async () => {
+    const f = await pausedFixture();
+    await sql`update registered_repositories set active = false where id = ${f.repositoryId}`;
+    expect((await reconcileRepository(f.dependencies, f.repositoryId, { reason: "SWEEP" })).skipped).toBe(false);
+    expect(await stagedCounts(f.repositoryId, f.state.pass!.id)).toEqual({ passes: 0, pages: 0 });
+    expect(f.state.opens).toBe(1);
+  });
+
+  it("leaves an in-flight fold's pages intact until its coordinated ordinary-failure cleanup", async () => {
+    const f = await pausedFixture();
+    const entered = signal(); const release = signal();
+    f.github.listIssues = async () => {
+      await f.state.pass!.write("second", { text: "in-flight page" });
+      entered.resolve(); await release.promise;
+      await f.state.pass!.write("after-unregister", { text: "still owned by the fold" });
+      throw new Error("synthetic upstream failure");
+    };
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const settled = reconcileRepository(f.dependencies, f.repositoryId, { reason: "SWEEP" }).then(() => false, () => true);
+    try {
+      await entered.promise;
+      expect((await new PostgresRepositoryStore(sql).unregisterRepository(f.registration)).kind).toBe("UNREGISTERED");
+      expect(await stagedCounts(f.repositoryId, f.state.pass!.id)).toEqual({ passes: 1, pages: 2 });
+      expect(await f.state.pass!.read("first")).toEqual({ text: "paused page" });
+    } finally {
+      release.resolve(); await settled; log.mockRestore();
+    }
+    expect(await settled).toBe(true);
+    expect(await stagedCounts(f.repositoryId, f.state.pass!.id)).toEqual({ passes: 0, pages: 0 });
+  });
+
   it("resumes a full fold without publishing a partial walk or consuming newer dirty work", async () => {
     const f = await materializeRepositoryFixture(sql);
     const repository = (await f.store.getRepository(f.repositoryId))!;
@@ -52,6 +96,7 @@ describe("paused full-pass pages", () => {
     const sweep = {
       spend: () => new PostgresSweepRoundStore(sql).spend(clock, 2),
       openPass: new PostgresSweepPassStore(sql).open.bind(new PostgresSweepPassStore(sql)),
+      discardPass: (id: string) => new PostgresSweepPassStore(sql).discardByRepository(id),
     };
     const first = await reconcileRepository({ store: f.store, github, sweep, now: () => clock, onBudgetChange: () => {} }, f.repositoryId, { reason: "SWEEP" });
     expect(first).toMatchObject({ skipped: true, sweepHeldUntil: new Date("2030-01-01T06:00:00Z") });
@@ -85,7 +130,7 @@ describe("paused full-pass pages", () => {
     const rounds = new PostgresSweepRoundStore(sql);
     const passes = new PostgresSweepPassStore(sql);
     const dependencies = { store: f.store, github, now: () => at, onBudgetChange: () => {},
-      sweep: { spend: () => rounds.spend(at, 3), openPass: passes.open.bind(passes) } };
+      sweep: { spend: () => rounds.spend(at, 3), openPass: passes.open.bind(passes), discardPass: passes.discardByRepository.bind(passes) } };
     await reconcileRepository(dependencies, f.repositoryId, { reason: "SWEEP" });
     expect(sent).toBe(2);
     await rounds.spend(at, 3);
@@ -133,7 +178,7 @@ describe("paused full-pass pages", () => {
     expect(cursors).toEqual([null, "page-two"]);
     expect(restReads).toBe(1);
     await restarted.complete();
-    expect(await sql`select * from reconciliation_sweep_pages`).toHaveLength(0);
+    expect(await sql`select * from reconciliation_sweep_pages where pass_id = ${restarted.id}`).toHaveLength(0);
   });
 
   it("checkpoints PostgreSQL-safe forge strings before returning or replaying a page", async () => {
@@ -162,3 +207,43 @@ describe("paused full-pass pages", () => {
     expect((await sql`select pass_id from reconciliation_sweep_passes where repository_id = ${f.repositoryId}`)[0]!.pass_id).toBe(fresh.id);
   });
 });
+
+function signal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function stagedCounts(repositoryId: string, passId: string) {
+  const [counts] = await sql<{ passes: number; pages: number }[]>`select
+    (select count(*)::int from reconciliation_sweep_passes where repository_id = ${repositoryId}) as passes,
+    (select count(*)::int from reconciliation_sweep_pages where pass_id = ${passId}) as pages`;
+  return counts;
+}
+
+async function pausedFixture() {
+  const f = await materializeRepositoryFixture(sql);
+  const repository = (await f.store.getRepository(f.repositoryId))!;
+  f.store.getGitHubAccessToken = async () => randomBytes(24).toString("hex");
+  const passes = new PostgresSweepPassStore(sql);
+  const state = { pass: null as SweepPass | null, opens: 0 };
+  const github: ReconciliationGateway = {
+    getRepositoryById: verifiedRepositoryAt(repository.ownerName),
+    listIssues: async () => {
+      await state.pass!.write("first", { text: "paused page" }, "next-page");
+      throw new SweepBudgetSpent(new Date("2030-01-01T06:00:00Z"));
+    },
+    getIssue: async () => null, getPullRequestClosingIssues: async () => [],
+    getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
+  };
+  const dependencies = { store: f.store, github, now: () => at, onBudgetChange: () => {}, sweep: {
+    spend: async () => null,
+    openPass: async (input: Parameters<PostgresSweepPassStore["open"]>[0]) => {
+      state.opens++; state.pass = await passes.open(input); return state.pass;
+    },
+    discardPass: (id: string) => passes.discardByRepository(id),
+  } };
+  expect((await reconcileRepository(dependencies, f.repositoryId, { reason: "SWEEP" })).skipped).toBe(true);
+  return { ...f, github, state, dependencies,
+    registration: { ownerName: repository.ownerName, sponsorId: repository.sponsor.id, provider: "github" as const } };
+}

@@ -15,6 +15,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.doUnmock("@/lib/fold/postgres-store");
+  vi.doUnmock("@/lib/fold/sweep-pass-store");
+  vi.doUnmock("@/lib/db/client");
   vi.doUnmock("@/lib/fold/reconciliation-worker");
   vi.doUnmock("@/lib/fold/sweep");
   vi.doUnmock("@/lib/fold/abandoned-runs");
@@ -95,6 +97,15 @@ describe("repository re-derivation", () => {
     const repository = await store.getRepository("repo-1");
     store.getRepository.mockResolvedValue({ ...repository!, active: false });
     const startWorker = vi.fn();
+    const discardPass = vi.fn(async () => {});
+    vi.doMock("@/lib/fold/sweep-pass-store", () => ({ PostgresSweepPassStore: class {
+      open = async () => { throw new Error("Inactive reconciliation must not open a pass."); };
+      discardByRepository = discardPass;
+    } }));
+    vi.doMock("@/lib/db/client", async (importActual) => ({
+      ...await importActual<typeof import("@/lib/db/client")>(),
+      getSql: vi.fn(), getCoordinationSql: vi.fn(),
+    }));
     vi.doMock("@/lib/fold/postgres-store", () => ({ PostgresFoldStore: class { constructor() { return store; } } }));
     vi.doMock("@/lib/fold/reconciliation-worker", async (importActual) => ({
       ...await importActual<typeof import("@/lib/fold/reconciliation-worker")>(),
@@ -110,6 +121,7 @@ describe("repository re-derivation", () => {
     const { register } = await import("@/instrumentation");
     await register();
     await startWorker.mock.calls[0][0].drain();
+    expect(discardPass).toHaveBeenCalledExactlyOnceWith("repo-1");
     expect(store.beginRun).toHaveBeenCalledExactlyOnceWith("repo-1", { rederivation: true });
     expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1);
   });

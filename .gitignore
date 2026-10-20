@@ -324,6 +324,7 @@ db/migrations/*
 !db/migrations/028_repository_reconciliation_cost.sql
 !db/migrations/052_repository_policy_violations.sql
 !db/migrations/067_reconciliation_sweep_round.sql
+!db/migrations/068_reconciliation_sweep_authority.sql
 
 !deploy/
 deploy/*
@@ -411,6 +412,7 @@ tests/dashboard/*
 tests/db/*
 !tests/db/*.ts
 !tests/db/sweep-round-store.test.ts
+!tests/db/sweep-authority.test.ts
 !tests/db/sweep-pass-store.test.ts
 !tests/db/postgres-url-host.test.ts
 !tests/db/reconciliation-evidence.test.ts

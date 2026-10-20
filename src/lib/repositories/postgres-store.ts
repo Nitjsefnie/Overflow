@@ -1,3 +1,4 @@
+import { PostgresSweepPassStore } from "@/lib/fold/sweep-pass-store";
 import {
   isParticipationEligible,
   participationEligibleEnforcementStates,
@@ -331,6 +332,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
         return { kind: "FORBIDDEN" };
       }
       if (row.unregistered_at !== null) {
+        await new PostgresSweepPassStore().discardIfIdle(row.id, transaction);
         return { kind: "ALREADY_UNREGISTERED", repository: toRegisteredRepository(row) };
       }
 
@@ -357,6 +359,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
       // (issue 681): the materialized body columns unconditionally, the
       // evidence cache only when no fold can still run — see
       // scrubRepositoryFreeText for the gate.
+      await new PostgresSweepPassStore().discardIfIdle(updated.id, transaction);
       await scrubRepositoryFreeText(transaction, updated.id);
       return { kind: "UNREGISTERED", repository: toRegisteredRepository(updated) };
     });
