@@ -149,7 +149,8 @@ function fixture(request: Date | null = null, attemptCount = 1) {
     hasDerivedRowsBelowFoldRevision: vi.fn(async () => false),
     beginRun: vi.fn(async () => "run-1"), completeRun: vi.fn(async () => {}),
     materialize: vi.fn(async () => ({ adds: 0, changes: 0, removals: 0 })),
-    failRun: vi.fn(async () => {}), recordVerifiedRepositoryIdentity: async () => {}, markRepositoryUnavailable: async () => {},
+    failRun: vi.fn(async () => {}), holdRun: vi.fn(async () => {}),
+    recordVerifiedRepositoryIdentity: async () => {}, markRepositoryUnavailable: async () => {},
     claimNextReconciliationJob: vi.fn<ReconciliationWorkerDependencies["store"]["claimNextReconciliationJob"]>()
       .mockResolvedValueOnce({ id: "job-1", repositoryId: "repo-1", reason: "SWEEP", attemptCount,
         leaseToken: "lease-1", rederivationRequestedAt: request, rederivationGeneration: request === null ? 0 : 1 }).mockResolvedValue(null),

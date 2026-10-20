@@ -74,7 +74,8 @@ describe("reconcileRepository", () => {
     const dependencies = reconciliationDependencies({ github: { listIssues: async () => { throw new SweepBudgetSpent(resetAt); } } });
     const result = await reconcileRepository(dependencies, "repository", { reason: "SWEEP" });
     expect(result).toMatchObject({ skipped: true, sweepHeldUntil: resetAt });
-    expect(dependencies.store.failRun).toHaveBeenCalledOnce();
+    expect(dependencies.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET");
+    expect(dependencies.store.failRun).not.toHaveBeenCalled();
     expect(dependencies.store.materialize).not.toHaveBeenCalled();
     expect(dependencies.store.markRepositoryUnavailable).not.toHaveBeenCalled();
   });
@@ -2052,6 +2053,7 @@ function reconciliationDependencies(
     completeRun: vi.fn().mockResolvedValue(undefined),
     materialize: overrides.materialize ?? vi.fn().mockResolvedValue({ adds: 1, changes: 0, removals: 0 }),
     failRun,
+    holdRun: vi.fn().mockResolvedValue(undefined),
     recordVerifiedRepositoryIdentity: vi.fn().mockResolvedValue(undefined),
     markRepositoryUnavailable: vi.fn().mockResolvedValue(undefined),
     findForgeIdentitiesByForgeUserIds: vi.fn().mockResolvedValue([]),

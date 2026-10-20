@@ -10,7 +10,7 @@ import { PostgresRepositoryLookupStore } from "@/lib/fold/repository-lookup-stor
 import { PostgresFoldMaterializationStore, type RepositoryFoldRevisionCounts, type RepositoryRederivationRequest } from "@/lib/fold/fold-materialization-store";
 import { PostgresSponsorCredentialStore } from "@/lib/fold/sponsor-credential-store";
 import { RepositoryCoordinator } from "@/lib/fold/repository-coordination";
-import type { ReconciliationDeltas, ReconciliationRepository, ReconciliationStore, RepositoryUnavailableReason } from "@/lib/fold/reconcile";
+import type { ReconciliationDeltas, ReconciliationHeldBy, ReconciliationRepository, ReconciliationStore, RepositoryUnavailableReason } from "@/lib/fold/reconcile";
 import type { ClaimedReconciliationJob, ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import type { GitHubWebhookDelivery, GitHubWebhookIssue } from "@/lib/github/webhook-schema";
 import type { WebhookDeliveryClaim, WebhookDeliveryStore, WebhookReceiptScope, WebhookRepositoryRegistration } from "@/lib/webhooks/processor";
@@ -138,6 +138,10 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
 
   public async failRun(runId: string, errorMessage: string): Promise<void> {
     return this.materialization.failRun(runId, errorMessage);
+  }
+
+  public async holdRun(runId: string, message: string, heldBy: ReconciliationHeldBy): Promise<void> {
+    return this.materialization.holdRun(runId, message, heldBy);
   }
 
   public async completeRun(runId: string): Promise<void> {

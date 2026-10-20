@@ -67,7 +67,8 @@ function fixture(remaining?: number) {
       beginRun: vi.fn(async () => "run-1"), completeRun: async () => {},
       findUsersByGitHubUserIds: async () => [],
       materialize: async () => ({ adds: 0, changes: 0, removals: 0 }),
-      failRun: async () => {}, recordVerifiedRepositoryIdentity: async () => {}, markRepositoryUnavailable: async () => {},
+      failRun: vi.fn(async () => {}), holdRun: vi.fn<ReconciliationStore["holdRun"]>(async () => {}),
+      recordVerifiedRepositoryIdentity: async () => {}, markRepositoryUnavailable: async () => {},
       findForgeIdentitiesByForgeUserIds: async () => [],
     },
     github: { getRepositoryById: reconcile, listIssues: async () => [],
@@ -126,10 +127,28 @@ describe("reconciliation budget holds under the repository lock", () => {
   it("keeps costs unpublished when the final page reaches the reserve", async () => {
     const f = fixture(4000);
     const materialize = pagedCostGateway(f, [2, 3], 499);
-    const failRun = vi.spyOn(f.fold.store, "failRun");
     await expect(runNextReconciliationJob(f.worker)).resolves.toBe("BUDGET_HELD");
     expect(materialize).not.toHaveBeenCalled();
-    expect(failRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for GraphQL budget.");
+    expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for GraphQL budget.", "GRAPHQL_BUDGET");
+    expect(f.fold.store.failRun).not.toHaveBeenCalled();
+    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
+  });
+
+  it("records the sweep request budget when an admitted crawl exhausts its requests", async () => {
+    const f = fixture(4000);
+    const materialize = pagedCostGateway(f, [2, 3]);
+    let requests = 0;
+    f.fold.sweep = {
+      spend: async () => ++requests <= 2 ? null : resetAt,
+      openPass: async (input) => ({ ...input, id: "pass-1", read: async () => undefined,
+        write: async () => {}, complete: async () => {} }),
+      discardPass: async () => {},
+    };
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("BUDGET_HELD");
+    expect(f.fold.store.beginRun).toHaveBeenCalledExactlyOnceWith("repository-1", { rederivation: false });
+    expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET");
+    expect(f.fold.store.failRun).not.toHaveBeenCalled();
+    expect(materialize).not.toHaveBeenCalled();
     expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
   });
 
@@ -144,6 +163,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", held);
     expect(f.fold.store.getGitHubAccessToken).not.toHaveBeenCalled();
     expect(f.fold.store.beginRun).not.toHaveBeenCalled();
+    expect(f.fold.store.holdRun).not.toHaveBeenCalled();
     expect(f.reconcile).not.toHaveBeenCalled();
     expect(f.store.retryReconciliationJob).not.toHaveBeenCalled();
     expect(f.store.failReconciliationJob).not.toHaveBeenCalled();
@@ -179,6 +199,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     expect(f.fold.store.assessReconciliationFairness).not.toHaveBeenCalled();
     expect(f.fold.store.getGitHubAccessToken).not.toHaveBeenCalled();
     expect(f.fold.store.beginRun).not.toHaveBeenCalled();
+    expect(f.fold.store.holdRun).not.toHaveBeenCalled();
   });
 
   it("bypasses fairness debt when the sponsor budget is UNKNOWN", async () => {
@@ -328,6 +349,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     fold.store.setReconciliationCooldown = cooldown;
     fold.store.beginRun = async () => { runStates.push("RUNNING"); return "run-1"; };
     fold.store.failRun = async () => { runStates.push("FAILED"); };
+    fold.store.holdRun = vi.fn(async () => { runStates.push("HELD"); });
     fold.store.completeRun = async () => { runStates.push("COMPLETED"); };
     fold.github = new GitHubGateway({ accessToken: "test-token", owner: "sponsor-1", budget: budgetStore,
       fetch: async (input) => {
@@ -357,7 +379,8 @@ describe("reconciliation budget holds under the repository lock", () => {
     expect(requests).toBe(1);
     expect(materialize).not.toHaveBeenCalled();
     expect(result).toBe("BUDGET_HELD");
-    expect(runStates).toEqual(["RUNNING", "FAILED"]);
+    expect(runStates).toEqual(["RUNNING", "HELD"]);
+    expect(fold.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for GraphQL budget.", "GRAPHQL_BUDGET");
     expect({ state, attempts, runAfter }).toEqual({ state: "PENDING", attempts: 0, runAfter: resetAt });
     expect(cooldown).not.toHaveBeenCalled();
     expect(worker.store.retryReconciliationJob).not.toHaveBeenCalled();
