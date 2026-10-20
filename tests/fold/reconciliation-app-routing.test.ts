@@ -7,8 +7,8 @@ import type { ReconciliationDependencies } from "@/lib/fold/reconcile";
 import type { ReconciliationWorkerDependencies, ReconciliationWorkerSchedule } from "@/lib/fold/reconciliation-worker";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 
-const { startWorker, startSweep, lookup, oauth, row } = vi.hoisted(() => ({
-  startWorker: vi.fn(), startSweep: vi.fn(), lookup: vi.fn(), oauth: vi.fn(),
+const { startWorker, startSweep, lookup, oauth, authWrite, row } = vi.hoisted(() => ({
+  startWorker: vi.fn(), startSweep: vi.fn(), lookup: vi.fn(), oauth: vi.fn(), authWrite: vi.fn(),
   row: { method: "app" as "app" | "oauth_hook" | null },
 }));
 
@@ -25,7 +25,7 @@ vi.mock("@/lib/fold/sweep", () => ({
   sweepReconciliations: vi.fn(),
 }));
 vi.mock("@/lib/fold/abandoned-runs", () => ({ finalizeAbandonedRuns: async () => {} }));
-vi.mock("@/lib/db/client", () => ({ getSql: vi.fn(), getCoordinationSql: vi.fn(), closeSql: vi.fn() }));
+vi.mock("@/lib/db/client", () => ({ getSql: () => authWrite, getCoordinationSql: vi.fn(), closeSql: vi.fn() }));
 // Only traversal is replaced: environment parsing, JWT signing, installation
 // lookup/mint, method routing, sponsor authentication and its journal are real.
 vi.mock("@/lib/fold/reconcile", () => ({
@@ -64,6 +64,7 @@ beforeEach(() => {
   vi.resetModules();
   startWorker.mockReset();
   startSweep.mockReset();
+  authWrite.mockReset().mockResolvedValue([]);
   row.method = "app";
   lookup.mockReset().mockImplementation(async () => row.method === null
     ? null : { id: "repository-1", registrationMethod: row.method });
@@ -148,6 +149,12 @@ for (const wiring of ["worker", "cli"] as const) {
         payload && typeof payload === "object" && "authPath" in payload ? [payload] : []);
     }
 
+    function expectRecorded(path: string) {
+      expect(authWrite).toHaveBeenCalledExactlyOnceWith(
+        expect.any(Array), path, expect.any(Date), "repository-1",
+      );
+    }
+
     function appRequests() { return requests.filter(({ issuer }) => issuer !== null); }
     function readAuthorization() { return requests.find(({ path }) => path === "/repositories/4242")?.authorization; }
 
@@ -160,6 +167,7 @@ for (const wiring of ["worker", "cli"] as const) {
       expect(authPaths()).toEqual([{
         repositoryId: "repository-1", authPath: "registration-app-installation", installationId: 22,
       }]);
+      expectRecorded("registration-app-installation");
     });
 
     it.each(["oauth_hook", null] as const)("keeps the reconciliation App path for method %s", async (method) => {
@@ -171,6 +179,7 @@ for (const wiring of ["worker", "cli"] as const) {
       expect(authPaths()).toEqual([{
         repositoryId: "repository-1", authPath: "github-app-installation", installationId: 11,
       }]);
+      expectRecorded("github-app-installation");
     });
 
     it.each(["oauth_hook", null] as const)("keeps the OAuth fallback after a reconciliation App 404 for method %s", async (method) => {
@@ -181,6 +190,7 @@ for (const wiring of ["worker", "cli"] as const) {
       expect(readAuthorization()).toBe(`Bearer ${sponsorToken}`);
       expect(oauth).toHaveBeenCalledExactlyOnceWith("sponsor-1");
       expect(authPaths()).toEqual([{ repositoryId: "repository-1", authPath: "sponsor-oauth-fallback" }]);
+      expectRecorded("sponsor-oauth-fallback");
     });
 
     it("falls back to OAuth when the registration App is unconfigured without trying the reconciliation App", async () => {
@@ -190,6 +200,7 @@ for (const wiring of ["worker", "cli"] as const) {
       expect(readAuthorization()).toBe(`Bearer ${sponsorToken}`);
       expect(oauth).toHaveBeenCalledExactlyOnceWith("sponsor-1");
       expect(authPaths()).toEqual([{ repositoryId: "repository-1", authPath: "sponsor-oauth-fallback" }]);
+      expectRecorded("sponsor-oauth-fallback");
     });
 
     it("leaves authentication unjournaled and skips lookup when both Apps are unconfigured", async () => {
@@ -200,6 +211,7 @@ for (const wiring of ["worker", "cli"] as const) {
       expect(readAuthorization()).toBe(`Bearer ${sponsorToken}`);
       expect(lookup).not.toHaveBeenCalled();
       expect(authPaths()).toEqual([]);
+      expect(authWrite).not.toHaveBeenCalled();
     });
   });
 }

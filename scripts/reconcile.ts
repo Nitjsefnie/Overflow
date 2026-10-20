@@ -1,7 +1,8 @@
-import { closeSql } from "../src/lib/db/client.ts";
+import { closeSql, getSql } from "../src/lib/db/client.ts";
 import { PostgresFoldStore } from "../src/lib/fold/postgres-store.ts";
 import { type ReconciliationSummary } from "../src/lib/fold/reconcile.ts";
 import { reconcileRepositoryAsSponsor } from "../src/lib/fold/reconcile-as-sponsor.ts";
+import { recordReconciliationAuthPath } from "../src/lib/fold/reconciliation-auth-path.ts";
 import {
   appInstallationTokenResolverFromEnv,
   createAppInstallationTokenResolver,
@@ -79,7 +80,10 @@ function productionDependencies(): ReconcileCliDependencies {
   return {
     store,
     reconcile: (repositoryId) =>
-      reconcileRepositoryAsSponsor(store, repositoryId, undefined, { resolveAppInstallationToken }),
+      reconcileRepositoryAsSponsor(store, repositoryId, undefined, {
+        resolveAppInstallationToken,
+        recordAuthPath: (id, path) => recordReconciliationAuthPath(getSql(), id, path, new Date()),
+      }),
     write: (line) => process.stdout.write(`${line}\n`),
   };
 }

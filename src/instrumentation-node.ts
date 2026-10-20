@@ -53,6 +53,7 @@ export async function registerNodejs(): Promise<void> {
   const { PostgresFoldStore } = await import("@/lib/fold/postgres-store");
   const { finalizeAbandonedRuns } = await import("@/lib/fold/abandoned-runs");
   const { reconcileRepositoryAsSponsor } = await import("@/lib/fold/reconcile-as-sponsor");
+  const { recordReconciliationAuthPath } = await import("@/lib/fold/reconciliation-auth-path");
   const { PostgresForgeIdentityStore } = await import("@/lib/forge/postgres-identities-store");
   const { pruneExpiredMaintenanceRows } = await import("@/lib/retention/prune");
   const { getSql, getCoordinationSql } = await import("@/lib/db/client");
@@ -105,6 +106,7 @@ export async function registerNodejs(): Promise<void> {
             ...options,
             sweep,
             resolveAppInstallationToken,
+            recordAuthPath: (id, path) => recordReconciliationAuthPath(getSql(), id, path, new Date()),
             resolveForgeToken,
             markCredentialRejected: async (identityId) => {
               const repository = await store.getRepository(repositoryId);
