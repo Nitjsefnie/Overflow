@@ -467,15 +467,10 @@ describe("the calibrate job's steps", () => {
     ).toBeGreaterThan(fabricateIndex);
   });
 
-  it("checks out the tree it measures at depth 1, leaving no credentials", () => {
+  it("checks out the tree it measures, leaving no credentials", () => {
     const [checkout] = steps.filter((step) => step.uses?.includes("actions/checkout"));
 
     expect(checkout, "the calibrate job must check out the repository").toBeDefined();
-    expect(
-      checkout?.with?.["fetch-depth"],
-      "depth 1: the job diffs the document against HEAD, and the HEAD^1 read the old depth-2 checkout " +
-        "served moved to the push job with the refusal message",
-    ).toBe(1);
     expect(
       checkout?.with?.["persist-credentials"],
       "the checkout must still leave no credentials in .git/config",

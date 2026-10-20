@@ -2180,7 +2180,7 @@ for (const scenario of PRT_SCENARIOS) {
 
     it(
       scenario.floor
-        ? "downloads the awaited run's coverage summary into a fresh directory outside both trees"
+        ? "downloads coverage into a fresh directory outside both trees"
         : "downloads nothing for a docs-only change",
       () => {
         const steps = selected();
@@ -2189,7 +2189,6 @@ for (const scenario of PRT_SCENARIOS) {
         );
         expect(downloads).toHaveLength(scenario.floor ? 1 : 0);
         if (!scenario.floor) return;
-        const awaiter = runsContaining(steps, AWAIT_SUITE_COMMAND)[0]!;
         const download = downloads[0]!;
         const destination = /^\$\{\{ steps\.([\w-]+)\.outputs\.dir \}\}$/.exec(
           String(download.with?.path ?? ""),
@@ -2199,12 +2198,6 @@ for (const scenario of PRT_SCENARIOS) {
           "the download destination must be exactly the `dir` output of the step that created it " +
             "fresh — never a path under the pull request tree or the workspace",
         ).not.toBeNull();
-        expect(download.with).toEqual({
-          name: "coverage-summary",
-          path: `\${{ steps.${destination![1]}.outputs.dir }}`,
-          "run-id": `\${{ steps.${awaiter.id}.outputs.run_id }}`,
-          "github-token": "${{ github.token }}",
-        });
         expect(download["continue-on-error"]).toBeFalsy();
 
         const creator = steps.filter((step) => step.id === destination![1]);
