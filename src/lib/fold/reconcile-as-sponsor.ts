@@ -9,6 +9,7 @@ import {
 import { ForgeCredentialRejectedError, resolveGateway } from "@/lib/forge/gateway";
 import { GitLabApiError } from "@/lib/gitlab/client";
 import type { AppInstallationTokenResolver } from "@/lib/github/app-installation-auth";
+import { GitHubApiError, GitHubGraphqlRequestError } from "@/lib/github/errors";
 
 /**
  * Folds one repository with its own sponsor's forge credentials.
@@ -93,7 +94,7 @@ export function reconcileRepositoryAsSponsor(
  * forge is actually read, and not before.
  *
  * Every method defers to the same memoized resolution, so a fold that reads
- * the forge several times still authenticates once, and a fold that reads it
+ * the forge several times selects its initial credential once, and a fold that reads it
  * not at all — the inactive repository, the cooled-down one — never asks for a
  * token that may no longer exist.
  *
@@ -105,6 +106,9 @@ export function reconcileRepositoryAsSponsor(
  * fails the fold — no fallback on anything but the definitive "no
  * installation", so a misconfigured App cannot quietly starve itself past
  * the budget it exists to protect.
+ * An App-authenticated read rejected with 401 re-resolves the credential and
+ * retries once, retaining the replacement gateway for later reads. The initial
+ * authentication path remains recorded once for the fold.
  * GitLab repositories resolve the linked identity's decrypted PAT on the
  * repository's instance and are FAIL-CLOSED: a missing or unverified identity
  * — or an unwired resolver — throws, failing that repository's reconciliation,
@@ -177,7 +181,18 @@ export function sponsorGateway(
             installationId: appToken.installationId,
           });
           await record(authPath);
-          return createGateway(appToken.token, repository.sponsor.id);
+          return guardGitHubAppCredential(
+            createGateway(appToken.token, repository.sponsor.id),
+            repositoryId,
+            async () => {
+              const refreshed = await resolveAppInstallationToken(repository.ownerName);
+              const accessToken = refreshed?.token ?? await store.getGitHubAccessToken(repository.sponsor.id);
+              if (accessToken === null) {
+                throw new Error("GitHub access token was not available.");
+              }
+              return createGateway(accessToken, repository.sponsor.id);
+            },
+          );
         }
         const authPath = "sponsor-oauth-fallback";
         console.info("Reconciliation authentication", { repositoryId, authPath });
@@ -201,6 +216,37 @@ export function sponsorGateway(
       (await gateway()).getPullRequestReviews(repository, pullRequestNumber),
     getPullRequestDiff: async (repository, pullRequestNumber) =>
       (await gateway()).getPullRequestDiff(repository, pullRequestNumber),
+  };
+}
+
+/** Re-resolve rejected App credentials and retry each read at most once. */
+function guardGitHubAppCredential(
+  gateway: ReconciliationGateway,
+  repositoryId: string,
+  refresh: () => Promise<ReconciliationGateway>,
+): ReconciliationGateway {
+  const guarded = async <T>(read: (current: ReconciliationGateway) => Promise<T>): Promise<T> => {
+    try {
+      return await read(gateway);
+    } catch (error) {
+      if (!(error instanceof GitHubApiError || error instanceof GitHubGraphqlRequestError) || error.status !== 401) {
+        throw error;
+      }
+      console.warn("Reconciliation authentication refreshed mid-fold", { repositoryId });
+      gateway = await refresh();
+      return read(gateway);
+    }
+  };
+  return {
+    getRepositoryById: (githubRepositoryId) => guarded((current) => current.getRepositoryById(githubRepositoryId)),
+    listIssues: (repository, options) => guarded((current) => current.listIssues(repository, options)),
+    getIssue: (repository, subject) => guarded((current) => current.getIssue(repository, subject)),
+    getPullRequestClosingIssues: (repository, subject) =>
+      guarded((current) => current.getPullRequestClosingIssues(repository, subject)),
+    getPullRequestReviews: (repository, pullRequestNumber) =>
+      guarded((current) => current.getPullRequestReviews(repository, pullRequestNumber)),
+    getPullRequestDiff: (repository, pullRequestNumber) =>
+      guarded((current) => current.getPullRequestDiff(repository, pullRequestNumber)),
   };
 }
 
