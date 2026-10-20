@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GitHubGraphqlClient } from "@/lib/github/graphql";
 import { GitHubApiError } from "@/lib/github/errors";
 import type { AppInstallationTokenResolver } from "@/lib/github/app-installation-auth";
+import type { GitHubIssue } from "@/lib/github/types";
 import { createGitHubGraphqlBudgetStore, gitHubGraphqlBudget } from "@/lib/github/rate-limit-budget";
 import { runNextReconciliationJob, drainReconciliationJobs, type ReconciliationWorkerStore } from "@/lib/fold/reconciliation-worker";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
@@ -182,6 +183,8 @@ describe("App credential refresh during reconciliation", () => {
     expect(harness.store.materialize).toHaveBeenCalledTimes(1);
     expect(harness.calls).not.toContain("failRun");
     expect(harness.readIssues.mock.calls).toEqual([[harness.tokenA], [harness.tokenB]]);
+    expect(harness.readReviews.mock.calls).toEqual([[harness.tokenB]]);
+    expect(harness.readDiff.mock.calls).toEqual([[harness.tokenB]]);
     expect(harness.createGateway.mock.calls).toEqual([
       [harness.tokenA, "sponsor-1"], [harness.tokenB, "sponsor-1"],
     ]);
@@ -194,10 +197,21 @@ describe("App credential refresh during reconciliation", () => {
 
   it("propagates the second 401 without another refresh or retry", async () => {
     const harness = createExpiringAppHarness();
+    const original = new GitHubApiError(401);
     const rejected = new GitHubApiError(401);
-    harness.readIssues.mockRejectedValueOnce(new GitHubApiError(401)).mockRejectedValue(rejected);
+    const unexpectedThirdAttempt = new Error("Unexpected third credential resolution or read.");
+    harness.readIssues.mockReset()
+      .mockRejectedValueOnce(original)
+      .mockRejectedValueOnce(rejected)
+      .mockRejectedValue(unexpectedThirdAttempt);
+    harness.resolveAppInstallationToken.mockReset()
+      .mockResolvedValueOnce({ token: harness.tokenA, installationId: 7777 })
+      .mockResolvedValueOnce({ token: harness.tokenB, installationId: 7777 })
+      .mockRejectedValue(unexpectedThirdAttempt);
 
-    await expect(harness.run()).rejects.toMatchObject({ cause: rejected });
+    const failure = await harness.run().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).cause).toBe(rejected);
 
     expect(harness.readIssues.mock.calls).toEqual([[harness.tokenA], [harness.tokenB]]);
     expect(harness.resolveAppInstallationToken).toHaveBeenCalledTimes(2);
@@ -214,6 +228,8 @@ describe("App credential refresh during reconciliation", () => {
     await expect(harness.run()).resolves.toMatchObject({ skipped: false, runId: "run-1" });
 
     expect(harness.readIssues.mock.calls).toEqual([[harness.tokenA], [harness.oauthToken]]);
+    expect(harness.readReviews.mock.calls).toEqual([[harness.oauthToken]]);
+    expect(harness.readDiff.mock.calls).toEqual([[harness.oauthToken]]);
     expect(harness.createGateway).toHaveBeenLastCalledWith(harness.oauthToken, "sponsor-1");
     expect(harness.resolveAppInstallationToken).toHaveBeenCalledTimes(2);
     expect(harness.store.materialize).toHaveBeenCalledTimes(1);
@@ -278,10 +294,31 @@ function createExpiringAppHarness(readError = new GitHubApiError(401)) {
   const harness = createHarness({ active: true, accessToken: oauthToken });
   harness.store.findUsersByGitHubUserIds = async () => [];
   harness.store.materialize = vi.fn(async () => ({ adds: 0, changes: 0, removals: 0 }));
+  const issue: GitHubIssue = {
+    id: 77, number: 7, title: "Issue with closing PR", body: "", url: "https://github.com/example/repository/issues/7",
+    state: "CLOSED", stateReason: "COMPLETED", createdAt: "2030-01-03T00:00:00Z",
+    updatedAt: "2030-01-03T01:00:00Z", closedAt: "2030-01-03T01:00:00Z",
+    authorLogin: null, authorGitHubUserId: null, labels: [],
+    claimAssigneeGitHubLogin: null, claimAssigneeGitHubUserId: null, history: [], comments: [],
+    closingPullRequests: [{
+      id: 88, number: 8, title: "Closing PR", body: "", url: "https://github.com/example/repository/pull/8",
+      state: "MERGED", mergedAt: "2030-01-03T01:00:00Z", mergeCommitOid: null, finalCommitAt: null,
+      authorLogin: null, authorGitHubUserId: null, repositoryGitHubId: 4242,
+      repositoryNameWithOwner: "example/repository",
+    }],
+  };
   let expired = false;
   const readIssues = vi.fn(async (token: string) => {
     if (token === tokenA && expired) throw readError;
+    return [issue];
+  });
+  const readReviews = vi.fn(async (token: string) => {
+    if (token === tokenA && expired) throw readError;
     return [];
+  });
+  const readDiff = vi.fn(async (token: string) => {
+    if (token === tokenA && expired) throw readError;
+    return "";
   });
   const createGateway = vi.fn<(token: string, owner: string) => ReconciliationGateway>((token) => ({
     getRepositoryById: async () => {
@@ -295,8 +332,8 @@ function createExpiringAppHarness(readError = new GitHubApiError(401)) {
     listIssues: async () => readIssues(token),
     getIssue: async () => null,
     getPullRequestClosingIssues: async () => [],
-    getPullRequestReviews: async () => [],
-    getPullRequestDiff: async () => "",
+    getPullRequestReviews: async () => readReviews(token),
+    getPullRequestDiff: async () => readDiff(token),
   }));
   const resolveAppInstallationToken = vi.fn<AppInstallationTokenResolver>()
     .mockResolvedValueOnce({ token: tokenA, installationId: 7777 })
@@ -305,7 +342,7 @@ function createExpiringAppHarness(readError = new GitHubApiError(401)) {
   const run = () => reconcileRepositoryAsSponsor(harness.store, "repo-1", createGateway, {
     resolveAppInstallationToken, recordAuthPath,
   });
-  return { ...harness, tokenA, tokenB, oauthToken, readIssues, createGateway,
+  return { ...harness, tokenA, tokenB, oauthToken, readIssues, readReviews, readDiff, createGateway,
     resolveAppInstallationToken, recordAuthPath, warned, run };
 }
 
