@@ -1,0 +1,1870 @@
+{
+  ".github/codeql-config.yml": [
+    446,
+    491
+  ],
+  ".github/dependabot.yml": [
+    6838,
+    7792
+  ],
+  ".github/workflows/actionlint.yml": [
+    2336,
+    3641
+  ],
+  ".github/workflows/ci-pr.yml": [
+    16043,
+    35692
+  ],
+  ".github/workflows/ci.yml": [
+    11344,
+    21589
+  ],
+  ".github/workflows/claim.yml": [
+    2187,
+    2743
+  ],
+  ".github/workflows/code-scanning.yml": [
+    620,
+    1450
+  ],
+  ".github/workflows/comment-share.yml": [
+    727,
+    2206
+  ],
+  ".github/workflows/coverage-comment.yml": [
+    5786,
+    12345
+  ],
+  ".github/workflows/dependency-audit.yml": [
+    8453,
+    22141
+  ],
+  ".github/workflows/ledger-relay.yml": [
+    3577,
+    5248
+  ],
+  ".github/workflows/pr-gate.yml": [
+    441,
+    1097
+  ],
+  ".github/workflows/pr-gates.yml": [
+    12029,
+    21196
+  ],
+  ".github/workflows/pr-suite.yml": [
+    5811,
+    9490
+  ],
+  ".github/workflows/ratchet-guard.yml": [
+    3579,
+    5864
+  ],
+  ".github/workflows/ratchet-push.yml": [
+    1879,
+    6337
+  ],
+  ".github/workflows/scorecard.yml": [
+    716,
+    1710
+  ],
+  ".github/workflows/secret-scan.yml": [
+    3932,
+    5375
+  ],
+  "db/migrations/008_moderator_role_changes.sql": [
+    433,
+    797
+  ],
+  "db/migrations/009_settlement_override_requests.sql": [
+    895,
+    2347
+  ],
+  "db/migrations/010_settled_evidence_ordering_grace.sql": [
+    448,
+    1256
+  ],
+  "db/migrations/011_api_tokens.sql": [
+    980,
+    1213
+  ],
+  "db/migrations/012_unwritable_closure_kinds.sql": [
+    222,
+    824
+  ],
+  "db/migrations/013_immutable_github_identity.sql": [
+    623,
+    1101
+  ],
+  "db/migrations/014_opening_authority_precondition.sql": [
+    251,
+    1015
+  ],
+  "db/migrations/015_normalize_settlement_status_check.sql": [
+    540,
+    1106
+  ],
+  "db/migrations/016_repository_identity_verification.sql": [
+    572,
+    992
+  ],
+  "db/migrations/017_cross_repository_closures.sql": [
+    289,
+    380
+  ],
+  "db/migrations/018_refreshable_display_logins.sql": [
+    2703,
+    4210
+  ],
+  "db/migrations/019_recorded_materialization_removals.sql": [
+    282,
+    413
+  ],
+  "db/migrations/020_repository_reconciliation_jobs.sql": [
+    2985,
+    4024
+  ],
+  "db/migrations/021_reconciliation_lease_duration.sql": [
+    397,
+    1178
+  ],
+  "db/migrations/022_fold_revision_stamps.sql": [
+    885,
+    1446
+  ],
+  "db/migrations/023_rederivation_requests.sql": [
+    1252,
+    1527
+  ],
+  "db/migrations/024_reconciliation_run_rederivation.sql": [
+    524,
+    601
+  ],
+  "db/migrations/025_rederivation_generation.sql": [
+    1307,
+    1434
+  ],
+  "db/migrations/027_issue_github_updated_at.sql": [
+    130,
+    194
+  ],
+  "db/migrations/029_reconciliation_changes_recorded_seq.sql": [
+    297,
+    385
+  ],
+  "db/migrations/030_repository_difficulty_scheme_versions.sql": [
+    840,
+    1384
+  ],
+  "db/migrations/031_tighten_issue_evidence_completeness.sql": [
+    1672,
+    3119
+  ],
+  "db/migrations/032_immutable_claim_assignee_identity.sql": [
+    492,
+    711
+  ],
+  "db/migrations/033_self_work_calibrations_issue_unique.sql": [
+    591,
+    1297
+  ],
+  "db/migrations/034_repository_unregistration.sql": [
+    391,
+    572
+  ],
+  "db/migrations/035_moderation_credit_adjustments.sql": [
+    1109,
+    3492
+  ],
+  "db/migrations/036_override_reconciliation_reason.sql": [
+    418,
+    648
+  ],
+  "db/migrations/037_abandoned_webhook_cleanups.sql": [
+    447,
+    661
+  ],
+  "db/migrations/038_forge_identities_and_provider_columns.sql": [
+    1325,
+    2221
+  ],
+  "db/migrations/039_forge_identity_user_fk.sql": [
+    629,
+    795
+  ],
+  "db/migrations/040_forge_repository_columns.sql": [
+    828,
+    901
+  ],
+  "db/migrations/041_forge_identity_token_failed_at.sql": [
+    615,
+    692
+  ],
+  "db/migrations/042_gitlab_webhook_orphan_cleanup.sql": [
+    1101,
+    1381
+  ],
+  "db/migrations/044_completed_work_credit_limits.sql": [
+    531,
+    2668
+  ],
+  "db/migrations/045_account_pseudonymisation.sql": [
+    566,
+    814
+  ],
+  "db/migrations/046_api_token_expiry.sql": [
+    1591,
+    1831
+  ],
+  "db/migrations/048_unregistered_webhook_credentials.sql": [
+    905,
+    1083
+  ],
+  "db/migrations/049_reason_length_limits.sql": [
+    898,
+    1764
+  ],
+  "db/migrations/051_forge_identity_https_instance.sql": [
+    884,
+    1062
+  ],
+  "db/migrations/052_repository_policy_violations.sql": [
+    1298,
+    1532
+  ],
+  "db/migrations/053_webhook_delivery_receipt_scope.sql": [
+    132,
+    839
+  ],
+  "db/migrations/054_privileged_action_credentials.sql": [
+    1380,
+    2095
+  ],
+  "db/migrations/055_allow_nullable_issue_and_pr_bodies.sql": [
+    241,
+    334
+  ],
+  "db/migrations/056_board_read_indexes.sql": [
+    1926,
+    2221
+  ],
+  "db/migrations/057_fold_evidence_facts.sql": [
+    853,
+    1372
+  ],
+  "db/migrations/058_api_token_delivery_window.sql": [
+    3581,
+    3871
+  ],
+  "db/migrations/059_session_epoch.sql": [
+    1259,
+    1330
+  ],
+  "db/migrations/060_sanction_deactivation_flag.sql": [
+    1891,
+    1978
+  ],
+  "db/migrations/061_sanction_contest_requests.sql": [
+    1806,
+    3403
+  ],
+  "db/migrations/062_webhook_delivery_body_digest.sql": [
+    243,
+    489
+  ],
+  "db/migrations/063_null_avatar_urls.sql": [
+    498,
+    528
+  ],
+  "db/migrations/064_data_subject_suppressions.sql": [
+    142,
+    626
+  ],
+  "db/migrations/065_retention_foreign_key_indexes.sql": [
+    724,
+    991
+  ],
+  "db/migrations/066_repository_registration_method.sql": [
+    56,
+    196
+  ],
+  "db/migrations/067_reconciliation_sweep_round.sql": [
+    268,
+    1019
+  ],
+  "db/migrations/068_reconciliation_sweep_authority.sql": [
+    184,
+    371
+  ],
+  "db/migrations/069_repository_reconciliation_auth_path.sql": [
+    69,
+    305
+  ],
+  "docker-compose.yml": [
+    792,
+    1752
+  ],
+  "next.config.ts": [
+    1464,
+    3826
+  ],
+  "scripts/account.ts": [
+    873,
+    5694
+  ],
+  "scripts/await-pr-suite.ts": [
+    4134,
+    13438
+  ],
+  "scripts/calibrate-coverage.ts": [
+    981,
+    3379
+  ],
+  "scripts/check-coverage-floor.ts": [
+    1939,
+    5724
+  ],
+  "scripts/check-legal-revisions.ts": [
+    6926,
+    12927
+  ],
+  "scripts/check-module-size.ts": [
+    3904,
+    12374
+  ],
+  "scripts/check-page-geometry.mjs": [
+    24128,
+    46768
+  ],
+  "scripts/check-prerendered-routes.ts": [
+    543,
+    2653
+  ],
+  "scripts/check-ratchets.ts": [
+    4916,
+    16951
+  ],
+  "scripts/ci-base-freshness.sh": [
+    1074,
+    4640
+  ],
+  "scripts/commit_scopes.py": [
+    5609,
+    11157
+  ],
+  "scripts/container-build.sh": [
+    1530,
+    3106
+  ],
+  "scripts/db-backup.sh": [
+    4884,
+    7386
+  ],
+  "scripts/db-offhost-backup.sh": [
+    6763,
+    12159
+  ],
+  "scripts/db-restore.sh": [
+    1066,
+    2469
+  ],
+  "scripts/deploy-revision.sh": [
+    14783,
+    33633
+  ],
+  "scripts/docs-only.ts": [
+    982,
+    3205
+  ],
+  "scripts/event-policy-ledger-app.ts": [
+    1429,
+    4983
+  ],
+  "scripts/http-surface-derive-failures.ts": [
+    3973,
+    20332
+  ],
+  "scripts/http-surface-derive.ts": [
+    4103,
+    20518
+  ],
+  "scripts/http-surface-fixtures.ts": [
+    4963,
+    23975
+  ],
+  "scripts/http-surface-record.ts": [
+    658,
+    2641
+  ],
+  "scripts/ledger-app-mint-permissions.ts": [
+    1411,
+    1527
+  ],
+  "scripts/ledger-relay-decisions.ts": [
+    9087,
+    15017
+  ],
+  "scripts/ledger-relay-fork.ts": [
+    1361,
+    2760
+  ],
+  "scripts/ledger-relay-job-budget.ts": [
+    1062,
+    3610
+  ],
+  "scripts/ledger-relay-publication.ts": [
+    2119,
+    9384
+  ],
+  "scripts/ledger-relay-sweep.ts": [
+    3889,
+    13136
+  ],
+  "scripts/ledger-relay-trigger.ts": [
+    2398,
+    5140
+  ],
+  "scripts/ledger-relay-upstream.ts": [
+    1042,
+    5980
+  ],
+  "scripts/ledger-relay.ts": [
+    6659,
+    18997
+  ],
+  "scripts/measure-field-controls.ts": [
+    1363,
+    6848
+  ],
+  "scripts/measure-header-geometry.mjs": [
+    3319,
+    15440
+  ],
+  "scripts/migrate.ts": [
+    6125,
+    16893
+  ],
+  "scripts/overflow-alert.sh": [
+    14032,
+    20497
+  ],
+  "scripts/overflow-bounce.sh": [
+    9947,
+    14371
+  ],
+  "scripts/overflow-canary.sh": [
+    14979,
+    23265
+  ],
+  "scripts/page-geometry-fixtures.mjs": [
+    2946,
+    6492
+  ],
+  "scripts/patch-coverage.ts": [
+    1449,
+    6364
+  ],
+  "scripts/perf-node-setup.mjs": [
+    326,
+    1269
+  ],
+  "scripts/prune-noop-reconciliation-changes.ts": [
+    4255,
+    10953
+  ],
+  "scripts/secret-scan-baseline.sh": [
+    2781,
+    5495
+  ],
+  "scripts/secret-scan.sh": [
+    6257,
+    7738
+  ],
+  "scripts/seed-board-benchmark.ts": [
+    5692,
+    24098
+  ],
+  "scripts/surface-change.ts": [
+    1497,
+    6096
+  ],
+  "src/app/.well-known/oauth-protected-resource/api/mcp/route.ts": [
+    450,
+    811
+  ],
+  "src/app/.well-known/oauth-protected-resource/route.ts": [
+    291,
+    652
+  ],
+  "src/app/api/calibration/route.ts": [
+    617,
+    2762
+  ],
+  "src/app/api/contests/route.ts": [
+    681,
+    4462
+  ],
+  "src/app/api/dashboard/route.ts": [
+    537,
+    2041
+  ],
+  "src/app/api/forge-identities/route.ts": [
+    1850,
+    9609
+  ],
+  "src/app/api/github/webhooks/route.ts": [
+    3379,
+    7785
+  ],
+  "src/app/api/gitlab/webhooks/route.ts": [
+    3478,
+    8190
+  ],
+  "src/app/api/issues/route.ts": [
+    644,
+    2823
+  ],
+  "src/app/api/mcp/route.ts": [
+    2909,
+    10680
+  ],
+  "src/app/api/moderation/adjustments/reversal/route.ts": [
+    559,
+    3356
+  ],
+  "src/app/api/moderation/audits/route.ts": [
+    254,
+    1636
+  ],
+  "src/app/api/moderation/contests/route.ts": [
+    1692,
+    6087
+  ],
+  "src/app/api/moderation/recalibration/adjustment/route.ts": [
+    766,
+    3579
+  ],
+  "src/app/api/moderation/recalibration/route.ts": [
+    464,
+    2471
+  ],
+  "src/app/api/moderation/rederivation/route.ts": [
+    1091,
+    4973
+  ],
+  "src/app/api/moderation/reversal/route.ts": [
+    864,
+    3431
+  ],
+  "src/app/api/overrides/route.ts": [
+    1359,
+    6976
+  ],
+  "src/app/api/readiness/route.ts": [
+    4886,
+    8676
+  ],
+  "src/app/api/repositories/labels/route.ts": [
+    7307,
+    16279
+  ],
+  "src/app/api/repositories/route.ts": [
+    6336,
+    25011
+  ],
+  "src/app/api/settlements/[id]/route.ts": [
+    853,
+    3279
+  ],
+  "src/app/api/tokens/route.ts": [
+    2459,
+    6027
+  ],
+  "src/app/api/version/route.ts": [
+    364,
+    536
+  ],
+  "src/app/calibration/page.tsx": [
+    434,
+    2141
+  ],
+  "src/app/contests/page.tsx": [
+    1002,
+    4842
+  ],
+  "src/app/dashboard/page.tsx": [
+    2190,
+    11431
+  ],
+  "src/app/layout.tsx": [
+    557,
+    902
+  ],
+  "src/app/not-found.tsx": [
+    561,
+    1104
+  ],
+  "src/app/third-party-notices.txt/route.ts": [
+    282,
+    1017
+  ],
+  "src/auth.ts": [
+    7467,
+    14000
+  ],
+  "src/components/account-controls-panel.tsx": [
+    1405,
+    6562
+  ],
+  "src/components/api-token-panel.tsx": [
+    2128,
+    7480
+  ],
+  "src/components/app-shell.tsx": [
+    986,
+    3203
+  ],
+  "src/components/sanction-contest-request.tsx": [
+    611,
+    3543
+  ],
+  "src/components/settlement-corrections.tsx": [
+    1333,
+    3719
+  ],
+  "src/components/settlement-override-queue.tsx": [
+    904,
+    3629
+  ],
+  "src/components/settlement-override-request.tsx": [
+    450,
+    2809
+  ],
+  "src/components/unregister-repository-control.tsx": [
+    1430,
+    4173
+  ],
+  "src/instrumentation-node.ts": [
+    2464,
+    7165
+  ],
+  "src/instrumentation.ts": [
+    885,
+    1199
+  ],
+  "src/lib/accounts/deletion.ts": [
+    3408,
+    7478
+  ],
+  "src/lib/accounts/export.ts": [
+    3136,
+    13693
+  ],
+  "src/lib/auth/account-store.ts": [
+    4497,
+    8595
+  ],
+  "src/lib/auth/bounded-logger.ts": [
+    3077,
+    5118
+  ],
+  "src/lib/auth/github-granted-scopes.ts": [
+    1698,
+    4087
+  ],
+  "src/lib/auth/github-oauth-scopes.ts": [
+    1350,
+    1873
+  ],
+  "src/lib/auth/github-userinfo.ts": [
+    3591,
+    6345
+  ],
+  "src/lib/auth/recent-sign-in.ts": [
+    246,
+    577
+  ],
+  "src/lib/auth/session-guard.ts": [
+    1884,
+    3566
+  ],
+  "src/lib/auth/session-recovery-reasons.ts": [
+    519,
+    870
+  ],
+  "src/lib/auth/sign-in-actions.ts": [
+    1044,
+    1923
+  ],
+  "src/lib/auth/sign-in-decision.ts": [
+    1466,
+    3146
+  ],
+  "src/lib/auth/trusted-host.ts": [
+    1170,
+    1501
+  ],
+  "src/lib/calibration/statistics.ts": [
+    507,
+    3073
+  ],
+  "src/lib/controller-config.ts": [
+    2235,
+    3397
+  ],
+  "src/lib/dashboard/eligible-issues.ts": [
+    2470,
+    14487
+  ],
+  "src/lib/dashboard/labels.ts": [
+    550,
+    969
+  ],
+  "src/lib/dashboard/queries.ts": [
+    7661,
+    50570
+  ],
+  "src/lib/dashboard/session.ts": [
+    709,
+    1958
+  ],
+  "src/lib/db/client.ts": [
+    3663,
+    6101
+  ],
+  "src/lib/db/migration-manifest.ts": [
+    1523,
+    4422
+  ],
+  "src/lib/db/redact-postgres-error.ts": [
+    747,
+    1455
+  ],
+  "src/lib/disputes.ts": [
+    6189,
+    6939
+  ],
+  "src/lib/domain/claim-path.ts": [
+    2301,
+    4186
+  ],
+  "src/lib/domain/difficulty-scheme.ts": [
+    813,
+    3676
+  ],
+  "src/lib/fold/data-subject-suppression.ts": [
+    3169,
+    13927
+  ],
+  "src/lib/fold/evidence-facts.ts": [
+    5351,
+    14042
+  ],
+  "src/lib/fold/fold-revision.ts": [
+    282,
+    309
+  ],
+  "src/lib/fold/guarded-callback.ts": [
+    3016,
+    3574
+  ],
+  "src/lib/fold/identity-claims.ts": [
+    3069,
+    11405
+  ],
+  "src/lib/fold/policy-violation-record.ts": [
+    710,
+    1896
+  ],
+  "src/lib/fold/reconcile-as-sponsor.ts": [
+    3774,
+    11540
+  ],
+  "src/lib/fold/reconcile.ts": [
+    8296,
+    30403
+  ],
+  "src/lib/fold/reconciliation-budget.ts": [
+    800,
+    3604
+  ],
+  "src/lib/fold/reconciliation-evidence.ts": [
+    2235,
+    4334
+  ],
+  "src/lib/fold/reconciliation-job-store.ts": [
+    2389,
+    10139
+  ],
+  "src/lib/fold/reconciliation-retry.ts": [
+    245,
+    1449
+  ],
+  "src/lib/fold/reconciliation-worker.ts": [
+    17211,
+    27522
+  ],
+  "src/lib/fold/repository-coordination.ts": [
+    5284,
+    12410
+  ],
+  "src/lib/fold/repository-fold.ts": [
+    20746,
+    53528
+  ],
+  "src/lib/fold/repository-lock-retry.ts": [
+    459,
+    998
+  ],
+  "src/lib/fold/repository-ownership.ts": [
+    874,
+    1077
+  ],
+  "src/lib/fold/sweep.ts": [
+    12673,
+    17710
+  ],
+  "src/lib/forge/gateway.ts": [
+    1373,
+    4384
+  ],
+  "src/lib/forge/identities.ts": [
+    3950,
+    9877
+  ],
+  "src/lib/forge/postgres-identities-store.ts": [
+    1477,
+    5417
+  ],
+  "src/lib/format-instant.ts": [
+    1143,
+    2553
+  ],
+  "src/lib/format-signed.ts": [
+    579,
+    1029
+  ],
+  "src/lib/github/app-installation-auth.ts": [
+    3398,
+    12053
+  ],
+  "src/lib/github/app-registration.ts": [
+    65,
+    388
+  ],
+  "src/lib/github/claim-action-releases.ts": [
+    345,
+    1668
+  ],
+  "src/lib/github/collection-walk-bound.ts": [
+    4730,
+    5347
+  ],
+  "src/lib/github/drain-issue-reads.ts": [
+    80,
+    293
+  ],
+  "src/lib/github/errors.ts": [
+    2955,
+    9644
+  ],
+  "src/lib/github/graphql-request-budget.ts": [
+    203,
+    887
+  ],
+  "src/lib/github/graphql.ts": [
+    1621,
+    10030
+  ],
+  "src/lib/github/rate-limit-budget.ts": [
+    968,
+    4417
+  ],
+  "src/lib/github/response-text.ts": [
+    1103,
+    2047
+  ],
+  "src/lib/github/types.ts": [
+    2046,
+    4455
+  ],
+  "src/lib/github/webhook-schema.ts": [
+    1460,
+    5071
+  ],
+  "src/lib/github/webhook-signature.ts": [
+    169,
+    721
+  ],
+  "src/lib/gitlab/api-error.ts": [
+    3412,
+    4636
+  ],
+  "src/lib/gitlab/client.ts": [
+    6836,
+    26121
+  ],
+  "src/lib/gitlab/collection-walk-bound.ts": [
+    2631,
+    3251
+  ],
+  "src/lib/gitlab/webhook-schema.ts": [
+    2873,
+    7939
+  ],
+  "src/lib/gitlab/webhook-token.ts": [
+    315,
+    719
+  ],
+  "src/lib/http/request-body.ts": [
+    764,
+    1436
+  ],
+  "src/lib/legal-revisions.ts": [
+    2938,
+    3361
+  ],
+  "src/lib/logging/journal-levels.ts": [
+    464,
+    1549
+  ],
+  "src/lib/mcp/protocol.ts": [
+    1111,
+    4366
+  ],
+  "src/lib/mcp/tools.ts": [
+    3563,
+    12004
+  ],
+  "src/lib/members/queries.ts": [
+    1509,
+    4440
+  ],
+  "src/lib/moderation/adjustment.ts": [
+    2691,
+    9544
+  ],
+  "src/lib/moderation/banned-accounts.ts": [
+    528,
+    1424
+  ],
+  "src/lib/moderation/credit-adjustment-store.ts": [
+    4522,
+    25936
+  ],
+  "src/lib/moderation/rederivation-service.ts": [
+    1519,
+    3863
+  ],
+  "src/lib/moderation/roles.ts": [
+    1540,
+    2110
+  ],
+  "src/lib/moderation/route-auth.ts": [
+    1342,
+    3003
+  ],
+  "src/lib/moderation/sanction-contest-route.ts": [
+    475,
+    1080
+  ],
+  "src/lib/moderation/sanction-contest-service.ts": [
+    3828,
+    8634
+  ],
+  "src/lib/moderation/sanction-contest-store.ts": [
+    4582,
+    13069
+  ],
+  "src/lib/moderation/sanction-lift.ts": [
+    2696,
+    4738
+  ],
+  "src/lib/moderation/service.ts": [
+    5384,
+    19790
+  ],
+  "src/lib/moderation/writer-credential.ts": [
+    342,
+    673
+  ],
+  "src/lib/overrides/apply.ts": [
+    1317,
+    2260
+  ],
+  "src/lib/overrides/postgres-store.ts": [
+    1952,
+    13005
+  ],
+  "src/lib/overrides/service.ts": [
+    2491,
+    8756
+  ],
+  "src/lib/overrides/unlabelled-points.ts": [
+    646,
+    693
+  ],
+  "src/lib/plural.ts": [
+    314,
+    444
+  ],
+  "src/lib/repositories/gitlab-forge-errors.ts": [
+    698,
+    2108
+  ],
+  "src/lib/repositories/gitlab-unregister.ts": [
+    1729,
+    4542
+  ],
+  "src/lib/repositories/postgres-store.ts": [
+    4364,
+    25623
+  ],
+  "src/lib/repositories/register.ts": [
+    26194,
+    69463
+  ],
+  "src/lib/repositories/unregister-scrub.ts": [
+    2537,
+    4459
+  ],
+  "src/lib/repositories/upgrade-webhooks.ts": [
+    1120,
+    7329
+  ],
+  "src/lib/retention/prune.ts": [
+    1894,
+    4937
+  ],
+  "src/lib/sanctions.ts": [
+    2276,
+    2698
+  ],
+  "src/lib/security/api-token.ts": [
+    472,
+    1300
+  ],
+  "src/lib/security/gitlab-api-fetch.ts": [
+    481,
+    742
+  ],
+  "src/lib/security/identity-link-fetch.ts": [
+    389,
+    650
+  ],
+  "src/lib/security/member-route-auth.ts": [
+    1154,
+    2954
+  ],
+  "src/lib/security/privileged-action-log.ts": [
+    2411,
+    4403
+  ],
+  "src/lib/security/protected-resource-metadata.ts": [
+    305,
+    667
+  ],
+  "src/lib/security/public-destination-deployment.ts": [
+    1940,
+    3129
+  ],
+  "src/lib/security/public-destination.ts": [
+    3265,
+    9559
+  ],
+  "src/lib/security/request-origin.ts": [
+    1364,
+    2631
+  ],
+  "src/lib/security/route-credential.ts": [
+    2014,
+    3534
+  ],
+  "src/lib/security/route-rate-limit.ts": [
+    2774,
+    5382
+  ],
+  "src/lib/security/server-action-origin.ts": [
+    904,
+    1452
+  ],
+  "src/lib/security/token-cipher.ts": [
+    1318,
+    6425
+  ],
+  "src/lib/strip-name-prefix.ts": [
+    349,
+    536
+  ],
+  "src/lib/tokens/lifetime.ts": [
+    1235,
+    1321
+  ],
+  "src/lib/tokens/postgres-store.ts": [
+    1769,
+    5416
+  ],
+  "src/lib/validation/reason.ts": [
+    827,
+    1057
+  ],
+  "src/lib/version.ts": [
+    486,
+    520
+  ],
+  "src/lib/webhooks/log-field.ts": [
+    2759,
+    6002
+  ],
+  "src/lib/webhooks/postgres-delivery-store.ts": [
+    460,
+    3014
+  ],
+  "src/lib/webhooks/postgres-receipts.ts": [
+    1183,
+    4565
+  ],
+  "src/lib/webhooks/processor.ts": [
+    2647,
+    5301
+  ],
+  "src/lib/webhooks/rate-limit.ts": [
+    5916,
+    8966
+  ],
+  "src/lib/worker/failure-logger.ts": [
+    2109,
+    3635
+  ],
+  "src/proxy.ts": [
+    1160,
+    1944
+  ],
+  "tests/api/api-md-route-coverage.test.ts": [
+    1331,
+    3099
+  ],
+  "tests/api/body-limits.test.ts": [
+    3413,
+    17926
+  ],
+  "tests/api/ci-workflows.test.ts": [
+    25684,
+    63863
+  ],
+  "tests/api/instrumentation-fail-closed.test.ts": [
+    827,
+    5030
+  ],
+  "tests/api/tokens-session-cookie.test.ts": [
+    1459,
+    5443
+  ],
+  "tests/api/tokens.test.ts": [
+    2719,
+    18049
+  ],
+  "tests/api/webhook-wiring.test.ts": [
+    1042,
+    2335
+  ],
+  "tests/api/webhook.test.ts": [
+    5645,
+    34162
+  ],
+  "tests/auth/account-deletion-sign-in-action.test.ts": [
+    190,
+    922
+  ],
+  "tests/auth/bounded-logger.test.ts": [
+    1845,
+    7598
+  ],
+  "tests/auth/session-authenticated-at.test.ts": [
+    643,
+    3832
+  ],
+  "tests/auth/session-cookie-content.test.ts": [
+    4409,
+    13652
+  ],
+  "tests/auth/session-deletion.test.ts": [
+    2245,
+    9876
+  ],
+  "tests/auth/session-lifetime.test.ts": [
+    488,
+    1941
+  ],
+  "tests/auth/session-recovery-reasons.test.ts": [
+    834,
+    2302
+  ],
+  "tests/auth/session-revocation.test.ts": [
+    2845,
+    11102
+  ],
+  "tests/auth/sign-in-token-continuity.test.ts": [
+    2421,
+    15404
+  ],
+  "tests/auth/trusted-host.test.ts": [
+    1364,
+    5332
+  ],
+  "tests/auth/undecryptable-session-logging.test.ts": [
+    2834,
+    8375
+  ],
+  "tests/ci/audit-acceptance.test.ts": [
+    2587,
+    6327
+  ],
+  "tests/ci/concurrency.test.ts": [
+    18482,
+    46169
+  ],
+  "tests/ci/conflict-markers.test.ts": [
+    1799,
+    7589
+  ],
+  "tests/ci/coverage-comment-workflow.test.ts": [
+    1987,
+    9243
+  ],
+  "tests/ci/dependency-audit-pr.test.ts": [
+    6164,
+    26577
+  ],
+  "tests/ci/dependency-audit-retry.test.ts": [
+    18061,
+    33897
+  ],
+  "tests/ci/docs-only-step.test.ts": [
+    3514,
+    14864
+  ],
+  "tests/ci/event-policy-workflow.test.ts": [
+    980,
+    6386
+  ],
+  "tests/ci/pr-data-triggers.test.ts": [
+    4969,
+    22125
+  ],
+  "tests/ci/pr-suite-workflow.test.ts": [
+    16577,
+    32992
+  ],
+  "tests/ci/production-closure.ts": [
+    3455,
+    7460
+  ],
+  "tests/ci/push-recalibration-step.test.ts": [
+    3549,
+    17320
+  ],
+  "tests/ci/required-checks.test.ts": [
+    1439,
+    6546
+  ],
+  "tests/ci/secret-scan-script.test.ts": [
+    42970,
+    75836
+  ],
+  "tests/ci/secret-scan-workflow.test.ts": [
+    14575,
+    35252
+  ],
+  "tests/ci/verify-fetch-provenance.test.ts": [
+    1396,
+    3767
+  ],
+  "tests/ci/verify-pr-tree.test.ts": [
+    8813,
+    34158
+  ],
+  "tests/ci/verify-step-reachability.test.ts": [
+    24976,
+    85505
+  ],
+  "tests/ci/verify-zizmor-step.test.ts": [
+    3630,
+    15973
+  ],
+  "tests/components/card-section-styles.test.tsx": [
+    1254,
+    5051
+  ],
+  "tests/components/field-control-styles.test.tsx": [
+    1593,
+    5056
+  ],
+  "tests/components/issues-board.test.tsx": [
+    1053,
+    6794
+  ],
+  "tests/components/landing-chrome.test.tsx": [
+    2185,
+    6978
+  ],
+  "tests/components/landing.test.tsx": [
+    8194,
+    21450
+  ],
+  "tests/components/legal-revisions-marker.test.tsx": [
+    6803,
+    12941
+  ],
+  "tests/components/not-found.test.tsx": [
+    3722,
+    8726
+  ],
+  "tests/components/rules.test.tsx": [
+    5346,
+    14404
+  ],
+  "tests/components/session-chrome.test.tsx": [
+    913,
+    3191
+  ],
+  "tests/components/site-header-wrap.test.tsx": [
+    3220,
+    9580
+  ],
+  "tests/components/terms-page.test.tsx": [
+    8209,
+    14335
+  ],
+  "tests/config/issue-admission.test.ts": [
+    799,
+    3356
+  ],
+  "tests/config/vitest-max-workers.test.ts": [
+    732,
+    2751
+  ],
+  "tests/dashboard/page-module-moderator-standing.test.ts": [
+    1700,
+    5434
+  ],
+  "tests/dashboard/page-module-redirect-guard.test.ts": [
+    4886,
+    11745
+  ],
+  "tests/dashboard/redirect-loop.test.ts": [
+    815,
+    4120
+  ],
+  "tests/db/account-reregistration.test.ts": [
+    1076,
+    6774
+  ],
+  "tests/db/api-token-delivery-window.test.ts": [
+    2841,
+    14268
+  ],
+  "tests/db/api-token-last-used.test.ts": [
+    1471,
+    8105
+  ],
+  "tests/db/avatar-url-nulling-migration.test.ts": [
+    725,
+    3325
+  ],
+  "tests/db/backup-restore.test.ts": [
+    11160,
+    33493
+  ],
+  "tests/db/board-generic-plan.test.ts": [
+    3813,
+    14609
+  ],
+  "tests/db/board-read-indexes.test.ts": [
+    3790,
+    14094
+  ],
+  "tests/db/calibration-cohorts-snapshot.test.ts": [
+    3113,
+    11352
+  ],
+  "tests/db/client-deadlines.test.ts": [
+    6132,
+    14372
+  ],
+  "tests/db/client.test.ts": [
+    152,
+    916
+  ],
+  "tests/db/closesql-connection-death.test.ts": [
+    843,
+    1914
+  ],
+  "tests/db/closesql-shutdown-before-death.test.ts": [
+    3446,
+    5995
+  ],
+  "tests/db/closesql-socket-error.test.ts": [
+    756,
+    4345
+  ],
+  "tests/db/connect-phase-death.test.ts": [
+    10226,
+    18489
+  ],
+  "tests/db/eligible-issues-query-scoping.test.ts": [
+    2966,
+    11544
+  ],
+  "tests/db/eligible-issues-query-shape.test.ts": [
+    4898,
+    21428
+  ],
+  "tests/db/identity-claim-publication.test.ts": [
+    5409,
+    21619
+  ],
+  "tests/db/migrate-default-branch-guard.test.ts": [
+    4564,
+    14575
+  ],
+  "tests/db/pipelined-query-after-build-failure.test.ts": [
+    1700,
+    2928
+  ],
+  "tests/db/policy-violation-recording.test.ts": [
+    1394,
+    8285
+  ],
+  "tests/db/postgres-container-names.test.ts": [
+    3220,
+    7938
+  ],
+  "tests/db/postgres-container.test.ts": [
+    931,
+    5095
+  ],
+  "tests/db/postgres-queue.test.ts": [
+    1105,
+    2513
+  ],
+  "tests/db/postgres-shared.test.ts": [
+    2391,
+    13279
+  ],
+  "tests/db/reconciliation-lock-release.test.ts": [
+    4202,
+    15748
+  ],
+  "tests/db/reserve-contract.test.ts": [
+    9844,
+    20735
+  ],
+  "tests/db/reserve-end.test.ts": [
+    1903,
+    5210
+  ],
+  "tests/db/reserve-shutdown-race.test.ts": [
+    998,
+    3084
+  ],
+  "tests/db/reserve-stranded-after-reconnect.test.ts": [
+    3919,
+    7573
+  ],
+  "tests/db/scheduled-reconnect.test.ts": [
+    1521,
+    9593
+  ],
+  "tests/db/shutdown-backlog-drain.test.ts": [
+    6252,
+    10180
+  ],
+  "tests/db/sql-array-cold-client.test.ts": [
+    1157,
+    4513
+  ],
+  "tests/db/statement-deadline-waiters.test.ts": [
+    2789,
+    15985
+  ],
+  "tests/db/types-fetch-failure-child.ts": [
+    1419,
+    3512
+  ],
+  "tests/db/types-fetch-failure.test.ts": [
+    1260,
+    5002
+  ],
+  "tests/db/worker-failure-logging.test.ts": [
+    2656,
+    7429
+  ],
+  "tests/deploy/alert-units.test.ts": [
+    3814,
+    10796
+  ],
+  "tests/deploy/bounce-units.test.ts": [
+    3510,
+    12955
+  ],
+  "tests/deploy/build-telemetry.test.ts": [
+    637,
+    2689
+  ],
+  "tests/deploy/canary-units.test.ts": [
+    3141,
+    12432
+  ],
+  "tests/deploy/container-image.test.ts": [
+    2553,
+    14785
+  ],
+  "tests/deploy/csp-dynamic-pages.test.ts": [
+    973,
+    1233
+  ],
+  "tests/deploy/edge-instrumentation-bundle.test.ts": [
+    1382,
+    2131
+  ],
+  "tests/deploy/postgres-patch.test.ts": [
+    2976,
+    9809
+  ],
+  "tests/deploy/proxy-csp.test.ts": [
+    2167,
+    6150
+  ],
+  "tests/deploy/tsconfig.test.ts": [
+    307,
+    932
+  ],
+  "tests/deploy/unit-file.test.ts": [
+    6706,
+    20520
+  ],
+  "tests/docs/backup-restore-runbook.test.ts": [
+    2365,
+    11320
+  ],
+  "tests/docs/decommission-runbook.test.ts": [
+    2215,
+    12877
+  ],
+  "tests/docs/incident-response-recovery.test.ts": [
+    2233,
+    7365
+  ],
+  "tests/docs/root-documents.test.ts": [
+    1006,
+    5063
+  ],
+  "tests/domain/claim-path-warnings.test.ts": [
+    898,
+    3657
+  ],
+  "tests/fold/cache-body-narrowing.test.ts": [
+    1115,
+    7130
+  ],
+  "tests/fold/fold-revision.test.ts": [
+    406,
+    1443
+  ],
+  "tests/fold/guarded-callback.test.ts": [
+    2207,
+    7089
+  ],
+  "tests/fold/opening-label-authority.test.ts": [
+    2885,
+    16589
+  ],
+  "tests/fold/pre-registration-closures.test.ts": [
+    2505,
+    15857
+  ],
+  "tests/fold/reconciliation-lock-reclaim.test.ts": [
+    1487,
+    9837
+  ],
+  "tests/fold/reconciliation-stranded-reservation.test.ts": [
+    1297,
+    3949
+  ],
+  "tests/fold/repository-ownership.test.ts": [
+    2745,
+    5242
+  ],
+  "tests/fold/sponsor-account-rename.test.ts": [
+    3703,
+    15199
+  ],
+  "tests/fold/sponsor-rename-reconciliation.test.ts": [
+    3532,
+    15129
+  ],
+  "tests/fold/sweep.test.ts": [
+    12226,
+    51695
+  ],
+  "tests/forge/gateway-destination-routes.test.ts": [
+    858,
+    4943
+  ],
+  "tests/forge/gitlab-commit-read-fold-boundary.test.ts": [
+    1968,
+    9724
+  ],
+  "tests/forge/gitlab-webhook-token.test.ts": [
+    383,
+    2312
+  ],
+  "tests/forge/identities-destination.test.ts": [
+    1173,
+    7411
+  ],
+  "tests/forge/instance-transport-limits.test.ts": [
+    1361,
+    8631
+  ],
+  "tests/github/webhook-schema.test.ts": [
+    1495,
+    6461
+  ],
+  "tests/lib/display-instant-format.test.ts": [
+    2288,
+    6393
+  ],
+  "tests/lib/eligible-issues-page.test.ts": [
+    558,
+    2640
+  ],
+  "tests/lib/failure-logger.test.ts": [
+    1267,
+    6782
+  ],
+  "tests/lib/gitlab/api-error.test.ts": [
+    657,
+    1442
+  ],
+  "tests/lib/mcp-tools-parity.test.ts": [
+    784,
+    4066
+  ],
+  "tests/lib/request-body.test.ts": [
+    2078,
+    5711
+  ],
+  "tests/moderation/current-role.test.ts": [
+    781,
+    4481
+  ],
+  "tests/moderation/writer-credential.test.ts": [
+    1575,
+    3843
+  ],
+  "tests/repositories/error-catalog.test.ts": [
+    8753,
+    45637
+  ],
+  "tests/scripts/check-legal-revisions.test.ts": [
+    5799,
+    30221
+  ],
+  "tests/scripts/check-page-geometry-board.test.ts": [
+    955,
+    5724
+  ],
+  "tests/scripts/check-page-geometry-launch.test.ts": [
+    3039,
+    12616
+  ],
+  "tests/scripts/check-page-geometry-session.test.ts": [
+    4250,
+    14023
+  ],
+  "tests/scripts/db-migrate-env-file.test.ts": [
+    719,
+    4496
+  ],
+  "tests/scripts/db-offhost-backup.test.ts": [
+    6134,
+    27053
+  ],
+  "tests/scripts/ledger-relay-app-key-rotation.test.ts": [
+    1353,
+    4862
+  ],
+  "tests/scripts/ledger-relay-check-fixtures.ts": [
+    408,
+    1718
+  ],
+  "tests/scripts/ledger-relay-fork.test.ts": [
+    2227,
+    12162
+  ],
+  "tests/scripts/ledger-relay-mint-permissions.test.ts": [
+    2537,
+    15571
+  ],
+  "tests/scripts/ledger-relay-secret-scan.test.ts": [
+    1348,
+    8751
+  ],
+  "tests/scripts/ledger-relay-sweep.test.ts": [
+    6525,
+    34727
+  ],
+  "tests/scripts/ledger-relay-trusted-producer.test.ts": [
+    567,
+    1694
+  ],
+  "tests/scripts/overflow-alert.test.ts": [
+    30189,
+    69071
+  ],
+  "tests/scripts/overflow-bounce.test.ts": [
+    3721,
+    24702
+  ],
+  "tests/scripts/overflow-canary.test.ts": [
+    33140,
+    77217
+  ],
+  "tests/security/github-authorization-url.test.ts": [
+    759,
+    4054
+  ],
+  "tests/security/identity-link-fetch.test.ts": [
+    1452,
+    3788
+  ],
+  "tests/security/local-database-exposure.test.ts": [
+    3920,
+    14681
+  ],
+  "tests/security/protected-resource-metadata.test.ts": [
+    844,
+    1371
+  ],
+  "tests/security/public-destination-deployment.test.ts": [
+    2311,
+    8923
+  ],
+  "tests/security/server-action-origin-stub.test.ts": [
+    1968,
+    2608
+  ],
+  "tests/security/server-action-origin.test.ts": [
+    1316,
+    7907
+  ],
+  "tests/security/sign-in-actions.test.ts": [
+    684,
+    2462
+  ],
+  "tests/security/sign-out-action.test.ts": [
+    195,
+    1258
+  ],
+  "tests/support/advisory-lock-probe.ts": [
+    667,
+    1268
+  ],
+  "tests/support/console-guard.ts": [
+    69,
+    444
+  ],
+  "tests/support/deploy-revision-harness.ts": [
+    4786,
+    24311
+  ],
+  "tests/support/difficulty-scheme.ts": [
+    201,
+    639
+  ],
+  "tests/support/empty-dashboard.ts": [
+    205,
+    506
+  ],
+  "tests/support/expect-poll-budget.test.ts": [
+    2202,
+    10515
+  ],
+  "tests/support/global-setup.test.ts": [
+    1088,
+    4535
+  ],
+  "tests/support/global-setup.ts": [
+    2539,
+    4326
+  ],
+  "tests/support/legacy-token-envelope.ts": [
+    195,
+    417
+  ],
+  "tests/support/loopback-listener.ts": [
+    792,
+    2801
+  ],
+  "tests/support/markdown-links.ts": [
+    3114,
+    6144
+  ],
+  "tests/support/postgres-container.ts": [
+    6483,
+    19614
+  ],
+  "tests/support/public-destination-harness.ts": [
+    2721,
+    6540
+  ],
+  "tests/support/scratch-git.test.ts": [
+    1328,
+    4054
+  ],
+  "tests/support/scratch-git.ts": [
+    4594,
+    7144
+  ],
+  "tests/support/shared-postgres-need.ts": [
+    1196,
+    5490
+  ],
+  "tests/support/stylesheet-rules.ts": [
+    816,
+    1879
+  ],
+  "tests/support/systemd-unit.ts": [
+    4685,
+    9087
+  ],
+  "tests/support/trusted-origin.ts": [
+    2096,
+    3683
+  ],
+  "tests/support/unhandled-rejection-probe.test.ts": [
+    1390,
+    3971
+  ],
+  "tests/support/unhandled-rejection-probe.ts": [
+    1030,
+    1449
+  ],
+  "tests/support/verified-repository.ts": [
+    266,
+    1052
+  ],
+  "tests/webhooks/rate-limit.test.ts": [
+    2765,
+    11356
+  ],
+  "vitest.config.ts": [
+    1290,
+    2100
+  ],
+  "vitest.setup.ts": [
+    1737,
+    2324
+  ]
+}
