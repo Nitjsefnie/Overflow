@@ -119,7 +119,7 @@ map_refusal_prefix='Could not read a valid .github/required-checks.json at %s (a
 # just after a merge, a legitimate job's check-run can be listed before its
 # run is.
 required_checks_gate() {
-  local remote_url repo required pins check check_pins unmapped check_runs runs run_id run_path run_event run_head_branch run_jobs jobs
+  local remote_url repo slug_ok required pins check check_pins unmapped check_runs runs run_id run_path run_event run_head_branch run_jobs jobs
   local classic_required rules_required required_stderr required_response required_status required_body required_header
   local map map_status tree_parse_status fallback_parser fallback_read_status fallback_parse_status
   local job_line job_run job_path job_id job_name job_attempt job_status job_conclusion
@@ -133,7 +133,12 @@ required_checks_gate() {
     https://github.com/*) repo="${remote_url#https://github.com/}" ;;
   esac
   repo="${repo%.git}"
-  if ! printf '%s' "$repo" | grep -Eq '^[^/]+/[^/]+$'; then
+  case "$repo" in
+    /*|*/|*/*/*) slug_ok=0 ;;
+    */*) slug_ok=1 ;;
+    *) slug_ok=0 ;;
+  esac
+  if [ "$slug_ok" -ne 1 ]; then
     printf 'Could not parse an OWNER/REPO GitHub slug from remote.origin.url (%s); refusing to deploy.\n' "$remote_url" >&2
     exit 1
   fi
