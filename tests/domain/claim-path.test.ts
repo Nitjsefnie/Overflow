@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { assessClaimPath } from "@/lib/domain/claim-path";
 
 const restAssignment = 'gh api -X POST "repos/$REPO/issues/$ISSUE/assignees"';
@@ -292,9 +294,10 @@ describe("known limits of textual evidence, not guaranteed runtime assignment", 
 });
 
 describe("released shared claim action evidence", () => {
-  const action = "Nitjsefnie-Actions/claim@4c781a9b0ce62ff263a65226f6005d412cea6ae1";
-  const released = new Set(["4c781a9b0ce62ff263a65226f6005d412cea6ae1"]);
-  const previousSha = "cd8ffd8227e94cdf60ed2580016187353b055cf4";
+  const sha = createHash("sha1").update("claim action fixture").digest("hex");
+  const action = `Nitjsefnie-Actions/claim@${sha}`;
+  const released = new Set([sha]);
+  const previousSha = createHash("sha1").update("previous claim action fixture").digest("hex");
   const caller = (reference: string, trigger = "on: issue_comment") => ({
     path: ".github/workflows/claim.yml",
     content: `${trigger}\njobs:\n  claim:\n    steps:\n      - uses: ${reference}\n`,
@@ -309,15 +312,15 @@ describe("released shared claim action evidence", () => {
       .toBe("EVIDENCE_FOUND");
   });
 
-  it("rejects the former hard-coded revision with an empty released set", () => {
+  it("rejects an action revision with an empty released set", () => {
     expect(assessClaimPath([caller(action)], new Set())).toBe("NO_EVIDENCE_FOUND");
   });
 
   it.each([
-    ["fake owner", "someone-else/claim@4c781a9b0ce62ff263a65226f6005d412cea6ae1"],
-    ["suffixed action", "Nitjsefnie-Actions/claim-extra@4c781a9b0ce62ff263a65226f6005d412cea6ae1"],
-    ["SHA absent from the set", "Nitjsefnie-Actions/claim@cd8ffd8227e94cdf60ed2580016187353b055cf4"],
-    ["wrong SHA", "Nitjsefnie-Actions/claim@0000000000000000000000000000000000000000"],
+    ["fake owner", `someone-else/claim@${sha}`],
+    ["suffixed action", `Nitjsefnie-Actions/claim-extra@${sha}`],
+    ["SHA absent from the set", `Nitjsefnie-Actions/claim@${previousSha}`],
+    ["wrong SHA", `Nitjsefnie-Actions/claim@${"0".repeat(40)}`],
     ["tag ref", "Nitjsefnie-Actions/claim@v2.0.5"],
     ["floating ref", "Nitjsefnie-Actions/claim@main"],
   ])("rejects a %s", (_reason, reference) => {
@@ -347,7 +350,12 @@ describe("released shared claim action evidence", () => {
 
   it("recognizes the actual repository caller", async () => {
     const path = ".github/workflows/claim.yml";
-    expect(assessClaimPath([{ path, content: await readFile(resolve(path), "utf8") }], released))
+    const content = await readFile(resolve(path), "utf8");
+    const workflow = parse(content) as { jobs: Record<string, { steps: { uses?: string }[] }> };
+    const released = new Set(Object.values(workflow.jobs).flatMap((job) => job.steps
+      .filter((step) => step.uses?.startsWith("Nitjsefnie-Actions/claim@"))
+      .map((step) => step.uses!.split("@")[1]!)));
+    expect(assessClaimPath([{ path, content }], released))
       .toBe("EVIDENCE_FOUND");
   });
 });

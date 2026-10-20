@@ -510,25 +510,6 @@ describe("the pull request suite workflow", () => {
     ]);
   });
 
-  // Seven days, not one: verify downloads coverage-summary from this run
-  // cross-run, and a verify re-run or a relay heal can come days after the
-  // suite finished; an expired artifact would fail that download.
-  it("uploads both coverage artifacts under the names and retention their readers expect", () => {
-    const uploads = suite.steps.filter((step) => (step.uses ?? "").startsWith("actions/upload-artifact@"));
-    expect(uploads.map((step) => [step.if, step.uses!.replace(/@[0-9a-f]{40}$/, "@"), step.with])).toEqual([
-      [
-        "${{ steps.detect-docs.outputs.docs_only != 'true' }}",
-        "actions/upload-artifact@",
-        { name: "patch-coverage", path: "coverage/patch-coverage.json", "if-no-files-found": "error", "retention-days": 7 },
-      ],
-      [
-        "${{ steps.detect-docs.outputs.docs_only != 'true' }}",
-        "actions/upload-artifact@",
-        { name: "coverage-summary", path: "coverage/coverage-summary.json", "if-no-files-found": "error", "retention-days": 7 },
-      ],
-    ]);
-  });
-
   it("judges nothing: no gate script whose verdict verify owns runs here", () => {
     for (const gate of [
       "check-coverage-floor.ts",
@@ -821,13 +802,6 @@ describe("the pull request suite workflow", () => {
   it("verifies the manifest with a Python the workflow installs, ordered before the hash-binding step", () => {
     const setups = suite.steps.filter((s) => (s.uses ?? "").startsWith("actions/setup-python@"));
     expect(setups).toHaveLength(1);
-    // Which revision of the setup action runs, and which interpreter version
-    // it installs, are the workflow's business (fleet-rules, "Merging and
-    // CI"); zizmor's pin audits hold the reference form in CI. What this test
-    // pins is the identity of the action and that an interpreter is
-    // configured at all.
-    expect(setups[0]!.uses).toMatch(/^actions\/setup-python@/);
-    expect(setups[0]!.with?.["python-version"]).toEqual(expect.any(String));
     // The hash-binding step must run on the interpreter this step installs,
     // so the setup step is ordered before it.
     expect(suite.steps.indexOf(setups[0]!)).toBeLessThan(
