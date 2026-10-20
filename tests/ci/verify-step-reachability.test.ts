@@ -2190,6 +2190,8 @@ for (const scenario of PRT_SCENARIOS) {
         expect(downloads).toHaveLength(scenario.floor ? 1 : 0);
         if (!scenario.floor) return;
         const download = downloads[0]!;
+        const awaiter = runsContaining(steps, AWAIT_SUITE_COMMAND)[0]!;
+        expect(download.with?.["run-id"]).toBe(`\${{ steps.${awaiter.id}.outputs.run_id }}`);
         const destination = /^\$\{\{ steps\.([\w-]+)\.outputs\.dir \}\}$/.exec(
           String(download.with?.path ?? ""),
         );
