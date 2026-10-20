@@ -2,8 +2,8 @@ name: ratchet push
 
 # Measurement stays keyless. Only this data-only job enters main-push and
 # authenticates using its deploy key. No fetched source is checked out or run.
-# Three-way merges preserve intervening records; stale conflicts wait for the
-# next main measurement. A rejected push on unchanged main is a hard error.
+# Replay requires unchanged source; three-way merges preserve intervening
+# records. A rejected push on unchanged main is a hard error.
 on:
   # This definition comes from main. Only successful push runs on main enter
   # the environment, and only their records artifact is downloaded as data.
@@ -113,13 +113,29 @@ jobs:
             echo "Current main has no comment-share records; deletion requires review" >&2
             exit 1
           fi
-          # Merge data alone so an intervening hand-tightened record survives.
+          # Replay only measurements of the current source; merge record-only edits.
           # Conflicts and unreadable ancestors defer to the next main measurement.
           if [ "$fetched" != "$base" ]; then
             if ! git -C "$scratch" show "$base:.github/comment-share.json" > "$RUNNER_TEMP/base-records.json"; then
               echo "::notice::Ancestor records are unreadable; the next main push measures again"
               {
                 echo "### Dropped: ancestor records could not be read"
+                echo "This run's tightening is dropped; the next main push measures again."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            source_changed=0
+            git -C "$scratch" diff --quiet --no-ext-diff --no-textconv \
+              --ignore-submodules=none --no-renames "$base" "$fetched" \
+              -- . ':(exclude).github/comment-share.json' || source_changed=$?
+            if [ "$source_changed" -gt 1 ]; then
+              echo "Could not compare the measured source with current main" >&2
+              exit "$source_changed"
+            fi
+            if [ "$source_changed" -eq 1 ]; then
+              echo "::notice::Source changed since measurement; the next main push measures again"
+              {
+                echo "### Dropped: source changed since measurement"
                 echo "This run's tightening is dropped; the next main push measures again."
               } >> "$GITHUB_STEP_SUMMARY"
               exit 0

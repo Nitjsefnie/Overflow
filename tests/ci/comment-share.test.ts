@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -25,6 +26,43 @@ type Workflow = {
 
 function readWorkflow(file: string): Workflow {
   return parse(readFileSync(resolve(".github/workflows", file), "utf8")) as Workflow;
+}
+
+function listArtifacts(step: Step, artifactNames: string[]): string {
+  const root = mkdtempSync(join(tmpdir(), "overflow-comment-share-list-"));
+  try {
+    const output = join(root, "output");
+    writeFileSync(output, "");
+    writeFileSync(join(root, "artifacts.json"), JSON.stringify({
+      artifacts: artifactNames.map((name) => ({ name, expired: false })),
+    }));
+    writeFileSync(join(root, "gh"), [
+      "#!/usr/bin/env node",
+      'const fs = require("node:fs");',
+      'const args = process.argv.slice(2);',
+      'const query = args[args.indexOf("--jq") + 1];',
+      'const endpoint = `repos/${process.env.REPO}/actions/runs/${process.env.RUN_ID}/artifacts`;',
+      'if (args[0] !== "api" || !args.includes(endpoint) || !args.includes("--paginate")',
+      '  || !args.includes("Cache-Control: no-cache")',
+      '  || query !== ".artifacts[] | select(.expired != true) | .name") process.exit(2);',
+      'const response = JSON.parse(fs.readFileSync(process.env.ARTIFACT_LIST, "utf8"));',
+      'for (const artifact of response.artifacts) {',
+      '  if (!artifact.expired) console.log(artifact.name);',
+      '}',
+      "",
+    ].join("\n"));
+    chmodSync(join(root, "gh"), 0o755);
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-euo", "pipefail", "-c", step.run!], {
+      env: { ...process.env, NODE_ENV: "test", PATH: `${root}:${process.env.PATH}`,
+        REPO: "fixture/project", RUN_ID: "42", ARTIFACT_LIST: join(root, "artifacts.json"), GITHUB_OUTPUT: output },
+      encoding: "utf8", timeout: 5_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    return readFileSync(output, "utf8");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 describe("the comment-share measurement and privileged handoff", () => {
@@ -53,9 +91,21 @@ describe("the comment-share measurement and privileged handoff", () => {
     const upload = producer.steps.find((step) => step.if?.includes("steps.stage.outputs.changed"));
     expect(upload).toBeDefined();
     expect(upload!.if).toBe("success() && steps.stage.outputs.changed == 'true'");
-    const download = readWorkflow("ratchet-push.yml").jobs.push.steps
-      .find((step) => step.with?.name === upload!.with?.name);
+    const artifactName = upload!.with?.name;
+    expect(artifactName).toBeTypeOf("string");
+    expect(artifactName).not.toBe("");
+    const steps = readWorkflow("ratchet-push.yml").jobs.push.steps;
+    const download = steps.find((step) =>
+      /^actions\/download-artifact(?:@|$)/.test(step.uses ?? "") && step.with?.name === artifactName);
     expect(download).toBeDefined();
+    const listing = steps.find((step) => step.id === "list");
+    expect(listing?.run).toBeDefined();
+    const runId = download!.with?.["run-id"];
+    expect(runId).toBeTypeOf("string");
+    expect(runId).toBe(listing!.env?.RUN_ID);
+    expect(runId).toMatch(/\bgithub\.event\.workflow_run\.id\b/);
+    expect(listArtifacts(listing!, [artifactName as string])).toBe("records=true\n");
+    expect(listArtifacts(listing!, [])).toBe("records=false\n");
   });
 
   // A PR completion must never enter the environment that holds the key.
