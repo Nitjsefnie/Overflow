@@ -74,7 +74,7 @@ describe("reconcileRepository", () => {
     const dependencies = reconciliationDependencies({ github: { listIssues: async () => { throw new SweepBudgetSpent(resetAt); } } });
     const result = await reconcileRepository(dependencies, "repository", { reason: "SWEEP" });
     expect(result).toMatchObject({ skipped: true, sweepHeldUntil: resetAt });
-    expect(dependencies.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET");
+    expect(dependencies.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", null);
     expect(dependencies.store.failRun).not.toHaveBeenCalled();
     expect(dependencies.store.materialize).not.toHaveBeenCalled();
     expect(dependencies.store.markRepositoryUnavailable).not.toHaveBeenCalled();
@@ -107,7 +107,7 @@ describe("reconcileRepository", () => {
     try {
       await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ cause: failure });
       expect(dependencies.github.getPullRequestReviews).toHaveBeenCalledOnce();
-      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.materialize).not.toHaveBeenCalled();
     } finally { logged.mockRestore(); }
   });
@@ -122,7 +122,7 @@ describe("reconcileRepository", () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     try {
       const failure = await reconcileRepository(dependencies, "repository").catch((error: unknown) => error);
-      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect((failure as Error).cause === upstream).toBe(true);
       expect(dependencies.store.setReconciliationCooldown).not.toHaveBeenCalled();
     } finally { logged.mockRestore(); info.mockRestore(); }
@@ -209,7 +209,7 @@ describe("reconcileRepository", () => {
       for (const upstream of [new Error("schema failure"), new GitHubApiError(403, false, retryAfterSeconds), new GitHubApiError(403, true, retryAfterSeconds)]) {
         const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(upstream) } });
         await expect(reconcileRepository({ ...dependencies, now }, "repository")).rejects.toMatchObject({ cause: upstream });
-        expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+        expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
         const writes = vi.mocked(dependencies.store.setReconciliationCooldown).mock.calls;
         if (upstream instanceof GitHubApiError && upstream.rateLimited) {
           expect(writes).toHaveLength(1);
@@ -774,7 +774,7 @@ describe("reconcileRepository", () => {
       expect(failure).toBeInstanceOf(Error);
       expect((failure as Error).message).toBe("Unable to reconcile repository.");
       expect((failure as Error).cause).toBe(upstream);
-      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       // The log carries the encoded token, not the raw object (issue 1042):
       // one line, so no text the error picked up can forge journal lines.
       expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", errorLogToken(upstream));
@@ -799,7 +799,7 @@ describe("reconcileRepository", () => {
         message: "Unable to reconcile repository.",
         cause: overCap,
       });
-      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
       expect(dependencies.store.materialize).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
@@ -831,7 +831,7 @@ describe("reconcileRepository", () => {
         const reportedCause = (failure as Error).cause as Error;
         expect(reportedCause.message).toBe("test write failed");
         expect(Object.keys(reportedCause).sort()).toEqual(["code", "name", "routine", "severity"]);
-        expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+        expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       } finally {
         errorLog.mockRestore();
       }
@@ -851,7 +851,7 @@ describe("reconcileRepository", () => {
         message: "Unable to reconcile repository.",
         cause: upstream,
       });
-      expect(dependencies.store.failRun.mock.calls).toEqual([["run-1", "Reconciliation failed."]]);
+      expect(dependencies.store.failRun.mock.calls).toEqual([["run-1", "Reconciliation failed.", null]]);
       // The log carries the encoded token (issue 1042); the body stays on the
       // cause object the rethrow attaches, out of the product-readable row.
       expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", errorLogToken(upstream));
@@ -872,7 +872,7 @@ describe("reconcileRepository", () => {
       await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
         cause: rejection,
       });
-      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE);
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE, null);
       // The cause still reaches the service log as the encoded token, exactly
       // as on the generic path (issue 1042).
       expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", errorLogToken(rejection));
@@ -890,7 +890,7 @@ describe("reconcileRepository", () => {
 
     try {
       await reconcileRepository(dependencies, "repository").catch(() => undefined);
-      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE);
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE, null);
     } finally {
       errorLog.mockRestore();
     }
@@ -904,7 +904,7 @@ describe("reconcileRepository", () => {
 
     try {
       await reconcileRepository(dependencies, "repository").catch(() => undefined);
-      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
     } finally {
       errorLog.mockRestore();
     }
@@ -1047,7 +1047,7 @@ describe("reconcileRepository", () => {
       await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
         message: "Unable to reconcile repository.",
       });
-      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
     } finally {
       errorLog.mockRestore();
@@ -1327,7 +1327,7 @@ describe("reconcileRepository", () => {
         await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
           message: "Unable to reconcile repository.",
         });
-        expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+        expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
         expect(discard).not.toHaveBeenCalled();
       } finally {
         errorLog.mockRestore();
@@ -1366,7 +1366,7 @@ describe("reconcileRepository", () => {
       await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
         message: "Unable to reconcile repository.",
       });
-      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
     } finally {
       errorLog.mockRestore();
@@ -1559,7 +1559,7 @@ describe("reconcileRepository", () => {
       await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
         message: "Unable to reconcile repository.",
       });
-      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
     } finally {
       errorLog.mockRestore();
@@ -1587,7 +1587,7 @@ describe("reconcileRepository", () => {
       await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
         message: "Unable to reconcile repository.",
       });
-      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).not.toHaveBeenCalledWith(expect.stringContaining("discarded unresolvable subject"));
@@ -1624,7 +1624,7 @@ describe("reconcileRepository", () => {
       await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
         message: "Unable to reconcile repository.",
       });
-      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
     } finally {
       errorLog.mockRestore();
@@ -1744,7 +1744,7 @@ describe("reconcileRepository", () => {
 
       await expect(reconcileRepository({ ...dependencies, now }, "repository")).rejects.toMatchObject({ cause: upstream });
 
-      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.markRepositoryUnavailable).not.toHaveBeenCalled();
       expect(dependencies.github.listIssues).not.toHaveBeenCalled();
       expect(vi.mocked(dependencies.store.setReconciliationCooldown).mock.calls).toEqual(

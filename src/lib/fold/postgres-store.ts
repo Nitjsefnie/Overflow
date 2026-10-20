@@ -136,12 +136,12 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return this.materialization.beginRun(repositoryId, options);
   }
 
-  public async failRun(runId: string, errorMessage: string): Promise<void> {
-    return this.materialization.failRun(runId, errorMessage);
+  public async failRun(runId: string, errorMessage: string, cost?: Omit<ReconciliationCostCharge, "completedAt"> | null): Promise<void> {
+    return this.materialization.failRun(runId, errorMessage, cost);
   }
 
-  public async holdRun(runId: string, message: string, heldBy: ReconciliationHeldBy): Promise<void> {
-    return this.materialization.holdRun(runId, message, heldBy);
+  public async holdRun(runId: string, message: string, heldBy: ReconciliationHeldBy, cost?: Omit<ReconciliationCostCharge, "completedAt"> | null): Promise<void> {
+    return this.materialization.holdRun(runId, message, heldBy, cost);
   }
 
   public async completeRun(runId: string): Promise<void> {

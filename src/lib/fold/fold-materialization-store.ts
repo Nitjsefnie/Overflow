@@ -191,19 +191,27 @@ export class PostgresFoldMaterializationStore {
     return row.id;
   }
 
-  public async failRun(runId: string, errorMessage: string): Promise<void> {
+  public async failRun(runId: string, errorMessage: string, cost?: Omit<ReconciliationCostCharge, "completedAt"> | null): Promise<void> {
     void errorMessage;
+    const observation = cost && (cost.observedResponses > 0 || cost.unmeasuredResponses > 0) ? cost : null;
     await this.sql`
       update reconciliation_runs
-      set status = ${"FAILED"}, completed_at = now(), error_message = ${"Reconciliation failed."}
+      set status = ${"FAILED"}, completed_at = now(), error_message = ${"Reconciliation failed."},
+        graphql_cost = ${observation?.observedCost ?? null}, graphql_cost_sponsor_id = ${observation?.sponsorId ?? null},
+        graphql_observed_responses = ${observation?.observedResponses ?? null},
+        graphql_unmeasured_responses = ${observation?.unmeasuredResponses ?? null}
       where id = ${runId} and status = 'PENDING'
     `;
   }
 
-  public async holdRun(runId: string, message: string, heldBy: ReconciliationHeldBy): Promise<void> {
+  public async holdRun(runId: string, message: string, heldBy: ReconciliationHeldBy, cost?: Omit<ReconciliationCostCharge, "completedAt"> | null): Promise<void> {
+    const observation = cost && (cost.observedResponses > 0 || cost.unmeasuredResponses > 0) ? cost : null;
     await this.sql`
       update reconciliation_runs
-      set status = ${"HELD"}, completed_at = now(), error_message = ${message}, held_by = ${heldBy}
+      set status = ${"HELD"}, completed_at = now(), error_message = ${message}, held_by = ${heldBy},
+        graphql_cost = ${observation?.observedCost ?? null}, graphql_cost_sponsor_id = ${observation?.sponsorId ?? null},
+        graphql_observed_responses = ${observation?.observedResponses ?? null},
+        graphql_unmeasured_responses = ${observation?.unmeasuredResponses ?? null}
       where id = ${runId} and status = 'PENDING'
     `;
   }

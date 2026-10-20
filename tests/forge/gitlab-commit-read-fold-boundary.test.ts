@@ -205,7 +205,7 @@ describe("a credential failure on the GitLab MR commits read never folds a settl
         expect((failure as Error).cause).toBeInstanceOf(ForgeCredentialRejectedError);
         expect(inspect(failure)).not.toContain("glpat-sponsor-secret");
         expect(mark).toHaveBeenCalledExactlyOnceWith("identity-1");
-        expect(failRun).toHaveBeenCalledExactlyOnceWith("run-1", FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE);
+        expect(failRun).toHaveBeenCalledExactlyOnceWith("run-1", FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE, null);
         expect(inspect(failRun.mock.calls)).not.toContain("glpat-sponsor-secret");
         // The old behavior's signature: a completed run whose fold was computed
         // with finalCommitAt = null (the selector then silently refused the
@@ -271,7 +271,7 @@ describe("a credential failure on the GitLab MR commits read never folds a settl
       expect((failure as Error).message).toBe("Unable to reconcile repository.");
       expect((failure as Error).cause).toBeInstanceOf(GitLabApiError);
       expect(((failure as Error).cause as GitLabApiError).status).toBe(401);
-      expect(failRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation failed.");
+      expect(failRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation failed.", null);
       expect(materialize).not.toHaveBeenCalled();
       expect(completeRun).not.toHaveBeenCalled();
     } finally {
