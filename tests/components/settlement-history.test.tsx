@@ -199,6 +199,8 @@ describe("settlement history page", () => {
   it("is reachable from the dashboard settlement card and the member navigation", () => {
     const { unmount } = render(
       <DashboardContent
+        appInstallUrl={null}
+        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{

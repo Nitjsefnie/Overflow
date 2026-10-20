@@ -135,7 +135,7 @@ Overflow: `install` would otherwise truncate the secrets that are already
 there. Populate the file before section 5 — its migration step reads
 `DATABASE_URL` out of it.
 
-Two optional variables configure the read-only reconciliation App for
+Optional variables configure the read-only reconciliation App for
 OAuth webhook registrations (issue 804): `GITHUB_APP_ID` is the App's id and
 `GITHUB_APP_PRIVATE_KEY_PATH` is the path to the App's PEM private key, at the
 host value `/etc/overflow/github-reconcile-app/private-key.pem`. Grant this App
@@ -147,7 +147,9 @@ and one that does not falls back to the sponsor's OAuth token; either variable
 unset or empty is the OAuth-only posture. Both are read at wiring time — when
 the reconciliation background starts, or when the `pnpm reconcile` CLI builds
 its production dependencies — and a configured but unreadable key file fails
-there, before any fold.
+there, before any fold. Set optional `GITHUB_APP_SLUG` to this reconciliation
+App's public slug to offer its installation on the sponsor dashboard for GitHub
+repositories using the OAuth fallback; unset means no offer is shown.
 
 App-based registration uses a separate GitHub App with three optional variables:
 
