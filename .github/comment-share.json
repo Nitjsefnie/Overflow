@@ -1528,8 +1528,8 @@
     2131
   ],
   "tests/deploy/postgres-patch.test.ts": [
-    2976,
-    9809
+    2931,
+    9769
   ],
   "tests/deploy/proxy-csp.test.ts": [
     2167,
