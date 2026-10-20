@@ -125,7 +125,7 @@ jobs:
             echo "::error::could not compute the freshness merge-base; refusing to certify"
             exit 1
           fi
-          if [[ ! "$freshness_base" =~ ^[0-9a-f]{40}$ ]] \
+          if [[ "$freshness_base" == *$'\n'* ]] || ! printf '%s' "$freshness_base" | grep -Eq '^[0-9a-f]{40}$' \
             || ! git cat-file -e "${freshness_base}^{commit}"; then
             echo "::error::freshness requires exactly one merge-base commit; refusing to certify"
             exit 1
@@ -800,7 +800,7 @@ jobs:
         env:
           RUN_ID: ${{ steps.suite.outputs.run_id }}
         run: |
-          if [[ ! "${RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+          if [[ "${RUN_ID}" == *$'\n'* ]] || ! printf '%s' "${RUN_ID}" | grep -Eq '^[1-9][0-9]*$'; then
             echo "::error::the suite awaiter wrote no run id (got '${RUN_ID}'); refusing to pass without a suite outcome"
             exit 1
           fi

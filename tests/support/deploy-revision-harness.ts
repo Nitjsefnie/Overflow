@@ -691,6 +691,7 @@ export async function missingGhPath(fixture: Fixture): Promise<string> {
     ["bash", "/bin/bash"],
     ["env", "/usr/bin/env"],
     ["readlink", "/usr/bin/readlink"],
+    ["grep", "/usr/bin/grep"],
     ["mktemp", "/usr/bin/mktemp"],
     ["rm", "/usr/bin/rm"],
   ] as const) {

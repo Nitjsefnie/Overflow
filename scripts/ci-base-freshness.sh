@@ -51,7 +51,7 @@ fi
 total_commits=$(gh api "repos/$REPO_SLUG/compare/$BASE_SHA...$current" --jq '.total_commits') || {
   fail_ "could not compare $BASE_SHA...$current (gh api failed) — refusing to certify on a failed API call."
 }
-if ! [[ "$total_commits" =~ ^[0-9]+$ ]]; then
+if [[ "$total_commits" == *$'\n'* ]] || ! printf '%s' "$total_commits" | grep -Eq '^[0-9]+$'; then
   fail_ "the compare $BASE_SHA...$current returned no commit count (got '$total_commits') — an unrepresentable compare. Refusing."
 fi
 if [ "$total_commits" -gt 200 ]; then
@@ -72,7 +72,7 @@ fi
 advance_entry_count=$(gh api "repos/$REPO_SLUG/compare/$BASE_SHA...$current" --jq '.files | length') || {
   fail_ "could not count the advance's files (gh api failed) — refusing to certify on a failed API call."
 }
-if ! [[ "$advance_entry_count" =~ ^[0-9]+$ ]]; then
+if [[ "$advance_entry_count" == *$'\n'* ]] || ! printf '%s' "$advance_entry_count" | grep -Eq '^[0-9]+$'; then
   fail_ "the compare $BASE_SHA...$current returned no file count (got '$advance_entry_count') — an unrepresentable compare. Refusing."
 fi
 
