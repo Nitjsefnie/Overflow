@@ -20,6 +20,7 @@ export type SweepPassInput = {
 export type ReconciliationSweepControl = {
   spend(): Promise<Date | null>;
   openPass(input: SweepPassInput): Promise<SweepPass>;
+  discardPass(repositoryId: string): Promise<void>;
 };
 const passes = new AsyncLocalStorage<SweepPass>();
 export function withSweepPass<T>(pass: SweepPass | undefined, work: () => Promise<T>): Promise<T> {

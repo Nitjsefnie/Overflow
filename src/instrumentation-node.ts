@@ -62,6 +62,7 @@ export async function registerNodejs(): Promise<void> {
   const sweep = {
     spend: () => sweepRound.spend(new Date(), readSweepRequestBudget(process.env)),
     openPass: sweepPasses.open.bind(sweepPasses),
+    discardPass: sweepPasses.discardByRepository.bind(sweepPasses),
   };
   const resolveAppInstallationToken = createReconciliationAppTokenResolver({
     reconciliationResolver,
@@ -162,9 +163,9 @@ export async function registerNodejs(): Promise<void> {
         listActiveRepositoryIds: () => store.listActiveRepositoryIds(),
         enqueue: (repositoryId) => store.enqueueReconciliationJob(repositoryId, "SWEEP"),
         onFailure: (repositoryId, error) => {
-          // One repository that cannot be queued must not silently stall the
-          // sweep for the rest, so the failure is reported and the sweep moves
-          // on. Encoded for the same reason as the drain's site above.
+          // Report the failure while retaining the durable slot: the next poll
+          // retries this repository. Encode the error for the same reason as
+          // the drain's site above.
           console.error(`Reconciliation sweep failed for repository ${repositoryId}`, errorLogToken(error));
         },
       });

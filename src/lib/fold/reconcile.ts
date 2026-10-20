@@ -275,6 +275,7 @@ async function reconcileRepositoryWhileCoordinated(
   };
   try {
     if (!repository.active) {
+      await dependencies.sweep?.discardPass(repositoryId);
       await dependencies.store.completeRun(runId);
       await dependencies.store.setReconciliationCooldown(repositoryId, null);
       return noDeltaSummary(repositoryId, runId);

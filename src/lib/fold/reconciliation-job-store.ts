@@ -78,6 +78,7 @@ export class PostgresReconciliationJobStore {
   /** Shared lifecycle policy for ordinary events and explicit re-derivation requests. */
   private reconciliationJobConflictUpdate() {
     return this.sql`
+      sweep_generation = repository_reconciliation_jobs.sweep_generation + case when excluded.reason = 'SWEEP' then 1 else 0 end,
       reason = case when excluded.reason = 'SWEEP' then excluded.reason else repository_reconciliation_jobs.reason end,
       state = case when repository_reconciliation_jobs.state = 'RUNNING' then 'RUNNING' else 'PENDING' end::repository_reconciliation_job_state,
           follow_up_requested = case when repository_reconciliation_jobs.state = 'RUNNING' then true else repository_reconciliation_jobs.follow_up_requested end,
@@ -110,7 +111,8 @@ export class PostgresReconciliationJobStore {
         for update skip locked
       )
       update repository_reconciliation_jobs
-      set state = ${"RUNNING"},
+      set claimed_sweep_generation = case when reason = 'SWEEP' then sweep_generation else null end,
+          state = ${"RUNNING"},
           lease_token = ${leaseToken},
           lease_duration_ms = ${RECONCILIATION_LEASE_MS},
           lease_duration_token = ${leaseToken},
@@ -166,6 +168,7 @@ export class PostgresReconciliationJobStore {
     // that took a follow-up becomes a fresh PENDING job instead of disappearing.
     // The row is locked for the decision so that an enqueue cannot set the flag
     // between reading it and acting on it, which would drop that event silently.
+    // Consume only this lease's sweep generation; a newer sweep stays armed.
     // Compare request generations under that same lock; timestamps are only
     // informational. Uncaptured work must survive both update and delete paths.
     return this.sql.begin(async (transaction) => {
@@ -184,12 +187,15 @@ export class PostgresReconciliationJobStore {
       if (row.follow_up_requested || !row.request_matches) {
         await transaction`
           update repository_reconciliation_jobs
-          set state = ${"PENDING"},
+          set reason = case when reason = 'SWEEP' and claimed_sweep_generation = sweep_generation
+                then 'WEBHOOK' else reason end,
+              state = ${"PENDING"},
               attempt_count = 0,
               run_after = now(),
               last_failure_at = null,
               follow_up_requested = false,
               rederivation_requested_at = case when ${row.request_matches} then null else rederivation_requested_at end,
+              claimed_sweep_generation = null,
               lease_token = null,
               lease_duration_ms = null,
               lease_expires_at = null
@@ -223,6 +229,7 @@ export class PostgresReconciliationJobStore {
           run_after = ${runAfter},
           attempt_count = greatest(attempt_count - 1, 0),
           follow_up_requested = false,
+          claimed_sweep_generation = null,
           lease_token = null,
           lease_duration_ms = null,
           lease_expires_at = null
@@ -245,6 +252,7 @@ export class PostgresReconciliationJobStore {
           run_after = ${runAfter},
           last_failure_at = now(),
           follow_up_requested = false,
+          claimed_sweep_generation = null,
           lease_token = null,
           lease_duration_ms = null,
           lease_expires_at = null
@@ -262,6 +270,7 @@ export class PostgresReconciliationJobStore {
       set state = ${"FAILED"},
           last_failure_at = now(),
           follow_up_requested = false,
+          claimed_sweep_generation = null,
           lease_token = null,
           lease_duration_ms = null,
           lease_expires_at = null

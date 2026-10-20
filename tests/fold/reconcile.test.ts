@@ -57,7 +57,7 @@ describe("reconcileRepository", () => {
     const dependencies = reconciliationDependencies({ github: { listIssues: async () => { throw new Error("invalid upstream page"); } } });
     const complete = vi.fn(async () => {});
     dependencies.sweep = {
-      spend: async () => null,
+      spend: async () => null, discardPass: async () => {},
       openPass: async (input) => ({ id: "pass", scanStartedAt: input.scanStartedAt, dirtySubjects: input.dirtySubjects,
         read: async () => undefined, write: async () => {}, complete }),
     };
