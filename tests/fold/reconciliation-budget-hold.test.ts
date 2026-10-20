@@ -10,7 +10,8 @@ import {
   type ReconciliationWorkerStore,
 } from "@/lib/fold/reconciliation-worker";
 import * as budgets from "@/lib/github/rate-limit-budget";
-import { GitHubGateway } from "@/lib/github/client";
+import { GitHubApiError, GitHubGateway } from "@/lib/github/client";
+import { RECONCILIATION_EVIDENCE_FORMAT } from "@/lib/fold/reconciliation-evidence";
 import { verifiedRepositoryPayload } from "../support/verified-repository";
 
 const now = new Date("2026-09-07T10:00:00Z");
@@ -914,3 +915,122 @@ describe("reconciliation budget holds under the repository lock", () => {
   });
 
 });
+
+describe("reconciliation drains concurrent GitHub reads before recording failure cost", () => {
+  // Removing any gateway drain loses the late cost/counter or publishes before the secondary error settles.
+  it.each(["listIssues", "getIssue", "fresh witnesses"] as const)(
+    "drains started %s reads before recording a failed run", async (path) => {
+      await assertDrainedFailure(path, "measured");
+    },
+  );
+  it.each(["listIssues", "getIssue", "fresh witnesses"] as const)(
+    "drains started %s reads that return an unmeasured response", async (path) => {
+      await assertDrainedFailure(path, "unmeasured");
+    },
+  );
+  it.each(["listIssues", "getIssue", "fresh witnesses"] as const)(
+    "drains started %s reads that also fail while retaining the first error object", async (path) => {
+      await assertDrainedFailure(path, "secondary failure");
+    },
+  );
+});
+
+async function assertDrainedFailure(
+  path: "listIssues" | "getIssue" | "fresh witnesses",
+  lateResult: "measured" | "unmeasured" | "secondary failure",
+): Promise<void> {
+  const f = fixture();
+  let markLateStarted!: () => void;
+  let markFailureReady!: () => void;
+  let releaseLate!: () => void;
+  const lateStarted = new Promise<void>((resolve) => { markLateStarted = resolve; });
+  const failureReady = new Promise<void>((resolve) => { markFailureReady = resolve; });
+  const lateReleased = new Promise<void>((resolve) => { releaseLate = resolve; });
+  const firstError = new GitHubApiError(400);
+  const secondaryError = new GitHubApiError(401);
+  const pageInfo = { hasNextPage: false, endCursor: null };
+  const nextPage = { hasNextPage: true, endCursor: "next" };
+  const witnesses = path === "fresh witnesses";
+  const node = {
+    databaseId: 101, number: 1, title: "issue", body: "", state: "OPEN",
+    updatedAt: "2026-09-01T12:05:00Z", createdAt: "2026-09-01T07:00:00Z",
+    url: "https://github.com/octo/overflow/issues/1", author: { login: "octo" },
+    labels: { nodes: [], pageInfo: witnesses ? pageInfo : nextPage }, assignees: { nodes: [] },
+    timelineItems: { nodes: [], pageInfo: witnesses ? pageInfo : nextPage },
+    closedByPullRequestsReferences: { nodes: [], pageInfo },
+  };
+  if (path === "getIssue") {
+    f.fold.store.getReconciliationEvidence = async () => ({
+      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, omittedOversizedFacts: 0,
+      checkpoint: now, lastFullPassAt: now, issues: [], pullRequests: [],
+    });
+    f.fold.store.getDirtyReconciliationSubjects = async () => [{ kind: "ISSUE", id: 101, number: 1, generation: 1 }];
+  }
+  const fail = async () => {
+    await lateStarted;
+    markFailureReady();
+    if (lateResult === "secondary failure") throw firstError;
+    return new Response("bad request", { status: 400 });
+  };
+  const delayed = async (repository: unknown) => {
+    markLateStarted();
+    await lateReleased;
+    if (lateResult === "secondary failure") throw secondaryError;
+    return Response.json({ data: {
+      rateLimit: lateResult === "measured" ? { cost: 5 } : {}, repository,
+    } });
+  };
+  let counts = 0;
+  f.fold.github = new GitHubGateway({ accessToken: "test-token", fetch: async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/repositories/4242")) return Response.json(verifiedRepositoryPayload(4242, "octo/overflow"));
+    if (!url.endsWith("/graphql")) {
+      if (witnesses && url.includes("/issues/1/events")) return fail();
+      return Response.json([]);
+    }
+    const { query } = JSON.parse(String(init?.body)) as { query: string };
+    const operation = /query (\w+)/.exec(query)?.[1];
+    if (operation === "RepositoryIssues") return Response.json({ data: { rateLimit: { cost: 2 },
+      repository: { issues: { nodes: path === "getIssue" ? [] : [node], pageInfo } },
+    } });
+    if (operation === "RepositoryIssue") return Response.json({ data: { rateLimit: { cost: 1 }, repository: { issue: node } } });
+    if (operation === "IssueTimelineCounts") {
+      counts++;
+      const repository = { i1: { databaseId: 101, timelineItems: { totalCount: witnesses ? 1 : 0 } } };
+      if (counts > 1) return delayed(repository);
+      return Response.json({ data: { rateLimit: { cost: 1 }, repository } });
+    }
+    if (operation === "IssueLabels") return fail();
+    if (operation === "IssueTimeline") {
+      const repository = { issue: { timelineItems: { nodes: [], pageInfo } } };
+      if (!witnesses) return delayed(repository);
+      return Response.json({ data: { rateLimit: { cost: 0 }, repository } });
+    }
+    throw new Error(`Unexpected operation ${operation}`);
+  } });
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  const outcome = reconcileRepository(f.fold, "repository-1", path === "getIssue" ? { reason: "WEBHOOK" } : undefined)
+    .catch((error: unknown) => error);
+  try {
+    await failureReady;
+    // Let fail-fast rejection reach the terminal write while the sibling remains gated.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const earlyWrites = vi.mocked(f.fold.store.failRun).mock.calls.length;
+    releaseLate();
+    const failure = await outcome;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(f.fold.store.failRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation failed.", {
+      sponsorId: "sponsor-1", observedCost: lateResult === "measured" ? 8 : 3,
+      observedResponses: (witnesses ? 3 : 2) + (lateResult === "measured" ? 1 : 0),
+      unmeasuredResponses: lateResult === "unmeasured" ? 1 : 0,
+    });
+    expect(earlyWrites).toBe(0);
+    expect(failure).toMatchObject({ cause: { status: 400 } });
+    if (lateResult === "secondary failure") expect((failure as Error).cause).toBe(firstError);
+    expect(f.fold.store.holdRun).not.toHaveBeenCalled();
+  } finally {
+    releaseLate();
+    await outcome;
+    logged.mockRestore();
+  }
+}

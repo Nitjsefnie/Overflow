@@ -143,7 +143,7 @@ export class GitHubGateway implements ForgeGateway {
     const manifest = targeted ? await this.getIssueTimelineManifest(repository, [...unique.values()]) : null;
     const issues: GitHubIssue[] = [];
     for (const node of unique.values()) {
-      const [labels, timeline, closingPullRequests] = await Promise.all([
+      const [labels, timeline, closingPullRequests] = await drainIssueReads([
         this.getIssueLabels(repository, node.number, node.labels),
         this.getIssueTimeline(repository, node.number, targeted ? node.timelineItems : undefined),
         this.getIssueClosingPullRequests(repository, node.number, node.closedByPullRequestsReferences),
@@ -165,7 +165,7 @@ export class GitHubGateway implements ForgeGateway {
         // captured earlier. Genuine truncation persists across reads, so re-take
         // both independent witnesses for this one issue and compare them against
         // THIS reread; only a persistent disagreement refuses publication.
-        const [freshCounts, freshManifest] = await Promise.all([
+        const [freshCounts, freshManifest] = await drainIssueReads([
           this.getIssueTimelineCounts(repository, [node]),
           this.getPerIssueTimelineManifest(repository, [node]),
         ]);
@@ -187,7 +187,7 @@ export class GitHubGateway implements ForgeGateway {
     if (node === undefined || node.databaseId !== subject.id) {
       throw new Error("GitHub issue identity did not match the dirty subject.");
     }
-    const [labels, timeline, closingPullRequests] = await Promise.all([
+    const [labels, timeline, closingPullRequests] = await drainIssueReads([
       this.getIssueLabels(repository, node.number, node.labels),
       this.getIssueTimeline(repository, node.number),
       this.getIssueClosingPullRequests(repository, node.number, node.closedByPullRequestsReferences),
@@ -902,6 +902,18 @@ export class GitHubGateway implements ForgeGateway {
     } finally {
       clearTimeout(timeout);
     }
+  }
+}
+
+/** Drain started reads before their caller snapshots cost, retaining the first rejection. */
+async function drainIssueReads<T extends readonly unknown[] | []>(
+  reads: T,
+): Promise<{ -readonly [K in keyof T]: Awaited<T[K]> }> {
+  try {
+    return await Promise.all(reads);
+  } catch (error) {
+    await Promise.allSettled(reads);
+    throw error;
   }
 }
 
