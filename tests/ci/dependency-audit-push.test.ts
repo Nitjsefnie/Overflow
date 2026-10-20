@@ -91,7 +91,7 @@ describe("the fast path is an outcome, not a skip", () => {
     expect(run).toContain('[ "${EVENT_NAME:?}" = "push" ]');
     // The before-SHA must be 40 hex and not the all-zeros SHA a new branch
     // or a force push carries.
-    expect(run).toContain('[[ "${BEFORE_SHA:?}" =~ ^[0-9a-f]{40}$ ]]');
+    expect(run).toContain(`printf '%s' "\${BEFORE_SHA}" | grep -Eq '^[0-9a-f]{40}$'`);
     expect(run).toContain('[ "${BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]');
     // The before commit must be present and an ancestor of the pushed HEAD.
     expect(run).toContain('git cat-file -e "${BEFORE_SHA}^{commit}"');

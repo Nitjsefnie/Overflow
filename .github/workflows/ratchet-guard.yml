@@ -82,7 +82,7 @@ jobs:
             echo "::error::Dispatch must target refs/heads/main"
             exit 1
           fi
-          if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          if [[ "$BASE_SHA" == *$'\n'* ]] || ! printf '%s' "$BASE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
             echo "::error::Dispatch base must be a full lowercase 40-character SHA"
             exit 1
           fi

@@ -25,6 +25,7 @@
 !.github/PULL_REQUEST_TEMPLATE.md
 !.github/dependabot.yml
 !.github/required-checks.json
+!.github/comment-share.json
 !.github/requirements-zizmor.txt
 !.github/requirements-pyyaml.txt
 !.github/gitleaks-baseline.json

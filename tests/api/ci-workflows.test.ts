@@ -253,7 +253,7 @@ fi
   echo "::error::Dispatch must target refs/heads/main"
   exit 1
 fi
-if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+if [[ "$BASE_SHA" == *$'\\n'* ]] || ! printf '%s' "$BASE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
   echo "::error::Dispatch base must be a full lowercase 40-character SHA"
   exit 1
 fi
@@ -836,7 +836,8 @@ cp .github/workflows/*.yml .github/workflows-pr/
 # all ambiguity, and ambiguity audits. The schedule and dispatch
 # legs never enter this branch — they audit unconditionally.
 if [ "\${EVENT_NAME:?}" = "push" ] \\
-  && [[ "\${BEFORE_SHA:?}" =~ ^[0-9a-f]{40}$ ]] \\
+  && [[ "\${BEFORE_SHA:?}" != *$'\\n'* ]] \\
+  && printf '%s' "\${BEFORE_SHA}" | grep -Eq '^[0-9a-f]{40}$' \\
   && [ "\${BEFORE_SHA}" != "0000000000000000000000000000000000000000" ] \\
   && git cat-file -e "\${BEFORE_SHA}^{commit}" 2>/dev/null \\
   && git merge-base --is-ancestor "\${BEFORE_SHA}" HEAD 2>/dev/null \\

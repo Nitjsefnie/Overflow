@@ -199,7 +199,7 @@ jobs:
             fi
           elif [ "${EVENT_NAME}" = workflow_dispatch ] && [ -n "${DISPATCH_BASE}" ]; then
             base="${DISPATCH_BASE}"
-            if [[ ! "${base}" =~ ^[0-9a-f]{40}$ ]]; then
+            if [[ "${base}" == *$'\n'* ]] || ! printf '%s' "${base}" | grep -Eq '^[0-9a-f]{40}$'; then
               echo "::error::Dispatch base has invalid format; expected 40 lowercase hexadecimal characters" >&2
               exit 1
             fi

@@ -56,7 +56,8 @@ operational_ignored_re="^(\.next/?|\.claude/|${release_name_re}/|${release_name_
 # assignment restores the locale on return.
 is_operational_ignored() {
   local LC_ALL=C
-  [[ "$1" =~ $operational_ignored_re ]]
+  # Git paths are single-line here; reject newlines before grep's per-line match.
+  [[ "$1" != *$'\n'* ]] && printf '%s' "$1" | LC_ALL=C grep -Eq -- "$operational_ignored_re"
 }
 
 # The map-refusal message's shared prefix, up to the clause each refusal
@@ -132,7 +133,7 @@ required_checks_gate() {
     https://github.com/*) repo="${remote_url#https://github.com/}" ;;
   esac
   repo="${repo%.git}"
-  if ! [[ "$repo" =~ ^[^/]+/[^/]+$ ]]; then
+  if ! printf '%s' "$repo" | grep -Eq '^[^/]+/[^/]+$'; then
     printf 'Could not parse an OWNER/REPO GitHub slug from remote.origin.url (%s); refusing to deploy.\n' "$remote_url" >&2
     exit 1
   fi
@@ -153,7 +154,7 @@ required_checks_gate() {
     else
       required_status=$?
     fi
-  elif [[ "${required_response%%$'\n'*}" =~ ^HTTP/[0-9]+[.][0-9]+[[:space:]]+404[[:space:]] ]]; then
+  elif printf '%s' "${required_response%%$'\n'*}" | grep -Eq '^HTTP/[0-9]+[.][0-9]+[[:space:]]+404[[:space:]]'; then
     classic_required=
   else
     required_status=1
@@ -178,7 +179,7 @@ required_checks_gate() {
     else
       required_status=$?
     fi
-  elif [[ "${required_response%%$'\n'*}" =~ ^HTTP/[0-9]+[.][0-9]+[[:space:]]+404[[:space:]] ]]; then
+  elif printf '%s' "${required_response%%$'\n'*}" | grep -Eq '^HTTP/[0-9]+[.][0-9]+[[:space:]]+404[[:space:]]'; then
     rules_required=
   else
     required_status=1

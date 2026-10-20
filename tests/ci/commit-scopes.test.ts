@@ -175,10 +175,10 @@ describe("scripts/commit_scopes.py", () => {
       "Actions event policy",
       "actionlint",
       "ci", "ci pull request",
-      "claim", "code scanning", "coverage comment",
+      "claim", "code scanning", "comment share", "coverage comment",
       "dependency audit",
       "ledger relay", "pr gate", "pr gates", "pr suite",
-      "ratchet guard", "scorecard",
+      "ratchet guard", "ratchet push", "scorecard",
       "secret scan",
     ]);
   });

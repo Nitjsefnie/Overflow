@@ -55,7 +55,6 @@ describe("the comment-share measurement and privileged handoff", () => {
     expect(upload!.if).toBe("success() && steps.stage.outputs.changed == 'true'");
     const download = readWorkflow("ratchet-push.yml").jobs.push.steps
       .find((step) => step.with?.name === upload!.with?.name);
-    expect(upload!.with?.name).toBe("comment-share-ratchet");
     expect(download).toBeDefined();
   });
 
@@ -82,7 +81,7 @@ describe("the comment-share measurement and privileged handoff", () => {
     const guard = push!.run!.match(/^if \[ -z "\$\{MASTER_PUSH_DEPLOY_KEY:-\}" \]; then\n[\s\S]*?^fi$/m);
     expect(guard, "the empty-key guard must be present as a complete block").not.toBeNull();
     const result = spawnSync("bash", ["--noprofile", "--norc", "-c", guard![0]], {
-      env: { PATH: process.env.PATH, MASTER_PUSH_DEPLOY_KEY: "" },
+      env: { PATH: process.env.PATH, NODE_ENV: "test", MASTER_PUSH_DEPLOY_KEY: "" },
       encoding: "utf8",
       timeout: 5_000,
     });

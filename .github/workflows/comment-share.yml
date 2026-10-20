@@ -19,7 +19,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: Nitjsefnie-Actions/comment-ratchet@ad5d027662f17593523ee8b8300f037489402f43 # v1.1.0
+      - uses: Nitjsefnie-Actions/comment-ratchet@2791c0c2ebdd3bb13c62d37771f766b04fa2fc29 # v1.1.2
         with:
           target: '15'
           records: '.github/comment-share.json'
