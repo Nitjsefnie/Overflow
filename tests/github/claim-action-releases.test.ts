@@ -1,11 +1,12 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
 import { GitHubApiError } from "@/lib/github/errors";
 import { resolveClaimActionReleases } from "@/lib/github/claim-action-releases";
 import { MAX_SUCCESS_BODY_BYTES } from "@/lib/github/response-text";
 
-const current = "4c781a9b0ce62ff263a65226f6005d412cea6ae1";
-const previous = "cd8ffd8227e94cdf60ed2580016187353b055cf4";
+const current = createHash("sha1").update("claim action fixture").digest("hex");
+const previous = createHash("sha1").update("previous claim action fixture").digest("hex");
 const tagSha = "a".repeat(40);
 const base = "/repos/Nitjsefnie-Actions/claim/git";
 const ref = (version: string, sha: string, type = "commit") => ({ ref: `refs/tags/${version}`, object: { sha, type } });
