@@ -440,8 +440,14 @@ describe("incremental reconciliation", () => {
 
   // Mutants: ADVANCE_FULL_AGE_ON_FAILURE, WATERMARK_BEFORE_MATERIALIZE,
   // CACHE_OUTSIDE_TRANSACTION, DROP_MIDPASS_INVALIDATION.
-  it.each(["issue page two", "PR evidence", "materialization", "cooldown"])("keeps synchronization state unchanged after %s failure", async (failure) => {
+  it.each([
+    ["issue page two", null, 0, 3],
+    ["PR evidence", "1", 1, 0],
+    ["materialization", "11", 3, 0],
+    ["cooldown", "11", 3, 0],
+  ] as const)("keeps synchronization state unchanged after %s failure", async (failure, cost, observedResponses, unmeasuredResponses) => {
     const f = await fixture();
+    const sponsorId = (await f.store.getRepository(f.id))!.sponsor.id;
     f.measuredIssueCost = 1;
     f.measuredReviewCost = 5;
     await f.run();
@@ -483,7 +489,8 @@ describe("incremental reconciliation", () => {
       .toEqual([{ status: "COMPLETED" }, { status: "FAILED" }]);
     expect(await sql`select graphql_cost, graphql_cost_sponsor_id, graphql_observed_responses, graphql_unmeasured_responses
       from reconciliation_runs where repository_id = ${f.id} and status = 'FAILED'`)
-      .toEqual([{ graphql_cost: null, graphql_cost_sponsor_id: null, graphql_observed_responses: null, graphql_unmeasured_responses: null }]);
+      .toEqual([{ graphql_cost: cost, graphql_cost_sponsor_id: sponsorId,
+        graphql_observed_responses: observedResponses, graphql_unmeasured_responses: unmeasuredResponses }]);
     expect(await sql`select * from repository_reconciliation_usage where repository_id = ${f.id}`).toEqual(usageBefore);
   });
 
