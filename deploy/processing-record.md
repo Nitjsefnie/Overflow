@@ -2,7 +2,7 @@
 
 **Recorded:** 2026-10-08
 
-**Source notice:** `/account-data`, version 1.8, effective 2026-10-08
+**Source notice:** `/account-data`, version 1.9, effective 2026-10-21
 **Scope:** Processing described by the account-data notice and the current Overflow implementation. The controller is the operator of the deployment described by the notice. Controller name and contact routes are operator configuration; when the hosted deployment has no overrides, its hosted identity and route values are used. A self-hosted operator supplies its own values.
 
 This record follows the four activities in the notice's “Purposes and legal bases” section. The balancing notes record the operator's reasoning and remaining impact; they are not a specialist legal opinion.
@@ -92,7 +92,7 @@ All visitors, signed-in members, people whose forge data is processed, moderator
 
 ### Recipients
 
-Cloudflare, Inc. handles site traffic. The hosting provider stores the database, on-host backups, and system journal. The operator has access to operational records; the separate privileged-action IP export is root-only on the host. Failure-alert excerpts pass through the host's mail relay and Google LLC's mail relay to the operator's mailbox. Discord Inc. stores the encrypted reduced backup in a private channel and receives no decryption key. Cloudflare, Google, and Discord are US-based; the hosting provider's region is not stated in the notice. The notice documents no transfer mechanism.
+Cloudflare, Inc. handles site traffic. The hosting provider stores the database, on-host backups, and system journal. The operator has access to operational records; the separate privileged-action IP export is root-only on the host. Failure-alert excerpts pass through the host's mail relay and Google LLC's mail relay to the operator's mailbox. Discord Inc. stores the encrypted reduced backup in a private channel and receives no decryption key. Cloudflare, Inc., Google LLC, and Discord Inc. are US-based and listed as active on the Data Privacy Framework List at dataprivacyframework.gov (checked 2026-10-21); transfers to them fall under the EU-U.S. Data Privacy Framework adequacy decision (Commission Implementing Decision (EU) 2023/1795). Cloudflare's and Discord's listings show re-certification under review while remaining active; Discord, Inc. certifies for non-HR data only, which covers the data Overflow processes. The operator accepted Cloudflare's [Data Processing Addendum](https://www.cloudflare.com/dpa), incorporated by reference through its [Self-Serve Subscription Agreement](https://www.cloudflare.com/terms/), as the processing contract (Art. 28), with standard contractual clauses as a fallback to the Data Privacy Framework. The operator has agreed no processing contract (Art. 28) or standard contractual clauses with Google LLC or Discord Inc.: the alert mail goes to a consumer Gmail account and the encrypted backup to a Discord channel using consumer accounts, so Data Privacy Framework certification is the only documented transfer mechanism for them. The hosting provider's region is not stated in the notice, and no transfer mechanism is documented for it.
 
 ### Retention
 
