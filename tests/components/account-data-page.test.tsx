@@ -441,6 +441,37 @@ describe("account-data notice page", () => {
     ).toMatch(/personal data[\s\S]*repository names[\s\S]*logins/i);
   });
 
+  it("discloses the transfer mechanisms for the US recipients", async () => {
+    await renderAccountDataPage();
+
+    const text = sectionLabelledBy("account-data-recipients-heading").textContent ?? "";
+
+    expect(text, "all five US recipients have a dated active DPF List statement").toMatch(
+      /Cloudflare, Inc\.; GitHub, Inc\.; GitLab, Inc\. \(for gitlab\.com identities\); Google LLC; and Discord Inc\. are listed as active on the Data Privacy Framework List at dataprivacyframework\.gov \(checked 2026-10-21\)/i,
+    );
+    expect(text, "the active listings identify the applicable adequacy decision").toMatch(
+      /transfers to these recipients fall under the EU-U\.S\. Data Privacy Framework adequacy decision \(Commission Implementing Decision \(EU\) 2023\/1795\)/i,
+    );
+    expect(text, "the certification limits match the checked listings").toMatch(
+      /GitHub, GitLab Inc\. and Discord, Inc\. certify for non-HR data only/i,
+    );
+    expect(text, "active re-certifications under review are disclosed").toMatch(
+      /Cloudflare.s and Discord.s listings show re-certification under review while remaining active/i,
+    );
+    expect(text, "Cloudflare's accepted agreement supplies its processing contract and fallback SCCs").toMatch(
+      /operator accepted Cloudflare.s Data Processing Addendum[\s\S]*Self-Serve Subscription Agreement[\s\S]*processing contract \(Art\. 28\)[\s\S]*standard contractual clauses as a fallback to the Data Privacy Framework/i,
+    );
+    expect(text, "Google and Discord consumer accounts have neither processing contracts nor SCCs").toMatch(
+      /operator has agreed no processing contract \(Art\. 28\) or standard contractual clauses with Google LLC or Discord Inc\.[\s\S]*consumer accounts[\s\S]*Data Privacy Framework certification is the only documented transfer mechanism for them/i,
+    );
+    expect(text, "the remaining undocumented mechanisms are scoped to the unverified recipients").toMatch(
+      /no transfer mechanism is documented for self-hosted GitLab instances or the unnamed hosting provider/i,
+    );
+    expect(text, "the blanket denial no longer contradicts the checked mechanisms").not.toMatch(
+      /the operator documents none/i,
+    );
+  });
+
   it("places the privileged-action export in the retention list, tenth of eleven items", async () => {
     await renderAccountDataPage();
 

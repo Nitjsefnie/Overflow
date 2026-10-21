@@ -431,8 +431,26 @@ export function AccountDataNotice() {
           Using this site from outside the US therefore means data is transferred to these
           US-based recipients, and to a self-hosted GitLab instance wherever it is hosted. You can
           complain about a transfer to your local supervisory authority, under Your rights below.
-          No transfer mechanism — standard contractual clauses, an adequacy decision, or a
-          certification — is claimed here: the operator documents none.
+          Cloudflare, Inc.; GitHub, Inc.; GitLab, Inc. (for gitlab.com identities); Google LLC; and
+          Discord Inc. are listed as active on the Data Privacy Framework List at
+          dataprivacyframework.gov (checked 2026-10-21). Transfers to these recipients fall under
+          the EU-U.S. Data Privacy Framework adequacy decision (Commission Implementing Decision
+          (EU) 2023/1795). GitHub, GitLab Inc. and Discord, Inc. certify for non-HR data only;
+          all data Overflow processes is non-HR data in the framework&apos;s sense (HR data means
+          employment data). Cloudflare&apos;s and Discord&apos;s listings show re-certification
+          under review while remaining active.
+        </p>
+        <p>
+          The operator accepted Cloudflare&apos;s Data Processing Addendum
+          (https://www.cloudflare.com/dpa), incorporated by reference through its Self-Serve
+          Subscription Agreement (https://www.cloudflare.com/terms/), as the processing contract
+          (Art. 28); it carries standard contractual clauses as a fallback to the Data Privacy
+          Framework. The operator has agreed no processing contract (Art. 28) or standard
+          contractual clauses with Google LLC or Discord Inc. — the alert mail goes to a consumer
+          Gmail account and the encrypted backup to a Discord channel using consumer accounts —
+          so the Data Privacy Framework certification is the only documented transfer mechanism
+          for them. No transfer mechanism is documented for self-hosted GitLab instances or the
+          unnamed hosting provider.
         </p>
       </section>
 
