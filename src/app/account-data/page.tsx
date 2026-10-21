@@ -441,9 +441,15 @@ export function AccountDataNotice() {
           under review while remaining active.
         </p>
         <p>
-          The operator accepted Cloudflare&apos;s Data Processing Addendum
-          (https://www.cloudflare.com/dpa), incorporated by reference through its Self-Serve
-          Subscription Agreement (https://www.cloudflare.com/terms/), as the processing contract
+          The operator accepted Cloudflare&apos;s Data Processing Addendum (
+          <a href="https://www.cloudflare.com/dpa" rel="noreferrer">
+            https://www.cloudflare.com/dpa
+          </a>
+          ), incorporated by reference through its Self-Serve Subscription Agreement (
+          <a href="https://www.cloudflare.com/terms/" rel="noreferrer">
+            https://www.cloudflare.com/terms/
+          </a>
+          ), as the processing contract
           (Art. 28); it carries standard contractual clauses as a fallback to the Data Privacy
           Framework. The operator has agreed no processing contract (Art. 28) or standard
           contractual clauses with Google LLC or Discord Inc. — the alert mail goes to a consumer

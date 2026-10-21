@@ -114,7 +114,7 @@ describe("account-data notice page", () => {
     expect(internal.filter((href) => !routes.has(href))).toEqual([]);
   });
 
-  it("points its external links at github.com over https, including the two named controls", async () => {
+  it("points its external links at GitHub controls and Cloudflare agreements over https", async () => {
     // The maintainer's channels render on the hosted origin (issue 1077).
     vi.stubEnv("APP_URL", "https://overflow.nitjsefni.eu");
     await renderAccountDataPage();
@@ -127,7 +127,11 @@ describe("account-data notice page", () => {
     expect(
       external.filter((href) => {
         const url = new URL(href);
-        return url.protocol !== "https:" || url.hostname !== "github.com";
+        return url.protocol !== "https:" || (
+          url.hostname !== "github.com" &&
+          href !== "https://www.cloudflare.com/dpa" &&
+          href !== "https://www.cloudflare.com/terms/"
+        );
       }),
     ).toEqual([]);
     // The two controls the notice hands the reader: the GitHub authorization
@@ -444,10 +448,20 @@ describe("account-data notice page", () => {
   it("discloses the transfer mechanisms for the US recipients", async () => {
     await renderAccountDataPage();
 
-    const text = sectionLabelledBy("account-data-recipients-heading").textContent ?? "";
+    const recipients = sectionLabelledBy("account-data-recipients-heading");
+    const text = recipients.textContent ?? "";
 
-    expect(text, "all five US recipients have a dated active DPF List statement").toMatch(
-      /Cloudflare, Inc\.; GitHub, Inc\.; GitLab, Inc\. \(for gitlab\.com identities\); Google LLC; and Discord Inc\. are listed as active on the Data Privacy Framework List at dataprivacyframework\.gov \(checked 2026-10-21\)/i,
+    for (const recipient of [
+      /Cloudflare, Inc\./i,
+      /GitHub, Inc\./i,
+      /GitLab,\s+Inc\./i,
+      /Google LLC/i,
+      /Discord Inc\./i,
+    ]) {
+      expect(text, "each US recipient is named in the section").toMatch(recipient);
+    }
+    expect(text, "the active DPF List statement names its source and check date").toMatch(
+      /listed as active[\s\S]*Data Privacy Framework List[\s\S]*dataprivacyframework\.gov[\s\S]*checked 2026-10-21/i,
     );
     expect(text, "the active listings identify the applicable adequacy decision").toMatch(
       /transfers to these recipients fall under the EU-U\.S\. Data Privacy Framework adequacy decision \(Commission Implementing Decision \(EU\) 2023\/1795\)/i,
@@ -461,6 +475,12 @@ describe("account-data notice page", () => {
     expect(text, "Cloudflare's accepted agreement supplies its processing contract and fallback SCCs").toMatch(
       /operator accepted Cloudflare.s Data Processing Addendum[\s\S]*Self-Serve Subscription Agreement[\s\S]*processing contract \(Art\. 28\)[\s\S]*standard contractual clauses as a fallback to the Data Privacy Framework/i,
     );
+    for (const href of ["https://www.cloudflare.com/dpa", "https://www.cloudflare.com/terms/"]) {
+      const agreement = recipients.querySelector(`a[href="${href}"]`);
+      expect(agreement, "the cited Cloudflare agreement is linked").not.toBeNull();
+      expect(agreement).toHaveTextContent(href);
+      expect(agreement).toHaveAttribute("rel", "noreferrer");
+    }
     expect(text, "Google and Discord consumer accounts have neither processing contracts nor SCCs").toMatch(
       /operator has agreed no processing contract \(Art\. 28\) or standard contractual clauses with Google LLC or Discord Inc\.[\s\S]*consumer accounts[\s\S]*Data Privacy Framework certification is the only documented transfer mechanism for them/i,
     );
