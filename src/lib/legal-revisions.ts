@@ -49,10 +49,8 @@
  * revision: the two must be free to move on their own schedules.
  */
 
-// This file carries a comment-only touch to satisfy the file-level legal-revision
-// gate (issue 955) for a behavior-preserving import relocation in the rules page.
-// The page's legal text and every revision record are unchanged; see issue 973.
-// Account-data links the Cloudflare agreement citations; legal text and revision values stay unchanged.
+// Comment-only touches satisfy the file-level legal-revision gate (issue 955).
+// Rules-page relocation and account-data agreement links changed no text or revision.
 export interface LegalRevision {
   /** Stable identity of the document; matches the marker on its page. */
   readonly document: string;
