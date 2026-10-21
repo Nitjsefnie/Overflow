@@ -23,8 +23,13 @@ export type ReconciliationSweepControl = {
   discardPass(repositoryId: string): Promise<void>;
 };
 const passes = new AsyncLocalStorage<SweepPass>();
+const freshReads = new AsyncLocalStorage<boolean>();
 export function withSweepPass<T>(pass: SweepPass | undefined, work: () => Promise<T>): Promise<T> {
   return pass === undefined ? work() : passes.run(pass, work);
+}
+/** A verification witness must describe the state it verifies; a replayed page describes an earlier one. */
+export function withFreshSweepReads<T>(work: () => Promise<T>): Promise<T> {
+  return freshReads.run(true, work);
 }
 
 /** Replay completed pages locally, so every new window buys forward progress.
@@ -32,6 +37,7 @@ export function withSweepPass<T>(pass: SweepPass | undefined, work: () => Promis
  * Only parsed successful responses are saved; error payloads are never retained.
  */
 export async function checkpointSweepRequest<T>(identity: unknown, read: () => Promise<T>): Promise<T> {
+  if (freshReads.getStore()) return read();
   const pass = passes.getStore();
   if (pass === undefined) return read();
   const key = createHash("sha256").update(JSON.stringify(identity)).digest("hex");

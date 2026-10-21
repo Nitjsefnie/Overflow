@@ -1,4 +1,4 @@
-import { checkpointSweepRestRequest } from "@/lib/fold/sweep-pass";
+import { checkpointSweepRestRequest, withFreshSweepReads } from "@/lib/fold/sweep-pass";
 import { z } from "zod";
 import { checkSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
@@ -159,17 +159,17 @@ export class GitHubGateway implements ForgeGateway {
         options?.timelineCriticalLabels?.has(label)
         || (options?.timelineWatchedLabels?.has(label) && !labeled.has(label)),
       )));
-      const authoritativeTimeline = suspect ? await this.getIssueTimeline(repository, node.number) : timeline;
+      const authoritativeTimeline = suspect ? await withFreshSweepReads(() => this.getIssueTimeline(repository, node.number)) : timeline;
       if (targeted && !matchesEvidence(authoritativeTimeline)) {
         // The original evidence may describe a timeline rewritten while the scan
         // read it: such a rewrite reads as incompleteness against witnesses
         // captured earlier. Genuine truncation persists across reads, so re-take
         // both independent witnesses for this one issue and compare them against
         // THIS reread; only a persistent disagreement refuses publication.
-        const [freshCounts, freshManifest] = await drainIssueReads([
+        const [freshCounts, freshManifest] = await withFreshSweepReads(() => drainIssueReads([
           this.getIssueTimelineCounts(repository, [node]),
           this.getPerIssueTimelineManifest(repository, [node]),
-        ]);
+        ]));
         if (!timelineMatchesEvidence(authoritativeTimeline, freshCounts.get(node.number), freshManifest.get(node.number))) {
           throw new Error(`GitHub issue ${node.number} timeline completeness could not be verified.`);
         }
