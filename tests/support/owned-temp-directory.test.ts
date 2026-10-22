@@ -100,3 +100,29 @@ it("registers fixtures before setup can fail and disposes every registered direc
   expect(existsSync(second)).toBe(false);
   fixtures.dispose();
 });
+
+it("disposes one registered path without removing another fixture", () => {
+  const fixtures = createOwnedTempDirectoryRegistry(join(root, "individual-"));
+  const first = fixtures.create();
+  const second = fixtures.create();
+  fixtures.dispose(first);
+  expect(existsSync(first)).toBe(false);
+  expect(existsSync(second)).toBe(true);
+  fixtures.dispose();
+  expect(existsSync(second)).toBe(false);
+});
+
+it("registers async creations under each armed prefix and disposes them asynchronously", async () => {
+  const firstPrefix = join(root, "async-first-");
+  const secondPrefix = join(root, "async-second-");
+  const fixtures = createOwnedTempDirectoryRegistry([firstPrefix, secondPrefix]);
+  const first = await fixtures.createAsync();
+  const second = await fixtures.createAsync(secondPrefix);
+  expect(first.startsWith(`${firstPrefix}${process.pid}-`)).toBe(true);
+  expect(second.startsWith(`${secondPrefix}${process.pid}-`)).toBe(true);
+  await fixtures.disposeAsync(first);
+  expect(existsSync(first)).toBe(false);
+  expect(existsSync(second)).toBe(true);
+  await fixtures.disposeAsync();
+  expect(existsSync(second)).toBe(false);
+});

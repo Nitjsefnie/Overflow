@@ -1,4 +1,5 @@
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 // Put ownership in the name so a kill cannot leave an unmarked directory.
@@ -23,19 +24,40 @@ export function reclaimOwnedTempDirectories(prefix: string): void {
   }
 }
 
-export function createOwnedTempDirectoryRegistry(prefix: string) {
-  reclaimOwnedTempDirectories(prefix);
+export function createOwnedTempDirectoryRegistry(prefixes: string | readonly string[]) {
+  const initial = typeof prefixes === "string" ? [prefixes] : prefixes;
+  const armed = new Set(initial);
+  for (const prefix of armed) reclaimOwnedTempDirectories(prefix);
   const directories = new Set<string>();
+  function arm(prefix: string): void {
+    if (!armed.has(prefix)) {
+      reclaimOwnedTempDirectories(prefix);
+      armed.add(prefix);
+    }
+  }
   return {
-    create(): string {
+    create(prefix = initial[0]): string {
+      arm(prefix);
       const directory = createOwnedTempDirectory(prefix);
       directories.add(directory);
       return directory;
     },
-    dispose(): void {
-      for (const directory of directories) {
-        rmSync(directory, { recursive: true, force: true });
-        directories.delete(directory);
+    async createAsync(prefix = initial[0]): Promise<string> {
+      arm(prefix);
+      const directory = await mkdtemp(`${prefix}${process.pid}-`);
+      directories.add(directory);
+      return directory;
+    },
+    dispose(directory?: string): void {
+      for (const path of directory === undefined ? directories : [directory]) {
+        rmSync(path, { recursive: true, force: true });
+        directories.delete(path);
+      }
+    },
+    async disposeAsync(directory?: string): Promise<void> {
+      for (const path of directory === undefined ? directories : [directory]) {
+        await rm(path, { recursive: true, force: true });
+        directories.delete(path);
       }
     },
   };
