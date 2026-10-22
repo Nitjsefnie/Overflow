@@ -1,3 +1,4 @@
+import { retainDisputePullRequests } from "@/lib/fold/dispute-pull-requests";
 import { createHash } from "node:crypto";
 import type { EnforcementState, IssueState, PullRequestState } from "@/lib/db/types";
 import { isParticipationEligibleAt } from "@/lib/fold/moderation-history";
@@ -161,8 +162,8 @@ export type FoldPullRequest = {
   url: string;
   state: PullRequestState;
   mergedAt: string | null;
-  mergeCommitOid: string;
-  finalCommitAt: string;
+  mergeCommitOid: string | null;
+  finalCommitAt: string | null;
   authorId: string | null;
   authorGitHubLogin: string | null;
   authorGitHubUserId: number | null;
@@ -391,9 +392,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
   const selfWorkCalibrations: SelfWorkCalibration[] = [];
   const unwritableClosures: UnwritableClosure[] = [];
   const policyViolations: FoldPolicyViolation[] = [];
-  // A property of the repository, not of any one issue. NaN when the stored
-  // instant is unreadable, which every reachability test below treats as
-  // unknown and therefore still reachable.
+  // An unreadable registration time leaves evidence reachable.
   const registeredAtTime = Date.parse(snapshot.repository.registeredAt);
 
   for (const issue of snapshot.issues) {
@@ -590,6 +589,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     );
   }
 
+  retainDisputePullRequests(snapshot, issues, pullRequestsByGitHubId);
   const ledgerEntries = foldLedger(
     settlements.flatMap((settlement) => toLedgerSettlement(settlement)),
   );
@@ -1084,17 +1084,17 @@ function rememberPullRequest(
   authorId: string | null,
   proofSha256: string,
   reviewRounds: Array<{ githubReviewId: number; submittedAt: string }>,
-): FoldPullRequest {
+): FoldPullRequest & { mergeCommitOid: string; finalCommitAt: string } {
   const existing = pullRequestsByGitHubId.get(pullRequest.id);
   if (existing !== undefined) {
     if (!existing.githubIssueIds.includes(issueId)) {
       existing.githubIssueIds.push(issueId);
       existing.githubIssueIds.sort((left, right) => left - right);
     }
-    return existing;
+    return { ...existing, mergeCommitOid: pullRequest.mergeCommitOid, finalCommitAt: pullRequest.finalCommitAt };
   }
 
-  const folded: FoldPullRequest = {
+  const folded = {
     githubPullRequestId: pullRequest.id,
     number: pullRequest.number,
     title: pullRequest.title,
@@ -1127,7 +1127,7 @@ function countReviewRounds(
 
 function toSettlement(input: {
   issueId: number;
-  pullRequest: FoldPullRequest;
+  pullRequest: FoldPullRequest & { mergeCommitOid: string };
   author: FoldUser | undefined;
   authorLogin: string | null;
   authorGitHubUserId: number | null;

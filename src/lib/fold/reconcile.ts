@@ -420,7 +420,7 @@ async function reconcileRepositoryWhileCoordinated(
                 dirtyPullRequestSubjects,
               );
               for (const [id, evidence] of refreshedEvidence) pullRequestEvidence.set(id, evidence);
-              const retainedPrIds = new Set(referencedPullRequests.filter((pr) => pr.state === "MERGED" && pr.mergedAt !== null
+              const retainedPrIds = new Set(referencedPullRequests.filter((pr) => (pr.state === "CLOSED" || (pr.state === "MERGED" && pr.mergedAt !== null))
                 && belongsToRegisteredRepository(repository, pr)).map(({ id }) => id));
               for (const id of pullRequestEvidence.keys()) if (!retainedPrIds.has(id)) pullRequestEvidence.delete(id);
               return { githubIssues, pullRequestEvidence };
@@ -659,16 +659,15 @@ async function collectPullRequestEvidence(
   // authority ends at the registered repository, so its evidence is not read.
   // The fold makes the same call through the same predicate, because the two
   // disagreeing is what puts an empty diff behind a settlement's proof.
-  const uniqueMergedPullRequests = new Map(
+  const uniqueEvidencePullRequests = new Map(
     pullRequests
       .filter((pullRequest) =>
-        pullRequest.state === "MERGED" &&
-        pullRequest.mergedAt !== null &&
+        (pullRequest.state === "CLOSED" || (pullRequest.state === "MERGED" && pullRequest.mergedAt !== null)) &&
         belongsToRegisteredRepository(registered, pullRequest))
       .map((pullRequest) => [pullRequest.id, pullRequest]),
   );
   const evidence = await mapWithConcurrency(
-    [...uniqueMergedPullRequests.values()],
+    [...uniqueEvidencePullRequests.values()],
     reconciliationConcurrency,
     async (pullRequest) => {
       try {
