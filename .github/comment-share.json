@@ -385,11 +385,11 @@
   ],
   "scripts/http-surface-derive.ts": [
     4103,
-    20518
+    20621
   ],
   "scripts/http-surface-fixtures.ts": [
     4963,
-    23975
+    24111
   ],
   "scripts/http-surface-record.ts": [
     658,
@@ -589,7 +589,7 @@
   ],
   "src/app/contests/page.tsx": [
     1002,
-    4842
+    4967
   ],
   "src/app/dashboard/page.tsx": [
     2190,
@@ -657,7 +657,7 @@
   ],
   "src/lib/accounts/export.ts": [
     3136,
-    13693
+    14555
   ],
   "src/lib/auth/account-store.ts": [
     4497,
@@ -713,7 +713,7 @@
   ],
   "src/lib/dashboard/eligible-issues.ts": [
     2470,
-    14487
+    15454
   ],
   "src/lib/dashboard/labels.ts": [
     550,
@@ -733,7 +733,7 @@
   ],
   "src/lib/db/migration-manifest.ts": [
     1523,
-    4422
+    4534
   ],
   "src/lib/db/redact-postgres-error.ts": [
     747,
@@ -781,7 +781,7 @@
   ],
   "src/lib/fold/reconcile.ts": [
     8296,
-    30403
+    30466
   ],
   "src/lib/fold/reconciliation-budget.ts": [
     800,
@@ -808,8 +808,8 @@
     12410
   ],
   "src/lib/fold/repository-fold.ts": [
-    20746,
-    53528
+    20523,
+    52974
   ],
   "src/lib/fold/repository-lock-retry.ts": [
     459,
@@ -1057,7 +1057,7 @@
   ],
   "src/lib/security/privileged-action-log.ts": [
     2411,
-    4403
+    4430
   ],
   "src/lib/security/protected-resource-metadata.ts": [
     305,
