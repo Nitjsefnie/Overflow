@@ -1,18 +1,11 @@
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-/**
- * Ownership is part of the name at creation, so even a kill immediately after
- * mkdtemp leaves a reclaimable directory rather than an unmarked orphan.
- */
+// Put ownership in the name so a kill cannot leave an unmarked directory.
 export function createOwnedTempDirectory(prefix: string): string {
   return mkdtempSync(`${prefix}${process.pid}-`);
 }
 
-/**
- * Reclaims only this prefix's dead owners. Live or inaccessible PIDs, legacy
- * unmarked directories and symlinks stay untouched, protecting parallel runs.
- */
 export function reclaimOwnedTempDirectories(prefix: string): void {
   const parent = dirname(prefix);
   const stem = basename(prefix);
