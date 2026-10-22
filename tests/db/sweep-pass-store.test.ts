@@ -34,6 +34,24 @@ afterAll(async () => {
 });
 
 describe("paused full-pass pages", () => {
+  it("reads the page ceiling from the environment when no override is supplied", async () => {
+    const previous = process.env.RECONCILIATION_SWEEP_PAGE_CEILING;
+    try {
+      process.env.RECONCILIATION_SWEEP_PAGE_CEILING = "2";
+      const f = await materializeRepositoryFixture(sql);
+      const pass = await new PostgresSweepPassStore(sql).open({ repositoryId: f.repositoryId,
+        evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
+      await pass.write("first", { page: 1 });
+      await pass.write("second", { page: 2 });
+      await pass.write("third", { page: 3 });
+      expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
+      expect(await pass.read("third")).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.RECONCILIATION_SWEEP_PAGE_CEILING;
+      else process.env.RECONCILIATION_SWEEP_PAGE_CEILING = previous;
+    }
+  });
+
   it("keeps concurrent checkpoint writes within the ceiling and returns every fetched payload", async () => {
     const f = await materializeRepositoryFixture(sql);
     const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId,
