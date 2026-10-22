@@ -9,6 +9,7 @@ const observerPrefix = join(tmpdir(), "temp-directory-scope-observer-");
 reclaimOwnedTempDirectories(observerPrefix);
 
 it.each([
+  { suite: "tests/db/backup-restore.test.ts", prefixes: ["overflow-backup-test-", "overflow-backup-partial-", "overflow-backup-stub-", "overflow-backup-bound-", "overflow-backup-symlink-", "overflow-backup-race-", "overflow-backup-reap-", "overflow-backup-barrier-"], filter: "", passes: 13 },
   { suite: "tests/lib/http-surface-non-envelope.test.ts", prefixes: [".next-release-non-envelope-fixture-"], filter: "invokes readiness", passes: 1, inRepository: true },
   { suite: "tests/lib/http-surface-record.test.ts", prefixes: [".next-release-record-fixture-"], filter: "single rejection", passes: 1, inRepository: true },
   { suite: "tests/lib/http-surface-type-edges.test.ts", prefixes: [".next-release-type-edge-fixture-"], filter: "records the evaluated module", passes: 6, inRepository: true },

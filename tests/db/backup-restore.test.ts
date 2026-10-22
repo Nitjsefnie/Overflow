@@ -21,20 +21,14 @@ import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer } from "../support/postgres-container";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-/**
- * The periodic restore test for the backup procedure: seed a real database, run
- * scripts/db-backup.sh against it, mutate the source, restore the dump into a
- * second scratch database with scripts/db-restore.sh, and hold the restored
- * copy against the seed.
- *
- * pg_dump and pg_restore never run from the host: the CI image may ship a
- * client older than the postgres:17 server, and pg_dump refuses a version
- * mismatch. Both tools are exec'd inside the container through the scripts'
- * OVERFLOW_PG_DUMP / OVERFLOW_PG_RESTORE prefixes, and DATABASE_URL passed to
- * the scripts names the server from inside the container (127.0.0.1:5432),
- * which is the address the exec'd tools can actually reach.
- */
+const backupFixtures = createOwnedTempDirectoryRegistry([
+  "overflow-backup-partial-", "overflow-backup-stub-", "overflow-backup-bound-",
+  "overflow-backup-symlink-", "overflow-backup-race-", "overflow-backup-reap-", "overflow-backup-barrier-",
+].map(prefix => join(tmpdir(), prefix)));
+
+// Use container clients to match the server version and its internal URL.
 const DATABASE = "backup_restore_test";
 const DRILL_DATABASE = "backup_restore_drill";
 /** Two scratch databases, one per dump of the same-second collision test. */
@@ -71,11 +65,7 @@ const comparedTables: ReadonlyArray<{ table: string; orderBy: string; columns: s
 
 const seedRows: Map<string, Record<string, unknown>[]> = new Map();
 
-/**
- * A connection string the tools inside the container can reach: the server is
- * in there, so the suite's own databaseUrl re-hosted onto 127.0.0.1:5432 —
- * credentials and all, whatever server (shared or private) this run got.
- */
+// Container tools connect through the internal port with this suite’s credentials.
 function containerInternalUrl(database: string): string {
   const url = new URL(sourceDatabaseUrl!);
   url.hostname = "127.0.0.1";
@@ -127,9 +117,7 @@ describe("the backup and restore procedure", () => {
     else process.env.DATABASE_URL = originalDatabaseUrl;
   });
 
-  // A case that dies mid-flight cannot clean up after itself, so the file does
-  // it here: whatever the case started, whatever route it left by. Remove its
-  // backup directory after process and pool teardown.
+  // Reap processes before removing their fixture files, even after a failed case.
   afterEach(async () => {
     try {
       await reapBackupRuns();
@@ -138,7 +126,11 @@ describe("the backup and restore procedure", () => {
         await drill?.end();
       } finally {
         drill = undefined;
-        if (backupDir !== undefined) rmSync(backupDir, { recursive: true, force: true });
+        try {
+          if (backupDir !== undefined) rmSync(backupDir, { recursive: true, force: true });
+        } finally {
+          backupFixtures.dispose();
+        }
       }
     }
   });
@@ -153,9 +145,7 @@ describe("the backup and restore procedure", () => {
   });
 
   it("writes a dump pg_restore can list, prints its path, and prunes past retention", () => {
-    // An old dump and an old non-dump file sit in the backup directory before
-    // the run: the dump shape must be pruned by --retention-days, the file that
-    // does not match overflow-*.dump must survive it.
+    // Retention must spare unrelated files.
     const staleDump = join(backupDir, "overflow-20260101T000000Z.dump");
     writeFileSync(staleDump, "stale");
     utimesSync(staleDump, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
@@ -163,10 +153,7 @@ describe("the backup and restore procedure", () => {
     writeFileSync(keptFile, "keep");
     utimesSync(keptFile, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
 
-    // Force a hostile umask in the child: workers cannot change process.umask,
-    // and the test must not change the permissions policy of other test files.
-    // The archive carries database contents, so the script must constrain its
-    // mode even when the caller would otherwise create world-readable files.
+    // A hostile child umask must still produce a private archive.
     const result = spawnSync("sh", [
       "-c", 'umask 022; exec sh "$@"', "backup-with-hostile-umask",
       backupScript, "--output-dir", backupDir, "--retention-days", "14",
@@ -188,22 +175,14 @@ describe("the backup and restore procedure", () => {
   });
 
   it("reclaims a crash-leftover partial older than a day and spares young partials and real dumps", () => {
-    // A run killed mid-dump leaves a .overflow-<pid>.dump.incomplete behind —
-    // pid-stemmed, since two runs in one second would otherwise share one
-    // partial; the next run's sweep must reclaim one older than 24 hours —
-    // keyed on mtime, not anything in the name — while a young partial and
-    // every real dump survive.
+    // Sweep old partials by mtime while preserving young partials and real dumps.
     const oldPartial = join(backupDir, ".overflow-20260101T000000Z.dump.incomplete");
     writeFileSync(oldPartial, "truncated");
     utimesSync(oldPartial, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
     const youngPartial = join(backupDir, ".overflow-20260102T000000Z.dump.incomplete");
     writeFileSync(youngPartial, "truncated");
 
-    // A real dump older than the 24-hour sweep threshold but well inside the
-    // 14-day retention window: a sweep whose name pattern widened past the
-    // partial grammar would delete it, and the containment check below is
-    // what kills such a mutant. Three days back satisfies both bounds on any
-    // run date; a fixed date would age past retention and break the test.
+    // A relative age stays between sweep and retention thresholds on every run date.
     const withinRetentionDump = join(backupDir, "overflow-20260920T000000Z.dump");
     const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
     writeFileSync(withinRetentionDump, "within-retention");
@@ -220,9 +199,7 @@ describe("the backup and restore procedure", () => {
     expect(existsSync(oldPartial), "the old partial").toBe(false);
     expect(existsSync(youngPartial), "the young partial").toBe(true);
 
-    // The sweep's printed line for the reclaimed partial must reach stdout,
-    // and before the final dump-path line (the print half of the two-pass
-    // print-then-delete contract).
+    // The sweep notice precedes the final dump path.
     expect(result.stdout).toContain(oldPartial);
     expect(
       result.stdout.indexOf(oldPartial),
@@ -239,13 +216,9 @@ describe("the backup and restore procedure", () => {
   });
 
   it("reclaims a partial left by a killed run of the current script", () => {
-    // The existing sweep cases write their fixture partials by hand, so they
-    // keep passing whatever the script names its own partial. This one kills a
-    // real run mid-dump and reclaims what the script actually left, which is
-    // what a partial name that falls outside the sweep glob would break: real
-    // leftovers would sit in the directory forever, unreclaimed.
-    const dir = mkdtempSync(join(tmpdir(), "overflow-backup-partial-"));
-    const stubDir = mkdtempSync(join(tmpdir(), "overflow-backup-stub-"));
+    // Reclaim a real killed run’s partial so a mismatched sweep glob fails.
+    const dir = backupFixtures.create(join(tmpdir(), "overflow-backup-partial-"));
+    const stubDir = backupFixtures.create(join(tmpdir(), "overflow-backup-stub-"));
     const killer = join(stubDir, "pg-dump-killer.sh");
     writeFileSync(killer, "#!/bin/sh\nprintf 'partial-bytes\\n'\nkill -9 $PPID\n");
     chmodSync(killer, 0o700);
@@ -271,9 +244,7 @@ describe("the backup and restore procedure", () => {
   });
 
   it("sweeps crash leftovers even when the dump itself fails", () => {
-    // "Every run begins by sweeping" includes runs whose dump never
-    // completes: a sweep placed after the dump completes would leave this
-    // partial behind on the fail path, so this test pins the placement.
+    // Sweep before dumping so a failed dump still reclaims leftovers.
     const oldPartial = join(backupDir, ".overflow-20260103T000000Z.dump.incomplete");
     writeFileSync(oldPartial, "truncated");
     utimesSync(oldPartial, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
@@ -328,34 +299,24 @@ describe("the backup and restore procedure", () => {
       expect(restored, table).toEqual(seedRows.get(table));
     }
 
-    // The mutation that must NOT have been carried: the scratch database holds
-    // the dump's four seeded issues, not the live table's five.
+    // The restored rows must predate the live mutation.
     const [issueCount] = await drill`select count(*)::int as count from issues`;
     expect(issueCount.count).toBe(4);
   });
 
   it("keeps both dumps when two runs land on the same UTC second", async () => {
-    // The stamp has second resolution, so two runs inside one second derive one
-    // name. OVERFLOW_BACKUP_STAMP pins the stamp so the collision is the
-    // variable under test rather than the wall clock: a name count alone let
-    // the replacing mv through (it read "expected 1 to be 2"), so the first
-    // dump is also identified by what it CONTAINS.
+    // Pin the stamp and restored content to distinguish collisions from replacement.
     const stamp = "20260930T120000Z";
     const firstName = `overflow-${stamp}.dump`;
     const secondName = `overflow-${stamp}-1.dump`;
     const thirdName = `overflow-${stamp}-2.dump`;
     const markerTitle = "same-second-marker";
 
-    // The marker row is present for the first dump and renamed before the
-    // second: a surviving first dump still restores the marker, a first dump
-    // replaced by the second restores the rename.
+    // Rename between dumps to identify each restored archive.
     const [repo] = await sql<{ id: string }[]>`select id from registered_repositories where github_repository_id = ${7_400_001}`;
     await insertIssue(sql, repo.id, 7_500_006, markerTitle, "OPEN");
 
-    // A successful run removes its own partial as it installs, and this is the
-    // only place that is visible: the sweep would reclaim one after a day, so
-    // a dropped cleanup here is silent. Compared against the directory as it
-    // stands before these runs start.
+    // Observe partial removal before a later sweep could hide it.
     const partialsBefore = incompleteNames(backupDir);
 
     const firstRun = runScript(backupScript, ["--output-dir", backupDir, "--retention-days", "14"], stampedEnv(stamp));
@@ -369,20 +330,11 @@ describe("the backup and restore procedure", () => {
     const secondPath = printedDumpPath(secondRun.stdout);
     expect(secondPath, `stdout was: ${secondRun.stdout}`).toBeDefined();
     expect(existsSync(secondPath!), "the second run's dump").toBe(true);
-    // The invariant the defect broke: two runs, two dumps. Counted over this
-    // stamp's names only, so unrelated dump names cannot stand in for the
-    // second run's.
+    // Count this stamp only so unrelated dumps cannot satisfy the collision test.
     expect(dumpsForStamp(backupDir, stamp), "one dump per run, neither replaced").toHaveLength(2);
     expect(existsSync(join(backupDir, firstName)), "the first run's dump, after the second run").toBe(true);
     expect(secondPath, `stdout was: ${secondRun.stdout}`).toBe(join(backupDir, secondName));
-    // The run says on STDERR that it took a suffix rather than the plain name.
-    // This pins the notice to the STREAM, not to a hazard it would prevent:
-    // printedDumpPath reads the last matching line, so a notice placed before
-    // the path would leave it correct either way, and the earlier version of
-    // this comment claimed otherwise. What the stream buys is that stdout stays
-    // exactly one line per run, which is the surface the runbook's tail -1 and
-    // printedDumpPath both read. So this catches the notice changing stream or
-    // going away, not a stdout notice being misread.
+    // Collision notices stay on stderr; stdout remains one dump path per run.
     expect(secondRun.stderr, "the collision notice").toContain("was already there");
     expect(firstRun.stderr, "no notice for a run that took the plain name").toBe("");
 
@@ -394,8 +346,7 @@ describe("the backup and restore procedure", () => {
     // All three succeeded, so all three cleaned up after themselves.
     expect(incompleteNames(backupDir), "partials after three successful runs").toEqual(partialsBefore);
 
-    // Content, not names: the first dump still restores the row the second no
-    // longer holds, and the second restores the rename.
+    // Restored contents distinguish the two dumps.
     const firstRestored = await restoreInto(FIRST_RUN_DATABASE, join(backupDir, firstName));
     try {
       const rows = await firstRestored`select title from issues where github_issue_id = ${7_500_006}`;
@@ -414,29 +365,20 @@ describe("the backup and restore procedure", () => {
   });
 
   it("fails loudly when the dump cannot be installed for a reason other than a taken name", () => {
-    // A name the filesystem refuses outright (here: past its length limit) is
-    // not a taken name, and retrying another suffix would never help. The run
-    // must abort with a message on stderr instead of searching forever.
+    // An invalid filename must abort rather than search suffixes.
     const before = dumpsIn(backupDir);
     const beforeIncomplete = incompleteNames(backupDir);
     const result = runScript(
       backupScript,
       ["--output-dir", backupDir, "--retention-days", "14"],
-      // LC_ALL pins the message this case reads below: "File name too long"
-      // is coreutils' rendering of strerror(ENAMETOOLONG), so it follows the
-      // host's locale. The run is a child, so this is where the locale goes.
+      // Pin the child locale for the ENAMETOOLONG diagnostic.
       { ...scriptEnv(), LC_ALL: "C", OVERFLOW_BACKUP_STAMP: "9".repeat(300) },
     );
 
     expect(result.status, "a run that cannot install its dump").not.toBe(0);
-    // The abort arm's OWN words, not the program's name and not a regex the
-    // candidate path satisfies on its own: the bound arm dies with the same
-    // program name and the same path in its message, so anything less specific
-    // here passes for a run that searched all 100 suffixes before giving up.
+    // The abort wording distinguishes this branch from suffix exhaustion.
     expect(result.stderr).toContain("could not install the dump as");
-    // The link's own reason has to reach the operator, or the message names a
-    // failure it does not explain. This one is about the relay, not about which
-    // arm fired — the line above is what discriminates the arm.
+    // Relay the filesystem reason to the operator.
     expect(result.stderr).toContain("File name too long");
     expect(dumpsIn(backupDir), "no dump was installed by the failed run").toEqual(before);
     // The run's own partial is cleaned up on the failure path.
@@ -444,13 +386,8 @@ describe("the backup and restore procedure", () => {
   });
 
   it("gives up with a message once every suffixed name is taken", () => {
-    // The stub tools keep this loop fast: it is the install search under test,
-    // not the dump, and a real pg_dump per attempt would make a bounded search
-    // unbounded in wall-clock terms. Each iteration occupies the next name, so
-    // the loop ends only when the script itself gives up. It runs in its own
-    // directory because it leaves one dump-named directory per attempt behind,
-    // and the shared directory's other cases count dump-shaped names.
-    const dir = mkdtempSync(join(tmpdir(), "overflow-backup-bound-"));
+    // Stub bytes isolate bounded name search from container dump latency.
+    const dir = backupFixtures.create(join(tmpdir(), "overflow-backup-bound-"));
     const stamp = "20260930T121500Z";
     const env: NodeJS.ProcessEnv = {
       ...scriptEnv(),
@@ -462,9 +399,7 @@ describe("the backup and restore procedure", () => {
     let result = runScript(backupScript, ["--output-dir", dir, "--retention-days", "14"], env);
     const occupied: string[] = [];
     for (let taken = 0; result.status === 0 && taken < 1000; taken += 1) {
-      // Occupy the name this run just took, as a DIRECTORY rather than the
-      // file it installed: ln against a directory target links INTO it and
-      // reports success, which would install the dump somewhere nobody reads.
+      // An occupied directory catches ln linking into the destination.
       const installed = printedDumpPath(result.stdout);
       expect(installed, `stdout was: ${result.stdout}`).toBeDefined();
       const name = join(dir, basename(installed!));
@@ -484,12 +419,8 @@ describe("the backup and restore procedure", () => {
   });
 
   it("takes the next suffix past a dangling symlink sitting on the plain name", () => {
-    // A backup directory restored from somewhere else, or half-recovered, can
-    // carry a symlink whose target is gone. The name is taken — the link
-    // refuses it — but a plain existence test follows the link, calls the name
-    // free, and sends the run down the "not a collision" arm. Loud, no data
-    // lost, and the night's backup is still missing: this is the -1 case.
-    const dir = mkdtempSync(join(tmpdir(), "overflow-backup-symlink-"));
+    // A dangling symlink still occupies its name.
+    const dir = backupFixtures.create(join(tmpdir(), "overflow-backup-symlink-"));
     const stamp = "20260930T133000Z";
     symlinkSync(join(dir, "target-that-was-removed"), join(dir, `overflow-${stamp}.dump`));
 
@@ -511,22 +442,11 @@ describe("the backup and restore procedure", () => {
   });
 
   it("keeps every run's dump when same-second runs install at the same time", async () => {
-    // The atomicity requirement 3 exists for, and the case above cannot reach
-    // it: its two runs are sequential, so a name chosen by a test-then-move is
-    // never wrong, because no two runs are ever inside the script together.
-    // These runs are all parked in the dump stub and released together, so the
-    // installs overlap. Each writes bytes no other run writes, so the
-    // assertions are on what the runs DID — one file per run, holding that
-    // run's own content, nothing left behind. No assertion on elapsed time:
-    // the barrier is a file this test creates, not a stopwatch.
-    const dir = mkdtempSync(join(tmpdir(), "overflow-backup-race-"));
-    const { stub, arrived, release } = barrierStub(mkdtempSync(join(tmpdir(), "overflow-backup-barrier-")));
+    // The barrier forces overlapping installs and distinct contents identify every run.
+    const dir = backupFixtures.create(join(tmpdir(), "overflow-backup-race-"));
+    const { stub, arrived, release } = barrierStub(backupFixtures.create(join(tmpdir(), "overflow-backup-barrier-")));
 
-    // Sixteen, not eight: the mutant is caught when two runs interleave between
-    // their existence test and their move, and the pairs that can do that grow
-    // with the square of the contender count. The kill is a rate, not a
-    // certainty — what must not happen is a green suite on broken code, so the
-    // count is raised until that residual is vanishing.
+    // Sixteen contenders increase the chance of catching a non-atomic install.
     const runs = 16;
     const stamp = "20260930T130000Z";
     const running = Array.from({ length: runs }, (_, index) =>
@@ -544,8 +464,7 @@ describe("the backup and restore procedure", () => {
       ),
     );
 
-    // Release only once every run is parked inside the stub, so what follows
-    // is N installs contending for one name rather than N sequential runs.
+    // Release only after every contender reaches the stub.
     await vi.waitFor(() => {
       expect(readdirSync(arrived), "every run parked in the dump stub").toHaveLength(runs);
     }, { timeout: 60_000, interval: 25 });
@@ -557,11 +476,7 @@ describe("the backup and restore procedure", () => {
 
     const names = dumpsIn(dir).sort();
     expect(names, "one dump per run, none sharing a name").toHaveLength(runs);
-    // The content is the point: two runs that picked one name leave the file
-    // count right and the bytes of one run gone, which is the whole defect.
-    // Both sides sort, because these are labels and not numbers: run-10 sorts
-    // before run-2, and comparing them in index order would be an assertion
-    // about spelling that passes or fails for the wrong reason.
+    // Sort labels lexically: run-10 precedes run-2.
     expect(names.map((name) => readFileSync(join(dir, name), "utf8")).sort()).toEqual(
       Array.from({ length: runs }, (_, index) => `run-${index}\n`).sort(),
     );
@@ -569,16 +484,9 @@ describe("the backup and restore procedure", () => {
   }, 120_000);
 
   it("reaps the runs it abandons when a barrier never opens", async () => {
-    // Every route out of the case above abandons its runs rather than
-    // cancelling them: a run that rejects, a barrier that never fills, the
-    // case's own timeout. An abandoned run is not a leaked promise, it is a
-    // live process sitting in the stub's wait loop, waking twenty times a
-    // second, and there is one per participant. So this asserts the reap
-    // rather than assuming it: start runs that can never be released, reap
-    // them, and prove each one is gone — the script AND the stub it is parked
-    // inside, which is a separate process and needs the group kill.
-    const dir = mkdtempSync(join(tmpdir(), "overflow-backup-reap-"));
-    const { stub, arrived, release } = barrierStub(mkdtempSync(join(tmpdir(), "overflow-backup-barrier-")));
+    // Reap abandoned script groups and their stub processes after every exit path.
+    const dir = backupFixtures.create(join(tmpdir(), "overflow-backup-reap-"));
+    const { stub, arrived, release } = barrierStub(backupFixtures.create(join(tmpdir(), "overflow-backup-barrier-")));
     const stamp = "20260930T134500Z";
 
     const started = Array.from({ length: 4 }, (_, index) =>
@@ -595,32 +503,24 @@ describe("the backup and restore procedure", () => {
         },
       ),
     );
-    // Each stub records its own pid in its arrival marker, which is what lets
-    // the assertion below reach the grandchild and not just the script.
+    // Arrival files expose the stub grandchildren’s PIDs.
     await vi.waitFor(() => {
       expect(readdirSync(arrived), "every run parked in the dump stub").toHaveLength(started.length);
     }, { timeout: 60_000, interval: 25 });
     const stubPids = readdirSync(arrived).map((name) => Number(readFileSync(join(arrived, name), "utf8").trim()));
     expect(started.every((run) => isAlive(run.pid)), "the runs are alive before the reap").toBe(true);
     expect(stubPids.every((pid) => Number.isInteger(pid) && isAlive(pid)), "the stubs are alive before the reap").toBe(true);
-    // Registered before the reap, not asserted after it: a stub is a separate
-    // process in the group, it is orphaned when the group dies, and its own
-    // latency to go is bounded by nothing else the test waits on. The reap
-    // below has to wait for it on the same terms as the scripts, or this case
-    // is a point-in-time check landing in the window between the two.
+    // Register stubs before reaping so the bounded wait covers their separate exits.
     for (const pid of stubPids) watchReapedPid(pid);
 
     const reaped = await reapBackupRuns();
 
     expect([...reaped].sort((a, b) => a - b)).toEqual(started.map((run) => run.pid).sort((a, b) => a - b));
-    // Every pid the reap was asked to cover is asserted INSIDE its bounded
-    // wait, which is where the scripts' pids have always been asserted. There
-    // is no bare isAlive left in this file.
+    // Assert all watched PIDs inside the bounded wait.
     for (const pid of [...started.map((run) => run.pid), ...stubPids]) {
       expect(isAlive(pid), `pid ${pid} survived the reap`).toBe(false);
     }
-    // Nothing left to reap: the registry is what makes the afterEach reap a
-    // no-op rather than a second round of kills against dead pids.
+    // An empty registry makes repeated reaping harmless.
     expect(await reapBackupRuns(), "a second reap has nothing left").toEqual([]);
   }, 60_000);
 });
@@ -686,30 +586,17 @@ async function restoreInto(database: string, dump: string): Promise<Sql> {
   return postgres(hostUrl(database), { max: 1 });
 }
 
-/**
- * A pg_dump stub that writes fixed bytes, for the cases that are about the
- * install loop rather than about the archive: it keeps a bounded search or a
- * run-per-attempt loop from costing a container round each time.
- */
+// Stub bytes keep install tests independent of pg_dump cost.
 function bytesStub(body = "custom-format-archive-bytes\n"): string {
-  const stub = join(mkdtempSync(join(tmpdir(), "overflow-backup-stub-")), "pg-dump-bytes.sh");
-  // The body goes in through a quoted heredoc rather than an interpolated
-  // shell literal: a body carrying an apostrophe would otherwise close the
-  // literal early and produce a stub that is not the stub. Written verbatim
-  // after the heredoc's own newline, so the bytes are the caller's and not one
-  // newline more than the caller asked for.
+  const stub = join(backupFixtures.create(join(tmpdir(), "overflow-backup-stub-")), "pg-dump-bytes.sh");
+  // A quoted heredoc preserves apostrophes and the caller’s exact trailing newline.
   const text = body.endsWith("\n") ? body : `${body}\n`;
   writeFileSync(stub, `#!/bin/sh\ncat <<'OVERFLOW_STUB_EOF'\n${text}OVERFLOW_STUB_EOF\n`);
   chmodSync(stub, 0o700);
   return stub;
 }
 
-/**
- * A pg_dump stub that parks every run on a barrier file: it records its own
- * pid where the test can find it, then blocks until the test creates the
- * release file. The wait is bounded, so a run whose barrier never opens ends
- * itself instead of outliving the case that was watching it.
- */
+// Bound the barrier wait so an unreleased stub cannot outlive its case.
 function barrierStub(barrierDir: string): { stub: string; arrived: string; release: string } {
   const arrived = join(barrierDir, "arrived");
   const release = join(barrierDir, "release");
@@ -736,13 +623,7 @@ function barrierStub(barrierDir: string): { stub: string; arrived: string; relea
 /** Backup runs this file has started and not yet reaped, by pid. */
 const unreapedBackups = new Set<number>();
 
-/**
- * Processes a case has asked the reap to wait for besides the runs themselves:
- * the stubs, which are separate processes in the same group and reach their
- * own exit on their own schedule. Kept here rather than in the case so the
- * afterEach covers them too — a case that dies between spawning and reaping
- * must not leave a stub behind either.
- */
+// Track stubs separately so afterEach also waits for their exits.
 const watchedReapPids = new Set<number>();
 
 /** Add a pid the reap must wait for, and which a bare check may not replace. */
@@ -760,18 +641,7 @@ function isAlive(pid: number): boolean {
   }
 }
 
-/**
- * Kill every backup run still alive, and wait until it — and every watched pid
- * — is gone. Returns the run pids it reaped so a case can assert on the set
- * rather than assume the kill landed.
- *
- * A run is its own process group (see startBackup), so the kill reaches the
- * whole tree — the script and the stub it is waiting inside. Signalling only
- * the script would leave the stub polling a barrier nobody will ever open, and
- * the two die on their own schedules, so the wait covers both classes. Waiting
- * on the scripts alone left the assertion on the stubs a single point-in-time
- * check that reddened correct code about once in twenty-five runs.
- */
+// Kill whole groups and wait for both scripts and watched stubs to disappear.
 async function reapBackupRuns(): Promise<number[]> {
   const pids = [...unreapedBackups];
   const watched = [...watchedReapPids];
@@ -795,14 +665,7 @@ async function reapBackupRuns(): Promise<number[]> {
   return pids;
 }
 
-/**
- * Start one backup run without waiting for it, so several can overlap. The run
- * is detached into its own process group and registered for reaping, because
- * every route out of the case that starts it — a rejected run, a barrier that
- * never fills, the case's own timeout — abandons the others rather than
- * cancelling them, and an abandoned run sits in the stub waking 20 times a
- * second for as long as the box keeps it.
- */
+// Register detached groups immediately so a failed case still reaps them.
 function startBackup(
   args: string[],
   env: NodeJS.ProcessEnv,
