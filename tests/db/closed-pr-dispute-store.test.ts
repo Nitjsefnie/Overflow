@@ -236,15 +236,42 @@ describe("closed PR dispute filing", () => {
     }
   });
 
-  it("lists only the contributor's disputes, including decided requests, newest first", async () => {
+  it("propagates unrelated unique violations and rolls back the filing", async () => {
     const fixture = await buildFixture();
     await insertPullRequest(fixture, "MERGED");
-    const older = await service().fileDispute({ id: fixture.contributorId }, filing(fixture));
-    await sql`
-      update closed_pr_dispute_requests set state = 'DECIDED', decision = 'DENIED',
-        decided_by = ${fixture.sponsorId}, decided_reason = 'Not supported.', decided_at = '2026-01-01',
-        created_at = '2025-06-01'
-      where id = ${older.id}
+    await sql.unsafe(`create function reject_dispute_event() returns trigger language plpgsql as $$
+      begin
+        if new.dispute_request_id is not null then
+          raise unique_violation using constraint = 'unrelated_event_unique';
+        end if;
+        return new;
+      end; $$`);
+    await sql.unsafe(`create trigger reject_dispute_event before insert on moderation_events
+      for each row execute function reject_dispute_event()`);
+    try {
+      await expect(store().fileDispute(filing(fixture))).rejects.toMatchObject({
+        code: "23505", constraint_name: "unrelated_event_unique",
+      });
+      await expectNoRequests(fixture);
+    } finally {
+      await sql.unsafe("drop trigger reject_dispute_event on moderation_events");
+      await sql.unsafe("drop function reject_dispute_event()");
+    }
+  });
+
+  it("lists only the contributor's disputes, including decided requests, newest first", async () => {
+    const fixture = await buildFixture();
+    const landing = await insertPullRequest(fixture, "MERGED");
+    const [older] = await sql<{ id: string }[]>`
+      insert into closed_pr_dispute_requests (
+        contributor_id, pull_request_id, issue_id, landed_pull_request_id, request_reason,
+        state, decision, decided_by, decided_by_sole_moderator, decided_reason, decided_at,
+        moderator_figure, awarded_points, created_at
+      ) values (
+        ${fixture.contributorId}, ${fixture.pullRequestId}, ${fixture.issueId}, ${landing.id}, 'Older request.',
+        'DECIDED', 'GRANTED', ${fixture.sponsorId}, true, 'The contribution landed.', '2026-01-01',
+        8, 3, '2025-06-01'
+      ) returning id
     `;
     const newer = await service().fileDispute({ id: fixture.contributorId }, filing(fixture));
     const theirs = await buildFixture();
@@ -252,8 +279,9 @@ describe("closed PR dispute filing", () => {
     await service().fileDispute({ id: theirs.contributorId }, filing(theirs));
     const listed = await service().listDisputes({ id: fixture.contributorId });
     expect(listed.map((request) => request.id)).toEqual([newer.id, older.id]);
-    expect(listed[1]).toMatchObject({ state: "DECIDED", decision: "DENIED", decidedBy: fixture.sponsorId,
-      decidedReason: "Not supported.", decidedAt: "2026-01-01T00:00:00.000Z" });
+    expect(listed[1]).toMatchObject({ state: "DECIDED", decision: "GRANTED", decidedBy: fixture.sponsorId,
+      decidedReason: "The contribution landed.", decidedAt: "2026-01-01T00:00:00.000Z",
+      moderatorFigure: 8, awardedPoints: 3, decidedBySoleModerator: true });
     expect(await service().listDisputes({ id: randomUUID() })).toEqual([]);
   });
 
