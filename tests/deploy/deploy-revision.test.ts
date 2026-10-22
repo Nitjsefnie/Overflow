@@ -2052,20 +2052,9 @@ printf '200\\n'
   });
 });
 
-/**
- * The refusal regressions against real git: the shims above make every git
- * call succeed, so only a real repository shows whether a refused deploy has
- * already moved the tree. The fixture tree becomes a checkout three commits
- * behind an origin repo. Its origin URL is github-shaped, so the CI gate
- * parses the fixture slug, and a clone-local insteadOf rewrites it to the
- * origin repo, so the fetch never leaves the fixture. The origin commits a
- * .gitignore for the fixture's release layout, so the tree starts clean.
- * The clone fetches BEFORE origin gains its three commits, so its FETCH_HEAD
- * and origin/main both sit at the base: only the deploy's own fetch can
- * bring the tip.
- * Global and system git config are shut out of the fixture and the deploy
- * alike, so a host setting (pull.rebase, say) cannot decide the outcome.
- */
+// Real git reveals mutation before refusal, which the always-successful shims cannot see.
+// Clone before advancing the local origin; only the deploy fetch can update its stale refs.
+// Clone-local insteadOf and isolated git config keep fetches local and behavior deterministic.
 const HERMETIC_GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
 /** The one tracked source file makeGitFixture commits under src/. */
 const SOURCE_PATH = "src/app/page.tsx";

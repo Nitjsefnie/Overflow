@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,9 @@ import {
   patchCoverage,
   REPORT_PATH,
 } from "../../scripts/patch-coverage.ts";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "patch-coverage-")]);
 
 const script = fileURLToPath(
   new URL("../../scripts/patch-coverage.ts", import.meta.url),
@@ -207,11 +210,11 @@ describe("patch-coverage CLI", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "patch-coverage-"));
+    root = tempDirectories.create(join(tmpdir(), "patch-coverage-"));
   });
 
   afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
+    tempDirectories.dispose(root);
   });
 
   const seed = () => {

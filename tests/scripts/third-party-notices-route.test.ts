@@ -1,14 +1,17 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "notices-route-")]);
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const routePath = join(repoRoot, "src/app/third-party-notices.txt/route.ts");
 
 it("pins the real release directory across a symlink switch and serves its notices", async () => {
-  const root = mkdtempSync(join(tmpdir(), "notices-route-"));
+  const root = tempDirectories.create(join(tmpdir(), "notices-route-"));
   const previousDistDir = process.env.NEXT_DIST_DIR;
   try {
     const firstRelease = join(root, "release-a");
@@ -45,6 +48,6 @@ it("pins the real release directory across a symlink switch and serves its notic
   } finally {
     if (previousDistDir === undefined) delete process.env.NEXT_DIST_DIR;
     else process.env.NEXT_DIST_DIR = previousDistDir;
-    rmSync(root, { recursive: true, force: true });
+    tempDirectories.dispose(root);
   }
 });

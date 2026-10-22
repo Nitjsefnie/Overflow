@@ -1,14 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  chownSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, chownSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
@@ -22,26 +13,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-/**
- * Behavioral coverage for scripts/overflow-canary.sh, the periodic exercise of
- * the host's failure-alert delivery path.
- *
- * The alert path is curl -> local exim -> one smarthost, and nothing in it
- * reports its own failure, so a dead route looks exactly like a healthy host.
- * The only observation that can see the smarthost leg is the exim mainlog's
- * `Completed` line for the id the submission was accepted under, which is why
- * these tests drive the real script end to end rather than shimming its
- * commands: a shim would stub out the very handshake the verdict rests on.
- *
- * So the suite runs the real /bin/sh script with the real curl against two
- * scratch servers in this process - a minimal SMTP stand-in speaking enough
- * of RFC 5321 for curl's client, and an HTTP server standing in for the
- * out-of-band webhook. Nothing leaves the machine and no host file is read:
- * the recipient and webhook paths, the state directory, the exim log and the
- * SMTP URL are all overridden through the script's test-only variables, which
- * the canary unit sets none of, so a deployed run always takes the defaults.
- */
+const tempDirectories = createOwnedTempDirectoryRegistry([]);
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const scriptPath = join(repositoryRoot, "scripts", "overflow-canary.sh");
@@ -64,13 +38,6 @@ let issuedMessageIds = 0;
 const nextMessageId = (): string =>
   `1xBuT1-000000003QH-${String(issuedMessageIds++).padStart(6, "0")}`;
 
-/**
- * The exim log's own prelude, present in every fixture: one message the canary
- * did not cause, already completed by the relay. Every run therefore judges a
- * log that is not silent and not exclusively its own, so a verdict that
- * ignored the id and matched any Completed line fails here rather than
- * passing by accident.
- */
 const UNRELATED_COMPLETED =
   "2026-09-30 01:30:04 1xBuT1-000000001AA-1aA1 Completed\n";
 
@@ -81,21 +48,6 @@ const UNRELATED_COMPLETED =
  */
 const hostileMessageId = '1xBuT1-0000"\\0000QH-0Qqz';
 
-/**
- * The two lines exim writes when a smarthost refuses the connection, in the
- * order it writes them, from the worked example in section 53.9 of the exim
- * specification.
- *
- * Neither ends the message. The detail line carries no two-character flag at
- * all - it is not a verdict - and the defer that follows it means the message
- * is still queued for its retry, so the FIRST line a scan reaches is the one
- * that never was a verdict. A scan that concludes on it reports a relay that
- * is retrying correctly as dead, and pages on the one signal the operator is
- * meant to trust.
- *
- * The bodies are returned without the timestamp `logLine` below writes, so
- * they compose with it the way every other fixture body does.
- */
 const connectFailureDetail = (id: string): string =>
   `${id} Failed to connect to smtp.gmail.com [2a00:1450:4001:c21::6c]: Connection refused`;
 
@@ -103,71 +55,15 @@ const connectFailureDetail = (id: string): string =>
 const deferredRetry = (id: string): string =>
   `${id} == ${recipientAddress} R=smarthost T=remote_smtp_smarthost defer (1): Connection refused`;
 
-/**
- * A routing line whose `C=` field holds the RELAY's own answer, quoted byte
- * for byte, as every exim 53.13 summary line does - carrying, as a filtering
- * relay's rejection text plausibly does, a word this suite's classifier
- * otherwise treats as a terminal verdict.
- *
- * Two things about the shape are load-bearing, and the fixture cannot carry
- * either of them twice:
- *
- * - `DN=` is quoted too, and comes first, so a scrubber that drops one quoted
- *   span and stops leaves `C=` for the terminal scan to find;
- * - the `C=` value contains a quote exim has ESCAPED inside it, which is what
- *   exim writes when the relay's own text carries one. A scrubber that pairs
- *   quotes naively ends the span at that inner quote and hands everything
- *   after it - the terminal word included - to the scan.
- */
 const relayAnswerMentioningFailure = (id: string): string =>
   `${id} => ${recipientAddress} R=smarthost T=remote_smtp_smarthost H=smtp.gmail.com [2a00:1450:4001:c21::6c] TFO CV=yes DN="CN=smtp.gmail.com" A=plain K C="550 5.7.1 rejected: \\"bounce\\" threshold not reached"`;
 
-/**
- * A TERMINAL line whose reason text happens to quote a connection failure.
- *
- * Section 53.5 is explicit that the two-character flag after the id is the
- * verdict, and this line is the case where the text and the flag disagree: the
- * `**` says the address bounced, and the rejection reason exim copies out of
- * the remote's answer happens to name a refused socket. Nothing in exim writes
- * both a terminal flag and a 53.9 detail line - the detail line carries no flag
- * at all - so the flag decides this line and the words in it are the relay's.
- */
 const terminalRejectionQuotingAConnectFailure = (id: string): string =>
   `${id} ** rejected: RCPT TO:<${recipientAddress}>: 550 Failed to connect to mail1.example [192.0.2.1]: Connection refused`;
 
-/**
- * The SAME failure in the spelling this exim build actually emits for a
- * refused socket when the failure is not the one section 53.9 documents:
- * `failed to connect to socket %s for %s transport: %s`, lowercase, in
- * `/usr/sbin/exim4`'s own strings beside the capitalised variant.
- *
- * It is a different case from the line above, and the difference is the whole
- * point: the terminal keywords are matched case-sensitively, so this line
- * carries none of them and can never be read as a verdict. Pinned so a
- * case-insensitive future edit is a visible change rather than an accident.
- */
 const lowercaseConnectFailure = (id: string): string =>
   `${id} failed to connect to socket 10.0.0.1 for remote_smtp_smarthost transport: Connection timed out`;
 
-/**
- * An UNFLAGGED detail line that carries `**` inside a quoted field.
- *
- * The property pinned here is the ANCHOR in the classifier's flag test: `**`
- * counts as the flag only where it follows the id, so a `**` a remote wrote
- * into its own quoted answer cannot turn a detail line into a terminal one.
- * This is the same inverted cause the flag-based fix exists to prevent, one
- * step further out: read the sequence anywhere in the line instead of at its
- * start, and a smarthost whose answer contains the DSN asterisk notation -
- * `** 5.7.1 blocked`, which it is free to say - would make every unflagged
- * detail line below it a terminal `Failed`.
- *
- * Exim does not write this exact line. Section 53.9 puts the detail line on a
- * line of its own, with no quoted field before it, and the fields a real
- * `=>` line carries come after the verb rather than before the detail text.
- * The fixture is built from a real routing line on this host with the detail
- * text appended, and it exists to isolate the anchor: it is the only shape in
- * which a quoted `**` and an unquoted keyword can be on one line at all.
- */
 const detailLineBesideAQuotedFlag = (id: string): string =>
   `${id} => ${recipientAddress} R=smarthost T=remote_smtp_smarthost H=smtp.gmail.com [2a00:1450:4001:c21::6c] TFO CV=yes DN="CN=smtp.gmail.com" A=plain K C="** 5.7.1 blocked by policy" Failed to connect to smtp.gmail.com [2a00:1450:4001:c21::6c]: Connection refused`;
 
@@ -202,30 +98,16 @@ const scratchDirectories: string[] = [];
 
 afterEach(async () => {
   for (const directory of scratchDirectories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
+    tempDirectories.dispose(directory);
   }
 });
 
 function scratch(prefix: string): string {
-  const directory = mkdtempSync(join(tmpdir(), `overflow-canary-${prefix}-`));
+  const directory = tempDirectories.create(join(tmpdir(), `overflow-canary-${prefix}-`));
   scratchDirectories.push(directory);
   return directory;
 }
 
-/**
- * A scratch directory for a fixture or a shim, removed after the test.
- *
- * The name is a leftover from an earlier shape and describes no behaviour:
- * this delegates to `scratch` and returns a **fresh `mkdtemp` directory on
- * every call**, exactly as `scratch` does. Nothing is shared between calls,
- * and a test that needs one directory to outlive a single run - the dedup
- * and re-arm cases, which read the marker a previous run left behind - gets
- * that by holding the returned path in a local, not from this helper.
- *
- * Worth stating because `shimDir` below depends on the fresh-per-call
- * behaviour: it must not hand two tests the same PATH directory, or one
- * test's `hostname` shim would silently become another's.
- */
 function sharedScratch(prefix: string): string {
   return scratch(prefix);
 }
@@ -237,17 +119,6 @@ interface WebhookStandIn {
   close: () => Promise<void>;
 }
 
-/**
- * Stands in for the Discord webhook: an HTTP server that records the exact
- * bytes the script posted, so a payload can be parsed and asserted on rather
- * than pattern-matched.
- *
- * `status` is what the stand-in answers with, so a test can play a webhook
- * that has stopped existing (404) or revoked its token (401). A client that
- * treats any HTTP response as success records a report nobody received as
- * delivered, and the failure mode is silent in the worst way — the outage is
- * marked reported and every later run of the streak posts nothing.
- */
 async function startWebhook(options: { status?: number } = {}): Promise<WebhookStandIn> {
   const posts: string[] = [];
   const server = createHttpServer((request, response) => {
@@ -275,12 +146,6 @@ function closeServer(server: HttpServer | NetServer): Promise<void> {
   });
 }
 
-/**
- * A port on the loopback interface with nothing listening on it, taken by
- * binding and then releasing it. A closed port is the honest way to make a
- * submission fail: there is no shim to crash and no timeout to wait out, and
- * curl fails at connect the way it would against a stopped exim daemon.
- */
 async function closedPort(): Promise<number> {
   const probe = createNetServer();
   await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
@@ -289,32 +154,11 @@ async function closedPort(): Promise<number> {
   return port;
 }
 
-/**
- * The minimum SMTP server curl's client will complete a submission against,
- * and the exim mainlog the relay verdict is read out of.
- *
- * It answers the end of DATA with the `250 OK id=` line a real relay prints,
- * and writes the log line that relay outcome would produce. `deferred` writes
- * only a defer, which is the shape a relay that accepted the message and
- * could not hand it on leaves behind: the id is in the log, `Completed` never
- * appears, and a run that trusts the 250 alone reports a dead host as healthy.
- */
 async function startSmtp(options: {
   outcome: RelayOutcome;
   logPath: string;
   messageId?: string;
-  /**
-   * Write the `Completed` line this many milliseconds AFTER answering the end
-   * of DATA, instead of at the moment it is answered.
-   *
-   * This is what a real relay does: it accepts the message, and the exim
-   * mainlog records the outcome a moment later, after the connection to the
-   * smarthost has actually been made. It is also the only way to reach the
-   * canary's polling loop, which a stand-in that logs synchronously satisfies
-   * on the very first read - leaving the loop, its deadline arithmetic and
-   * its sleep entirely unexercised, and a regression to a single read
-   * invisible.
-   */
+
   completeAfterMs?: number;
   /**
    * Write the smarthost's own `250 2.0.0 OK ... - gsmtp` acceptance line
@@ -323,42 +167,15 @@ async function startSmtp(options: {
    * nothing further to observe, whatever became of it afterwards.
    */
   smarthostAcceptLine?: boolean;
-  /**
-   * Take the mainlog's read permission away the instant this daemon writes its
-   * first line - which is before the `250 OK id=` the run is waiting for is
-   * written to the socket, so the script has passed its pre-flight read and
-   * cannot poll until the log has already gone dark - and give it back after
-   * this many milliseconds.
-   *
-   * That is the window the pre-flight check narrows rather than closes: a
-   * rotation under `nocreate` (this host's /etc/logrotate.d/exim4-base) leaves
-   * the path absent until exim itself reopens it, and a permission change lands
-   * the same way. Without a fixture that reaches it, the poll-time branch is
-   * unexercised code that only exists because a branch nobody runs is how the
-   * deployed defect shipped. A window longer than the wait budget models a log
-   * that stays dark; a shorter one models a gap that closes, which the run must
-   * not carry out of the loop as its verdict.
-   */
+
   logUnreadableForMs?: number;
 }): Promise<SmtpStandIn> {
   const messageId = options.messageId ?? nextMessageId();
   const messages: string[] = [];
   let bufferedData: string[] = [];
-  /**
-   * Scheduled log writes that have not fired yet. `close` waits on them: the
-   * fixture directory dies with the test, and a relay still owing the mainlog
-   * a line would otherwise write into a directory that is already gone -
-   * which surfaces as an unhandled ENOENT attributed to whichever test
-   * happened to be running, and reads as a harness fault rather than one.
-   */
+
   const pending: Promise<void>[] = [];
-  /**
-   * Errors from those writes, rethrown by `close` once every one has settled.
-   * Settling the promise in a `finally` is what keeps a throwing write from
-   * hanging `Promise.all` until the vitest timeout - but swallowing the error
-   * would trade a hang for a silent pass, so it is held here instead and
-   * raised at the one moment the test is already looking.
-   */
+
   const writeFailures: unknown[] = [];
   const server = createNetServer((socket) => {
     let buffer = "";
@@ -447,11 +264,7 @@ async function startSmtp(options: {
                 `${messageId} *** rejected RCPT <canary@example.test>: 550 5.1.1 unknown user`,
               );
             } else if (options.outcome === "terminal-blackhole") {
-              // The two terminal keywords the classifier carries and this
-              // suite had no fixture for. The alert suite pins all five; a
-              // keyword only one of the two copies pins is a keyword a
-              // one-sided edit can drop, and R5's byte-identity is enforced by
-              // a test rather than by a human remembering to run a diff.
+
               messages.push(bufferedData.join("\r\n"));
               bufferedData = [];
               logLine(`${messageId} ** blackhole: <> <canary@example.test>`);
@@ -460,12 +273,7 @@ async function startSmtp(options: {
               bufferedData = [];
               logLine(`${messageId} ** discarded: <> <canary@example.test>`);
             } else if (options.outcome === "deferred-then-completed") {
-              // One message id, two outcomes, in the order a real relay
-              // produces them when a message is greylisted or answered with a
-              // temporary 4xx: the first attempt defers, the retry succeeds.
-              // Both lines are in the log at once, which is the case that
-              // decides whether the script reads a verdict as final on sight
-              // or waits for the budget to close.
+
               messages.push(bufferedData.join("\r\n"));
               bufferedData = [];
               logLine(
@@ -482,11 +290,7 @@ async function startSmtp(options: {
               logLine(connectFailureDetail(messageId));
               logLine(deferredRetry(messageId));
             } else if (options.outcome === "retrying-then-completed") {
-              // The same refusal, answered on the retry. The detail line and
-              // the defer are the first things the poll can see, and the
-              // Completed line only lands after it has already waited - so
-              // this is the case where a scan that concludes on the detail
-              // line pages an operator about a message that was delivered.
+
               messages.push(bufferedData.join("\r\n"));
               bufferedData = [];
               logLine(connectFailureDetail(messageId));
@@ -514,18 +318,7 @@ async function startSmtp(options: {
               bufferedData = [];
               logLine(lowercaseConnectFailure(messageId));
             } else if (options.outcome === "deferred-then-connect-failure") {
-              // TWO queue runs under one id, and the order that matters: the
-              // first attempt is deferred for a greylist, and the RETRY meets a
-              // refused connection. Section 53.9 documents the detail line for a
-              // single attempt, ahead of its own deferral; this is the shape
-              // across attempts, where it lands after a provisional line is
-              // already in the log.
-              //
-              // Nothing about either line ends the message, so the outcome the
-              // report names has to be the FIRST provisional one exim wrote -
-              // and a scan that stops skipping detail lines once it has a name
-              // in hand reads the retry's refusal as a terminal `Failed`, which
-              // is this issue's own defect arriving by a different route.
+
               messages.push(bufferedData.join("\r\n"));
               bufferedData = [];
               logLine(`${messageId} ** defer rejected: greylisted, please retry`);
@@ -540,11 +333,7 @@ async function startSmtp(options: {
               bufferedData = [];
               logLine(connectFailureDetail(messageId));
             } else if (options.outcome === "smarthost-answer-mentions-failure") {
-              // The refusal text the RELAY wrote, inside the C= field exim
-              // quotes it into, on a routing line exim itself wrote about a
-              // delivery it is going to retry. The word in the quotes is the
-              // relay's, not exim's accounting, so it decides nothing - and
-              // the retry afterwards is what settles this message.
+
               messages.push(bufferedData.join("\r\n"));
               bufferedData = [];
               logLine(relayAnswerMentioningFailure(messageId));
@@ -599,11 +388,7 @@ async function startSmtp(options: {
     messageId,
     messages,
     close: async () => {
-      // The pending writes are drained and their failures rethrown even if
-      // closing the listener itself throws, which is what a `finally` buys:
-      // without it a rejected closeServer skips both, and the guard above
-      // stops guarding for exactly the run where the harness is already
-      // misbehaving.
+
       try {
         await closeServer(server);
       } finally {
@@ -687,25 +472,6 @@ function makeFixture(options: FixtureOptions = {}): CanaryFixture {
   return fixture;
 }
 
-/**
- * Whether the suite itself is running as root, which decides how a log this
- * process may not read is built.
- *
- * The deployed defect was a ROOT process that could not read a 0640 file: uid
- * 0 normally carries CAP_DAC_OVERRIDE, and `CapabilityBoundingSet=` empty -
- * copied into the canary unit from the alert template beside it - strips it,
- * so the permission bits stood and `grep` answered "Permission denied".
- * Reproducing that honestly needs both halves, and one of them depends on who
- * runs the suite:
- *
- * - as root, a 0640 root-owned log is still readable, because root bypasses
- *   the bits; so the log is left alone and the SCRIPT is run as an
- *   unprivileged uid, and the read then fails on the group bits, which is the
- *   half production actually hit;
- * - unprivileged, the log is locked at 0000 instead, which denies its own
- *   owner the read. A suite that cannot setuid has no other way to make a file
- *   it owns unreadable to itself.
- */
 const SUITE_RUNS_AS_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
 
 /** The uid/gid the script is dropped to when the suite runs as root. */
@@ -745,13 +511,6 @@ function openFixtureToDroppedIdentity(fixture: CanaryFixture): void {
   chmodSync(fixture.webhookFile, 0o644);
 }
 
-/**
- * Proves the lock denies the read to the identity the script will run as,
- * using the script's own test. Without it a fixture that silently failed to
- * reproduce production - root still bypassing the bits, a chmod that lost a
- * race - would leave these tests green for the wrong reason, which is the
- * shape of the defect being fixed.
- */
 function expectUnreadableToChild(logPath: string): void {
   const probe = spawnSync("/bin/sh", ["-c", '[ -r "$1" ] && exit 0; exit 3', "sh", logPath], {
     encoding: "utf8",
@@ -764,14 +523,6 @@ function expectUnreadableToChild(logPath: string): void {
   ).toBe(3);
 }
 
-/**
- * Runs the real script and resolves with its outcome.
- *
- * Deliberately not spawnSync: the SMTP and webhook stand-ins live in this
- * process, and a synchronous spawn blocks the event loop, so the kernel's
- * accept queue is never drained and curl waits on a server that cannot answer
- * until the run it is waiting for has returned.
- */
 function runCanary(
   fixture: CanaryFixture,
   options: {
@@ -822,19 +573,6 @@ function runCanary(
   });
 }
 
-/**
- * The budget a terminal outcome has to conclude the poll well inside of, and
- * the bound that says "well inside".
- *
- * The bound is DERIVED, not chosen. A hardcoded 10 s sitting beside a fixture
- * that could be lowered to 5 s is an assertion that can silently stop firing:
- * the reviewer's probe lowered this very fixture to 5 s and the
- * deleted-short-circuit mutant came back green across all 35 tests, because
- * the run then finished inside the bound while still having spent its budget.
- * Halving keeps the two coupled at every budget — a run that spent the budget
- * is always outside the bound, and a short-circuit that finishes in well
- * under a second is always inside it.
- */
 const TERMINAL_BUDGET_SECONDS = 20;
 const TERMINAL_BOUND_MS = (TERMINAL_BUDGET_SECONDS * 1000) / 2;
 
@@ -846,26 +584,6 @@ const TERMINAL_BOUND_MS = (TERMINAL_BUDGET_SECONDS * 1000) / 2;
  */
 const RETRYING_BUDGET_SECONDS = 3;
 
-/**
- * The verdict token a report names, or `undefined` when it names none.
- *
- * The reason is this script's product - its only job on a failure is to name
- * the verdict the classifier reached - so the token IS the output under test.
- * It is read out by splitting on the two anchors that flank it, the word the
- * report introduces the name with and the ` for ` that introduces the message
- * id, and compared by EQUALITY.
- *
- * Equality is the whole point. The neighbouring `toContain` pins prove the
- * token occurs somewhere in the sentence and not that it is the name: they
- * stay green on a classifier that recorded nothing at all (the run falls back
- * to "records no Completed line", which contains neither anchor's subject), on
- * one that recorded the WRONG provisional name - both are legitimate reasons
- * and both are bugs - and on one that printed a slice of the line at offsets
- * computed somewhere else. `deferred` also satisfies a `toContain("defer")`.
- *
- * Nothing here pins the sentence: only the token between the two anchors is
- * compared, so rewording the reason around it changes no assertion.
- */
 function reportedVerdict(reported: string): string | undefined {
   return /recorded (.+?) for /.exec(reported)?.[1];
 }
@@ -1038,13 +756,7 @@ describe("overflow-canary.sh on a healthy path", () => {
   });
 
   it("waits for a slow relay rather than giving up on the first read", async () => {
-    // The relay answers the end of DATA immediately and logs Completed a
-    // moment later, which is what a real relay does while it waits on the
-    // smarthost. A run that gave the log one read would call this path dead.
-    //
-    // This is coverage, not a guard: the scenario below is the one that
-    // discriminates, because a read that misses and finds nothing leaves no
-    // reason at all, so a collapsed loop exits 0 here too.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -1070,18 +782,7 @@ describe("overflow-canary.sh on a healthy path", () => {
   });
 
   it("keeps polling to the budget, and reports, when Completed never arrives", async () => {
-    // The discriminating test for the polling loop, and the direction that
-    // matters. Collapsing the loop to a single read does not report a healthy
-    // path as dead - it reports a DEAD path as HEALTHY: the read misses, no
-    // reason is ever set, and the run falls through to exit 0 with no post and
-    // no marker. That is the silent failure this whole script exists to
-    // prevent, so the scenario has to be one where the loop is the only thing
-    // standing between a deferred message and a green result.
-    //
-    // A non-zero budget is the point: with waitSeconds at 0 the negative cases
-    // exit on the first read, and the deadline arithmetic, the retry and the
-    // sleep the brief's step 6 specifies are never executed at all. Two
-    // seconds is enough for the loop to spin and give up.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -1362,13 +1063,7 @@ describe("overflow-canary.sh dead-streak dedup", () => {
   ])(
     "records nothing when the webhook answers %s, so the next run reports again",
     async (_label, status) => {
-      // The transport succeeded and the report was refused. A webhook that
-      // has been deleted or had its token revoked answers exactly this way,
-      // and a client that counts any HTTP response as delivery writes the
-      // dead-streak marker for an outage it never actually reported - after
-      // which every later run of the streak stays silent. That is the one
-      // report nobody receives followed by permanent quiet, which is the
-      // exact failure this script exists to prevent.
+
       const fixture = makeFixture();
       const webhook = await startWebhook({ status });
       writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -1467,20 +1162,7 @@ describe("overflow-canary.sh verdict discrimination", () => {
   });
 
   it("a message the relay defers and then completes on retry is not reported dead", async () => {
-    // The scenario is one message id with two lines in the log at once: a
-    // first attempt deferred, the retry completed. That is what a greylisted
-    // or temporary-4xx relay produces routinely, so a verdict read as final
-    // on sight turns an ordinary retry into a false dead verdict plus a
-    // spurious page on the one signal the maintainer is meant to trust.
-    //
-    // What this pins is therefore a BEHAVIOUR, not an ordering: moving the
-    // Completed and failure checks past each other is a no-op, verified
-    // deliberately, because a provisional verdict must not short-circuit the
-    // poll. What breaks here is a verdict becoming conclusive on sight -
-    // treating `defer` as final, or breaking on any verdict before re-reading
-    // the log. That is the failure the reviewer's swap produced in the
-    // shipped code, where the canary paged and recorded a dead streak for a
-    // message the relay had delivered.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -1506,17 +1188,7 @@ describe("overflow-canary.sh verdict discrimination", () => {
   });
 
   it("names the terminal outcome when a defer is followed by a bounce", async () => {
-    // exim records a temporary failure and, if the retry also fails for good,
-    // a terminal one - under the same id. A search that settles on the FIRST
-    // verdict it meets reports `defer` for the whole budget: still a correct
-    // dead verdict, but the wrong cause, named to an operator at three in the
-    // morning, and it burns the entire budget before saying so.
-    //
-    // The elapsed assertion is the same one its sibling below makes, and for
-    // the same reason: "names bounce" and "concludes without waiting" are two
-    // separate properties, and this fixture is the only one that exercises
-    // the second when a defer came first. Pinning it in one place only would
-    // leave the two shapes resting on each other's survival.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -1544,17 +1216,7 @@ describe("overflow-canary.sh verdict discrimination", () => {
   });
 
   it("reports a terminal outcome on its own without spending the budget", async () => {
-    // A terminal verdict ends a message, so it must conclude the poll at once
-    // rather than wait out the budget for a Completed line that will never
-    // come. Without this the canary sits for the full 60 seconds on every
-    // bounce and rejection, and a refactor that made every verdict provisional
-    // would ship silently.
-    //
-    // The suite previously wrote only `** defer` lines, so nothing pinned
-    // this. The elapsed bound is the rule's one permitted exception to "never
-    // assert a wall-clock margin" - an assertion that something did NOT happen
-    // inside an interval far shorter than it could take - and it is DERIVED
-    // from the budget rather than chosen beside it.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -1577,21 +1239,7 @@ describe("overflow-canary.sh verdict discrimination", () => {
   });
 
   it("reads as healthy when the smarthost accepted a message to a mailbox that no longer exists", async () => {
-    // THE BOUNDARY OF THIS SCRIPT, pinned by a test rather than by prose
-    // alone - and it is a boundary, not a defect.
-    //
-    // Measured on the real host against the real Gmail smarthost and an
-    // RFC 2606 reserved domain, so that delivery is impossible by
-    // construction: Gmail answered `250 2.0.0 OK ... - gsmtp`, exim logged
-    // Completed, and the canary reported a healthy path. That is correct. The
-    // smarthost accepted the message, and once the message has left the queue
-    // there is no observation left through the local exim that can tell the
-    // smarthost's acceptance from the remote mailbox existing.
-    //
-    // So a wrong, deleted or converted recipient is a permanent false green,
-    // and the only detector for it is the daily heartbeat STOPPING ARRIVING.
-    // The operator section says so; this test is what stops that from being
-    // quietly reworded into a claim the code does not support.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -1614,52 +1262,12 @@ describe("overflow-canary.sh verdict discrimination", () => {
   });
 });
 
-/**
- * A log this process cannot read, which is the deployed defect, and the one
- * thing no test here ever exercised.
- *
- * The alert unit beside this one carries byte-identical hardening and is safe
- * on the same mainlog, because it reads the JOURNAL and never the file: the
- * identical empty `CapabilityBoundingSet=` that makes the file unreadable is
- * harmless next to `journalctl`. So every canary test ran against a scratch
- * log with permissive modes, and the permission was never once a factor. The
- * first production run reported
- *
- *   the local daemon accepted the message as 1xBzft-... but
- *   /var/log/exim4/mainlog records no Completed line for it within 60s
- *
- * while exim had written `Completed` for that id one second after submission.
- * The canary could never read the file; it spent its whole budget proving it,
- * named a relay that had delivered the message, and paged.
- *
- * So these three tests run the script against a log it genuinely cannot read,
- * and pin the property that makes the next one self-diagnosing: an unreadable
- * log says nothing about the relay, and a run that cannot take a verdict must
- * not report one.
- */
 describe("overflow-canary.sh when the exim log cannot be read", () => {
-  /**
-   * What a report may not say once the verdict cannot be taken. Each is a
-   * phrase one of the relay branches emits, and each is a claim about the
-   * relay - the false statement that sent an operator to the smarthost instead
-   * of to a file mode. Asserted as absences rather than as the presence of a
-   * replacement phrase, because the wording of a refusal is the script's to
-   * choose and the absence is the property that matters.
-   */
+
   const RELAY_VERDICT_CLAIMS = [/Completed/, /did not take the message/, /the smarthost/];
 
   it("refuses before submitting anything, and reports the canary itself rather than the relay", async () => {
-    // The pre-flight check. A canary that cannot read the log cannot take a
-    // verdict, so it says so and stops: no submission, no heartbeat mail the
-    // operator would find with no explanation attached.
-    //
-    // It still reports, and that is the load-bearing half. A silent exit 2 is
-    // invisible - nothing on this host reads the canary's exit status - and a
-    // canary that quietly stopped checking reproduces, one level up, the exact
-    // failure this feature exists to end. So the report goes out under a header
-    // that claims the CANARY is broken and never claims the relay is failing,
-    // which is what keeps it from being the false page this defect produced
-    // once already.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -1711,12 +1319,7 @@ describe("overflow-canary.sh when the exim log cannot be read", () => {
   });
 
   it("names the unreadable log when it goes dark mid-poll, and still claims nothing about the relay", async () => {
-    // The window the pre-flight check narrows rather than closes. This host's
-    // /etc/logrotate.d/exim4-base rotates with `nocreate`, so the path is
-    // briefly absent until exim reopens it, and a permission change lands the
-    // same way. The pre-flight read passed, the message is already submitted,
-    // and then there is no log to read for the rest of the budget: the run must
-    // refuse rather than blame the relay.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -1771,12 +1374,7 @@ describe("overflow-canary.sh when the exim log cannot be read", () => {
   });
 
   it("reports a persistently broken canary once, under its own state, and re-arms on health", async () => {
-    // A canary broken for a week must not post every day - the same reasoning
-    // that dedups the outage, applied to the fault - and the state it dedups
-    // on must be the FAULT's, or the first real outage would find the fault
-    // marker's silence standing in its way. A healthy run retires the fault
-    // marker, because the one thing that proves the canary works again is a
-    // run that reached a verdict.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -1820,18 +1418,7 @@ describe("overflow-canary.sh when the exim log cannot be read", () => {
   });
 
   it("reports the outage again after a stretch of blindness, rather than honouring a marker from before it", async () => {
-    // The hole one step after the one above, and the reviewer's finding. A real
-    // outage is reported, so the dead-streak marker is written. The canary then
-    // goes blind for a while - which never clears that marker, because clearing
-    // it is a verdict about the path and a blind run has none. When readability
-    // comes back and the relay is STILL dead, the old marker says "already
-    // reported" and the outage is swallowed: a route that stopped delivering,
-    // looking like a host that already said so.
-    //
-    // So the marker is honoured only while it is still the newest word on the
-    // outage. A fault recorded after it retires the dedup, the outage is
-    // reported again, and the fresh marker - with the fault marker retired in
-    // its turn - re-anchors the streak.
+
     const fixture = makeFixture({ alreadyMarked: true });
     const recordedOutage = readFileSync(fixture.marker, "utf8");
     const webhook = await startWebhook();
@@ -1890,20 +1477,7 @@ describe("overflow-canary.sh when the exim log cannot be read", () => {
   });
 
   it("reports the outage when the fault marker is empty, rather than trusting a stamp it cannot read", async () => {
-    // The one untrustworthy stamp that used to land on the WRONG side. A
-    // zero-length fault marker is reachable, not hypothetical: the marker is
-    // written through a `>` redirect, which truncates before `printf` runs, so
-    // a write that then fails leaves an empty file nothing removes.
-    //
-    // Every other unusable stamp - truncated, whitespace-corrupt, full of
-    // characters a timestamp never carries - is rejected by the character
-    // guard, and an empty string passes it, being a prefix of every class. So
-    // the empty case fell through to the comparison, sorted first, read as the
-    // OLDER of the two, and concluded the recorded outage was still the newest
-    // word on it: the dedup held and the outage after a stretch of blindness
-    // was swallowed. The cost of getting that backwards is an outage nobody
-    // was told about, so an empty stamp on either side retires the dedup like
-    // every other stamp the run cannot trust.
+
     const fixture = makeFixture({ alreadyMarked: true });
     writeFileSync(fixture.faultMarker, "");
     const webhook = await startWebhook();
@@ -1931,13 +1505,7 @@ describe("overflow-canary.sh when the exim log cannot be read", () => {
   });
 
   it("reports the timeout, not the unreadable log, when the gap closes inside the budget", async () => {
-    // The other direction, and the one a latch would get wrong. Remembering the
-    // first unreadable moment and reading it at the deadline turns a gap that
-    // closed again into "the log is not readable" - a claim about this host
-    // that stopped being true before the run ended, in place of the one about
-    // the relay that is still true. So the state that decides the verdict is
-    // the state at the deadline, and a run whose log came back reports what it
-    // read: a defer that never Completed.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -1974,16 +1542,7 @@ describe("overflow-canary.sh when the exim log cannot be read", () => {
 });
 describe("overflow-canary.sh on a message the relay is retrying", () => {
   it("keeps polling past a refused connection and reports the retry at the budget", async () => {
-    // Section 53.9's whole shape, with nothing behind it: the message is still
-    // in the queue and exim is going to try again, so there is no verdict to
-    // read at all. The absence of a Completed line is still an outage at the
-    // budget - this asserts nothing about that - what it pins is that the
-    // detail line exim writes BEFORE its deferral is not a verdict, which is
-    // shown by the poll surviving it.
-    //
-    // `waits` is a record the run produced, not a duration measured from the
-    // outside: a classifier that concludes on the detail line breaks out of
-    // the loop before it ever waits, so it records nothing.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -2007,11 +1566,7 @@ describe("overflow-canary.sh on a message the relay is retrying", () => {
         recorder.waits(),
         "a refused connection is a detail line, and must not end the poll on sight",
       ).toBeGreaterThan(0);
-      // The refusal is the thing an operator needs named, and a run that
-      // spent its budget saying only that no Completed line appeared has told
-      // them nothing about why the message stopped. Compared by equality on the
-      // extracted token - see `reportedVerdict` - so a classifier that recorded
-      // nothing, or recorded the deferral behind it instead, fails here.
+
       expect(reportedVerdict(JSON.parse(webhook.posts[0]!).content)).toBe(
         "Failed to connect to",
       );
@@ -2022,18 +1577,7 @@ describe("overflow-canary.sh on a message the relay is retrying", () => {
   });
 
   it("keeps the FIRST provisional outcome when the retry's refusal is logged after it", async () => {
-    // Two queue runs under one id: a greylist deferral, then a retry whose
-    // connection was refused. Section 53.9 documents the detail line for a
-    // single attempt, ahead of its own deferral, and every other fixture in
-    // this suite has it in that order - so a classifier that skipped detail
-    // lines only until it had a name in hand would pass all of them and read
-    // this retry as a terminal `Failed`.
-    //
-    // Both assertions are load-bearing and they are different properties: the
-    // NAME is the first provisional outcome exim wrote, and the POLL is the
-    // behaviour that name stands for. A classifier that concluded on the
-    // second line gets the name right and still burns the budget differently,
-    // so neither assertion stands in for the other.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -2064,12 +1608,7 @@ describe("overflow-canary.sh on a message the relay is retrying", () => {
   });
 
   it("reports a message delivered on the retry as healthy, though the refused attempt was logged first", async () => {
-    // The same two lines, and then the retry connects. This is the case the
-    // page was spurious FOR: the run that concludes on the detail line records
-    // an outage and marks it, so every later run of the streak posts nothing
-    // and the operator is told the alert path is broken on a route that is
-    // delivering. The exit status is the observable that separates the two -
-    // there is nothing to read out of the report to compare it against.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -2131,16 +1670,7 @@ describe("overflow-canary.sh on a message the relay is retrying", () => {
   });
 
   it("does not read a terminal word out of the relay's own quoted answer", async () => {
-    // The `C=` field is the RELAY's answer, quoted byte for byte, and a
-    // filtering relay's rejection text plausibly carries words like this one -
-    // here a terminal keyword AND a quote exim had to escape inside it, which
-    // is what a naive quote-paired scrub would end the field on. It is exim's
-    // own accounting on the same line - the retrying delivery - that decides
-    // this message, and a scan reading the quotes gets a verdict exim never
-    // gave.
-    //
-    // The exit status separates the two, because the retry then completes and
-    // a run that survived the quoted text has a healthy path to report.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -2165,17 +1695,7 @@ describe("overflow-canary.sh on a message the relay is retrying", () => {
 
 describe("overflow-canary.sh when the flag and the words disagree", () => {
   it("concludes on a rejection whose reason text names a refused socket", async () => {
-    // Section 53.5 makes the two-character flag the verdict, and this is the
-    // line where that matters: `** rejected` against a message whose rejection
-    // reason happens to quote a refused connection. Exim never writes a line
-    // that is both a terminal failure and a 53.9 detail line - the detail line
-    // carries no flag at all - so nothing here is retrying and the verdict was
-    // conclusive the moment exim wrote it.
-    //
-    // Both assertions are load-bearing. A classifier that lets the detail-line
-    // text win on a flagged line takes the WHOLE budget to say it, and names a
-    // retrying relay for a message exim rejected: the cause inverted, on the
-    // one report whose job is to give an operator the cause.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -2200,12 +1720,7 @@ describe("overflow-canary.sh when the flag and the words disagree", () => {
   });
 
   it("reads a quoted `**` as the relay's words, not as exim's flag", async () => {
-    // The anchor, pinned. `flagged` must be true only where `**` FOLLOWS the id,
-    // so a `**` a smarthost wrote into its own quoted answer cannot make an
-    // unflagged detail line terminal. Nothing here is retrying-and-refused
-    // twice over: there is one detail line and it carries no flag, so the run
-    // waits its budget out and names the refusal - the whole inverted cause,
-    // one step further out than the one round 3 fixed.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -2238,15 +1753,7 @@ describe("overflow-canary.sh when the flag and the words disagree", () => {
   });
 
   it("waits out the budget on the lowercase refused-socket line, which ends nothing", async () => {
-    // This exim build emits a lowercase `failed to connect to socket ...`
-    // beside the capitalised one, and the terminal keywords are matched
-    // case-sensitively - so this line carries none of them. It must not be
-    // read as a verdict, and there is nothing provisional to name either: the
-    // run simply reaches its budget with the message still undelivered.
-    //
-    // The pin is on the DIRECTION: a case-insensitive edit to the alternation
-    // would turn this line into a terminal keyword and this test would catch it
-    // by the elapsed bound rather than leaving it invisible.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -2281,12 +1788,7 @@ describe("overflow-canary.sh when the flag and the words disagree", () => {
 
 describe("overflow-canary.sh naming the verdict it read", () => {
   it("names a deferral by the token, not by a prefix of it", async () => {
-    // The other provisional outcome, and the one this suite's neighbours pin
-    // with `toContain("defer")` - which a report saying `deferred`, or
-    // `deferrals pending`, satisfies just as well. The pair is what makes the
-    // token exact: `Failed to connect to` and `defer` are two names the
-    // classifier chooses between, and a pin that cannot tell them apart is not
-    // pinning the choice.
+
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -2303,11 +1805,6 @@ describe("overflow-canary.sh naming the verdict it read", () => {
     }
   });
 
-  // The classifier carries five terminal keywords and this suite had fixtures
-  // for three of them. A keyword only one of the two copies of the block pins
-  // is a keyword a one-sided edit can drop and take the report's cause with it,
-  // and R5's byte-identity is enforced below rather than by a human remembering
-  // to run a diff - so the gap has to close here, in this suite.
   it.each([
     ["blackhole", "terminal-blackhole"],
     ["discarded", "terminal-discarded"],
@@ -2337,15 +1834,7 @@ describe("overflow-canary.sh naming the verdict it read", () => {
 });
 
 describe("the two scripts' verdict blocks", () => {
-  /**
-   * The block both scripts classify with, lifted out of each file.
-   *
-   * Keyed on the assignment that opens it and the line that closes it, NOT on
-   * the first `awk` program in the file: the alert script runs a second one
-   * earlier, for the transport, and a range that started there extracts a
-   * program that is not the verdict block and compares two nothing-values as
-   * equal. Two `indexOf` calls, one on each end, cannot do that.
-   */
+
   function verdictBlock(source: string): string {
     const start = source.indexOf('      verdict=$(awk -v id="$message_id" \'');
     const terminator = '\n      \' "$exim_log") || verdict=\'\'\n';
@@ -2358,11 +1847,7 @@ describe("the two scripts' verdict blocks", () => {
   }
 
   it("is byte-identical in both scripts", () => {
-    // The invariant the brief states as a `diff` for a human to run, which is
-    // an instruction rather than a gate: nothing failed when one copy drifted,
-    // because no test looked. Two copies of one classifier can only be edited
-    // together, and this is what makes that true by construction rather than by
-    // discipline.
+
     const canary = verdictBlock(readFileSync(scriptPath, "utf8"));
     const alert = verdictBlock(readFileSync(alertScriptPath, "utf8"));
 
@@ -2394,18 +1879,6 @@ function shimDir(failing: string): string {
   return directory;
 }
 
-/**
- * A shim directory whose `sleep` records every wait before really taking it,
- * so "the poll kept going" can be read off an interaction the run produced
- * rather than off a wall-clock margin.
- *
- * This is the `shimDir` seam above with a different command in it, not a second
- * fixture harness: the script's only wait is the poll's, PATH is the only
- * thing that redirects it, and `runCanary` already takes this directory. The
- * real sleep still happens, because the deadline the canary closes is computed
- * from the real clock - shortening it would make the run, not the measurement,
- * dishonest.
- */
 function waitRecorder(): { shimBin: string; waits: () => number } {
   const directory = sharedScratch("waits");
   const record = join(directory, "waits");
@@ -2451,11 +1924,7 @@ describe("overflow-canary.sh when the host cannot describe itself", () => {
   it.each(["thirty", "-1", "1.5", "60s"])(
     "refuses a wait budget of %j rather than aborting inside the arithmetic",
     async (budget) => {
-      // The budget reaches a $(( )) expansion, where a non-numeric operand
-      // aborts the run under set -e and says nothing at all. Only the tests
-      // set it, so this is not a production path - but a refusal that names
-      // the value costs three lines, and the silence it replaces is the same
-      // unreadable-result failure the rest of this file keeps closing.
+
       const fixture = makeFixture();
       const smtp = await startSmtp({ outcome: "completed", logPath: fixture.eximLog });
 

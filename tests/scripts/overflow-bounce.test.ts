@@ -1,18 +1,12 @@
 import { spawnSync } from "node:child_process";
-import {
-  appendFileSync,
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "overflow-bounce-root-"), join(tmpdir(), "overflow-bounce-")]);
 
 /**
  * Behavioral coverage for scripts/overflow-bounce.sh, which nothing else in
@@ -78,13 +72,13 @@ const sharedRoots: string[] = [];
 
 afterEach(() => {
   for (const directory of sharedRoots.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
+    tempDirectories.dispose(directory);
   }
 });
 
 /** A scratch directory holding a spool and/or state dir across several runs. */
 function makeRoot(): string {
-  const directory = mkdtempSync(join(tmpdir(), "overflow-bounce-root-"));
+  const directory = tempDirectories.create(join(tmpdir(), "overflow-bounce-root-"));
   sharedRoots.push(directory);
   return directory;
 }
@@ -200,7 +194,7 @@ function runBounce(options: {
   curlStatus?: number;
   args?: string[];
 }): BounceRun {
-  const directory = mkdtempSync(join(tmpdir(), "overflow-bounce-"));
+  const directory = tempDirectories.create(join(tmpdir(), "overflow-bounce-"));
 
   try {
     const bin = join(directory, "bin");
@@ -248,7 +242,7 @@ function runBounce(options: {
       offset: existsSync(offsetPath) ? readFileSync(offsetPath, "utf8") : null,
     };
   } finally {
-    rmSync(directory, { recursive: true, force: true });
+    tempDirectories.dispose(directory);
   }
 }
 

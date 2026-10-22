@@ -1,12 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isDocsOnly, isDocsPath, parseNulList } from "../../scripts/docs-only.ts";
 import { commitFiles, git, scratchGitEnv } from "../support/scratch-git";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "docs-only-cli-")]);
 
 const script = fileURLToPath(
   new URL("../../scripts/docs-only.ts", import.meta.url),
@@ -79,16 +81,16 @@ describe("docs-only CLI against a git repository", () => {
   let root = "";
 
   beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), "docs-only-cli-"));
+    root = await tempDirectories.createAsync(join(tmpdir(), "docs-only-cli-"));
   });
 
   afterAll(async () => {
-    await rm(root, { recursive: true, force: true });
+    await tempDirectories.disposeAsync();
   });
 
   /** A repository whose root commit holds one code file and one doc. */
   async function scratchRepo(): Promise<string> {
-    const repo = await mkdtemp(join(root, "repo-"));
+    const repo = await tempDirectories.createAsync(join(root, "repo-"));
     git(repo, "init", "--quiet", "--initial-branch=main");
     await commitFiles(
       repo,
@@ -192,7 +194,7 @@ describe("docs-only CLI against a git repository", () => {
   });
 
   it("prints false outside a git repository", async () => {
-    const outside = await mkdtemp(join(root, "not-a-repo-"));
+    const outside = await tempDirectories.createAsync(join(root, "not-a-repo-"));
     const result = classify(outside, "HEAD^1");
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("false\n");

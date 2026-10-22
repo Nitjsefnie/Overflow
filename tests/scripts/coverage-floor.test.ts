@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,9 @@ import {
   type CoverageFloorDoc,
   type CoverageSummary,
 } from "../../scripts/check-coverage-floor.ts";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "coverage-floor-"), join(tmpdir(), "coverage-floor-summary-")]);
 
 let root: string;
 const script = fileURLToPath(
@@ -18,11 +21,11 @@ const script = fileURLToPath(
 );
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "coverage-floor-"));
+  root = tempDirectories.create(join(tmpdir(), "coverage-floor-"));
 });
 
 afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  tempDirectories.dispose(root);
 });
 
 const doc = (measured: number, floor: number): CoverageFloorDoc => ({
@@ -221,13 +224,13 @@ describe("coverage floor CLI", () => {
 describe("coverage floor CLI --summary", () => {
   let elsewhere: string;
   beforeEach(() => {
-    elsewhere = mkdtempSync(join(tmpdir(), "coverage-floor-summary-"));
+    elsewhere = tempDirectories.create(join(tmpdir(), "coverage-floor-summary-"));
     spawnSync("git", ["init", "-q"], { cwd: root, encoding: "utf8" });
     mkdirSync(join(root, "scripts"), { recursive: true });
     writeFileSync(join(root, "scripts/coverage.json"), `${JSON.stringify(doc(74.0, 73.0), null, 2)}\n`);
   });
   afterEach(() => {
-    rmSync(elsewhere, { recursive: true, force: true });
+    tempDirectories.dispose(elsewhere);
   });
 
   const write = (path: string, pct: number) => {

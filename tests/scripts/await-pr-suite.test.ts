@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,6 +10,9 @@ import {
   SUITE_WORKFLOW_PATH,
   type AwaitDeps,
 } from "../../scripts/await-pr-suite.ts";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "await-pr-suite-"), join(tmpdir(), "await-pr-suite-cli-")]);
 
 /**
  * The pull-request suite awaiter: the base-defined verify job takes the
@@ -167,7 +170,7 @@ describe("awaitPrSuite — success", () => {
   });
 
   it("appends run_id to GITHUB_OUTPUT when it is set, after any existing content", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "await-pr-suite-"));
+    const dir = tempDirectories.create(join(tmpdir(), "await-pr-suite-"));
     try {
       const outputPath = join(dir, "output");
       writeFileSync(outputPath, "earlier=1\n");
@@ -176,12 +179,12 @@ describe("awaitPrSuite — success", () => {
       expect(outcome.exitCode).toBe(0);
       expect(readFileSync(outputPath, "utf8")).toBe("earlier=1\nrun_id=4242\n");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      tempDirectories.dispose(dir);
     }
   });
 
   it("writes nothing to GITHUB_OUTPUT when the run did not succeed", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "await-pr-suite-"));
+    const dir = tempDirectories.create(join(tmpdir(), "await-pr-suite-"));
     try {
       const outputPath = join(dir, "output");
       writeFileSync(outputPath, "");
@@ -190,7 +193,7 @@ describe("awaitPrSuite — success", () => {
       expect(outcome.exitCode).toBe(1);
       expect(readFileSync(outputPath, "utf8")).toBe("");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      tempDirectories.dispose(dir);
     }
   });
 });
@@ -535,11 +538,11 @@ describe("the CLI, as a spawned process", () => {
   }
 
   function withDir(body: (dir: string) => void): void {
-    const dir = mkdtempSync(join(tmpdir(), "await-pr-suite-cli-"));
+    const dir = tempDirectories.create(join(tmpdir(), "await-pr-suite-cli-"));
     try {
       body(dir);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      tempDirectories.dispose(dir);
     }
   }
 
@@ -602,7 +605,6 @@ describe("the CLI, as a spawned process", () => {
     });
   });
 });
-
 
 describe("awaitPrSuite — exact triggering run", () => {
   function exact(run = suiteRun(), status = 200, newer: FakeRun[] = [], listStatus = 200) {
@@ -694,7 +696,6 @@ describe("awaitPrSuite — exact triggering run", () => {
     expect(h.calls).toEqual([]);
   });
 });
-
 
 describe("complete supersession pagination without waiting", () => {
   const history = Array.from({ length: 101 }, (_, n) => suiteRun({ id: 2000 - n }));
