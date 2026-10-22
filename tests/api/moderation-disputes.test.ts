@@ -66,16 +66,21 @@ describe("POST /api/moderation/disputes", () => {
     expect(await response.json()).toEqual({ error: { code: "INVALID_REQUEST", message: "Invalid closed PR dispute decision." } });
     expect(deps.createService).not.toHaveBeenCalled();
   });
-  it.each(["GRANTED", "DENIED"] as const)("records %s under the session moderator identity", async (decision) => {
+  it.each([
+    { decision: "GRANTED", figure: 1 },
+    { decision: "GRANTED", figure: 5 },
+    { decision: "GRANTED", figure: 10 },
+    { decision: "DENIED", figure: 5 },
+  ] as const)("records $decision with figure $figure under the session moderator identity", async ({ decision, figure }) => {
     const journal = vi.spyOn(console, "info").mockImplementation(() => {});
     try {
       const decideDispute = vi.fn().mockResolvedValue({ ...decided, decision });
       const deps = dependencies({ createService: vi.fn().mockResolvedValue({ decideDispute }) });
-      const response = await createClosedPrDisputeDecisionPostHandler(deps)(json({ ...payload(), decision }));
+      const response = await createClosedPrDisputeDecisionPostHandler(deps)(json({ ...payload(), decision, figure }));
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ request: { ...decided, decision } });
       expect(decideDispute).toHaveBeenCalledExactlyOnceWith(requestId, { id: moderatorId }, {
-        decision, figure: 5, decidedReason: decided.decidedReason,
+        decision, figure, decidedReason: decided.decidedReason,
       });
       expect(journal).toHaveBeenCalledWith("Privileged action", expect.objectContaining({
         action: "closed_pr.dispute.decide", actorId: moderatorId,
