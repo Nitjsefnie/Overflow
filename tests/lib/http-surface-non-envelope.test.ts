@@ -1,23 +1,31 @@
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { repoRoot } from "../../scripts/http-surface-derive.ts";
+import { createOwnedTempDirectory, reclaimOwnedTempDirectories } from "../support/owned-temp-directory";
+
+const fixturePrefix = join(repoRoot, ".next-release-non-envelope-fixture-");
+reclaimOwnedTempDirectories(fixturePrefix);
 
 function probe(extra = "") {
-  const root = mkdtempSync(join(repoRoot, ".next-release-non-envelope-fixture-"));
-  for (const path of ["src", "scripts", "package.json"]) cpSync(join(repoRoot, path), join(root, path), { recursive: true });
-  const route = join(root, "src/app/api/account/route.ts");
-  const source = readFileSync(route, "utf8");
-  writeFileSync(route, `${source}\n${extra}\n`);
-  const env = { ...process.env };
-  delete env.DATABASE_URL;
-  return spawnSync(process.execPath, ["--experimental-transform-types", "--import",
-    join(root, "scripts/register-path-aliases.ts"), "--input-type=module"], {
-    cwd: root, env, encoding: "utf8", timeout: 90_000,
-    input: `import { deriveHttpSurfaceRecord } from "./scripts/http-surface-record.ts";
+  const root = createOwnedTempDirectory(fixturePrefix);
+  try {
+    for (const path of ["src", "scripts", "package.json"]) cpSync(join(repoRoot, path), join(root, path), { recursive: true });
+    const route = join(root, "src/app/api/account/route.ts");
+    const source = readFileSync(route, "utf8");
+    writeFileSync(route, `${source}\n${extra}\n`);
+    const env = { ...process.env };
+    delete env.DATABASE_URL;
+    return spawnSync(process.execPath, ["--experimental-transform-types", "--import",
+      join(root, "scripts/register-path-aliases.ts"), "--input-type=module"], {
+      cwd: root, env, encoding: "utf8", timeout: 90_000,
+      input: `import { deriveHttpSurfaceRecord } from "./scripts/http-surface-record.ts";
 console.log(JSON.stringify(await deriveHttpSurfaceRecord()));`,
-  });
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 describe("recorded non-envelope HTTP failure answers", () => {

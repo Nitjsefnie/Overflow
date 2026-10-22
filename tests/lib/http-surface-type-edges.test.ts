@@ -1,12 +1,16 @@
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { repoRoot } from "../../scripts/http-surface-derive.ts";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const fixtures = createOwnedTempDirectoryRegistry(join(repoRoot, ".next-release-type-edge-fixture-"));
+afterAll(() => fixtures.dispose());
 
 /** The real route graph and tooling, evaluated by the updater's native Node loader. */
 function edgeFixture(declaration: string): string {
-  const root = mkdtempSync(join(repoRoot, ".next-release-type-edge-fixture-"));
+  const root = fixtures.create();
   for (const path of ["src", "scripts", "package.json"]) cpSync(join(repoRoot, path), join(root, path), { recursive: true });
   writeFileSync(join(root, "src/lib/http/type-edge.ts"), `import { errorResponse } from "./error-response.ts";
 export type ReviewMarker = string;
