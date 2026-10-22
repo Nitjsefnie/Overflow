@@ -84,6 +84,11 @@ it.each([false, true])("reconciles closed evidence through materialization, fili
   expect(request.landedPullRequestId).toBe(prs.find((pr) => pr.pull_request_number === 11)!.id);
   expect(await service.decideDispute(request.id, { id: users[2] }, { decision: "GRANTED", figure: 6, decidedReason: "Same work confirmed." }))
     .toMatchObject({ awardedPoints: 5, decision: "GRANTED" });
+  const listed = (await service.listDisputes()).find((row) => row.id === request.id)!;
+  expect(listed.comparison).toMatchObject({
+    closedPullRequest: { number: 12, title: "Original contribution", url: closed.url, rawDiff: "diff for PR 12", reviews: [{ id: 123 }] },
+    landedPullRequest: { number: 11, title: "Landed implementation", url: landing.url, rawDiff: "diff for PR 11" },
+  });
   // A partial pass must keep both the cached closed candidate and its review fact.
   await foldStore.withRepositoryReconciliation(repo.id, () => foldStore.setReconciliationCooldown(repo.id, null));
   expect(await reconcileRepository({ store: foldStore, github: { ...gateway, listIssues: async () => [] } }, repo.id, { reason: "WEBHOOK" }))

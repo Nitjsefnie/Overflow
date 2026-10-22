@@ -830,6 +830,28 @@
     },
     "GET /api/moderation/disputes": {
       "awardedPoints": "null",
+      "comparison": {
+        "closedPullRequest": {
+          "number": "number",
+          "rawDiff": "string",
+          "reviews": {
+            "dismissal": "null",
+            "id": "number",
+            "state": "string",
+            "submittedAt": "string"
+          },
+          "title": "string",
+          "url": "string"
+        },
+        "landedCommitUrl": "null",
+        "landedPullRequest": {
+          "number": "number",
+          "rawDiff": "string",
+          "reviews": "unknown",
+          "title": "string",
+          "url": "string"
+        }
+      },
       "contributorId": "string",
       "createdAt": "string",
       "decidedAt": "null",

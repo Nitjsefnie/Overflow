@@ -1,10 +1,24 @@
+import type { GitHubPullRequestReview } from "@/lib/github/types";
 import { reasonText } from "@/lib/validation/reason";
 import { z } from "zod";
 
 export type ClosedPrDisputeState = "OPEN" | "DECIDED";
 export type ClosedPrDisputeDecision = "GRANTED" | "DENIED";
 
+export type ClosedPrDisputePullRequest = {
+  number: number; title: string; url: string;
+  reviews: GitHubPullRequestReview[] | null;
+  rawDiff: string | null;
+};
+export type ClosedPrDisputeComparison = {
+  closedPullRequest: ClosedPrDisputePullRequest;
+  landedPullRequest: ClosedPrDisputePullRequest | null;
+  landedCommitUrl: string | null;
+};
+
 export type ClosedPrDisputeRequest = {
+  /** Stored comparison evidence is projected for the moderation queue. */
+  comparison?: ClosedPrDisputeComparison;
   id: string;
   contributorId: string;
   pullRequestId: string;

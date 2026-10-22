@@ -157,3 +157,21 @@ describe("moderation dispute list and decisions", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 });
+
+it("shows stored source and landing evidence side by side with forge destinations", () => {
+  render(<ClosedPrDisputeList moderation requests={[{ ...open, comparison: {
+    closedPullRequest: { number: 12, title: "Original parser", url: "https://github.com/owner/repo/pull/12",
+      reviews: [{ id: 101, state: "CHANGES_REQUESTED", submittedAt: "2026-10-01T10:00:00Z", dismissal: null }], rawDiff: "-old parser\n+original parser" },
+    landedPullRequest: { number: 19, title: "Landing parser", url: "https://github.com/owner/repo/pull/19",
+      reviews: [{ id: 102, state: "APPROVED", submittedAt: "2026-10-02T10:00:00Z", dismissal: null }], rawDiff: "-old parser\n+landed parser" },
+    landedCommitUrl: null,
+  } }]} />);
+  const source = within(screen.getByRole("region", { name: "Closed pull request evidence" }));
+  const landing = within(screen.getByRole("region", { name: "Landed change evidence" }));
+  expect(source.getByRole("link", { name: "#12 Original parser" })).toHaveAttribute("href", "https://github.com/owner/repo/pull/12");
+  expect(source.getByText(/CHANGES_REQUESTED/)).toHaveTextContent("101");
+  expect(source.getByText(/original parser/)).toHaveTextContent("-old parser");
+  expect(landing.getByRole("link", { name: "#19 Landing parser" })).toHaveAttribute("href", "https://github.com/owner/repo/pull/19");
+  expect(landing.getByText(/APPROVED/)).toHaveTextContent("102");
+  expect(landing.getByText(/landed parser/)).toHaveTextContent("-old parser");
+});
