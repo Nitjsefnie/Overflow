@@ -633,6 +633,19 @@ it("FINAL-P1 closed contributor PR reaches the filing store through the fold", (
     "closed contributor PR must reach the real materializer before filing").toContain(202);
 });
 
+it("preserves the first retained merge proof when a PR closes multiple issues", () => {
+  const snapshot = outsiderFixture();
+  snapshot.issues[0]!.closingPullRequests[0]!.mergeCommitOid = "a".repeat(40);
+  const second = structuredClone(snapshot.issues[0]!);
+  second.id = 102;
+  second.number = 2;
+  second.closingPullRequests[0]!.mergeCommitOid = "b".repeat(40);
+  snapshot.issues.push(second);
+  const result = foldRepository(snapshot);
+  expect(result.settlements.map((settlement) => settlement.mergeCommitOid)).toEqual(["a".repeat(40), "a".repeat(40)]);
+  expect(result.pullRequests[0]!.mergeCommitOid).toBe("a".repeat(40));
+});
+
 function selfWorkFixture(): RepositoryFoldSnapshot {
   const snapshot = outsiderFixture();
   snapshot.issues[0]!.closingPullRequests[0]!.authorLogin = "sponsor";

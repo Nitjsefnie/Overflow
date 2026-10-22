@@ -1091,7 +1091,7 @@ function rememberPullRequest(
       existing.githubIssueIds.push(issueId);
       existing.githubIssueIds.sort((left, right) => left - right);
     }
-    return { ...existing, mergeCommitOid: pullRequest.mergeCommitOid, finalCommitAt: pullRequest.finalCommitAt };
+    return existing as FoldPullRequest & { mergeCommitOid: string; finalCommitAt: string };
   }
 
   const folded = {
