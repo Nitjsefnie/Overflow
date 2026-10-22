@@ -361,7 +361,7 @@
   ],
   "scripts/db-offhost-backup.sh": [
     6763,
-    12159
+    12207
   ],
   "scripts/db-restore.sh": [
     1066,
@@ -921,7 +921,7 @@
   ],
   "src/lib/legal-revisions.ts": [
     2875,
-    3298
+    3299
   ],
   "src/lib/logging/journal-levels.ts": [
     464,
@@ -1313,7 +1313,7 @@
   ],
   "tests/components/legal-revisions-marker.test.tsx": [
     6803,
-    12941
+    12942
   ],
   "tests/components/not-found.test.tsx": [
     3722,
@@ -1545,7 +1545,7 @@
   ],
   "tests/docs/backup-restore-runbook.test.ts": [
     2365,
-    11320
+    11349
   ],
   "tests/docs/decommission-runbook.test.ts": [
     2215,
@@ -1689,7 +1689,7 @@
   ],
   "tests/scripts/db-offhost-backup.test.ts": [
     6134,
-    27053
+    27082
   ],
   "tests/scripts/ledger-relay-app-key-rotation.test.ts": [
     1353,
