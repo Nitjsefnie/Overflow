@@ -1,6 +1,6 @@
 {
   "snapshotFormat": 2,
-  "httpServerVersion": "1.3.0",
+  "httpServerVersion": "1.4.0",
   "errorEnvelope": {
     "error": {
       "code": "string",
@@ -127,6 +127,24 @@
           "createdAt": "string",
           "id": "string"
         }
+      },
+      "closedPrDisputeRequests": {
+        "asContributor": {
+          "createdAt": "string",
+          "id": "string"
+        },
+        "asDecider": {
+          "createdAt": "string",
+          "id": "string"
+        }
+      },
+      "disputeCreditAdjustmentLines": {
+        "createdAt": "string",
+        "id": "string"
+      },
+      "disputeCreditAdjustments": {
+        "createdAt": "string",
+        "id": "string"
       },
       "exportedAt": "string",
       "forgeIdentities": {

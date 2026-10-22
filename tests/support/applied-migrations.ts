@@ -76,4 +76,5 @@ export const appliedMigrationNames: readonly string[] = [
   "068_reconciliation_sweep_authority.sql",
   "069_repository_reconciliation_auth_path.sql",
   "070_reconciliation_held_status.sql",
+  "071_closed_pr_disputes.sql",
 ];

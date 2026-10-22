@@ -116,12 +116,11 @@ describe("privileged action credential migration", () => {
   });
 
   it("preserves existing history and event immutability across 054", async () => {
-    // contest_request_id (migration 061) rides along as a nullable null on
-    // the moderation_events rows only; moderator_role_changes has no such
-    // column.
+    // The request references from 061 and 071 are nullable on moderation
+    // events; moderator_role_changes has neither column.
     expect(await historyRows()).toEqual(previousRows.map((row) =>
       "new_state" in row
-        ? { ...row, credential_kind: null, credential_token_id: null, contest_request_id: null }
+        ? { ...row, credential_kind: null, credential_token_id: null, contest_request_id: null, dispute_request_id: null }
         : { ...row, credential_kind: null, credential_token_id: null },
     ));
     const sql = getSql();
