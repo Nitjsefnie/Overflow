@@ -57,6 +57,23 @@ afterAll(async () => {
 });
 
 describe("migration checksums", () => {
+  it("retains cleanup ownership after a fixture write fails", async () => {
+    const before = new Set(readdirSync(tmpdir()));
+    await expect(fixtureDirectory("missing/001.sql", "select 1;"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    const added = readdirSync(tmpdir()).filter((name) => name.startsWith("overflow-1055-migration-") && !before.has(name));
+    expect(added).toHaveLength(1);
+  });
+
+  it.skipIf(process.env.TEMP_DIRECTORY_TEARDOWN_PROBE !== "1")("cleans fixtures despite database teardown failure", async () => {
+    await fixtureDirectory("001.sql", "select 1;");
+    const end = adminSql!.end.bind(adminSql);
+    vi.spyOn(adminSql!, "end").mockImplementationOnce(async () => {
+      await end();
+      throw new Error("fixture teardown failure");
+    });
+  });
+
   it("records the file's checksum when it applies a migration", async () => {
     await onNewDatabase("record_checksum", async (sql) => {
       await runMigrations();
