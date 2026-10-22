@@ -9,6 +9,9 @@ const fixtures = [
   ["aliased import", (name: string) => `import { ${name} as make } from "node:fs/promises"; void make("fixture-");`],
   ["namespace", (name: string) => `import * as fs from "node:fs"; void fs.${name}("fixture-");`],
   ["computed member", (name: string) => `import * as fs from "node:fs"; void fs["${name}"]("fixture-");`],
+  ["static template member", (name: string) => `import fs from "node:fs"; void fs[\`${name}\`]("fixture-");`],
+  ["escaped static template member", (name: string) => `import fs from "node:fs"; void fs[\`${name.replace("m", "\\u006d")}\`]("fixture-");`],
+  ["static template destructuring", (name: string) => `const { [\`${name}\`]: make } = require("node:fs"); void make("fixture-");`],
   ["optional member", (name: string) => `import * as fs from "node:fs"; void fs?.${name}?.("fixture-");`],
   ["destructured require", (name: string) => `const { "${name}": make } = require("node:fs"); void make("fixture-");`],
 ] as const;
@@ -39,6 +42,15 @@ describe("owned temp directory ESLint guard", () => {
       expect(result.warningCount).toBe(0);
     },
   );
+
+  it.each([
+    'export const first = `mkdtempSync`[0];',
+    'const key = "file"; export const value = { [key]: `mkdtempSync` };',
+  ])("allows allocator-name templates outside property lookup: %s", async (source) => {
+    const [result] = await eslint.lintText(source, { filePath: "tests/fixtures/temp-guard-control.ts" });
+    expect(result.errorCount).toBe(0);
+    expect(result.warningCount).toBe(0);
+  });
 
   it("allows owned allocation and disposal in tests", async () => {
     const [result] = await eslint.lintText([

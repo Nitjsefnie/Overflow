@@ -10,7 +10,7 @@ export default defineConfig([
       "no-restricted-syntax": [
         "error",
         {
-          selector: "Identifier[name=/^mkdtemp(Sync)?$/], MemberExpression[computed=true][property.value=/^mkdtemp(Sync)?$/], Property[key.value=/^mkdtemp(Sync)?$/]",
+          selector: "Identifier[name=/^mkdtemp(Sync)?$/], MemberExpression[computed=true][property.value=/^mkdtemp(Sync)?$/], Property[key.value=/^mkdtemp(Sync)?$/], :matches(MemberExpression[computed=true] > TemplateLiteral.property, Property[computed=true] > TemplateLiteral.key)[expressions.length=0] > TemplateElement[value.cooked=/^mkdtemp(Sync)?$/]",
           message: "Use tests/support/owned-temp-directory and dispose the directory in its existing test lifecycle.",
         },
       ],
