@@ -1,11 +1,15 @@
 import { generateKeyPairSync, randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReconciliationDependencies } from "@/lib/fold/reconcile";
 import type { ReconciliationWorkerDependencies, ReconciliationWorkerSchedule } from "@/lib/fold/reconciliation-worker";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const fixtureDirectories = createOwnedTempDirectoryRegistry(join(tmpdir(), "reconciliation-app-keys-"));
+
 
 const { startWorker, startSweep, lookup, oauth, authWrite, row } = vi.hoisted(() => ({
   startWorker: vi.fn(), startSweep: vi.fn(), lookup: vi.fn(), oauth: vi.fn(), authWrite: vi.fn(),
@@ -50,10 +54,13 @@ vi.mock("@/lib/fold/postgres-store", () => ({
   },
 }));
 
-const directory = mkdtempSync(join(tmpdir(), "reconciliation-app-keys-"));
-const keyPath = join(directory, "app.pem");
-writeFileSync(keyPath, generateKeyPairSync("rsa", { modulusLength: 2048 })
-  .privateKey.export({ type: "pkcs8", format: "pem" }));
+let keyPath: string;
+beforeAll(() => {
+  const directory = fixtureDirectories.create();
+  keyPath = join(directory, "app.pem");
+  writeFileSync(keyPath, generateKeyPairSync("rsa", { modulusLength: 2048 })
+    .privateKey.export({ type: "pkcs8", format: "pem" }));
+});
 const registrationToken = randomBytes(24).toString("base64url");
 const reconciliationToken = randomBytes(24).toString("base64url");
 const sponsorToken = randomBytes(24).toString("base64url");
@@ -99,7 +106,7 @@ beforeEach(() => {
 });
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
-afterAll(() => { vi.resetModules(); rmSync(directory, { recursive: true }); });
+afterAll(() => { try { vi.resetModules(); } finally { fixtureDirectories.dispose(); } });
 
 it("routes the composite through a distinct injected registration-method lookup", async () => {
   row.method = "oauth_hook";

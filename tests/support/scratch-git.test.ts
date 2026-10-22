@@ -4,24 +4,26 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "./owned-temp-directory";
 
-/**
- * The scratch-git helpers must hold their repository to itself even when the
- * test process inherits git state through the environment — as it does under
- * `git -c k=v rebase -x '<cmd>'`, which exports GIT_CONFIG_PARAMETERS to the
- * command. The module reads process.env when it loads, so each case sets the
- * variables first and then imports a fresh copy of it.
- */
+const fixtureDirectories = createOwnedTempDirectoryRegistry(join(tmpdir(), "scratch-git-"));
+
+
+// Set inherited Git state before importing the environment-reading helper.
 describe("scratch-git helpers under an inherited git environment", () => {
   const saved = { ...process.env };
   let root = "";
 
   beforeAll(async () => {
-    root = await realpath(await mkdtemp(join(tmpdir(), "scratch-git-")));
+    root = await realpath(await fixtureDirectories.createAsync());
   });
 
   afterAll(async () => {
-    await rm(root, { recursive: true, force: true });
+    try {
+      if (root) await rm(root, { recursive: true, force: true });
+    } finally {
+      await fixtureDirectories.disposeAsync();
+    }
   });
 
   afterEach(() => {
@@ -68,27 +70,7 @@ describe("scratch-git helpers under an inherited git environment", () => {
     expect(git(repo, "rev-parse", "--absolute-git-dir")).toBe(join(repo, ".git"));
   });
 
-  /**
-   * `tryGit` exists so that a read whose NON-ZERO exit is the answer can keep
-   * the status. Its other job is the harder half: a launch that never produced a
-   * status must not be readable as "looked, found nothing".
-   *
-   * Measured on this box, `spawnSync` pointed at a working directory that does
-   * not exist returns `status: null`, `error: spawnSync git ENOENT`, and a
-   * `stdout` that is **undefined** — not the empty string, and not the `string`
-   * the old return type promised. The key is present; the value is not a string.
-   *
-   * The FALSE GREEN is the neighbouring case, and it is why the guard throws
-   * rather than coalescing. Measured through vitest's own `expect`:
-   * `expect(undefined).not.toContain(x)` raises an `AssertionError` — red, but on
-   * a message about an unusable argument rather than about the repository — while
-   * `expect("").not.toContain(x)` **PASSES**, and a timeout gives exactly that
-   * `""`. So a helper returning `stdout: result.stdout ?? ""` would certify a
-   * repository it never opened as clean. Throwing is the only shape in which
-   * "could not look" cannot be read as "looked, found nothing" — the exact
-   * distinction between status 1 and everything above it. Asserted here rather
-   * than trusted.
-   */
+  // Launch errors must throw; coalescing missing stdout would falsely certify a clean repository.
   it("refuses to report a launch failure as a clean read", async () => {
     const { tryGit } = await freshHelpers();
     const missing = join(root, "no-such-directory-938");

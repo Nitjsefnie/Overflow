@@ -1,11 +1,15 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const fixtureDirectories = createOwnedTempDirectoryRegistry(join(tmpdir(), "owned-processes-test-"));
+
 
 const modulePath = join(process.cwd(), "scripts/owned-processes.mjs");
 interface Owner {
@@ -42,7 +46,7 @@ const children: ChildProcess[] = [];
 const owners: Owner[] = [];
 const fixtureGroups: number[] = [];
 async function directory() {
-  const path = await mkdtemp(join(tmpdir(), "owned-processes-test-"));
+  const path = await fixtureDirectories.createAsync();
   directories.push(path);
   return path;
 }
@@ -65,18 +69,22 @@ async function assertGone(...pids: number[]) {
 }
 
 afterEach(async () => {
-  for (const owner of owners.splice(0)) await owner.cleanup();
-  for (const pid of fixtureGroups.splice(0)) {
-    try { process.kill(-pid, "SIGKILL"); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
-  }
-  for (const child of children.splice(0)) {
-    if (child.pid && !gone(child.pid)) {
-      try { process.kill(-child.pid, "SIGKILL"); }
+  try {
+    for (const owner of owners.splice(0)) await owner.cleanup();
+    for (const pid of fixtureGroups.splice(0)) {
+      try { process.kill(-pid, "SIGKILL"); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
     }
+    for (const child of children.splice(0)) {
+      if (child.pid && !gone(child.pid)) {
+        try { process.kill(-child.pid, "SIGKILL"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      }
+    }
+    for (const path of directories.splice(0)) await rm(path, { recursive: true, force: true });
+  } finally {
+    fixtureDirectories.dispose();
   }
-  for (const path of directories.splice(0)) await rm(path, { recursive: true, force: true });
 });
 
 it.each([false, true])("terminates the entire group (grandchild ignores TERM: %s)", async (ignore) => {
