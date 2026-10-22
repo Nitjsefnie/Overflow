@@ -154,23 +154,25 @@ export class GitHubGateway implements ForgeGateway {
       const labeled = new Set(timeline.history.flatMap((event) => event.kind === "LABELED" ? [event.label] : []));
       const expectedCount = counts?.get(node.number);
       const expectedIds = manifest?.get(node.number);
+      const criticalLabels = labels.filter((label) => options?.timelineCriticalLabels?.has(label));
+      const hasMissingCriticalLabel = (value: typeof timeline) => criticalLabels.some((label) =>
+        !value.history.some((event) => event.kind === "LABELED" && event.label === label),
+      );
       const matchesEvidence = (value: typeof timeline) => timelineMatchesEvidence(value, expectedCount, expectedIds);
       const suspect = targeted && (!matchesEvidence(timeline) || (node.timelineItems !== undefined && labels.some((label) =>
         options?.timelineCriticalLabels?.has(label)
         || (options?.timelineWatchedLabels?.has(label) && !labeled.has(label)),
       )));
       const authoritativeTimeline = suspect ? await withFreshSweepReads(() => this.getIssueTimeline(repository, node.number)) : timeline;
-      if (targeted && !matchesEvidence(authoritativeTimeline)) {
-        // The original evidence may describe a timeline rewritten while the scan
-        // read it: such a rewrite reads as incompleteness against witnesses
-        // captured earlier. Genuine truncation persists across reads, so re-take
-        // both independent witnesses for this one issue and compare them against
-        // THIS reread; only a persistent disagreement refuses publication.
+      if (targeted && (!matchesEvidence(authoritativeTimeline) || hasMissingCriticalLabel(authoritativeTimeline))) {
+        // A rewrite can make scan-time witnesses stale. Re-take them after the reread;
+        // persistent disagreement or a missing standing critical label still refuses.
+        // The reread replaces the earlier timeline.
         const [freshCounts, freshManifest] = await withFreshSweepReads(() => drainIssueReads([
           this.getIssueTimelineCounts(repository, [node]),
           this.getPerIssueTimelineManifest(repository, [node]),
         ]));
-        if (!timelineMatchesEvidence(authoritativeTimeline, freshCounts.get(node.number), freshManifest.get(node.number))) {
+        if (!timelineMatchesEvidence(authoritativeTimeline, freshCounts.get(node.number), freshManifest.get(node.number)) || hasMissingCriticalLabel(authoritativeTimeline)) {
           throw new Error(`GitHub issue ${node.number} timeline completeness could not be verified.`);
         }
       }
@@ -1457,11 +1459,8 @@ function lastLinkPage(linkHeader: string | null): number | null {
   return Number.isSafeInteger(page) && page >= 1 ? page : null;
 }
 
-/**
- * Timeline ids must be unique and match the exact independent count. The REST
- * manifest is a lower bound: every attested id must occur in the timeline.
- * An empty manifest verifies only a zero count, for scan-time and fresh pairs.
- */
+/** Unique ids match the exact count and contain the REST lower bound.
+ * Positive counts need a witness; history also needs an event witness. */
 function timelineMatchesEvidence(
   timeline: { history: Array<{ id: string }>; comments: Array<{ id: string }> },
   expectedCount: number | undefined,
@@ -1472,7 +1471,8 @@ function timelineMatchesEvidence(
 
   return ids.length === expectedCount && uniqueIds.size === expectedCount
     && expectedIds !== undefined && (expectedCount === 0 || expectedIds.size > 0)
-    && [...expectedIds].every((id) => uniqueIds.has(id));
+    && [...expectedIds].every((id) => uniqueIds.has(id))
+    && (timeline.history.length === 0 || timeline.history.some(({ id }) => expectedIds.has(id)));
 }
 
 /**
