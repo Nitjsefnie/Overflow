@@ -10,6 +10,21 @@ const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "owned-
 let root: string;
 const helper = new URL("./owned-temp-directory.ts", import.meta.url).href;
 
+function killedOwnerDirectory(prefix: string): string {
+  const killed = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import { writeFileSync, writeSync } from 'node:fs';
+    import { join } from 'node:path';
+    import { createOwnedTempDirectory } from ${JSON.stringify(helper)};
+    const directory = createOwnedTempDirectory(process.argv[1]);
+    writeFileSync(join(directory, 'fixture.json'), '{}');
+    writeSync(1, directory);
+    process.kill(process.pid, 'SIGKILL');
+  `, prefix], { encoding: "utf8", timeout: 10_000 });
+  expect(killed.error).toBeUndefined();
+  expect(killed.signal).toBe("SIGKILL");
+  return killed.stdout;
+}
+
 beforeAll(() => {
   root = tempDirectories.create(join(tmpdir(), "owned-temp-directory-tests-"));
 });
@@ -64,7 +79,7 @@ describe("owned temp directories", () => {
     expect(existsSync(directory)).toBe(true);
 
     const live = createOwnedTempDirectory(prefix);
-    const foreign = join(root, `others-${killed.pid}-fixture`);
+    const foreign = join(root, `others-${killed.pid}-abcdef`);
     mkdirSync(foreign);
     const malformed = `${prefix}${killed.pid}-abcde`;
     mkdirSync(malformed);
@@ -129,4 +144,38 @@ it("registers async creations under each armed prefix and disposes them asynchro
   expect(existsSync(second)).toBe(true);
   await fixtures.disposeAsync();
   expect(existsSync(second)).toBe(false);
+});
+
+it("reclaims killed owners when constructing a registry with an initial prefix", () => {
+  const prefix = join(root, "registry-initial-");
+  const orphan = killedOwnerDirectory(prefix);
+  const live = createOwnedTempDirectory(prefix);
+  expect(existsSync(orphan)).toBe(true);
+  expect(existsSync(live)).toBe(true);
+
+  const fixtures = createOwnedTempDirectoryRegistry([prefix]);
+  try {
+    expect(existsSync(orphan)).toBe(false);
+    expect(existsSync(live)).toBe(true);
+  } finally {
+    fixtures.dispose();
+  }
+});
+
+it.each(["create", "createAsync"] as const)("reclaims killed owners on first use of a new prefix through %s", async (method) => {
+  const fixtures = createOwnedTempDirectoryRegistry([]);
+  const prefix = join(root, `registry-dynamic-${method}-`);
+  const orphan = killedOwnerDirectory(prefix);
+  const live = createOwnedTempDirectory(prefix);
+  expect(existsSync(orphan)).toBe(true);
+  expect(existsSync(live)).toBe(true);
+
+  try {
+    const created = await fixtures[method](prefix);
+    expect(existsSync(created)).toBe(true);
+    expect(existsSync(orphan)).toBe(false);
+    expect(existsSync(live)).toBe(true);
+  } finally {
+    await fixtures.disposeAsync();
+  }
 });
