@@ -1,8 +1,8 @@
-import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   baseCommit,
   git,
@@ -21,6 +21,11 @@ import { SERVER_VERSION } from "@/lib/version";
 import { readSurfaceSnapshotsAt } from "../../scripts/surface-snapshot-base.ts";
 import { assertSnapshotVersions } from "../../scripts/surface-version.ts";
 import type { McpSurfaceSnapshot } from "../../scripts/surface-change.ts";
+import { createOwnedTempDirectory, reclaimOwnedTempDirectories } from "../support/owned-temp-directory";
+
+for (const prefix of ["http-snapshot-fixture-", "http-snapshot-identity-"]) {
+  reclaimOwnedTempDirectories(join(tmpdir(), prefix));
+}
 
 const mcpSnapshot = JSON.parse(
   readFileSync(new URL("../../scripts/mcp-surface-snapshot.json", import.meta.url), "utf8"),
@@ -207,51 +212,82 @@ logPrivilegedAction({ action: "audit.open", actorId: "fixture-actor", credential
     expect(() => assertNoBreakingRecordedChange(base)).not.toThrow();
   });
 
-  it("commits the synthetic fixture with no ambient git identity (the CI-runner case)", () => {
-    // Actions runners carry no global or system git config and no identity
-    // env, and a fresh clone's local config names nobody: the fixture commit
-    // must not depend on any of it. Empty config files and unset identity env
-    // scrub the stored sources; user.useConfigOnly then forbids the
-    // hostname-based auto-detection that a well-named development box falls
-    // back to (the runner has no FQDN and fails it as "empty ident name"),
-    // so the spawn must carry its own identity to pass anywhere.
-    const scratch = mkdtempSync(join(tmpdir(), "http-snapshot-identity-"));
-    const emptyConfig = join(scratch, "empty-gitconfig");
-    writeFileSync(emptyConfig, "");
-    const identityEnv = [
-      "GIT_CONFIG_GLOBAL",
-      "GIT_CONFIG_SYSTEM",
-      "GIT_AUTHOR_NAME",
-      "GIT_AUTHOR_EMAIL",
-      "GIT_COMMITTER_NAME",
-      "GIT_COMMITTER_EMAIL",
-      "GIT_CONFIG_COUNT",
-      "GIT_CONFIG_KEY_0",
-      "GIT_CONFIG_VALUE_0",
-    ];
-    const saved = new Map(identityEnv.map((name) => [name, process.env[name]]));
-    for (const name of identityEnv) {
-      delete process.env[name];
+  it.each(["success", "serialization failure", "git failure"])("leaves no fixture directory after %s", (outcome) => {
+    const before = snapshotDirectories("http-snapshot-fixture-");
+    const fixture = structuredClone(snapshot);
+    if (outcome === "serialization failure") {
+      Object.assign(fixture, { circular: fixture });
     }
-    process.env.GIT_CONFIG_GLOBAL = emptyConfig;
-    process.env.GIT_CONFIG_SYSTEM = emptyConfig;
-    process.env.GIT_CONFIG_COUNT = "1";
-    process.env.GIT_CONFIG_KEY_0 = "user.useConfigOnly";
-    process.env.GIT_CONFIG_VALUE_0 = "true";
     try {
-      const base = commitSnapshotFixture({ httpServerVersion: snapshot.httpServerVersion, routes: {} });
-      expect(git(["cat-file", "-t", base])).toBe("commit");
-    } finally {
-      for (const [name, value] of saved) {
-        if (value === undefined) {
-          delete process.env[name];
-        } else {
-          process.env[name] = value;
-        }
+      if (outcome === "git failure") {
+        vi.stubEnv("GIT_OBJECT_DIRECTORY", join(tmpdir(), `absent-git-objects-${process.pid}`));
       }
+      const attempt = () => commitSnapshotFixture(fixture);
+      if (outcome === "success") expect(attempt()).toMatch(/^[a-f0-9]+$/);
+      else expect(attempt).toThrow(outcome === "git failure" ? /git hash-object/ : /circular/i);
+    } finally {
+      vi.unstubAllEnvs();
     }
+    expect(snapshotDirectories("http-snapshot-fixture-")).toEqual(before);
+  });
+
+  it.each([false, true])("commits with no ambient git identity and cleans up (throw=%s)", (fails) => {
+    const before = snapshotDirectories("http-snapshot-identity-");
+    const attempt = () => {
+      // Actions runners carry no global or system git config and no identity
+      // env, and a fresh clone's local config names nobody: the fixture commit
+      // must not depend on any of it. Empty config files and unset identity env
+      // scrub the stored sources; user.useConfigOnly then forbids the
+      // hostname-based auto-detection that a well-named development box falls
+      // back to (the runner has no FQDN and fails it as "empty ident name"),
+      // so the spawn must carry its own identity to pass anywhere.
+      const scratch = createOwnedTempDirectory(join(tmpdir(), "http-snapshot-identity-"));
+      const emptyConfig = join(scratch, "empty-gitconfig");
+      const identityEnv = [
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+      ];
+      const saved = new Map(identityEnv.map((name) => [name, process.env[name]]));
+      try {
+        writeFileSync(emptyConfig, "");
+        for (const name of identityEnv) {
+          delete process.env[name];
+        }
+        process.env.GIT_CONFIG_GLOBAL = emptyConfig;
+        process.env.GIT_CONFIG_SYSTEM = emptyConfig;
+        process.env.GIT_CONFIG_COUNT = "1";
+        process.env.GIT_CONFIG_KEY_0 = "user.useConfigOnly";
+        process.env.GIT_CONFIG_VALUE_0 = "true";
+        if (fails) throw new Error("identity fixture failure");
+        const base = commitSnapshotFixture({ httpServerVersion: snapshot.httpServerVersion, routes: {} });
+        expect(git(["cat-file", "-t", base])).toBe("commit");
+      } finally {
+        for (const [name, value] of saved) {
+          if (value === undefined) {
+            delete process.env[name];
+          } else {
+            process.env[name] = value;
+          }
+        }
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    };
+    if (fails) expect(attempt).toThrow("identity fixture failure");
+    else expect(attempt).not.toThrow();
+    expect(snapshotDirectories("http-snapshot-identity-")).toEqual(before);
   });
 });
+
+function snapshotDirectories(prefix: string): string[] {
+  return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).sort();
+}
 
 /** Both gates compare both surfaces at the same base and enforce the stronger move. */
 function assertNoBreakingRecordedChange(base: string, current?: HttpSurfaceSnapshot): void {
@@ -267,10 +303,15 @@ function assertNoBreakingRecordedChange(base: string, current?: HttpSurfaceSnaps
  * comparisons at an arbitrary recorded surface without moving any ref.
  */
 function commitSnapshotFixture(snapshot: HttpSurfaceSnapshot): string {
-  const scratch = mkdtempSync(join(tmpdir(), "http-snapshot-fixture-"));
-  const file = join(scratch, "http-surface-snapshot.json");
-  writeFileSync(file, JSON.stringify(snapshot, null, 2));
-  const blob = gitInput(["hash-object", "-w", file]);
+  const scratch = createOwnedTempDirectory(join(tmpdir(), "http-snapshot-fixture-"));
+  let blob: string;
+  try {
+    const file = join(scratch, "http-surface-snapshot.json");
+    writeFileSync(file, JSON.stringify(snapshot, null, 2));
+    blob = gitInput(["hash-object", "-w", file]);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
   const leaf = gitInput(["mktree"], `100644 blob ${blob}\thttp-surface-snapshot.json\n`);
   const root = gitInput(["mktree"], `040000 tree ${leaf}\tscripts\n`);
   return gitInput(["commit-tree", root, "-m", "synthetic HTTP snapshot fixture"], "");

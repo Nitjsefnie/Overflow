@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
+import { createOwnedTempDirectory, reclaimOwnedTempDirectories } from "../support/owned-temp-directory";
 import { closeSql, getSql } from "@/lib/db/client";
 
 const migrationsDirectory = path.resolve(
@@ -18,6 +19,11 @@ const migrationsDirectory = path.resolve(
 const migrationNames = readdirSync(migrationsDirectory)
   .filter((name) => /^\d+_.+\.sql$/.test(name))
   .sort();
+
+const fixturePrefix = path.join(tmpdir(), "overflow-1055-migration-");
+reclaimOwnedTempDirectories(fixturePrefix);
+const fixtureDirectories: string[] = [];
+const fixtureDirectoriesBefore = readdirSync(tmpdir()).filter((name) => name.startsWith("overflow-1055-migration-"));
 
 const originalDatabaseUrl = process.env.DATABASE_URL;
 let container: StartedTestContainer | undefined;
@@ -36,10 +42,18 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await closeSql();
-  await adminSql?.end();
-  await container?.stop();
-  restoreDatabaseUrl();
+  try {
+    await closeSql();
+    await adminSql?.end();
+    await container?.stop();
+  } finally {
+    restoreDatabaseUrl();
+    for (const directory of fixtureDirectories) {
+      await rm(directory, { recursive: true, force: true });
+    }
+    expect(readdirSync(tmpdir()).filter((name) => name.startsWith("overflow-1055-migration-")).sort())
+      .toEqual(fixtureDirectoriesBefore.sort());
+  }
 });
 
 describe("migration checksums", () => {
@@ -217,7 +231,8 @@ describe("recorded migration compatibility", () => {
 });
 
 async function fixtureDirectory(name: string, contents: string): Promise<string> {
-  const directory = await mkdtemp(path.join(tmpdir(), "overflow-1055-migration-"));
+  const directory = createOwnedTempDirectory(fixturePrefix);
+  fixtureDirectories.push(directory);
   await writeFile(path.join(directory, name), contents);
   return directory;
 }
