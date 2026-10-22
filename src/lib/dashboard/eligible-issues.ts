@@ -216,6 +216,24 @@ const BOARD_QUERY = `
           (adjustments.target_account_id, -lines.amount)
         ) as legs(account_id, amount)
         where legs.account_id in (select sponsor_id from candidate_sponsors)
+        union all
+        -- Signed dispute lines affect debt, but never count as completed work.
+        select legs.account_id, legs.amount, adjustments.created_at, 2,
+          adjustments.id::text || ':' || lines.id::text || ':' || legs.leg,
+          repositories.provider, coalesce(repositories.instance_url, ''),
+          coalesce(repositories.forge_project_id, repositories.github_repository_id),
+          pull_requests.pull_request_number, issues.issue_number
+        from dispute_credit_adjustments as adjustments
+        join dispute_credit_adjustment_lines as lines on lines.adjustment_id = adjustments.id
+        join closed_pr_dispute_requests as disputes on disputes.id = adjustments.dispute_id
+        join pull_requests on pull_requests.id = disputes.pull_request_id
+        join issues on issues.id = disputes.issue_id
+        join registered_repositories as repositories on repositories.id = pull_requests.repository_id
+        cross join lateral (values
+          (lines.creditor_id, lines.amount, 'creditor'),
+          (adjustments.target_account_id, -lines.amount, 'target')
+        ) as legs(account_id, amount, leg)
+        where legs.account_id in (select sponsor_id from candidate_sponsors)
       ),
       running_balances as (
         select *, coalesce(sum(amount) over (
