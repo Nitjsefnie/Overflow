@@ -138,8 +138,8 @@ function runCommand(command: string, databaseUrl?: string, cwd = repositoryRoot)
     // the documented script's own interface, not host config supplying behavior:
     // this suite's container database is disposable by construction, and a
     // branch carrying an unmerged migration can only migrate it by the escape
-    // the guard itself names (issue 511). Unset here in CI and on main, so the
-    // child's behavior is unchanged where the guard has nothing to refuse.
+    // the guard itself names (issue 511). The PostgreSQL suite selects it in
+    // setup after creating its disposable database.
     if (process.env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD !== undefined) {
       environment.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD = process.env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD;
     }
