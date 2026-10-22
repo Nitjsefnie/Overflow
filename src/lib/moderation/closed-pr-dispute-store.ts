@@ -1,6 +1,6 @@
 import { getSql } from "@/lib/db/client";
 import type { EnforcementState, PullRequestState, SqlClient } from "@/lib/db/types";
-import { z } from "zod";
+import { disputeComparisons, reviewEvidence } from "@/lib/moderation/closed-pr-dispute-evidence";
 import { countReviewRoundsAsOf } from "@/lib/fold/review-rounds";
 import { closedPrDisputeDecisionSchema } from "@/lib/moderation/closed-pr-dispute-service";
 import type {
@@ -33,14 +33,6 @@ type RequestRow = {
 };
 
 type Repository = { owner_name: string; provider: string; instance_url: string | null };
-
-const reviewState = z.enum(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"]);
-const reviewEvidence = z.object({ reviews: z.array(z.object({
-  id: z.number().int().positive(),
-  state: reviewState,
-  submittedAt: z.string().nullable(),
-  dismissal: z.object({ at: z.string(), previousState: reviewState.nullable() }).nullable(),
-})) });
 
 export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
   public constructor(private readonly sql: SqlClient = getSql()) {}
@@ -251,7 +243,8 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
         case when state = 'OPEN' then id end asc,
         decided_at desc, id desc
     `;
-    return rows.map(toRequest);
+    const comparisons = await disputeComparisons(this.sql, rows.map((row) => row.id));
+    return rows.map((row) => ({ ...toRequest(row), comparison: comparisons.get(row.id) }));
   }
 
   public async listRequestsForAccount(accountId: string): Promise<ClosedPrDisputeRequest[]> {

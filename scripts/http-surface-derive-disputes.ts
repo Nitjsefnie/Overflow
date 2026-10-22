@@ -23,7 +23,12 @@ export async function disputeSurfaceAnswers(): Promise<Record<string, DerivedAns
   const member: ClosedPrDisputeRouteDependencies = { ...auth, getCurrentRole: async () => "MEMBER",
     createService: async () => ({ fileDispute: async () => filed, listDisputes: async () => [filed, decided] }) };
   const moderator: ClosedPrDisputeModerationRouteDependencies = { ...auth, getCurrentRole: async () => "MODERATOR",
-    createService: async () => ({ decideDispute: async () => decided, listDisputes: async () => [filed, decided] }) };
+    createService: async () => ({ decideDispute: async () => decided, listDisputes: async () => [filed, decided].map((request) => ({ ...request, comparison: {
+      closedPullRequest: { number: 12, title: "Original contribution", url: "https://github.com/example/repo/pull/12",
+        reviews: [{ id: 1, state: "CHANGES_REQUESTED" as const, submittedAt: "2026-10-01T10:00:00Z", dismissal: null }], rawDiff: "original diff" },
+      landedPullRequest: { number: 19, title: "Landing", url: "https://github.com/example/repo/pull/19",
+        reviews: [], rawDiff: "landing diff" }, landedCommitUrl: null,
+    } })) }) };
   return withAppUrl(async () => ({
     "GET /api/disputes": await derivedAnswer(await createClosedPrDisputeListGetHandler(member)(memberRequest("/api/disputes"))),
     "POST /api/disputes": await derivedAnswer(await createClosedPrDisputePostHandler(member)(mutationRequest("/api/disputes", "POST", {
