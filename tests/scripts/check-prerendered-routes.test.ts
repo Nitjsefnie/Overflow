@@ -1,9 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { rmSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { checkPrerenderedRoutes } from "../../scripts/check-prerendered-routes";
+
+import { createOwnedTempDirectory, reclaimOwnedTempDirectories } from "../support/owned-temp-directory";
+
+const fixturePrefix = join(tmpdir(), "overflow-1144-prerender-");
+reclaimOwnedTempDirectories(fixturePrefix);
 
 const manifest = (routes: Record<string, unknown> = {}, dynamicRoutes: Record<string, unknown> = {}) => ({
   version: 4, routes, dynamicRoutes,
@@ -72,12 +77,16 @@ describe("the prerender decision", () => {
 
 describe("the prerender gate CLI", () => {
   function run(source?: string, symlink = false) {
-    const cwd = mkdtempSync(join(tmpdir(), "overflow-1144-prerender-"));
-    const build = join(cwd, symlink ? "release" : ".next");
-    mkdirSync(build);
-    if (source !== undefined) writeFileSync(join(build, "prerender-manifest.json"), source);
-    if (symlink) symlinkSync(build, join(cwd, ".next"), "dir");
-    return spawnSync(process.execPath, [script], { cwd, encoding: "utf8" });
+    const cwd = createOwnedTempDirectory(fixturePrefix);
+    try {
+      const build = join(cwd, symlink ? "release" : ".next");
+      mkdirSync(build);
+      if (source !== undefined) writeFileSync(join(build, "prerender-manifest.json"), source);
+      if (symlink) symlinkSync(build, join(cwd, ".next"), "dir");
+      return spawnSync(process.execPath, [script], { cwd, encoding: "utf8" });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   }
 
   it.each([undefined, "{broken", "null", JSON.stringify({ routes: {} })])(
