@@ -209,10 +209,11 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
           decided_at, moderator_figure, awarded_points, created_at
       `;
       if (row === undefined) throw new Error("Closed PR dispute decision returned no row.");
+      // Stamp history after the user lock: transaction start may predate a sanction we waited for.
       const [event] = await transaction<{ id: string }[]>`
-        insert into moderation_events (target_user_id, actor_id, audit_id, prior_state, new_state, reason, dispute_request_id)
+        insert into moderation_events (target_user_id, actor_id, audit_id, prior_state, new_state, reason, dispute_request_id, created_at)
         values (${request.contributor_id}, ${input.moderatorAccountId}, null, ${account.enforcement_state},
-          ${account.enforcement_state}, ${decidedReason}, ${request.id}) returning id
+          ${account.enforcement_state}, ${decidedReason}, ${request.id}, clock_timestamp()) returning id
       `;
       if (event === undefined) throw new Error("Closed PR dispute decision event returned no row.");
 
