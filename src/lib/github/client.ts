@@ -1458,12 +1458,9 @@ function lastLinkPage(linkHeader: string | null): number | null {
 }
 
 /**
- * The one completeness rule for every witness pair: the timeline's ids must be
- * exactly as many as the independent count, unique, and exactly the REST
- * manifest's ids. The scan-time evidence and the fresh pair taken for a
- * suspect reread run this same comparison, so a mid-read rewrite and a truly
- * truncated read are separated by whether disagreement persists across
- * re-taken evidence — never by a different rule.
+ * Timeline ids must be unique and match the exact independent count. The REST
+ * manifest is a lower bound: every attested id must occur in the timeline.
+ * An empty manifest verifies only a zero count, for scan-time and fresh pairs.
  */
 function timelineMatchesEvidence(
   timeline: { history: Array<{ id: string }>; comments: Array<{ id: string }> },
@@ -1471,8 +1468,11 @@ function timelineMatchesEvidence(
   expectedIds: Set<string> | undefined,
 ): boolean {
   const ids = [...timeline.history, ...timeline.comments].map(({ id }) => id);
-  return ids.length === expectedCount && new Set(ids).size === expectedCount
-    && expectedIds?.size === expectedCount && ids.every((id) => expectedIds.has(id));
+  const uniqueIds = new Set(ids);
+
+  return ids.length === expectedCount && uniqueIds.size === expectedCount
+    && expectedIds !== undefined && (expectedCount === 0 || expectedIds.size > 0)
+    && [...expectedIds].every((id) => uniqueIds.has(id));
 }
 
 /**

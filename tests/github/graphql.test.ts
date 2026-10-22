@@ -164,7 +164,6 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
       ...Array.from({ length: 5 }, () => ({ type: "undefinedField", message: "Field removed" })),
       { type: "RATE_LIMIT", message: "Rate limit exceeded" },
     ]);
-
     expect(error.message).toContain("RATE_LIMIT");
     expect(error.message).toContain("undefinedField: Field removed");
     expect(error.message).toContain("RATE_LIMIT: Rate limit exceeded");
@@ -177,7 +176,6 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
     { label: "long identical types", entry: { type: "t".repeat(512), message: "Denied" } },
   ])("bounds 100,000 $label to the aggregate summary budget", async ({ entry }) => {
     const error = await failureFor(Array.from({ length: 100_000 }, () => entry));
-
     expect(error.message.length).toBeLessThanOrEqual(8_000);
     expect(error.message).toContain("99999 duplicate error(s) collapsed");
   });
@@ -188,7 +186,6 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
       { type: "RATE_LIMIT", message: "Denied", path: ["second"] },
       { type: "RATE_LIMIT", message: "Denied", path: ["third"] },
     ]);
-
     expect(error.message).toBe('GitHub GraphQL request failed. RATE_LIMIT: Denied path=["first"]; … 2 duplicate error(s) collapsed');
   });
 
@@ -199,7 +196,6 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
       { type: "RATE_LIMIT", message: "Second reason" },
       { type: "FORBIDDEN", message: "First reason" },
     ]);
-
     expect(error.message).toBe("GitHub GraphQL request failed. FORBIDDEN: First reason; FORBIDDEN: Second reason; RATE_LIMIT: Second reason; … 1 duplicate error(s) collapsed");
   });
 
@@ -210,7 +206,6 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
       { type: "RATE_LIMIT", message: "Second limit" },
       { type: "RATE_LIMIT", message: "First limit" },
     ]);
-
     expect(error.message).toBe("GitHub GraphQL request failed. SCHEMA: Field 0; SCHEMA: Field 1; SCHEMA: Field 2; SCHEMA: Field 3; SCHEMA: Field 4; RATE_LIMIT; … 3 more error(s) without full details");
   });
 
@@ -219,7 +214,6 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
       type: `TYPE_${index}_${"t".repeat(500)}`,
       message: "Denied",
     })));
-
     expect(error.message.length).toBeLessThanOrEqual(8_000);
     expect(error.message).toContain("99995 more error(s) without full details");
     expect(error.message).toContain("summary budget exceeded");
@@ -236,7 +230,6 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
 
   it("retains the 7674-unit maximum full prefix within the aggregate ceiling", async () => {
     const error = await failureFor(maximumFullEntries());
-
     expect(error.message.length).toBeLessThanOrEqual(8_000);
     expect(error.message.length).toBe(7_674);
   });
@@ -256,7 +249,6 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
       { type: tailType, message: "Tail detail" },
       ...Array.from({ length: 9 }, () => ({ type: "z".repeat(512), message: "Overflow" })),
     ]);
-
     expect(error.message.length).toBeLessThanOrEqual(8_000);
     expect(error.message.length).toBe(expectedLength);
     expect(error.message.includes(`; ${tailType};`)).toBe(retained);
@@ -276,7 +268,6 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
       ? [...Array.from({ length: 5 }, (_, index) => ({ type: "undefinedField", message: `Field ${index}` })), entry]
       : [entry];
     const error = await failureFor(entries);
-
     expect(error.message).not.toContain("test-access-token");
     expect(error.message).toContain("[REDACTED]");
   });
@@ -284,14 +275,12 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
   it.each([511, 512, 513])("retains type text deliberately at length %i", async (length) => {
     const error = await failureFor([{ type: "t".repeat(length), message: "Denied" }]);
     const expectedType = length === 513 ? `${"t".repeat(511)}…` : "t".repeat(length);
-
     expect(error.message).toBe(`GitHub GraphQL request failed. ${expectedType}: Denied`);
   });
 
   it.each([511, 512, 513])("retains message text deliberately at length %i", async (length) => {
     const error = await failureFor([{ type: "FORBIDDEN", message: "m".repeat(length) }]);
     const expectedMessage = length === 513 ? `${"m".repeat(511)}…` : "m".repeat(length);
-
     expect(error.message).toBe(`GitHub GraphQL request failed. FORBIDDEN: ${expectedMessage}`);
   });
 
@@ -302,7 +291,6 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
       message: field === "message" ? text : "Denied",
     }]);
     const retained = `${"a".repeat(510)}…`;
-
     expect(error.message).toBe(field === "type"
       ? `GitHub GraphQL request failed. ${retained}: Denied`
       : `GitHub GraphQL request failed. FORBIDDEN: ${retained}`);
@@ -316,7 +304,6 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
       path: ["p".repeat(512), "issues", 0, "title"],
     }]);
     const preview = error.message.split(" path=")[1];
-
     expect(preview.length).toBeLessThanOrEqual(512);
     expect(JSON.parse(preview)).toEqual([`${"p".repeat(45)}…`, "issues", 0, "title"]);
   });
@@ -328,7 +315,6 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
       path: Array.from({ length: 11 }, () => `${"\u0000".repeat(7)}😀\\\"more`),
     }]);
     const preview = error.message.split(" path=")[1];
-
     expect(preview.length).toBeLessThanOrEqual(512);
     expect(JSON.parse(preview)).toEqual([
       ...Array.from({ length: 10 }, () => `${"\u0000".repeat(7)}😀…`), "…",
@@ -337,7 +323,6 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
 
   it("distinguishes a malformed path segment from a genuine question mark", async () => {
     const error = await failureFor([{ type: "FORBIDDEN", message: "Denied", path: ["?", {}] }]);
-
     expect(error.message).toContain('path=["?",null]');
   });
 
@@ -350,7 +335,6 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
       message: "Denied",
       path: Array.from({ length: Number(length) }, (_, index) => `s${index}`),
     }]);
-
     expect(error.message).toBe(`GitHub GraphQL request failed. FORBIDDEN: Denied path=${preview}`);
   });
 
@@ -360,7 +344,6 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
       message: "Access\ndenied\there",
       path: ["repo\nsitory", "is\tsues"],
     }]);
-
     expect(error.message).toBe('GitHub GraphQL request failed. FOR BIDDEN TYPE: Access denied here path=["repo sitory","is sues"]');
   });
 
@@ -809,7 +792,6 @@ describe("GitHubGateway GraphQL source adapter", () => {
     });
 
     const issues = await gateway.listIssues({ owner: "octo", name: "overflow" });
-
     expect(issues[0]).toMatchObject({
       authorLogin: "owner",
       createdAt: "2026-08-30T09:00:00.000Z",
@@ -886,7 +868,6 @@ describe("GitHubGateway GraphQL source adapter", () => {
     });
 
     const issues = await gateway.listIssues({ owner: "octo", name: "overflow" });
-
     expect(issues[0]?.comments[0]).toMatchObject({
       id: "unedited-comment",
       lastEditedAt: null,
@@ -907,7 +888,6 @@ describe("GitHubGateway GraphQL source adapter", () => {
           return timelineResponse();
         }
         cursors.push(request.variables.cursor);
-
         if (request.variables.cursor === null) {
           return Response.json({
             data: {
@@ -1006,7 +986,6 @@ describe("GitHubGateway GraphQL source adapter", () => {
     });
 
     const issues = await gateway.listIssues({ owner: "octo", name: "overflow" });
-
     expect(issues.map(({ id, state, stateReason, closedAt }) => ({ id, state, stateReason, closedAt }))).toEqual([
       { id: 101, state: "CLOSED", stateReason: "NOT_PLANNED", closedAt: "2026-09-04T12:00:00.000Z" },
       { id: 102, state: "OPEN", stateReason: null, closedAt: null },
@@ -1051,7 +1030,6 @@ describe("GitHubGateway GraphQL source adapter", () => {
     });
 
     const issues = await gateway.listIssues({ owner: "octo", name: "overflow" });
-
     expect(issues.map((issue) => issue.claimAssigneeGitHubLogin)).toEqual([
       "claim-holder",
       null,
@@ -1080,7 +1058,6 @@ describe("GitHubGateway GraphQL source adapter", () => {
           query: string;
           variables: { cursor: string | null; issueNumber?: number };
         };
-
         if (request.query.includes("query RepositoryIssues")) {
           return Response.json({
             data: {
@@ -1121,7 +1098,6 @@ describe("GitHubGateway GraphQL source adapter", () => {
     });
 
     const issues = await gateway.listIssues({ owner: "octo", name: "overflow" });
-
     expect(issues.map((issue) => issue.labels)).toEqual([
       [...firstHundredLabels("issue-one"), "required/1"],
       [...firstHundredLabels("issue-two"), "required/2"],
@@ -1699,9 +1675,7 @@ describe("GitHubGateway GraphQL account identities", () => {
         assignee: { login: "contributor" },
       },
     ]);
-
     const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
-
     expect(issue?.history).toEqual([
       {
         kind: "LABELED",
@@ -1753,9 +1727,7 @@ describe("GitHubGateway GraphQL account identities", () => {
         body: commentBody,
       },
     ]);
-
     const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
-
     expect(issue).toMatchObject({ authorLogin: "owner", authorGitHubUserId: 4242 });
     expect(issue?.comments).toEqual([
       {
@@ -1799,9 +1771,7 @@ describe("GitHubGateway GraphQL account identities", () => {
         body: commentBody,
       },
     ]);
-
     const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
-
     expect(issue).toMatchObject({ authorLogin: "dependabot[bot]", authorGitHubUserId: null });
     expect(issue?.history).toEqual([
       {
@@ -1851,9 +1821,7 @@ describe("GitHubGateway GraphQL account identities", () => {
           body: commentBody,
         },
       ]);
-
       const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
-
       expect(issue).toMatchObject({ authorLogin: "owner", authorGitHubUserId: null });
       expect(issue?.history[0]).toMatchObject({ actorLogin: "owner", actorGitHubUserId: null });
       expect(issue?.comments[0]).toMatchObject({ authorLogin: "owner", authorGitHubUserId: null });
@@ -1889,7 +1857,6 @@ describe("GitHubGateway GraphQL account identities", () => {
     });
 
     await gateway.listIssues({ owner: "octo", name: "overflow" });
-
     expect(queries.some((query) => query.includes("query RepositoryIssues"))).toBe(true);
     // Every issue gets a cheap nested timeline; the detector selects suspect
     // issues for complete per-issue rereads. Check those documents here.
@@ -1970,7 +1937,6 @@ describe("GitHubGateway issue timeline ordering", () => {
     });
 
     const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
-
     expect(issue?.history.map((event) => event.id)).toEqual(["event-early", "event-mid", "event-late"]);
     expect(issue?.comments.map((comment) => comment.id)).toEqual(["comment-early", "comment-late"]);
   });
@@ -1993,7 +1959,6 @@ describe("GitHubGateway issue timeline ordering", () => {
     });
 
     const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
-
     expect(issue?.comments.map((comment) => comment.id)).toEqual(["comment-a", "comment-b", "comment-c"]);
     expect(issue?.history.map((event) => event.id)).toEqual(["event-only"]);
   });
@@ -2025,6 +1990,46 @@ describe("GitHubGateway issue timeline query shape", () => {
     createdAt: "2026-09-06T04:00:00.000Z", lastEditedAt: null,
     author: { login: "sponsor", databaseId: 4242 }, body: "settled: 6 because of the delivered work",
   };
+
+  it.each([
+    { name: "accepts a capped REST event collection", accepts: true, count: 5,
+      timeline: [openingEvent(1), { ...settledEvent, __typename: "UnlabeledEvent", id: "removed" },
+        { ...settledEvent, __typename: "AssignedEvent", id: "assigned", assignee: { login: "worker" } },
+        settledEvent, rationale],
+      manifest: [openingEvent(1), { __typename: "UnlabeledEvent", id: "removed" },
+        { __typename: "AssignedEvent", id: "assigned" }, { __typename: "ClosedEvent", id: "closed" }, rationale] },
+    { name: "refuses an empty manifest against a positive count", accepts: false, count: 2,
+      timeline: [openingEvent(1), rationale], manifest: [] },
+    { name: "refuses a manifest id the reread timeline dropped", accepts: false, count: 2,
+      timeline: [openingEvent(1), rationale], manifest: [{ ...openingEvent(1), id: "dropped-event" }] },
+  ])("$name", async ({ accepts, count, timeline, manifest }) => {
+    const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
+      const perIssue = perIssueManifestResponse(input, { 1: manifest });
+      if (perIssue !== null) return perIssue;
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/issues/events")) {
+        return Response.json([], { headers: { link: `<${url.origin}${url.pathname}?page=2>; rel="next"` } });
+      }
+      const repoManifest = manifestResponse(input, {});
+      if (repoManifest !== null) return repoManifest;
+      const { query, variables } = JSON.parse(String(init?.body));
+      if (query.includes("query RepositoryIssues")) return Response.json({ data: { repository: { issues: {
+        nodes: [issueNode(101, 1, "Manifest evidence", { nodes: [], pageInfo })], pageInfo,
+      } } } });
+      if (query.includes("query IssueTimelineCounts")) return countsResponse(variables, () => count);
+      if (query.includes("query IssueTimeline")) return timelineResponse(timeline);
+      throw new Error(`Unexpected GraphQL operation: ${query}`);
+    } });
+    const result = gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions);
+    if (accepts) {
+      await expect(result).resolves.toHaveLength(1);
+      const [issue] = await result;
+      expect(issue?.history.map(({ id }) => id)).toEqual(["opening-event-1", "removed", "assigned", "settled-event"]);
+      expect(issue?.comments.map(({ id }) => id)).toEqual(["rationale-node"]);
+    } else {
+      await expect(result).rejects.toThrow("GitHub issue 1 timeline completeness could not be verified.");
+    }
+  });
 
   it.each(["LabeledEvent", "UnlabeledEvent", "AssignedEvent", "UnassignedEvent", "IssueComment"])(
     "detects correlated GraphQL loss of %s against repository REST evidence",
@@ -2570,7 +2575,6 @@ describe("GitHubGateway issue timeline query shape", () => {
       }
       throw new Error("Unexpected GraphQL operation");
     } });
-
     await expect(gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions)).rejects.toThrow();
     expect(exactCursors).toEqual([null]);
   });
@@ -2829,7 +2833,6 @@ describe("GitHubGateway issue timeline query shape", () => {
     });
 
     const issues = await gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions);
-
     expect(issues).toHaveLength(count);
     expect(issues[89]?.number).toBe(90);
     expect(issues[89]?.history).toEqual([
@@ -2957,7 +2960,6 @@ describe.each(["GraphQL", "REST"] as const)("%s HTTP failures", (transport) => {
     "reports %s", async (_case, status, headers, body, rateLimited, retryAfterSeconds) => {
       const error = await request(async () => new Response(body, { status, headers }))
         .catch((error: unknown) => error);
-
       expect(error).toBeInstanceOf(GitHubApiError);
       expect(error).toMatchObject({ status, rateLimited, retryAfterSeconds, body });
     },
@@ -2966,7 +2968,6 @@ describe.each(["GraphQL", "REST"] as const)("%s HTTP failures", (transport) => {
   it("caps the diagnostic body while classifying the full response", async () => {
     const error = await request(async () => new Response("x".repeat(500) + "secondary rate limit", { status: 403 }))
       .catch((error: unknown) => error);
-
     expect(error).toBeInstanceOf(GitHubApiError);
     expect(error).toMatchObject({ status: 403, rateLimited: true, body: "x".repeat(500) });
     expect((error as GitHubApiError).body).toHaveLength(500);
@@ -2976,7 +2977,6 @@ describe.each(["GraphQL", "REST"] as const)("%s HTTP failures", (transport) => {
     const response = new Response("Forbidden", { status: 403, headers: { "retry-after": "60" } });
     await response.text();
     const error = await request(async () => response).catch((error: unknown) => error);
-
     expect(error).toBeInstanceOf(GitHubApiError);
     expect(error).toMatchObject({ status: 403, rateLimited: true, retryAfterSeconds: 60, body: null });
   });
