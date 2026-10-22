@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createOwnedTempDirectory, reclaimOwnedTempDirectories } from "./owned-temp-directory";
 
 let root: string;
@@ -17,6 +17,27 @@ afterAll(() => {
 });
 
 describe("owned temp directories", () => {
+  it("preserves a directory when its owner probe is denied", () => {
+    const prefix = join(root, "denied-");
+    const directory = createOwnedTempDirectory(prefix);
+    const kill = process.kill.bind(process);
+    let denied = false;
+    const probe = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid === process.pid && signal === 0) {
+        denied = true;
+        throw Object.assign(new Error("permission denied"), { code: "EPERM" });
+      }
+      return kill(pid, signal);
+    });
+    try {
+      reclaimOwnedTempDirectories(prefix);
+      expect(denied).toBe(true);
+      expect(existsSync(directory)).toBe(true);
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
   it("records ownership atomically in the directory name", () => {
     const prefix = join(root, "atomic-");
     const directory = createOwnedTempDirectory(prefix);
@@ -27,9 +48,12 @@ describe("owned temp directories", () => {
   it("reclaims the real directory left by a killed owner on the next sweep", () => {
     const prefix = join(root, "killed-");
     const killed = spawnSync(process.execPath, ["--input-type=module", "-e", `
-      import { writeSync } from 'node:fs';
+      import { writeFileSync, writeSync } from 'node:fs';
+      import { join } from 'node:path';
       import { createOwnedTempDirectory } from ${JSON.stringify(helper)};
-      writeSync(1, createOwnedTempDirectory(process.argv[1]));
+      const directory = createOwnedTempDirectory(process.argv[1]);
+      writeFileSync(join(directory, 'fixture.json'), '{}');
+      writeSync(1, directory);
       process.kill(process.pid, 'SIGKILL');
     `, prefix], { encoding: "utf8", timeout: 10_000 });
     expect(killed.error).toBeUndefined();
@@ -38,9 +62,11 @@ describe("owned temp directories", () => {
     expect(existsSync(directory)).toBe(true);
 
     const live = createOwnedTempDirectory(prefix);
-    const foreign = createOwnedTempDirectory(join(root, "unrelated-"));
+    const foreign = mkdtempSync(join(root, `others-${killed.pid}-`));
+    const malformed = `${prefix}${killed.pid}-abcde`;
+    mkdirSync(malformed);
     const unmarked = mkdtempSync(prefix);
-    const invalidOwner = `${prefix}0-invalid`;
+    const invalidOwner = `${prefix}0-abcdef`;
     mkdirSync(invalidOwner);
     const symlink = `${prefix}${killed.pid}-abcdef`;
     symlinkSync(foreign, symlink, "dir");
@@ -55,7 +81,7 @@ describe("owned temp directories", () => {
     expect(sweep.error).toBeUndefined();
     expect(sweep.status, sweep.stderr).toBe(0);
     expect(existsSync(directory)).toBe(false);
-    for (const kept of [live, foreign, unmarked, invalidOwner, symlink, file]) {
+    for (const kept of [live, foreign, malformed, unmarked, invalidOwner, symlink, file]) {
       expect(existsSync(kept), kept).toBe(true);
     }
     reclaimOwnedTempDirectories(prefix); // Repeated and concurrent sweeps are harmless.

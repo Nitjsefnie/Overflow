@@ -231,7 +231,7 @@ logPrivilegedAction({ action: "audit.open", actorId: "fixture-actor", credential
     expect(snapshotDirectories("http-snapshot-fixture-")).toEqual(before);
   });
 
-  it.each([false, true])("commits with no ambient git identity and cleans up (throw=%s)", (fails) => {
+  it.each(["success", "body failure", "write failure"])("commits with no ambient git identity and cleans up (%s)", (outcome) => {
     const before = snapshotDirectories("http-snapshot-identity-");
     const attempt = () => {
       // Actions runners carry no global or system git config and no identity
@@ -242,7 +242,7 @@ logPrivilegedAction({ action: "audit.open", actorId: "fixture-actor", credential
       // back to (the runner has no FQDN and fails it as "empty ident name"),
       // so the spawn must carry its own identity to pass anywhere.
       const scratch = createOwnedTempDirectory(join(tmpdir(), "http-snapshot-identity-"));
-      const emptyConfig = join(scratch, "empty-gitconfig");
+      const emptyConfig = outcome === "write failure" ? scratch : join(scratch, "empty-gitconfig");
       const identityEnv = [
         "GIT_CONFIG_GLOBAL",
         "GIT_CONFIG_SYSTEM",
@@ -265,7 +265,7 @@ logPrivilegedAction({ action: "audit.open", actorId: "fixture-actor", credential
         process.env.GIT_CONFIG_COUNT = "1";
         process.env.GIT_CONFIG_KEY_0 = "user.useConfigOnly";
         process.env.GIT_CONFIG_VALUE_0 = "true";
-        if (fails) throw new Error("identity fixture failure");
+        if (outcome === "body failure") throw new Error("identity fixture failure");
         const base = commitSnapshotFixture({ httpServerVersion: snapshot.httpServerVersion, routes: {} });
         expect(git(["cat-file", "-t", base])).toBe("commit");
       } finally {
@@ -279,7 +279,8 @@ logPrivilegedAction({ action: "audit.open", actorId: "fixture-actor", credential
         rmSync(scratch, { recursive: true, force: true });
       }
     };
-    if (fails) expect(attempt).toThrow("identity fixture failure");
+    if (outcome === "body failure") expect(attempt).toThrow("identity fixture failure");
+    else if (outcome === "write failure") expect(attempt).toThrow(/EISDIR/);
     else expect(attempt).not.toThrow();
     expect(snapshotDirectories("http-snapshot-identity-")).toEqual(before);
   });
