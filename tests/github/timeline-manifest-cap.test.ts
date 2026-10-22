@@ -61,18 +61,26 @@ describe("timeline manifest lower-bound evidence", () => {
       timeline: [openingEvent, removedEvent, assignedEvent, settledEvent, rationale],
       manifest: [openingEvent, removedEvent, assignedEvent, { __typename: "ClosedEvent", id: "closed" }, rationale] },
     { name: "refuses an empty manifest", accepts: false, count: 2, timeline: common, manifest: [] },
+    { name: "refuses an empty events collection", accepts: false, count: 2,
+      timeline: common, manifest: [rationale] },
+    { name: "refuses a missing critical label event", accepts: false, count: 3, standing: ["settled: 6"],
+      initial: [openingEvent, assignedEvent, settledEvent, rationale],
+      timeline: [openingEvent, assignedEvent, rationale], manifest: common },
     { name: "refuses a manifest id missing from the reread", accepts: false, count: 2, timeline: common,
       manifest: [...common, { ...openingEvent, id: "dropped-event" }] },
     { name: "refuses a surplus duplicate", accepts: false, count: 2,
       timeline: [...common, rationale], manifest: common },
-  ])("$name", async ({ accepts, count, timeline, manifest }) => {
+  ])("$name", async ({ accepts, count, timeline, manifest, initial, standing }) => {
     const gateway = new GitHubGateway({ accessToken: ["test", "access", "token"].join("-"), fetch: async (input, init) => {
       const response = manifestResponse(new URL(String(input)).pathname, manifest);
       if (response !== null) return response;
       const { query } = JSON.parse(String(init?.body));
       const operation = /query (\w+)/.exec(query)?.[1];
       if (operation === "RepositoryIssues") return Response.json({ data: { repository: { issues: {
-        nodes: [issueNode()], pageInfo,
+        nodes: [{ ...issueNode(), labels: { nodes: (standing ?? []).map((name) => ({ name })), pageInfo },
+          ...(initial === undefined ? {} : {
+            timelineItems: { nodes: initial, totalCount: 4, pageInfo },
+          }) }], pageInfo,
       } } } });
       if (operation === "IssueTimelineCounts") return Response.json({ data: { repository: { i1: {
         databaseId: 101, timelineItems: { totalCount: count },
