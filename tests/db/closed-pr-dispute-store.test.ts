@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
+import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 import { closeSql, getSql } from "@/lib/db/client";
 import type { EnforcementState, PullRequestState } from "@/lib/db/types";
 import type { GitHubPullRequestReview } from "@/lib/github/types";
@@ -802,6 +803,46 @@ describe("grant financial uniqueness", () => {
     }
   });
 
+
+it.each([false, true])("replays dispute debt through the view and eligible board (reversal=%s)", async (reversal) => {
+  const fixture = await decisionFixture();
+  const borrowerId = reversal ? fixture.landingCreditorId : fixture.sponsorId;
+  if (reversal) {
+    await insertLandingSettlement(fixture, borrowerId);
+    // Prior ordinary debt leaves -3; the landing reversal takes this account to -10.
+    for (const credits of [7, 3]) {
+      const debt = await decisionFixture();
+      await insertLandingSettlement(debt, debt.landingCreditorId, borrowerId, credits);
+    }
+    await sql`update users set role = 'MODERATOR' where id = ${fixture.moderatorId}`;
+  }
+  await service().decideDispute(fixture.requestId, { id: fixture.moderatorId }, { ...decision(fixture), figure: 10 });
+  for (let index = 0; index < 2; index += 1) {
+    const laterWork = await decisionFixture();
+    await sql`update pull_requests set author_id = ${borrowerId}, merged_at = clock_timestamp() where id = ${laterWork.landingId}`;
+    await insertLandingSettlement(laterWork, borrowerId);
+  }
+  const [balance] = await sql`select balance from balances where account_id = ${borrowerId}`;
+  expect(Number(balance.balance)).toBe(4);
+  const [limit] = await sql`select repaid_debt, credit_limit from account_credit_limits where account_id = ${borrowerId}`;
+  // Preserve both independent consumers' outcomes even when one assertion fails.
+  expect.soft(Number(limit.repaid_debt), "completed work repays dispute debt").toBe(10);
+  expect.soft(Number(limit.credit_limit)).toBe(11);
+  // Return to -10 after repayment: at limit 11 both openings board; at default 10 only the repayment exception does.
+  for (let index = 0; index < 2; index += 1) {
+    const laterDebt = await decisionFixture();
+    await sql`update pull_requests set merged_at = clock_timestamp() where id = ${laterDebt.landingId}`;
+    await insertLandingSettlement(laterDebt, laterDebt.landingCreditorId, borrowerId);
+  }
+  const [repo] = await sql<{ id: string; owner_name: string }[]>`insert into registered_repositories
+    (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme)
+    values (${externalId++}, ${`owner/repayment-${externalId++}`}, ${borrowerId}, 'PUBLIC', ${externalId++},
+      ${sql.json(validDifficultyScheme())}) returning id, owner_name`;
+  const openings = [await insertIssue(repo.id), await insertIssue(repo.id)];
+  await sql`update issues set state = 'OPEN' where id = any(${openings}::uuid[])`;
+  const board = await listEligibleIssues(fixture.contributorId, { repository: repo.owner_name });
+  expect(board.map((row) => row.id).sort(), "board must use the same dispute repayment limit").toEqual(openings.sort());
+});
 
 function store() { return new PostgresClosedPrDisputeStore(sql); }
 function service() { return new ClosedPrDisputeService(store()); }
