@@ -62,6 +62,64 @@ describe("closed PR dispute schema", () => {
     await expect(insertRequest(fixture)).resolves.toMatchObject({ state: "OPEN" });
   });
 
+  it("permits only one granted dispute per issue across different PRs", async () => {
+    const fixture = await buildFixture();
+    await insertRequest(fixture, grantFields(fixture));
+    const otherPrId = await copyClosedPullRequest(fixture.pullRequestId);
+    await expect(insertRequest(fixture, { ...grantFields(fixture), pull_request_id: otherPrId }))
+      .rejects.toMatchObject({ code: "23505", constraint_name: "closed_pr_dispute_requests_one_grant_per_issue" });
+    await expect(insertRequest(fixture, { pull_request_id: otherPrId })).resolves.toMatchObject({ state: "OPEN" });
+    const otherIssue = await buildFixture();
+    await expect(insertRequest(otherIssue, grantFields(otherIssue))).resolves.toMatchObject({ decision: "GRANTED" });
+    expect(await sql`select name from schema_migrations
+      where name = '074_closed_pr_dispute_grant_issue_uniqueness.sql'`)
+      .toEqual([{ name: "074_closed_pr_dispute_grant_issue_uniqueness.sql" }]);
+  });
+
+  it("refuses the issue-grant upgrade with duplicate issue ids and resumes after they are resolved", async () => {
+    const databaseUrl = process.env.DATABASE_URL!;
+    const upgradeUrl = new URL(databaseUrl);
+    const databaseName = `dispute_issue_unique_upgrade_${externalId++}`;
+    upgradeUrl.pathname = `/${databaseName}`;
+    await sql`create database ${sql(databaseName)}`;
+    await closeSql();
+    try {
+      process.env.DATABASE_URL = upgradeUrl.toString();
+      sql = getSql();
+      await runMigrations({ upTo: "073_dispute_credit_limit_replay.sql" });
+      const affectedIssueIds: string[] = [];
+      const surplusRequestIds: string[] = [];
+      for (let index = 0; index < 2; index += 1) {
+        const fixture = await buildFixture();
+        affectedIssueIds.push(fixture.issueId);
+        await insertRequest(fixture, grantFields(fixture));
+        const otherPrId = await copyClosedPullRequest(fixture.pullRequestId);
+        const surplus = await insertRequest(fixture, { ...grantFields(fixture), pull_request_id: otherPrId });
+        surplusRequestIds.push(surplus.id as string);
+      }
+      await expect(runMigrations()).rejects.toThrow(
+        `Closed PR dispute precondition failed: 2 issue(s) hold more than one granted dispute. Issue ids: ${affectedIssueIds.sort().join(", ")}`,
+      );
+      expect(await sql`select max(name) as latest from schema_migrations`)
+        .toEqual([{ latest: "073_dispute_credit_limit_replay.sql" }]);
+      expect(await sql`select indexname from pg_indexes
+        where indexname = 'closed_pr_dispute_requests_one_grant_per_issue'`).toEqual([]);
+      await sql`delete from closed_pr_dispute_requests where id = any(${surplusRequestIds}::uuid[])`;
+      await runMigrations();
+      await runMigrations();
+      expect(await sql`select name from schema_migrations
+        where name = '074_closed_pr_dispute_grant_issue_uniqueness.sql'`)
+        .toEqual([{ name: "074_closed_pr_dispute_grant_issue_uniqueness.sql" }]);
+      expect(await sql`select indexname from pg_indexes
+        where indexname = 'closed_pr_dispute_requests_one_grant_per_issue'`)
+        .toEqual([{ indexname: "closed_pr_dispute_requests_one_grant_per_issue" }]);
+    } finally {
+      await closeSql();
+      process.env.DATABASE_URL = databaseUrl;
+      sql = getSql();
+    }
+  });
+
   it.each([
     ["blank filing reason", { request_reason: "   " }],
     ["long filing reason", { request_reason: "x".repeat(2001) }],
@@ -252,4 +310,14 @@ async function insertEvent(fixture: { contributorId: string }, disputeId: string
     returning id
   `;
   return event.id as string;
+}
+
+async function copyClosedPullRequest(pullRequestId: string): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    insert into pull_requests (github_pull_request_id, repository_id, issue_id, pull_request_number,
+      url, title, body, author_id, state)
+    select ${externalId++}, repository_id, issue_id, ${externalId++}, url, title, body, author_id, state
+    from pull_requests where id = ${pullRequestId} returning id
+  `;
+  return row.id;
 }

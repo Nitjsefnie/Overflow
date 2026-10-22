@@ -74,6 +74,13 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
       if (pullRequest.author_id !== input.accountId) return { kind: "forbidden" };
       if (pullRequest.state !== "CLOSED") return { kind: "invalid_state" };
 
+      const [credited] = await transaction<{ id: string }[]>`
+        select id from closed_pr_dispute_requests
+        where issue_id = ${pullRequest.issue_id} and decision = 'GRANTED'
+        limit 1
+      `;
+      if (credited !== undefined) return { kind: "issue_already_credited" };
+
       const [automaticLanding] = await transaction<{ id: string }[]>`
         select id from pull_requests
         where issue_id = ${pullRequest.issue_id} and state = 'MERGED'
@@ -234,7 +241,8 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
       return { kind: "ok", value: toRequest(row) };
     }).catch((error: unknown): ClosedPrDisputeStoreResult<ClosedPrDisputeRequest> => {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "23505"
-        && "constraint_name" in error && error.constraint_name === "closed_pr_dispute_requests_one_grant_per_pull_request") {
+        && "constraint_name" in error && (error.constraint_name === "closed_pr_dispute_requests_one_grant_per_pull_request"
+          || error.constraint_name === "closed_pr_dispute_requests_one_grant_per_issue")) {
         return { kind: "already_granted" };
       }
       throw error;
