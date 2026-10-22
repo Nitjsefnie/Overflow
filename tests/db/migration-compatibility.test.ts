@@ -1,23 +1,26 @@
 import { fileURLToPath } from "node:url";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { pendingMigrationLines, readMigrationTree } from "../../scripts/deploy-migration-status";
 import { migrationCompatibilityFixtures, finalFixMigrationFixtures, lexicalCompatibilityFixtures } from "../fixtures/migration-compatibility";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([path.join(tmpdir(), "overflow-1055-migration-fixtures-")]);
 
 let fixturesDirectory: string;
 const migrationsDirectory = fileURLToPath(new URL("../../db/migrations/", import.meta.url));
 
 beforeAll(async () => {
-  fixturesDirectory = await mkdtemp(path.join(tmpdir(), "overflow-1055-migration-fixtures-"));
+  fixturesDirectory = await tempDirectories.createAsync(path.join(tmpdir(), "overflow-1055-migration-fixtures-"));
   for (const { name, contents } of [...migrationCompatibilityFixtures, ...finalFixMigrationFixtures, ...lexicalCompatibilityFixtures]) {
     await writeFile(path.join(fixturesDirectory, name), contents);
   }
 });
 
 afterAll(async () => {
-  if (fixturesDirectory) await rm(fixturesDirectory, { recursive: true, force: true });
+  if (fixturesDirectory) await tempDirectories.disposeAsync(fixturesDirectory);
 });
 
 describe("migration compatibility fixtures", () => {

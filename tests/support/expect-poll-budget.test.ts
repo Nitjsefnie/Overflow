@@ -1,28 +1,12 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
+import { createOwnedTempDirectoryRegistry } from "./owned-temp-directory";
 
-/**
- * The installed vitest (5.0.0) defaults `expect.poll` to timeout=1000ms,
- * interval=50ms — see `timeout = 1e3` at line 910 of the installed bundle's
- * chunks/index.OVGXnVRj.js. A default-budget poll cannot outlast one second of
- * load: tests/fold/reconciliation-write-fencing.test.ts failed exactly this way
- * under a full-suite run — four poll sites watching a postgres lock wait
- * appeared empty because the fence path needed longer than the silent default
- * to reach its first blocked statement (issue 286).
- *
- * This guard is a tree-wide scan, not a lint rule: in every .ts and .tsx file
- * under tests/ (the only extensions present there today; vitest's default
- * include runs both), every `expect.poll(` call must carry an explicit
- * `timeout:` in its trailing options object, so no future poll can land
- * silently on the 1-second default. The scan is textual and deliberately
- * conservative — an options argument built by a helper call cannot prove it
- * carries a timeout, so it is flagged; inline the object instead. The marker
- * is matched verbatim: an aliased or whitespace-split spelling evades the
- * scan, and none exists.
- */
+const tempDirectories = createOwnedTempDirectoryRegistry([path.join(os.tmpdir(), "poll-budget-fixture-")]);
+
 const MARKER = "expect.poll" + "(";
 
 interface Scan {
@@ -341,7 +325,7 @@ describe("every expect.poll under tests/ carries an explicit timeout", () => {
   });
 
   it("scans .tsx files, which vitest runs and the tree contains", () => {
-    const fixtureRoot = mkdtempSync(path.join(os.tmpdir(), "poll-budget-fixture-"));
+    const fixtureRoot = tempDirectories.create(path.join(os.tmpdir(), "poll-budget-fixture-"));
     try {
       const fixtureDir = path.join(fixtureRoot, "components");
       mkdirSync(fixtureDir);
@@ -356,7 +340,7 @@ describe("every expect.poll under tests/ carries an explicit timeout", () => {
         "components/example.test.tsx:1 — no options argument; poll runs on vitest's silent 1000ms default. Pass { timeout: … } explicitly.",
       ]);
     } finally {
-      rmSync(fixtureRoot, { recursive: true, force: true });
+      tempDirectories.dispose(fixtureRoot);
     }
   });
 

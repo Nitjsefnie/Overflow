@@ -1,19 +1,21 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { createOwnedTempDirectory } from "./owned-temp-directory";
+import { createOwnedTempDirectory, createOwnedTempDirectoryRegistry } from "./owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "temp-directory-lifecycle-")]);
 
 let root: string;
 const helper = new URL("./owned-temp-directory.ts", import.meta.url).href;
 
 beforeAll(() => {
-  root = mkdtempSync(join(tmpdir(), "temp-directory-lifecycle-"));
+  root = tempDirectories.create(join(tmpdir(), "temp-directory-lifecycle-"));
 });
 
 afterAll(() => {
-  if (root) rmSync(root, { recursive: true, force: true });
+  if (root) tempDirectories.dispose();
 });
 
 it.each([
@@ -42,7 +44,7 @@ it.each([
     teardownFailure: true,
   },
 ])("observes $label after the real suite exits", ({ suite, prefixes, filter, passes, teardownFailure }) => {
-  const directory = mkdtempSync(join(root, "run-"));
+  const directory = tempDirectories.create(join(root, "run-"));
   const killed = spawnSync(process.execPath, ["--input-type=module", "-e", `
     import { writeFileSync, writeSync } from 'node:fs';
     import { join } from 'node:path';

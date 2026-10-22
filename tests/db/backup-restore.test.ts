@@ -11,7 +11,6 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +25,7 @@ import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-director
 const backupFixtures = createOwnedTempDirectoryRegistry([
   "overflow-backup-partial-", "overflow-backup-stub-", "overflow-backup-bound-",
   "overflow-backup-symlink-", "overflow-backup-race-", "overflow-backup-reap-", "overflow-backup-barrier-",
+  "overflow-backup-test-",
 ].map(prefix => join(tmpdir(), prefix)));
 
 // Use container clients to match the server version and its internal URL.
@@ -103,7 +103,7 @@ describe("the backup and restore procedure", () => {
 
   beforeEach(async () => {
     await sql`truncate users cascade`;
-    backupDir = mkdtempSync(join(tmpdir(), "overflow-backup-test-"));
+    backupDir = backupFixtures.create(join(tmpdir(), "overflow-backup-test-"));
     dumpPath = undefined;
     await seed();
     await snapshot();
@@ -127,7 +127,7 @@ describe("the backup and restore procedure", () => {
       } finally {
         drill = undefined;
         try {
-          if (backupDir !== undefined) rmSync(backupDir, { recursive: true, force: true });
+          if (backupDir !== undefined) backupFixtures.dispose(backupDir);
         } finally {
           backupFixtures.dispose();
         }
