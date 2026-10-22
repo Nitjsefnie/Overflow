@@ -1,12 +1,16 @@
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { repoRoot } from "../../scripts/http-surface-derive.ts";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const fixtures = createOwnedTempDirectoryRegistry(join(repoRoot, ".next-release-record-fixture-"));
+afterAll(() => fixtures.dispose());
 
 /** Independent source tree, with normal dependency resolution from the parent checkout. */
 function throwingFixture(): string {
-  const root = mkdtempSync(join(repoRoot, ".next-release-record-fixture-"));
+  const root = fixtures.create();
   for (const path of ["src", "scripts", "package.json"]) cpSync(join(repoRoot, path), join(root, path), { recursive: true });
   const path = join(root, "src/app/api/version/route.ts");
   const source = readFileSync(path, "utf8");

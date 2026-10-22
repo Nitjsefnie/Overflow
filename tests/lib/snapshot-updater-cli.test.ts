@@ -1,17 +1,21 @@
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { repoRoot } from "../../scripts/http-surface-derive.ts";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 import { replaceConstAssignment } from "../../scripts/update-http-surface-snapshot.ts";
 import type { HttpSurfaceSnapshot, McpSurfaceSnapshot } from "../../scripts/surface-change.ts";
+
+const fixtures = createOwnedTempDirectoryRegistry(join(repoRoot, ".next-release-snapshot-fixture-"));
+afterAll(() => fixtures.dispose());
 
 const versionSites = ["src/lib/version.ts", "src/lib/mcp/protocol.ts",
   "scripts/http-surface-snapshot.json", "scripts/mcp-surface-snapshot.json"];
 
 /** Parent node_modules resolves normally; no copied or linked dependencies. */
 function fixture(changed: boolean = true): string {
-  const root = mkdtempSync(join(repoRoot, ".next-release-snapshot-fixture-"));
+  const root = fixtures.create();
   for (const path of ["src", "scripts", "package.json"]) cpSync(join(repoRoot, path), join(root, path), { recursive: true });
   // The scenarios start at 1.1.0 independently of the repository's current release.
   for (const [site, name] of [[versionSites[0]!, "SERVER_VERSION"], [versionSites[1]!, "MCP_SERVER_VERSION"]]) {
