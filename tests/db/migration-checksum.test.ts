@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
-import { rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,7 +9,7 @@ import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
-import { createOwnedTempDirectory, reclaimOwnedTempDirectories } from "../support/owned-temp-directory";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 import { closeSql, getSql } from "@/lib/db/client";
 
 const migrationsDirectory = path.resolve(
@@ -21,9 +21,9 @@ const migrationNames = readdirSync(migrationsDirectory)
   .sort();
 
 const fixturePrefix = path.join(tmpdir(), "overflow-1055-migration-");
-reclaimOwnedTempDirectories(fixturePrefix);
-const fixtureDirectories: string[] = [];
-const fixtureDirectoriesBefore = readdirSync(tmpdir()).filter((name) => name.startsWith("overflow-1055-migration-"));
+const tempDirectories = createOwnedTempDirectoryRegistry([fixturePrefix]);
+const foreignTempDirectories = createOwnedTempDirectoryRegistry([`${fixturePrefix}fixtures-`]);
+let foreignFixtureDirectory: string | undefined;
 
 const originalDatabaseUrl = process.env.DATABASE_URL;
 let container: StartedTestContainer | undefined;
@@ -48,11 +48,17 @@ afterAll(async () => {
     await container?.stop();
   } finally {
     restoreDatabaseUrl();
-    for (const directory of fixtureDirectories) {
-      await rm(directory, { recursive: true, force: true });
+    // Remove the foreign fixture after the census, including when an assertion fails.
+    try {
+      await tempDirectories.disposeAsync();
+      expect(readdirSync(tmpdir()).filter((name) => name.startsWith(`${path.basename(fixturePrefix)}${process.pid}-`)))
+        .toEqual([]);
+      if (foreignFixtureDirectory !== undefined) {
+        expect(readdirSync(foreignFixtureDirectory)).toEqual([]);
+      }
+    } finally {
+      await foreignTempDirectories.disposeAsync();
     }
-    expect(readdirSync(tmpdir()).filter((name) => name.startsWith("overflow-1055-migration-")).sort())
-      .toEqual(fixtureDirectoriesBefore.sort());
   }
 });
 
@@ -63,6 +69,11 @@ describe("migration checksums", () => {
       .rejects.toMatchObject({ code: "ENOENT" });
     const added = readdirSync(tmpdir()).filter((name) => name.startsWith("overflow-1055-migration-") && !before.has(name));
     expect(added).toHaveLength(1);
+  });
+
+  it("ignores another suite's matching directory during the cleanup census", async () => {
+    foreignFixtureDirectory = await foreignTempDirectories.createAsync();
+    await fixtureDirectory("001.sql", "select 1;");
   });
 
   it.skipIf(process.env.TEMP_DIRECTORY_TEARDOWN_PROBE !== "1")("cleans fixtures despite database teardown failure", async () => {
@@ -248,8 +259,7 @@ describe("recorded migration compatibility", () => {
 });
 
 async function fixtureDirectory(name: string, contents: string): Promise<string> {
-  const directory = createOwnedTempDirectory(fixturePrefix);
-  fixtureDirectories.push(directory);
+  const directory = await tempDirectories.createAsync(fixturePrefix);
   await writeFile(path.join(directory, name), contents);
   return directory;
 }
