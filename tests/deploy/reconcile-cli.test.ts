@@ -364,10 +364,12 @@ describe("reconciliation CLI commands with PostgreSQL", () => {
   let sql: Sql;
   let sponsorId: string;
   const repositoryIdsByOwnerName = new Map<string, string>();
+  const previousMigrationGuard = process.env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD;
 
   beforeAll(async () => {
     started = await startPostgresContainer({ database: "cli", user: "cli", password: "cli" });
     sql = postgres(started.databaseUrl, { max: 1 });
+    process.env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD = "skip";
     const migration = runCommand("pnpm db:migrate", started.databaseUrl);
     expect(migration.status, migration.stderr).toBe(0);
 
@@ -395,6 +397,8 @@ describe("reconciliation CLI commands with PostgreSQL", () => {
       await sql?.end();
     } finally {
       await started?.container.stop();
+      if (previousMigrationGuard === undefined) delete process.env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD;
+      else process.env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD = previousMigrationGuard;
     }
   }, 120_000);
 
