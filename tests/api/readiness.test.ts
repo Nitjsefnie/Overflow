@@ -1,5 +1,5 @@
 import net from "node:net";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { StartedTestContainer } from "testcontainers";
@@ -16,6 +16,12 @@ import { runMigrations } from "../../scripts/migrate";
 import { finalFixMigrationFixtures } from "../fixtures/migration-compatibility";
 import { pendingMigrationLines, readMigrationTree } from "../../scripts/deploy-migration-status";
 import { startPostgresContainer } from "../support/postgres-container";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const readinessDirectories = createOwnedTempDirectoryRegistry([
+  "overflow-1055-readiness-", "overflow-1055-readiness-order-", "overflow-1055-final-fix-",
+].map(prefix => path.join(tmpdir(), prefix)));
+
 
 /**
  * The cap reason the handler renders when a probe outlives the structural
@@ -333,10 +339,14 @@ describe("readiness endpoint against real databases", () => {
   });
 
   afterAll(async () => {
-    await closeSql();
-    await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    try {
+      await closeSql();
+      await container?.stop();
+      if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = originalDatabaseUrl;
+    } finally {
+      await readinessDirectories.disposeAsync();
+    }
   });
 
   it("answers 200 through the production GET export against a real database", async () => {
@@ -408,7 +418,7 @@ describe("readiness endpoint against real databases", () => {
   ])("answers $status after the real runner applies an extra $label migration", async ({ marker, ddl, status }) => {
     const sql = getSql();
     const filename = "900_readiness_fixture.sql";
-    const directory = await mkdtemp(path.join(tmpdir(), "overflow-1055-readiness-"));
+    const directory = await readinessDirectories.createAsync(path.join(tmpdir(), "overflow-1055-readiness-"));
     await writeFile(path.join(directory, filename), `${marker}create table readiness_items (note text);\n${ddl}`);
     try {
       await runMigrations({ directory });
@@ -444,7 +454,7 @@ describe("readiness endpoint against real databases", () => {
   it("journals only ahead flagged filenames in applied-name order, with behind taking precedence", async () => {
     const errorSpy = spyOnProbeJournal();
     const sql = getSql();
-    const directory = await mkdtemp(path.join(tmpdir(), "overflow-1055-readiness-order-"));
+    const directory = await readinessDirectories.createAsync(path.join(tmpdir(), "overflow-1055-readiness-order-"));
     const later = "902_later.sql";
     const earlier = "901_earlier.sql";
     const unflagged = "903_unflagged.sql";
@@ -478,7 +488,7 @@ describe("readiness endpoint against real databases", () => {
 
   it.each(finalFixMigrationFixtures)("final fix real chain $name", async ({ name, contents, shape, writerCode }) => {
     const sql = getSql();
-    const directory = await mkdtemp(path.join(tmpdir(), "overflow-1055-final-fix-"));
+    const directory = await readinessDirectories.createAsync(path.join(tmpdir(), "overflow-1055-final-fix-"));
     await sql`create table items (note text)`;
     await writeFile(path.join(directory, name), contents);
     const errorSpy = spyOnProbeJournal();

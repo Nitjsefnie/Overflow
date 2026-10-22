@@ -1,13 +1,18 @@
 import { spawnSync } from "node:child_process";
-import { access, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   legalTextUnchangedJustification,
   reviewCommits,
 } from "../../scripts/check-legal-revisions";
 import * as legalRevisions from "../../src/lib/legal-revisions";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const fixtureDirectories = createOwnedTempDirectoryRegistry(join(tmpdir(), "legal-revisions-"));
+afterAll(() => fixtureDirectories.disposeAsync());
+
 
 const TERMS = "src/app/terms/page.tsx";
 const RULES = "src/app/rules/page.tsx";
@@ -17,27 +22,18 @@ const SANCTIONS = "src/lib/sanctions.ts";
 const GUARD = "src/lib/legal-revisions.ts";
 const GATE_SCRIPT = "scripts/check-legal-revisions.ts";
 
-/** A commit message that makes no legal-text claim at all. */
 const NO_CLAIM = "Subject line only\n\nA paragraph with no claim about the text.\n";
 
-/** Builds a commit record with the default (marker-free) message. */
 const commit = (sha: string, files: readonly string[], message: string = NO_CLAIM) => ({
   sha,
   files,
   message,
 });
 
-/** A body carrying the well-formed exemption marker with its justification. */
 const markerBody = (justification: string): string =>
   `Subject line\n\nA paragraph about the change.\n\nLegal-Text: unchanged; ${justification}\n`;
 
-/**
- * Reads LEGAL_PAGES out of the gate script's source. The array is
- * module-private — the script exports only the review entry points — and this
- * pin must not widen the script's export surface just to be readable, so the
- * test parses the literal instead. A parse that comes back empty fails the
- * length guard in the test loudly rather than passing vacuously.
- */
+// Parse the private page list and reject an empty result rather than widening production exports.
 async function gateLegalPages(): Promise<string[]> {
   const source = await readFile(resolve(GATE_SCRIPT), "utf8");
   const block = source.match(/const LEGAL_PAGES[^=]*=\s*\[([\s\S]*?)\]/);
@@ -142,18 +138,7 @@ describe("legal revision gate", () => {
   });
 });
 
-/**
- * The marker's grammar is the whole exemption: whatever shape is accepted here
- * is what a legal-text change can buy its way past, so every loosening is
- * pinned as tightly as every acceptance. The shape is a trailer-style line in
- * the commit message BODY:
- *
- *   Legal-Text: unchanged; <justification>
- *
- * anchored at the start of a whole line (never a substring, never mid-sentence,
- * never an indented or quoted line, never the subject), with a non-empty
- * justification after the delimiter.
- */
+// Exemptions require a whole trailer line in the body with a nonempty justification.
 describe("the Legal-Text: unchanged marker's grammar", () => {
   const inBody = (line: string): string => `Subject line\n\n${line}\n`;
 
@@ -507,13 +492,7 @@ describe("the exemption's scope", () => {
   });
 });
 
-/**
- * The gate resolves the repository it walks from its own location, so every
- * CLI-level leg runs the real binary against a throwaway git repository
- * carrying a byte-identical copy of the script. That fixture is the only way
- * to have real commit MESSAGES, which is where the exemption lives. The
- * fixture is removed again in dispose().
- */
+// Copy the real script into the fixture because it resolves its repository from its own location.
 async function createGateFixture(
   options: { failMessageReads?: boolean } = {},
 ): Promise<{
@@ -526,7 +505,7 @@ async function createGateFixture(
   };
   dispose: () => Promise<void>;
 }> {
-  const root = await mkdtemp(join(tmpdir(), "legal-revisions-"));
+  const root = await fixtureDirectories.createAsync();
   await mkdir(join(root, "scripts"), { recursive: true });
   await copyFile(
     resolve(GATE_SCRIPT),
@@ -604,7 +583,7 @@ async function createGateFixture(
     git,
     commit,
     runGate,
-    dispose: () => rm(root, { recursive: true, force: true }),
+    dispose: () => fixtureDirectories.disposeAsync(root),
   };
 }
 
@@ -946,21 +925,7 @@ describe("the gate's command line", () => {
   });
 });
 
-/**
- * The gate is only as complete as the span between its page list and the
- * record module's exports: a fourth legal document added as a new page plus a
- * new *_REVISION export, without a LEGAL_PAGES entry, would ship silently
- * ungated — the gate would walk three pages and never look at the fourth.
- * This pin closes that direction: every record the module exports must name a
- * document whose page exists and is one the gate walks.
- *
- * The module side is imported, not parsed: the exports are typed values, so
- * the language enumerates them and a rename or reformat cannot rot the pin.
- * The script side is parsed from source because LEGAL_PAGES is module-private
- * and widening the script's export surface just to be readable is a
- * production change this pin does not get to make; an unparsable or empty
- * list fails the length guard below loudly instead of passing vacuously.
- */
+// Span every exported legal revision and the private page list; reject empty parses.
 describe("the gate's coverage of the revision record module", () => {
   it("walks a page for every document the record module stamps", async () => {
     const legalPages = await gateLegalPages();

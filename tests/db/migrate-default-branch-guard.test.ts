@@ -13,6 +13,10 @@ import {
   runMigrations,
 } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const seededDirectories = createOwnedTempDirectoryRegistry(path.join(os.tmpdir(), "migrate-guard-repository-"));
+
 
 // Rebind the runner to this file's filesystem and database mocks.
 vi.hoisted(() => { vi.resetModules(); });
@@ -21,13 +25,7 @@ afterAll(() => { vi.resetModules(); });
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const migrationsDirectory = path.join(repositoryRoot, "db/migrations");
 
-/**
- * The candidate refs the default branch is resolved from, mirroring scripts/migrate.ts's
- * deliberately unexported `defaultBranchRefCandidates` — same names, same order. The resolver
- * tries them in sequence and the first one that resolves wins. Two consumers here: the
- * preference-order leg seeds exactly this list into a scratch repository, and the checkout leg
- * re-derives the first resolving candidate to hold this checkout to that same rule.
- */
+// Mirror the resolver’s candidate order to exercise precedence.
 const RESOLVER_CANDIDATES = [
   "refs/remotes/origin/HEAD",
   "refs/remotes/origin/main",
@@ -36,11 +34,7 @@ const RESOLVER_CANDIDATES = [
   "refs/heads/master",
 ] as const;
 
-/**
- * The default branch as this checkout resolves it, computed once at load: the CLI legs below
- * assert against the ref the guard itself would use, so a leg never disagrees with the runner
- * about which ref won.
- */
+// Resolve once so CLI expectations follow this checkout’s available refs.
 const resolvedDefaultBranchRef = resolveDefaultBranchRef(repositoryRoot);
 
 const migrationsOnDisk = vi.hoisted(() => ({ entries: [] as string[] }));
@@ -49,10 +43,7 @@ const databaseClient = vi.hoisted(() => ({
   closeSql: vi.fn(() => Promise.resolve()),
 }));
 
-// The runMigrations pin below drives the real exported entry point against a mocked listing and
-// a stubbed database — the same hermetic shape tests/db/migration-numbering.test.ts uses. Only
-// readdir is replaced: the CLI legs' child processes are outside this module graph, and the one
-// read this file makes of the real tree uses the synchronous API for exactly that reason.
+// Mock only readdir; child CLI processes and synchronous tree reads remain real.
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs/promises")>()),
   readdir: () => Promise.resolve(migrationsOnDisk.entries),
@@ -143,10 +134,7 @@ describe("resolving the default branch from local refs alone", () => {
       return; // The fail-open shape is the neighbors' job; the CLI legs pin its skip line.
     }
 
-    // The contract, not one checkout's inventory: a stock full clone carries origin/HEAD, a
-    // linked worktree does not, and both satisfy the same first-resolving-candidate rule over
-    // RESOLVER_CANDIDATES. Naming WHICH candidate wins in a given checkout is the
-    // preference-order leg's job; this one only holds this checkout to that rule.
+    // Clone and linked-worktree refs differ; assert the first available candidate.
     expect(resolvedDefaultBranchRef).toBe(
       RESOLVER_CANDIDATES.find((ref) => refExists(repositoryRoot, ref)),
     );
@@ -159,8 +147,7 @@ describe("resolving the default branch from local refs alone", () => {
     expect(treeMigrationNames.length).toBeGreaterThan(0);
     expect(defaultBranchMigrationNames.length).toBeGreaterThan(0);
     const check = () => assertMigrationsOnDefaultBranch(treeMigrationNames, defaultBranchMigrationNames, resolvedDefaultBranchRef);
-    // A feature branch carrying a new migration must exercise the refusal;
-    // a shipped/default tree must pass. Both hosts run the real guard.
+    // Exercise the real guard whether this host tree needs refusal or acceptance.
     if (treeMigrationNames.some((name) => !defaultBranchMigrationNames.includes(name))) expect(check).toThrow();
     else expect(check).not.toThrow();
   });
@@ -175,10 +162,7 @@ describe("the exported runMigrations, which the guard must stay out of", () => {
   it("applies a foreign migration without the default-branch refusal, which is the CLI guard's alone", async () => {
     migrationsOnDisk.entries = ["001_a.sql", "999_foreign_to_the_default_branch.sql"];
 
-    // The refusal belongs to the command-line path only: runMigrations() is what testcontainer
-    // suites and CI call directly, and routing it through the guard would need every suite to
-    // seed refs none carries. The stub rejection below is the pin — the run must proceed past
-    // the tree checks and into the runner proper, never the issue-511 refusal.
+    // Direct runMigrations calls must reach the runner without requiring repository refs.
     await expect(runMigrations()).rejects.toThrow("the database client is stubbed here");
     expect(databaseClient.withTransaction).toHaveBeenCalled();
   });
@@ -211,30 +195,15 @@ describe("the CLI against a real database", () => {
       await started.container.stop();
     };
 
-    // The fake migration lives in a private linked worktree rather than the shared
-    // db/migrations/: vitest runs test files in parallel workers, every other suite seeds
-    // through the unguarded runMigrations(), which enumerates that directory, and a file left
-    // there for this suite's window lands in other suites' ledgers (tests/db/schema.test.ts
-    // pins exact ledger contents). A linked worktree shares the refs, so the guard's
-    // default-branch resolution and listing behave identically to the real tree's.
+    // A private linked worktree prevents parallel database suites seeing the fake migration.
     privateWorktreeRoot = mkdtempSync(path.join(os.tmpdir(), "migrate-guard-worktree-"));
     git(repositoryRoot, "worktree", "add", privateWorktreeRoot, "HEAD");
-    // A migration-carrying host branch must not red this suite (issue 522): created from HEAD,
-    // the linked worktree would inherit the host branch's db/migrations, and a branch-only
-    // migration there would survive the fake's removal and refuse the clean run below. So the
-    // private tree's migration set is pinned to the default branch's: the tracked set is
-    // removed first because `git checkout <ref> -- db/migrations` only overwrites the files
-    // the ref carries — a branch-only file is left behind (tested, issue 522) — and the
-    // default branch's set is checked out over the emptied directory. The CLI under test
-    // remains the branch's own scripts/migrate.ts; only the database-facing tree moves. The
-    // swap stages a diff in the private worktree — harmless, afterEach force-removes the tree.
+    // Empty tracked migrations before checkout so branch-only files cannot survive; keep the branch runner.
     if (resolvedDefaultBranchRef !== undefined) {
       git(privateWorktreeRoot, "rm", "-q", "-r", "db/migrations");
       git(privateWorktreeRoot, "checkout", resolvedDefaultBranchRef, "--", "db/migrations");
     }
-    // The linked worktree carries no node_modules of its own; the symlink keeps the spawned
-    // runner's imports resolvable without copying the store. Only node runs from here, so the
-    // symlink is enough — nothing builds in this tree.
+    // Link dependencies so the private runner resolves imports without copying the store.
     symlinkSync(
       path.join(repositoryRoot, "node_modules"),
       path.join(worktreeRoot(), "node_modules"),
@@ -248,9 +217,7 @@ describe("the CLI against a real database", () => {
 
   afterEach(async () => {
     if (privateWorktreeRoot !== undefined) {
-      // Proper removal first, tolerating its failure so the fallbacks still run: the raw delete
-      // keeps a crashed add from stranding the directory, and the prune keeps a half-removed
-      // registration from stranding the repository's worktree list.
+      // Raw removal and prune recover a failed worktree add or remove.
       gitQuietly(repositoryRoot, "worktree", "remove", "--force", privateWorktreeRoot);
       rmSync(privateWorktreeRoot, { recursive: true, force: true });
       gitQuietly(repositoryRoot, "worktree", "prune");
@@ -278,9 +245,7 @@ describe("the CLI against a real database", () => {
     const refused = runCli(undefined);
 
     if (resolvedDefaultBranchRef === undefined) {
-      // In a checkout where no candidate ref resolves — CI's detached merge-ref checkout, for
-      // one — the guard is fail-open by design, and what the run owes instead is the visible
-      // skip line: the refusal cannot be asserted where the default branch cannot be known.
+      // An unknown default branch requires the visible skip diagnostic.
       expect(refused.status).toBe(0);
       expect(refused.stderr).toContain("could not determine");
       return;
@@ -292,8 +257,7 @@ describe("the CLI against a real database", () => {
     expect(refused.stderr).toContain("issue 511");
     expect(refused.stderr).toContain("OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD=skip");
 
-    // The incident shape pinned end to end: the ledger does not even come into existence,
-    // because the guard stops the run before the runner opens it.
+    // Refusal must happen before the ledger is created.
     const sql = postgres(containerUrl, { max: 1 });
     try {
       expect(await sql`select to_regclass('schema_migrations') as ledger`).toEqual([
@@ -318,9 +282,7 @@ describe("the CLI against a real database", () => {
       const [{ applied }] = await sql<{ applied: number }[]>`
         select count(*)::integer as applied from schema_migrations
       `;
-      // The comparison reads the PRIVATE worktree's listing (issue 522): that is the tree the
-      // run actually enumerated, while the shared db/migrations/ listing is host-branch-shaped
-      // and would compare a default-branch run against a branch-only count.
+      // Compare the private tree the runner enumerated, not this host branch’s listing.
       expect(applied).toBeGreaterThanOrEqual(
         listMigrationNames(readdirSync(path.join(worktreeRoot(), "db/migrations"))).length,
       );
@@ -337,13 +299,11 @@ describe("the CLI against a real database", () => {
     const clean = runCli(undefined);
 
     expect(clean.status).toBe(0);
-    // The fail-open skip line cites the issue too, so the refusal phrase — not the issue
-    // number — is what marks a refusal here.
+    // The refusal wording distinguishes refusal from a skip that cites the same issue.
     expect(clean.stderr).not.toContain("is frozen there under its name");
     expect(clean.stderr).not.toContain(fakeMigrationName);
 
-    // The ledger keeps recording what the overridden run applied — the whole reason a
-    // branch-only migration must never reach a database that matters.
+    // An explicit override must still record applied migrations.
     const sql = postgres(containerUrl, { max: 1 });
     try {
       expect(
@@ -358,14 +318,18 @@ describe("the CLI against a real database", () => {
 const seededRepositoryRoots: string[] = [];
 
 afterAll(() => {
-  for (const root of seededRepositoryRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
+  try {
+    for (const root of seededRepositoryRoots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  } finally {
+    seededDirectories.dispose();
   }
 });
 
 /** Seeds a throwaway git repository whose only content is one empty commit on `trunk`. */
 function seedRepository(): string {
-  const root = mkdtempSync(path.join(os.tmpdir(), "migrate-guard-repository-"));
+  const root = seededDirectories.create();
   git(root, "init", "-b", "trunk");
   git(root, "config", "user.email", "guard-test@example.com");
   git(root, "config", "user.name", "Guard Test");
@@ -386,11 +350,7 @@ function gitQuietly(root: string, ...args: string[]): void {
   spawnSync("git", args, { cwd: root, encoding: "utf8" });
 }
 
-/**
- * Whether the ref resolves in the tree: the resolver's own probe (`rev-parse --verify --quiet`,
- * exit status as the verdict), so the checkout leg re-derives its expectation the same way
- * scripts/migrate.ts settles it.
- */
+// Use the resolver’s own probe semantics for the checkout expectation.
 function refExists(root: string, ref: string): boolean {
   return (
     spawnSync("git", ["rev-parse", "--verify", "--quiet", ref], { cwd: root, encoding: "utf8" })

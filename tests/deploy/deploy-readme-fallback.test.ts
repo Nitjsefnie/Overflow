@@ -1,10 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const fixtureDirectories = createOwnedTempDirectoryRegistry(path.join(tmpdir(), "overflow-readme-fallback-"));
+
 
 const readme = fileURLToPath(new URL("../../deploy/README.md", import.meta.url));
 const deployScript = fileURLToPath(new URL("../../scripts/deploy-revision.sh", import.meta.url));
@@ -27,8 +31,12 @@ interface Fixture {
 let liveFixture: Fixture | undefined;
 
 afterEach(async () => {
-  if (liveFixture) await rm(liveFixture.dir, { recursive: true, force: true });
-  liveFixture = undefined;
+  try {
+    if (liveFixture) await rm(liveFixture.dir, { recursive: true, force: true });
+    liveFixture = undefined;
+  } finally {
+    await fixtureDirectories.disposeAsync();
+  }
 });
 
 function run(command: string, args: string[], cwd: string) {
@@ -50,7 +58,7 @@ async function standingBlock(): Promise<string> {
 }
 
 async function makeFixture(options: { advanceRemote?: boolean } = {}): Promise<Fixture> {
-  const dir = await mkdtemp(path.join(tmpdir(), "overflow-readme-fallback-"));
+  const dir = await fixtureDirectories.createAsync();
   const seed = path.join(dir, "seed");
   const remote = path.join(dir, "remote.git");
   const tree = path.join(dir, "tree");

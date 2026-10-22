@@ -1,16 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-// Issue 117: the documented local setup failed because `pnpm db:migrate`
-// reached the connection string only through process.env.DATABASE_URL, and
-// nothing on that path loaded .env (Next.js loads it for dev/build/start, so
-// only the migration step failed). These tests execute the package.json
-// db:migrate command as written, with scripts/migrate.ts substituted by a
-// probe, so removing or mangling the .env-loading flag fails here.
+const fixtureDirectories = createOwnedTempDirectoryRegistry(join(tmpdir(), "db-migrate-env-file-"));
+afterAll(() => fixtureDirectories.dispose());
+
+
+// Run the documented command against a probe to observe its .env-loading behavior.
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const sentinel = "OVERFLOW_DB_MIGRATE_SENTINEL";
 const fromDotenvFile = "from-dotenv-file";
@@ -42,7 +42,7 @@ interface Fixture {
 }
 
 function createFixture(dotEnv: string | undefined): Fixture {
-  const directory = mkdtempSync(join(tmpdir(), "db-migrate-env-file-"));
+  const directory = fixtureDirectories.create();
   mkdirSync(join(directory, "scripts"));
   writeFileSync(join(directory, "scripts", "db-migrate-env-probe.mjs"), probeSource());
   const { packageManager } = JSON.parse(readFileSync(join(repositoryRoot, "package.json"), "utf8")) as {
@@ -101,7 +101,7 @@ function withFixture<T>(dotEnv: string | undefined, run: (fixture: Fixture) => T
   try {
     return run(fixture);
   } finally {
-    rmSync(fixture.directory, { recursive: true, force: true });
+    fixtureDirectories.dispose(fixture.directory);
   }
 }
 

@@ -4,24 +4,20 @@
 // Extracted so each measured test module stays under the tests family ceiling
 // (scripts/check-module-size.ts).
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "./owned-temp-directory";
+
+const fixtureDirectories = createOwnedTempDirectoryRegistry(path.join(tmpdir(), "overflow-deploy-revision-"));
+
 
 export const script = fileURLToPath(new URL("../../scripts/deploy-revision.sh", import.meta.url));
-/**
- * The gate's jq parser, tracked beside the script so the map and the code
- * that knows its shape travel together (issue 1104). The fixture tree holds
- * the repository's current bytes at this path, exactly as for the script.
- */
+// Copy the parser alongside the deploy script so their pinned formats travel together.
 export const parser = fileURLToPath(new URL("../../scripts/required-checks-parse.jq", import.meta.url));
-/**
- * The refusal the procedure's serialization notes mandate, byte for byte, with
- * the lock spelled as configured. Production defaults to /run/overflow-deploy.lock;
- * the behavioral test substitutes the fixture lock.
- */
+// Substitute the fixture lock in the procedure’s exact refusal.
 export const REFUSAL_TEMPLATE =
   "Could not acquire the deploy lock on %LOCK%; refusing to deploy. Consult the deploy procedure's serialization notes before re-running.";
 
@@ -31,13 +27,7 @@ export function refusalFor(lock: string): string {
   return REFUSAL_TEMPLATE.replace("%LOCK%", lock);
 }
 
-/**
- * A shim executable: logs one tab-separated line per invocation — command,
- * arguments, then an env capture — and then either exits with a status the
- * test set or delegates to the real binary. Nothing here reaches the network,
- * systemd, the shared pnpm store or any tree outside the fixture, and every
- * invocation is bounded by spawnSync's timeout.
- */
+// Shims record argv and environment while keeping real effects inside the fixture.
 export function shimBody(name: string, envKeys: string[], dispatch: string): string {
   const envCapture = ["LC_ALL", ...envKeys]
     .map((key) => `envs+=" ${key}=\${${key}-}"`)
@@ -78,8 +68,12 @@ let liveFixture: Fixture | undefined;
 
 /** Removes the live fixture (makeFixture's temp dir), if a test left one. */
 export async function cleanupLiveFixture(): Promise<void> {
-  if (liveFixture) await rm(liveFixture.dir, { recursive: true, force: true });
-  liveFixture = undefined;
+  try {
+    if (liveFixture) await rm(liveFixture.dir, { recursive: true, force: true });
+    liveFixture = undefined;
+  } finally {
+    await fixtureDirectories.disposeAsync();
+  }
 }
 
 export const FIXTURE_UNIT = "overflow-fixture.service";
@@ -108,18 +102,10 @@ export const FIXTURE_RUN_IDS: Record<string, number> = {
 };
 /** GitHub Actions' app id on GitHub.com: the producer of every Actions job's own check-run. */
 export const ACTIONS_APP_ID = 15368;
-/**
- * The Overflow Ledger App's id: check-runs it posts attribute a required
- * context to the relay that produced them. Matches the script's knob default;
- * the override is exercised by its own test.
- */
+// App attribution follows the script’s default; separate tests exercise its override.
 export const LEDGER_APP_ID = 5118623;
 
-/**
- * The gate's reads in call order when one poll iteration settles it on `sha`
- * with the fixture's pinned runs (100 and 200): protection, branch rules, the pin map at the
- * SHA, every check-run, the workflow runs, and the jobs of each pinned run.
- */
+// Read order spans protection, rules, SHA pins, check-runs, workflow runs and jobs.
 export function gateReads(sha: string): string[] {
   return [
     `gh api repos/${FIXTURE_REPO}/branches/main/protection --include`,
@@ -160,11 +146,7 @@ export interface GateCheckRun {
   conclusion?: string;
 }
 
-/**
- * Writes one poll iteration's GitHub JSON for the gh shim to project with jq. A
- * job's check-run shares its id, as on GitHub; `extraCheckRuns` are check-runs
- * no job produced (created through the Checks API or by an App).
- */
+// Share check-run IDs with jobs; extra check-runs model unrelated App producers.
 export async function writeGateState(
   fixture: Pick<Fixture, "dir">,
   name: string,
@@ -208,10 +190,7 @@ export async function writeGateState(
   return directory;
 }
 
-/**
- * The common case: one run per workflow, one job per row, each job in the
- * workflow FIXTURE_WORKFLOWS places it in.
- */
+// Place each job in the workflow named by FIXTURE_WORKFLOWS.
 export async function writeCheckRuns(
   fixture: Pick<Fixture, "dir">,
   name: string,
@@ -243,17 +222,7 @@ export const RELEASE_GRAMMAR = /^\.next-release-\d{8}T\d{6}Z-[a-f0-9]{7,40}$/;
 export const LISTING_REGEX = String.raw`.*/\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}`;
 /** The ignored-files gate's read, as the shim log records it. */
 export const IGNORED_LISTING = "git ls-files -z --others --ignored --exclude-standard --directory --no-empty-directory";
-/**
- * Every ignored untracked entry production's tree legitimately holds, in the
- * shape `git ls-files --others --ignored --directory` prints it: directories
- * carry a trailing slash, the .next symlink does not.
- *
- * `.claude/` is this repository's own session machinery (the autoloaded working
- * rules and the priority board). The checkout a deploy is invoked from may carry
- * it, ignored, so an operator must not have to delete it to deploy. It is
- * allowlisted as a directory entry with its trailing slash, so nothing below it
- * is admitted by name and no sibling one edit away matches.
- */
+// Model directory trailing slashes; allow .claude/ without admitting sibling paths.
 export const OPERATIONAL_IGNORED = [
   ".next",
   ".next/",
@@ -265,11 +234,7 @@ export const OPERATIONAL_IGNORED = [
   "next-env.d.ts",
   "node_modules/",
 ];
-/**
- * Names one edit away from an allowlisted entry, each of which must refuse:
- * together they pin that every allowlist entry matches the whole path, from
- * the tree root, with the release grammar exactly.
- */
+// Near misses pin whole-path allowlist matching.
 export const NEAR_MISS_IGNORED = [
   ".claude",
   ".claude-rules/",
@@ -293,12 +258,7 @@ export const NEAR_MISS_IGNORED = [
   "src/app/zz-probe/",
 ];
 
-/**
- * The offending paths the ignored-files refusal lists: the run of lines
- * directly above its message, each indented by exactly two spaces (%q escapes
- * a leading space, so a path never starts with one). A real git fetch writes
- * its ref updates to the same stream just before, indented further.
- */
+// Only two-space-indented lines immediately above the refusal are offending paths.
 export function listedOffenders(stderr: string): string[] {
   const lines = stderr.split("\n");
   const offenders: string[] = [];
@@ -321,7 +281,7 @@ export async function makeFixture(options: {
   extraReleases?: string[];
   servingCache?: boolean;
 } = {}): Promise<Fixture> {
-  const dir = await mkdtemp(path.join(tmpdir(), "overflow-deploy-revision-"));
+  const dir = await fixtureDirectories.createAsync();
   const tree = path.join(dir, "tree");
   await mkdir(tree);
   const prevName = options.prevRelease ?? ".next-release-20260908T000000Z-abc1234";
@@ -384,13 +344,7 @@ export async function makeFixture(options: {
   return fixture;
 }
 
-/**
- * Per-command behavior behind the shared log line. The shims exist to make the
- * procedure observable and controllable, so each records its argv and either
- * exits with a status the test set or delegates to the real binary: the
- * retention listing must really enumerate the fixture tree, and the fence must
- * really be satisfiable, for the success-path pins to mean anything.
- */
+// Delegate retention and fence operations to real tools so success pins cannot pass vacuously.
 export const SHIM_DISPATCH: Record<string, { envKeys: string[]; dispatch: string }> = {
   git: {
     envKeys: ["GIT_SHIM_PARSER", "GIT_SHIM_PARSER_RC"],

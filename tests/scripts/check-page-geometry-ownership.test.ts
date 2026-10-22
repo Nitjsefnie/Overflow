@@ -1,19 +1,23 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const fixtureDirectories = createOwnedTempDirectoryRegistry(join(tmpdir(), "gate-ownership-test-"));
+
 
 const root = process.cwd();
 const directories: string[] = [];
 const groups = new Set<number>();
 const gates: ChildProcess[] = [];
 async function scratch() {
-  const path = await mkdtemp(join(tmpdir(), "gate-ownership-test-"));
+  const path = await fixtureDirectories.createAsync();
   directories.push(path);
   return path;
 }
@@ -44,27 +48,31 @@ async function assertGone(...pids: number[]) {
   for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
 }
 afterEach(async () => {
-  for (const path of [...directories]) {
-    for (const kind of ["server", "chrome"]) {
-      const spawned = join(path, `${kind}-pid`);
-      if (existsSync(spawned)) groups.add(Number(await readFile(spawned, "utf8")));
-      const record = join(path, `${kind}.json`);
-      if (existsSync(record)) groups.add(JSON.parse(await readFile(record, "utf8")).parent);
+  try {
+    for (const path of [...directories]) {
+      for (const kind of ["server", "chrome"]) {
+        const spawned = join(path, `${kind}-pid`);
+        if (existsSync(spawned)) groups.add(Number(await readFile(spawned, "utf8")));
+        const record = join(path, `${kind}.json`);
+        if (existsSync(record)) groups.add(JSON.parse(await readFile(record, "utf8")).parent);
+      }
+      const workdir = join(path, "workdir");
+      if (existsSync(workdir)) directories.push(await readFile(workdir, "utf8"));
     }
-    const workdir = join(path, "workdir");
-    if (existsSync(workdir)) directories.push(await readFile(workdir, "utf8"));
+    // Includes the gate group even after its leader exits, so disconnected
+    // plain-spawn mutants are cleaned without leaking their fixture children.
+    for (const pid of groups) {
+      try { process.kill(-pid, "SIGKILL"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+    }
+    groups.clear();
+    for (const child of gates.splice(0)) {
+      if (child.exitCode === null && child.signalCode === null) await once(child, "exit");
+    }
+    for (const path of directories.splice(0)) await rm(path, { recursive: true, force: true });
+  } finally {
+    fixtureDirectories.dispose();
   }
-  // Includes the gate group even after its leader exits, so disconnected
-  // plain-spawn mutants are cleaned without leaking their fixture children.
-  for (const pid of groups) {
-    try { process.kill(-pid, "SIGKILL"); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
-  }
-  groups.clear();
-  for (const child of gates.splice(0)) {
-    if (child.exitCode === null && child.signalCode === null) await once(child, "exit");
-  }
-  for (const path of directories.splice(0)) await rm(path, { recursive: true, force: true });
 });
 
 it.each(["SIGTERM", "SIGINT"] as const)("owns the real gate's directory at the %s acquisition boundary", async signal => {
