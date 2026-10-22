@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { closeSql, getSql } from "@/lib/db/client";
@@ -467,6 +467,103 @@ describe("closed PR dispute decisions", () => {
     expect(await decisionEvents(fixture.requestId)).toHaveLength(1);
   });
 
+  it("preserves pre-sanction eligibility when the decision began before the sanction", async () => {
+    const fixture = await decisionFixture();
+    let markLocked!: (pid: number) => void;
+    let release!: () => void;
+    const locked = new Promise<number>((resolve) => { markLocked = resolve; });
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const holder = sql.begin(async (transaction) => {
+      await transaction`select id from closed_pr_dispute_requests where id = ${fixture.requestId} for update`;
+      const [backend] = await transaction<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      markLocked(backend.pid);
+      await released;
+    });
+    const holderPid = await locked;
+    const deciding = store().decideDispute({ ...decision(fixture), decision: "DENIED" });
+    try {
+      await waitingOnBackend(holderPid);
+      await vi.waitFor(async () => {
+        expect(await waitingOnBackend(holderPid)).toBe(1);
+      }, { timeout: 5000 });
+      const [beforeSanction] = await sql<{ at: string }[]>`select clock_timestamp()::text as at`;
+      await sql.begin(async (transaction) => {
+        await transaction`update users set enforcement_state = 'BANNED' where id = ${fixture.contributorId}`;
+        await transaction`insert into moderation_events
+          (target_user_id, actor_id, prior_state, new_state, reason, created_at)
+          values (${fixture.contributorId}, ${fixture.moderatorId}, 'ACTIVE', 'BANNED',
+            'Concurrent sanction.', clock_timestamp())`;
+      });
+      release();
+      await holder;
+      await expect(deciding).resolves.toMatchObject({ kind: "ok" });
+      const [eligibility] = await sql<{ eligible: boolean; original_cutoff: boolean }[]>`
+        select participation_eligible_at(${fixture.contributorId}, ${beforeSanction.at}::timestamptz) as eligible,
+          decided_at < ${beforeSanction.at}::timestamptz as original_cutoff
+        from closed_pr_dispute_requests where id = ${fixture.requestId}
+      `;
+      expect(eligibility.eligible, "decision changed pre-sanction eligibility").toBe(true);
+      expect(eligibility.original_cutoff).toBe(true);
+    } finally {
+      release();
+      await Promise.allSettled([holder, deciding]);
+    }
+  });
+
+  it("waits for the contributor transition and preserves committed sanction eligibility", async () => {
+    const fixture = await decisionFixture();
+    const gateId = externalId++;
+    // Gate the event as well, so a missing/late user lock still reaches the outcome assertions.
+    await sql.unsafe(`create function hold_dispute_history() returns trigger language plpgsql as $$
+      begin
+        if new.dispute_request_id = '${fixture.requestId}'::uuid then
+          perform pg_advisory_xact_lock(hashtext(current_database()), ${gateId});
+        end if;
+        return new;
+      end; $$`);
+    await sql.unsafe(`create trigger hold_dispute_history before insert on moderation_events
+      for each row execute function hold_dispute_history()`);
+    let markLocked!: (pid: number) => void;
+    let release!: () => void;
+    const locked = new Promise<number>((resolve) => { markLocked = resolve; });
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const holder = sql.begin(async (transaction) => {
+      await transaction`select pg_advisory_xact_lock(hashtext(current_database()), ${gateId})`;
+      await transaction`update users set enforcement_state = 'BANNED' where id = ${fixture.contributorId}`;
+      await transaction`insert into moderation_events
+        (target_user_id, actor_id, prior_state, new_state, reason, created_at)
+        values (${fixture.contributorId}, ${fixture.moderatorId}, 'ACTIVE', 'BANNED',
+          'Uncommitted sanction.', clock_timestamp())`;
+      const [backend] = await transaction<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      markLocked(backend.pid);
+      await released;
+    });
+    const holderPid = await locked;
+    const deciding = store().decideDispute({ ...decision(fixture), decision: "DENIED" });
+    try {
+      await waitingOnBackend(holderPid);
+      await vi.waitFor(async () => {
+        expect(await waitingOnBackend(holderPid)).toBe(1);
+      }, { timeout: 5000 });
+      release();
+      await holder;
+      await expect(deciding).resolves.toMatchObject({ kind: "ok" });
+      const [afterDecision] = await sql<{ at: string }[]>`select clock_timestamp()::text as at`;
+      const [eligibility] = await sql<{ eligible: boolean }[]>`
+        select participation_eligible_at(${fixture.contributorId}, ${afterDecision.at}::timestamptz) as eligible
+      `;
+      expect(eligibility.eligible, "decision ignored the committed sanction").toBe(false);
+      const events = await sql`select prior_state, new_state from moderation_events
+        where dispute_request_id = ${fixture.requestId} and actor_id = ${fixture.moderatorId}`;
+      expect(events).toEqual([{ prior_state: "BANNED", new_state: "BANNED" }]);
+    } finally {
+      release();
+      await Promise.allSettled([holder, deciding]);
+      await sql.unsafe("drop trigger hold_dispute_history on moderation_events");
+      await sql.unsafe("drop function hold_dispute_history()");
+    }
+  });
+
   it("counts reviews at database decision time, not the closed PR's absent merge timestamp", async () => {
     const fixture = await decisionFixture();
     const [clock] = await sql<{ past: string; future: string }[]>`
@@ -726,4 +823,12 @@ async function expectUndecided(requestId: string) {
     where id = ${requestId}`).toEqual([{ state: "OPEN", decision: null, moderator_figure: null, awarded_points: null, decided_by: null }]);
   expect(await sql`select id from moderation_events where dispute_request_id = ${requestId}`).toHaveLength(1);
   expect(await sql`select id from dispute_credit_adjustments where dispute_id = ${requestId}`).toEqual([]);
+}
+
+async function waitingOnBackend(holderPid: number): Promise<number> {
+  const [activity] = await sql<{ waiting: number }[]>`
+    select count(*)::integer as waiting from pg_stat_activity
+    where datname = current_database() and ${holderPid} = any(pg_blocking_pids(pid))
+  `;
+  return activity.waiting;
 }
