@@ -58,7 +58,7 @@ const restoreSubsections = [
 /**
  * The contract identifiers section (i) has to name. A row here is the job's
  * surface landing on the section that documents it: the units and the script
- * it drives, the seven tables whose data the reduced set excludes (the
+ * it drives, the eight tables whose data the reduced set excludes (the
  * reduced set's whole point — a copy that silently grew to include one of
  * these tables' data would be a different copy than the privacy notice
  * describes), the env entries the operator configures, and the custody and
@@ -75,6 +75,7 @@ const sectionILiterals = [
   "repository_reconciliation_dirty_subjects",
   "repository_reconciliation_jobs",
   "repository_reconciliation_usage",
+  "reconciliation_sweep_pages",
   "xz -9e",
   "age",
   "overflow-reduced-*.sql.xz.age",

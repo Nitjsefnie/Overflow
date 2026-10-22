@@ -527,7 +527,7 @@ full dumps do not have.
 
 **The limit first, because it bounds what this path recovers:** a forge
 object deleted since the backup keeps its settlement row but loses its
-evidence facts. The copy excludes section (i)'s seven tables by data, and the
+evidence facts. The copy excludes section (i)'s eight tables by data, and the
 forced rederivation rebuilds their rows from the forge as it stands when it
 runs — rows the forge no longer has are not recovered by this path. Every
 other table restores as of the backup moment, `schema_migrations` among them,
@@ -605,7 +605,7 @@ sudo -u postgres psql -d overflow_from_offhost \
 ```
 
 Compare per-table counts as in (e.1), production against the restore —
-reading the seven excluded tables as populated only to the forge's current
+reading the eight excluded tables as populated only to the forge's current
 state. Swapping the restore in for the live database is (e.2)'s swap: its
 rename block and the service start, after the migration and its gate.
 
@@ -720,9 +720,9 @@ the same `EnvironmentFile=/etc/overflow/backup.env` as the full backup, plus
 the entries this section stands up.
 
 The copy is a **reduced set**: one `pg_dump --format=plain` of every table's
-schema, with data excluded for exactly the 7 tables whose rows a forced full
+schema, with data excluded for exactly the 8 tables whose rows a forced full
 rederivation rebuilds or that hold only work-queue state. Their schema still
-travels with the copy; only their rows are left out. The 7, in the order the
+travels with the copy; only their rows are left out. The 8, in the order the
 script excludes them:
 
 - `repository_reconciliation_evidence_facts`
@@ -732,6 +732,12 @@ script excludes them:
 - `repository_reconciliation_dirty_subjects`
 - `repository_reconciliation_jobs`
 - `repository_reconciliation_usage`
+- `reconciliation_sweep_pages`
+
+`reconciliation_sweep_pages` is the reconciliation sweep's replayable
+page-checkpoint cache; the forge is the source of truth. The walk re-fetches
+missing pages, so the cache's rows are left out of the copy whose encrypted
+size the size guard bounds.
 
 Every other table keeps its data, for two reasons: authoritative rows refer
 to the forge-derived projections by id — `settlement_override_requests`

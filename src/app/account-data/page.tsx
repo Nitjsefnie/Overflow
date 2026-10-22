@@ -513,7 +513,7 @@ export function AccountDataNotice() {
           <li>
             In addition to those backups, a nightly automated copy of an encrypted, reduced backup set
             leaves the host for a private Discord channel. It holds every table&apos;s structure and the
-            data of every table except seven tables whose rows Overflow rebuilds from GitHub or GitLab
+            data of every table except eight tables whose rows Overflow rebuilds from GitHub or GitLab
             or that hold only background work state. The copy is encrypted with the age tool to a key
             whose private half is not on Overflow&apos;s host, and it is deleted there after 14 days.
           </li>
