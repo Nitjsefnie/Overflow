@@ -37,6 +37,22 @@ describe("closed PR dispute schema", () => {
     const request = await insertRequest(fixture);
     expect(request).toMatchObject({ state: "OPEN", decided_by_sole_moderator: false });
     await expect(insertRequest(fixture)).rejects.toMatchObject({ code: "23505" });
+    const [otherPr] = await sql<{ id: string }[]>`
+      insert into pull_requests (github_pull_request_id, repository_id, issue_id, pull_request_number,
+                                 url, title, body, author_id, state)
+      select ${externalId++}, repository_id, issue_id, 100, 'https://example.test/pull/100',
+        title, body, author_id, state
+      from pull_requests where id = ${fixture.pullRequestId}
+      returning id
+    `;
+    await expect(insertRequest(fixture, { pull_request_id: otherPr.id })).resolves.toMatchObject({
+      state: "OPEN", contributor_id: fixture.contributorId, pull_request_id: otherPr.id,
+    });
+    const [openRequests] = await sql<{ count: number }[]>`
+      select count(*)::integer as count from closed_pr_dispute_requests
+      where contributor_id = ${fixture.contributorId} and state = 'OPEN'
+    `;
+    expect(openRequests.count).toBe(2);
     await sql`
       update closed_pr_dispute_requests
       set state = 'DECIDED', decision = 'DENIED', decided_by = ${fixture.contributorId},
@@ -84,6 +100,13 @@ describe("closed PR dispute schema", () => {
     const fixture = await buildFixture();
     await expect(insertRequest(fixture, { ...grantFields(fixture), ...fields }))
       .rejects.toMatchObject({ code: "23514" });
+  });
+
+  it.each([1, 10])("accepts a GRANTED figure of %i", async (figure) => {
+    const fixture = await buildFixture();
+    await expect(insertRequest(fixture, {
+      ...grantFields(fixture), moderator_figure: figure, awarded_points: figure,
+    })).resolves.toMatchObject({ decision: "GRANTED", moderator_figure: figure, awarded_points: figure });
   });
 
   it("accepts bounded reasons, either evidence form, and a zero-point grant", async () => {
