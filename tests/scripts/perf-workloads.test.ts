@@ -13,6 +13,7 @@ import {
 let container: StartedTestContainer | undefined;
 let sql: ReturnType<typeof postgres>;
 let databaseUrl: string;
+const previousMigrationGuard = process.env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD;
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
 beforeAll(async () => {
@@ -25,6 +26,7 @@ beforeAll(async () => {
   publishPostgresOnLoopback(built, "0");
   container = await built.start();
   databaseUrl = postgresConnectionUrl({ ...options, password, ...await startedPostgresEndpoint(container) });
+  process.env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD = "skip";
   const migration = spawnSync("pnpm", ["db:migrate"], {
     cwd: root, encoding: "utf8", env: { ...process.env, DATABASE_URL: databaseUrl },
   });
@@ -40,6 +42,8 @@ beforeEach(async () => {
 afterAll(async () => {
   await sql?.end();
   await container?.stop();
+  if (previousMigrationGuard === undefined) delete process.env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD;
+  else process.env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD = previousMigrationGuard;
 });
 
 it("measures all real workloads twice deterministically without touching the parent database", async () => {
