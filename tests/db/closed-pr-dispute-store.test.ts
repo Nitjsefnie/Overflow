@@ -458,14 +458,25 @@ describe("closed PR dispute decisions", () => {
       .toEqual([{ settlement_id: null, creditor_id: fixture.contributorId, amount: 6 }]);
   });
 
-  it.each([2, 3])("records a zero-net grant with %i rounds and no adjustment or reversal", async (rounds) => {
+  it.each([2, 3])("records a reversal-only zero-net grant with %i rounds", async (rounds) => {
     const fixture = await decisionFixture();
-    await insertLandingSettlement(fixture, fixture.landingCreditorId);
+    const settlementId = await insertLandingSettlement(fixture, fixture.landingCreditorId);
     await setReviews(fixture, Array.from({ length: rounds }, (_, index) => review(index + 1)));
     await expect(store().decideDispute({ ...decision(fixture), figure: 2 }))
       .resolves.toMatchObject({ kind: "ok", value: { decision: "GRANTED", moderatorFigure: 2, awardedPoints: 0 } });
-    expect(await sql`select id from dispute_credit_adjustments where dispute_id = ${fixture.requestId}`).toEqual([]);
+    expect(await sql`select id from dispute_credit_adjustments where dispute_id = ${fixture.requestId}`).toHaveLength(1);
+    expect(await adjustmentLines(fixture.requestId)).toEqual([{ settlement_id: settlementId, creditor_id: fixture.landingCreditorId, amount: -7 }]);
     expect(await decisionEvents(fixture.requestId)).toHaveLength(1);
+  });
+
+  it.each(["self-work", "no-record", "commit", "zero-credit"])("writes no adjustment for zero award with %s landing", async (kind) => {
+    const fixture = await decisionFixture(kind === "commit");
+    if (kind === "self-work") await insertLandingSettlement(fixture, fixture.sponsorId, fixture.landingCreditorId);
+    if (kind === "zero-credit") await insertLandingSettlement(fixture, fixture.landingCreditorId, fixture.sponsorId, 0);
+    await setReviews(fixture, [review(1), review(2)]);
+    await expect(store().decideDispute({ ...decision(fixture), figure: 2 }))
+      .resolves.toMatchObject({ kind: "ok", value: { awardedPoints: 0, decision: "GRANTED" } });
+    expect(await sql`select id from dispute_credit_adjustments where dispute_id = ${fixture.requestId}`).toEqual([]);
   });
 
   it("preserves pre-sanction eligibility when the decision began before the sanction", async () => {

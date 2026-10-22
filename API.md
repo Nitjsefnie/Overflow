@@ -952,8 +952,9 @@ exists. The sole-moderator path records `decidedBySoleModerator: true`.
 A positive grant appends a sponsor-targeted credit adjustment with an award
 leg to the contributor. A landing settlement credited to a third account is
 reversed by an additional leg in that adjustment; a self-work landing or a
-landing without a settlement has no reversal leg. A zero award creates no
-adjustment. Existing settlement and calibration creditors are preserved.
+landing without a settlement has no reversal leg. A zero award still reverses any qualifying landing settlement through a
+reversal-only adjustment. Only a zero award with no qualifying reversal creates
+no adjustment; zero-amount lines are never written. Existing settlement and calibration creditors are preserved.
 
 All errors use `{ "error": { "code": <code>, "message": <message> } }`.
 Service refusals preserve the service's explanation. Status/code pairs are
