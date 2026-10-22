@@ -707,6 +707,65 @@ describe("closed PR dispute decisions", () => {
   });
 });
 
+describe("grant financial uniqueness", () => {
+  it.each([false, true])("refuses a second grant for the same PR without repeating award or reversal (settlement=%s)", async (hasSettlement) => {
+    const fixture = await decisionFixture();
+    if (hasSettlement) await insertLandingSettlement(fixture, fixture.landingCreditorId);
+    await service().decideDispute(fixture.requestId, { id: fixture.moderatorId }, decision(fixture));
+    const repeated = await service().fileDispute({ id: fixture.contributorId }, filing(fixture));
+    await expect(service().decideDispute(repeated.id, { id: fixture.moderatorId }, decision(fixture)))
+      .rejects.toMatchObject({ code: "ALREADY_GRANTED" });
+    await expect(store().decideDispute({ ...decision(fixture), requestId: repeated.id })).resolves.toEqual({ kind: "already_granted" });
+    await expectUndecided(repeated.id);
+    const balances = await sql`select account_id, balance from balances
+      where account_id = any(${[fixture.sponsorId, fixture.contributorId, fixture.landingCreditorId]}::uuid[])`;
+    expect(balances.find((row) => row.account_id === fixture.contributorId)?.balance).toBe(6);
+    expect(balances.find((row) => row.account_id === fixture.sponsorId)?.balance).toBe(-6);
+    if (hasSettlement) expect(balances.find((row) => row.account_id === fixture.landingCreditorId)?.balance).toBe(0);
+    expect(await sql`select id from dispute_credit_adjustments where dispute_id = ${fixture.requestId}`).toHaveLength(1);
+  });
+
+  it("allows re-filing and granting after denial", async () => {
+    const fixture = await decisionFixture();
+    await service().decideDispute(fixture.requestId, { id: fixture.moderatorId }, { ...decision(fixture), decision: "DENIED" });
+    const repeated = await service().fileDispute({ id: fixture.contributorId }, filing(fixture));
+    expect(await service().decideDispute(repeated.id, { id: fixture.moderatorId }, decision(fixture)))
+      .toMatchObject({ decision: "GRANTED", awardedPoints: 6 });
+  });
+
+  it("serializes distinct historical requests at the grant index", async () => {
+    const fixture = await decisionFixture();
+    await service().decideDispute(fixture.requestId, { id: fixture.moderatorId }, { ...decision(fixture), decision: "DENIED" });
+    const repeated = await service().fileDispute({ id: fixture.contributorId }, filing(fixture));
+    await service().decideDispute(repeated.id, { id: fixture.moderatorId }, { ...decision(fixture), decision: "DENIED" });
+    // Exercise the financial constraint independently of the one-OPEN-request gate.
+    let markLocked!: (pid: number) => void;
+    let release!: () => void;
+    const locked = new Promise<number>((resolve) => { markLocked = resolve; });
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const holder = sql.begin(async (tx) => {
+      await tx`update closed_pr_dispute_requests set decision = 'GRANTED', moderator_figure = 6, awarded_points = 6
+        where id = ${fixture.requestId}`;
+      const [backend] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      markLocked(backend.pid);
+      await released;
+    });
+    const pid = await locked;
+    const contender = sql`update closed_pr_dispute_requests set decision = 'GRANTED', moderator_figure = 6, awarded_points = 6
+      where id = ${repeated.id}`.then(() => "unexpected second grant", (error: unknown) => error);
+    try {
+      await waitingOnBackend(pid);
+      await vi.waitFor(async () => { expect(await waitingOnBackend(pid)).toBe(1); }, { timeout: 1500 });
+      release();
+      await holder;
+      expect(await contender).toMatchObject({ code: "23505", constraint_name: "closed_pr_dispute_requests_one_grant_per_pull_request" });
+    } finally {
+      release();
+      await Promise.allSettled([holder, contender]);
+    }
+  });
+});
+
 function store() { return new PostgresClosedPrDisputeStore(sql); }
 function service() { return new ClosedPrDisputeService(store()); }
 function filing(fixture: { contributorId: string; pullRequestId: string }) {
