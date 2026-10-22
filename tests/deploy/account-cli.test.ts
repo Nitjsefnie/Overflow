@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,9 @@ import { DELETED_ACCOUNT_LOGIN } from "@/lib/accounts/deletion";
 import { DATA_SUBJECT_TOMBSTONE_LOGIN } from "@/lib/accounts/forge-person";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer, type StartedPostgres } from "../support/postgres-container";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "account-cli-home-")]);
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const operating = readFileSync(new URL("../../OPERATING.md", import.meta.url), "utf8");
@@ -219,7 +222,7 @@ describe("documented account commands", () => {
   });
 
   it("loads under the documented flags without a database and fails sanitized", () => {
-    const home = mkdtempSync(join(tmpdir(), "account-cli-home-"));
+    const home = tempDirectories.create(join(tmpdir(), "account-cli-home-"));
     try {
       const words = documentedArgumentWords(documentedCommands[0]!, 42);
       const result = spawnDocumented(words, { PATH: process.env.PATH!, HOME: home });
@@ -234,7 +237,7 @@ describe("documented account commands", () => {
         expect(result.stderr).not.toContain(loadingError);
       }
     } finally {
-      rmSync(home, { recursive: true, force: true });
+      tempDirectories.dispose(home);
     }
   }, 120_000);
 });
@@ -340,7 +343,7 @@ describe("account CLI with PostgreSQL", () => {
 
   it("runs the documented commands in document order against a seeded account", async () => {
     const githubUserId = await seedUser("documented-run");
-    const home = mkdtempSync(join(tmpdir(), "account-cli-home-"));
+    const home = tempDirectories.create(join(tmpdir(), "account-cli-home-"));
     try {
       const environment: Record<string, string> = { PATH: process.env.PATH!, HOME: home, DATABASE_URL: started.databaseUrl };
       const statuses: (number | null)[] = [];
@@ -368,7 +371,7 @@ describe("account CLI with PostgreSQL", () => {
       const forgeRemoval = JSON.parse(results[5]!.stdout);
       expect(forgeRemoval.kind).toBe("REMOVED");
     } finally {
-      rmSync(home, { recursive: true, force: true });
+      tempDirectories.dispose(home);
     }
     const row = await userRow(githubUserId);
     // The forge removal ran last: its tombstone is the final login on the

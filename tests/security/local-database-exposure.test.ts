@@ -1,10 +1,13 @@
 import { execFile } from "node:child_process";
-import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, readFile, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([resolve(tmpdir(), "compose-exposure-"), resolve(tmpdir(), "compose-exposure-profiled-")]);
 
 const COMPOSE_FILE = "docker-compose.yml";
 const ENVIRONMENT_FILE = ".env.example";
@@ -41,18 +44,13 @@ function resolvedComposeDocuments(): Promise<ResolvedDocument[]> {
 }
 
 async function resolveComposeDocument(): Promise<ResolvedDocument> {
-  // Interpolation must not see anything from the invoking shell: a developer
-  // exporting POSTGRES_HOST_BIND, COMPOSE_* or DOCKER_* variables must not
-  // change this suite's verdict. The invocation gets only what Docker needs to
-  // find its binary and CLI plugins, and an empty env file so a project `.env`
-  // (which the documented setup creates from `.env.example`) cannot widen the
-  // resolution either — the shipped file is pinned as shipped.
+
   const environment: NodeJS.ProcessEnv = { NODE_ENV: process.env.NODE_ENV };
   for (const name of ["PATH", "HOME", "DOCKER_CONFIG"] as const) {
     const value = process.env[name];
     if (value !== undefined) environment[name] = value;
   }
-  const directory = await mkdtemp(resolve(tmpdir(), "compose-exposure-"));
+  const directory = await tempDirectories.createAsync(resolve(tmpdir(), "compose-exposure-"));
   try {
     // Compose reads this file instead of any project `.env`, so the
     // resolution depends on nothing but docker-compose.yml itself.
@@ -86,24 +84,18 @@ async function resolveComposeDocument(): Promise<ResolvedDocument> {
     });
     return JSON.parse(stdout) as ResolvedDocument;
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await tempDirectories.disposeAsync(directory);
   }
 }
 
 async function resolveComposeDocumentWithProfiles(): Promise<ResolvedDocument> {
-  // The profiled services carry `env_file: [.env]`, and `docker compose
-  // config` refuses a resolution whose selected service declares an env file
-  // the project directory does not hold — a clean checkout has none, and the
-  // repo root must not grow a real one. The compose file is therefore resolved
-  // from a copy in a temporary directory, beside a stub `.env` that satisfies
-  // the declaration without carrying a value; interpolation still reads the
-  // empty `--env-file`, so the verdict depends on nothing else.
+
   const environment: NodeJS.ProcessEnv = { NODE_ENV: process.env.NODE_ENV };
   for (const name of ["PATH", "HOME", "DOCKER_CONFIG"] as const) {
     const value = process.env[name];
     if (value !== undefined) environment[name] = value;
   }
-  const directory = await mkdtemp(resolve(tmpdir(), "compose-exposure-profiled-"));
+  const directory = await tempDirectories.createAsync(resolve(tmpdir(), "compose-exposure-profiled-"));
   try {
     const composeCopy = resolve(directory, COMPOSE_FILE);
     await copyFile(resolve(COMPOSE_FILE), composeCopy);
@@ -140,7 +132,7 @@ async function resolveComposeDocumentWithProfiles(): Promise<ResolvedDocument> {
     });
     return JSON.parse(stdout) as ResolvedDocument;
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await tempDirectories.disposeAsync(directory);
   }
 }
 
@@ -155,12 +147,7 @@ function diagnoseComposeFailure(error: Error, stderr: string): string {
 }
 
 describe("local development database exposure", () => {
-  // `docker compose config` resolves only the services selected by profile, so
-  // a service excluded from the default profile is invisible to every
-  // assertion here while `docker compose --profile <name> up` would still
-  // publish it. This suite reads the raw file's service names — names only,
-  // nothing else is read from the raw YAML — and refuses the gap rather than
-  // covering it silently.
+
   it("resolves every service the file declares", async () => {
     const declared = declaredServiceNames(await readFile(resolve(COMPOSE_FILE), "utf8"));
     const documents = await resolvedComposeDocuments();
@@ -245,12 +232,6 @@ describe("local development database exposure", () => {
     }
   });
 
-  // The loopback case above judges whatever host_ip Compose resolves, so the
-  // classifier it calls is pinned directly on the spellings Compose accepts:
-  // an IPv4-mapped address is loopback exactly when its embedded IPv4 tail is,
-  // whether that tail is written dotted ("::ffff:127.0.0.2") or hex
-  // ("::ffff:7f00:2"). The negative side keeps a constant-true classifier from
-  // passing.
   it("classifies loopback addresses, including IPv4-mapped spellings", () => {
     expect(["127.0.0.1", "::1", "::ffff:127.0.0.2", "::ffff:7f00:2"].map(isLoopbackAddress))
       .toEqual([true, true, true, true]);
@@ -279,11 +260,6 @@ describe("local development database exposure", () => {
   });
 });
 
-// An entry is published only when it carries a "published" port; a bare
-// long-form target is expose-only and reachable from no interface at all.
-// Which side of a mapping the database port sits on says nothing about who can
-// reach it: a sibling published as 0.0.0.0:5432:6432 puts the database port on
-// every interface just as surely as one published as 0.0.0.0:6432:5432.
 function isPublishedDatabaseFacing(entry: ResolvedPort): boolean {
   if (entry.published === undefined || entry.published === null || entry.published === "") return false;
   const target = entry.target === undefined || entry.target === null ? "" : String(entry.target);
@@ -298,12 +274,6 @@ function portCovers(spec: string, port: number): boolean {
   return Number(range[1]) <= port && port <= Number(range[2]);
 }
 
-// Compose resolves host_ip as written, so the classifier must read every
-// spelling Docker accepts: a loopback bind is a 127/8 dotted quad, or any IPv6
-// spelling of ::1 — compressed, full-form, or IPv4-mapped with the mapped
-// address written dotted or hex, which are the same address. `localhost` and
-// octal forms such as `0177.0.0.1` Docker rejects outright, so the classifier
-// has no reason to understand them.
 function isLoopbackAddress(address: string): boolean {
   let ip = address;
   if (ip.startsWith("[") && ip.endsWith("]")) ip = ip.slice(1, -1);

@@ -1,21 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { relativeLinks, unresolvedLinks } from "../support/markdown-links";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-/**
- * `deploy/backup-restore.md` is the database runbook. Nothing else in the
- * repository notices when it loses a section: the root documents link into it
- * by anchor, and an anchor that stops naming a heading breaks only for the
- * reader who follows it. The off-host copy (issue 1093) added section (i) and
- * subsection (e.4), and these assertions hold the runbook's structure and its
- * resolution, never what it says — a faithful paraphrase that keeps the
- * headings, the commands and the contract identifiers leaves this file green,
- * which is the point.
- */
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "backup-restore-runbook-")]);
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
 const document = "deploy/backup-restore.md";
@@ -55,15 +47,6 @@ const restoreSubsections = [
   "### (e.4) Restoring the encrypted off-host copy",
 ];
 
-/**
- * The contract identifiers section (i) has to name. A row here is the job's
- * surface landing on the section that documents it: the units and the script
- * it drives, the eight tables whose data the reduced set excludes (the
- * reduced set's whole point — a copy that silently grew to include one of
- * these tables' data would be a different copy than the privacy notice
- * describes), the env entries the operator configures, and the custody and
- * retention facts the notice makes promises about.
- */
 const sectionILiterals = [
   "overflow-offhost-backup.timer",
   "overflow-offhost-backup.service",
@@ -225,7 +208,7 @@ describe("backup-restore runbook", () => {
   it("parses every bash fenced block as bash", () => {
     const blocks = bashBlocks(source);
     const failures: string[] = [];
-    const dir = mkdtempSync(join(tmpdir(), "backup-restore-runbook-"));
+    const dir = tempDirectories.create(join(tmpdir(), "backup-restore-runbook-"));
     try {
       for (const [index, block] of blocks.entries()) {
         const file = join(dir, `block-${index + 1}.sh`);
@@ -238,7 +221,7 @@ describe("backup-restore runbook", () => {
         }
       }
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      tempDirectories.dispose(dir);
     }
     expect(failures, `\n${failures.join("\n")}`).toStrictEqual([]);
   });

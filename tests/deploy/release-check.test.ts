@@ -1,9 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([path.join(os.tmpdir(), "overflow-release-check-")]);
 
 const project = fileURLToPath(new URL("../..", import.meta.url));
 const script = path.join(project, "scripts/release.ts");
@@ -12,13 +15,13 @@ let fixture: string;
 let tree: string;
 
 beforeEach(async () => {
-  fixture = await mkdtemp(path.join(os.tmpdir(), "overflow-release-check-"));
+  fixture = await tempDirectories.createAsync(path.join(os.tmpdir(), "overflow-release-check-"));
   tree = path.join(fixture, "project");
   await mkdir(tree);
 });
 
 afterEach(async () => {
-  await rm(fixture, { recursive: true, force: true });
+  await tempDirectories.disposeAsync(fixture);
 });
 
 async function release(directory: string) {

@@ -79,11 +79,6 @@ describe("the verify workflow's docs-only detection step", () => {
   it("runs the base copy over the materialised merge tree in the pull-request leg", () => {
     const run = prStep?.run ?? "";
 
-    // The workspace is the base checkout and the pull request's merge commit
-    // is the detached worktree at PR_TREE. The base copy of the script judges
-    // it against its first parent; nothing is fetched or deepened here, and
-    // there is no event arm to select, because the file receives nothing but
-    // workflow_run.
     expect(run).toBe(
       'cd "${PR_TREE:?the pull request tree was not materialised}"\n' +
         'changed=$(node "${GITHUB_WORKSPACE}/scripts/docs-only.ts" HEAD^1)\n' +
@@ -142,6 +137,11 @@ describe("the verify workflow's docs-only detection step", () => {
       await tempDirectories.disposeAsync(root);
     });
 
+    /**
+     * The origin repository. Its root commit carries the real
+     * scripts/docs-only.ts, so the step runs the module under test, plus one
+     * code file and one doc for later commits to change.
+     */
     async function upstream(): Promise<string> {
       counter += 1;
       const repo = join(root, `upstream-${counter}`);
@@ -261,6 +261,8 @@ describe("the verify workflow's docs-only detection step", () => {
       }
     });
 
+    /** A merge ref: the base tip as first parent, the pull request head as second.
+     * Also plants refs/pull/1/merge on the origin, the way GitHub publishes it. */
     async function mergeRef(origin: string, headChange: (repo: string) => Promise<void>): Promise<string> {
       git(origin, "checkout", "--quiet", "-b", "feature");
       await headChange(origin);

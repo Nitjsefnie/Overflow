@@ -1,16 +1,19 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { copyFile, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([path.join(os.tmpdir(), "overflow-release-build-")]);
 
 const project = fileURLToPath(new URL("../..", import.meta.url));
 let tree: string;
 let trackedConfig: string;
 
 beforeEach(async () => {
-  tree = await mkdtemp(path.join(os.tmpdir(), "overflow-release-build-"));
+  tree = await tempDirectories.createAsync(path.join(os.tmpdir(), "overflow-release-build-"));
   await mkdir(path.join(tree, "scripts"));
   await mkdir(path.join(tree, "src/app/review-removal"), { recursive: true });
   for (const file of ["next.config.ts", "tsconfig.json", "package.json", "scripts/release.ts"]) {
@@ -29,7 +32,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(tree, { recursive: true, force: true });
+  await tempDirectories.disposeAsync(tree);
 });
 
 function prepare(release: string) {

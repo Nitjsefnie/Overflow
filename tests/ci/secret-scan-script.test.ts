@@ -61,6 +61,7 @@ function wholeRecordEquals(committed: Record<string, unknown>, captured: Record<
   return true;
 }
 
+/** The parsed baseline as whole records, which is the shape the comparison above is written against. */
 function asRecords(entries: Finding[]): Record<string, unknown>[] {
   return entries as unknown as Record<string, unknown>[];
 }
@@ -84,18 +85,6 @@ describe(".github/gitleaks-baseline.json", () => {
 
   it("carries no secret material: every Secret is redacted away, and so is the secret inside Match", () => {
 
-    // rules are now readable in a tracked file.
-    //
-
-    //
-
-    // IS the token, so it comes out as the bare literal REDACTED; a
-
-    // three such entries read `TOKEN_ENCRYPTION_KEY", "REDACTED"`,
-    // `encrypted_webhook_secret","REDACTED"` and
-    // `TOKEN_ISSUANCE_ID = "REDACTED"`. So the two fields are asserted
-
-    // would then never produce a record equal to the one on file.
     for (const finding of findings) {
       expect(finding.Secret, `Secret for ${finding.Fingerprint}`).toBe("REDACTED");
       expect(
@@ -107,15 +96,6 @@ describe(".github/gitleaks-baseline.json", () => {
 
   it("keeps BOTH Match shapes gitleaks 8.30.1 emits, rather than normalising them to one", () => {
 
-    // equality and would emit `TOKEN_ENCRYPTION_KEY", "REDACTED"` for a
-
-    // history that is clean, and the failure reads as a leaked secret.
-    //
-
-    // keeps the assignment. Present in the current baseline, both are.
-    //
-
-    // regenerated — not silently afterwards.
     const bare = findings.filter((finding) => finding.Match === "REDACTED");
     const contextual = findings.filter((finding) => finding.Match !== "REDACTED" && finding.Match.includes("REDACTED"));
     expect(
@@ -132,27 +112,6 @@ describe(".github/gitleaks-baseline.json", () => {
 
   it("leaves nothing but source-line context where the secret was", () => {
 
-    // rather than a first filter:
-    //
-
-    //   offending material is punctuation.
-    //
-
-    //
-
-    // entries where the history is present.
-    //
-
-    // behind is `encrypted_webhook_secret` at 24 characters, and a real
-
-    // the data cannot tell the two apart. Splicing such a token beside a
-
-    // one. Provenance can, because the token is not on the line.
-    //
-
-    // a credential-shaped FIXTURE is how the round-2 demonstration found
-
-    // merely described is both safe and sufficient to make the point.
     for (const finding of findings) {
       const residue = finding.Match.replaceAll("REDACTED", "");
       expect(
@@ -165,11 +124,6 @@ describe(".github/gitleaks-baseline.json", () => {
 
   it("bounds what the redaction can leave, to what 8.30.1 actually emits", () => {
 
-    // the longest identifier-shaped run in the current baseline is
-
-    // cheap first filter, and the fact that it cannot by itself tell a
-
-    // check exists beside it.
     for (const finding of findings) {
       const longest = Math.max(0, ...[...finding.Match.replaceAll("REDACTED", "").matchAll(/[A-Za-z0-9_]+/g)].map((match) => match[0].length));
       expect(
@@ -197,7 +151,10 @@ describe(".github/gitleaks-baseline.json", () => {
   });
 
   it("carries the fingerprint gitleaks 8.30.1 emits for each finding", () => {
-
+    // The shape is Commit:File:RuleID:StartLine. It is asserted rather than
+    // trusted because a hand-edited or regenerated-elsewhere baseline can carry
+    // a fingerprint this version would never produce, and the comparison the
+    // baseline exists to drive is whole-record equality against a report this
     // same version emits.
     for (const finding of findings) {
       expect(
@@ -216,11 +173,6 @@ describe(".github/gitleaks-baseline.json", () => {
 
   it("is accepted by the provenance check, on the real entries, at any depth", () => {
 
-    // one needs the history.
-    //
-
-    // inverted checker where the history is absent is this. The line is
-
     let checked = 0;
     for (const finding of findings) {
       const runs = finding.Match.replaceAll("REDACTED", "").match(/[A-Za-z0-9_]+/g) ?? [];
@@ -233,9 +185,6 @@ describe(".github/gitleaks-baseline.json", () => {
       if (runs.length > 0) checked += 1;
     }
 
-    // nothing.
-
-    // claim unchecked exactly where nobody local is looking.
     expect(
       checked,
       `only ${checked} of ${findings.length} committed entries leave a residue this suite can check, ` +
@@ -247,13 +196,6 @@ describe(".github/gitleaks-baseline.json", () => {
 
   it("carries the captured scan report whole-record, which is the equality gitleaks suppresses on", () => {
 
-    // that finding.
-    //
-
-    // and the mutation test below is what shows it rather than claims it.
-    //
-
-    // `&`, this suite stayed green, which is the correct result.
     expect(
       asRecords(findings).some((committed) => wholeRecordEquals(committed, CAPTURED_FINDING)),
       "no committed entry equals the captured scan report field for field. gitleaks 8.30.1 suppresses a finding " +
@@ -263,9 +205,6 @@ describe(".github/gitleaks-baseline.json", () => {
   });
 
   it("stops matching the captured record the moment the entry is removed, or one field of it moves", () => {
-
-    // and watch the comparison above stop holding.
-    //
 
     const committed = asRecords(findings);
     const matches = (entries: Record<string, unknown>[]) => entries.some((entry) => wholeRecordEquals(entry, CAPTURED_FINDING));
@@ -302,10 +241,8 @@ describe(".github/gitleaks-baseline.json", () => {
 describe("the provenance check, against a repository this suite builds", () => {
   let root = "";
   let repo = "";
-
+  /** The line the synthetic commit's fixture file carries, read back from git. */
   let sourceLine = "";
-
-  // not a plausible credential: a 32-character hex string under an
 
   const SOURCE = [
     'import { describe, it } from "vitest";',
@@ -324,7 +261,9 @@ describe("the provenance check, against a repository this suite builds", () => {
     await mkdir(repo, { recursive: true });
     git(repo, "init", "--quiet", "--initial-branch=main");
     const sha = await commitFiles(repo, { "tests/fixtures/keys.test.ts": `${SOURCE}\n` }, "fixture");
-
+    // Read the line back out of the object database rather than reusing the
+    // string above, so the check is exercised on a line that genuinely came
+    // from a commit — the way the committed baseline's own entries would be.
     sourceLine = git(repo, "show", `${sha}:tests/fixtures/keys.test.ts`).split("\n")[3];
   });
 
@@ -333,18 +272,19 @@ describe("the provenance check, against a repository this suite builds", () => {
   });
 
   it("accepts the residue gitleaks actually leaves, so the check is not vacuous", () => {
-
+    // The positive case, and it is the one that makes the negative cases mean
+    // something. A checker that rejects everything would pass every rejection
     // test below while being useless.
     expect(sourceLine, "the synthetic commit must carry the line the fixtures read").toContain("TOKEN_ENCRYPTION_KEY");
     expect(provenanceViolations(finding('TOKEN_ENCRYPTION_KEY", "REDACTED"'), sourceLine)).toEqual([]);
-
+    // And the shape a rule produces when its match IS the secret: nothing left.
     expect(provenanceViolations(finding("REDACTED"), sourceLine)).toEqual([]);
   });
 
   it("rejects a token spliced in beside the redaction, at the length that beat a bound", () => {
-
+    // The reviewer planted exactly this shape and a 28-character bound let it
     // through. 20 characters is under the tightened 24 bound too, so the
-
+    // character count cannot reject it and only provenance can — which is why
     // the bound is the cheap first filter and this is the guard.
     const planted = "Ab3dEf9hIj2kLm4nOp6q";
     expect(planted.length).toBe(20);
@@ -356,7 +296,7 @@ describe("the provenance check, against a repository this suite builds", () => {
   });
 
   it("rejects a short token too, which is where a length bound cannot follow", () => {
-
+    // 12 characters, well under any bound read off the committed data. Only
     // provenance rejects this, which is why it is the check that ships.
     const planted = "Ab3dEf9hIj2k";
     expect(planted.length).toBeLessThan(24);
@@ -364,14 +304,16 @@ describe("the provenance check, against a repository this suite builds", () => {
   });
 
   it("rejects an identifier taken from a different line of the same file", () => {
-
+    // A reviewer reading the entry would see a plausible source identifier; only
     // the line it names gives it away.
     const planted = "gitleaks_provenance";
     expect(provenanceViolations(finding(`${planted}REDACTED`), sourceLine)).toEqual([planted]);
   });
 
   it("names every offending run, not merely that one exists", () => {
-
+    // A baseline with two splices must report both, so a fix is verifiable
+    // without re-deriving which material was planted. The separator matters:
+    // pasted with nothing between them the two bodies read as ONE identifier
     // run, which is itself the shape a hand-paste produces.
     const planted = ["Ab3dEf9hIj2kLm4nOp6q", "Ab3dEf9hIj2k"];
     expect(provenanceViolations(finding(`${planted.join('", "')}REDACTED`), sourceLine)).toEqual(planted);
@@ -385,10 +327,11 @@ describe("the git reads that decide whether the deep check runs", () => {
     elsewhere = await tempDirectories.createAsync(join(tmpdir(), "gitleaks-redirect-"));
     const repo = join(elsewhere, "shallow");
     await mkdir(repo, { recursive: true });
-
+    // A real repository with real commits, so `rev-parse --is-shallow-repository`
+    // can only answer `true` about it if git is really being pointed there.
     git(repo, "init", "--quiet", "--initial-branch=main");
     await commitFiles(repo, { "README.md": "# somewhere else\n" }, "root");
-
+    // Make it genuinely shallow, so the redirect is detectable rather than a
     // no-op: a full repository would answer `false` to the same query.
     const marker = join(repo, ".git", "shallow");
     await writeFile(marker, `${git(repo, "rev-parse", "HEAD")}\n`, "utf8");
@@ -429,10 +372,6 @@ describe("the git reads that decide whether the deep check runs", () => {
           encoding: "utf8",
           env: process.env,
         }).stdout.trim();
-        // The bite, and only the two variables that genuinely redirect can
-
-        // so a disagreement demanded of them would be a false demand. Those
-        // cases are still exercised, to catch a shield that breaks ordinary
 
         if (redirects) {
           expect(unshielded, `${variable} must genuinely redirect, or this case proves nothing`).toBe("true");
@@ -468,9 +407,6 @@ describe("the git reads that decide whether the deep check runs", () => {
       .stdout.trim();
     expect(ambientHead, "the ambient checkout must have a HEAD to look for").toMatch(/^[0-9a-f]{40}$/);
 
-    // The floor, and it holds at BOTH depths: the redirect points at a
-
-    // comment on the same distinction.
     let biting = 0;
     for (const { variable, value, redirects } of REDIRECTORS) {
       const saved = process.env[variable];
@@ -512,9 +448,6 @@ describe("the committed baseline's provenance, where the history is present", ()
   it.skipIf(shallow)("reproduces every residue from the source line its entry records", () => {
     const sources = new Map<string, string[]>();
 
-    // redaction assertions are what carry those entries.
-    //
-
     let checked = 0;
     for (const finding of findings) {
       const key = `${finding.Commit}:${finding.File}`;
@@ -523,30 +456,11 @@ describe("the committed baseline's provenance, where the history is present", ()
           sources.set(key, showFileLines(finding.Commit, finding.File));
         } catch (error) {
 
-          // is where that defect is reported. So this FAILS too, in the one
-          // environment that can see it. A skip here would report the defect as
-          // coverage, which is the shape of false green this suite has spent
-          // three rounds removing.
-          //
-
-          // exists for a **no-op** downgrade of this guard:
-          // downgraded to one, control reaches the lookup, and without the
-          // backstop the loop crashes on a missing map entry with a bare
-          // TypeError that names nothing. (A `continue` downgrade is a
-          // different thing entirely: it skips the loop body, so the lookup is
-          // never reached and the crash cannot happen. The backstop does not
-          // cover that case and is not claimed to.)
           expect.fail(
             `the baseline names ${key}, which must exist in this repository's history: ` +
               `${(error as Error).message}`,
           );
-          // Unreachable while `expect.fail` throws, and that is the point: it
-          // exists so that a NO-OP downgrade of the guard above still fails
 
-          // than crashing three lines later with a TypeError nobody can act on.
-          // Measured: with a corrupt entry, the guard no-op and this backstop
-          // removed, the failure is the TypeError; with it, the failure names
-          // all three.
           return expect.fail(
             `the baseline names ${key}, but its lines were not read, so there is nothing to check it ` +
               "against. The guard above did not stop the loop.",
@@ -555,9 +469,6 @@ describe("the committed baseline's provenance, where the history is present", ()
       }
       const line = sources.get(key)![finding.StartLine - 1] ?? "";
 
-      // defects and read zero on a perfectly good baseline. An entry is
-      // meaningful to this check when its residue carries at least one
-      // identifier run for the checker to account for.
       if ((finding.Match.replaceAll("REDACTED", "").match(/[A-Za-z0-9_]+/g) ?? []).length > 0) {
         checked += 1;
       }
@@ -580,8 +491,6 @@ describe("the committed baseline's provenance, where the history is present", ()
   });
 
   it.skipIf(shallow)("pins the source the captured entry names, at the commit it names", () => {
-
-    //
 
     const entry = asRecords(findings).find((committed) => wholeRecordEquals(committed, CAPTURED_FINDING));
     expect(
@@ -628,7 +537,7 @@ describe("scripts/secret-scan.sh", () => {
     exitCode?: number;
     /** Run with no gitleaks on PATH at all. */
     absent?: boolean;
-
+    /** A GITLEAKS_REPORT_PATH to set, or undefined for the script's own default. */
     reportPath?: string;
 
     script?: string;
@@ -638,7 +547,7 @@ describe("scripts/secret-scan.sh", () => {
     status: number | null;
     output: string;
     argv: string[];
-
+    /** The report the script wrote, resolved against the directory it ran in. */
     report: string;
   };
 
@@ -709,7 +618,9 @@ describe("scripts/secret-scan.sh", () => {
     for (const key of ["GITLEAKS_REPORT_PATH", "STUB_ARGV_FILE", "STUB_VERSION", "STUB_EXIT"]) {
       delete env[key];
     }
-
+    // A PATH that carries only bash's own essentials. When the case supplies a
+    // stub the stub's directory is prepended; when it does not, gitleaks is
+    // genuinely unreachable — this box has no system-wide gitleaks, which is
     // the same condition a runner with a failed download-step produces.
     const essentials = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"];
     env.PATH = config.absent ? essentials.join(":") : [binDir, ...essentials].join(":");
@@ -728,6 +639,7 @@ describe("scripts/secret-scan.sh", () => {
     return { status: result.status, output: `${result.stdout}\n${result.stderr}`, argv, report };
   }
 
+  /** The value that follows `flag` in the recorded argv, or undefined. */
   const valueAfter = (argv: string[], flag: string): string | undefined => {
     const index = argv.indexOf(flag);
     return index === -1 ? undefined : argv[index + 1];
@@ -754,7 +666,8 @@ describe("scripts/secret-scan.sh", () => {
     const { argv, status, output } = await runScript();
     expect(status, `the stub accepted the argv the script passed: ${output}`).toBe(0);
     expect(argv, "gitleaks must be invoked as `gitleaks git`, or the history is never walked").toContain("git");
-
+    // `dir` is the other subcommand that takes a path. A script that swapped
+    // `git` for `dir` would scan the checkout and still exit 0 while every
     // committed-and-then-deleted secret stayed invisible — a green no-op.
     expect(argv, "`gitleaks dir` scans the working tree, not the history").not.toContain("dir");
   });
@@ -764,10 +677,6 @@ describe("scripts/secret-scan.sh", () => {
     expect(status, `the stub accepted the argv the script passed: ${output}`).toBe(0);
     const target = argv[argv.length - 1];
 
-    // or a migration would never be reported.
-    //
-
-    // answer the way a hardcoded path would.
     const topLevel = spawnSync("git", ["rev-parse", "--show-toplevel"], {
       encoding: "utf8",
       env: scratchGitEnv,
@@ -780,9 +689,6 @@ describe("scripts/secret-scan.sh", () => {
         "target means a credential committed anywhere outside it is never reported and the run is " +
         "green, which is the whole failure this workflow exists to catch.",
     ).toBe(topLevel);
-
-    // satisfied by a path that happens to be spelled the same way.
-    //
 
     expect(
       existsSync(target) && statSync(target).isDirectory(),
@@ -819,7 +725,8 @@ describe("scripts/secret-scan.sh", () => {
     expect(clean.status, "a clean scan must exit 0").toBe(0);
 
     const findings = await runScript({ exitCode: 1 });
-
+    // The one failure this exists to catch: `set -e` around the scan followed
+    // by a second command turns a findings run green, and a scheduled scan that
     // cannot go red is a scan that reports nothing forever.
     expect(findings.status, "a findings scan must exit nonzero — the script must not swallow the exit code").toBe(1);
   });
@@ -832,14 +739,13 @@ describe("scripts/secret-scan.sh", () => {
 
   it("refuses to scan when gitleaks is absent from PATH", async () => {
     const { status, output, report } = await runScript({ absent: true });
-
+    // A missing binary is not a clean history. `gitleaks ... || true`, or a
     // `command -v` check that only warns, both report success on a runner
     // whose download step silently did nothing.
     expect(status, "a missing gitleaks must fail the run, not pass it").not.toBe(0);
     expect(output).toMatch(/gitleaks/i);
     expect(existsSync(report), "no report can exist when the scanner never ran").toBe(false);
 
-    // scanner upgrade.
     expect(
       output,
       "a missing gitleaks must say so in the guard's own words, so the failure is not read as a " +
@@ -852,11 +758,12 @@ describe("scripts/secret-scan.sh", () => {
     const { status, output, argv, report } = await runScript({ version: "8.30.0" });
     expect(status, "an unpinned gitleaks must fail the run").not.toBe(0);
     // The names matter more than the code: this is the message a future
-
+    // maintainer reads when a dependabot-style bump breaks the scan, and it
     // has to say which version was found and which is required.
     expect(output).toContain("8.30.0");
     expect(output).toContain(PINNED_VERSION);
-
+    // No scan at all — the whole point of refusing is that the run against a
+    // different rule set never happens, because a changed rule set under a
     // committed baseline produces findings the baseline cannot explain.
     expect(argv, "the scan must not run at all under an unpinned gitleaks").not.toContain("git");
     expect(existsSync(report), "the scan must not write a report under an unpinned gitleaks").toBe(false);
@@ -875,8 +782,10 @@ describe("scripts/secret-scan.sh", () => {
       "e84b1c60",
     ].join("");
 
+    /** The line carrying it, written into a file that is later deleted. */
     const PLANTED_PATH = "deploy/service.env";
 
+    /** What the control fixture plants at the same path, in the same commit. */
     const INERT_PLACEHOLDER = "inert-placeholder";
 
     const NARROWED_SUBTREE = "tests";
@@ -900,7 +809,6 @@ describe("scripts/secret-scan.sh", () => {
         description: "the repository root taken from the caller's working directory",
       },
 
-      // "no such file or directory" and no diagnosis.
       "missing-target": {
         needle: '"$REPO_ROOT" || exit $?',
         replacement: '"$REPO_ROOT/does-not-exist" || exit $?',
@@ -909,12 +817,13 @@ describe("scripts/secret-scan.sh", () => {
     };
 
     type Fixture = {
-
+      /** The fixture repository — which is also what the staged script scans. */
       repo: string;
       /** The staged copy of `scripts/secret-scan.sh` inside it. */
       script: string;
     };
 
+    /** Writes the script into `destination`, applying a fault if one is requested. */
     function stageScript(destination: string): void {
       const source = readFileSync(scriptPath, "utf8");
       let staged = source;
@@ -929,7 +838,7 @@ describe("scripts/secret-scan.sh", () => {
               "injected nothing and a run under it would have proved nothing about that mutant",
           );
         }
-
+        // A function replacement, not a string one: the needles carry `$` runs
         // (`$REPO_ROOT`, `$?`, `$SCRIPT_DIR`) that JavaScript's replacement
         // patterns would consume as syntax rather than as text.
         staged = source.replace(fault.needle, () => fault.replacement);
@@ -955,13 +864,10 @@ describe("scripts/secret-scan.sh", () => {
       git(repo, "rm", "--quiet", PLANTED_PATH);
       git(repo, "commit", "--quiet", "--message", "take it back out of the tree");
 
-      // findable at its own path — it resolves the repository it scans from
-
-      // alter the history the planted assertions are made against.
       const script = join(repo, "scripts", "secret-scan.sh");
       stageScript(script);
       await mkdir(join(repo, ".github"), { recursive: true });
-
+      // The real committed baseline, not a stand-in: the script insists the file
       // exists and refuses without it, so a fixture carrying `[]` would be
       // testing a different script than the one this repository runs.
       await writeFile(join(repo, ".github", "gitleaks-baseline.json"), readFileSync(baselinePath), "utf8");
@@ -978,7 +884,8 @@ describe("scripts/secret-scan.sh", () => {
 
     it("stages the tracked script byte for byte when no fault is injected", () => {
       // The switch above is inert, and this is what says so. Without it, a
-
+      // `SECRET_SCAN_TEST_FAULT` left over in a shell's environment would quietly
+      // run the whole block against a mutated script, and every green result here
       // would be a claim about a script this repository does not ship.
       expect(FAULT, "SECRET_SCAN_TEST_FAULT is set, so this run is a fault-injection run").toBe("");
       expect(readFileSync(planted.script, "utf8")).toBe(readFileSync(scriptPath, "utf8"));
@@ -987,7 +894,6 @@ describe("scripts/secret-scan.sh", () => {
 
     it("puts the planted secret inside the history a scan walks, and outside the tree a scan could read", () => {
 
-      // own fixture rather than the script.
       const history = tryGit(planted.repo, "log", "--all", "-p");
       expect(history.status, `the fixture's history must be readable: ${history.stderr}`).toBe(0);
       expect(
@@ -996,8 +902,9 @@ describe("scripts/secret-scan.sh", () => {
           "the scan would pass here no matter what was broken.",
       ).toContain(PLANTED_SECRET);
 
+      // And the property that makes a narrowed target a real loss rather than a
       // saving, asserted as content: a commit exists under the subtree a
-
+      // plausible narrowing would pick, and no commit under it ever carried the
       // secret.
       expect(
         statSync(join(planted.repo, NARROWED_SUBTREE)).isDirectory(),
@@ -1013,6 +920,8 @@ describe("scripts/secret-scan.sh", () => {
           "that subtree would still find it and this suite could not tell a narrowed target from the real one",
       ).not.toContain(PLANTED_SECRET);
 
+      // The other half of the gap: absent from the working tree, at HEAD and on
+      // disk. `git grep` answers 1 for "no match" and 128 for "I could not look",
       // so the status is asserted exactly rather than as "not zero" — a
       // non-zero status that meant "no such tree" is not a clean result.
       const atHead = tryGit(planted.repo, "grep", "--quiet", "--fixed-strings", PLANTED_SECRET, "HEAD");
@@ -1029,7 +938,8 @@ describe("scripts/secret-scan.sh", () => {
     });
 
     it("hands the scanner the history subcommand and a target whose history carries the secret", async () => {
-
+      // `GITLEAKS_REPORT_PATH` is set exactly as `.github/workflows/secret-scan.yml`
+      // sets it, so the run below is the workflow's scan step with the checkout
       // swapped for the fixture — rather than a near-miss of it.
       const { argv, status, output } = await runScript({ script: planted.script, reportPath: "gitleaks-report.json" });
       expect(
@@ -1038,13 +948,12 @@ describe("scripts/secret-scan.sh", () => {
           `argv: ${argv.join(" ")}`,
       ).toBe(0);
 
-      // and subcommands are only ever the first argument. A whole-argv
-
-      // whose path happens to contain those three letters.
       expect(argv[0], "`gitleaks git` walks every commit; `gitleaks dir` reads the tree, where the planted secret was deleted").toBe(
         "git",
       );
 
+      // The flag set, against the fixture rather than against this checkout: the
+      // baseline named here is the one the staged script resolved from its own
       // location, so this also pins that resolution.
       expect(valueAfter(argv, "--baseline-path")).toBe(join(planted.repo, ".github", "gitleaks-baseline.json"));
       expect(argv).toContain("--redact");
@@ -1053,18 +962,15 @@ describe("scripts/secret-scan.sh", () => {
       expect(valueAfter(argv, "--report-path")).toBe("gitleaks-report.json");
 
       const target = argv[argv.length - 1];
-
+      // `existsSync` first, because `statSync` on a path that is not there throws
       // — and that ENOENT would replace the explanation below with a bare
-
+      // "no such file or directory" for a case this message was written for.
       expect(
         existsSync(target) && statSync(target).isDirectory(),
         `the scan target '${target}' must be a directory that exists, so the comparisons below cannot be ` +
           "satisfied by a path that is merely spelled the same way",
       ).toBe(true);
 
-      // narrower than the identity check at the end and fails with a better
-
-      // and still inside the repository, so nothing above can see it.
       const topLevel = tryGit(target, "rev-parse", "--show-toplevel");
       expect(
         topLevel.status,
@@ -1077,13 +983,6 @@ describe("scripts/secret-scan.sh", () => {
           "green, which is the whole failure this workflow exists to catch.",
       ).toBe(realpathSync(target));
 
-      // the cwd, which is git's own expression of "the history of this
-      // directory".
-      //
-
-      // under a narrowed target carries the planted secret anyway and the
-
-      // what catches the target before this one ever has to.
       const walked = tryGit(target, "log", "--all", "-p", "--", ".");
       expect(
         walked.status,
@@ -1097,8 +996,9 @@ describe("scripts/secret-scan.sh", () => {
           "the wiring assertions cannot see the difference between that and a full scan.",
       ).toContain(PLANTED_SECRET);
 
+      // And the identity itself. `realpath` on both sides because the script
       // resolves its root through a `cd` + `pwd`, and a temporary directory
-
+      // reached through a symlinked /tmp would otherwise compare unequal to the
       // path this suite built with.
       expect(
         realpathSync(target),
@@ -1109,11 +1009,6 @@ describe("scripts/secret-scan.sh", () => {
 
     it("reads a secret-free fixture the same way, which is what gives the planted case teeth", async () => {
 
-      // the secret" could be satisfied by a script aimed anywhere at all.
-      //
-      // Attacking the control means breaking THIS: point the builder at the
-
-      // control exists to have.
       const withoutSecret = tryGit(control.repo, "log", "--all", "-p");
       expect(withoutSecret.status, `the control fixture's history must be readable: ${withoutSecret.stderr}`).toBe(0);
       expect(

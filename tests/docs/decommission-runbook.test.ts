@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,25 +9,9 @@ import { runMigrations } from "../../scripts/migrate";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer, type StartedPostgres } from "../support/postgres-container";
 import { relativeLinks, unresolvedLinks } from "../support/markdown-links";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-/**
- * `deploy/decommission.md` is the deployment's whole-product decommissioning
- * runbook, added because the deployment docs covered install, deploy, rotate
- * and restore and defined no end-of-life path. Nothing else in the repository
- * notices when the runbook loses a phase, loses the commands that make a phase
- * more than prose, or loses the store names that make the difference between
- * "every store has a disposal step" and a document that merely says so — the
- * other procedures keep linking to their own concerns, and a reader who
- * follows the runbook during a real decommission is the one who finds the gap.
- * These assertions hold the runbook's structure and its resolution, not what
- * it says.
- *
- * The assertions are about structure and resolution, never prose. The nine
- * phases have to exist under their literal headings in order, each has to
- * carry its commands in a `sh` fenced block, and each has to name the stores
- * its phase disposes of. A faithful paraphrase, a rewording or a rewrite that
- * keeps those properties leaves this file green, which is the point.
- */
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "decommission-runbook-")]);
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
 const document = "deploy/decommission.md";
@@ -252,7 +236,7 @@ describe("decommissioning runbook", () => {
   it("parses every sh fenced block as bash", () => {
     const blocks = shBlocks(source);
     const failures: string[] = [];
-    const dir = mkdtempSync(join(tmpdir(), "decommission-runbook-"));
+    const dir = tempDirectories.create(join(tmpdir(), "decommission-runbook-"));
     try {
       for (const [index, block] of blocks.entries()) {
         const file = join(dir, `block-${index + 1}.sh`);
@@ -265,7 +249,7 @@ describe("decommissioning runbook", () => {
         }
       }
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      tempDirectories.dispose(dir);
     }
     expect(failures, `\n${failures.join("\n")}`).toStrictEqual([]);
   });

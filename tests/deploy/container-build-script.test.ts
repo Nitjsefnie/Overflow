@@ -1,10 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([path.join(tmpdir(), "overflow-container-build-")]);
 
 const scriptPath = fileURLToPath(new URL("../../scripts/container-build.sh", import.meta.url));
 const script = readFileSync(scriptPath, "utf8");
@@ -149,11 +152,11 @@ interface BuildFixture {
 // Runs body against a fresh fixture and removes the fixture directory
 // afterwards, including when building the fixture itself fails.
 async function withBuildFixture(body: (fixture: BuildFixture) => Promise<void>): Promise<void> {
-  const dir = await mkdtemp(path.join(tmpdir(), "overflow-container-build-"));
+  const dir = await tempDirectories.createAsync(path.join(tmpdir(), "overflow-container-build-"));
   try {
     await body(await makeBuildFixture(dir));
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await tempDirectories.disposeAsync(dir);
   }
 }
 

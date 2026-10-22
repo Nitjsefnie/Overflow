@@ -1,9 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([path.join(os.tmpdir(), "overflow-next-config-"), path.join(os.tmpdir(), "overflow-next-containment-")]);
 
 const originalDistDir = process.env.NEXT_DIST_DIR;
 const project = fileURLToPath(new URL("../..", import.meta.url));
@@ -25,7 +28,7 @@ function writePreparedConfig(tree: string, release: string) {
 }
 
 function prepareConfig(release = ".next-release-20260907T101500Z-abc1234") {
-  const tree = mkdtempSync(path.join(os.tmpdir(), "overflow-next-config-"));
+  const tree = tempDirectories.create(path.join(os.tmpdir(), "overflow-next-config-"));
   preparedTrees.push(tree);
   const filename = writePreparedConfig(tree, release);
   vi.spyOn(process, "cwd").mockReturnValue(tree);
@@ -67,7 +70,7 @@ afterEach(() => {
   }
   vi.doUnmock("node:fs");
   vi.restoreAllMocks();
-  for (const tree of preparedTrees.splice(0)) rmSync(tree, { recursive: true, force: true });
+  for (const tree of preparedTrees.splice(0)) tempDirectories.dispose(tree);
   vi.resetModules();
 });
 
@@ -77,7 +80,7 @@ describe("NEXT_DIST_DIR", () => {
     let projectDir: string;
 
     beforeEach(() => {
-      fixtureDir = mkdtempSync(path.join(os.tmpdir(), "overflow-next-containment-"));
+      fixtureDir = tempDirectories.create(path.join(os.tmpdir(), "overflow-next-containment-"));
       projectDir = path.join(fixtureDir, "project");
       const outsideDir = path.join(fixtureDir, "outside");
       mkdirSync(projectDir);
@@ -91,7 +94,7 @@ describe("NEXT_DIST_DIR", () => {
       vi.doUnmock("node:path");
       vi.doUnmock("node:fs");
       vi.restoreAllMocks();
-      rmSync(fixtureDir, { recursive: true, force: true });
+      tempDirectories.dispose(fixtureDir);
     });
 
     it.each(["release-link/build-123", "release-link\\build-123"])(

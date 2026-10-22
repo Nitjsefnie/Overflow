@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,6 +46,9 @@ import {
   type GateJob,
   type GateRun,
 } from "../support/deploy-revision-harness";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([path.join(tmpdir(), "overflow-deploy-revision-git-"), path.join(tmpdir(), "overflow-1055-deploy-fixtures-")]);
 
 // Each suite cleans the shared fixture (tests/support/deploy-revision-harness.ts).
 afterEach(cleanupLiveFixture);
@@ -1775,7 +1778,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
   });
 
   it("matches real git: silent on a production-shaped ignored tree, loud once a tracked file changes", async () => {
-    const repo = await mkdtemp(path.join(tmpdir(), "overflow-deploy-revision-git-"));
+    const repo = await tempDirectories.createAsync(path.join(tmpdir(), "overflow-deploy-revision-git-"));
     try {
       const git = (...args: string[]): string => {
         const result = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
@@ -1821,7 +1824,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
       await writeFile(path.join(repo, "README.md"), "two\n");
       expect(status()).not.toBe("");
     } finally {
-      await rm(repo, { recursive: true, force: true });
+      await tempDirectories.disposeAsync(repo);
     }
   });
 
@@ -1891,14 +1894,14 @@ describe("deploy-revision.sh pending-migration gate", () => {
   let directory: string;
 
   beforeAll(async () => {
-    directory = await mkdtemp(path.join(tmpdir(), "overflow-1055-deploy-fixtures-"));
+    directory = await tempDirectories.createAsync(path.join(tmpdir(), "overflow-1055-deploy-fixtures-"));
     for (const { name, contents } of migrationCompatibilityFixtures) {
       await writeFile(path.join(directory, name), contents);
     }
   });
 
   afterAll(async () => {
-    if (directory) await rm(directory, { recursive: true, force: true });
+    if (directory) await tempDirectories.disposeAsync(directory);
   });
 
   async function fixtureStatus(name: string): Promise<string> {
