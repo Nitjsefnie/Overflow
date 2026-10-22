@@ -1223,25 +1223,9 @@
     18482,
     46169
   ],
-  "tests/ci/conflict-markers.test.ts": [
-    1799,
-    7589
-  ],
   "tests/ci/coverage-comment-workflow.test.ts": [
     1987,
     9243
-  ],
-  "tests/ci/dependency-audit-pr.test.ts": [
-    6164,
-    26577
-  ],
-  "tests/ci/dependency-audit-retry.test.ts": [
-    18061,
-    33897
-  ],
-  "tests/ci/docs-only-step.test.ts": [
-    3514,
-    14864
   ],
   "tests/ci/event-policy-workflow.test.ts": [
     980,
@@ -1259,37 +1243,17 @@
     3455,
     7460
   ],
-  "tests/ci/push-recalibration-step.test.ts": [
-    3549,
-    17320
-  ],
   "tests/ci/required-checks.test.ts": [
     1439,
     6546
-  ],
-  "tests/ci/secret-scan-script.test.ts": [
-    42970,
-    75836
-  ],
-  "tests/ci/secret-scan-workflow.test.ts": [
-    14575,
-    35252
   ],
   "tests/ci/verify-fetch-provenance.test.ts": [
     1396,
     3767
   ],
-  "tests/ci/verify-pr-tree.test.ts": [
-    8813,
-    34158
-  ],
   "tests/ci/verify-step-reachability.test.ts": [
     24976,
     85505
-  ],
-  "tests/ci/verify-zizmor-step.test.ts": [
-    3630,
-    15973
   ],
   "tests/components/card-section-styles.test.tsx": [
     1254,
@@ -1347,10 +1311,6 @@
     1700,
     5434
   ],
-  "tests/dashboard/page-module-redirect-guard.test.ts": [
-    4886,
-    11745
-  ],
   "tests/dashboard/redirect-loop.test.ts": [
     815,
     4120
@@ -1370,10 +1330,6 @@
   "tests/db/avatar-url-nulling-migration.test.ts": [
     725,
     3325
-  ],
-  "tests/db/backup-restore.test.ts": [
-    11160,
-    33493
   ],
   "tests/db/board-generic-plan.test.ts": [
     3813,
@@ -1422,10 +1378,6 @@
   "tests/db/identity-claim-publication.test.ts": [
     5409,
     21619
-  ],
-  "tests/db/migrate-default-branch-guard.test.ts": [
-    4564,
-    14575
   ],
   "tests/db/pipelined-query-after-build-failure.test.ts": [
     1700,
@@ -1543,21 +1495,9 @@
     6706,
     20520
   ],
-  "tests/docs/backup-restore-runbook.test.ts": [
-    2365,
-    11349
-  ],
-  "tests/docs/decommission-runbook.test.ts": [
-    2215,
-    12877
-  ],
   "tests/docs/incident-response-recovery.test.ts": [
     2233,
     7365
-  ],
-  "tests/docs/root-documents.test.ts": [
-    1006,
-    5063
   ],
   "tests/domain/claim-path-warnings.test.ts": [
     898,
@@ -1667,10 +1607,6 @@
     8753,
     45637
   ],
-  "tests/scripts/check-legal-revisions.test.ts": [
-    5799,
-    30221
-  ],
   "tests/scripts/check-page-geometry-board.test.ts": [
     955,
     5724
@@ -1682,14 +1618,6 @@
   "tests/scripts/check-page-geometry-session.test.ts": [
     4250,
     14023
-  ],
-  "tests/scripts/db-migrate-env-file.test.ts": [
-    719,
-    4496
-  ],
-  "tests/scripts/db-offhost-backup.test.ts": [
-    6134,
-    27082
   ],
   "tests/scripts/ledger-relay-app-key-rotation.test.ts": [
     1353,
@@ -1719,18 +1647,6 @@
     567,
     1694
   ],
-  "tests/scripts/overflow-alert.test.ts": [
-    30189,
-    69071
-  ],
-  "tests/scripts/overflow-bounce.test.ts": [
-    3721,
-    24702
-  ],
-  "tests/scripts/overflow-canary.test.ts": [
-    33140,
-    77217
-  ],
   "tests/security/github-authorization-url.test.ts": [
     759,
     4054
@@ -1738,10 +1654,6 @@
   "tests/security/identity-link-fetch.test.ts": [
     1452,
     3788
-  ],
-  "tests/security/local-database-exposure.test.ts": [
-    3920,
-    14681
   ],
   "tests/security/protected-resource-metadata.test.ts": [
     844,
@@ -1775,10 +1687,6 @@
     69,
     444
   ],
-  "tests/support/deploy-revision-harness.ts": [
-    4786,
-    24311
-  ],
   "tests/support/difficulty-scheme.ts": [
     201,
     639
@@ -1786,14 +1694,6 @@
   "tests/support/empty-dashboard.ts": [
     205,
     506
-  ],
-  "tests/support/expect-poll-budget.test.ts": [
-    2202,
-    10515
-  ],
-  "tests/support/global-setup.test.ts": [
-    1088,
-    4535
   ],
   "tests/support/global-setup.ts": [
     2539,
@@ -1818,10 +1718,6 @@
   "tests/support/public-destination-harness.ts": [
     2721,
     6540
-  ],
-  "tests/support/scratch-git.test.ts": [
-    1328,
-    4054
   ],
   "tests/support/scratch-git.ts": [
     4594,
