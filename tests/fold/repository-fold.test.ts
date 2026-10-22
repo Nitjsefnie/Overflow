@@ -633,6 +633,14 @@ it("FINAL-P1 closed contributor PR reaches the filing store through the fold", (
     "closed contributor PR must reach the real materializer before filing").toContain(202);
 });
 
+it("never prices a CLOSED PR even when all its merge evidence is valid", () => {
+  const snapshot = outsiderFixture();
+  snapshot.issues[0]!.closingPullRequests[0]!.state = "CLOSED";
+  const result = foldRepository(snapshot);
+  expect.soft(result.settlements, "CLOSED PR must never produce a settlement").toEqual([]);
+  expect.soft(result.ledgerEntries, "CLOSED PR must never produce ledger entries").toEqual([]);
+});
+
 it("preserves the first retained merge proof when a PR closes multiple issues", () => {
   const snapshot = outsiderFixture();
   snapshot.issues[0]!.closingPullRequests[0]!.mergeCommitOid = "a".repeat(40);
