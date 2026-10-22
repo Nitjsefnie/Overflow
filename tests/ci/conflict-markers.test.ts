@@ -64,6 +64,11 @@ describe("the verify workflow's conflict-marker shell gate", () => {
     return root;
   }
 
+  /**
+   * Runs a leg's real run block in `workspace`, with only the variables the
+   * runner would give this step: the event name, and PR_TREE when the case
+   * supplies the materialise step's output.
+   */
   async function run(step: Step, event: string, workspace: string, prTree?: string) {
     expect(step.run, "the verify job must supply the real shell gate").toBeDefined();
     const script = join(tempRoot, `gate-${++counter}.sh`);
@@ -84,11 +89,7 @@ describe("the verify workflow's conflict-marker shell gate", () => {
   });
 
   it("takes no input at all in ci.yml, whose file receives no workflow_run", () => {
-    // Structural, where the pre-split step was guarded by a branch: the
-    // materialise step does not exist in ci.yml, so there is no PR_TREE to
-    // name, and the run block never mentions one. The stray-value case below
-    // therefore cannot be reached by editing this leg — it would have to be
-    // reached by ADDING the variable, which this denies.
+
     expect(
       pushStep?.env,
       "ci.yml's conflict-marker step must declare no env at all — this file receives only " +

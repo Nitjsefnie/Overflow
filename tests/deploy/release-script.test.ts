@@ -1,22 +1,25 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, readlink, realpath, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readlink, realpath, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([path.join(os.tmpdir(), "overflow-release-test-"), path.join(os.tmpdir(), "overflow-release-immutable-")]);
 
 const script = fileURLToPath(new URL("../../scripts/release.ts", import.meta.url));
 let fixtureDir: string;
 let tree: string;
 
 beforeEach(async () => {
-  fixtureDir = await mkdtemp(path.join(os.tmpdir(), "overflow-release-test-"));
+  fixtureDir = await tempDirectories.createAsync(path.join(os.tmpdir(), "overflow-release-test-"));
   tree = path.join(fixtureDir, "project");
   await mkdir(tree);
 });
 
 afterEach(async () => {
-  await rm(fixtureDir, { recursive: true, force: true });
+  await tempDirectories.disposeAsync(fixtureDir);
 });
 
 function run(...args: string[]) {
@@ -37,7 +40,7 @@ let immutableFlagProbe: Promise<boolean> | undefined;
 
 function supportsImmutableFlag() {
   immutableFlagProbe ??= (async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), "overflow-release-immutable-"));
+    const directory = await tempDirectories.createAsync(path.join(os.tmpdir(), "overflow-release-immutable-"));
     const probe = path.join(directory, "probe");
     try {
       await writeFile(probe, "probe");
@@ -51,7 +54,7 @@ function supportsImmutableFlag() {
       return enforced;
     } finally {
       spawnSync("chattr", ["-i", probe], { encoding: "utf8" });
-      await rm(directory, { recursive: true, force: true });
+      await tempDirectories.disposeAsync(directory);
     }
   })();
   return immutableFlagProbe;

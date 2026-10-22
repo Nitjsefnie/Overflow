@@ -1,8 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "overflow-upgrade-order-")]);
 
 describe("ordinary deployment webhook upgrade", () => {
   it.each([
@@ -14,7 +17,7 @@ describe("ordinary deployment webhook upgrade", () => {
     const markdown = await readFile("deploy/README.md", "utf8");
     const section = markdown.split("## 10. Deploying a new revision")[1]!;
     const block = /```bash\n([\s\S]*?)\n```/.exec(section)![1]!;
-    const fixture = await mkdtemp(join(tmpdir(), "overflow-upgrade-order-"));
+    const fixture = await tempDirectories.createAsync(join(tmpdir(), "overflow-upgrade-order-"));
     try {
       await mkdir(join(fixture, ".next-current/cache"), { recursive: true });
       await writeFile(join(fixture, "overflow.env"), "");
@@ -90,7 +93,7 @@ describe("ordinary deployment webhook upgrade", () => {
       expect(log).toBeDefined();
       expect(await readFile(log!, "utf8")).toContain('{"upgradeFixture":true}');
     } finally {
-      await rm(fixture, { recursive: true, force: true });
+      await tempDirectories.disposeAsync(fixture);
     }
   });
 });

@@ -27,12 +27,7 @@ let root = "";
 let counter = 0;
 
 beforeAll(async () => {
-  // ci-pr.yml, not ci.yml: issue 1090 split the pull-request leg of the verify
-  // job into a file whose only trigger is `workflow_run`, and every step
-  // this suite executes — the materialise step and the tree gates that read its
-  // outputs — is in that leg. Reading ci.yml after the split found none of them,
-  // and every case below would have been a vacuous "the step I could not find is
-  // absent".
+
   const workflow = parse(await readFile(resolve(".github/workflows/ci-pr.yml"), "utf8")) as {
     jobs: { verify: { steps: Step[] } };
   };
@@ -75,14 +70,28 @@ const UNFETCHABLE_BASE = "fedcba9876543210fedcba9876543210fedcba98";
 type Fixture = { origin: string; workspace: string; merge: string; head: string; base: string };
 
 type FixtureOptions = {
-
+  /**
+   * What the head commits AFTER GitHub published the merge ref — the shape a
+   * `synchronize` event has when the payload's head SHA has moved on but its
+   * asynchronously computed merge commit has not.
+   */
   afterPublish?: Record<string, string>;
-
+  /** Whether GitHub published a merge ref at all. It publishes none for a head that does not merge cleanly. */
   publishMerge?: boolean;
-
+  /**
+   * The branch the workspace is cloned from, single-branch. `main` is the
+   * default and is what a full-history checkout of the base holds; naming a
+   * branch that does not reach the base commit gives a workspace that does NOT
+   * hold the event's base SHA, which is the case the step's base fetch exists
+   * for.
+   */
   workspaceBranch?: string;
 };
 
+/**
+ * An origin whose main carries the real gate scripts, a pull request whose
+ * head commits `files`, and the merge ref GitHub would publish for it.
+ */
 async function fixture(
   files: Record<string, string>,
   message = "pull request change",
@@ -156,6 +165,12 @@ async function fixture(
 
 type StepResult = { status: number | null; stdout: string; stderr: string; output: string };
 
+/**
+ * A step's `env:` as the runner would present it: each value that is exactly
+ * a step output expression resolves from `outputs` (pr-tree) or `byStep`;
+ * every other
+ * expression must be supplied by the case through `given`.
+ */
 function stepEnv(
   step: Step,
   outputs: Record<string, string>,
@@ -226,6 +241,11 @@ function readOutputs(text: string): Record<string, string> {
   return entries;
 }
 
+/**
+ * How long `runStepOnOpenStdin` waits before calling a step blocked. It only
+ * elapses when the step is wrong; a step that finishes does so in well under a
+ * second here, so this is generous rather than tight.
+ */
 const OPEN_STDIN_BUDGET_MS = 20_000;
 
 async function runStepOnOpenStdin(
@@ -292,6 +312,12 @@ function parents(repo: string, sha: string): string[] {
   return git(repo, "rev-list", "--parents", "-n", "1", sha).split(" ").slice(1);
 }
 
+/**
+ * The step's workflow-command annotations, one entry per line, in the order it
+ * emitted them. Two refusals that produce DIFFERENT lists are distinguishable
+ * to whoever reads the run, without any case having to know what either of
+ * them says.
+ */
 function annotations(result: StepResult): string[] {
   return `${result.stdout}\n${result.stderr}`
     .split("\n")
@@ -419,12 +445,6 @@ describe("the pull request tree the workflow_run leg judges", () => {
     expect(outputs).toEqual({});
     expect(existsSync(join(runnerTemp, "pr-tree")), "nothing may be materialised").toBe(false);
 
-    // Message fidelity, pinned by the DIFFERENCE and not by the wording: a
-    // reader of the annotation during an incident has to be told which of the
-    // two fetches failed, because the step's other refusal — a head that does
-    // not merge cleanly — is a completely different incident. An annotation
-    // shared between them would send that reader to the wrong cause, so the
-    // two are compared against each other instead of against a phrase.
     const conflicting = await fixture(
       { "CHANGELOG.md": "# pulled request\n" },
       "conflicting change",
@@ -440,13 +460,7 @@ describe("the pull request tree the workflow_run leg judges", () => {
   it("is refused by the two-parent bind when the merge is built from a head other than the event's", async () => {
     const fx = await fixture({ "src/a.ts": "export const a = 3;\n" });
     const step = stepRunning("git worktree add --detach");
-    // The mutant: build the merge from the base's PARENT instead of the
-    // event's head — a commit that is present, that merges cleanly, and whose
-    // merge tree is the base's own tree. Nothing about it is malformed, so
-    // nothing but the bind can refuse it, and without the bind the gates
-    // would judge the base and every pull request would pass vacuously. The
-    // fetch is left alone: it names a revision git cannot fetch, so a
-    // mutation there would be refused by the wrong command.
+
     const wrong = '"${BASE_SHA:?}^"';
     const mutant: Step = {
       ...step,
@@ -472,13 +486,7 @@ describe("the pull request tree the workflow_run leg judges", () => {
   it("is refused by the two-parent bind when the merge commit is bound to a base other than the event's", async () => {
     const fx = await fixture({ "src/a.ts": "export const a = 3;\n" });
     const step = stepRunning("git worktree add --detach");
-    // The mirror of the case above. The TREE is still merged from the right two
-    // commits and the second parent is still the event's head, so the head leg
-    // of the bind passes and nothing about the commit is malformed: only the
-    // base leg can refuse it. Without that leg the step would materialise a
-    // commit whose first parent is not the base this event is about — which is
-    // why deleting the base leg leaves the whole suite green unless a case
-    // exercises exactly this.
+
     const mutant: Step = {
       ...step,
       run: (step.run ?? "").replace(
@@ -743,7 +751,12 @@ describe("a pull request that replaces the gate script guarding what it changed"
 });
 
 describe("the awaited suite run's id the workflow_run leg requires", () => {
-
+  /**
+   * On a docs-only change nothing downstream reads the run id, so this step is
+   * the only thing between an awaiter that exits 0 without writing one and a
+   * green verify. Its real run block is executed with the id resolved from
+   * the awaiter's output the way the runner would.
+   */
   function requireStep(): Step {
     const awaiter = stepRunning("/scripts/await-pr-suite.ts");
     expect(awaiter.id).toBeDefined();

@@ -1,20 +1,23 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([path.join(os.tmpdir(), "overflow-release-prepare-")]);
 
 const script = fileURLToPath(new URL("../../scripts/release.ts", import.meta.url));
 const release = ".next-release-20260907T070000Z-abc1234";
 let tree: string;
 
 beforeEach(async () => {
-  tree = await mkdtemp(path.join(os.tmpdir(), "overflow-release-prepare-"));
+  tree = await tempDirectories.createAsync(path.join(os.tmpdir(), "overflow-release-prepare-"));
 });
 
 afterEach(async () => {
-  await rm(tree, { recursive: true, force: true });
+  await tempDirectories.disposeAsync(tree);
 });
 
 function prepare(...args: string[]) {

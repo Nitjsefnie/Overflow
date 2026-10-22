@@ -20,6 +20,10 @@ const RUNAWAY_MAX_DEPTH = 5;
 
 const RUNAWAY_WAIT_SECONDS = 2;
 
+/**
+ * The bound the runaway fixture is deliberately run under. Below the chain's
+ * own lifetime, so the chain is guaranteed to still be running when it fires.
+ */
 const RUNAWAY_BOUND_MS = 1_500;
 
 const SURVIVOR_SETTLE_MS = 4_000;
@@ -33,8 +37,6 @@ function killTree(pgid: number | undefined, pid: number | undefined): void {
       return;
     } catch (error) {
 
-      // not go down, and falling through to the single pid is better than
-      // leaving the tree alive.
       if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
     }
   }
@@ -62,16 +64,12 @@ function runBoundedScript(
     timeout: timeoutMs,
     killSignal: STEP_KILL_SIGNAL,
   });
-
+  // The script publishes `$$` before the exec, so this read is after the fact
+  // and never races: by now either the file is there or the script never ran.
   let pgid: number | undefined;
   try {
     const published = Number(readFileSync(pgidFile, "utf8").trim());
 
-    // 614470 sat in group 614439. So the group is read from /proc, not
-    // inferred from those two.
-    //
-
-    // removes a way to aim a group-kill at the runner.
     const own = ownProcessGroup();
     if (Number.isInteger(published) && published > 1 && published !== process.pid && published !== own) {
       pgid = published;
@@ -79,7 +77,7 @@ function runBoundedScript(
   } catch {
     // No file: `setsid` never got as far as the script.
   }
-
+  // Unconditional, not only on a timeout: a script that exits can leave a
   // descendant running, and that is the same leak by another route.
   killTree(pgid, result.pid ?? undefined);
   return result;
@@ -103,6 +101,7 @@ function ownProcessGroup(): number | undefined {
 
 const LINUX_ONLY = process.platform === "linux";
 
+/** `pnpm audit --json` over a lockfile with no known vulnerabilities. */
 const CLEAN: ScriptedOutcome = {
   code: 0,
   stderr: "",
@@ -120,6 +119,7 @@ const CLEAN: ScriptedOutcome = {
   }),
 };
 
+/** `pnpm audit --json` over a lockfile pinning lodash 4.17.11 (trimmed). */
 const ADVISORIES: ScriptedOutcome = {
   code: 1,
   stderr: "",
@@ -146,6 +146,7 @@ const ADVISORIES: ScriptedOutcome = {
   }),
 };
 
+/** `pnpm audit --json` against an advisory endpoint answering `status`. */
 function registryFailure(status: number, code: string): ScriptedOutcome {
   return {
     code: 1,
@@ -248,33 +249,26 @@ describe("the dependency audit workflow's audit step", () => {
 
   it("exists exactly once, and never tolerates its own failure", () => {
     expect(auditSteps).toHaveLength(1);
-
+    // `continue-on-error` here would swallow the very signal the workflow
+    // exists to raise: a step that cannot fail cannot report an advisory.
     expect(Boolean(auditSteps[0]?.["continue-on-error"])).toBe(false);
   });
 
   it("executes nothing from the pull request, and reads the lockfile as data", () => {
 
-    // schedule and dispatch of main's own tip; the pull-request leg is
-    // pr-gates.yml, which materializes the manifests as data for
-
-    // denied by name rather than left to a whole-job diff.
     const checkout = steps.filter((step) => step.uses?.startsWith("actions/checkout"));
     expect(checkout).toHaveLength(1);
     const run = auditSteps[0]?.run ?? "";
-
+    // No install, so no PR-authored manifest is ever resolved and executed:
     // `pnpm audit` reads pnpm-lock.yaml directly.
     expect(run).not.toMatch(/\b(pnpm|npm|yarn)\s+(ci|install|i)\b/);
-
+    // No expression is interpolated into the shell, so nothing about the event
+    // can become a command. The step's inputs are reads of what pnpm wrote.
     expect(run.includes("${{")).toBe(false);
   });
 
   it("keeps the retry inside the workflow, where a pull request cannot replace it", () => {
-    // The classifier is a run-script step rather than a module under
 
-    // original `pull_request` leg — the discipline both legs keep: a
-    // pull-request leg's checkout IS the pull request, so
-
-    // and a gate's logic stays where the trigger cannot substitute it.
     const run = auditSteps[0]?.run ?? "";
     expect(run).not.toMatch(/\bnode\s+(\.\/)?scripts\//);
     expect(run).not.toMatch(/\bbash\s+(\.\/)?scripts\//);
@@ -292,6 +286,7 @@ describe("the dependency audit workflow's audit step", () => {
     const effective = (step: Step | undefined, key: string): string | undefined =>
       step?.env?.[key] ?? jobEnv?.[key] ?? workflowEnv?.[key];
 
+    // The step the finding was about, named on its own so a regression there
     // fails with a message about the audit rather than about a sweep.
     for (const [key, value] of Object.entries(PINS)) {
       expect(
@@ -302,7 +297,6 @@ describe("the dependency audit workflow's audit step", () => {
       ).toBe(value);
     }
 
-    // today is the pin that will be forgotten.
     const pnpmSteps = steps.filter((step) => /\bpnpm\b/.test(step.run ?? ""));
     expect(
       pnpmSteps.length,
@@ -320,12 +314,13 @@ describe("the dependency audit workflow's audit step", () => {
   });
 
   it("signals every process it kills with SIGKILL", () => {
-
+    // Lives here, outside the Linux-gated block, because it is about a constant
+    // and needs no shell — so it still runs on a platform that skips the rest.
     expect(STEP_KILL_SIGNAL).toBe("SIGKILL");
   });
 
   it("reads the audit's own output rather than a report file a pull request could stage", () => {
-
+    // `pnpm audit` is the only thing that writes the report here. A path under
     // version control would be pull-request-staged input to a decision.
     expect(auditSteps[0]?.run ?? "").toMatch(/pnpm audit --json/);
   });
@@ -386,13 +381,10 @@ describe("the dependency audit workflow's audit step", () => {
         ...process.env,
         PATH: `${join(home, "bin")}:${process.env.PATH}`,
         AUDIT_STUB_DIR: home,
-        // These cases exercise the classifier and its retry budget, so they
-        // simulate a leg that audits unconditionally: the fast path's event
-        // gate short-circuits on anything but push, and BEFORE_SHA stays
-        // unset exactly as the schedule and dispatch legs receive it.
+
         EVENT_NAME: "schedule",
       };
-
+      // Omitting the key entirely is how the shipped default is exercised.
       if (options?.delaySeconds !== undefined) {
         env.DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS = options.delaySeconds;
       } else {
@@ -408,6 +400,7 @@ describe("the dependency audit workflow's audit step", () => {
       };
     }
 
+    /** The delay every case below asks for unless it is testing the default. */
     const RETRY_DELAY = "7";
 
     it("passes a clean lockfile without retrying", () => {
@@ -419,7 +412,6 @@ describe("the dependency audit workflow's audit step", () => {
 
     it("fails a lockfile carrying advisories, on the first attempt and without retrying", () => {
 
-      // spend runner minutes to arrive at the same verdict.
       const outcome = runStep([ADVISORIES], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       expect(outcome.attempts).toBe(1);
@@ -430,7 +422,7 @@ describe("the dependency audit workflow's audit step", () => {
       const outcome = runStep([SERVER_5XX, CLEAN], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(0);
       expect(outcome.attempts).toBe(2);
-
+      // One sleep, and it is the delay asked for — the backoff is the record
       // the stub kept, not a literal the script happens to contain.
       expect(outcome.sleeps).toEqual([RETRY_DELAY]);
     });
@@ -445,19 +437,18 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("spends exactly its retry budget on a registry outage and then fails", () => {
-      // One scripted outcome replays forever, so `attempts` is the retry
 
-      // on a slow registry.
       const outcome = runStep([SERVER_5XX], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       expect(outcome.attempts).toBe(3);
-
+      // Two sleeps for three attempts: the last failure reports rather than
       // waiting for a fourth that will not come.
       expect(outcome.sleeps).toEqual([RETRY_DELAY, RETRY_DELAY]);
     });
 
     it("sleeps its shipped default when nothing overrides it", () => {
-
+      // The suite above always asks for a delay of its own, so the default is
+      // what a CI run actually uses, and it is read off the recorded call.
       const outcome = runStep([SERVER_5XX, CLEAN]);
       expect(outcome.status).toBe(0);
       expect(outcome.sleeps).toEqual(["30"]);
@@ -465,8 +456,6 @@ describe("the dependency audit workflow's audit step", () => {
 
     it("does not retry a registry answer that is not transient", () => {
 
-      // human but gets the same treatment — one attempt, then a red run
-      // somebody looks at.
       const forbidden = runStep([FORBIDDEN], { delaySeconds: RETRY_DELAY });
       expect(forbidden.status).toBe(1);
       expect(forbidden.attempts).toBe(1);
@@ -484,7 +473,7 @@ describe("the dependency audit workflow's audit step", () => {
       expect(refused.stdout).toMatch(/\bunreachable\b/);
 
       // Both sites the `unreadable` label is emitted from, plus the
-
+      // `unreachable` site, so every label in the classifier is covered and a
       // partial swap cannot hide behind the others.
       for (const outcome of [UNREADABLE, NO_ADVISORIES_FIELD, UNTRUSTED, NO_LOCKFILE]) {
         const result = runStep([outcome], { delaySeconds: RETRY_DELAY });
@@ -494,11 +483,6 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("names each way of failing to produce a verdict by what actually happened", () => {
-
-      // whichever of the three it collapses.
-      //
-
-      // around it; what is banned is matching a source file's copy or a
 
       const seen: Record<string, string> = {};
       for (const [name, outcome, expected, forbidden] of [
@@ -518,7 +502,8 @@ describe("the dependency audit workflow's audit step", () => {
         ).not.toContain(forbidden);
         seen[name] = result.stdout;
       }
-
+      // And the three texts are genuinely three: no two agree. Without this the
+      // pins above would pass a classifier that printed all three fragments in
       // every case.
       expect(new Set(Object.values(seen)).size, "the three texts are not distinguishable").toBe(3);
     });
@@ -535,7 +520,6 @@ describe("the dependency audit workflow's audit step", () => {
 
     it("does not retry when one endpoint's answer is transient and the other's is not", () => {
 
-      // "no". `every` is what makes that the rule; `some` would retry it.
       const outcome = runStep([SPLIT_ANSWER], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       expect(outcome.attempts).toBe(1);
@@ -543,7 +527,8 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("does not retry a status outside 500–599, however it reads", () => {
-
+      // The classifier promises 5xx and 429. A 6xx is not one, and retrying it
+      // would spend the whole budget on an answer that is not going to change.
       const outcome = runStep([OUT_OF_RANGE], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       expect(outcome.attempts).toBe(1);
@@ -558,11 +543,7 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("fails an empty advisories map that arrived with a nonzero exit", () => {
-      // The other fail-closed edge, and the one the workflow's own comment
 
-      // says something went wrong, so the report is one this step does not
-
-      // a run that also reported a failure.
       const outcome = runStep([UNTRUSTED], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       expect(outcome.attempts).toBe(1);
@@ -570,9 +551,7 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("reports neither a clean lockfile nor an advisory when the report has no advisories field", () => {
-      // Nothing in this report says the lockfile was clean. It also says
 
-      // not exist.
       const outcome = runStep([NO_ADVISORIES_FIELD], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       expect(outcome.attempts).toBe(1);
@@ -581,24 +560,10 @@ describe("the dependency audit workflow's audit step", () => {
 
     it("leaves nothing running when the step script never terminates", async () => {
 
-      // 57,700 processes were still alive twelve hours later.
-      //
-
-      // processes carrying this run's unique marker must be back at its
-
-      // leaked it would cost five processes rather than fifty thousand.
       const marker = `audit-runaway-${randomBytes(8).toString("hex")}`;
       const home = join(root, marker);
       mkdirSync(home, { recursive: true });
       const script = join(home, "audit.sh");
-
-      // five processes, not a fork bomb.
-      //
-
-      // path — silently counts nothing once a level re-execs by a RELATIVE
-      // path, which is exactly how this fixture recurses.
-
-      // site in `killTree` leaves processes alive here and turns this red.
 
       writeFileSync(
         script,
@@ -621,21 +586,18 @@ describe("the dependency audit workflow's audit step", () => {
           "unfixed build's survivors expire on their own and this test passes vacuously",
       ).toBeLessThan(RUNAWAY_MAX_DEPTH * RUNAWAY_WAIT_SECONDS * 1000);
 
+      // Bounded far below the chain's own lifetime, so the chain is guaranteed
+      // to still be running when the bound fires — the only state in which this
       // can fail.
       const result = runBoundedScript(script, home, { ...process.env }, RUNAWAY_BOUND_MS, [marker]);
 
       // It was killed, not merely slow: `spawnSync` reports the timeout it
-
+      // applied, which is a record of what the code did rather than a duration
       // this test measured.
       expect((result.error as NodeJS.ErrnoException | undefined)?.code).toBe("ETIMEDOUT");
 
-      // the thing this whole mechanism exists to prevent.
       expect(result.signal).toBe("SIGKILL");
 
-      // still alive after the window below, on the unfixed spawn.
-      //
-
-      // of the group rather than the ones this count can see.
       const deadline = Date.now() + SURVIVOR_SETTLE_MS;
       let survivors = countProcesses(marker);
       while (survivors > baseline && Date.now() < deadline) {

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,18 +9,9 @@ import {
   unresolvedLinks,
   unresolvedRelativeLinks,
 } from "../support/markdown-links";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-/**
- * The root documents link to each other and into `deploy/` by relative path
- * and heading anchor. Nothing else notices when a section moves between files
- * or a heading is reworded: the link keeps rendering, and only a reader who
- * follows it finds that it lands nowhere. So every relative Markdown link in
- * these files is resolved here — the target file must exist, and an anchor
- * must name a heading in that file under GitHub's slug rule.
- *
- * The assertions are about resolution, never about prose: a document is free
- * to say anything, as long as what it links to is there.
- */
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "markdown-links-")]);
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -118,7 +109,7 @@ describe("root documents", () => {
   it("resolves a reference use whose definition lives outside the excerpt", () => {
     // Shaped like the section-scoped caller: an excerpt cut at a heading, whose
     // reference use names a definition declared under a later heading.
-    const root = mkdtempSync(join(tmpdir(), "markdown-links-"));
+    const root = tempDirectories.create(join(tmpdir(), "markdown-links-"));
     try {
       writeFileSync(join(root, "doc.md"), [
         "## Section under test",
@@ -136,7 +127,7 @@ describe("root documents", () => {
         "doc.md:3 links to does-not-exist.md, and does-not-exist.md does not exist",
       ]);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      tempDirectories.dispose(root);
     }
   });
 

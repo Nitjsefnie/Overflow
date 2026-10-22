@@ -1,76 +1,11 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-/**
- * Guard: a redirect planted in any protected page module must fail the suite,
- * the same way a loop through the session gate does.
- *
- * tests/dashboard/redirect-loop.test.ts walks redirects BETWEEN routes, but its
- * routes map substitutes requireMemberPageSession() for "/dashboard" and omits
- * the other gated page modules entirely — the walk only covers the session
- * gate's own exits. A redirect written into one of those page modules is
- * invisible to the walk. Reproduced before this guard was written: a dynamic
- * `redirect("/")` planted in src/app/dashboard/page.tsx right after the gate
- * left `pnpm test --run tests/dashboard tests/components` fully green (37
- * files, 483 tests).
- *
- * Two ways to close that gap were weighed (issue 130):
- *
- *   A. Put every protected page module in the walk's routes map. Each one
- *      queries the ledger after the gate returns, so every entry would need
- *      its data dependencies mocked before the walk could even reach a
- *      redirect — heavy, and the mocks would drift with every query change.
- *
- *   B. This guard (chosen): a source scan asserting that no page module under
- *      src/app references next/navigation at all, outside declared exceptions.
- *      Redirects belong to the session gate (src/lib/dashboard/session.ts),
- *      whose exits the walk already exercises, so a module-level rule stays
- *      cheap and drifts with nothing: it reads source, never the ledger.
- *
- * The scan is textual and matches the module specifier verbatim, in the style
- * of the expect.poll budget guard (tests/support/expect-poll-budget.test.ts):
- * every import shape still names the module, so aliasing does not evade it.
- * Each shape below is pinned against a fixture tree:
- *
- *   - static named import          import { redirect } from "next/navigation"
- *   - aliased named import         import { redirect as boom } from "next/navigation"
- *   - namespace import             import * as nav from "next/navigation"; nav.redirect(...)
- *   - dynamic import, destructured const { redirect } = await import("next/navigation")
- *   - dynamic import, namespace    const nav = await import("next/navigation"); nav.redirect(...)
- *   - non-redirect members too     notFound() — the rule is module-level, so any
- *                                  next/navigation capability needs a reviewed exception
- *
- * Known, accepted limits: a computed specifier (`import("next/" + "navigation")`)
- * evades the textual match; only page.tsx modules are scanned, so a layout.tsx
- * could still hide a redirect; and a page module could route through a lib
- * wrapper that re-exports redirect from next/navigation — creating such a
- * wrapper is deliberate evasion, and none exists today. All are deliberate
- * scope cuts, in exchange for a guard that reads source and nothing else.
- *
- * The two declared exceptions are safe because each is served AS ITSELF by the
- * routes map in tests/dashboard/redirect-loop.test.ts, so every redirect it
- * issues is caught by the walk's loop detection:
- *
- *   - "page.tsx" ("/", the public landing): the walk's first describe starts at
- *     "/" with a member session, so HomePage's redirect("/dashboard") fires
- *     inside the walk and lands on the dashboard exit.
- *   - "moderation/page.tsx" ("/moderation"): the walk's second describe starts
- *     there as a member who may not moderate, so ModerationPage's
- *     redirect("/dashboard") fires and the trace is asserted end to end.
- *
- * The issue text named moderation as the single exception, but the landing page
- * also redirects and is walked as itself, so both are declared — an undeclared
- * redirecting module would fail the guard on the clean tree.
- *
- * Neither exception can rot silently: the tree-level test re-reads each
- * exception and requires it to still reference next/navigation (an exception
- * that stops redirecting is dropped, not grandfathered), and re-reads the walk
- * to require its routes map to still serve both modules, since that serving is
- * the property that makes each exception safe.
- */
+const tempDirectories = createOwnedTempDirectoryRegistry([path.join(os.tmpdir(), "redirect-guard-fixture-")]);
 
 const MARKER = "next/navigation";
 
@@ -150,7 +85,7 @@ function scanAppTree(rootDir: string, exceptions: readonly string[]): Scan {
 
 /** Builds a throwaway src/app-shaped tree, runs `run` on it, and always removes it. */
 function withFixtureTree(files: Record<string, string>, run: (root: string) => void): void {
-  const root = mkdtempSync(path.join(os.tmpdir(), "redirect-guard-fixture-"));
+  const root = tempDirectories.create(path.join(os.tmpdir(), "redirect-guard-fixture-"));
   try {
     for (const [relative, source] of Object.entries(files)) {
       const full = path.join(root, relative);
@@ -159,7 +94,7 @@ function withFixtureTree(files: Record<string, string>, run: (root: string) => v
     }
     run(root);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    tempDirectories.dispose(root);
   }
 }
 
@@ -167,9 +102,6 @@ describe("no page module under src/app reaches next/navigation outside the walke
   it("leaves no page module for a hidden redirect to hide in", () => {
     const modules = listPageModules(APP_DIRECTORY);
 
-    // Floors, not an inventory: twelve page modules today. Lower the floor
-    // consciously if routes are removed — a floor of zero would let the scan
-    // pass over an empty tree, where it protects nothing.
     expect(modules.length).toBeGreaterThanOrEqual(12);
     for (const exception of EXCEPTIONS) {
       expect(modules).toContain(exception);
@@ -199,10 +131,6 @@ describe("no page module under src/app reaches next/navigation outside the walke
       "utf8",
     );
 
-    // These two entries in the walk's routes map are the property that makes
-    // both exceptions safe. If the walk stops serving a module as itself, the
-    // exception must be re-justified or the module must stop referencing
-    // next/navigation — the guard refuses to decide silently.
     expect(walk).toMatch(/["']\/["']\s*:\s*\(\)\s*=>\s*HomePage\(\)/);
     expect(walk).toMatch(/["']\/moderation["']\s*:\s*\(\)\s*=>\s*ModerationPage\(\)/);
   });
@@ -370,10 +298,6 @@ describe("the scan catches every import shape", () => {
       (root) => {
         const scan = scanAppTree(root, []);
 
-        // Both axes matter: the count pins that no module was skipped, and the
-        // per-file matches pin WHICH modules were read — a walker that ever
-        // stops recursing into dot-directories (or any other class of
-        // directory) fails here instead of silently narrowing the guard.
         expect(scan.moduleCount).toBe(2);
         expect(scan.filesWithSites).toEqual([".hidden/page.tsx", "widget/page.tsx"]);
         expect(scan.violations).toEqual([

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,9 @@ import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer, type StartedPostgres } from "../support/postgres-container";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "reconcile-cli-config-"), join(tmpdir(), "reconcile-cli-pnpmfile-"), join(tmpdir(), "reconcile-cli-parent-config-")]);
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const operating = readFileSync(new URL("../../OPERATING.md", import.meta.url), "utf8");
@@ -102,7 +105,7 @@ function tokenizeCommand(command: string): string[] {
 
 function runCommand(command: string, databaseUrl?: string, cwd = repositoryRoot) {
   const [executable, ...argumentsList] = tokenizeCommand(command);
-  const configDirectory = mkdtempSync(join(tmpdir(), "reconcile-cli-config-"));
+  const configDirectory = tempDirectories.create(join(tmpdir(), "reconcile-cli-config-"));
   try {
     const npmConfig = join(configDirectory, "npmrc");
     writeFileSync(npmConfig, "");
@@ -154,13 +157,13 @@ function runCommand(command: string, databaseUrl?: string, cwd = repositoryRoot)
     expect(result.status).not.toBeNull();
     return result;
   } finally {
-    rmSync(configDirectory, { recursive: true, force: true });
+    tempDirectories.dispose(configDirectory);
   }
 }
 
 describe("documented reconciliation CLI commands", () => {
   it("does not inherit a global pnpmfile that injects Node options through the lifecycle shell", () => {
-    const fixture = mkdtempSync(join(tmpdir(), "reconcile-cli-pnpmfile-"));
+    const fixture = tempDirectories.create(join(tmpdir(), "reconcile-cli-pnpmfile-"));
     const previousPnpmfile = process.env.npm_config_global_pnpmfile;
     try {
       const { packageManager } = JSON.parse(readFileSync(join(repositoryRoot, "package.json"), "utf8"));
@@ -194,12 +197,12 @@ describe("documented reconciliation CLI commands", () => {
     } finally {
       if (previousPnpmfile === undefined) delete process.env.npm_config_global_pnpmfile;
       else process.env.npm_config_global_pnpmfile = previousPnpmfile;
-      rmSync(fixture, { recursive: true, force: true });
+      tempDirectories.dispose(fixture);
     }
   });
 
   it("does not inherit Node options from the parent's pnpm config file", () => {
-    const parentConfig = mkdtempSync(join(tmpdir(), "reconcile-cli-parent-config-"));
+    const parentConfig = tempDirectories.create(join(tmpdir(), "reconcile-cli-parent-config-"));
     const previousConfigHome = process.env.XDG_CONFIG_HOME;
     try {
       mkdirSync(join(parentConfig, "pnpm"));
@@ -211,7 +214,7 @@ describe("documented reconciliation CLI commands", () => {
     } finally {
       if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
       else process.env.XDG_CONFIG_HOME = previousConfigHome;
-      rmSync(parentConfig, { recursive: true, force: true });
+      tempDirectories.dispose(parentConfig);
     }
   });
 
