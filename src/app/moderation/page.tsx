@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
+import { ClosedPrDisputeList } from "@/components/closed-pr-dispute-list";
+import type { ClosedPrDisputeRequest } from "@/lib/moderation/closed-pr-dispute-service";
 import type { GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import { formatInstant } from "@/lib/format-instant";
 import { plural } from "@/lib/plural";
@@ -43,6 +45,14 @@ export default async function ModerationPage() {
   let recalibratingAccounts: RecalibratingAccountProjection[] | null = null;
   let bannedAccounts: BannedAccountProjection[] | null = null;
   let openContests: OpenContestRequestProjection[] | null = null;
+  let disputes: ClosedPrDisputeRequest[] | null = null;
+  try {
+    const { ClosedPrDisputeService } = await import("@/lib/moderation/closed-pr-dispute-service");
+    const { PostgresClosedPrDisputeStore } = await import("@/lib/moderation/closed-pr-dispute-store");
+    disputes = await new ClosedPrDisputeService(new PostgresClosedPrDisputeStore()).listDisputes();
+  } catch {
+    // The dispute queue names its own failed read.
+  }
   let moderators: { accountId: string; githubLogin: string; isConfigured: boolean }[] | null = null;
   let githubBudget: { owner: string; assessment: GitHubGraphqlBudgetAssessment }[] | null;
   try {
@@ -240,6 +250,12 @@ export default async function ModerationPage() {
             ))}
           </ol>
         )}
+      </section>
+      <section className="surface" aria-labelledby="closed-pr-disputes-heading">
+        <p className="eyebrow">Closed PR disputes</p>
+        <h2 id="closed-pr-disputes-heading">Closed PR dispute requests</h2>
+        <p>Open requests appear oldest first, followed by decided history. A sponsor, contributor or landing author cannot decide while another moderator exists. A grant requires stored review evidence; its figure is reduced by review rounds, floored at zero.</p>
+        {disputes === null ? <p role="alert">The closed PR dispute queue could not be loaded.</p> : <ClosedPrDisputeList requests={disputes} moderation />}
       </section>
       <section className="surface moderation-card" aria-labelledby="moderators-heading">
         <p className="eyebrow">Who can moderate</p>

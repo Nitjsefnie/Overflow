@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { SanctionContestRequestForm } from "@/components/sanction-contest-request";
 import { SANCTION_CONTESTABLE_CASE, SANCTION_CONTEST_RULES } from "@/lib/disputes";
@@ -45,6 +46,7 @@ export function SanctionContestsContent({
       <section className="page-heading" aria-labelledby="sanction-contests-title">
         <p className="eyebrow">Recourse</p>
         <h1 id="sanction-contests-title">Contest a sanction.</h1>
+        <p><Link href="/disputes">Closed PR disputes</Link> are available when your closed change lands elsewhere.</p>
         <p>
           You can contest <span data-sanction-contest>{SANCTION_CONTESTABLE_CASE}</span> you are living under when
           you believe it is wrong: the sanctioned account asks, a moderator decides, and the answer is recorded

@@ -29,6 +29,8 @@ the security reason and the change.
 
 - 1.4.0: `POST /api/account/export` adds closed-PR dispute requests and their
   credit adjustments and lines, including contributor and deciding-moderator records.
+  Adds contributor filing/history at `/api/disputes` and moderator
+  decisions/queue/history at `/api/moderation/disputes`.
 - 1.2.0: `POST /api/repositories` accepts the optional `registrationMethod`
   selector for GitHub App registration; `DELETE /api/repositories` adds the
   optional `appAccessRemains` guidance for App-registered repositories.
@@ -891,6 +893,83 @@ pass the service's own message through the error envelope:
 | 409 | `CONFLICT` | `This sanction cannot be contested right now.` | The event is not the account's live sanction, another request is already open on it, or the sanction has been lifted. |
 | 422 | `INVALID_INPUT` | The message names the rule. | A blank reason or a missing event id. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to complete the sanction contest request.` | The service behind the route failed; retry when it recovers. |
+
+## Closed PR disputes
+
+The stored contributor of a CLOSED, unmerged pull request can request credit
+when its change lands elsewhere. Both routes accept a session or API token;
+the moderation route requires the account's current moderator role. Filing
+and decision each record a moderation event. The contributor page is
+`/disputes`; the queue and decided history appear on `/moderation`.
+
+| Route | Request | Success |
+| --- | --- | --- |
+| `POST /api/disputes` | `{ "pullRequestId": <stored PR uuid>, "reason": <nonblank, ≤2000 characters>, "landedPullRequestUrl"?: <URL>, "landedCommitUrl"?: <URL> }` | `200` `{ "request": <dispute request> }`. The credential's account must be the stored PR author; the PR must be CLOSED and unmerged, with at most one OPEN dispute. |
+| `GET /api/disputes` | None. | `200`: an array of the credential's own dispute requests, newest first, including decided history. |
+| `POST /api/moderation/disputes` | `{ "requestId": <uuid>, "decision": "GRANTED" \| "DENIED", "reason": <nonblank, ≤2000 characters>, "figure"?: <integer 1–10> }` | `200` `{ "request": <decided dispute request> }`. A GRANTED decision requires `figure`; DENIED does not. The moderator identity comes from the credential, never from the body. |
+| `GET /api/moderation/disputes` | None. | `200`: an array of all requests, OPEN first (oldest first), then decided history (newest first). |
+
+Filing uses an already stored MERGED PR for the same issue automatically. When
+one exists, omit both landed URLs. Otherwise supply exactly one: a merged PR
+URL for the same registered repository, or a landed commit URL. Supplying both
+URLs, a non-merged or wrong-repository landing PR, or no landed evidence is
+refused with `422` `INVALID_INPUT`. Reasons and supplied URLs are trimmed;
+POST schemas reject unknown fields. Both POST bodies are limited to `32 KiB`.
+
+A dispute request carries:
+
+```json
+{
+  "id": "uuid",
+  "contributorId": "uuid",
+  "pullRequestId": "uuid",
+  "issueId": "uuid",
+  "landedPullRequestId": null,
+  "landedCommitUrl": "https://github.com/owner/repo/commit/landed",
+  "requestReason": "The change landed elsewhere.",
+  "state": "DECIDED",
+  "decision": "GRANTED",
+  "decidedBy": "uuid",
+  "decidedBySoleModerator": true,
+  "decidedReason": "The stored evidence supports the claim.",
+  "decidedAt": "2026-10-02T10:00:00.000Z",
+  "moderatorFigure": 5,
+  "awardedPoints": 3,
+  "createdAt": "2026-10-01T10:00:00.000Z"
+}
+```
+
+`landedPullRequestId` is a UUID or null; `landedCommitUrl` is a string or null.
+OPEN requests have null decision, decider, decision reason/time, figure and
+award, and `decidedBySoleModerator: false`. A denial leaves figure and award
+null. A grant records the figure and `awardedPoints = max(0, figure − stored
+review rounds)`; an award of zero still grants the request. A sponsor,
+contributor or landing author cannot decide while another live moderator
+exists. The sole-moderator path records `decidedBySoleModerator: true`.
+
+A positive grant appends a sponsor-targeted credit adjustment with an award
+leg to the contributor. A landing settlement credited to a third account is
+reversed by an additional leg in that adjustment; a self-work landing or a
+landing without a settlement has no reversal leg. A zero award creates no
+adjustment. Existing settlement and calibration creditors are preserved.
+
+All errors use `{ "error": { "code": <code>, "message": <message> } }`.
+Service refusals preserve the service's explanation. Status/code pairs are
+shared by both routes:
+
+| HTTP | Code | Meaning / next step |
+| --- | --- | --- |
+| 401 | `UNAUTHENTICATED` | A valid member credential is required. |
+| 403 | `FORBIDDEN` | Wrong contributor, a non-moderator on the moderation route, a conflicted deciding moderator while another exists, or a refused request origin. |
+| 404 | `NOT_FOUND` | The account or dispute request was not found. |
+| 409 | `CONFLICT` | The PR cannot be disputed in its current state, already has an OPEN request, or the request was already decided. |
+| 413 | `PAYLOAD_TOO_LARGE` | POST body exceeds `32 KiB`. |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | POST declares a content type other than JSON. |
+| 422 | `INVALID_REQUEST` | Unparsable or strict-schema-invalid POST body, including a missing grant figure. Message: `Invalid closed PR dispute request.` or `Invalid closed PR dispute decision.` |
+| 422 | `INVALID_INPUT` | Service input or landed-evidence refusal; the message names the rule. |
+| 422 | `INSUFFICIENT_EVIDENCE` | `Stored review evidence is required to grant this dispute.` The request stays open; inspect the evidence before granting. |
+| 500 | `MISCONFIGURED` | The trusted application origin is not configured. |
+| 502 | `UPSTREAM_FAILURE` | A POST failed internally (`Unable to complete the closed PR dispute request.`), or a GET read failed (`Unable to load your closed PR dispute requests.` / `Unable to load the closed PR dispute queue.`). |
 
 ## Readiness probe
 

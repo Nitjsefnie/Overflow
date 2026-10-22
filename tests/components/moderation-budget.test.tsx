@@ -9,6 +9,7 @@ const loaders = vi.hoisted(() => ({
   recalibrating: vi.fn(async () => []),
   banned: vi.fn(async () => []),
   openContests: vi.fn(async () => []),
+  disputes: vi.fn<() => Promise<import("@/lib/moderation/closed-pr-dispute-service").ClosedPrDisputeRequest[]>>(async () => []),
   moderators: vi.fn<() => Promise<{ accountId: string; githubLogin: string; isConfigured: boolean }[]>>(async () => []),
   candidates: vi.fn(async () => []),
   repositories: vi.fn(async () => []),
@@ -38,6 +39,9 @@ vi.mock("@/lib/dashboard/queries", () => ({
 vi.mock("@/lib/moderation/banned-accounts", () => ({ listBannedAccounts: loaders.banned }));
 vi.mock("@/lib/moderation/sanction-contest-store", () => ({
   PostgresSanctionContestStore: class { listOpenContestRequests = loaders.openContests; },
+}));
+vi.mock("@/lib/moderation/closed-pr-dispute-store", () => ({
+  PostgresClosedPrDisputeStore: class { listRequestsForModeration = loaders.disputes; },
 }));
 vi.mock("@/lib/moderation/postgres-store", () => ({
   PostgresModerationStore: class { listModerators = loaders.moderators; },
@@ -91,7 +95,7 @@ describe("moderation budget integration", () => {
       "moderation-title", "open-audit-heading", "no-audits-heading",
       "settlement-corrections-heading", "unwritable-closures-heading",
       "recalibrating-heading", "banned-heading", "sanction-contests-heading",
-      "moderators-heading",
+      "closed-pr-disputes-heading", "moderators-heading",
       "unwritable-closure-history-heading", "enforcement-history-heading", "github-budget-heading",
     ]);
     expect(screen.queryByTestId("github-budget-panel")).toBeNull();

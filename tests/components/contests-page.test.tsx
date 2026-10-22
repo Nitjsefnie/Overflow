@@ -67,6 +67,10 @@ function renderContent(
 }
 
 describe("sanction contests page", () => {
+  it("links to the closed PR dispute filing page", () => {
+    renderContent([], []);
+    expect(screen.getByRole("link", { name: "Closed PR disputes" })).toHaveAttribute("href", "/disputes");
+  });
   it("renders the rules the account files under, from the shared constant", () => {
     renderContent([recalibrating()], [openRequest()]);
 

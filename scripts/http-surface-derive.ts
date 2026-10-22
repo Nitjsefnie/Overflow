@@ -55,6 +55,7 @@ import {
   fixtureRepositoryRouteDependencies,
 } from "./http-surface-fixtures.ts";
 import { moderationSurfaceAnswers } from "./http-surface-derive-moderation.ts";
+import { disputeSurfaceAnswers } from "./http-surface-derive-disputes.ts";
 
 /**
  * The HTTP surface snapshot's shared machinery (issue 912): what the recorded
@@ -680,5 +681,6 @@ export async function deriveHttpSurfaceAnswers(): Promise<Record<string, Derived
     "GET /api/settlements/<id>": await deriveGetSettlementProof(),
     "GET /api/calibration": await deriveGetCalibration(),
     ...(await moderationSurfaceAnswers()),
+    ...(await disputeSurfaceAnswers()),
   };
 }

@@ -80,6 +80,9 @@ src/app/api/calibration/*
 !src/app/api/contests/
 src/app/api/contests/*
 !src/app/api/contests/*.ts
+!src/app/api/disputes/
+src/app/api/disputes/*
+!src/app/api/disputes/*.ts
 !src/app/api/dashboard/
 src/app/api/dashboard/*
 !src/app/api/forge-identities/
@@ -119,6 +122,9 @@ src/app/api/moderation/adjustments/reversal/*
 !src/app/api/moderation/contests/
 src/app/api/moderation/contests/*
 !src/app/api/moderation/contests/*.ts
+!src/app/api/moderation/disputes/
+src/app/api/moderation/disputes/*
+!src/app/api/moderation/disputes/*.ts
 !src/app/api/moderation/audits/
 src/app/api/moderation/audits/*
 !src/app/api/moderation/audits/*.ts
@@ -176,6 +182,9 @@ src/app/account-data/*
 !src/app/contests/
 src/app/contests/*
 !src/app/contests/*.tsx
+!src/app/disputes/
+src/app/disputes/*
+!src/app/disputes/*.tsx
 !src/app/dashboard/
 src/app/dashboard/*
 !src/app/dashboard/*.tsx
