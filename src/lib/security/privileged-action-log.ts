@@ -38,6 +38,7 @@ export type PrivilegedAction =
   | "repository.rederivation-request"
   | "settlement-override.grant"
   | "settlement-override.decline"
+  | "closed_pr.dispute.decide"
   | "sanction.contest.decide"
   | "sanction.contest.decide.already_gone";
 

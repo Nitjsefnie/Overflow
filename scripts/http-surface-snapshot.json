@@ -789,6 +789,82 @@
         "settledPoints": "number",
         "state": "string"
       }
+    },
+    "GET /api/disputes": {
+      "awardedPoints": "null",
+      "contributorId": "string",
+      "createdAt": "string",
+      "decidedAt": "null",
+      "decidedBy": "null",
+      "decidedBySoleModerator": "boolean",
+      "decidedReason": "null",
+      "decision": "null",
+      "id": "string",
+      "issueId": "string",
+      "landedCommitUrl": "string",
+      "landedPullRequestId": "null",
+      "moderatorFigure": "null",
+      "pullRequestId": "string",
+      "requestReason": "string",
+      "state": "string"
+    },
+    "POST /api/disputes": {
+      "request": {
+        "awardedPoints": "null",
+        "contributorId": "string",
+        "createdAt": "string",
+        "decidedAt": "null",
+        "decidedBy": "null",
+        "decidedBySoleModerator": "boolean",
+        "decidedReason": "null",
+        "decision": "null",
+        "id": "string",
+        "issueId": "string",
+        "landedCommitUrl": "string",
+        "landedPullRequestId": "null",
+        "moderatorFigure": "null",
+        "pullRequestId": "string",
+        "requestReason": "string",
+        "state": "string"
+      }
+    },
+    "GET /api/moderation/disputes": {
+      "awardedPoints": "null",
+      "contributorId": "string",
+      "createdAt": "string",
+      "decidedAt": "null",
+      "decidedBy": "null",
+      "decidedBySoleModerator": "boolean",
+      "decidedReason": "null",
+      "decision": "null",
+      "id": "string",
+      "issueId": "string",
+      "landedCommitUrl": "string",
+      "landedPullRequestId": "null",
+      "moderatorFigure": "null",
+      "pullRequestId": "string",
+      "requestReason": "string",
+      "state": "string"
+    },
+    "POST /api/moderation/disputes": {
+      "request": {
+        "awardedPoints": "number",
+        "contributorId": "string",
+        "createdAt": "string",
+        "decidedAt": "string",
+        "decidedBy": "string",
+        "decidedBySoleModerator": "boolean",
+        "decidedReason": "string",
+        "decision": "string",
+        "id": "string",
+        "issueId": "string",
+        "landedCommitUrl": "string",
+        "landedPullRequestId": "null",
+        "moderatorFigure": "number",
+        "pullRequestId": "string",
+        "requestReason": "string",
+        "state": "string"
+      }
     }
   },
   "successStatus": {
@@ -825,7 +901,11 @@
     "POST /api/moderation/rederivation": 200,
     "POST /api/overrides": 200,
     "GET /api/overrides": 200,
-    "PATCH /api/overrides/<id>": 200
+    "PATCH /api/overrides/<id>": 200,
+    "GET /api/disputes": 200,
+    "POST /api/disputes": 200,
+    "GET /api/moderation/disputes": 200,
+    "POST /api/moderation/disputes": 200
   },
   "failures": {
     "GET /api/version": [],
@@ -1241,6 +1321,58 @@
       "422 INVALID_INPUT",
       "422 INVALID_REQUEST",
       "429 RATE_LIMITED",
+      "500 MISCONFIGURED",
+      "502 UPSTREAM_FAILURE"
+    ],
+    "GET /api/disputes": [
+      "401 UNAUTHENTICATED",
+      "403 FORBIDDEN",
+      "404 NOT_FOUND",
+      "409 CONFLICT",
+      "413 PAYLOAD_TOO_LARGE",
+      "415 UNSUPPORTED_MEDIA_TYPE",
+      "422 INSUFFICIENT_EVIDENCE",
+      "422 INVALID_INPUT",
+      "422 INVALID_REQUEST",
+      "500 MISCONFIGURED",
+      "502 UPSTREAM_FAILURE"
+    ],
+    "POST /api/disputes": [
+      "401 UNAUTHENTICATED",
+      "403 FORBIDDEN",
+      "404 NOT_FOUND",
+      "409 CONFLICT",
+      "413 PAYLOAD_TOO_LARGE",
+      "415 UNSUPPORTED_MEDIA_TYPE",
+      "422 INSUFFICIENT_EVIDENCE",
+      "422 INVALID_INPUT",
+      "422 INVALID_REQUEST",
+      "500 MISCONFIGURED",
+      "502 UPSTREAM_FAILURE"
+    ],
+    "GET /api/moderation/disputes": [
+      "401 UNAUTHENTICATED",
+      "403 FORBIDDEN",
+      "404 NOT_FOUND",
+      "409 CONFLICT",
+      "413 PAYLOAD_TOO_LARGE",
+      "415 UNSUPPORTED_MEDIA_TYPE",
+      "422 INSUFFICIENT_EVIDENCE",
+      "422 INVALID_INPUT",
+      "422 INVALID_REQUEST",
+      "500 MISCONFIGURED",
+      "502 UPSTREAM_FAILURE"
+    ],
+    "POST /api/moderation/disputes": [
+      "401 UNAUTHENTICATED",
+      "403 FORBIDDEN",
+      "404 NOT_FOUND",
+      "409 CONFLICT",
+      "413 PAYLOAD_TOO_LARGE",
+      "415 UNSUPPORTED_MEDIA_TYPE",
+      "422 INSUFFICIENT_EVIDENCE",
+      "422 INVALID_INPUT",
+      "422 INVALID_REQUEST",
       "500 MISCONFIGURED",
       "502 UPSTREAM_FAILURE"
     ]
