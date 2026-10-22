@@ -3,6 +3,18 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import type { DirtyReconciliationSubject } from "@/lib/fold/reconciliation-evidence";
 
+/** Keep resumed walks from re-spending their budget on cached pages, with bounded storage.
+ * A walk needing more than one window's request budget plus these replayed pages
+ * cannot finish while capped. The forge re-serves pages not kept, costing budget,
+ * never correctness.
+ */
+export const DEFAULT_SWEEP_PASS_PAGE_CEILING = 1000;
+export function readSweepPassPageCeiling(environment: Partial<Record<string, string>>): number {
+  const raw = environment.RECONCILIATION_SWEEP_PAGE_CEILING ?? "";
+  const value = /^\d+$/.test(raw) ? Number(raw) : NaN;
+  return Number.isSafeInteger(value) && value > 0 ? value : DEFAULT_SWEEP_PASS_PAGE_CEILING;
+}
+
 export type SweepPass = {
   id: string;
   scanStartedAt: Date;
