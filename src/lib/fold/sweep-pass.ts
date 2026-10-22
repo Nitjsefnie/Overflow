@@ -40,7 +40,7 @@ export function withFreshSweepReads<T>(work: () => Promise<T>): Promise<T> {
   return freshReads.run(true, work);
 }
 
-/** Replay completed pages locally, so every new window buys forward progress.
+/** Replay retained pages locally to save upstream requests.
  * Keys hash paths/query variables, never authentication headers or credentials.
  * Only parsed successful responses are saved; error payloads are never retained.
  */
