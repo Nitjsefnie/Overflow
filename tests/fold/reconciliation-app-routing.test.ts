@@ -106,7 +106,7 @@ beforeEach(() => {
 });
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
-afterAll(() => { try { vi.resetModules(); } finally { fixtureDirectories.dispose(); } });
+afterAll(() => { try { fixtureDirectories.dispose(); } finally { vi.resetModules(); } });
 
 it("routes the composite through a distinct injected registration-method lookup", async () => {
   row.method = "oauth_hook";
