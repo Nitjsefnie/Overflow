@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
+import { exportAccount } from "@/lib/accounts/export";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository } from "@/lib/fold/reconcile";
@@ -47,7 +48,7 @@ it.each([false, true])("reconciles closed evidence through materialization, fili
     values (${repositoryKey}, ${ownerName}, ${users[0]}, 'PUBLIC', ${repositoryKey}, ${sql.json(validDifficultyScheme())}) returning id`;
   const landing: GitHubPullRequest = {
     id: externalId++, number: 11, title: "Landed implementation", body: "", url: `https://github.com/${ownerName}/pull/11`,
-    state: "MERGED", mergedAt: "2026-09-01T12:00:00Z", mergeCommitOid: "a".repeat(40), finalCommitAt: "2026-09-01T11:00:00Z",
+    state: "MERGED", mergedAt: "2026-09-01T12:00:00Z", mergeCommitOid: "A".repeat(40), finalCommitAt: "2026-09-01T11:00:00Z",
     authorLogin: `producer-${ids[0]}`, authorGitHubUserId: ids[0], repositoryGitHubId: repositoryKey, repositoryNameWithOwner: ownerName,
   };
   const closed: GitHubPullRequest = { ...landing, id: externalId++, number: 12, title: "Original contribution",
@@ -75,6 +76,8 @@ it.each([false, true])("reconciles closed evidence through materialization, fili
   expect(prs).toHaveLength(2);
   const source = prs.find((pr) => pr.pull_request_number === 12)!;
   expect(source).toMatchObject({ state: "CLOSED", author_id: users[1] });
+  const exported = await exportAccount(sql, ids[1]);
+  expect(exported?.authoredPullRequests).toEqual([expect.objectContaining({ id: source.id, url: closed.url, state: "CLOSED" })]);
   const cached = await foldStore.getReconciliationEvidence(repo.id);
   expect(cached?.pullRequests.find((pr) => pr.id === closed.id)).toMatchObject({ rawDiff: "diff for PR 12", reviews: [{ id: 123 }] });
   expect(await sql`select id from settlements where pull_request_id = ${source.id}`).toEqual([]);

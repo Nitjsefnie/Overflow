@@ -50,7 +50,7 @@ export function ClosedPrDisputeRequestForm() {
         <input id="dispute-pull-request" name="pullRequestId" className="field-input" value={pullRequestId}
           onChange={(event) => setPullRequestId(event.target.value)} required />
       </label>
-      <p className="mono-meta">Use the stored pull request UUID. Leave both evidence URLs blank when a merged PR for the same issue is already recorded. Otherwise supply one landed URL.</p>
+      <p className="mono-meta">Find the closed PR’s ID in the authored pull requests in your <a href="/api/account/export">account data export</a>. Leave both evidence URLs blank when a merged PR for the same issue is already recorded. Otherwise supply one landed URL.</p>
       <label className="field" htmlFor="dispute-landed-pr">
         <span>Landed pull request URL (optional)</span>
         <input id="dispute-landed-pr" name="landedPullRequestUrl" className="field-input" type="url" value={landedPullRequestUrl}
