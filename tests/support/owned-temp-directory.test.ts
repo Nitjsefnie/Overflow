@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createOwnedTempDirectory, reclaimOwnedTempDirectories } from "./owned-temp-directory";
+import { createOwnedTempDirectory, createOwnedTempDirectoryRegistry, reclaimOwnedTempDirectories } from "./owned-temp-directory";
 
 let root: string;
 const helper = new URL("./owned-temp-directory.ts", import.meta.url).href;
@@ -86,4 +86,17 @@ describe("owned temp directories", () => {
     }
     reclaimOwnedTempDirectories(prefix); // Repeated and concurrent sweeps are harmless.
   });
+});
+
+it("registers fixtures before setup can fail and disposes every registered directory", () => {
+  const fixtures = createOwnedTempDirectoryRegistry(join(root, "registered-"));
+  const first = fixtures.create();
+  const second = fixtures.create();
+  expect(existsSync(first)).toBe(true);
+  expect(existsSync(second)).toBe(true);
+  expect(() => writeFileSync(join(second, "missing/file"), "fixture")).toThrow();
+  fixtures.dispose();
+  expect(existsSync(first)).toBe(false);
+  expect(existsSync(second)).toBe(false);
+  fixtures.dispose();
 });

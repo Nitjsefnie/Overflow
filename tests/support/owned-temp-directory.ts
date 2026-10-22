@@ -22,3 +22,21 @@ export function reclaimOwnedTempDirectories(prefix: string): void {
     }
   }
 }
+
+export function createOwnedTempDirectoryRegistry(prefix: string) {
+  reclaimOwnedTempDirectories(prefix);
+  const directories = new Set<string>();
+  return {
+    create(): string {
+      const directory = createOwnedTempDirectory(prefix);
+      directories.add(directory);
+      return directory;
+    },
+    dispose(): void {
+      for (const directory of directories) {
+        rmSync(directory, { recursive: true, force: true });
+        directories.delete(directory);
+      }
+    },
+  };
+}

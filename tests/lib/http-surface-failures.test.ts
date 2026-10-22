@@ -1,9 +1,14 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { deriveRouteFailures, routeModulePath } from "../../scripts/http-surface-derive-failures.ts";
 import { repoRoot } from "../../scripts/http-surface-derive.ts";
+
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const fixtures = createOwnedTempDirectoryRegistry(join(tmpdir(), "http-surface-failures-"));
+afterAll(() => fixtures.dispose());
 
 const helper = `export function errorEnvelope(code: string, message: string, extra?: Record<string, unknown>) {
   return { error: { code, message, ...extra } };
@@ -17,7 +22,7 @@ const importHelper = 'import { errorResponse } from "@/lib/http/error-response";
 
 /** A scratch repository root holding the helper and the given src files. */
 function tree(files: Record<string, string>): string {
-  const root = mkdtempSync(join(tmpdir(), "http-surface-failures-"));
+  const root = fixtures.create();
   for (const [path, source] of Object.entries({ "src/lib/http/error-response.ts": helper, ...files })) {
     mkdirSync(dirname(join(root, path)), { recursive: true });
     writeFileSync(join(root, path), source);

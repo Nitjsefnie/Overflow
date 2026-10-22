@@ -1,9 +1,15 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { resolveSuitePullRequest } from "../../scripts/resolve-suite-pull-request.ts";
+
+import { createOwnedTempDirectory, reclaimOwnedTempDirectories } from "../support/owned-temp-directory";
+
+for (const prefix of ["suite-cancelled-outputs-", "suite-pr-outputs-"]) {
+  reclaimOwnedTempDirectories(join(tmpdir(), prefix));
+}
 
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
@@ -124,15 +130,19 @@ describe("suite run PR resolution", () => {
   it.each(["listing", "fresh read"])("accepts a cancelled suite superseded by a moved head in the %s", async (phase) => {
     const moved = { ...pr(), head: { ...pr().head, sha: "c".repeat(40) } };
     const h = harness({ ...suite(), conclusion: "cancelled" }, phase === "listing" ? [moved] : [pr()], moved);
-    const dir = mkdtempSync(join(tmpdir(), "suite-cancelled-outputs-"));
-    const output = join(dir, "output");
-    writeFileSync(output, "earlier=true\n");
-    const result = await resolveSuitePullRequest({ ...h.deps, env: { ...h.deps.env, GITHUB_OUTPUT: output } });
-    expect(result.exitCode).toBe(0);
-    expect(result.outputs).toEqual({ superseded: "true" });
-    expect(readFileSync(output, "utf8")).toBe("earlier=true\nsuperseded=true\n");
-    expect(result.lines.join("\n")).toContain("::notice::");
-    expect(result.lines.join("\n")).toContain(moved.head.sha);
+    const dir = createOwnedTempDirectory(join(tmpdir(), "suite-cancelled-outputs-"));
+    try {
+      const output = join(dir, "output");
+      writeFileSync(output, "earlier=true\n");
+      const result = await resolveSuitePullRequest({ ...h.deps, env: { ...h.deps.env, GITHUB_OUTPUT: output } });
+      expect(result.exitCode).toBe(0);
+      expect(result.outputs).toEqual({ superseded: "true" });
+      expect(readFileSync(output, "utf8")).toBe("earlier=true\nsuperseded=true\n");
+      expect(result.lines.join("\n")).toContain("::notice::");
+      expect(result.lines.join("\n")).toContain(moved.head.sha);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("accepts a cancelled suite superseded by a higher-id pull_request suite at the same SHA", async () => {
@@ -196,12 +206,16 @@ describe("suite run PR resolution", () => {
   });
 
   it("appends only validated outputs to GITHUB_OUTPUT", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "suite-pr-outputs-"));
-    const output = join(dir, "output");
-    writeFileSync(output, "earlier=true\n");
-    const h = harness();
-    const result = await resolveSuitePullRequest({ ...h.deps, env: { ...h.deps.env, GITHUB_OUTPUT: output } });
-    expect(result.exitCode).toBe(0);
-    expect(readFileSync(output, "utf8")).toBe(`earlier=true\npr_number=1183\nhead_sha=${HEAD}\nbase_sha=${BASE}\nbase_ref=main\n`);
+    const dir = createOwnedTempDirectory(join(tmpdir(), "suite-pr-outputs-"));
+    try {
+      const output = join(dir, "output");
+      writeFileSync(output, "earlier=true\n");
+      const h = harness();
+      const result = await resolveSuitePullRequest({ ...h.deps, env: { ...h.deps.env, GITHUB_OUTPUT: output } });
+      expect(result.exitCode).toBe(0);
+      expect(readFileSync(output, "utf8")).toBe(`earlier=true\npr_number=1183\nhead_sha=${HEAD}\nbase_sha=${BASE}\nbase_ref=main\n`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
