@@ -124,10 +124,10 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
       // the locked account's live state on both sides, with no audit behind it.
       await transaction`
         insert into moderation_events (
-          target_user_id, actor_id, audit_id, prior_state, new_state, reason, dispute_request_id
+          target_user_id, actor_id, audit_id, prior_state, new_state, reason, dispute_request_id, created_at
         ) values (
           ${input.accountId}, ${input.accountId}, null, ${account.enforcement_state},
-          ${account.enforcement_state}, ${input.reason}, ${row.id}
+          ${account.enforcement_state}, ${input.reason}, ${row.id}, clock_timestamp()
         )
       `;
       return { kind: "ok", value: toRequest(row) };
