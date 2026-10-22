@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClosedPrDisputesContent } from "@/app/disputes/page";
 import { ClosedPrDisputeDecisionControl } from "@/components/closed-pr-dispute-decision";
 import { ClosedPrDisputeList } from "@/components/closed-pr-dispute-list";
+import { disputeComparisons } from "@/lib/moderation/closed-pr-dispute-evidence";
+import type { SqlClient } from "@/lib/db/types";
 import type { ClosedPrDisputeRequest } from "@/lib/moderation/closed-pr-dispute-service";
 
 const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
@@ -158,20 +160,28 @@ describe("moderation dispute list and decisions", () => {
   });
 });
 
-it("shows stored source and landing evidence side by side with forge destinations", () => {
-  render(<ClosedPrDisputeList moderation requests={[{ ...open, comparison: {
-    closedPullRequest: { number: 12, title: "Original parser", url: "https://github.com/owner/repo/pull/12",
-      reviews: [{ id: 101, state: "CHANGES_REQUESTED", submittedAt: "2026-10-01T10:00:00Z", dismissal: null }], rawDiff: "-old parser\n+original parser" },
-    landedPullRequest: { number: 19, title: "Landing parser", url: "https://github.com/owner/repo/pull/19",
-      reviews: [{ id: 102, state: "APPROVED", submittedAt: "2026-10-02T10:00:00Z", dismissal: null }], rawDiff: "-old parser\n+landed parser" },
-    landedCommitUrl: null,
-  } }]} />);
+it("shows stored source and landing evidence side by side with forge destinations", async () => {
+  // Return database-shaped evidence; the production mapper builds the rendered comparison.
+  const sql = vi.fn().mockResolvedValueOnce([{
+    id: requestId, owner_name: "owner/repo", provider: "github", instance_url: null, landed_commit_url: null,
+    closed_number: 12, closed_title: "Original parser",
+    closed_payload: { reviews: [{ id: 101, state: "CHANGES_REQUESTED", submittedAt: "2026-10-01T10:00:00Z", dismissal: null }],
+      rawDiff: "-old parser\n+original parser" },
+    landing_number: 19, landing_title: "Landing parser",
+    landing_payload: { reviews: [{ id: 102, state: "APPROVED", submittedAt: "2026-10-02T10:00:00Z", dismissal: null }],
+      rawDiff: "-old parser\n+landed parser" },
+  }]) as unknown as SqlClient;
+  const comparison = (await disputeComparisons(sql, [requestId])).get(requestId);
+  render(<ClosedPrDisputeList moderation requests={[{ ...open, landedCommitUrl: null,
+    landedPullRequestId: requestId.replace(/4$/, "5"), comparison }]} />);
   const source = within(screen.getByRole("region", { name: "Closed pull request evidence" }));
   const landing = within(screen.getByRole("region", { name: "Landed change evidence" }));
   expect(source.getByRole("link", { name: "#12 Original parser" })).toHaveAttribute("href", "https://github.com/owner/repo/pull/12");
   expect(source.getByText(/CHANGES_REQUESTED/)).toHaveTextContent("101");
   expect(source.getByText(/original parser/)).toHaveTextContent("-old parser");
-  expect(landing.getByRole("link", { name: "#19 Landing parser" })).toHaveAttribute("href", "https://github.com/owner/repo/pull/19");
+  const landingLink = landing.queryByRole("link", { name: "#19 Landing parser" });
+  expect(landingLink, "production landing link must be rendered").not.toBeNull();
+  expect(landingLink).toHaveAttribute("href", "https://github.com/owner/repo/pull/19");
   expect(landing.getByText(/APPROVED/)).toHaveTextContent("102");
   expect(landing.getByText(/landed parser/)).toHaveTextContent("-old parser");
 });
