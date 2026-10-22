@@ -1,10 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { commitFiles, git, scratchGitEnv } from "../support/scratch-git";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "verify-suppression-step-")]);
 /**
  * Issue 1035: the audit suppression list is load-bearing data and it moves
  * only through a maintainer-reviewed merge. The dependency audit honours
@@ -118,12 +121,12 @@ beforeAll(async () => {
     jobs: { verify: { steps: Step[] } };
   };
   steps = workflow.jobs.verify.steps;
-  root = await mkdtemp(join(tmpdir(), "verify-suppression-step-"));
+  root = await tempDirectories.createAsync(join(tmpdir(), "verify-suppression-step-"));
   pyyamlManifest = await readFile(resolve(".github/requirements-pyyaml.txt"), "utf8");
 });
 
 afterAll(async () => {
-  await rm(root, { recursive: true, force: true });
+  await tempDirectories.disposeAsync(root);
 });
 
 function theStep(): Step {

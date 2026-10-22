@@ -1,10 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { commitFiles, git, scratchGitEnv } from "../support/scratch-git";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "docs-only-step-")]);
 
 type WorkflowStep = {
   id?: string;
@@ -15,29 +18,6 @@ type WorkflowStep = {
   env?: Record<string, string | undefined>;
 };
 
-/**
- * The verify job's "Detect docs-only change" step picks the diff base and
- * hands it to scripts/docs-only.ts (issue 646): the merge commit's first
- * parent on a pull request, the push's `before` SHA on a push, and an optional
- * validated base on workflow_dispatch. A dispatch without a base and every
- * undecidable push must end in docs_only=false.
- *
- * Issue 1090 split ci.yml, and the step with it, into two legs that both
- * produce `steps.detect-docs.outputs.docs_only` for their own file's gated
- * steps. The pull-request leg (ci-pr.yml, reachable only by
- * `workflow_run`) runs the BASE checkout's copy with the materialised
- * merge tree (PR_TREE) as its working directory and nothing else. The
- * push/dispatch leg (ci.yml) keeps the `before`-SHA and validated-dispatch-base
- * branches. Each file's closed trigger set is the event gate; the pull-request
- * step skips a superseded cancellation, whose later steps read no outputs.
- * The pull-request run block has no
- * `if [ "${EVENT_NAME}" = ... ]` arm to select it.
- *
- * The wiring is pinned on the parsed YAML, and each leg's own run script is
- * then executed with bash -e (GitHub's default shell) inside scratch
- * repositories that reproduce the runner's shallow checkout, so the base rule
- * is covered by what the script does rather than by what it says.
- */
 describe("the verify workflow's docs-only detection step", () => {
   let detectSteps: WorkflowStep[] = [];
   let prStep: WorkflowStep | undefined;
@@ -155,18 +135,13 @@ describe("the verify workflow's docs-only detection step", () => {
     let counter = 0;
 
     beforeAll(async () => {
-      root = await mkdtemp(join(tmpdir(), "docs-only-step-"));
+      root = await tempDirectories.createAsync(join(tmpdir(), "docs-only-step-"));
     });
 
     afterAll(async () => {
-      await rm(root, { recursive: true, force: true });
+      await tempDirectories.disposeAsync(root);
     });
 
-    /**
-     * The origin repository. Its root commit carries the real
-     * scripts/docs-only.ts, so the step runs the module under test, plus one
-     * code file and one doc for later commits to change.
-     */
     async function upstream(): Promise<string> {
       counter += 1;
       const repo = join(root, `upstream-${counter}`);
@@ -182,14 +157,6 @@ describe("the verify workflow's docs-only detection step", () => {
       return repo;
     }
 
-    /**
-     * Runs the run script of the leg that would receive `env.EVENT_NAME`, the
-     * way the runner would: a depth-1 checkout of `sha` fetched from the
-     * origin, bash -e, and a GITHUB_OUTPUT file. `options.githubSha` overrides
-     * the runner's GITHUB_SHA for events where it differs from the checked-out
-     * commit (workflow_run points it at the base tip while the checkout
-     * is the merge ref).
-     */
     async function runStep(
       origin: string,
       sha: string,
@@ -294,8 +261,6 @@ describe("the verify workflow's docs-only detection step", () => {
       }
     });
 
-    /** A merge ref: the base tip as first parent, the pull request head as second.
-     * Also plants refs/pull/1/merge on the origin, the way GitHub publishes it. */
     async function mergeRef(origin: string, headChange: (repo: string) => Promise<void>): Promise<string> {
       git(origin, "checkout", "--quiet", "-b", "feature");
       await headChange(origin);

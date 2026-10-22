@@ -1,48 +1,18 @@
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { commitFiles, git, hasCommit, scratchGitEnv } from "../support/scratch-git";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-/**
- * The verify job's workflow_run leg, EXECUTED rather than read.
- *
- * Under that event the job checks out the base branch, materialises the pull
- * request's merge tree as a detached worktree outside the workspace, and
- * runs the base checkout's own gate scripts over that tree as data. The
- * property that matters is that the pull request cannot judge itself: a pull
- * request that edits a gated file AND replaces the gate script that would
- * catch it must still be refused, because the script that runs is the
- * base's.
- *
- * Each case builds an origin repository whose main carries the real gate
- * scripts, a pull request branch, and the merge commit GitHub would publish
- * for it as refs/pull/1/merge (base tip first parent, head second). The
- * workspace is a full clone of main — the checkout the step list starts from
- * — and the steps' own `run:` blocks are executed with the runner's shell
- * flags. Each step's own `env:` is resolved the way the runner would:
- * `${{ steps.pr-tree.outputs.* }}` from what the materialise step wrote to
- * GITHUB_OUTPUT, and any other expression only from a value the case supplies
- * — an expression nobody resolves throws rather than reading empty. The event
- * payload's `merge_commit_sha` goes into every case's environment, published
- * or stale, because a step that reads it must fail here rather than in the
- * next push.
- */
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "verify-pr-tree-")]);
 
 type Step = { name?: string; id?: string; run?: string; env?: Record<string, string> };
 
-/**
- * Issue 1099's zizmor gate is NOT executed by this suite: there is no stub pip
- * here and this file must stay off the network. The step's contract — the
- * git-objects read, the strict grammar, the sanitized copy, the pinned pip
- * argv — is executed end to end in tests/ci/verify-zizmor-step.test.ts, which
- * builds the merge commit and supplies the stub. Selecting the step here is a
- * bug in this file, not a case to run.
- */
 const ZIZMOR_PIN_STEP_NAME = "Verify the zizmor pin's hashes match its version";
 
 function assertNotZizmorPinStep(step: Step): void {
@@ -67,11 +37,11 @@ beforeAll(async () => {
     jobs: { verify: { steps: Step[] } };
   };
   steps = workflow.jobs.verify.steps;
-  root = await mkdtemp(join(tmpdir(), "verify-pr-tree-"));
+  root = await tempDirectories.createAsync(join(tmpdir(), "verify-pr-tree-"));
 });
 
 afterAll(async () => {
-  await rm(root, { recursive: true, force: true });
+  await tempDirectories.disposeAsync(root);
 });
 
 function stepRunning(needle: string): Step {
@@ -99,41 +69,20 @@ const MODULE_SIZE_DOC = `${JSON.stringify(
 
 const NEUTERED = "process.exit(0);\n";
 
-/**
- * SHAs the origin cannot serve: correctly formed, and not a commit anywhere in
- * the fixture's history — the shape an event's head or base takes when the
- * repository does not hold it. Deliberately not a real revision's tail: the
- * case is that NO such commit exists. Every case that uses one proves that
- * with `hasCommit`, so the value is never the thing under test.
- */
 const UNFETCHABLE_HEAD = "0123456789abcdef0123456789abcdef01234567";
 const UNFETCHABLE_BASE = "fedcba9876543210fedcba9876543210fedcba98";
 
 type Fixture = { origin: string; workspace: string; merge: string; head: string; base: string };
 
 type FixtureOptions = {
-  /**
-   * What the head commits AFTER GitHub published the merge ref — the shape a
-   * `synchronize` event has when the payload's head SHA has moved on but its
-   * asynchronously computed merge commit has not.
-   */
+
   afterPublish?: Record<string, string>;
-  /** Whether GitHub published a merge ref at all. It publishes none for a head that does not merge cleanly. */
+
   publishMerge?: boolean;
-  /**
-   * The branch the workspace is cloned from, single-branch. `main` is the
-   * default and is what a full-history checkout of the base holds; naming a
-   * branch that does not reach the base commit gives a workspace that does NOT
-   * hold the event's base SHA, which is the case the step's base fetch exists
-   * for.
-   */
+
   workspaceBranch?: string;
 };
 
-/**
- * An origin whose main carries the real gate scripts, a pull request whose
- * head commits `files`, and the merge ref GitHub would publish for it.
- */
 async function fixture(
   files: Record<string, string>,
   message = "pull request change",
@@ -207,12 +156,6 @@ async function fixture(
 
 type StepResult = { status: number | null; stdout: string; stderr: string; output: string };
 
-/**
- * A step's `env:` as the runner would present it: each value that is exactly
- * a step output expression resolves from `outputs` (pr-tree) or `byStep`;
- * every other
- * expression must be supplied by the case through `given`.
- */
 function stepEnv(
   step: Step,
   outputs: Record<string, string>,
@@ -283,22 +226,8 @@ function readOutputs(text: string): Record<string, string> {
   return entries;
 }
 
-/**
- * How long `runStepOnOpenStdin` waits before calling a step blocked. It only
- * elapses when the step is wrong; a step that finishes does so in well under a
- * second here, so this is generous rather than tight.
- */
 const OPEN_STDIN_BUDGET_MS = 20_000;
 
-/**
- * Runs one step's `run:` block with a stdin that is OPEN and never written to,
- * which is what a runner that leaves a step's stdin inherited hands it. A step
- * that reads stdin blocks on this pipe forever — the failure this exists to
- * catch — so the wait is bounded and the child is killed rather than left
- * behind: `runStep` above cannot express this at all, because `spawnSync`
- * closes stdin by default, and both ubuntu-latest and vitest do exactly that.
- * Two environments agreeing to hide a hang is not a property of the step.
- */
 async function runStepOnOpenStdin(
   step: Step,
   fx: Fixture,
@@ -363,39 +292,16 @@ function parents(repo: string, sha: string): string[] {
   return git(repo, "rev-list", "--parents", "-n", "1", sha).split(" ").slice(1);
 }
 
-/**
- * The step's workflow-command annotations, one entry per line, in the order it
- * emitted them. Two refusals that produce DIFFERENT lists are distinguishable
- * to whoever reads the run, without any case having to know what either of
- * them says.
- */
 function annotations(result: StepResult): string[] {
   return `${result.stdout}\n${result.stderr}`
     .split("\n")
     .filter((line) => line.includes("::error::"));
 }
 
-/**
- * The same annotations with every SHA they name masked out, so two refusals
- * can be compared on WHAT THEY SAY rather than on which commits they name.
- * Without the mask this comparison is vacuous: two cases in two fixtures have
- * different SHAs, so even a message shared verbatim would render differently
- * and look distinct.
- */
 function maskedAnnotations(result: StepResult): string[] {
   return annotations(result).map((line) => line.replace(/[0-9a-f]{40}/g, "<sha>"));
 }
 
-/**
- * Materialises the merge tree from the event's head and base; returns the
- * outputs later steps read.
- *
- * The event's payload `merge_commit_sha` goes into the environment of every
- * case, published or not, whether or not the step declares it: a step that
- * reads it must fail here rather than in the next `synchronize` event, because
- * GitHub computes that field asynchronously and it can name the merge of the
- * head this event has already moved past.
- */
 async function materialise(
   fx: Fixture,
   options: { step?: Step; env?: Record<string, string> } = {},
@@ -631,14 +537,6 @@ describe("the pull request tree the workflow_run leg judges", () => {
   });
 });
 
-/**
- * The cause of a refusal, pinned by the PAIR rather than by the wording of the
- * annotation. "Did not exit 0 and wrote no outputs" is what every refusal
- * looks like — a fetch that failed, a base that is missing, anything — so the
- * two cases here differ in exactly one thing, what the head commits, and they
- * land on opposite sides of the same boundary. That is what says the refusal
- * above is the conflict and not the next thing that would also have failed.
- */
 describe("a head that does not merge cleanly into its base", () => {
   /** Both fixtures are built with `publishMerge: false`; only the files differ. */
   const SHAPE = { publishMerge: false } as const;
@@ -845,12 +743,7 @@ describe("a pull request that replaces the gate script guarding what it changed"
 });
 
 describe("the awaited suite run's id the workflow_run leg requires", () => {
-  /**
-   * On a docs-only change nothing downstream reads the run id, so this step is
-   * the only thing between an awaiter that exits 0 without writing one and a
-   * green verify. Its real run block is executed with the id resolved from
-   * the awaiter's output the way the runner would.
-   */
+
   function requireStep(): Step {
     const awaiter = stepRunning("/scripts/await-pr-suite.ts");
     expect(awaiter.id).toBeDefined();
@@ -880,7 +773,6 @@ describe("the awaited suite run's id the workflow_run leg requires", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0);
   });
 });
-
 
 describe("freshness against the suite's conservatively bounded base", () => {
   it.each([

@@ -1,11 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "dependency-audit-push-")]);
 
 const LINUX_ONLY = process.platform === "linux";
 
@@ -118,11 +120,11 @@ describe.skipIf(!LINUX_ONLY)("the audit step's classification, run over scratch 
   let cases = 0;
 
   beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), "dependency-audit-push-"));
+    root = await tempDirectories.createAsync(join(tmpdir(), "dependency-audit-push-"));
   });
 
   afterAll(async () => {
-    await rm(root, { recursive: true, force: true });
+    await tempDirectories.disposeAsync(root);
   });
 
   const BASE_PACKAGE = `${JSON.stringify({ name: "scratch", version: "1.0.0", private: true }, null, 2)}\n`;

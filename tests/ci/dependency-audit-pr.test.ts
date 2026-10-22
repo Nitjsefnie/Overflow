@@ -1,47 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-/**
- * Issue 1149: the dependency audit's pull-request leg is a required context
- * produced from a definition the pull request cannot change.
- *
- * `.github/workflows/pr-gates.yml` runs under `pull_request_target`
- * alone, so it always executes MAIN'S copy of itself; the pull request enters
- * only as git objects (this event's head and base SHAs), its merge tree is
- * built locally with `git merge-tree --write-tree`, and the two manifests are
- * materialized as data into a sanitized RUNNER_TEMP directory that
- * `pnpm audit` reads. The audit half of the step is dependency-audit.yml's own
- * audit step VERBATIM — the five-verdict classifier and the narrow transient
- * retry — so the two legs cannot drift.
- *
- * This suite holds the file to that on two layers:
- *
- *  - STRUCTURAL: the trigger set is closed ({pull_request_target}), there is
- *    no paths filter (the leg must fire on EVERY pull request so the required
- *    context always reports — a missing context blocks a merge as surely as a
- *    red one), the concurrency block cancels superseded runs within one PR,
- *    as tests/ci/concurrency.test.ts requires of this aggregate, the
- *    job is named `dependency-audit` (the context name the relay matches), the
- *    env pins ride at job level, and the audit portion is byte-identical to
- *    the push leg's.
- *  - BEHAVIORAL: the step's own run text is executed the way the runner does
- *    — bash with the runner's flags over git fixtures — with `pnpm` and
- *    `sleep` stubbed first on PATH. Nothing here touches a network or a
- *    registry: the stub replays outcomes captured from pnpm 10.33.0's output
- *    shapes, and every verdict is asserted on the stub's own record plus the
- *    step's exit status.
- *
- * The both-ways proof the issue asks for lives in the behavioral block: a
- * manifest-touching pull request whose merge-tree lockfile carries an
- * advisory exits nonzero (a red audit), and a pull request that touches no
- * manifest is audited on the base's unchanged bytes and exits zero (the
- * context reports green, never missing).
- */
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "dependency-audit-pr-")]);
 
 const LINUX_ONLY = process.platform === "linux";
 
@@ -74,7 +40,6 @@ const ENV_PINS: Record<string, string> = {
   npm_config_audit_level: "low",
 };
 
-/** Every fixed refusal the step's prologue can print; content-free constants. */
 const REFUSALS = {
   fetchHead: "::error::could not fetch the pull request's head",
   fetchBase:
@@ -86,7 +51,6 @@ const REFUSALS = {
   manifestEntry: "must be exactly one mode-100644 blob entry in the merge tree; refusing",
 };
 
-/** Planted in pull-request-controlled content; must never reach the step's output. */
 const MARKER = "GHSA-ATTACKER-MANIFEST-MARKER";
 
 let workflow: Workflow;
@@ -110,11 +74,11 @@ describe("pr-gates.yml's shape", () => {
 
   it("triggers on pull_request_target alone, with no paths filter", () => {
     // The closed trigger set, not a denylist: this file reads pull-request
-    // data, so the issue-1090 rule leaves it exactly this trigger and nothing
+
     // else. A paths filter is equally absent ON PURPOSE: branch protection
     // refuses a MISSING required context, so a leg that skipped no-manifest
     // pull requests would strand them — every pull request must produce a
-    // run, and the file-level verdict is the audit's on the merge-tree bytes.
+
     expect(Object.keys(workflow.on ?? {})).toEqual(["pull_request_target"]);
     expect(workflow.on).toEqual({
       pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
@@ -137,7 +101,7 @@ describe("pr-gates.yml's shape", () => {
   });
 
   it("binds the pull-request-controlled inputs for every step that runs pnpm", () => {
-    // Job level, like the push leg's: Actions env is step-scoped, so a pin on
+
     // the installing step never reaches the step that executes the audit.
     // The five values are the push leg's five, exactly — a diverged value
     // here would mean the two legs audit under different rules.
@@ -179,7 +143,7 @@ describe("pr-gates.yml's shape", () => {
   });
 
   it("receives the event through env:, never through shell interpolation", () => {
-    // The wire format of the event reaches the shell only through the step's
+
     // env block; a ${{ }} inside any run block would be an interpolation
     // channel this repository denies everywhere.
     for (const step of steps) {
@@ -206,7 +170,7 @@ describe("pr-gates.yml's shape", () => {
     expect(code).toContain('git fetch --quiet --no-tags origin "${HEAD_SHA:?}"');
     expect(code).toContain('git fetch --quiet --no-tags origin "${BASE_SHA:?}"');
     expect(code).not.toContain("refs/pull");
-    // The merge tree is built for THIS event's two SHAs, never read from the
+
     // asynchronous event payload or a refs/pull merge ref.
     expect(run).toContain('git merge-tree --write-tree "${BASE_SHA:?}" "${HEAD_SHA:?}"');
     // The ls-tree single-blob discipline, per manifest, into a fresh
@@ -233,7 +197,7 @@ describe("pr-gates.yml's shape", () => {
 
   it("audits with the push leg's own audit step, byte-identical", () => {
     // Extracted comparison, never a hand-copied expectation: the audit half
-    // (classifier, verdict dispatch, transient retry) of both files is sliced
+
     // from the parsed run text and required equal, so the two legs cannot
     // drift and a hand-edit to one fails this equality immediately.
     const portionOf = (source: Workflow, jobKey: string, stepName: string): string => {
@@ -254,16 +218,16 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   let cases = 0;
 
   beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), "dependency-audit-pr-"));
+    root = await tempDirectories.createAsync(join(tmpdir(), "dependency-audit-pr-"));
   });
 
   afterAll(async () => {
-    await rm(root, { recursive: true, force: true });
+    await tempDirectories.disposeAsync(root);
   });
 
   const BASE_PACKAGE = `${JSON.stringify({ name: "scratch", version: "1.0.0", private: true }, null, 2)}\n`;
   const BASE_LOCKFILE = "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies: {}\n";
-  /** The stub replays these captured-SHAPES; no registry, no real advisory. */
+
   const CLEAN = {
     code: 0,
     stdout: `${JSON.stringify({ advisories: {}, metadata: { vulnerabilities: {} } })}\n`,
@@ -301,12 +265,6 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   /** Head entry for a path the pull request DELETES from the base tree. */
   const DELETED = Symbol("deleted");
 
-  /**
-   * A scratch origin whose `main` carries `base` at BASE_SHA, plus `head`
-   * built on it — the two commits the step is handed as this event's head
-   * and base — and a workspace (a full clone, the step's cwd, the state
-   * actions/checkout's fetch-depth: 0 leaves on a pull_request_target event).
-   */
   async function fixture(
     base: Record<string, string>,
     head: Record<string, string | { mode: string; content: string } | typeof DELETED>,
@@ -382,14 +340,6 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
     sleeps: string[];
   }
 
-  /**
-   * Runs the shipped run text the way the runner does — `bash -e`, a script
-   * file, cwd the checkout — with `pnpm` and `sleep` stubbed first on PATH.
-   * `pnpm` records its cwd and argv, replays `outcomes` in order, and writes
-   * its scripted stdout/stderr for the step to redirect; `sleep` records its
-   * argument instead of waiting, so the backoff is asserted on the record of
-   * the call rather than on a clock.
-   */
   async function runStep(
     fx: { workspace: string; baseSha: string; headSha: string },
     outcomes: Array<{ code: number; stdout: string; stderr: string }>,

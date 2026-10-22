@@ -1,25 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-/**
- * The verify job's conflict-marker gate, executed. Issue 1090 split the
- * pull-request leg into ci-pr.yml, whose only trigger is
- * `workflow_run`, and both files still carry the gate — over different
- * trees. In ci.yml (push and workflow_dispatch) it searches the checked-out
- * event commit; in ci-pr.yml it always searches the pull request's merge tree,
- * which an earlier step materialises outside the workspace and hands over as
- * PR_TREE. Both legs run here.
- *
- * The step's environment is built from scratch rather than inherited. The
- * runner exports GITHUB_EVENT_NAME (and RUNNER_TEMP, GITHUB_WORKSPACE, …) into
- * every step, including the one running this suite, so an inherited
- * environment makes the leg exercised depend on which workflow happens to run
- * the tests rather than on the case.
- */
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "overflow-conflict-markers-")]);
 
 type Step = { name?: string; run?: string; env?: Record<string, string> };
 
@@ -45,7 +32,7 @@ describe("the verify workflow's conflict-marker shell gate", () => {
   const pattern = "^(<{7}( |$)|>{7}( |$)|={7}$)";
 
   beforeAll(async () => {
-    tempRoot = await mkdtemp(join(tmpdir(), "overflow-conflict-markers-"));
+    tempRoot = await tempDirectories.createAsync(join(tmpdir(), "overflow-conflict-markers-"));
     // Reading only ci.yml after the split found the push leg and none of the
     // pull-request tree cases, so each file is read for the leg it owns.
     const gate = async (file: string): Promise<Step> => {
@@ -61,7 +48,7 @@ describe("the verify workflow's conflict-marker shell gate", () => {
   });
 
   afterAll(async () => {
-    await rm(tempRoot, { recursive: true, force: true });
+    await tempDirectories.disposeAsync(tempRoot);
   });
 
   /** A scratch repository tracking one file with the given contents. */
@@ -77,11 +64,6 @@ describe("the verify workflow's conflict-marker shell gate", () => {
     return root;
   }
 
-  /**
-   * Runs a leg's real run block in `workspace`, with only the variables the
-   * runner would give this step: the event name, and PR_TREE when the case
-   * supplies the materialise step's output.
-   */
   async function run(step: Step, event: string, workspace: string, prTree?: string) {
     expect(step.run, "the verify job must supply the real shell gate").toBeDefined();
     const script = join(tempRoot, `gate-${++counter}.sh`);

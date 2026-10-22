@@ -1,9 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "overflow-comment-share-push-")]);
 
 const recordsPath = ".github/comment-share.json";
 const roots: string[] = [];
@@ -37,7 +40,7 @@ function source(commentBytes: number): string {
 }
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "overflow-comment-share-push-"));
+  const root = tempDirectories.create(join(tmpdir(), "overflow-comment-share-push-"));
   roots.push(root);
   const repo = join(root, "repo");
   const remote = join(root, "remote.git");
@@ -76,7 +79,7 @@ function fixture() {
 }
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) tempDirectories.dispose(root);
 });
 
 describe("the real Git comment-share writer", () => {

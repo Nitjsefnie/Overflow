@@ -1,58 +1,25 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { commitFiles, git, scratchGitEnv, tryGit } from "../support/scratch-git";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-/**
- * The shape of .github/workflows/secret-scan.yml, asserted on the PARSED YAML
- * and never on raw bytes, so reformatting the file does not disturb these
- * assertions while a change to any of the values below fails loudly.
- *
- * Every assertion here exists because of a specific way this workflow could go
- * quietly green while doing nothing:
- *
- *  - a `pull_request` trigger could execute untrusted PR scripts; the trusted
- *    `pull_request_target` leg must only fetch the PR head as git objects;
- *  - a checkout without `fetch-depth: 0` turns a full-history scan into a scan
- *    of the tip commit, which passes every time;
- *  - a gitleaks installed from an action reference or a package manager is a
- *    version this file does not pin, so the rule set can move under a committed
- *    baseline;
- *  - a `continue-on-error` or an `if: always()` on the scan step turns findings
- *    into a green run;
- *  - a non-SHA-pinned `uses` would make the supply chain of a repository that
- *    reads full history an unpinned one — pin shape is zizmor's to hold now
- *    (fleet-rules, "Merging and CI"); no assertion in this file reads it;
- *  - an install step that extracts a binary without putting that directory on
- *    the PATH of LATER steps — the Critical this suite now executes rather than
- *    reads about, below.
- *
- * The model of the assertions is tests/api/ci-workflows.test.ts, which pins
- * dependency-audit.yml and code-scanning.yml; tests/ci/concurrency.test.ts is
- * what classifies this workflow's concurrency group.
- */
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "secret-scan-reachability-")]);
 
 // Which gitleaks release the workflow pins is the workflow's business
-// (fleet-rules, "Merging and CI": a legitimate CI change never fails a
-// test). The fixture derives the version the scan step will accept from
+
 // the workflow itself instead of repeating a literal here, so a
-// coordinated bump stays green and the refusal check below still proves
+
 // the scan script rejects anything the workflow does not name.
 const workflowVersion = String(parse(
   readFileSync(resolve(".github/workflows/secret-scan.yml"), "utf8"),
 ).jobs["secret-scan"].steps.find((step: { name?: string }) => step.name === "Install gitleaks").env.GITLEAKS_VERSION);
 
-/**
- * The version the fixture gitleaks in the step-boundary test reports. It has to
- * be the pinned one, because the scan step's script refuses to scan under
- * anything else — and that refusal is a second, load-bearing thing the test
- * proves by getting past it.
- */
 const FAKE_GITLEAKS_VERSION = workflowVersion;
 
 type Workflow = {
@@ -79,13 +46,11 @@ type Workflow = {
   >;
 };
 
-
 const LEGS = [
   { file: ".github/workflows/secret-scan.yml", pr: false },
   { file: ".github/workflows/pr-gates.yml", pr: true },
 ] as const;
 
-/** The file that carries a given leg, as it is named inside `.github/workflows/`. */
 const basename = (file: string): string => file.slice(".github/workflows/".length);
 
 describe.each(LEGS)("$file", ({ file, pr }) => {
@@ -99,7 +64,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
 
   it("is named for what it does, and names its leg distinctly", () => {
     // Two workflows sharing one `name:` would make the ledger relay's
-    // `workflows:` filter ambiguous, and GitHub's own UI would show two runs
+
     // under one heading with nothing to tell them apart.
     expect(workflow.name).toBe(pr ? "pr gates" : "secret scan");
   });
@@ -141,7 +106,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
   it(pr ? "uses main's checkout and fetches the PR head only as git objects" : "uses main's checkout, and fetches no pull-request ref", () => {
     const checkouts = scan.steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
     expect(checkouts).toHaveLength(1);
-    // Ungated on both legs: each file has exactly one event class, so there is
+
     // nothing left to switch on.
     expect(checkouts[0].if).toBeUndefined();
     const fetch = scan.steps.find((step) => step.name === "Fetch the pull request head");
@@ -153,17 +118,14 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       expect(scan.steps.indexOf(fetch!)).toBeGreaterThan(scan.steps.indexOf(checkouts[0]));
       expect(scan.steps.indexOf(fetch!)).toBeLessThan(installIndex);
     } else {
-      // The load-bearing half of the split, asserted on the FILE that has to
-      // be free of it: no pull-request fetch survives on the push leg, which is
+
       // what keeps a privileged trigger from reaching a `refs/pull` fetch.
       expect(fetch, "the push/schedule/dispatch leg must fetch no pull-request ref").toBeUndefined();
     }
     for (const step of scan.steps) {
       expect(step.run ?? "").not.toMatch(/git\s+(checkout|switch|reset|worktree)\b/);
     }
-    // Asserted on the parsed `on:` above and on the step list here, never on
-    // the raw source: a file's comments legitimately name the leg that moved
-    // out of it, and a source-text assertion would go red on a comment and stay
+
     // green on the shape.
     if (pr) {
       const source = readFileSync(resolve(file), "utf8");
@@ -206,7 +168,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
   });
 
   it("bounds the history scan's runtime", () => {
-    // A hung full-history scan must release its runner within a bounded time.
+
     expect(scan["timeout-minutes"]).toBe(15);
   });
 
@@ -216,8 +178,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
   });
 
   it("verifies and extracts the scanner tarball without a package-manager install", () => {
-    // No step may install gitleaks by reference. A `gitleaks/gitleaks-action@…`
-    // step is pinned by SHA like any other action, but the ACTION decides the
+
     // scanner's version, so a bump inside it moves the rule set under a
     // committed baseline with nothing in this repository to change.
     for (const step of scan.steps) {
@@ -231,17 +192,14 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     expect(install, "no step verifies a downloaded gitleaks tarball with sha256sum -c").toBeDefined();
     const run = install!.run ?? "";
     expect(run, "the install step must extract the binary").toMatch(/tar\s+-xzf/);
-    // Tolerates whatever path prefix the extraction is addressed by, because
-    // that prefix is exactly what the step-boundary test below exercises and
-    // this one only needs to know the step verifies what it just unpacked.
+
     expect(run, "the install step must print the version it installed").toMatch(/gitleaks"?\s+version\b/);
   });
 
   it("runs the scan script, and the script's exit code is the gate", async () => {
     const scanStep = scan.steps.find((step) => /bash scripts\/secret-scan\.sh/.test(step.run ?? ""));
     expect(scanStep, "no step runs scripts/secret-scan.sh").toBeDefined();
-    // The whole workflow's signal is this step's exit code. Anything that lets
-    // it continue past a nonzero exit turns a detection signal into decoration.
+
     for (const step of scan.steps) {
       expect(
         step["continue-on-error"],
@@ -249,8 +207,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       ).toBeUndefined();
     }
     // Scoped to the scan step alone: the upload step is REQUIRED to carry
-    // `if: always()`, which is what leaves a red run's findings readable. A
-    // blanket "no step has an if" would deny the one gate that does real work.
+
     expect(
       scanStep!.if ?? "",
       "the scan step must not be gated — `if: always()` or `if: failure()` on it is precisely the " +
@@ -261,15 +218,14 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
   it("uploads the JSON report as an artifact even when the scan failed", () => {
     const upload = scan.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
     expect(upload, "no step uploads the findings report as an artifact").toBeDefined();
-    // `if: always()` is the only thing that makes a red run leave the report
-    // behind, and the report is what a human reads to learn WHICH commit and
+
     // WHICH line carried the finding.
     expect(upload!.if, "the upload must run on a failed scan too").toMatch(/always\(\)/);
   });
 
   it("keeps every event value out of run: interpolation", () => {
     for (const step of scan.steps) {
-      // Values from the event reach the shell through env:, never through ${{ }}
+
       // inside run:, or a repository or branch name becomes shell source.
       expect(step.run ?? "", `${step.name ?? step.uses ?? "a step"} must not interpolate into run:`).not.toContain(
         "${{",
@@ -278,10 +234,9 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
   });
 
   it("uses a job id and name that cannot collide with a required check context", () => {
-    // tests/ci/required-checks.test.ts fails on a ${{ }} expression in a job
+
     // name, and .github/required-checks.json names verify, actionlint and
-    // ratchet-guard. A job id or name that matched one of those would be a
-    // required context this workflow's conclusions could silently satisfy.
+
     expect(workflow.jobs, "the job id must not be verify").not.toHaveProperty("verify");
     if (!pr) {
       expect(workflow.jobs, "the push scan must not produce actionlint").not.toHaveProperty("actionlint");
@@ -291,44 +246,31 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
   });
 
   it("installs a gitleaks that the scan step's OWN shell can resolve by bare name", async () => {
-    // This is the assertion that spans the step boundary, and it EXECUTES both
+
     // steps rather than reading either one.
     //
-    // The defect it exists for was a workflow that could never go green: the
-    // install step extracted the binary into the step's working directory, and
-    // never put that directory on the PATH of later steps. Every assertion in
-    // this file was still green — the install step's shape was pinned here, the
-    // script's wiring was pinned in secret-scan-script.test.ts against a stub
+
     // the test itself put on PATH, and the gap between them was owned by
-    // neither. Three green suites certifying a job that failed on its first
+
     // scheduled run, with a message that pointed at the wrong cause.
     //
-    // So the invariant pinned is the CONSUMER's resolution, and the only honest
+
     // way to check it is to run it. This test:
     //
-    //   1. stages a repository the way actions/checkout would leave one — the
-    //      real scripts/secret-scan.sh and the real .github/gitleaks-baseline.json,
+
     //      and nothing else;
-    //   2. builds a gitleaks release tarball locally and points the install
-    //      step's `curl` at a stub that hands it over, so the step's own script
+
     //      runs with no network;
-    //   3. executes the install step's `run:` block VERBATIM, with a runner's
+
     //      three environment variables set to the temp tree;
-    //   4. executes the scan step's `run:` block VERBATIM in a FRESH shell whose
-    //      PATH is the runner's own PATH plus exactly the entries the install
-    //      step appended to $GITHUB_PATH — which is what a GitHub runner hands
+
     //      the next step;
     //   5. asserts the scan step exited 0 and wrote a report.
     //
-    // Step 4 is the whole test. A stubbed binary in step 2 is what makes this
-    // runnable offline; it is not what makes it pass, because the stub lives
-    // where the install step put it and the consumer's PATH is built without
-    // knowing that. Remove the install step's $GITHUB_PATH write and step 4
+
     // fails with the very message the real job would have printed.
     //
-    // The one thing stubbed is the download, and the checksum the step verifies
-    // is this fixture's real digest rather than the workflow's literal — this
-    // test is about reachability across the boundary, not about the checksum,
+
     // which the install-step assertion in this file pins by literal.
     const install = scan.steps.find((step) => /sha256sum -c/.test(step.run ?? ""));
     const consumer = scan.steps.find((step) => /scripts\/secret-scan\.sh/.test(step.run ?? ""));
@@ -336,8 +278,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     expect(consumer?.run, "no scan step to execute").toBeDefined();
 
     const root = join(tmpdir(), `secret-scan-runner-${process.pid}-${Date.now()}`);
-    // The runner's own PATH. Deliberately excludes the workspace and every
-    // directory the install step might use, because on a real runner neither is
+
     // on it — that exclusion is the entire subject of the test.
     const RUNNER_PATH = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"].join(":");
     try {
@@ -349,8 +290,6 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       for (const directory of [workspace, runnerTemp, stubBin, dist]) await mkdir(directory, { recursive: true });
       await writeFile(githubPathFile, "", "utf8");
 
-      // Stage the repository the way the checkout step leaves it: the script the
-      // scan step runs, and the baseline the script insists exists. No .git —
       // the scanner below is a fixture, not gitleaks.
       await mkdir(join(workspace, "scripts"), { recursive: true });
       await mkdir(join(workspace, ".github"), { recursive: true });
@@ -358,9 +297,6 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       await copyFile(resolve(".github/gitleaks-baseline.json"), join(workspace, ".github/gitleaks-baseline.json"));
       await chmod(join(workspace, "scripts/secret-scan.sh"), 0o755);
 
-      // The gitleaks release tarball, built locally. `version` answers so the
-      // script's pin check can pass; the scan subcommand validates the argv the
-      // script passes and writes the report, so a mis-wired command still fails
       // loudly here rather than producing plausible-looking data.
       const fakeBinary = join(dist, "gitleaks");
       await writeFile(
@@ -400,9 +336,6 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       expect(packed.status, `the fixture tarball must build: ${packed.stderr}`).toBe(0);
       const digest = createHash("sha256").update(readFileSync(tarball)).digest("hex");
 
-      // A curl that hands over the fixture instead of reaching the network. The
-      // stub fails loudly if the install step stops using -o, so this cannot
-      // quietly become a no-op that "passes" an install that downloaded nothing.
       await writeFile(
         join(stubBin, "curl"),
         [
@@ -424,7 +357,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
 
       // (3) The install step, verbatim, with the runner's environment.
       const installEnv: NodeJS.ProcessEnv = {
-        // Neither step reads NODE_ENV; it is present because this repository's
+
         // NodeJS.ProcessEnv requires it, and the convention across its tests.
         NODE_ENV: "test",
         PATH: `${stubBin}:${RUNNER_PATH}`,
@@ -442,17 +375,16 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       };
       // `bash -e`, which is what a GitHub runner uses for a `run:` block on
       // Linux. Not an optimisation: without errexit a failed command in the
-      // middle of the block is not fatal, so `echo … | sha256sum -c -` printing
-      // FAILED would be followed by the next line running and the step exiting
+
       // 0 — the test would then pass on an install whose checksum did not
       // verify. The reviewer's T-4 mutant is exactly that, and it is green
       // without this flag.
       //
-      // `pipefail` is deliberately NOT set, because the runner does not set it
+
       // either and the point is to reproduce the runner. What makes
-      // `sha256sum -c` safe here is that it is the LAST stage of its pipeline:
+
       // under `bash -e` without pipefail a pipeline's status is the last
-      // stage's, so this check is the one whose status the step inherits. That
+
       // is a property of the ORDER, not of the flags — an earlier stage
       // failing while a later one succeeds would be invisible here, and the
       // downloader's own flags (`-f -sS -L --retry 3`) are what cover that.
@@ -467,7 +399,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       ).toBe(0);
 
       // (4) The scan step, verbatim, in a FRESH shell whose PATH is the
-      // runner's own PATH plus the entries the install step appended — which is
+
       // precisely how a GitHub runner composes a later step's PATH.
       const appended = readFileSync(githubPathFile, "utf8").split("\n").filter((line) => line.trim() !== "");
       const consumerEnv: NodeJS.ProcessEnv = {
@@ -481,13 +413,9 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
         FAKE_GITLEAKS_VERSION: FAKE_GITLEAKS_VERSION,
         ...consumer!.env,
       };
-      // `-e` on THIS step is inert by construction, and is kept only so the two
-      // blocks are run the way a runner runs them. This step's `run:` is a single
-      // command whose exit status is already the script's own, so there is no
-      // intervening line for errexit to abandon. Do not "simplify" the flags on
-      // one block and not the other, and do not read the install step's `-e` as
+
       // load-bearing here: the property it makes observable is "a checksum
-      // mismatch aborts the install step", and that is a conjunction of the flag
+
       // and a failing checksum, pinned by the install step's assertions.
       const consumerResult = spawnSync("bash", ["-e", "-c", consumer!.run!], {
         cwd: workspace,
@@ -521,19 +449,13 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     expect(step, "no step runs the baseline-reachability check").toBeDefined();
     expect(step!.name, "a step that can fail the run must be named, or its red is anonymous in the log").toBeTruthy();
     // Not gated. A `if: always()` here would invert the check into a
-    // decoration: it runs after a failure the same way it runs after a success,
+
     // which is fine for the report upload and wrong for this.
     expect(
       step!.if ?? "",
       "the reachability step must not be gated — it is the step whose nonzero exit ends the run",
     ).not.toMatch(/always\(\)|failure\(\)|!cancelled|cancelled\(\)/);
-    // Last, not first, and deliberately. An unreachable entry does not make the
-    // scan WRONG — gitleaks walks the real history, so such an entry suppresses
-    // nothing and the scan still reports whatever is really there — but in the
-    // common `--rebase` case it is HALF of a pair whose other half is what
-    // suppresses the finding, so the scan's own report is the other half of this
-    // diagnosis. Failing before it would discard the evidence a human needs, and
-    // would fail the upload with "file not found" beside the real diagnostic.
+
     const scanStep = scan.steps.findIndex((candidate) => /bash scripts\/secret-scan\.sh/.test(candidate.run ?? ""));
     const uploadStep = scan.steps.findIndex((candidate) => candidate.uses?.startsWith("actions/upload-artifact@"));
     const reachabilityStep = scan.steps.indexOf(step!);
@@ -543,24 +465,6 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     expect(reachabilityStep, "the reachability step must come after the report upload, so a red run still leaves the report").toBeGreaterThan(uploadStep);
   });
 
-  /**
-   * The reachability step, EXECUTED.
-   *
-   * Everything above asserts the step's SHAPE from the parsed YAML. That is not
-   * evidence the step works: a step whose `run:` block is a `grep` for a string,
-   * or whose comparison is inverted, satisfies every shape assertion above and
-   * reports a clean baseline as an orphaned one — or, worse, the reverse, on a
-   * daily tick nobody is watching. So this executes the step's own `run:` block
-   * verbatim, the way the sibling install/scan test executes those two, against a
-   * repository this suite builds with real commits.
-   *
-   * It builds one rather than reading the committed baseline for the same reason
-   * the provenance checker does: the committed baseline's eight entries name six
-   * commits of THIS repository, five of them from September and one from October,
-   * so a case that has to fail cannot use them without first poisoning a tracked
-   * file, and a case that has to pass cannot use them at all in any checkout
-   * shallower than the oldest of them.
-   */
   describe("the reachability step, executed against repositories this suite builds", () => {
     const SCRIPT = "scripts/secret-scan-baseline.sh";
 
@@ -571,27 +475,11 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     };
 
     let root = "";
-    /**
-     * A commit that is present in the object store but is NOT an ancestor of
-     * HEAD. This is the shape the check exists for rather than the easier
-     * one: a `--rebase` merge's discarded pre-image is exactly this — a commit
-     * git still holds and that `rev-parse` resolves, which a bare
-     * `hasCommit`-style existence test would wave through. Building it as a side
-     * branch is how a real one is shaped, and it is why the check asks
-     * `merge-base --is-ancestor` rather than `cat-file -e`.
-     */
+
     let unmerged = "";
-    /** An ancestor of HEAD, so the positive direction has something real to pass on. */
+
     let reachable = "";
-    /**
-     * Reachable from NEITHER root: not an ancestor of HEAD, and not the pull
-     * request's head. `unmerged` is the PR root's own tip, so it is a valid
-     * entry on the pull-request leg and only on that leg — which makes it the
-     * wrong fixture for an assertion that must hold on both. This one is built
-     * by deleting the branch that carried it, so git still holds the object
-     * (what `rev-parse` resolves, and what a bare existence test would wave
-     * through) while no ref in the fixture names it.
-     */
+
     let orphaned = "";
 
     const finding = (commit: string, file: string) => ({
@@ -606,7 +494,6 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       Fingerprint: `${commit}:${file}:generic-api-key:116`,
     });
 
-    /** Run the step's `run:` block verbatim in `repoPath`, with `baseline` as its committed file. */
     const runStep = (repoPath: string, baseline: unknown) => {
       writeFileSync(join(repoPath, ".github", "gitleaks-baseline.json"), `${JSON.stringify(baseline, null, 1)}\n`, "utf8");
       return spawnSync("bash", ["-e", "-c", step().run!], {
@@ -620,7 +507,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     };
 
     beforeAll(async () => {
-      root = await mkdtemp(join(tmpdir(), "secret-scan-reachability-"));
+      root = await tempDirectories.createAsync(join(tmpdir(), "secret-scan-reachability-"));
       const repoPath = join(root, "checkout");
       await mkdir(repoPath, { recursive: true });
       git(repoPath, "init", "--quiet", "--initial-branch=main");
@@ -630,9 +517,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       unmerged = await commitFiles(repoPath, { "b.txt": "b\n" }, "on a branch that is never merged");
       git(repoPath, "checkout", "--quiet", "main");
       git(repoPath, "update-ref", "refs/remotes/pr/head", unmerged);
-      // A second branch, committed and then deleted: the object survives (no gc
-      // runs in this fixture) but nothing names it, so it is on neither HEAD nor
-      // the PR root. `unmerged` above cannot play this part — it IS the PR root.
+
       git(repoPath, "checkout", "--quiet", "-b", "orphan");
       orphaned = await commitFiles(repoPath, { "c.txt": "c\n" }, "on a branch that is deleted");
       git(repoPath, "checkout", "--quiet", "main");
@@ -640,8 +525,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       expect(tryGit(repoPath, "cat-file", "-e", `${orphaned}^{commit}`).status).toBe(0);
       expect(tryGit(repoPath, "merge-base", "--is-ancestor", orphaned, "HEAD").status).toBe(1);
       expect(tryGit(repoPath, "merge-base", "--is-ancestor", orphaned, "refs/remotes/pr/head").status).toBe(1);
-      // Staged last, so the history above is the history git actually has. The
-      // script resolves its repository from its OWN location, which is what makes
+
       // a staged copy the checkout as far as the step is concerned.
       await mkdir(join(repoPath, "scripts"), { recursive: true });
       await mkdir(join(repoPath, ".github"), { recursive: true });
@@ -649,7 +533,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     });
 
     afterAll(async () => {
-      if (root) await rm(root, { recursive: true, force: true });
+      if (root) await tempDirectories.disposeAsync(root);
     });
 
     it("passes when every commit the baseline names is an ancestor of HEAD", () => {
@@ -660,14 +544,13 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
         result.status,
         `the step must pass on a baseline naming only reachable commits:\n${result.stdout}\n${result.stderr}`,
       ).toBe(0);
-      // Not a bare exit code: a step that exited 0 without reading the baseline
+
       // would satisfy that too, so it has to say what it checked.
       expect(result.stdout, "the step must report how many entries it checked").toMatch(/1\b/);
     });
 
     it("fails, naming the fingerprint and the commit, on an entry on neither root", () => {
-      // `orphaned`, not `unmerged`: this assertion has to hold on BOTH legs, and
-      // `unmerged` is the pull request's own head — a valid baseline entry on
+
       // the pull-request leg, which reads it as a second root. The commit on
       // neither root is the only one both legs reject.
       const orphan = finding(orphaned, "tests/security/orphan.test.ts");
@@ -680,10 +563,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
         "a baseline naming a commit on neither HEAD nor the pull request is a defect in a tracked " +
           "artefact, and this step is the only thing that ever notices it",
       ).not.toBe(0);
-      // Both halves, in one substring. Asserting the fingerprint alone would be
-      // satisfied by any message echoing the commit, because gitleaks builds the
-      // fingerprint out of it; asserting the commit alone would not say WHICH
-      // entry. The exact expected sentence is what a human reads at 04:41 UTC each
+
       // day, so it is what is pinned.
       expect(
         `${result.stdout}\n${result.stderr}`,
@@ -698,10 +578,9 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       const repo = join(root, "checkout");
       expect(tryGit(repo, "merge-base", "--is-ancestor", unmerged, "HEAD").status).toBe(1);
       const result = runStep(repo, [finding(reachable, "tests/main.ts"), finding(unmerged, "tests/pr.ts")]);
-      // The two legs carry different roots, and this is the assertion that says
-      // so: the pull-request leg is handed `refs/remotes/pr/head` as a second
+
       // root, so an entry reachable only there passes there and FAILS on the
-      // push leg, whose step takes no root at all. Asserting one status for both
+
       // files would have papered over the split rather than pinned it.
       if (pr) {
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -738,10 +617,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
 
     it("refuses to answer in a shallow checkout, where every verdict would be a false alarm", async () => {
       // Its own repository, because making this one shallow would poison the
-      // cases above. A shallow checkout cannot distinguish "this repository does
-      // not have the commit" from "this checkout was not fetched far enough", so
-      // the honest answer there is to refuse rather than to report a defect that
-      // is not there — which is what a step this one would otherwise do daily,
+
       // if anyone ever pointed it at a shallow checkout.
       const shallowPath = join(root, "shallow");
       await mkdir(shallowPath, { recursive: true });
@@ -750,9 +626,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       await mkdir(join(shallowPath, "scripts"), { recursive: true });
       await mkdir(join(shallowPath, ".github"), { recursive: true });
       await copyFile(resolve(SCRIPT), join(shallowPath, SCRIPT));
-      // What `git clone --depth N` leaves behind: the boundary commit listed in
-      // .git/shallow, which is what makes `rev-parse --is-shallow-repository`
-      // answer true. A real shallow clone rather than a stubbed answer, so the
+
       // guard is shown to read the property and not a variable.
       await writeFile(join(shallowPath, ".git", "shallow"), `${head}\n`, "utf8");
 
@@ -762,15 +636,12 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     });
 
     it("cannot pass on a baseline it did not read", () => {
-      // A vacuous pass is the failure this whole repository keeps removing. Two
-      // shapes, because they fail for different reasons and only one of them is
+
       // quiet:
       //
-      //  - `[]` is a document jq READS SUCCESSFULLY and that yields no entries
-      //    to, so nothing rejects it and the loop simply iterates zero times.
+
       //    This is the vacuous pass itself, and the step guards it.
-      //  - `{findings: []}` is a document jq cannot index, so it dies at the read
-      //    and the step's guard never runs. Also correct — it fails loudly — but
+
       //    for a different reason, so it is not asked to carry the guard's
       //    message.
       const empty = runStep(join(root, "checkout"), []);
@@ -786,7 +657,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
 
   it("is tracked under the deny-by-default ignore policy", () => {
     for (const path of [
-      // Both legs, per the file under test: a split producer whose new file is
+
       // invisible to git ships nothing, and this workflow's whole job is to
       // scan what actually landed.
       file,
@@ -800,9 +671,9 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       ).toBe(1);
     }
     // The negative direction, so a `!.github/**` or `!scripts/**` widening
-    // cannot satisfy the assertions above while reopening every untracked file
+
     // in those directories. The junk under .github/workflows/ carries the
-    // .yaml extension on purpose: `.github/workflows/*.yml` is a deliberate
+
     // glob, so an unshipped .yml there would legitimately be named back.
     for (const path of [".github/workflows/junk.yaml", ".github/junk.txt", "scripts/junk.sh"]) {
       expect(checkIgnore(path), `${path} is junk and must stay ignored`).toBe(0);
@@ -810,30 +681,6 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
   });
 });
 
-/**
- * `git check-ignore` exit status for a path: 1 when the path is NOT ignored —
- * the state a deliberately named-back file must be in — and 0 when it is.
- * `--no-index` is what makes the answer about the ignore policy rather than
- * about what happens to be staged, so the assertion holds for a file that has
- * not been added yet.
- *
- * `env: scratchGitEnv` and the timeout are hygiene rather than a fix for a hole
- * that exists here, and it is worth saying which is which because the provenance
- * predicates needed the same option for a real exposure and a reader would
- * otherwise assume both were the same thing.
- *
- * Measured: a `GIT_DIR` redirect does NOT change this function's answer. Git's
- * ignore precedence puts the working tree's `.gitignore` above both
- * `info/exclude` and `core.excludesFile`, so the rule that decides a path here is
- * read from this checkout's own `.gitignore` whichever repository GIT_DIR names.
- * `GIT_DIR=/a/shallow/clone/.git` and `core.excludesFile` pointed at a
- * `*`-pattern file both left the answer at 1, exactly as unredirected.
- *
- * What the env does block is `GIT_INDEX_FILE` and a user's `core.excludesFile`
- * reaching the call, which is the same class the helper exists for, and the
- * timeout is because a synchronous call cannot be preempted by vitest's own
- * `testTimeout`.
- */
 function checkIgnore(pathname: string): number | null {
   return spawnSync("git", ["check-ignore", "--no-index", "--quiet", pathname], {
     cwd: resolve("."),

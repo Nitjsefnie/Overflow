@@ -1,8 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "overflow-commit-scopes-")]);
 
 /** Real local origins exercise the anonymous fetch and outgoing range too. */
 describe("scripts/commit_scopes.py", () => {
@@ -42,11 +45,11 @@ describe("scripts/commit_scopes.py", () => {
   }
 
   beforeAll(async () => {
-    tempRoot = await mkdtemp(join(tmpdir(), "overflow-commit-scopes-"));
+    tempRoot = await tempDirectories.createAsync(join(tmpdir(), "overflow-commit-scopes-"));
   });
 
   afterAll(async () => {
-    await rm(tempRoot, { recursive: true, force: true });
+    await tempDirectories.disposeAsync(tempRoot);
   });
 
   it("passes an empty outgoing range without rejudging a bad subject on main", async () => {

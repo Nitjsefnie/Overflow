@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "audit-suppression-step-")]);
 
 type Step = {
   name?: string;
@@ -100,12 +101,12 @@ beforeAll(async () => {
     jobs: { "dependency-audit": { steps: Step[] } };
   };
   steps = workflow.jobs["dependency-audit"].steps;
-  root = await mkdtemp(join(tmpdir(), "audit-suppression-step-"));
+  root = await tempDirectories.createAsync(join(tmpdir(), "audit-suppression-step-"));
   pyyamlManifest = await readFile(resolve(".github/requirements-pyyaml.txt"), "utf8");
 });
 
 afterAll(async () => {
-  await rm(root, { recursive: true, force: true });
+  await tempDirectories.disposeAsync(root);
 });
 
 function theStep(): Step {
