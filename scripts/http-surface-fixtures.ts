@@ -319,10 +319,13 @@ function fixtureAccountExportDocument(): AccountExport {
     moderatorRoleChanges: { asTarget: [row()], asActor: [row()] },
     settlementOverrideRequests: { asRequester: [row()], asDecider: [row()] },
     sanctionContestRequests: { asAccount: [row()], asDecider: [row()] },
+    closedPrDisputeRequests: { asContributor: [row()], asDecider: [row()] },
     reconciliationRuns: { asRequester: [row()], asGraphqlCostSponsor: [row()] },
     repositoryReconciliationUsage: [row()],
     moderationCreditAdjustments: [row()],
     moderationCreditAdjustmentLines: [row()],
+    disputeCreditAdjustments: [row()],
+    disputeCreditAdjustmentLines: [row()],
   };
 }
 

@@ -86,10 +86,13 @@ export type AccountExport = {
   moderatorRoleChanges: { asTarget: AccountExportRow[]; asActor: AccountExportRow[] };
   settlementOverrideRequests: { asRequester: AccountExportRow[]; asDecider: AccountExportRow[] };
   sanctionContestRequests: { asAccount: AccountExportRow[]; asDecider: AccountExportRow[] };
+  closedPrDisputeRequests: { asContributor: AccountExportRow[]; asDecider: AccountExportRow[] };
   reconciliationRuns: { asRequester: AccountExportRow[]; asGraphqlCostSponsor: AccountExportRow[] };
   repositoryReconciliationUsage: AccountExportRow[];
   moderationCreditAdjustments: AccountExportRow[];
   moderationCreditAdjustmentLines: AccountExportRow[];
+  disputeCreditAdjustments: AccountExportRow[];
+  disputeCreditAdjustmentLines: AccountExportRow[];
 };
 
 /**
@@ -168,6 +171,8 @@ export const userForeignKeyExports: readonly UserForeignKeyExportEntry[] = [
   { table: "settlement_override_requests", column: "decided_by_id", path: "settlementOverrideRequests.asDecider", kind: "jsonb", orderBy: ["created_at", "id"] },
   { table: "sanction_contest_requests", column: "account_id", path: "sanctionContestRequests.asAccount", kind: "jsonb", orderBy: ["created_at", "id"] },
   { table: "sanction_contest_requests", column: "decided_by", path: "sanctionContestRequests.asDecider", kind: "jsonb", orderBy: ["created_at", "id"] },
+  { table: "closed_pr_dispute_requests", column: "contributor_id", path: "closedPrDisputeRequests.asContributor", kind: "jsonb", orderBy: ["created_at", "id"] },
+  { table: "closed_pr_dispute_requests", column: "decided_by", path: "closedPrDisputeRequests.asDecider", kind: "jsonb", orderBy: ["created_at", "id"] },
   { table: "reconciliation_runs", column: "requested_by_user_id", path: "reconciliationRuns.asRequester", kind: "jsonb", orderBy: ["started_at", "id"] },
   { table: "reconciliation_runs", column: "graphql_cost_sponsor_id", path: "reconciliationRuns.asGraphqlCostSponsor", kind: "jsonb", orderBy: ["started_at", "id"] },
   {
@@ -180,6 +185,8 @@ export const userForeignKeyExports: readonly UserForeignKeyExportEntry[] = [
   },
   { table: "moderation_credit_adjustments", column: "target_account_id", path: "moderationCreditAdjustments", kind: "jsonb", orderBy: ["created_at", "id"] },
   { table: "moderation_credit_adjustment_lines", column: "creditor_id", path: "moderationCreditAdjustmentLines", kind: "jsonb", orderBy: ["adjustment_id", "settlement_id"] },
+  { table: "dispute_credit_adjustments", column: "target_account_id", path: "disputeCreditAdjustments", kind: "jsonb", orderBy: ["created_at", "id"] },
+  { table: "dispute_credit_adjustment_lines", column: "creditor_id", path: "disputeCreditAdjustmentLines", kind: "jsonb", orderBy: ["adjustment_id", "id"] },
 ];
 
 function iso(value: Date): string {
@@ -377,10 +384,13 @@ export async function exportAccount(
         moderatorRoleChanges: { asTarget: [], asActor: [] },
         settlementOverrideRequests: { asRequester: [], asDecider: [] },
         sanctionContestRequests: { asAccount: [], asDecider: [] },
+        closedPrDisputeRequests: { asContributor: [], asDecider: [] },
         reconciliationRuns: { asRequester: [], asGraphqlCostSponsor: [] },
         repositoryReconciliationUsage: [],
         moderationCreditAdjustments: [],
         moderationCreditAdjustmentLines: [],
+        disputeCreditAdjustments: [],
+        disputeCreditAdjustmentLines: [],
       };
 
       // The loader is selected on the entry's declared kind. An explicit-kind

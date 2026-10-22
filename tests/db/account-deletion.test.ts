@@ -675,6 +675,31 @@ describe("account deletion as pseudonymisation", () => {
       insert into moderation_credit_adjustment_lines (adjustment_id, settlement_id, creditor_id, amount)
       values (${adjustment!.id}, ${settlementId}, ${exporter.id}, 2)
     `;
+    const [disputedPr] = await sql<{ id: string }[]>`
+      insert into pull_requests (github_pull_request_id, repository_id, issue_id, pull_request_number,
+                                 url, title, body, author_id, state)
+      values (${9_700_600 + nextSeedNumber()}, ${repositoryId}, ${issueId}, 3,
+              'https://example.test/pr-3', 'Disputed contribution', '', ${exporter.id}, 'CLOSED')
+      returning id
+    `;
+    const [dispute] = await sql<{ id: string }[]>`
+      insert into closed_pr_dispute_requests (
+        contributor_id, pull_request_id, issue_id, landed_pull_request_id, request_reason,
+        state, decision, decided_by, decided_reason, decided_at, moderator_figure, awarded_points
+      ) values (
+        ${exporter.id}, ${disputedPr!.id}, ${issueId}, ${pullRequestId}, 'Export fixture dispute',
+        'DECIDED', 'GRANTED', ${exporter.id}, 'Contribution landed elsewhere', now(), 4, 2
+      ) returning id
+    `;
+    const [disputeAdjustment] = await sql<{ id: string }[]>`
+      insert into dispute_credit_adjustments (moderation_event_id, dispute_id, target_account_id, reason)
+      values (${targetEvent!.id}, ${dispute!.id}, ${exporter.id}, 'Export fixture dispute award')
+      returning id
+    `;
+    await sql`
+      insert into dispute_credit_adjustment_lines (adjustment_id, creditor_id, amount)
+      values (${disputeAdjustment!.id}, ${exporter.id}, 2)
+    `;
 
     const document = await exportAccount(sql, exporter.githubUserId);
     expect(document).not.toBeNull();

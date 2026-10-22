@@ -27,6 +27,8 @@ the security reason and the change.
 
 **Version history:**
 
+- 1.4.0: `POST /api/account/export` adds closed-PR dispute requests and their
+  credit adjustments and lines, including contributor and deciding-moderator records.
 - 1.2.0: `POST /api/repositories` accepts the optional `registrationMethod`
   selector for GitHub App registration; `DELETE /api/repositories` adds the
   optional `appAccessRemains` guidance for App-registered repositories.
