@@ -222,6 +222,36 @@ describe("closed PR dispute filing", () => {
     expect(await store().listRequestsForAccount(fixture.contributorId)).toHaveLength(1);
   });
 
+  it("allows concurrent pending disputes on different closed PRs of one issue", async () => {
+    const fixture = await buildFixture();
+    await insertPullRequest(fixture, "MERGED");
+    const contributorId = await insertUser();
+    const otherPr = await insertPullRequest({ ...fixture, contributorId }, "CLOSED");
+    const results = await Promise.all([
+      store().fileDispute(filing(fixture)),
+      store().fileDispute(filing({ contributorId, pullRequestId: otherPr.id })),
+    ]);
+    expect(results).toEqual([
+      { kind: "ok", value: expect.objectContaining({ state: "OPEN", issueId: fixture.issueId }) },
+      { kind: "ok", value: expect.objectContaining({ state: "OPEN", issueId: fixture.issueId }) },
+    ]);
+    expect(await sql`select id from closed_pr_dispute_requests where issue_id = ${fixture.issueId}`).toHaveLength(2);
+  });
+
+  it.each([false, true])("refuses filing after the issue was credited (other PR=%s)", async (otherPr) => {
+    const fixture = await decisionFixture();
+    await service().decideDispute(fixture.requestId, { id: fixture.moderatorId }, decision(fixture));
+    const contributorId = otherPr ? await insertUser() : fixture.contributorId;
+    const pullRequestId = otherPr ? (await insertPullRequest({ ...fixture, contributorId }, "CLOSED")).id : fixture.pullRequestId;
+    const input = filing({ contributorId, pullRequestId });
+    await expect(service().fileDispute({ id: contributorId }, input)).rejects.toMatchObject({
+      code: "CONFLICT", message: "this issue has already been credited through a granted dispute",
+    });
+    await expect(store().fileDispute(input)).resolves.toEqual({ kind: "issue_already_credited" });
+    expect(await sql`select id from closed_pr_dispute_requests where issue_id = ${fixture.issueId}`).toHaveLength(1);
+    expect(await sql`select id from moderation_events where dispute_request_id = ${fixture.requestId}`).toHaveLength(2);
+  });
+
   it("rolls back the request if the filing event fails", async () => {
     const fixture = await buildFixture();
     await insertPullRequest(fixture, "MERGED");
@@ -271,8 +301,8 @@ describe("closed PR dispute filing", () => {
         moderator_figure, awarded_points, created_at
       ) values (
         ${fixture.contributorId}, ${fixture.pullRequestId}, ${fixture.issueId}, ${landing.id}, 'Older request.',
-        'DECIDED', 'GRANTED', ${fixture.sponsorId}, true, 'The contribution landed.', '2026-01-01',
-        8, 3, '2025-06-01'
+        'DECIDED', 'DENIED', ${fixture.sponsorId}, true, 'Insufficient evidence.', '2026-01-01',
+        null, null, '2025-06-01'
       ) returning id
     `;
     const newer = await service().fileDispute({ id: fixture.contributorId }, filing(fixture));
@@ -281,9 +311,9 @@ describe("closed PR dispute filing", () => {
     await service().fileDispute({ id: theirs.contributorId }, filing(theirs));
     const listed = await service().listDisputes({ id: fixture.contributorId });
     expect(listed.map((request) => request.id)).toEqual([newer.id, older.id]);
-    expect(listed[1]).toMatchObject({ state: "DECIDED", decision: "GRANTED", decidedBy: fixture.sponsorId,
-      decidedReason: "The contribution landed.", decidedAt: "2026-01-01T00:00:00.000Z",
-      moderatorFigure: 8, awardedPoints: 3, decidedBySoleModerator: true });
+    expect(listed[1]).toMatchObject({ state: "DECIDED", decision: "DENIED", decidedBy: fixture.sponsorId,
+      decidedReason: "Insufficient evidence.", decidedAt: "2026-01-01T00:00:00.000Z",
+      moderatorFigure: null, awardedPoints: null, decidedBySoleModerator: true });
     expect(await service().listDisputes({ id: randomUUID() })).toEqual([]);
   });
 
@@ -738,9 +768,16 @@ describe("grant financial uniqueness", () => {
     const fixture = await decisionFixture();
     if (hasSettlement) await insertLandingSettlement(fixture, fixture.landingCreditorId);
     await service().decideDispute(fixture.requestId, { id: fixture.moderatorId }, decision(fixture));
-    const repeated = await service().fileDispute({ id: fixture.contributorId }, filing(fixture));
+    // Bypass filing to exercise the per-PR financial constraint independently.
+    const [repeated] = await sql<{ id: string }[]>`insert into closed_pr_dispute_requests
+      (contributor_id, pull_request_id, issue_id, landed_pull_request_id, request_reason)
+      values (${fixture.contributorId}, ${fixture.pullRequestId}, ${fixture.issueId}, ${fixture.landingId}, 'Existing pending request.')
+      returning id`;
+    await sql`insert into moderation_events
+      (target_user_id, actor_id, prior_state, new_state, reason, dispute_request_id)
+      values (${fixture.contributorId}, ${fixture.contributorId}, 'ACTIVE', 'ACTIVE', 'Existing filing.', ${repeated.id})`;
     await expect(service().decideDispute(repeated.id, { id: fixture.moderatorId }, decision(fixture)))
-      .rejects.toMatchObject({ code: "ALREADY_GRANTED" });
+      .rejects.toMatchObject({ code: "ALREADY_GRANTED", message: "this issue has already been credited through a granted dispute" });
     await expect(store().decideDispute({ ...decision(fixture), requestId: repeated.id })).resolves.toEqual({ kind: "already_granted" });
     await expectUndecided(repeated.id);
     const balances = await sql`select account_id, balance from balances
@@ -749,6 +786,32 @@ describe("grant financial uniqueness", () => {
     expect(balances.find((row) => row.account_id === fixture.sponsorId)?.balance).toBe(-6);
     if (hasSettlement) expect(balances.find((row) => row.account_id === fixture.landingCreditorId)?.balance).toBe(0);
     expect(await sql`select id from dispute_credit_adjustments where dispute_id = ${fixture.requestId}`).toHaveLength(1);
+  });
+
+  it.each([false, true])("refuses granting another PR on the same issue with only one award (settlement=%s)", async (hasSettlement) => {
+    const fixture = await decisionFixture();
+    if (hasSettlement) await insertLandingSettlement(fixture, fixture.landingCreditorId);
+    const contributorId = await insertUser();
+    const otherPr = await insertPullRequest({ ...fixture, contributorId }, "CLOSED");
+    await setReviews({ ...fixture, pullRequestId: otherPr.id }, []);
+    const pending = await service().fileDispute({ id: contributorId }, filing({ contributorId, pullRequestId: otherPr.id }));
+    await expect(store().decideDispute(decision(fixture)))
+      .resolves.toMatchObject({ kind: "ok", value: { moderatorFigure: 6, awardedPoints: 6 } });
+    await expect(service().decideDispute(pending.id, { id: fixture.moderatorId }, { ...decision(fixture), figure: 10 }))
+      .rejects.toMatchObject({ code: "ALREADY_GRANTED", message: "this issue has already been credited through a granted dispute" });
+    await expect(store().decideDispute({ ...decision(fixture), requestId: pending.id }))
+      .resolves.toEqual({ kind: "already_granted" });
+    await expectUndecided(pending.id);
+    expect(await sql`select requests.id from closed_pr_dispute_requests requests
+      where issue_id = ${fixture.issueId} and decision = 'GRANTED'`).toEqual([{ id: fixture.requestId }]);
+    expect(await sql`select adjustments.dispute_id from dispute_credit_adjustments adjustments
+      join closed_pr_dispute_requests requests on requests.id = adjustments.dispute_id
+      where requests.issue_id = ${fixture.issueId}`).toEqual([{ dispute_id: fixture.requestId }]);
+    const lines = await adjustmentLines(fixture.requestId);
+    expect(lines.filter((line) => line.amount > 0)).toEqual([
+      { settlement_id: null, creditor_id: fixture.contributorId, amount: 6 },
+    ]);
+    expect(lines.filter((line) => line.amount < 0)).toHaveLength(hasSettlement ? 1 : 0);
   });
 
   it("allows re-filing and granting after denial", async () => {

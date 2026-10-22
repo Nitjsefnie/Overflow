@@ -58,6 +58,7 @@ export type ClosedPrDisputeStoreResult<T> =
   | { kind: "invalid_state" }
   | { kind: "already_decided" }
   | { kind: "already_granted" }
+  | { kind: "issue_already_credited" }
   | { kind: "forbidden_imposer" }
   | { kind: "insufficient_evidence" }
   | { kind: "forbidden" }
@@ -147,8 +148,10 @@ function unwrap<T>(result: ClosedPrDisputeStoreResult<T>): T {
       throw new ClosedPrDisputeError("FORBIDDEN", "A sponsor, contributor or landing author may not decide while another moderator can.");
     case "already_decided":
       throw new ClosedPrDisputeError("CONFLICT", "This dispute request has already been decided.");
+    case "issue_already_credited":
+      throw new ClosedPrDisputeError("CONFLICT", "this issue has already been credited through a granted dispute");
     case "already_granted":
-      throw new ClosedPrDisputeError("ALREADY_GRANTED", "This closed pull request has already received a granted dispute.");
+      throw new ClosedPrDisputeError("ALREADY_GRANTED", "this issue has already been credited through a granted dispute");
     case "insufficient_evidence":
       throw new ClosedPrDisputeError("INSUFFICIENT_EVIDENCE", "Stored review evidence is required to grant this dispute.");
     case "invalid_input":
