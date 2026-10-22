@@ -1,19 +1,21 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createOwnedTempDirectory, createOwnedTempDirectoryRegistry, reclaimOwnedTempDirectories } from "./owned-temp-directory";
 
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "owned-temp-directory-tests-")]);
+
 let root: string;
 const helper = new URL("./owned-temp-directory.ts", import.meta.url).href;
 
 beforeAll(() => {
-  root = mkdtempSync(join(tmpdir(), "owned-temp-directory-tests-"));
+  root = tempDirectories.create(join(tmpdir(), "owned-temp-directory-tests-"));
 });
 
 afterAll(() => {
-  if (root) rmSync(root, { recursive: true, force: true });
+  if (root) tempDirectories.dispose();
 });
 
 describe("owned temp directories", () => {
@@ -62,10 +64,12 @@ describe("owned temp directories", () => {
     expect(existsSync(directory)).toBe(true);
 
     const live = createOwnedTempDirectory(prefix);
-    const foreign = mkdtempSync(join(root, `others-${killed.pid}-`));
+    const foreign = join(root, `others-${killed.pid}-fixture`);
+    mkdirSync(foreign);
     const malformed = `${prefix}${killed.pid}-abcde`;
     mkdirSync(malformed);
-    const unmarked = mkdtempSync(prefix);
+    const unmarked = `${prefix}unmarked`;
+    mkdirSync(unmarked);
     const invalidOwner = `${prefix}0-abcdef`;
     mkdirSync(invalidOwner);
     const symlink = `${prefix}${killed.pid}-abcdef`;

@@ -1,13 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from "vitest";
 import { createOwnedTempDirectoryRegistry } from "./owned-temp-directory";
 
 const fixtureDirectories = createOwnedTempDirectoryRegistry(join(tmpdir(), "scratch-git-"));
-
 
 // Set inherited Git state before importing the environment-reading helper.
 describe("scratch-git helpers under an inherited git environment", () => {
@@ -20,7 +19,7 @@ describe("scratch-git helpers under an inherited git environment", () => {
 
   afterAll(async () => {
     try {
-      if (root) await rm(root, { recursive: true, force: true });
+      if (root) await fixtureDirectories.disposeAsync(root);
     } finally {
       await fixtureDirectories.disposeAsync();
     }
@@ -40,7 +39,7 @@ describe("scratch-git helpers under an inherited git environment", () => {
   }
 
   it("ignores config passed through GIT_CONFIG_PARAMETERS and GIT_CONFIG_COUNT", async () => {
-    const repo = await mkdtemp(join(root, "repo-"));
+    const repo = await fixtureDirectories.createAsync(join(root, "repo-"));
     process.env.GIT_CONFIG_PARAMETERS = "'scratch.parameters'='leaked'";
     process.env.GIT_CONFIG_COUNT = "1";
     process.env.GIT_CONFIG_KEY_0 = "scratch.count";
@@ -59,8 +58,8 @@ describe("scratch-git helpers under an inherited git environment", () => {
   });
 
   it("operates on the repository it is given, not one named by GIT_DIR", async () => {
-    const repo = await mkdtemp(join(root, "repo-"));
-    const elsewhere = await mkdtemp(join(root, "elsewhere-"));
+    const repo = await fixtureDirectories.createAsync(join(root, "repo-"));
+    const elsewhere = await fixtureDirectories.createAsync(join(root, "elsewhere-"));
     spawnSync("git", ["init", "--quiet", elsewhere], { encoding: "utf8" });
     process.env.GIT_DIR = join(elsewhere, ".git");
     process.env.GIT_WORK_TREE = elsewhere;

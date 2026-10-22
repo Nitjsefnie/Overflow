@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,8 +15,9 @@ import {
 import { startPostgresContainer } from "../support/postgres-container";
 import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-const seededDirectories = createOwnedTempDirectoryRegistry(path.join(os.tmpdir(), "migrate-guard-repository-"));
-
+const seededDirectories = createOwnedTempDirectoryRegistry([
+  "migrate-guard-repository-", "migrate-guard-plain-", "migrate-guard-worktree-",
+].map(prefix => path.join(os.tmpdir(), prefix)));
 
 // Rebind the runner to this file's filesystem and database mocks.
 vi.hoisted(() => { vi.resetModules(); });
@@ -124,7 +125,7 @@ describe("resolving the default branch from local refs alone", () => {
   });
 
   it("finds no default branch outside a git repository", () => {
-    const plain = mkdtempSync(path.join(os.tmpdir(), "migrate-guard-plain-"));
+    const plain = seededDirectories.create(path.join(os.tmpdir(), "migrate-guard-plain-"));
     seededRepositoryRoots.push(plain);
     expect(resolveDefaultBranchRef(plain)).toBeUndefined();
   });
@@ -196,7 +197,7 @@ describe("the CLI against a real database", () => {
     };
 
     // A private linked worktree prevents parallel database suites seeing the fake migration.
-    privateWorktreeRoot = mkdtempSync(path.join(os.tmpdir(), "migrate-guard-worktree-"));
+    privateWorktreeRoot = seededDirectories.create(path.join(os.tmpdir(), "migrate-guard-worktree-"));
     git(repositoryRoot, "worktree", "add", privateWorktreeRoot, "HEAD");
     // Empty tracked migrations before checkout so branch-only files cannot survive; keep the branch runner.
     if (resolvedDefaultBranchRef !== undefined) {
@@ -219,7 +220,7 @@ describe("the CLI against a real database", () => {
     if (privateWorktreeRoot !== undefined) {
       // Raw removal and prune recover a failed worktree add or remove.
       gitQuietly(repositoryRoot, "worktree", "remove", "--force", privateWorktreeRoot);
-      rmSync(privateWorktreeRoot, { recursive: true, force: true });
+      seededDirectories.dispose(privateWorktreeRoot);
       gitQuietly(repositoryRoot, "worktree", "prune");
     }
     await stopContainer();
@@ -320,7 +321,7 @@ const seededRepositoryRoots: string[] = [];
 afterAll(() => {
   try {
     for (const root of seededRepositoryRoots.splice(0)) {
-      rmSync(root, { recursive: true, force: true });
+      seededDirectories.dispose(root);
     }
   } finally {
     seededDirectories.dispose();

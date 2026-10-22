@@ -1,27 +1,13 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setup } from "./global-setup";
 import { runNeedsSharedPostgres } from "./shared-postgres-need";
+import { createOwnedTempDirectoryRegistry } from "./owned-temp-directory";
 
-/**
- * Pins the lazy-start wiring of the shared postgres globalSetup (issue 1070)
- * on the path a whole-suite run cannot see: vitest runs globalSetup only in
- * the main process and CI only runs the full suite, whose file list always
- * matches, so a regression to always-start survives every committed test
- * silently. The scan module itself has its own unit tests
- * (shared-postgres-need.test.ts); here it is mocked to pin the WIRING —
- * setup() resolves the run's specifications, passes exactly their moduleIds
- * to the scan, and when the scan says no, provides nothing at all.
- *
- * The no-match path never touches Docker: no container is started, no client
- * is created. The match path is deliberately unpinned here — pinning it would
- * need a real container in a unit test; the DB suites exercise it end to end.
- * A scan-bypass mutant (start unconditionally) fails every case below,
- * because the mutant reaches the match path and its provide-with-facts (or
- * parked-failure) call is exactly what these assertions refuse.
- */
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "global-setup-pin-")]);
+
 vi.mock("./shared-postgres-need", () => ({
   SHARED_POSTGRES_MARKER: "startPostgresContainer",
   runNeedsSharedPostgres: vi.fn(),
@@ -58,13 +44,13 @@ describe("the shared postgres globalSetup starts nothing for a run that needs no
   let probeDirectory: string;
 
   beforeEach(async () => {
-    probeDirectory = await mkdtemp(join(tmpdir(), "global-setup-pin-"));
+    probeDirectory = await tempDirectories.createAsync(join(tmpdir(), "global-setup-pin-"));
     scanMock.mockReset();
     scanMock.mockReturnValue(false);
   });
 
   afterEach(async () => {
-    await rm(probeDirectory, { recursive: true, force: true });
+    await tempDirectories.disposeAsync(probeDirectory);
   });
 
   it("resolves the run's files with filenamePattern defaulting to [] and provides nothing", async () => {
