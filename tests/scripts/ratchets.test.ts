@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,9 @@ import {
   coverageRelaxations,
   moduleSizeRelaxations,
 } from "../../scripts/check-ratchets.ts";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "ratchets-")]);
 
 const script = fileURLToPath(new URL("../../scripts/check-ratchets.ts", import.meta.url));
 
@@ -405,11 +408,11 @@ describe("ratchet check against a real git repository", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "ratchets-"));
+    root = tempDirectories.create(join(tmpdir(), "ratchets-"));
   });
 
   afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
+    tempDirectories.dispose(root);
   });
 
   const git = (...args: string[]) => {

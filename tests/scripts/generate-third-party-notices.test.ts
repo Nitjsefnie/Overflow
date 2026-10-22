@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -12,17 +12,20 @@ import {
 } from "../../scripts/generate-third-party-notices.ts";
 import { THIRD_PARTY_LICENCE_TEXTS } from "../../scripts/third-party-licence-texts.ts";
 import * as noticesGenerator from "../../scripts/generate-third-party-notices.ts";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "third-party-notices-")]);
 
 const script = fileURLToPath(new URL("../../scripts/generate-third-party-notices.ts", import.meta.url));
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 let root: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "third-party-notices-"));
+  root = tempDirectories.create(join(tmpdir(), "third-party-notices-"));
 });
 
 afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  tempDirectories.dispose(root);
 });
 
 function entry(name: string, version: string, license: string, file?: string, text?: string): NoticeEntry {

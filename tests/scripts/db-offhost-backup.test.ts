@@ -1,49 +1,12 @@
 import { spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  closeSync,
-  existsSync,
-  fstatSync,
-  mkdirSync,
-  mkdtempSync,
-  openSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-/**
- * Behavioral coverage for scripts/db-offhost-backup.sh, which nothing else in
- * the suite executes. Each test runs the real script under /bin/sh with a PATH
- * shim directory in front and the mailbox CLI replaced through
- * OVERFLOW_OFFHOST_MB, so a run records the argv it intended and touches
- * nothing outside its own fixture:
- *
- * - `pg_dump` is a recording stub: it never dials a database. DATABASE_URL
- *   throughout this file names a closed port on loopback with credentials that
- *   exist nowhere, so a run that reached the real client would fail loudly
- *   rather than dump anything.
- * - `xz` and `age` are pass-through recording stubs that each prefix their
- *   input, so the installed file's bytes (`age|xz|<plain>`) prove the data
- *   flowed through both stages, and the argv records prove with what flags.
- * - `find`, `date`, `sleep` and `python3` are real: the sweep, the
- *   install, the prune and the 14-day message sweep run their real logic
- *   against fixture files whose mtimes and message timestamps the test set.
- * - `ln` is a recording wrapper that execs the real link(2), so a run's
- *   install is observable as the partial path it linked from.
- *
- * The safety properties under test are the ones the backup contract rests on:
- * nothing is posted unencrypted (the recipient is validated before anything
- * runs), the size guard never splits a file and leaves the local copy, and the
- * Discord sweep deletes only this job's own messages older than 14 days.
- */
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "overflow-offhost-"), join(tmpdir(), "overflow-offhost-prune-"), join(tmpdir(), "overflow-offhost-sweep-"), join(tmpdir(), "overflow-offhost-cred-")]);
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const scriptPath = join(repositoryRoot, "scripts", "db-offhost-backup.sh");
@@ -95,13 +58,6 @@ const ageShim = [
   "",
 ].join("\n");
 
-/**
- * The install is a `ln` from the staged partial onto the series name, so a
- * recording wrapper around the real ln captures the exact partial path a run
- * linked from — the name the script's stem decision is visible in. The
- * wrapper records its own parent pid beside the operand: the shim runs as a
- * child of the script's shell, so that pid IS the `$$` the script stems with.
- */
 const lnShim = [
   "#!/bin/sh",
   `printf '%s\\n' "$PPID" "$1" '---' >> "$OFFHOST_TEST_LN_LOG"`,
@@ -109,28 +65,11 @@ const lnShim = [
   "",
 ].join("\n");
 
-/**
- * The one line the connector fake writes to its own stderr before it execs its
- * body. What the test asserts on is the script's redirect decision: a canary
- * the bring-up suppresses means stderr is discarded, and a bring-up death is
- * invisible in the journal.
- */
 const connectorStderrCanary = "OFFHOST_TEST_CONNECTOR_STDERR canary from the connector fake";
 
-/**
- * The mailbox CLI fake. Every invocation is recorded to the log as its argv,
- * one argument per line, calls separated by a `---` line; behaviour follows
- * the OFFHOST_TEST_MB_* knobs. The connector fake stays alive under its own
- * pid (the script must stop it) and flips the liveness file, which is what
- * turns a failing list-agents probe into a succeeding one.
- */
 const mbFake = [
   "#!/bin/sh",
-  // ONE printf invocation per call, separator as the last argument: the
-  // connector runs concurrently with the probes that follow it, so two
-  // separate appends (args, then separator) can interleave and the log
-  // parser would read two calls as one. A single buffered write is atomic
-  // under O_APPEND.
+
   `printf '%s\\n' "$@" '---' >> "$OFFHOST_TEST_MB_LOG"`,
   // The DISCORD_TOKEN the invocation's environment carried, recorded on every
   // call so a test can assert what the CLI observed (last write stands; every
@@ -207,17 +146,10 @@ const runDirectories: string[] = [];
 
 afterEach(() => {
   for (const directory of runDirectories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
+    tempDirectories.dispose(directory);
   }
 });
 
-/**
- * A killed child is a zombie between its death and its reap, and
- * `process.kill(pid, 0)` answers "exists" for a zombie - so the first
- * observation after the job exits can land inside that window. Poll bounded
- * for the reap: the connector fake sleeps 300 seconds, so an assertion that
- * gives up here can only ever mean the job failed to stop it.
- */
 function expectProcessGone(pid: number): void {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
@@ -266,7 +198,7 @@ function runBackup(
     channelValue?: string;
   } = {},
 ): BackupRun & { backupDirectory: string } {
-  const directory = mkdtempSync(join(tmpdir(), "overflow-offhost-"));
+  const directory = tempDirectories.create(join(tmpdir(), "overflow-offhost-"));
   runDirectories.push(directory);
   const backupDirectory = options.backupDirectory ?? join(directory, "backups");
   const connectorPidPath = join(directory, "connector-pid");
@@ -571,7 +503,7 @@ describe("db-offhost-backup.sh size guard", () => {
 
 describe("db-offhost-backup.sh local retention", () => {
   it("prunes reduced backups older than 14 days and only those", () => {
-    const directory = mkdtempSync(join(tmpdir(), "overflow-offhost-prune-"));
+    const directory = tempDirectories.create(join(tmpdir(), "overflow-offhost-prune-"));
     try {
       const backupDirectory = join(directory, "backups");
       mkdirSync(backupDirectory);
@@ -596,12 +528,12 @@ describe("db-offhost-backup.sh local retention", () => {
       expect(existsSync(oldFullDump), "the full backup's files are not ours to delete").toBe(true);
       expect(existsSync(unrelated), "nothing else is ours to delete").toBe(true);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      tempDirectories.dispose(directory);
     }
   });
 
   it("sweeps leftover partials older than 24 hours, keeping fresh ones", () => {
-    const directory = mkdtempSync(join(tmpdir(), "overflow-offhost-sweep-"));
+    const directory = tempDirectories.create(join(tmpdir(), "overflow-offhost-sweep-"));
     try {
       const backupDirectory = join(directory, "backups");
       mkdirSync(backupDirectory);
@@ -636,7 +568,7 @@ describe("db-offhost-backup.sh local retention", () => {
       expect(existsSync(staleDeflated), "a stale compressed intermediate is swept").toBe(false);
       expect(existsSync(freshPlain), "a fresh partial stays").toBe(true);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      tempDirectories.dispose(directory);
     }
   });
 });
@@ -732,11 +664,8 @@ describe("db-offhost-backup.sh discord posting", () => {
   });
 
   it("bridges the unit's osc credential to DISCORD_TOKEN before any mailbox call", () => {
-    // The unit loads the token as a systemd credential (#1105); the script's
-    // bridge is what hands it to the CLI. The fake records what its
-    // environment carried, so the assertion is on what the CLI observed -
-    // and the argv log proves the token never rides a command line.
-    const directory = mkdtempSync(join(tmpdir(), "overflow-offhost-cred-"));
+
+    const directory = tempDirectories.create(join(tmpdir(), "overflow-offhost-cred-"));
     runDirectories.push(directory);
     const credentialsDirectory = join(directory, "credentials");
     mkdirSync(credentialsDirectory);

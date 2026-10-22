@@ -1,13 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  appendFileSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +17,9 @@ import {
   trackedPaths,
   type ModuleSizeDoc,
 } from "../../scripts/check-module-size.ts";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "module-size-")]);
 
 const CEILINGS = { src: 800, tests: 2500, tooling: 800, stylesheets: 800, migrations: 400 };
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -38,11 +33,11 @@ function ceilingsWithout(...families: string[]): Record<string, number> {
 let root: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "module-size-"));
+  root = tempDirectories.create(join(tmpdir(), "module-size-"));
 });
 
 afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  tempDirectories.dispose(root);
 });
 
 function document(baseline: Record<string, number> = {}): ModuleSizeDoc {
