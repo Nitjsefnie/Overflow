@@ -1,4 +1,5 @@
 import { reasonText } from "@/lib/validation/reason";
+import { z } from "zod";
 
 export type ClosedPrDisputeState = "OPEN" | "DECIDED";
 export type ClosedPrDisputeDecision = "GRANTED" | "DENIED";
@@ -29,19 +30,34 @@ export type ClosedPrDisputeFilingInput = {
   landedCommitUrl?: string;
 };
 
+export const closedPrDisputeDecisionSchema = z.object({
+  decision: z.enum(["GRANTED", "DENIED"]),
+  figure: z.number().int().min(1).max(10).optional(),
+  decidedReason: reasonText(),
+}).refine((input) => input.decision !== "GRANTED" || input.figure !== undefined);
+
+export type ClosedPrDisputeDecisionInput = z.input<typeof closedPrDisputeDecisionSchema>;
+
 export type ClosedPrDisputeStoreResult<T> =
   | { kind: "ok"; value: T }
   | { kind: "not_found" }
   | { kind: "invalid_state" }
+  | { kind: "already_decided" }
+  | { kind: "forbidden_imposer" }
+  | { kind: "insufficient_evidence" }
   | { kind: "forbidden" }
   | { kind: "invalid_input" };
 
 export type ClosedPrDisputeStore = {
   fileDispute(input: ClosedPrDisputeFilingInput & { accountId: string }): Promise<ClosedPrDisputeStoreResult<ClosedPrDisputeRequest>>;
+  decideDispute(input: ClosedPrDisputeDecisionInput & {
+    requestId: string; moderatorAccountId: string;
+  }): Promise<ClosedPrDisputeStoreResult<ClosedPrDisputeRequest>>;
   listRequestsForAccount(accountId: string): Promise<ClosedPrDisputeRequest[]>;
+  listRequestsForModeration(): Promise<ClosedPrDisputeRequest[]>;
 };
 
-export type ClosedPrDisputeErrorCode = "NOT_FOUND" | "CONFLICT" | "INVALID_INPUT" | "FORBIDDEN";
+export type ClosedPrDisputeErrorCode = "NOT_FOUND" | "CONFLICT" | "INVALID_INPUT" | "FORBIDDEN" | "INSUFFICIENT_EVIDENCE";
 
 export class ClosedPrDisputeError extends Error {
   public constructor(
@@ -76,9 +92,22 @@ export class ClosedPrDisputeService {
     }));
   }
 
-  /** The contributor's own requests, open and decided, newest first. */
-  public async listDisputes(account: { id: string }): Promise<ClosedPrDisputeRequest[]> {
-    return this.store.listRequestsForAccount(account.id);
+  public async decideDispute(
+    requestId: string,
+    moderator: { id: string },
+    input: ClosedPrDisputeDecisionInput,
+  ): Promise<ClosedPrDisputeRequest> {
+    const id = normalizeText(requestId, "Dispute request identifier");
+    const parsed = closedPrDisputeDecisionSchema.safeParse(input);
+    if (!parsed.success) {
+      throw new ClosedPrDisputeError("INVALID_INPUT", "A decision, bounded reason and grant figure from 1 to 10 are required.");
+    }
+    return unwrap(await this.store.decideDispute({ ...parsed.data, requestId: id, moderatorAccountId: moderator.id }));
+  }
+
+  /** With an account, its history; without one, the moderation queue and decided history. */
+  public async listDisputes(account?: { id: string }): Promise<ClosedPrDisputeRequest[]> {
+    return account === undefined ? this.store.listRequestsForModeration() : this.store.listRequestsForAccount(account.id);
   }
 }
 
@@ -94,12 +123,18 @@ function unwrap<T>(result: ClosedPrDisputeStoreResult<T>): T {
     case "ok":
       return result.value;
     case "not_found":
-      throw new ClosedPrDisputeError("NOT_FOUND", "No such account.");
+      throw new ClosedPrDisputeError("NOT_FOUND", "No such account or dispute request.");
     case "invalid_state":
       throw new ClosedPrDisputeError("CONFLICT", "This pull request cannot be disputed right now.");
     case "forbidden":
-      throw new ClosedPrDisputeError("FORBIDDEN", "Only the stored author may dispute this pull request.");
+      throw new ClosedPrDisputeError("FORBIDDEN", "This account may not perform this dispute action.");
+    case "forbidden_imposer":
+      throw new ClosedPrDisputeError("FORBIDDEN", "A sponsor, contributor or landing author may not decide while another moderator can.");
+    case "already_decided":
+      throw new ClosedPrDisputeError("CONFLICT", "This dispute request has already been decided.");
+    case "insufficient_evidence":
+      throw new ClosedPrDisputeError("INSUFFICIENT_EVIDENCE", "Stored review evidence is required to grant this dispute.");
     case "invalid_input":
-      throw new ClosedPrDisputeError("INVALID_INPUT", "Provide one landed evidence source unless the issue already has a merged pull request.");
+      throw new ClosedPrDisputeError("INVALID_INPUT", "Invalid dispute input.");
   }
 }

@@ -1,7 +1,11 @@
 import { getSql } from "@/lib/db/client";
 import type { EnforcementState, PullRequestState, SqlClient } from "@/lib/db/types";
+import { z } from "zod";
+import { countReviewRoundsAsOf } from "@/lib/fold/review-rounds";
+import { closedPrDisputeDecisionSchema } from "@/lib/moderation/closed-pr-dispute-service";
 import type {
   ClosedPrDisputeDecision,
+  ClosedPrDisputeDecisionInput,
   ClosedPrDisputeFilingInput,
   ClosedPrDisputeRequest,
   ClosedPrDisputeState,
@@ -29,6 +33,14 @@ type RequestRow = {
 };
 
 type Repository = { owner_name: string; provider: string; instance_url: string | null };
+
+const reviewState = z.enum(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"]);
+const reviewEvidence = z.object({ reviews: z.array(z.object({
+  id: z.number().int().positive(),
+  state: reviewState,
+  submittedAt: z.string().nullable(),
+  dismissal: z.object({ at: z.string(), previousState: reviewState.nullable() }).nullable(),
+})) });
 
 export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
   public constructor(private readonly sql: SqlClient = getSql()) {}
@@ -128,6 +140,117 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
       `;
       return { kind: "ok", value: toRequest(row) };
     });
+  }
+
+  public async decideDispute(input: ClosedPrDisputeDecisionInput & {
+    requestId: string; moderatorAccountId: string;
+  }): Promise<ClosedPrDisputeStoreResult<ClosedPrDisputeRequest>> {
+    const parsed = closedPrDisputeDecisionSchema.safeParse(input);
+    if (!parsed.success) return { kind: "invalid_input" };
+    const { decision, figure, decidedReason } = parsed.data;
+    return this.sql.begin(async (transaction): Promise<ClosedPrDisputeStoreResult<ClosedPrDisputeRequest>> => {
+      const [request] = await transaction<(RequestRow & { decision_time: Date })[]>`
+        select id, contributor_id, pull_request_id, issue_id, landed_pull_request_id, landed_commit_url,
+          request_reason, state, decision, decided_by, decided_by_sole_moderator, decided_reason,
+          decided_at, moderator_figure, awarded_points, created_at, now() as decision_time
+        from closed_pr_dispute_requests where id = ${input.requestId} for update
+      `;
+      if (request === undefined) return { kind: "not_found" };
+      if (request.state !== "OPEN") return { kind: "already_decided" };
+
+      // Read PRs without locks: filing locks contributor then PR; taking a PR
+      // lock before the contributor here would invert that order.
+      const [related] = await transaction<{
+        sponsor_id: string; repository_id: string; github_pull_request_id: string; landing_author_id: string | null;
+      }[]>`
+        select repositories.sponsor_id, closed.repository_id, closed.github_pull_request_id::text,
+          landing.author_id as landing_author_id
+        from issues
+        join registered_repositories repositories on repositories.id = issues.repository_id
+        join pull_requests closed on closed.id = ${request.pull_request_id}
+        left join pull_requests landing on landing.id = ${request.landed_pull_request_id}
+        where issues.id = ${request.issue_id}
+      `;
+      if (related === undefined) return { kind: "not_found" };
+      const liveModerators = await transaction<{ id: string }[]>`
+        select id from users where role = 'MODERATOR' and deleted_at is null order by id
+      `;
+      if (!liveModerators.some((moderator) => moderator.id === input.moderatorAccountId)) return { kind: "forbidden" };
+      const conflicted = [related.sponsor_id, request.contributor_id, related.landing_author_id]
+        .includes(input.moderatorAccountId);
+      if (conflicted && liveModerators.length > 1) return { kind: "forbidden_imposer" };
+      const soleModerator = liveModerators.length === 1;
+
+      // Serialize the same-state history event with enforcement changes.
+      const [account] = await transaction<{ enforcement_state: EnforcementState }[]>`
+        select enforcement_state from users where id = ${request.contributor_id} for update
+      `;
+      if (account === undefined) return { kind: "not_found" };
+      let awardedPoints: number | null = null;
+      if (decision === "GRANTED") {
+        const [evidence] = await transaction<{ payload: unknown }[]>`
+          select payload from repository_reconciliation_evidence_facts
+          where repository_id = ${related.repository_id} and kind = 'pull_request'
+            and subject_key = ${related.github_pull_request_id}
+        `;
+        const reviews = reviewEvidence.safeParse(evidence?.payload);
+        if (!reviews.success) return { kind: "insufficient_evidence" };
+        awardedPoints = Math.max(0, figure! - countReviewRoundsAsOf(reviews.data.reviews, request.decision_time.valueOf()).length);
+      }
+
+      const [row] = await transaction<RequestRow[]>`
+        update closed_pr_dispute_requests set state = 'DECIDED', decision = ${decision},
+          decided_by = ${input.moderatorAccountId}, decided_by_sole_moderator = ${soleModerator},
+          decided_reason = ${decidedReason}, decided_at = now(),
+          moderator_figure = ${decision === "GRANTED" ? figure! : null}, awarded_points = ${awardedPoints}
+        where id = ${request.id}
+        returning id, contributor_id, pull_request_id, issue_id, landed_pull_request_id, landed_commit_url,
+          request_reason, state, decision, decided_by, decided_by_sole_moderator, decided_reason,
+          decided_at, moderator_figure, awarded_points, created_at
+      `;
+      if (row === undefined) throw new Error("Closed PR dispute decision returned no row.");
+      const [event] = await transaction<{ id: string }[]>`
+        insert into moderation_events (target_user_id, actor_id, audit_id, prior_state, new_state, reason, dispute_request_id)
+        values (${request.contributor_id}, ${input.moderatorAccountId}, null, ${account.enforcement_state},
+          ${account.enforcement_state}, ${decidedReason}, ${request.id}) returning id
+      `;
+      if (event === undefined) throw new Error("Closed PR dispute decision event returned no row.");
+
+      if (awardedPoints !== null && awardedPoints > 0) {
+        const [adjustment] = await transaction<{ id: string }[]>`
+          insert into dispute_credit_adjustments (moderation_event_id, dispute_id, target_account_id, reason)
+          values (${event.id}, ${request.id}, ${related.sponsor_id}, ${decidedReason}) returning id
+        `;
+        if (adjustment === undefined) throw new Error("Dispute credit adjustment returned no row.");
+        await transaction`
+          insert into dispute_credit_adjustment_lines (adjustment_id, settlement_id, creditor_id, amount)
+          values (${adjustment.id}, null, ${request.contributor_id}, ${awardedPoints})
+        `;
+        // The landing may settle other issues; only this issue's price is reversed.
+        await transaction`
+          insert into dispute_credit_adjustment_lines (adjustment_id, settlement_id, creditor_id, amount)
+          select ${adjustment.id}, id, creditor_id, -credits
+          from settlements
+          where pull_request_id = ${request.landed_pull_request_id} and issue_id = ${request.issue_id}
+            and creditor_id <> ${related.sponsor_id} and credits > 0
+        `;
+      }
+      return { kind: "ok", value: toRequest(row) };
+    });
+  }
+
+  public async listRequestsForModeration(): Promise<ClosedPrDisputeRequest[]> {
+    const rows = await this.sql<RequestRow[]>`
+      select id, contributor_id, pull_request_id, issue_id, landed_pull_request_id, landed_commit_url,
+        request_reason, state, decision, decided_by, decided_by_sole_moderator, decided_reason,
+        decided_at, moderator_figure, awarded_points, created_at
+      from closed_pr_dispute_requests
+      order by (state = 'OPEN') desc,
+        case when state = 'OPEN' then created_at end asc,
+        case when state = 'OPEN' then id end asc,
+        decided_at desc, id desc
+    `;
+    return rows.map(toRequest);
   }
 
   public async listRequestsForAccount(accountId: string): Promise<ClosedPrDisputeRequest[]> {
