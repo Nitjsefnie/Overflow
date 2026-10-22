@@ -209,23 +209,25 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
       `;
       if (event === undefined) throw new Error("Closed PR dispute decision event returned no row.");
 
-      if (awardedPoints !== null && awardedPoints > 0) {
+      // The landing may settle other issues; only this issue's price is reversed.
+      const reversals = awardedPoints === null ? [] : await transaction<{ id: string; creditor_id: string; credits: number }[]>`
+        select id, creditor_id, credits from settlements
+        where pull_request_id = ${request.landed_pull_request_id} and issue_id = ${request.issue_id}
+          and creditor_id <> ${related.sponsor_id} and credits > 0
+      `;
+      if ((awardedPoints !== null && awardedPoints > 0) || reversals.length > 0) {
         const [adjustment] = await transaction<{ id: string }[]>`
           insert into dispute_credit_adjustments (moderation_event_id, dispute_id, target_account_id, reason)
           values (${event.id}, ${request.id}, ${related.sponsor_id}, ${decidedReason}) returning id
         `;
         if (adjustment === undefined) throw new Error("Dispute credit adjustment returned no row.");
-        await transaction`
+        if (awardedPoints !== null && awardedPoints > 0) await transaction`
           insert into dispute_credit_adjustment_lines (adjustment_id, settlement_id, creditor_id, amount)
           values (${adjustment.id}, null, ${request.contributor_id}, ${awardedPoints})
         `;
-        // The landing may settle other issues; only this issue's price is reversed.
-        await transaction`
+        for (const reversal of reversals) await transaction`
           insert into dispute_credit_adjustment_lines (adjustment_id, settlement_id, creditor_id, amount)
-          select ${adjustment.id}, id, creditor_id, -credits
-          from settlements
-          where pull_request_id = ${request.landed_pull_request_id} and issue_id = ${request.issue_id}
-            and creditor_id <> ${related.sponsor_id} and credits > 0
+          values (${adjustment.id}, ${reversal.id}, ${reversal.creditor_id}, ${-reversal.credits})
         `;
       }
       return { kind: "ok", value: toRequest(row) };
