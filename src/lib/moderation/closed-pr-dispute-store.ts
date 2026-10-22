@@ -168,6 +168,7 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
         select id from users where role = 'MODERATOR' and deleted_at is null order by id
       `;
       if (!liveModerators.some((moderator) => moderator.id === input.moderatorAccountId)) return { kind: "forbidden" };
+      // Commit evidence stores no landing account: its conflict set is sponsor + contributor.
       const conflicted = [related.sponsor_id, request.contributor_id, related.landing_author_id]
         .includes(input.moderatorAccountId);
       if (conflicted && liveModerators.length > 1) return { kind: "forbidden_imposer" };

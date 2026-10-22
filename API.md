@@ -947,7 +947,8 @@ award, and `decidedBySoleModerator: false`. A denial leaves figure and award
 null. A grant records the figure and `awardedPoints = max(0, figure − stored
 review rounds)`; an award of zero still grants the request. A sponsor,
 contributor or landing author cannot decide while another live moderator
-exists. The sole-moderator path records `decidedBySoleModerator: true`.
+exists. Commit-only landing evidence has no stored landing account; its
+conflict set is sponsor and contributor. The sole-moderator path records `decidedBySoleModerator: true`.
 
 A positive grant appends a sponsor-targeted credit adjustment with an award
 leg to the contributor. A landing settlement credited to a third account is

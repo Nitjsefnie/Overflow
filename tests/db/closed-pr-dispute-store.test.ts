@@ -337,6 +337,20 @@ describe("closed PR dispute decisions", () => {
     },
   );
 
+  it("uses only sponsor and contributor conflicts for a commit landing", async () => {
+    const fixture = await decisionFixture(true);
+    for (const id of [fixture.sponsorId, fixture.contributorId, fixture.landingCreditorId]) {
+      await sql`update users set role = 'MODERATOR' where id = ${id}`;
+    }
+    for (const id of [fixture.sponsorId, fixture.contributorId]) {
+      await expect(store().decideDispute({ ...decision(fixture), moderatorAccountId: id }))
+        .resolves.toEqual({ kind: "forbidden_imposer" });
+    }
+    // No PR/forge identity records a landing author for the supplied commit.
+    await expect(store().decideDispute({ ...decision(fixture), moderatorAccountId: fixture.landingCreditorId }))
+      .resolves.toMatchObject({ kind: "ok", value: { decidedBy: fixture.landingCreditorId, decidedBySoleModerator: false } });
+  });
+
   it.each(["sponsorId", "contributorId", "landingCreditorId", "moderatorId"] as const)(
     "allows sole live moderator %s and records the flag from the fresh roster", async (identity) => {
       const fixture = await decisionFixture();
