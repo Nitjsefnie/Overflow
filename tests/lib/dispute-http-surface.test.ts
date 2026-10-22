@@ -15,7 +15,7 @@ describe("closed PR dispute HTTP recording", () => {
   it("records every refusal kind through the shared route helper", () => {
     const failures = deriveRouteFailures(routes);
     for (const route of routes) expect(failures[route]).toEqual(expect.arrayContaining([
-      "403 FORBIDDEN", "409 CONFLICT", "404 NOT_FOUND", "422 INVALID_INPUT", "422 INSUFFICIENT_EVIDENCE", "502 UPSTREAM_FAILURE",
+      "403 FORBIDDEN", "409 CONFLICT", "409 ALREADY_GRANTED", "404 NOT_FOUND", "422 INVALID_INPUT", "422 INSUFFICIENT_EVIDENCE", "502 UPSTREAM_FAILURE",
     ]));
   });
 });

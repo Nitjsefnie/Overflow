@@ -229,6 +229,12 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
         `;
       }
       return { kind: "ok", value: toRequest(row) };
+    }).catch((error: unknown): ClosedPrDisputeStoreResult<ClosedPrDisputeRequest> => {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "23505"
+        && "constraint_name" in error && error.constraint_name === "closed_pr_dispute_requests_one_grant_per_pull_request") {
+        return { kind: "already_granted" };
+      }
+      throw error;
     });
   }
 

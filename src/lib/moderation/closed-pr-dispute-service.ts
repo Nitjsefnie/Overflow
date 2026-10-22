@@ -57,6 +57,7 @@ export type ClosedPrDisputeStoreResult<T> =
   | { kind: "not_found" }
   | { kind: "invalid_state" }
   | { kind: "already_decided" }
+  | { kind: "already_granted" }
   | { kind: "forbidden_imposer" }
   | { kind: "insufficient_evidence" }
   | { kind: "forbidden" }
@@ -71,7 +72,7 @@ export type ClosedPrDisputeStore = {
   listRequestsForModeration(): Promise<ClosedPrDisputeRequest[]>;
 };
 
-export type ClosedPrDisputeErrorCode = "NOT_FOUND" | "CONFLICT" | "INVALID_INPUT" | "FORBIDDEN" | "INSUFFICIENT_EVIDENCE";
+export type ClosedPrDisputeErrorCode = "NOT_FOUND" | "CONFLICT" | "ALREADY_GRANTED" | "INVALID_INPUT" | "FORBIDDEN" | "INSUFFICIENT_EVIDENCE";
 
 export class ClosedPrDisputeError extends Error {
   public constructor(
@@ -146,6 +147,8 @@ function unwrap<T>(result: ClosedPrDisputeStoreResult<T>): T {
       throw new ClosedPrDisputeError("FORBIDDEN", "A sponsor, contributor or landing author may not decide while another moderator can.");
     case "already_decided":
       throw new ClosedPrDisputeError("CONFLICT", "This dispute request has already been decided.");
+    case "already_granted":
+      throw new ClosedPrDisputeError("ALREADY_GRANTED", "This closed pull request has already received a granted dispute.");
     case "insufficient_evidence":
       throw new ClosedPrDisputeError("INSUFFICIENT_EVIDENCE", "Stored review evidence is required to grant this dispute.");
     case "invalid_input":

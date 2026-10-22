@@ -105,7 +105,7 @@ describe("POST /api/moderation/disputes", () => {
     expect(deps.getSession).not.toHaveBeenCalled();
   });
   it.each([
-    ["FORBIDDEN", 403], ["CONFLICT", 409], ["NOT_FOUND", 404], ["INVALID_INPUT", 422], ["INSUFFICIENT_EVIDENCE", 422],
+    ["ALREADY_GRANTED", 409], ["FORBIDDEN", 403], ["CONFLICT", 409], ["NOT_FOUND", 404], ["INVALID_INPUT", 422], ["INSUFFICIENT_EVIDENCE", 422],
   ] as const)("maps %s to %s", async (code, status) => {
     const deps = dependencies({ createService: vi.fn().mockResolvedValue({
       decideDispute: vi.fn().mockRejectedValue(new ClosedPrDisputeError(code, "The rule explains the refusal.")),
