@@ -939,6 +939,8 @@ A dispute request carries:
 }
 ```
 
+The contributor can obtain the stored closed PR UUID from `authoredPullRequests` in their account export (`GET /api/account/export`).
+
 The moderation queue also projects `comparison`: the closed and landed PR numbers, titles, canonical forge URLs, and their stored reviews and raw diffs. Missing or omitted evidence is null; commit landings show a validated forge commit link without fetching content.
 
 `landedPullRequestId` is a UUID or null; `landedCommitUrl` is a string or null.

@@ -25,7 +25,7 @@ export function retainDisputePullRequests(
       }
       retained.set(pr.id, {
         githubPullRequestId: pr.id, number: pr.number, title: pr.title, url: pr.url, state: pr.state,
-        mergedAt: pr.mergedAt, mergeCommitOid: pr.mergeCommitOid, finalCommitAt: pr.finalCommitAt,
+        mergedAt: pr.mergedAt, mergeCommitOid: pr.mergeCommitOid?.toLowerCase() ?? null, finalCommitAt: pr.finalCommitAt,
         authorId: pr.authorGitHubUserId === null ? null : authors.get(pr.authorGitHubUserId) ?? null,
         authorGitHubLogin: pr.authorLogin, authorGitHubUserId: pr.authorGitHubUserId,
         proofSha256: createHash("sha256").update(pr.rawDiff, "utf8").digest("hex"),
