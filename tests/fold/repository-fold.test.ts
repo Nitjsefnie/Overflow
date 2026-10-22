@@ -620,6 +620,19 @@ describe("foldRepository", () => {
   });
 });
 
+
+it("FINAL-P1 closed contributor PR reaches the filing store through the fold", () => {
+  const snapshot = outsiderFixture();
+  const landing = snapshot.issues[0]!.closingPullRequests[0]!;
+  snapshot.issues[0]!.closingPullRequests.unshift({ ...landing,
+    id: 202, number: 12, state: "CLOSED", mergedAt: null, mergeCommitOid: null,
+    url: "https://github.com/octo/example/pull/12",
+  });
+  const result = foldRepository(snapshot);
+  expect(result.pullRequests.map((pr) => pr.githubPullRequestId),
+    "closed contributor PR must reach the real materializer before filing").toContain(202);
+});
+
 function selfWorkFixture(): RepositoryFoldSnapshot {
   const snapshot = outsiderFixture();
   snapshot.issues[0]!.closingPullRequests[0]!.authorLogin = "sponsor";

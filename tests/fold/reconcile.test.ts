@@ -374,8 +374,9 @@ describe("reconcileRepository", () => {
       ["contributor", 6], ["sponsor", -6],
       ["contributor", 6], ["sponsor", -6],
     ]);
-    // The 120 unmerged references per issue must not alter any part of the baseline fold.
-    const unstampedFold = JSON.stringify(fold, (key, value) => key === "updatedAt" ? undefined : value);
+    // Retained CLOSED evidence changes the rows, while merged pricing stays identical.
+    expect(fold.pullRequests.filter((pr) => pr.state === "CLOSED")).toHaveLength(360);
+    const unstampedFold = JSON.stringify({ ...fold, pullRequests: fold.pullRequests.filter((pr) => pr.state === "MERGED") }, (key, value) => key === "updatedAt" ? undefined : value);
     expect(createHash("sha256").update(unstampedFold).digest("hex")).toBe("cfb680a10c35065663b858d59c86e2688ef85205a594e9e002ac7c08422b2b2d");
     expect(requests.filter(({ operation }) => operation === "ClosingPullRequests")).toEqual([
       { operation: "ClosingPullRequests", variables: { owner: "octo", name: "example", issueNumber: 3, cursor: "closing-3-next" } },
