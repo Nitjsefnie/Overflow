@@ -766,6 +766,43 @@ describe("grant financial uniqueness", () => {
   });
 });
 
+  it("FINAL-P3 filing must not backdate a concurrent sanction", async () => {
+    const fixture = await buildFixture();
+    await insertPullRequest(fixture, "MERGED");
+    let markLocked!: (pid: number) => void;
+    let release!: () => void;
+    const locked = new Promise<number>((resolve) => { markLocked = resolve; });
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const holder = sql.begin(async (transaction) => {
+      await transaction`select id from users where id = ${fixture.contributorId} for update`;
+      const [backend] = await transaction<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      markLocked(backend.pid);
+      await released;
+      await transaction`update users set enforcement_state = 'BANNED' where id = ${fixture.contributorId}`;
+      await transaction`insert into moderation_events
+        (target_user_id, actor_id, prior_state, new_state, reason, created_at)
+        values (${fixture.contributorId}, ${fixture.sponsorId}, 'ACTIVE', 'BANNED',
+          'Concurrent sanction during filing.', clock_timestamp())`;
+    });
+    const holderPid = await locked;
+    const filingResult = store().fileDispute(filing(fixture));
+    try {
+      await waitingOnBackend(holderPid);
+      await vi.waitFor(async () => { expect(await waitingOnBackend(holderPid)).toBe(1); }, { timeout: 5000 });
+      const [probe] = await sql<{ at: string }[]>`select clock_timestamp()::text as at`;
+      release();
+      await holder;
+      await expect(filingResult).resolves.toMatchObject({ kind: "ok" });
+      const [historical] = await sql<{ eligible: boolean }[]>`
+        select participation_eligible_at(${fixture.contributorId}, ${probe.at}::timestamptz) as eligible`;
+      expect(historical.eligible, "filing backdated the sanction before its actual transition").toBe(true);
+    } finally {
+      release();
+      await Promise.allSettled([holder, filingResult]);
+    }
+  });
+
+
 function store() { return new PostgresClosedPrDisputeStore(sql); }
 function service() { return new ClosedPrDisputeService(store()); }
 function filing(fixture: { contributorId: string; pullRequestId: string }) {
