@@ -1727,6 +1727,13 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
         creditor_id text,
         amount integer
       );
+      create table closed_pr_dispute_requests (id text primary key, pull_request_id text, issue_id text);
+      create table dispute_credit_adjustments (
+        id text primary key, dispute_id text, target_account_id text, created_at timestamptz
+      );
+      create table dispute_credit_adjustment_lines (
+        id text primary key, adjustment_id text, creditor_id text, amount integer
+      );
       create table repository_reconciliation_jobs (repository_id text, state text, last_failure_at timestamptz);
       create table moderation_events (
         id text primary key,
