@@ -1,47 +1,13 @@
 import { spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { git } from "../support/scratch-git";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-/**
- * Issue 1036 moved the calibration push out of the calibrate job into
- * push-recalibration, a job that holds contents: write and runs no repository
- * or dependency code — its push half is inline shell. A structural pin cannot
- * tell a shell that commits and pushes from a shell that only says so, so this
- * suite EXECUTES the two steps the split introduced, the way the runner does —
- * bash with the runner's flags, in scratch repositories holding a bare origin,
- * a seed commit and a clone — the way tests/ci/docs-only-step.test.ts executes
- * its step's real `run:` text. There is NO NETWORK: the push URL is redirected
- * to a local bare remote through the PUSH_REMOTE_URL override the shell
- * honors, and the refusal and race cases arrive as pre-receive hooks on that
- * remote.
- *
- * Two halves:
- *
- *  - push-recalibration's "Commit and push the recalibrated floor": commits
- *    the document bytes it received as github-actions[bot], pushes
- *    HEAD:refs/heads/main, fetch-rebase-retries once on a refusal, and fails
- *    with a ::error:: naming the recorded and measured floors when the remote
- *    refuses for good.
- *  - calibrate's "Export the recalibrated document": the diff decides
- *    `changed`, and the document bytes leave through a GITHUB_OUTPUT heredoc
- *    that the push job's env receives back byte-for-byte.
- *
- * The one case the fixtures cannot reproduce is branch protection itself, so
- * the refusal half stands in for it: what is under test is that a refused push
- * fails the job visibly instead of reading as green (issue 684).
- */
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "push-recalibration-step-")]);
 
 type WorkflowStep = {
   name?: string;
@@ -99,20 +65,13 @@ beforeAll(async () => {
   ).toHaveLength(1);
   exportRun = exportSteps[0]!.run ?? "";
 
-  root = mkdtempSync(join(tmpdir(), "push-recalibration-step-"));
+  root = tempDirectories.create(join(tmpdir(), "push-recalibration-step-"));
 });
 
 afterAll(() => {
-  rmSync(root, { recursive: true, force: true });
+  tempDirectories.dispose();
 });
 
-/**
- * The environment the runner gives a step: PATH and HOME, plus what the step's
- * env: block maps. Deliberately NOT scratchGitEnv — its GIT_AUTHOR_NAME and
- * GIT_COMMITTER_NAME would outrank the `-c user.name=` the bot identity is set
- * with, and every push case would commit as the scratch identity while the
- * assertion reads github-actions[bot].
- */
 const childEnv = (extra: Record<string, string>): NodeJS.ProcessEnv => ({
   PATH: process.env.PATH ?? "",
   HOME: process.env.HOME ?? "",
@@ -243,7 +202,7 @@ describe("push-recalibration's push step, executed", () => {
   };
 
   function sshFixture() {
-    const scratch = mkdtempSync(join(root, "ssh-"));
+    const scratch = tempDirectories.create(join(root, "ssh-"));
     const home = join(scratch, "home");
     const bin = join(scratch, "bin");
     const key = join(scratch, "deploy-key");

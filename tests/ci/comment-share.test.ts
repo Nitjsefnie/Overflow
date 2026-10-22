@@ -1,9 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "overflow-comment-share-list-")]);
 
 type Step = {
   id?: string;
@@ -29,7 +32,7 @@ function readWorkflow(file: string): Workflow {
 }
 
 function listArtifacts(step: Step, artifactNames: string[]): string {
-  const root = mkdtempSync(join(tmpdir(), "overflow-comment-share-list-"));
+  const root = tempDirectories.create(join(tmpdir(), "overflow-comment-share-list-"));
   try {
     const output = join(root, "output");
     writeFileSync(output, "");
@@ -61,7 +64,7 @@ function listArtifacts(step: Step, artifactNames: string[]): string {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     return readFileSync(output, "utf8");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    tempDirectories.dispose(root);
   }
 }
 

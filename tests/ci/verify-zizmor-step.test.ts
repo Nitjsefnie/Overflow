@@ -1,31 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { commitFiles, git, scratchGitEnv } from "../support/scratch-git";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-/**
- * Issue 1099: the base-defined zizmor manifest gate, EXECUTED rather than read.
- *
- * pr-suite.yml's own pin check runs under `pull_request` — the pull request's
- * own definition — so a pull request can delete the check its manifest is
- * subject to. ci-pr.yml's verify job therefore carries the same gate as a
- * BASE-defined step: it reads the pull request's
- * `.github/requirements-zizmor.txt` from GIT OBJECTS of the materialised merge
- * commit, never from the filesystem, so neither a symlinked leaf nor a
- * symlinked `.github` parent can redirect the read; pre-parses it with a strict
- * grammar into a fresh sanitized copy under RUNNER_TEMP; and lets pip resolve
- * only that copy with `--require-hashes`.
- *
- * Every case below builds a scratch repository holding the merge commit under
- * test and executes the step's real `run:` text the way the runner does — bash
- * with the runner's flags, env resolved from the case, cwd the repository that
- * holds the objects. There is NO NETWORK: `pip` is a stub, first on PATH, that
- * records its argv and exits 0 (or an injected non-zero, for the case where
- * pip itself must fail the step).
- */
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "verify-zizmor-step-")]);
 
 type Step = {
   name?: string;
@@ -52,11 +34,11 @@ beforeAll(async () => {
     jobs: { verify: { steps: Step[] } };
   };
   steps = workflow.jobs.verify.steps;
-  root = await mkdtemp(join(tmpdir(), "verify-zizmor-step-"));
+  root = await tempDirectories.createAsync(join(tmpdir(), "verify-zizmor-step-"));
 });
 
 afterAll(async () => {
-  await rm(root, { recursive: true, force: true });
+  await tempDirectories.disposeAsync(root);
 });
 
 function theStep(): Step {
@@ -65,18 +47,6 @@ function theStep(): Step {
   return matching[0]!;
 }
 
-/**
- * A scratch repository holding a base commit plus one "merge" commit whose tree
- * carries `.github/requirements-zizmor.txt` exactly as `manifest` describes.
- * Returns { repo, merge } — `merge` is the value MERGE_SHA receives.
- *
- * The manifest path is shaped by INDEX SURGERY over plumbing, uniformly for
- * every case: blobs via `hash-object -w`, entries via
- * `update-index --cacheinfo`, the tree via `write-tree`, the commit via
- * `commit-tree`. That is the only way to commit a 120000 symlink, a 100755 or a
- * 160000 gitlink at a chosen path, and it keeps the normal 100644 cases on the
- * same code as the refused shapes.
- */
 type ManifestSpec =
   | { kind: "absent" }
   | { kind: "file"; content: string }
@@ -130,16 +100,6 @@ async function fixture(manifest: ManifestSpec): Promise<{ repo: string; merge: s
   return { repo, merge };
 }
 
-/**
- * A stub `pip`, first on PATH: appends its full argv (space-joined) as one line
- * to `ZIZMOR_PIP_STUB_LOG` and exits 0 — or `ZIZMOR_PIP_STUB_EXIT`, for the
- * case where pip itself must fail the step. NO NETWORK: nothing here resolves
- * a package.
- *
- * The stub is linear and never self-spawns, so the recursion-safety rule's
- * depth cap and scope wrapper do not apply to it; the cases spawn exactly one
- * bash per run.
- */
 const PIP_STUB = [
   "#!/usr/bin/env bash",
   'printf \'%s\\n\' "$*" >> "${ZIZMOR_PIP_STUB_LOG}"',
