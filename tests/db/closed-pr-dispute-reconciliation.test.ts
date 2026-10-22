@@ -97,4 +97,20 @@ it.each([false, true])("reconciles closed evidence through materialization, fili
   expect(await reconcileRepository({ store: foldStore, github: { ...gateway, listIssues: async () => [] } }, repo.id, { reason: "WEBHOOK" }))
     .toMatchObject({ skipped: false });
   expect((await foldStore.getReconciliationEvidence(repo.id))?.pullRequests.map((pr) => pr.id)).toContain(closed.id);
+  closed.state = "OPEN";
+  await foldStore.withRepositoryReconciliation(repo.id, () => foldStore.setReconciliationCooldown(repo.id, null));
+  await expect(reconcileRepository({ store: foldStore, github: gateway }, repo.id, { reason: "SWEEP" }))
+    .resolves.toMatchObject({ skipped: false });
+  expect(await sql`select id, state from pull_requests where id = ${source.id}`)
+    .toEqual([{ id: source.id, state: "OPEN" }]);
+  expect(await service.listDisputes({ id: users[1] })).toContainEqual(expect.objectContaining({ id: request.id, decision: "GRANTED" }));
+  expect(await sql`select id from settlements where pull_request_id = ${source.id}`).toEqual([]);
+  // Removal from the collected references preserves both sides of the dispute and their issue rows.
+  issues.splice(0);
+  await foldStore.withRepositoryReconciliation(repo.id, () => foldStore.setReconciliationCooldown(repo.id, null));
+  await expect(reconcileRepository({ store: foldStore, github: gateway }, repo.id, { reason: "SWEEP" }))
+    .resolves.toMatchObject({ skipped: false });
+  expect(await sql`select id from pull_requests where repository_id = ${repo.id} order by id`)
+    .toEqual(prs.map(({ id }) => ({ id })).sort((a, b) => a.id.localeCompare(b.id)));
+  expect(await sql`select id from dispute_credit_adjustments where dispute_id = ${request.id}`).toHaveLength(1);
 });

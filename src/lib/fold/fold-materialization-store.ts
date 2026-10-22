@@ -306,6 +306,7 @@ export class PostgresFoldMaterializationStore {
         issueIds,
         pullRequestIds,
         input.runId,
+        publication.synchronization,
       );
       await recordNewPolicyViolations(transaction, input.repositoryId, input.runId, publication.fold.policyViolations);
       if (input.synchronization !== undefined) {
@@ -558,12 +559,11 @@ type RemovedPullRequestRow = {
 };
 
 /**
- * Deletes the issues and pull requests the fold no longer contains, counting
- * each one and recording it in the change log.
+ * Deletes unreferenced issues and pull requests the fold no longer contains.
+ * Dispute history retains its rows; observed nonterminal PRs refresh live state.
  *
- * A deletion here is the reconciliation's most consequential act — a fold that
- * stops naming a repository's work erases every materialized row of it — so it
- * is reported rather than performed in silence. The record is written before
+ * Each removal is reported before deletion, so its snapshot describes the
+ * materialized work that actually left. The record is written before
  * the delete, so the state it carries is read from the row that existed, and it
  * carries no `pull_request_id`: migration 004 gives that column
  * `on delete set null`, so a reference to the row being deleted is nulled by the
@@ -578,7 +578,10 @@ async function deleteAbsentMaterialization(
   issueIds: Map<number, string>,
   pullRequestIds: Map<number, string>,
   runId: string,
+  synchronization?: ReconciliationSynchronization,
 ): Promise<ReconciliationDeltas> {
+  const observedStates = new Map((synchronization?.issues ?? [])
+    .flatMap((issue) => issue.closingPullRequests).map((pr) => [pr.id, pr.state]));
   const desiredIssueIds = new Set(issueIds.values());
   const desiredPullRequestIds = new Set(pullRequestIds.values());
   let removals = 0;
@@ -598,6 +601,20 @@ async function deleteAbsentMaterialization(
   await deleteAbsentPullRequestIssueLinks(sql, repositoryId, fold);
   for (const pullRequest of currentPullRequests) {
     if (!desiredPullRequestIds.has(pullRequest.id)) {
+      // Serialize with filing before checking references in a fresh statement.
+      await sql`select id from pull_requests where id = ${pullRequest.id} for update`;
+      const [dispute] = await sql`
+        select id from closed_pr_dispute_requests
+        where pull_request_id = ${pullRequest.id} or landed_pull_request_id = ${pullRequest.id} limit 1
+      `;
+      if (dispute !== undefined) {
+        const state = observedStates.get(toSafeInteger(pullRequest.github_pull_request_id));
+        if (state !== undefined) await sql`
+          update pull_requests set state = ${state}, updated_at = now()
+          where id = ${pullRequest.id} and state is distinct from ${state}
+        `;
+        continue;
+      }
       await recordChange(sql, runId, null, "PULL_REQUEST", "REMOVE", removedPullRequestState(pullRequest), null);
       await sql`delete from review_rounds where pull_request_id = ${pullRequest.id}`;
       await sql`delete from pull_request_issues where pull_request_id = ${pullRequest.id}`;
@@ -607,6 +624,14 @@ async function deleteAbsentMaterialization(
   }
   for (const issue of currentIssues) {
     if (!desiredIssueIds.has(issue.id)) {
+      const [dispute] = await sql`
+        select requests.id from closed_pr_dispute_requests requests
+        join pull_requests closed on closed.id = requests.pull_request_id
+        left join pull_requests landing on landing.id = requests.landed_pull_request_id
+        where requests.issue_id = ${issue.id} or closed.issue_id = ${issue.id} or landing.issue_id = ${issue.id}
+        limit 1
+      `;
+      if (dispute !== undefined) continue;
       await recordChange(sql, runId, null, "ISSUE", "REMOVE", removedIssueState(issue), null);
       await sql`delete from issues where id = ${issue.id}`;
       removals += 1;
