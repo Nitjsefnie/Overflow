@@ -5,12 +5,14 @@ import { difficultySchemeInForceAt, type DifficultyScheme, type DifficultyScheme
 import { foldLedger, type LedgerEntry } from "@/lib/domain/ledger";
 import { calculateSettlement, type SettlementDecision } from "@/lib/domain/settlement";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
+import { countReviewRoundsAsOf } from "@/lib/fold/review-rounds";
 import type {
   GitHubIssue,
   GitHubIssueComment,
   GitHubIssueHistoryEvent,
   GitHubPullRequestReview,
 } from "@/lib/github/types";
+export { countReviewRoundsAsOf } from "@/lib/fold/review-rounds";
 
 export type FoldModerationEvent = {
   id: string;
@@ -1120,28 +1122,7 @@ function countReviewRounds(
     return [];
   }
 
-  const mergeTime = Date.parse(mergedAt);
-  const uniqueReviews = new Map<number, string>();
-  for (const review of reviews) {
-    // Count rounds as they stood at merge; later dismissals cannot rewrite
-    // the settled price, while a pre-merge dismissal withdraws the round.
-    const submittedState = review.state === "DISMISSED"
-      ? review.dismissal?.previousState ?? null
-      : review.state;
-    if (
-      submittedState !== "CHANGES_REQUESTED" ||
-      !validTimestamp(review.submittedAt) ||
-      Date.parse(review.submittedAt) >= mergeTime ||
-      dismissedBefore(review, mergeTime)
-    ) {
-      continue;
-    }
-    uniqueReviews.set(review.id, review.submittedAt);
-  }
-
-  return [...uniqueReviews.entries()]
-    .map(([githubReviewId, submittedAt]) => ({ githubReviewId, submittedAt }))
-    .sort((left, right) => left.githubReviewId - right.githubReviewId);
+  return countReviewRoundsAsOf(reviews, Date.parse(mergedAt));
 }
 
 function toSettlement(input: {
@@ -1354,12 +1335,6 @@ function validIssueHistoryEvent(event: GitHubIssueHistoryEvent): boolean {
 
 function validIssueComment(comment: GitHubIssueComment): boolean {
   return typeof comment.id === "string" && comment.id.length > 0 && validTimestamp(comment.createdAt);
-}
-
-function dismissedBefore(review: GitHubPullRequestReview, deadline: number): boolean {
-  return review.dismissal !== null &&
-    validTimestamp(review.dismissal.at) &&
-    Date.parse(review.dismissal.at) < deadline;
 }
 
 function editedAfter(comment: GitHubIssueComment, deadline: number): boolean {
