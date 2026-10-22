@@ -5,7 +5,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresSweepPassStore } from "@/lib/fold/sweep-pass-store";
-import { withSweepPass, type SweepPass } from "@/lib/fold/sweep-pass";
+import { checkpointSweepRequest, withSweepPass, type SweepPass } from "@/lib/fold/sweep-pass";
 import { withSweepRequestBudget, SweepBudgetSpent } from "@/lib/fold/sweep-request-budget";
 import { PostgresSweepRoundStore } from "@/lib/fold/sweep-round-store";
 import { GitHubGraphqlClient, collectCursorPages } from "@/lib/github/graphql";
@@ -34,6 +34,119 @@ afterAll(async () => {
 });
 
 describe("paused full-pass pages", () => {
+  it("keeps concurrent checkpoint writes within the ceiling and returns every fetched payload", async () => {
+    const f = await materializeRepositoryFixture(sql);
+    const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId,
+      evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
+    const payloads = await withSweepPass(pass, () => Promise.all([1, 2, 3].map((page) =>
+      checkpointSweepRequest({ page }, async () => ({ page })))));
+    expect(payloads).toEqual([{ page: 1 }, { page: 2 }, { page: 3 }]);
+    expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
+  });
+
+  it("rejects a failed write without blocking later writes or spending their capacity", async () => {
+    const f = await materializeRepositoryFixture(sql);
+    const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId,
+      evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
+    const results = await Promise.allSettled([
+      pass.write("failed", { page: 0 }, "invalid\u0000cursor"),
+      pass.write("first", { page: 1 }, "cursor-one"),
+    ]);
+    expect(results.map((result) => result.status)).toEqual(["rejected", "fulfilled"]);
+    await pass.write("second", { page: 2 }, "cursor-two");
+    expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
+    expect(await pass.read("failed")).toBeUndefined();
+    expect(await pass.read("first")).toEqual({ page: 1 });
+    expect(await pass.read("second")).toEqual({ page: 2 });
+    expect(await sql`select walk_cursor from reconciliation_sweep_passes where pass_id = ${pass.id}`)
+      .toEqual([{ walk_cursor: "cursor-two" }]);
+  });
+
+  it("stops storing at the ceiling and replays the stored pair on reopen", async () => {
+    const f = await materializeRepositoryFixture(sql);
+    const input = { repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] };
+    const pass = await new PostgresSweepPassStore(sql, 2).open(input);
+    await pass.write("first", { page: 1 }, "cursor-one");
+    await pass.write("second", { page: 2 }, "cursor-two");
+    await pass.write("third", { page: 3 }, "cursor-three");
+    expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
+    expect(await pass.read("first")).toEqual({ page: 1 });
+    expect(await pass.read("second")).toEqual({ page: 2 });
+    expect(await pass.read("third")).toBeUndefined();
+    expect(await sql`select walk_cursor from reconciliation_sweep_passes where pass_id = ${pass.id}`)
+      .toEqual([{ walk_cursor: "cursor-two" }]);
+    const reopened = await new PostgresSweepPassStore(sql, 2).open(input);
+    expect(reopened.id).toBe(pass.id);
+    expect(await reopened.read("first")).toEqual({ page: 1 });
+    expect(await reopened.read("second")).toEqual({ page: 2 });
+    await reopened.write("fourth", { page: 4 });
+    expect(await reopened.read("fourth")).toBeUndefined();
+    expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
+  });
+
+  it("releases an over-ceiling pass on open and stores new pages", async () => {
+    const f = await materializeRepositoryFixture(sql);
+    const input = { repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] };
+    const old = await new PostgresSweepPassStore(sql, 3).open(input);
+    await old.write("first", { page: 1 });
+    await old.write("second", { page: 2 });
+    await old.write("third", { page: 3 });
+    expect(await stagedCounts(f.repositoryId, old.id)).toEqual({ passes: 1, pages: 3 });
+    const pass = await new PostgresSweepPassStore(sql, 2).open(input);
+    expect(pass.id).toBe(old.id);
+    expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 0 });
+    expect(await pass.read("first")).toBeUndefined();
+    await pass.write("new-first", { page: 4 });
+    await pass.write("new-second", { page: 5 });
+    await pass.write("new-third", { page: 6 });
+    expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
+    expect(await pass.read("new-first")).toEqual({ page: 4 });
+    expect(await pass.read("new-second")).toEqual({ page: 5 });
+    expect(await pass.read("new-third")).toBeUndefined();
+  });
+
+  it("keeps each repository pass's ceiling independent", async () => {
+    const store = new PostgresSweepPassStore(sql, 2);
+    for (const f of [await materializeRepositoryFixture(sql), await materializeRepositoryFixture(sql)]) {
+      const pass = await store.open({ repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
+      await pass.write("first", { page: 1 });
+      await pass.write("second", { page: 2 });
+      await pass.write("third", { page: 3 });
+      expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
+      expect(await pass.read("first")).toEqual({ page: 1 });
+      expect(await pass.read("second")).toEqual({ page: 2 });
+      expect(await pass.read("third")).toBeUndefined();
+    }
+  });
+
+  it("does not spend ceiling capacity or advance the cursor on a duplicate write", async () => {
+    const f = await materializeRepositoryFixture(sql);
+    const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId,
+      evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
+    await pass.write("first", { page: 1 }, "cursor-one");
+    await pass.write("first", { page: 99 }, "duplicate-cursor");
+    expect(await sql`select walk_cursor from reconciliation_sweep_passes where pass_id = ${pass.id}`)
+      .toEqual([{ walk_cursor: "cursor-one" }]);
+    await pass.write("second", { page: 2 }, "cursor-two");
+    await pass.write("third", { page: 3 }, "cursor-three");
+    expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
+    expect(await pass.read("first")).toEqual({ page: 1 });
+    expect(await pass.read("second")).toEqual({ page: 2 });
+    expect(await pass.read("third")).toBeUndefined();
+  });
+
+  it("completes a capped pass by deleting the pass and its pages", async () => {
+    const f = await materializeRepositoryFixture(sql);
+    const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId,
+      evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
+    await pass.write("first", { page: 1 });
+    await pass.write("second", { page: 2 });
+    await pass.write("third", { page: 3 });
+    expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
+    await pass.complete();
+    expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 0, pages: 0 });
+  });
+
   it("disposes paused pass pages on coordinated unregistration and inactive completion", async () => {
     const f = await pausedFixture();
     expect(await stagedCounts(f.repositoryId, f.state.pass!.id)).toEqual({ passes: 1, pages: 1 });
