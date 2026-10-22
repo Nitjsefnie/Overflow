@@ -20,6 +20,10 @@ const open: ClosedPrDisputeRequest = {
 const decided: ClosedPrDisputeRequest = { ...open, id: requestId + "-history", state: "DECIDED", decision: "GRANTED",
   decidedBy: requestId, decidedBySoleModerator: true, decidedReason: "Review evidence supports the claim.",
   decidedAt: "2026-10-02T10:00:00.000Z", moderatorFigure: 5, awardedPoints: 3 };
+const decidedByAnotherModerator: ClosedPrDisputeRequest = {
+  ...decided, id: requestId + "-other-history", decidedBySoleModerator: false,
+  decidedReason: "An independent moderator reviewed the claim.",
+};
 afterEach(() => { refresh.mockClear(); vi.unstubAllGlobals(); });
 function renderPage(requests: ClosedPrDisputeRequest[] | null = []) {
   return render(<ClosedPrDisputesContent memberName="Ada" isModerator={false} requests={requests} />);
@@ -88,21 +92,42 @@ describe("closed PR dispute page and filing", () => {
 });
 
 describe("moderation dispute list and decisions", () => {
-  it("offers controls for open requests and shows sole moderator history", () => {
-    render(<ClosedPrDisputeList requests={[open, decided]} moderation />);
-    expect(screen.getAllByRole("button")).toHaveLength(2);
-    expect(screen.getByText(/decided by the sole moderator/)).toBeVisible();
-    expect(screen.getAllByText((text) => text.includes(open.landedCommitUrl!))).toHaveLength(2);
+  it.each(["contributor history", "moderation queue"] as const)("scopes controls and sole-moderator labels to their rows on %s", (surface) => {
+    const requests = [open, decided, decidedByAnotherModerator];
+    const moderation = surface === "moderation queue";
+    if (moderation) render(<ClosedPrDisputeList requests={requests} moderation />);
+    else renderPage(requests);
+    const list = screen.getByRole("list", { name: moderation ? "Closed PR dispute queue and history" : "Your closed PR disputes" });
+    const entries = within(list).getAllByRole("listitem");
+    expect(entries).toHaveLength(3);
+    const openItem = within(entries[0]!);
+    if (moderation) {
+      expect(openItem.getByRole("button", { name: "Grant the dispute" })).toBeVisible();
+      expect(openItem.getByRole("button", { name: "Deny the dispute" })).toBeVisible();
+      expect(openItem.getAllByRole("button")).toHaveLength(2);
+    } else {
+      expect(openItem.queryAllByRole("button")).toHaveLength(0);
+    }
+    for (const entry of entries.slice(1)) expect(within(entry).queryAllByRole("button")).toHaveLength(0);
+    expect(within(entries[1]!).getByText(/decided by the sole moderator/)).toBeVisible();
+    expect(within(entries[2]!).getByText(decidedByAnotherModerator.decidedReason!, { exact: false })).toBeVisible();
+    expect(within(entries[2]!).queryByText(/decided by the sole moderator/)).toBeNull();
+    expect(within(list).getAllByText((text) => text.includes(open.landedCommitUrl!))).toHaveLength(3);
   });
-  it.each(["GRANTED", "DENIED"] as const)("sends %s and refreshes", async (decision) => {
+  it.each([
+    { decision: "GRANTED", figure: 1 },
+    { decision: "GRANTED", figure: 5 },
+    { decision: "GRANTED", figure: 10 },
+    { decision: "DENIED", figure: undefined },
+  ] as const)("sends $decision with figure $figure and refreshes", async ({ decision, figure }) => {
     const fetchMock = mockResponse({ request: { ...decided, decision } });
     render(<ClosedPrDisputeDecisionControl requestId={requestId} />); enterDecision();
-    if (decision === "GRANTED") fireEvent.change(screen.getByLabelText("Figure (1–10)"), { target: { value: "5" } });
+    if (decision === "GRANTED") fireEvent.change(screen.getByLabelText("Figure (1–10)"), { target: { value: String(figure) } });
     fireEvent.click(screen.getByRole("button", { name: decision === "GRANTED" ? "Grant the dispute" : "Deny the dispute" }));
     await waitFor(() => expect(screen.getByRole("status")).toBeVisible());
     expect(fetchMock).toHaveBeenCalledWith("/api/moderation/disputes", {
       method: "POST", headers: { "content-type": "application/json" }, credentials: "same-origin",
-      body: JSON.stringify({ requestId, decision, reason: "The evidence supports the claim.", ...(decision === "GRANTED" ? { figure: 5 } : {}) }),
+      body: JSON.stringify({ requestId, decision, reason: "The evidence supports the claim.", ...(decision === "GRANTED" ? { figure } : {}) }),
     });
     expect(refresh).toHaveBeenCalledTimes(1);
   });
