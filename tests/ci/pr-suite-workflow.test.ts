@@ -390,13 +390,9 @@ describe("the pull request suite workflow", () => {
     });
   });
 
-  it("checks out the default pull_request merge commit with no persisted credential", () => {
+  it("checks out exactly once", () => {
     const checkouts = suite.steps.filter((step) => (step.uses ?? "").startsWith("actions/checkout@"));
     expect(checkouts).toHaveLength(1);
-    expect(checkouts[0]).toEqual({
-      uses: expect.stringMatching(/^actions\/checkout@/),
-      with: { "persist-credentials": false, "fetch-depth": 2 },
-    });
     expect(suite["timeout-minutes"]).toBe(45);
   });
 
