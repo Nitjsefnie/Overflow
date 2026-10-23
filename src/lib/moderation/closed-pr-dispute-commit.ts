@@ -6,7 +6,7 @@ import { GitHubGraphqlRequestError } from "@/lib/github/errors";
 export type CommitAuthorResult =
   | { kind: "ok"; accountId: string }
   | { kind: "unresolved_commit_author" }
-  | { kind: "unlinked_commit_author" };
+  | { kind: "unknown_author" };
 
 export async function resolveLandedCommitAuthor(sql: TransactionClient, value: string): Promise<CommitAuthorResult> {
   const unresolved = { kind: "unresolved_commit_author" } as const;
@@ -25,8 +25,9 @@ export async function resolveLandedCommitAuthor(sql: TransactionClient, value: s
         or (${!github} and owner_name = ${match[1]} and instance_url = ${url.origin}))
   `;
   if (repository === undefined) return unresolved;
-  // GitLab's commit API supplies name/email, not an authoritative forge user id.
-  if (!github) return unresolved;
+  // GitLab's commit API supplies name/email, not an authoritative forge user id;
+  // user_forge_identities is keyed by forge_user_id, so no authoritative join key exists.
+  if (!github) return { kind: "unknown_author" };
   const token = await new PostgresSponsorCredentialStore(sql,
     process.env.TOKEN_ENCRYPTION_KEY, process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS,
   ).getGitHubAccessToken(repository.sponsor_id);
@@ -43,5 +44,5 @@ export async function resolveLandedCommitAuthor(sql: TransactionClient, value: s
   if (forgeId === null) return unresolved;
   // Match the fold and forge-person procedure's GitHub numeric identity mapping.
   const [account] = await sql<{ id: string }[]>`select id from users where github_user_id = ${forgeId}`;
-  return account === undefined ? { kind: "unlinked_commit_author" } : { kind: "ok", accountId: account.id };
+  return account === undefined ? { kind: "unknown_author" } : { kind: "ok", accountId: account.id };
 }

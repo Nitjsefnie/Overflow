@@ -16,7 +16,7 @@ export function ClosedPrDisputeList({ requests, moderation = false }: {
           <p>Closed PR: {request.pullRequestId} · issue: {request.issueId}</p>
           {moderation ? <p>Contributor: {request.contributorId}</p> : null}
           <p>Filed {formatInstant(request.createdAt)}: “{request.requestReason}”</p>
-          {moderation && request.comparison ? <ClosedPrDisputeComparisonView comparison={request.comparison} /> : <p>Landed evidence: {request.landedPullRequestId ?? request.landedCommitUrl ?? "not recorded"}</p>}
+          {moderation && request.comparison ? <ClosedPrDisputeComparisonView comparison={request.comparison} landingAccount={request.landedCommitAuthorId} /> : <p>Landed evidence: {request.landedPullRequestId ?? request.landedCommitUrl ?? "not recorded"}</p>}
           {request.decidedReason === null ? null : (
             <p className="mono-meta">
               Decided {request.decidedAt === null ? "at an unknown time" : formatInstant(request.decidedAt)}: “{request.decidedReason}”

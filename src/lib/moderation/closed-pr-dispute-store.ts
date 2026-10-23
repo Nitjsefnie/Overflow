@@ -113,8 +113,8 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
         } else if (hasCommitUrl && input.landedCommitUrl!.trim().length > 0) {
           landedCommitUrl = input.landedCommitUrl!.trim();
           const author = await this.resolveCommitAuthor(landedCommitUrl, transaction);
-          if (author.kind !== "ok") return author;
-          landedCommitAuthorId = author.accountId;
+          if (author.kind === "unresolved_commit_author") return author;
+          landedCommitAuthorId = author.kind === "ok" ? author.accountId : null;
         } else {
           return { kind: "landing_required" };
         }

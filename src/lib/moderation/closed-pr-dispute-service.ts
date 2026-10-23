@@ -86,8 +86,7 @@ export type ClosedPrDisputeStoreResult<T> =
   | { kind: "insufficient_evidence" }
   | { kind: "forbidden" }
   | { kind: "invalid_input" }
-  | { kind: "unresolved_commit_author" }
-  | { kind: "unlinked_commit_author" };
+  | { kind: "unresolved_commit_author" };
 
 export type ClosedPrDisputeStore = {
   fileDispute(input: ClosedPrDisputeFilingInput & { accountId: string }): Promise<ClosedPrDisputeStoreResult<ClosedPrDisputeRequest>>;
@@ -188,8 +187,6 @@ function unwrap<T>(result: ClosedPrDisputeStoreResult<T>): T {
       throw new ClosedPrDisputeError("INSUFFICIENT_EVIDENCE", "Stored review evidence is required to grant this dispute.");
     case "unresolved_commit_author":
       throw new ClosedPrDisputeError("CONFLICT", "The landed commit could not be resolved to its author.");
-    case "unlinked_commit_author":
-      throw new ClosedPrDisputeError("CONFLICT", "The landed commit author has no linked Overflow account.");
     case "invalid_input":
       throw new ClosedPrDisputeError("INVALID_INPUT", "Invalid dispute input.");
     default:
