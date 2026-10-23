@@ -603,7 +603,7 @@ the host credential from the Actions secret.
    the App is not recoverable by re-registering either.
 2. **The host PEM and the Actions secret belong to separate Apps.** The
    file at `GITHUB_APP_PRIVATE_KEY_PATH` is the read-only reconciliation App's
-   key. The `OVERFLOW_LEDGER_APP_KEY` secret belongs to the check-publishing App,
+   key. The `LEDGER_APP_KEY` secret belongs to the check-publishing App,
    whose credential is absent from the host. Rotate each App's key separately;
    never copy the reconciliation key into the relay's Actions secret.
 3. **The relay fires unattended today, and a gate would change that.** Read
@@ -689,7 +689,7 @@ action, and as of this writing it has not been done.
    to stay readable by the account the service runs as, which is why
    `/etc/overflow` is left traversable on a reconciliation App host. The path is absent if
    the host runs the OAuth-only posture, and that absence is itself the record.
-   The separate check-publishing App's `OVERFLOW_LEDGER_APP_KEY` secret on the `overflow-ledger`
+   The separate check-publishing App's `LEDGER_APP_KEY` secret on the `overflow-ledger`
    environment — is observable only by an account that can read the
    repository's settings, so record that you could not read it when you could
    not. Never `cat` the file, never paste its contents, and never record the
