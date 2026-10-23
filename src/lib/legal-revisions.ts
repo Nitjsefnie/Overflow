@@ -62,8 +62,8 @@ export interface LegalRevision {
 
 export const TERMS_REVISION: LegalRevision = {
   document: "terms",
-  version: "1.2",
-  effectiveDate: "2026-10-06",
+  version: "1.3",
+  effectiveDate: "2026-10-23",
 };
 
 export const ACCOUNT_DATA_REVISION: LegalRevision = {
@@ -78,6 +78,6 @@ export const ACCOUNT_DATA_REVISION: LegalRevision = {
 // page, not only on the notice that points at it.
 export const RULES_REVISION: LegalRevision = {
   document: "rules",
-  version: "1.2",
-  effectiveDate: "2026-10-06",
+  version: "1.3",
+  effectiveDate: "2026-10-23",
 };

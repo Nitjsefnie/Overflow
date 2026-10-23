@@ -27,7 +27,7 @@ Go to <https://overflow.nitjsefni.eu> and sign in with GitHub. Register a reposi
 
 Completed work for others repays a negative balance immediately. Repay enough to rise above the cutoff and ordinary discovery of all your unclaimed issues resumes. Every 10 credits repaid while negative adds 1 to your limit. Only the portion that repays debt counts. Self-work creates no credit. The exception bounds concurrently visible unclaimed work to one issue per exhausted sponsor; it does not bound cumulative debt or guarantee recovery.
 
-Only the sponsor prices work, at merge time, after the work exists. A claim is not a payment. Only a merged closing PR settles. Distinct review rounds are subtracted from the actual points, so repeated requests for changes reduce the credit earned.
+Only the sponsor prices work, at merge time, after the work exists. A claim is not a payment. Only a merged closing PR settles. Distinct review rounds are subtracted from the actual points, so repeated requests for changes reduce the credit earned. A balance funds a posted price; it does not guarantee that anyone will pick the work up.
 
 Every settlement records the label event, the sponsor's comment, the merge commit and a diff fingerprint. Every number from GitHub work is reproducible from GitHub. Accounts are audited by comparing outsider settlements with paired self-work samples: audit, warn, recalibrate, ban. Accounts use immutable GitHub account ids. Changing your login doesn't erase your balance.
 

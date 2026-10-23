@@ -73,6 +73,7 @@ export function TermsNotice() {
           Credits for a settlement are the final difficulty points minus the distinct review rounds it
           took, with a minimum of 0. Work in a repository you sponsor does not change balances. Credits
           earned before you sign in wait until you claim your GitHub identity — every one of them.
+          A balance funds a posted price; it does not guarantee that anyone will pick the work up.
         </p>
       </section>
 
