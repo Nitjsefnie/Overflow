@@ -10,7 +10,7 @@ In the codebase, `Nitjsefnie` is the repository owner as a GitHub user account, 
 
 If the maintainer is unavailable, merges, issue triage and labelling, conduct decisions ([CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)), and settlement labelling stop; the tracker keeps accepting issues and pull requests, and CI keeps running on them. The repository is public, so the code itself is not at risk for as long as the account exists; deleting the account deletes the repository with it, because a personal account's repositories go with it (GitHub Docs, *Deleting your personal account*). Access recovery runs through GitHub's account-recovery processes, and no co-owner or organization owner exists who could grant access meanwhile. [deploy/incident-response.md](deploy/incident-response.md#account-loss-and-account-compromise) covers what to do when that account is deleted, locked by platform action or under someone else's control, including what the Overflow Ledger App's identity does and does not depend on.
 
-In the instance, the service runs as the unprivileged `overflow` account under the systemd unit [deploy/overflow.service](deploy/overflow.service), pinned by `tests/deploy/unit-file.test.ts`, with `Restart=on-failure` and a five-second restart delay, and a start limit of five starts per 300 seconds, so a crash loop gives up in one final failure instead of restarting forever. Deploy authority and secret rotation sit with root on the deployment host: [deploy/README.md](deploy/README.md) section 10 deploys a new revision and section 11 rotates `TOKEN_ENCRYPTION_KEY`. The production environment file — the database URL, OAuth credentials, auth secret, token encryption key, webhook URLs and moderator ids — lives in `/etc/overflow/overflow.env`, owned by root. The production database is PostgreSQL on the deployment host, and [deploy/backup-restore.md](deploy/backup-restore.md) owns its backups. The moderator roster is resolved at sign-in from the `MODERATOR_GITHUB_USER_IDS` environment entry ([src/lib/moderation/roles.ts](src/lib/moderation/roles.ts)): a configured id is always promoted, a stored moderator is never demoted by absence from the list, grants made inside the product persist in the database, and changing the entry requires host access and a service restart. A member may request a correction to a priced settlement or calibration, and a moderator grants or declines it ([src/lib/overrides/service.ts](src/lib/overrides/service.ts)); the fold prices settlements automatically from GitHub labels and comments, so pricing itself needs no moderator. The contributor scoring this drives is screened for data-protection impact in [deploy/dpia-screening.md](deploy/dpia-screening.md), which records the scoring activities, the human-review routes on the sanctioning path, and the screening conclusion with its reopen triggers.
+In the instance, the service runs as the unprivileged `overflow` account under the systemd unit [deploy/overflow.service](deploy/overflow.service), pinned by `tests/deploy/unit-file.test.ts`, with `Restart=on-failure` and a five-second restart delay, and a start limit of five starts per 300 seconds, so a crash loop gives up in one final failure instead of restarting forever. Deploy authority and secret rotation sit with root on the deployment host: [deploy/README.md](deploy/README.md) section 10 deploys a new revision and section 11 rotates `OVERFLOW_TOKEN_ENCRYPTION_KEY`. The production environment file — the database URL, OAuth credentials, auth secret, token encryption key, webhook URLs and moderator ids — lives in `/etc/overflow/overflow.env`, owned by root. The production database is PostgreSQL on the deployment host, and [deploy/backup-restore.md](deploy/backup-restore.md) owns its backups. The moderator roster is resolved at sign-in from the `OVERFLOW_MODERATOR_GITHUB_USER_IDS` environment entry ([src/lib/moderation/roles.ts](src/lib/moderation/roles.ts)): a configured id is always promoted, a stored moderator is never demoted by absence from the list, grants made inside the product persist in the database, and changing the entry requires host access and a service restart. A member may request a correction to a priced settlement or calibration, and a moderator grants or declines it ([src/lib/overrides/service.ts](src/lib/overrides/service.ts)); the fold prices settlements automatically from GitHub labels and comments, so pricing itself needs no moderator. The contributor scoring this drives is screened for data-protection impact in [deploy/dpia-screening.md](deploy/dpia-screening.md), which records the scoring activities, the human-review routes on the sanctioning path, and the screening conclusion with its reopen triggers.
 
 If the maintainer is unavailable, new deployments and secret rotation stop, moderator roster changes stop — they are an environment edit plus a service restart — and open settlement-correction requests wait, because only a moderator can grant or decline them; members can still sign in, file correction requests, and read the ledger ([README.md](README.md) is the guide to using the instance). Running unattended are the service itself under systemd (`Restart=on-failure`), the webhook receivers, GitHub sign-in, the reconciliation worker with its startup and six-hour sweep, and automatic settlement pricing from repository labels — in every case above except a deleted account, which deletes the repository the last two read, so those two stop with it. The instance is rebuildable from the public repository by another operator following this document and [deploy/README.md](deploy/README.md); the production database exists only on the deployment host, with backups per [deploy/backup-restore.md](deploy/backup-restore.md).
 
@@ -18,7 +18,7 @@ If the maintainer is unavailable, new deployments and secret rotation stop, mode
 
 These steps stand up a local copy of the application against a local PostgreSQL database.
 
-1. Copy `.env.example` to `.env` and replace every placeholder. Generate `AUTH_SECRET` with `openssl rand -base64 32`; generate `TOKEN_ENCRYPTION_KEY` with `node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))"`, which prints the exact 43-character unpadded base64url form the service accepts.
+1. Copy `.env.example` to `.env` and replace every placeholder. Generate `AUTH_SECRET` with `openssl rand -base64 32`; generate `OVERFLOW_TOKEN_ENCRYPTION_KEY` with `node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))"`, which prints the exact 43-character unpadded base64url form the service accepts.
 2. Use an already-installed PostgreSQL 17 server **or** start the local Compose service:
 
    ```bash
@@ -32,17 +32,17 @@ These steps stand up a local copy of the application against a local PostgreSQL 
    `127.0.0.1`, so it is reachable only on this machine by default. To expose
    it deliberately, use `pnpm dev --hostname 0.0.0.0`; that listens on all
    IPv4 interfaces, allowing other hosts that can reach this machine to
-   connect. Use a trusted development network and set `APP_URL` and the OAuth
+   connect. Use a trusted development network and set `OVERFLOW_APP_URL` and the OAuth
    callback URL to the host and port those clients use.
 
-3. Point `DATABASE_URL` at that database, then install and migrate:
+3. Point `OVERFLOW_DATABASE_URL` at that database, then install and migrate:
 
    ```bash
    pnpm install --frozen-lockfile
    pnpm db:migrate
    ```
 
-   If `POSTGRES_HOST_PORT` is overridden, use that same host port in `DATABASE_URL`.
+   If `POSTGRES_HOST_PORT` is overridden, use that same host port in `OVERFLOW_DATABASE_URL`.
 
 4. Start the application:
 
@@ -53,11 +53,11 @@ These steps stand up a local copy of the application against a local PostgreSQL 
    Open `http://127.0.0.1:3000` (port 3000 by default, or the port set by
    `PORT`). To use another port,
    pass Next.js's `--port` flag, for example `pnpm dev --port 3130`.
-   Set `APP_URL` and the GitHub OAuth callback URL
-   (`<APP_URL>/api/auth/callback/github`) to use that port too; sign-in and
+   Set `OVERFLOW_APP_URL` and the GitHub OAuth callback URL
+   (`<OVERFLOW_APP_URL>/api/auth/callback/github`) to use that port too; sign-in and
    origin checks depend on those origins agreeing.
 
-Useful verification commands (the geometry check needs a Chrome/Chromium binary and, when it spawns its own server, `DATABASE_URL` and `AUTH_SECRET`, both set in the `.env` configured above):
+Useful verification commands (the geometry check needs a Chrome/Chromium binary and, when it spawns its own server, `OVERFLOW_DATABASE_URL` and `AUTH_SECRET`, both set in the `.env` configured above):
 
 ```bash
 pnpm test --run
@@ -68,7 +68,7 @@ node scripts/check-page-geometry.mjs
 ```
 
 The optional geometry command starts a separate production-mode application
-listener on all interfaces at port 3219 by default (`LAYOUT_CHECK_PORT`
+listener on all interfaces at port 3219 by default (`OVERFLOW_LAYOUT_CHECK_PORT`
 overrides the port), plus a Chrome DevTools listener on an automatically
 allocated port. To reuse the loopback application listener instead of starting
 another app server, pass `--base-url http://127.0.0.1:3000` (adjust the port if
@@ -110,16 +110,16 @@ This section is operator configuration for a deployment you run yourself; on the
 Create a GitHub OAuth application and a public HTTPS webhook endpoint. Configure the OAuth app's callback URL as `https://<public-host>/api/auth/callback/github`, and set these values in `.env`:
 
 ```dotenv
-APP_URL=https://<public-host>
-GITHUB_WEBHOOK_URL=https://<public-host>/api/github/webhooks
-GITLAB_WEBHOOK_URL=https://<public-host>/api/gitlab/webhooks
+OVERFLOW_APP_URL=https://<public-host>
+OVERFLOW_GITHUB_WEBHOOK_URL=https://<public-host>/api/github/webhooks
+OVERFLOW_GITLAB_WEBHOOK_URL=https://<public-host>/api/gitlab/webhooks
 ```
 
-Both forges must be able to reach their callback URLs over public HTTPS. Registrations using repository webhooks get an independent secret and a callback UUID in the `hook` query parameter. Secrets are encrypted with `TOKEN_ENCRYPTION_KEY`; they are never returned by the repository API. A credential authenticates only its registered provider, immutable repository/project ID, and GitLab instance. Receivers reject deliveries larger than 25 MiB with HTTP 413.
+Both forges must be able to reach their callback URLs over public HTTPS. Registrations using repository webhooks get an independent secret and a callback UUID in the `hook` query parameter. Secrets are encrypted with `OVERFLOW_TOKEN_ENCRYPTION_KEY`; they are never returned by the repository API. A credential authenticates only its registered provider, immutable repository/project ID, and GitLab instance. Receivers reject deliveries larger than 25 MiB with HTTP 413.
 
 For App-based GitHub registration, configure a separate registration App with
 `GITHUB_REGISTRATION_APP_ID`, `GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH` and
-`GITHUB_REGISTRATION_APP_WEBHOOK_SECRET`. Its public HTTPS receiver is
+`OVERFLOW_GITHUB_REGISTRATION_APP_WEBHOOK_SECRET`. Its public HTTPS receiver is
 `POST /api/github/app-webhook`; use the same webhook secret in the App's settings
 and the environment. Subscribe to exactly `issues`, `issue_comment`,
 `pull_request` and `pull_request_review`, and grant repository permissions
@@ -178,7 +178,7 @@ Run this read-only query with a database connection configured for the instance
 you intend to inspect:
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+psql "$OVERFLOW_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
 select r.owner_name, r.active, j.repository_id, j.state, j.reason,
        j.attempt_count, j.run_after, j.last_failure_at
 from repository_reconciliation_jobs j
@@ -242,7 +242,7 @@ A sweep runs at startup and every six hours, and offers every active repository 
 
 This is an **admission threshold, not a guaranteed remaining balance**. An admitted pass may fetch many pull requests and paginate without a point ceiling, so it can spend past the reserve. The threshold stops new passes; it does not cancel requests within an admitted pass.
 
-A paused sweep pass keeps at most 1000 pages by default, configurable with `RECONCILIATION_SWEEP_PAGE_CEILING`. A walk beyond that ceiling re-fetches pages it did not keep from the forge, spending request budget without losing correctness. A pass that fills its cache and still cannot finish re-fetches uncached pages in every later window, so the walk can stay held until the corpus shrinks or the ceiling rises.
+A paused sweep pass keeps at most 1000 pages by default, configurable with `OVERFLOW_RECONCILIATION_SWEEP_PAGE_CEILING`. A walk beyond that ceiling re-fetches pages it did not keep from the forge, spending request budget without losing correctness. A pass that fills its cache and still cannot finish re-fetches uncached pages in every later window, so the walk can stay held until the corpus shrinks or the ceiling rises.
 
 The GraphQL budget panel at the end of the moderator page (`/moderation`) displays one entry per known quota owner: the account's GitHub login when already available from the moderator roster, otherwise its account ID, followed by the recorded remaining balance, optional limit, reserve, reset time, observation time and hold state. Each sponsor account has its own OAuth quota; its readings and transitions are keyed by account ID, never by a credential. Unowned gateways record nothing. Within each owner's newest reset window the store retains the lowest balance and rejects older windows, so delayed responses cannot erase a known hold. Observations are process-local and disappear on restart; they are not shared across application instances. No owners observed yet is displayed separately from a known owner's unobserved or held budget.
 
@@ -271,8 +271,8 @@ as issue events, regardless of the comment text, author or issue state.
 The fold's pricing, author/edit evidence rules and fifteen-minute grace are unchanged.
 
 Deploy and verify the comment-capable release before upgrading existing hooks.
-With the deployment's `DATABASE_URL`, `TOKEN_ENCRYPTION_KEY`,
-`GITHUB_WEBHOOK_URL`, and `GITLAB_WEBHOOK_URL` loaded, run:
+With the deployment's `OVERFLOW_DATABASE_URL`, `OVERFLOW_TOKEN_ENCRYPTION_KEY`,
+`OVERFLOW_GITHUB_WEBHOOK_URL`, and `OVERFLOW_GITLAB_WEBHOOK_URL` loaded, run:
 
 ```bash
 pnpm webhooks:upgrade
@@ -292,7 +292,7 @@ failure. Avoid concurrent manual hook edits.
 Migration 043 must run before the scoped receivers start. Legacy hooks are rejected
 until upgraded; there is no shared-secret fallback. Run the upgrade promptly and
 complete the queued full reconciliation to recover gaps. Retire the previous
-shared credential after all registrations migrate; keep `TOKEN_ENCRYPTION_KEY`,
+shared credential after all registrations migrate; keep `OVERFLOW_TOKEN_ENCRYPTION_KEY`,
 and change it only by the [key rotation procedure](deploy/README.md#11-rotating-the-credential-encryption-key).
 
 Each JSON outcome identifies the registration by its local ID, reports
@@ -447,7 +447,7 @@ pre-deletion dump.
 
 ### Running the commands
 
-On the deployment host, with the deployment's `DATABASE_URL` loaded:
+On the deployment host, with the deployment's `OVERFLOW_DATABASE_URL` loaded:
 
 ```bash
 cd /srv/overflow
@@ -566,32 +566,32 @@ Neither table covers variables read only by surrounding tooling: the shell's
 
 | Variable | Purpose |
 | --- | --- |
-| `DATABASE_URL` | PostgreSQL connection string |
-| `DATABASE_STATEMENT_TIMEOUT_MS` | Optional deadline in milliseconds for every statement the database work pool runs, enforced by the server; defaults to 600000 (ten minutes) when unset, while a set-but-invalid value — empty, non-numeric, negative or zero — is an error at client construction, not a fallback |
+| `OVERFLOW_DATABASE_URL` | PostgreSQL connection string |
+| `OVERFLOW_DATABASE_STATEMENT_TIMEOUT_MS` | Optional deadline in milliseconds for every statement the database work pool runs, enforced by the server; defaults to 600000 (ten minutes) when unset, while a set-but-invalid value — empty, non-numeric, negative or zero — is an error at client construction, not a fallback |
 | `AUTH_SECRET` | Auth.js session signing secret |
 | `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` | GitHub OAuth application credentials |
-| `TOKEN_ENCRYPTION_KEY` | OAuth-token encryption key |
-| `TOKEN_ENCRYPTION_KEY_PREVIOUS` | Optional decrypt-only previous key, set only while rotating `TOKEN_ENCRYPTION_KEY` by [deploy/README.md section 11](deploy/README.md#11-rotating-the-credential-encryption-key); unset or empty means none, a malformed value is an error |
-| `APP_URL` | Public application URL; its origin is the only one browser mutations may come from, and a missing or malformed value refuses every one of them. In production, with all four host-trust overrides below unset, parsing a valid, non-opaque origin enables Auth.js's boolean `trustHost` flag; that flag does not compare incoming sign-in requests against this origin |
-| `AUTH_URL`, `AUTH_TRUST_HOST` | Optional overrides of Auth.js's boolean `trustHost` flag: the first defined value in `AUTH_URL`, `AUTH_TRUST_HOST`, `VERCEL`, `CF_PAGES` order enables the flag when non-empty and disables it when empty, bypassing the `NODE_ENV`/`APP_URL` fallback. A non-empty `AUTH_URL` must parse as a URL and also rewrites the incoming auth request's URL origin to that URL's origin; leave all four unset to use the fallback described below |
-| `VERCEL`, `CF_PAGES` | Optional hosting-platform trust flags; after `AUTH_URL` and `AUTH_TRUST_HOST`, the first defined value in this order decides sign-in host trust by whether it is non-empty. When all four are unset, the `NODE_ENV`/`APP_URL` fallback applies |
-| `NODE_ENV` | Runtime mode, set to `production` by the systemd unit. With all four host-trust overrides above unset, Auth.js's boolean `trustHost` flag is true in production only when `APP_URL` parses to a valid, non-opaque origin, and is true unconditionally in other modes |
+| `OVERFLOW_TOKEN_ENCRYPTION_KEY` | OAuth-token encryption key |
+| `OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS` | Optional decrypt-only previous key, set only while rotating `OVERFLOW_TOKEN_ENCRYPTION_KEY` by [deploy/README.md section 11](deploy/README.md#11-rotating-the-credential-encryption-key); unset or empty means none, a malformed value is an error |
+| `OVERFLOW_APP_URL` | Public application URL; its origin is the only one browser mutations may come from, and a missing or malformed value refuses every one of them. In production, with all four host-trust overrides below unset, parsing a valid, non-opaque origin enables Auth.js's boolean `trustHost` flag; that flag does not compare incoming sign-in requests against this origin |
+| `AUTH_URL`, `AUTH_TRUST_HOST` | Optional overrides of Auth.js's boolean `trustHost` flag: the first defined value in `AUTH_URL`, `AUTH_TRUST_HOST`, `VERCEL`, `CF_PAGES` order enables the flag when non-empty and disables it when empty, bypassing the `NODE_ENV`/`OVERFLOW_APP_URL` fallback. A non-empty `AUTH_URL` must parse as a URL and also rewrites the incoming auth request's URL origin to that URL's origin; leave all four unset to use the fallback described below |
+| `VERCEL`, `CF_PAGES` | Optional hosting-platform trust flags; after `AUTH_URL` and `AUTH_TRUST_HOST`, the first defined value in this order decides sign-in host trust by whether it is non-empty. When all four are unset, the `NODE_ENV`/`OVERFLOW_APP_URL` fallback applies |
+| `NODE_ENV` | Runtime mode, set to `production` by the systemd unit. With all four host-trust overrides above unset, Auth.js's boolean `trustHost` flag is true in production only when `OVERFLOW_APP_URL` parses to a valid, non-opaque origin, and is true unconditionally in other modes |
 | `NEXT_RUNTIME`, `NEXT_PHASE` | Framework markers: only `NEXT_RUNTIME=nodejs` loads Node startup wiring and permits background reconciliation; missing or other runtime values do not. `NEXT_PHASE=phase-production-build` suppresses background reconciliation, while other or unset phase values leave it eligible unless explicitly disabled |
 | `JOURNAL_STREAM` | Optional systemd journal stream identity (`device:inode`); only a valid value matching stderr enables journal priorities for `console.error` (3) and `console.warn` (4). Unset, malformed or mismatched values leave the console unchanged |
-| `NEXT_DIST_DIR` | Also read at runtime by the third-party-notices route: selects the release directory containing `third-party-notices.txt`, trimming the value and defaulting to `.next` when unset or blank. The resolved release is pinned at first use. Keep it unset for the documented production service; its build use is described below |
-| `GITHUB_WEBHOOK_URL`, `GITLAB_WEBHOOK_URL` | Public callback base URLs; registration adds a scoped `hook` UUID |
+| `OVERFLOW_NEXT_DIST_DIR` | Also read at runtime by the third-party-notices route: selects the release directory containing `third-party-notices.txt`, trimming the value and defaulting to `.next` when unset or blank. The resolved release is pinned at first use. Keep it unset for the documented production service; its build use is described below |
+| `OVERFLOW_GITHUB_WEBHOOK_URL`, `OVERFLOW_GITLAB_WEBHOOK_URL` | Public callback base URLs; registration adds a scoped `hook` UUID |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` | Optional pair for GitHub App installation authentication when reconciling OAuth webhook registrations: the App id and path to its PEM private-key file. Either unset or empty leaves those registrations using OAuth-only authentication. With both set, wiring reads the key and fails if it is unreadable, unparseable or not RSA-family; repositories without an App installation fall back to sponsor OAuth. See [deploy/README.md section 4](deploy/README.md#4-create-the-environment-file) for the service account's file access |
 | `GITHUB_REGISTRATION_APP_ID`, `GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH` | Optional separate registration App id and PEM RSA key path. Either unset or empty disables App-based registration. A configured unreadable, unparseable or non-RSA key throws at wiring time. App registrations reconcile through this App's installation token. See [GitHub OAuth and webhooks](#operating-an-instance-github-oauth-and-webhooks) for setup |
-| `GITHUB_REGISTRATION_APP_WEBHOOK_SECRET` | Secret shared with the registration App's webhook settings for `POST /api/github/app-webhook`. Unset or empty answers deliveries with HTTP `503` (fail-closed) |
+| `OVERFLOW_GITHUB_REGISTRATION_APP_WEBHOOK_SECRET` | Secret shared with the registration App's webhook settings for `POST /api/github/app-webhook`. Unset or empty answers deliveries with HTTP `503` (fail-closed) |
 | `PUBLIC_DESTINATION_DENY_CIDRS` | Optional override of the outbound fetch guard's deployment deny list: comma-separated bare IP addresses or CIDR subnets, trimmed, with invalid entries rejected. Empty or blank explicitly selects an empty list. Unset defaults to the host's public interface addresses; unavailable interface enumeration warns and defaults to an empty list, so restricted deployments must supply their public addresses explicitly |
-| `CONTROLLER_NAME`, `CONTROLLER_ISSUES_URL`, `CONTROLLER_SENSITIVE_URL` | Optional controller identity and request channels the legal pages (`/account-data`, `/terms`) render; the defaults are the hosted instance's — the maintainer personally, the project's public issue tracker, and GitHub's private vulnerability reporting form — and they render only where `APP_URL`'s origin is `https://overflow.nitjsefni.eu`, so any other origin renders the plain self-hosted statement plus exactly the channels configured here, and an unset variable publishes nothing rather than the maintainer's channel. Blank values read as unset |
-| `MODERATOR_GITHUB_USER_IDS` | Comma-separated moderator GitHub account ids (`gh api users/<login> --jq .id`); replaces `MODERATOR_GITHUB_LOGINS`, which is no longer read |
-| `PRIVILEGED_PROXY_SECRET` | Optional shared secret the reverse proxy echoes in `x-privileged-proxy-secret` on proxied requests (operator steps in [deploy/README.md section 13](deploy/README.md#13-verifying-the-privileged-action-journals-client-addresses)); a privileged-action journal entry's client address is recorded verified only when that header equals this value and the value is set and non-empty, and an unset or empty value keeps every entry's address recorded but marked unverified |
+| `CONTROLLER_NAME`, `CONTROLLER_ISSUES_URL`, `CONTROLLER_SENSITIVE_URL` | Optional controller identity and request channels the legal pages (`/account-data`, `/terms`) render; the defaults are the hosted instance's — the maintainer personally, the project's public issue tracker, and GitHub's private vulnerability reporting form — and they render only where `OVERFLOW_APP_URL`'s origin is `https://overflow.nitjsefni.eu`, so any other origin renders the plain self-hosted statement plus exactly the channels configured here, and an unset variable publishes nothing rather than the maintainer's channel. Blank values read as unset |
+| `OVERFLOW_MODERATOR_GITHUB_USER_IDS` | Comma-separated moderator GitHub account ids (`gh api users/<login> --jq .id`); replaces `MODERATOR_GITHUB_LOGINS`, which is no longer read |
+| `OVERFLOW_PRIVILEGED_PROXY_SECRET` | Optional shared secret the reverse proxy echoes in `x-privileged-proxy-secret` on proxied requests (operator steps in [deploy/README.md section 13](deploy/README.md#13-verifying-the-privileged-action-journals-client-addresses)); a privileged-action journal entry's client address is recorded verified only when that header equals this value and the value is set and non-empty, and an unset or empty value keeps every entry's address recorded but marked unverified |
 | `GITHUB_GRAPHQL_BUDGET_RESERVE` | Optional GraphQL admission threshold for new worker passes; defaults to 500, malformed values fall back to 500, and `0` disables the hold. A very large value is deliberately restrictive; see Reconciliation for scope and restart instructions. |
-| `RECONCILIATION_SWEEP_PAGE_CEILING` | Optional per-pass bound on cached sweep pages; defaults to 1000. Missing, blank, malformed, nonpositive or unsafe-integer values fall back to 1000; pages beyond the ceiling are re-fetched from the forge. |
+| `OVERFLOW_RECONCILIATION_SWEEP_PAGE_CEILING` | Optional per-pass bound on cached sweep pages; defaults to 1000. Missing, blank, malformed, nonpositive or unsafe-integer values fall back to 1000; pages beyond the ceiling are re-fetched from the forge. |
 | `OVERFLOW_DISABLE_RECONCILIATION_SWEEP` | Any non-empty value turns off the reconciliation worker and its sweep — the whole of automatic reconciliation; jobs still accumulate and nothing drains them (see Reconciliation) |
 | `OVERFLOW_SKIP_STARTUP_RECONCILIATION` | Exactly `1` skips the reconciliation sweep a restart runs at startup, as a temporary deploy override; missed deliveries stay unrecovered until the six-hour sweep or a manual reconciliation, and any other value keeps the startup sweep on |
-| `DEBUG_GITHUB_COST` | Debug-only, do not set in production: any non-empty value makes the GitHub client log the point cost and remaining balance of an issues-page query whose response carries a rate-limit reading |
+| `OVERFLOW_DEBUG_GITHUB_COST` | Debug-only, do not set in production: any non-empty value makes the GitHub client log the point cost and remaining balance of an issues-page query whose response carries a rate-limit reading |
 | `RATE_LIMIT_EXPORT_PER_HOUR` | Optional per-identity hourly bound for `POST /api/account/export`; defaults to 3. Present but nonpositive or non-numeric values fall back to the default. One of the five expensive-route bounds (with the repositories, tokens, forge-identities and overrides rows below): each value is one acting credential's burst per hour, refilled steadily at value/60 per minute and keyed by the credential that acts — the session's account id, or the API token's issuance id — shared with the MCP dispatch of the same operation |
 | `RATE_LIMIT_REPOSITORIES_PER_HOUR` | Optional per-identity hourly bound for `POST`, `PATCH` and `DELETE /api/repositories`; defaults to 10. Same derivation, keying and fallback as the export bound |
 | `RATE_LIMIT_TOKENS_PER_HOUR` | Optional per-identity hourly bound for `POST /api/tokens`; defaults to 5. Same derivation, keying and fallback as the export bound |
@@ -601,12 +601,12 @@ Neither table covers variables read only by surrounding tooling: the shell's
 ### Deployment and build inputs
 
 These values are read while configuring a build or interpolating a Compose
-file. `NEXT_DIST_DIR` also has the runtime read described above.
+file. `OVERFLOW_NEXT_DIST_DIR` also has the runtime read described above.
 See [the container deployment guide](deploy/container.md) for Compose usage.
 
 | Variable | Read site and purpose |
 | --- | --- |
-| `NEXT_DIST_DIR` | [next.config.ts](next.config.ts), lines 6–88: optional trimmed direct-child build output directory. When set, the configuration validates the prepared matching TypeScript config and uses the directory as Next.js `distDir`; unset uses Next.js defaults. |
+| `OVERFLOW_NEXT_DIST_DIR` | [next.config.ts](next.config.ts), lines 6–88: optional trimmed direct-child build output directory. When set, the configuration validates the prepared matching TypeScript config and uses the directory as Next.js `distDir`; unset uses Next.js defaults. |
 | `POSTGRES_HOST_BIND` | [docker-compose.yml](docker-compose.yml), lines 9–13: host address for the published PostgreSQL port; defaults to `127.0.0.1`. |
 | `POSTGRES_HOST_PORT` | [docker-compose.yml](docker-compose.yml), lines 9–13: host port for PostgreSQL; defaults to `5432`, while the container port stays `5432`. |
 | `APP_HOST_BIND` | [docker-compose.yml](docker-compose.yml), lines 36–39: host address for the published app port; defaults to `127.0.0.1`. |

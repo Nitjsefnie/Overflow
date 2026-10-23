@@ -138,10 +138,11 @@ describe("the backup and restore procedure", () => {
   it("refuses to back up without OVERFLOW_DATABASE_URL", () => {
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.OVERFLOW_DATABASE_URL;
+    delete env.DATABASE_URL;
     const result = runScript(backupScript, ["--output-dir", backupDir], env);
 
     expect(result.status, result.stderr).not.toBe(0);
-    expect(result.stderr).toContain("OVERFLOW_DATABASE_URL");
+    expect(result.stderr).toContain("db-backup.sh: DATABASE_URL is not set; refusing to guess which database to dump");
   });
 
   it("writes a dump pg_restore can list, prints its path, and prunes past retention", () => {

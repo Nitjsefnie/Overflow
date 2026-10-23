@@ -337,7 +337,7 @@ describe("the spawned-server environment preflight (issue 471)", () => {
   });
 
   it("reports OVERFLOW_DATABASE_URL missing when it is set to the empty string", () => {
-    expect(missingEnv({ OVERFLOW_DATABASE_URL: "" }, () => false)).toEqual(["OVERFLOW_DATABASE_URL"]);
+    expect(missingEnv({ OVERFLOW_DATABASE_URL: "" }, () => false)).toEqual(["DATABASE_URL"]);
   });
 
   it("reports nothing missing when the env lacks OVERFLOW_DATABASE_URL but a repo-root .env file exists", () => {
@@ -350,7 +350,7 @@ describe("the spawned-server environment preflight (issue 471)", () => {
   it("reports OVERFLOW_DATABASE_URL missing when neither the env nor a repo-root .env file has it", () => {
     // The case the script turns into the exit-2 refusal before spawning
     // anything: the run would otherwise fail as a false layout regression.
-    expect(missingEnv({}, () => false)).toEqual(["OVERFLOW_DATABASE_URL"]);
+    expect(missingEnv({}, () => false)).toEqual(["DATABASE_URL"]);
   });
 
   it("composes the refusal message with the variable's name and BOTH remedies", () => {

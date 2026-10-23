@@ -483,11 +483,11 @@ describe("the pull request suite workflow", () => {
         "`PIP_CONFIG_FILE`) there lets the pull request supply the artifact the hashes are " +
         "checked against. Add a key here deliberately, with its reason.",
     ).toEqual([
-      "OVERFLOW_APP_URL",
       "AUTH_GITHUB_ID",
       "AUTH_GITHUB_SECRET",
       "AUTH_SECRET",
       "COREPACK_ENABLE_PROJECT_SPEC",
+      "OVERFLOW_APP_URL",
       "OVERFLOW_DATABASE_URL",
       "OVERFLOW_GITHUB_WEBHOOK_URL",
       "OVERFLOW_MODERATOR_GITHUB_USER_IDS",

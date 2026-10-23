@@ -24,6 +24,7 @@ afterEach(() => {
 it("rebuilds a warmed production audit handler with the registered role mock after resetting modules", async () => {
   const roleFailure = vi.spyOn(console, "error");
   vi.stubEnv("OVERFLOW_DATABASE_URL", undefined);
+  vi.stubEnv("DATABASE_URL", undefined);
   productionAuth.mockResolvedValue(memberSession);
   productionRole.mockResolvedValue("MEMBER");
 
@@ -41,7 +42,7 @@ it("rebuilds a warmed production audit handler with the registered role mock aft
   });
   expect(roleFailure).toHaveBeenCalledWith(
     "Moderator route gate: role lookup failed.",
-    expect.objectContaining({ message: "OVERFLOW_DATABASE_URL must be configured before using the database." }),
+    expect.objectContaining({ message: "DATABASE_URL must be configured before using the database." }),
   );
 
   // Resetting must rebuild that graph with the registered mocks. Without it,

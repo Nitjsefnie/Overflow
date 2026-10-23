@@ -1637,7 +1637,7 @@ function gateBehavior(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(gateBehavior);
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(Object.entries(value)
-      .filter(([key]) => !["uses", "with", "image", "runs-on"].includes(key) && !key.startsWith("ACTIONLINT_"))
+      .filter(([key]) => !["uses", "with", "image", "runs-on"].includes(key) && !key.startsWith("OVERFLOW_ACTIONLINT_"))
       .map(([key, entry]) => [key, gateBehavior(entry)]));
   }
   return value;

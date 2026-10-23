@@ -210,7 +210,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
     );
 
     expect(error, "a sweep-only start names no triggering run").toBeInstanceOf(Error);
-    expect(error?.message).toContain("OVERFLOW_LEDGER_SWEEP_ONLY");
+    expect(error?.message).toContain("LEDGER_SWEEP_ONLY=true is a sweep-only relay");
     expect(error?.message).toContain("no triggering run may be named");
     expect(fetchStub.requests.map((request) => request.url)).toEqual([OWN_JOB_URL, TOKEN_URL, SWEEP_RUNS_URL]);
   });
@@ -235,7 +235,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
     );
 
     expect(error, "an ambiguous mode must fail closed").toBeInstanceOf(Error);
-    expect(error?.message).toContain('OVERFLOW_LEDGER_SWEEP_ONLY must be exactly "true" or "false"');
+    expect(error?.message).toContain('LEDGER_SWEEP_ONLY must be exactly "true" or "false"');
     expect(fetchStub.requests.map((request) => request.url)).toEqual([OWN_JOB_URL, TOKEN_URL, SWEEP_RUNS_URL]);
   });
 

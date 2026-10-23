@@ -134,6 +134,7 @@ describe("repository route internal failures", () => {
 
   it("logs the real POST wiring failure when OVERFLOW_DATABASE_URL is unset", async () => {
     vi.stubEnv("OVERFLOW_DATABASE_URL", undefined);
+    vi.stubEnv("DATABASE_URL", undefined);
     readSession.mockResolvedValue({ user: { id: "member-id", role: "MEMBER" } });
     const database = await vi.importActual<typeof import("@/lib/db/client")>("@/lib/db/client");
     await database.closeSql();
@@ -150,7 +151,7 @@ describe("repository route internal failures", () => {
       code: "INTERNAL_ERROR", message: "Unable to initialize repository registration.",
     } });
     expect(console.error).toHaveBeenCalledExactlyOnceWith(
-      "Repository registration failed: Error: OVERFLOW_DATABASE_URL must be configured before using the database.",
+      "Repository registration failed: Error: DATABASE_URL must be configured before using the database.",
     );
   });
 
