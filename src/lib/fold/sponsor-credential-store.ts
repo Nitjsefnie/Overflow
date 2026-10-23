@@ -1,9 +1,9 @@
-import type { SqlClient } from "@/lib/db/types";
+import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import { credentialBinding, decryptToken, tokenKeySetFrom } from "@/lib/security/token-cipher";
 
 export class PostgresSponsorCredentialStore {
   public constructor(
-    private readonly sql: SqlClient,
+    private readonly sql: SqlClient | TransactionClient,
     private readonly tokenEncryptionKey: string | undefined,
     private readonly previousTokenEncryptionKey: string | undefined,
   ) {}

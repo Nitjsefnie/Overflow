@@ -1,4 +1,4 @@
-import type { SqlClient } from "@/lib/db/types";
+import type { TransactionClient } from "@/lib/db/types";
 import { PostgresSponsorCredentialStore } from "@/lib/fold/sponsor-credential-store";
 import { GitHubGateway } from "@/lib/github/client";
 
@@ -7,7 +7,7 @@ export type CommitAuthorResult =
   | { kind: "unresolved_commit_author" }
   | { kind: "unlinked_commit_author" };
 
-export async function resolveLandedCommitAuthor(sql: SqlClient, value: string): Promise<CommitAuthorResult> {
+export async function resolveLandedCommitAuthor(sql: TransactionClient, value: string): Promise<CommitAuthorResult> {
   const unresolved = { kind: "unresolved_commit_author" } as const;
   let url: URL;
   try { url = new URL(value); } catch { return unresolved; }

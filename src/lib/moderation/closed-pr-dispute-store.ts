@@ -1,6 +1,6 @@
 import { resolveLandedCommitAuthor, type CommitAuthorResult } from "@/lib/moderation/closed-pr-dispute-commit";
 import { getSql } from "@/lib/db/client";
-import type { EnforcementState, PullRequestState, SqlClient } from "@/lib/db/types";
+import type { EnforcementState, PullRequestState, SqlClient, TransactionClient } from "@/lib/db/types";
 import { disputeComparisons, reviewEvidence } from "@/lib/moderation/closed-pr-dispute-evidence";
 import { countReviewRoundsAsOf } from "@/lib/fold/review-rounds";
 import { closedPrDisputeDecisionSchema } from "@/lib/moderation/closed-pr-dispute-service";
@@ -39,8 +39,8 @@ type Repository = { owner_name: string; provider: string; instance_url: string |
 export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
   public constructor(
     private readonly sql: SqlClient = getSql(),
-    private readonly resolveCommitAuthor: (url: string) => Promise<CommitAuthorResult> =
-      (url) => resolveLandedCommitAuthor(sql, url),
+    private readonly resolveCommitAuthor: (url: string, transaction: TransactionClient) => Promise<CommitAuthorResult> =
+      (url, transaction) => resolveLandedCommitAuthor(transaction, url),
   ) {}
 
   public async fileDispute(
@@ -116,7 +116,7 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
           landedPullRequestId = landing.id;
         } else if (hasCommitUrl && input.landedCommitUrl!.trim().length > 0) {
           landedCommitUrl = input.landedCommitUrl!.trim();
-          const author = await this.resolveCommitAuthor(landedCommitUrl);
+          const author = await this.resolveCommitAuthor(landedCommitUrl, transaction);
           if (author.kind !== "ok") return author;
           landedCommitAuthorId = author.accountId;
         } else {
