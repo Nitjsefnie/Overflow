@@ -1,3 +1,4 @@
+import { readEnv } from "@/lib/env";
 import { PostgresSweepPassStore } from "@/lib/fold/sweep-pass-store";
 import {
   isParticipationEligible,
@@ -74,8 +75,8 @@ type WebhookCredentialRow = {
 export class PostgresRepositoryStore implements RepositoryRegistrationStore {
   public constructor(
     private readonly sql: SqlClient = getSql(),
-    private readonly tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY,
-    private readonly previousTokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS,
+    private readonly tokenEncryptionKey: string | undefined = readEnv("TOKEN_ENCRYPTION_KEY"),
+    private readonly previousTokenEncryptionKey: string | undefined = readEnv("TOKEN_ENCRYPTION_KEY_PREVIOUS"),
   ) {}
 
   private tokenKeys(): TokenKeySet {

@@ -1,3 +1,4 @@
+import { readEnv } from "@/lib/env";
 import type { TransactionClient } from "@/lib/db/types";
 import { PostgresSponsorCredentialStore } from "@/lib/fold/sponsor-credential-store";
 import { GitHubGateway } from "@/lib/github/client";
@@ -29,7 +30,7 @@ export async function resolveLandedCommitAuthor(sql: TransactionClient, value: s
   // user_forge_identities is keyed by forge_user_id, so no authoritative join key exists.
   if (!github) return { kind: "unknown_author" };
   const token = await new PostgresSponsorCredentialStore(sql,
-    process.env.TOKEN_ENCRYPTION_KEY, process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS,
+    readEnv("TOKEN_ENCRYPTION_KEY"), readEnv("TOKEN_ENCRYPTION_KEY_PREVIOUS"),
   ).getGitHubAccessToken(repository.sponsor_id);
   if (token === null) return unresolved;
   const [owner, name] = repository.owner_name.split("/");

@@ -1,3 +1,4 @@
+import { readEnv } from "../env.ts";
 import postgres from "postgres";
 import type { SqlClient, TransactionCallback } from "@/lib/db/types";
 export { redactPostgresError } from "./redact-postgres-error.ts";
@@ -96,7 +97,7 @@ function reportPostgresNotice(notice: PostgresNotice): void {
  * silently disabled the deadline the default exists to guarantee.
  */
 function statementTimeoutMs(): string {
-  const raw = process.env.DATABASE_STATEMENT_TIMEOUT_MS;
+  const raw = readEnv("DATABASE_STATEMENT_TIMEOUT_MS");
   if (raw === undefined) {
     return DEFAULT_STATEMENT_TIMEOUT_MS;
   }
@@ -138,7 +139,7 @@ let client: SqlClient | undefined;
 let coordinationClient: SqlClient | undefined;
 
 function requireDatabaseUrl(): string {
-  const databaseUrl = process.env.DATABASE_URL;
+  const databaseUrl = readEnv("DATABASE_URL");
   if (databaseUrl === undefined || databaseUrl.length === 0) {
     throw new Error("DATABASE_URL must be configured before using the database.");
   }

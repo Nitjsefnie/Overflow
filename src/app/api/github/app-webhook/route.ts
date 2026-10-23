@@ -1,3 +1,4 @@
+import { readEnv } from "@/lib/env";
 import { createHash } from "node:crypto";
 import { githubWebhookEvents, parseGitHubWebhookDeliveryDetailed, type GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import { verifyGitHubWebhookSignature } from "@/lib/github/webhook-signature";
@@ -105,7 +106,7 @@ const webhookRateLimiter = createReceiverRateLimiter({
 
 export async function POST(request: Request): Promise<Response> {
   return createGitHubAppWebhookPostHandler({
-    secret: process.env.GITHUB_REGISTRATION_APP_WEBHOOK_SECRET,
+    secret: readEnv("GITHUB_REGISTRATION_APP_WEBHOOK_SECRET"),
     checkRateLimit: () => webhookRateLimiter.admit(),
     findActiveAppRegistrationByGitHubRepositoryId: (id) => new PostgresRepositoryStore().findActiveAppRegistrationByGitHubRepositoryId(id),
     processWebhook: async (delivery, scope) => {

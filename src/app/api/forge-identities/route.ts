@@ -1,3 +1,4 @@
+import { readEnv } from "@/lib/env";
 import { errorResponse } from "@/lib/http/error-response";
 import { z } from "zod";
 import { getSql } from "@/lib/db/client";
@@ -97,7 +98,7 @@ export function createForgeIdentitiesRouteDependencies(): ForgeIdentitiesRouteDe
         forgeUserId: input.forgeUserId,
       });
     },
-    tokenEncryptionKey: process.env.TOKEN_ENCRYPTION_KEY,
+    tokenEncryptionKey: readEnv("TOKEN_ENCRYPTION_KEY"),
   };
 }
 

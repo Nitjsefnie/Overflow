@@ -1,3 +1,4 @@
+import { readEnv } from "@/lib/env";
 import { readGitHubRegistrationAppAuthConfig } from "@/lib/github/app-installation-auth";
 import { createAppRegistration } from "@/lib/github/app-registration";
 import { errorResponse } from "@/lib/http/error-response";
@@ -653,7 +654,7 @@ async function buildRegistrationDependencies(
   let forgeIdentity: { instanceUrl: string; token: string } | null = null;
   let getForgeToken: ((userId: string, instanceUrl: string) => Promise<{ token: string; identityId: string } | null>) | undefined;
   if (input.provider === "gitlab") {
-    const tokenEncryptionKey = process.env.TOKEN_ENCRYPTION_KEY;
+    const tokenEncryptionKey = readEnv("TOKEN_ENCRYPTION_KEY");
     if (tokenEncryptionKey === undefined || tokenEncryptionKey.length === 0) {
       throw new Error("Token encryption key must be configured.");
     }
@@ -685,8 +686,8 @@ async function buildRegistrationDependencies(
  */
 function requiredWebhookConfiguration(provider?: "gitlab"): { callbackUrl: string } {
   const callbackUrl = provider === "gitlab"
-    ? process.env.GITLAB_WEBHOOK_URL
-    : process.env.GITHUB_WEBHOOK_URL;
+    ? readEnv("GITLAB_WEBHOOK_URL")
+    : readEnv("GITHUB_WEBHOOK_URL");
   if (
     callbackUrl === undefined ||
     callbackUrl.length === 0

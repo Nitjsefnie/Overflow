@@ -1,3 +1,4 @@
+import { readEnv } from "@/lib/env";
 import { getSql } from "@/lib/db/client";
 import type { SqlClient } from "@/lib/db/types";
 import type { FoldForgeIdentity, FoldResult, FoldUser } from "@/lib/fold/repository-fold";
@@ -32,9 +33,9 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
 
   public constructor(
     private readonly sql: SqlClient = getSql(),
-    tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY,
+    tokenEncryptionKey: string | undefined = readEnv("TOKEN_ENCRYPTION_KEY"),
     private readonly coordinationSql?: SqlClient,
-    previousTokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS,
+    previousTokenEncryptionKey: string | undefined = readEnv("TOKEN_ENCRYPTION_KEY_PREVIOUS"),
     /**
      * Store-level tuning, injectable for tests. The only knob today is the
      * per-fact byte limit the evidence cache omits facts over (default 64 MiB,

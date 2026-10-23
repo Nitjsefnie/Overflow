@@ -1,3 +1,4 @@
+import { readEnv } from "@/lib/env";
 import { timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import type { RouteCredentialReference } from "@/lib/security/route-credential";
@@ -91,7 +92,7 @@ export function readClientAddress(request: Request): {
  * `timingSafeEqual` throws on one.
  */
 function proxySecretMatches(request: Request): boolean {
-  const expected = process.env.PRIVILEGED_PROXY_SECRET;
+  const expected = readEnv("PRIVILEGED_PROXY_SECRET");
   if (expected === undefined || expected.length === 0) {
     return false;
   }

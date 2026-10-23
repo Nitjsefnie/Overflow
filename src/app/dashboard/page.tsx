@@ -1,3 +1,4 @@
+import { readEnv } from "@/lib/env";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { BalanceCard } from "@/components/balance-card";
@@ -314,13 +315,13 @@ export default async function DashboardPage() {
     // live moderator is. A failure here degrades exactly like a failed ledger
     // read: to the error state below.
     const sql = getSql();
-    const appInstallUrl = reconciliationAppInstallUrl({ GITHUB_APP_SLUG: process.env.GITHUB_APP_SLUG });
+    const appInstallUrl = reconciliationAppInstallUrl({ GITHUB_APP_SLUG: readEnv("GITHUB_APP_SLUG") });
     const appInstallOfferRepositoryIds = appInstallUrl === null
       ? new Set<string>()
       : await getAppInstallOfferRepositoryIds(sql, session.user.id);
     const standing = await findLiveModeratorStanding(sql, session.user.id);
     const moderatorFloorConfigured =
-      normalizeModeratorGitHubUserIds(process.env.MODERATOR_GITHUB_USER_IDS).size > 0;
+      normalizeModeratorGitHubUserIds(readEnv("MODERATOR_GITHUB_USER_IDS")).size > 0;
     return (
       <DashboardContent
         memberName={session.user.name}

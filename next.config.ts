@@ -1,9 +1,10 @@
+import { readEnv } from "./src/lib/env.ts";
 import type { NextConfig } from "next";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-const distDir = process.env.NEXT_DIST_DIR?.trim();
+const distDir = readEnv("NEXT_DIST_DIR")?.trim();
 const tsconfigPath = distDir ? `${distDir}.tsconfig.json` : undefined;
 
 if (distDir) {
@@ -12,7 +13,7 @@ if (distDir) {
 
   if (!relativeDir || /[\\/]/.test(distDir)) {
     throw new Error(
-      `Invalid NEXT_DIST_DIR: ${process.env.NEXT_DIST_DIR}; use a direct child directory beside .next.`,
+      `Invalid NEXT_DIST_DIR: ${readEnv("NEXT_DIST_DIR")}; use a direct child directory beside .next.`,
     );
   }
 
@@ -29,7 +30,7 @@ if (distDir) {
     // absolute. Separator-bearing inputs are already rejected above.
     path.isAbsolute(relativeDir)
   ) {
-    throw new Error(`Invalid NEXT_DIST_DIR: ${process.env.NEXT_DIST_DIR}`);
+    throw new Error(`Invalid NEXT_DIST_DIR: ${readEnv("NEXT_DIST_DIR")}`);
   }
 
   let entry;
@@ -39,7 +40,7 @@ if (distDir) {
     // Leave inaccessible or invalid output paths to Next's own diagnostics.
   }
   if (entry?.isSymbolicLink()) {
-    throw new Error(`Invalid NEXT_DIST_DIR: ${process.env.NEXT_DIST_DIR}`);
+    throw new Error(`Invalid NEXT_DIST_DIR: ${readEnv("NEXT_DIST_DIR")}`);
   }
 
   try {

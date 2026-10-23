@@ -25,6 +25,7 @@ describe("readClientAddress", () => {
   }
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (hadSecret) {
       process.env.PRIVILEGED_PROXY_SECRET = savedSecret;
     } else {
@@ -32,6 +33,24 @@ describe("readClientAddress", () => {
     }
     hadSecret = false;
     savedSecret = undefined;
+  });
+
+  it("verifies the prefixed proxy secret before the legacy secret", () => {
+    setProxySecret("legacy-proxy");
+    vi.stubEnv("OVERFLOW_PRIVILEGED_PROXY_SECRET", proxySecret);
+
+    expect(readClientAddress(requestWith({ "x-real-ip": "203.0.113.7", [secretHeaderName]: proxySecret })))
+      .toEqual({ clientAddress: "203.0.113.7", clientAddressVerified: true });
+    expect(readClientAddress(requestWith({ "x-real-ip": "203.0.113.7", [secretHeaderName]: "legacy-proxy" })))
+      .toEqual({ clientAddress: "203.0.113.7", clientAddressVerified: false });
+  });
+
+  it("leaves addresses unverified when the prefixed proxy secret is empty", () => {
+    setProxySecret(proxySecret);
+    vi.stubEnv("OVERFLOW_PRIVILEGED_PROXY_SECRET", "");
+
+    expect(readClientAddress(requestWith({ "x-real-ip": "203.0.113.7", [secretHeaderName]: proxySecret })))
+      .toEqual({ clientAddress: "203.0.113.7", clientAddressVerified: false });
   });
 
   it("returns an IPv4 X-Real-IP value, unverified without the proxy secret", () => {
