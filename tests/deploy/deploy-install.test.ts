@@ -40,7 +40,7 @@ const otherShellLines = new Set([
   "git clone https://github.com/Nitjsefnie/Overflow.git /srv/overflow",
   "cd /srv/overflow",
   "set -a; . /etc/overflow/overflow.env; set +a",
-  'export OVERFLOW_DATABASE_URL="${OVERFLOW_DATABASE_URL:-${DATABASE_URL-}}"',
+  'export OVERFLOW_DATABASE_URL="${OVERFLOW_DATABASE_URL-${DATABASE_URL-}}"',
   "key_name=OVERFLOW_TOKEN_ENCRYPTION_KEY",
   "key_name=TOKEN_ENCRYPTION_KEY",
   "if ! grep -q '^OVERFLOW_TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env ; then",

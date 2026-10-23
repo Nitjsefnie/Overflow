@@ -190,12 +190,13 @@ reconciliation startup closed.
 Before a recovery or credential-maintenance block that uses the database,
 paste this block into the same shell. Repeat it after editing the environment
 file. It exports the canonical database URL for direct clients and derived
-restore URLs: a nonempty canonical value wins, otherwise the legacy value is
-used. The file itself is unchanged.
+restore URLs: a set canonical value wins, including an empty string; only an
+unset canonical variable falls back to the legacy value. The file itself is
+unchanged.
 
 ```bash
 set -a; . /etc/overflow/overflow.env; set +a
-export OVERFLOW_DATABASE_URL="${OVERFLOW_DATABASE_URL:-${DATABASE_URL-}}"
+export OVERFLOW_DATABASE_URL="${OVERFLOW_DATABASE_URL-${DATABASE_URL-}}"
 ```
 
 ### Reverse-proxy requirements
