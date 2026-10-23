@@ -6,6 +6,19 @@ import { GET as getApiMcpProtectedResource } from "@/app/.well-known/oauth-prote
 useTrustedOrigin();
 
 describe("GET /.well-known/oauth-protected-resource", () => {
+  it("serves the configured resource when only the legacy app URL is set", async () => {
+    vi.stubEnv("OVERFLOW_APP_URL", undefined);
+    vi.stubEnv("APP_URL", "https://legacy.example/dashboard");
+
+    const response = await getProtectedResource();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      resource: "https://legacy.example/api/mcp",
+      bearer_methods_supported: ["header"],
+    });
+  });
+
   it.each([
     ["the well-known root", getProtectedResource],
     ["the /api/mcp location", getApiMcpProtectedResource],
@@ -29,10 +42,10 @@ describe("GET /.well-known/oauth-protected-resource", () => {
   it.each([
     ["unset", ""],
     ["unparsable", "not a url"],
-  ])("answers both locations with the misconfiguration refusal when APP_URL is %s", async (_name, appUrl) => {
-    // The top-level useTrustedOrigin() stubs APP_URL first; this override wins
+  ])("answers both locations with the misconfiguration refusal when OVERFLOW_APP_URL is %s", async (_name, appUrl) => {
+    // The top-level useTrustedOrigin() stubs OVERFLOW_APP_URL first; this override wins
     // for the body of this test and afterEach unstubs it.
-    vi.stubEnv("APP_URL", appUrl);
+    vi.stubEnv("OVERFLOW_APP_URL", appUrl);
 
     const responses = [await getProtectedResource(), await getApiMcpProtectedResource()];
 

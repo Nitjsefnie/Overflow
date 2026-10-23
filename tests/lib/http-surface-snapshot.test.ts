@@ -130,7 +130,7 @@ describe("HTTP surface snapshot", () => {
 
   it("suppresses fixture audit lines while preserving the production logger afterwards", () => {
     const env = { ...process.env };
-    delete env.DATABASE_URL;
+    delete env.OVERFLOW_DATABASE_URL;
     const result = spawnSync(process.execPath, ["--experimental-transform-types", "--import",
       "./scripts/register-path-aliases.ts", "--input-type=module"], { cwd: repoRoot, encoding: "utf8", env,
       input: `import { deriveHttpSurfaceRecord } from "./scripts/http-surface-record.ts";
@@ -154,7 +154,7 @@ logPrivilegedAction({ action: "audit.open", actorId: "fixture-actor", credential
   });
 
   it("enforces the combined HTTP and MCP SemVer requirement", () => {
-    assertNoBreakingRecordedChange(baseCommit(process.env.HTTP_SNAPSHOT_BASE_COMMIT, "HTTP"));
+    assertNoBreakingRecordedChange(baseCommit(process.env.OVERFLOW_HTTP_SNAPSHOT_BASE_COMMIT, "HTTP"));
   });
 
   it.each([
@@ -300,7 +300,7 @@ function assertNoBreakingRecordedChange(base: string, current?: HttpSurfaceSnaps
 
 /**
  * Commits `snapshot` as scripts/http-surface-snapshot.json in a dangling
- * (ref-free) root commit, so a test can pin HTTP_SNAPSHOT_BASE_COMMIT-style
+ * (ref-free) root commit, so a test can pin OVERFLOW_HTTP_SNAPSHOT_BASE_COMMIT-style
  * comparisons at an arbitrary recorded surface without moving any ref.
  */
 function commitSnapshotFixture(snapshot: HttpSurfaceSnapshot): string {

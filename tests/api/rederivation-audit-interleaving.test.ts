@@ -21,7 +21,7 @@ const clientAddress = "203.0.113.7";
 let sql: Sql;
 let container: StartedTestContainer | undefined;
 let sequence = 999_682_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 describe("the rederivation journal line survives a post-commit failure", () => {
   beforeAll(async () => {
@@ -31,7 +31,7 @@ describe("the rederivation journal line survives a post-commit failure", () => {
       password: "rederivation_audit_interleaving_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -39,8 +39,8 @@ describe("the rederivation journal line survives a post-commit failure", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     vi.restoreAllMocks();
   });
 

@@ -26,7 +26,7 @@ const precedingMigration = (() => {
   return index > 0 ? names[index - 1] : undefined;
 })();
 
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 let container: StartedTestContainer | undefined;
 let adminSql: Sql | undefined;
 let currentDatabaseUrl = "";
@@ -41,7 +41,7 @@ beforeAll(async () => {
   container = started.container;
   currentDatabaseUrl = started.databaseUrl;
   adminSql = postgres(currentDatabaseUrl, { max: 1 });
-  process.env.DATABASE_URL = currentDatabaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = currentDatabaseUrl;
   await runMigrations();
 });
 
@@ -50,9 +50,9 @@ afterAll(async () => {
   await adminSql?.end();
   await container?.stop();
   if (originalDatabaseUrl === undefined) {
-    delete process.env.DATABASE_URL;
+    delete process.env.OVERFLOW_DATABASE_URL;
   } else {
-    process.env.DATABASE_URL = originalDatabaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   }
 });
 
@@ -328,12 +328,12 @@ async function onNewDatabase<T>(databaseName: string, body: (sql: Sql) => Promis
   const url = new URL(currentDatabaseUrl);
   url.pathname = `/${databaseName}`;
   await closeSql();
-  process.env.DATABASE_URL = url.toString();
+  process.env.OVERFLOW_DATABASE_URL = url.toString();
   try {
     return await body(getSql());
   } finally {
     await closeSql();
-    process.env.DATABASE_URL = currentDatabaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = currentDatabaseUrl;
   }
 }
 

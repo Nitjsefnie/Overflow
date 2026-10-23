@@ -81,9 +81,9 @@ function world(entryMs: number, stepMs = seconds(5)) {
     throw new Error(`unexpected request ${url}`);
   }) as typeof fetch;
   const env: Record<string, string | undefined> = {
-    LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
-    GITHUB_REPOSITORY: REPO, LEDGER_SWEEP_ONLY: "true",
-    GITHUB_RUN_ID: RUN_ID, GITHUB_RUN_ATTEMPT: ATTEMPT, RELAY_RERUN_TOKEN: WORKFLOW_TOKEN,
+    OVERFLOW_LEDGER_APP_ID: "5118623", OVERFLOW_LEDGER_INSTALLATION_ID: "166057493", OVERFLOW_LEDGER_APP_KEY: key,
+    GITHUB_REPOSITORY: REPO, OVERFLOW_LEDGER_SWEEP_ONLY: "true",
+    GITHUB_RUN_ID: RUN_ID, GITHUB_RUN_ATTEMPT: ATTEMPT, OVERFLOW_RELAY_RERUN_TOKEN: WORKFLOW_TOKEN,
   };
   const deps: RelayDeps = {
     env, fetchFn, delayFn: async (ms) => { state.now += ms; }, nowFn: () => state.now,
@@ -264,7 +264,7 @@ describe("the ledger relay's job-start budget", () => {
     expect(w.state.checks).toEqual([]);
   });
 
-  it.each(["GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "RELAY_RERUN_TOKEN"])(
+  it.each(["GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "OVERFLOW_RELAY_RERUN_TOKEN"])(
     "exits red before any request when %s is missing",
     async (name) => {
       const w = world(JOB_STARTED_AT + seconds(30));

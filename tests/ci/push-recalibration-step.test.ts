@@ -188,7 +188,7 @@ describe("push-recalibration's push step, executed", () => {
     ].join("\n");
 
   const pushEnv = (): Record<string, string> => ({
-    DOCUMENT: outputDocument(78.46, 77.46),
+    OVERFLOW_DOCUMENT: outputDocument(78.46, 77.46),
     GH_TOKEN: "scratch-token-not-a-secret",
     GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
     PUSH_REMOTE_URL: origin,
@@ -220,7 +220,7 @@ describe("push-recalibration's push step, executed", () => {
     chmodSync(join(bin, "ssh"), 0o755);
     return {
       env: {
-        MASTER_PUSH_DEPLOY_KEY: readFileSync(key, "utf8"),
+        OVERFLOW_MASTER_PUSH_DEPLOY_KEY: readFileSync(key, "utf8"),
         HOME: home,
         PATH: `${bin}:${process.env.PATH ?? ""}`,
         SSH_LOG: sshLog,
@@ -233,7 +233,7 @@ describe("push-recalibration's push step, executed", () => {
   it.each(["", "false"])("uses SSH with the deploy key when simulation is '%s' and fails visibly on refusal", (simulation) => {
     seedRemote("");
     const fixture = sshFixture();
-    const env: Record<string, string> = { ...pushEnv(), ...fixture.env, SIMULATE_REFUSED_RAISE: simulation };
+    const env: Record<string, string> = { ...pushEnv(), ...fixture.env, OVERFLOW_SIMULATE_REFUSED_RAISE: simulation };
     delete env.PUSH_REMOTE_URL;
     // A missing SSH branch must fail locally too, without reaching GitHub.
     git(checkout, "config", `url.https://127.0.0.1:1/.insteadOf`, "https://x-access-token:");
@@ -256,7 +256,7 @@ describe("push-recalibration's push step, executed", () => {
     const result = runStep(pushRun, checkout, {
       ...pushEnv(),
       ...fixture.env,
-      SIMULATE_REFUSED_RAISE: "true",
+      OVERFLOW_SIMULATE_REFUSED_RAISE: "true",
     });
 
     expect(result.status).not.toBe(0);
@@ -269,7 +269,7 @@ describe("push-recalibration's push step, executed", () => {
   it.each(["true", "yes"])("deliberately uses the token path for simulation '%s' even with a deploy key", (simulation) => {
     seedRemote(rejectAlways);
     const fixture = sshFixture();
-    const env: Record<string, string> = { ...pushEnv(), ...fixture.env, SIMULATE_REFUSED_RAISE: simulation };
+    const env: Record<string, string> = { ...pushEnv(), ...fixture.env, OVERFLOW_SIMULATE_REFUSED_RAISE: simulation };
     delete env.PUSH_REMOTE_URL;
     // Exercise token URL selection without network access or PUSH_REMOTE_URL.
     git(checkout, "config", `url.${origin}.insteadOf`,
@@ -369,7 +369,7 @@ describe("push-recalibration's push step, executed", () => {
     const before = git(origin, "rev-parse", "main");
     // No GH_TOKEN: the token is needed only where a push URL is built from it.
     const result = runStep(pushRun, checkout, {
-      DOCUMENT: outputDocument(73.46, 72.46),
+      OVERFLOW_DOCUMENT: outputDocument(73.46, 72.46),
       GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
       PUSH_REMOTE_URL: origin,
     });
@@ -388,7 +388,7 @@ describe("push-recalibration's push step, executed", () => {
     // Nothing listens on 127.0.0.1:1; the URL carries the token so any
     // unredacted git error output would name it.
     const result = runStep(pushRun, checkout, {
-      DOCUMENT: docText(78.46, 77.46),
+      OVERFLOW_DOCUMENT: docText(78.46, 77.46),
       GH_TOKEN: "scratch-token-not-a-secret",
       GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
       PUSH_REMOTE_URL:
@@ -496,7 +496,7 @@ describe("calibrate's export step, executed", () => {
     git(root, "clone", "-q", origin, receiver);
     const before = git(origin, "rev-parse", "main");
     const result = runStep(pushRun, receiver, {
-      DOCUMENT: values.document,
+      OVERFLOW_DOCUMENT: values.document,
       GH_TOKEN: "scratch-token-not-a-secret",
       GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
       PUSH_REMOTE_URL: origin,

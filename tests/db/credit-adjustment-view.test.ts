@@ -9,7 +9,7 @@ import { startPostgresContainer } from "../support/postgres-container";
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 5_400_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 function nextExternalId(): number {
   externalId += 1;
@@ -28,7 +28,7 @@ describe("moderation credit adjustment ledger legs", () => {
       password: "credit_adjustment_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     // The second run replays every migration against the installed schema, so a
     // migration that is not re-runnable fails here rather than in production.
@@ -41,9 +41,9 @@ describe("moderation credit adjustment ledger legs", () => {
     await container?.stop();
 
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 

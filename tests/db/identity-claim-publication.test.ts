@@ -11,7 +11,7 @@ import { startPostgresContainer } from "../support/postgres-container";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 /**
  * The ordering this suite pins: a fold snapshot is published while a
@@ -29,7 +29,7 @@ describe("identity claims survive republication of a stale fold", () => {
       password: "identity_claim_publication_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -37,8 +37,8 @@ describe("identity claims survive republication of a stale fold", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it("keeps a claimed settlement SETTLED when a stale snapshot is republished", async () => {

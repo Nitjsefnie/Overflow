@@ -11,13 +11,13 @@ import { startPostgresContainer } from "../support/postgres-container";
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 6_500_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 describe("pickup stock", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({ database: "pickup_test", user: "pickup_test" });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     execFileSync("pnpm", ["db:migrate"], { env: process.env, stdio: "pipe" });
     sql = getSql();
   });
@@ -25,8 +25,8 @@ describe("pickup stock", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it("reads posted prices for open outside assignments and unassigned issues, excluding sponsor assignments and closed issues", async () => {

@@ -92,7 +92,7 @@ describe("repository route internal failures", () => {
     readSession.mockResolvedValue({ user: { id: "member-id", role: "MEMBER" } });
     vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken").mockResolvedValue("synthetic-identity-token");
     vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState").mockResolvedValue("ACTIVE");
-    vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+    vi.stubEnv("OVERFLOW_GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
     const error = new TypeError("fetch failed");
     const fetchGitHub = vi.fn<typeof fetch>().mockRejectedValue(error);
     vi.stubGlobal("fetch", fetchGitHub);
@@ -112,7 +112,7 @@ describe("repository route internal failures", () => {
     readSession.mockResolvedValue({ user: { id: "member-id", role: "MEMBER" } });
     vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken").mockResolvedValue("synthetic-identity-token");
     vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState").mockResolvedValue("ACTIVE");
-    vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+    vi.stubEnv("OVERFLOW_GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
     const fetchGitHub = vi.fn<typeof fetch>(() => new Promise<Response>(() => {}));
     vi.stubGlobal("fetch", fetchGitHub);
 
@@ -132,8 +132,8 @@ describe("repository route internal failures", () => {
     expect(console.error).toHaveBeenCalledExactlyOnceWith("Repository registration failed.", signal.reason);
   });
 
-  it("logs the real POST wiring failure when DATABASE_URL is unset", async () => {
-    vi.stubEnv("DATABASE_URL", undefined);
+  it("logs the real POST wiring failure when OVERFLOW_DATABASE_URL is unset", async () => {
+    vi.stubEnv("OVERFLOW_DATABASE_URL", undefined);
     readSession.mockResolvedValue({ user: { id: "member-id", role: "MEMBER" } });
     const database = await vi.importActual<typeof import("@/lib/db/client")>("@/lib/db/client");
     await database.closeSql();
@@ -150,7 +150,7 @@ describe("repository route internal failures", () => {
       code: "INTERNAL_ERROR", message: "Unable to initialize repository registration.",
     } });
     expect(console.error).toHaveBeenCalledExactlyOnceWith(
-      "Repository registration failed: Error: DATABASE_URL must be configured before using the database.",
+      "Repository registration failed: Error: OVERFLOW_DATABASE_URL must be configured before using the database.",
     );
   });
 

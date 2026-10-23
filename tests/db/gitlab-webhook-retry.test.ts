@@ -10,13 +10,13 @@ import { startPostgresContainer } from "../support/postgres-container";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 describe("GitLab stable message retries", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({ database: "gitlab_retry", user: "gitlab_retry", password: "gitlab_retry" });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -24,8 +24,8 @@ describe("GitLab stable message retries", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it.each(["Idempotency-Key", "webhook-id"])("deduplicates fresh execution UUIDs using %s without invalidating a running fold", async (header) => {

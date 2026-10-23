@@ -1172,7 +1172,7 @@ describe("member dashboard", () => {
 
     const warning = within(sectionFor("account-controls-heading")).getByRole("status");
     expect(warning).toBeVisible();
-    expect(warning.textContent).toContain("MODERATOR_GITHUB_USER_IDS");
+    expect(warning.textContent).toContain("OVERFLOW_MODERATOR_GITHUB_USER_IDS");
     expect(warning.textContent).toContain("No GitHub user id is configured");
   });
 

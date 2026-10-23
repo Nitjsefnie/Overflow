@@ -27,9 +27,9 @@ vi.mock("next-auth/providers/github", () => ({
 
 let sql: Sql;
 let container: StartedTestContainer | undefined;
-const originalDatabaseUrl = process.env.DATABASE_URL;
-const originalTokenKey = process.env.TOKEN_ENCRYPTION_KEY;
-const originalPreviousKey = process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
+const originalTokenKey = process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY;
+const originalPreviousKey = process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS;
 // Two distinct 32-byte keys, encoded canonically (the same shape
 // tests/security/github-oauth-scope.test.ts uses).
 const TOKEN_KEY = Buffer.alloc(32, 1).toString("base64url");
@@ -41,10 +41,10 @@ beforeAll(async () => {
     user: "signin_token_continuity_test",
   });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
-  process.env.TOKEN_ENCRYPTION_KEY = TOKEN_KEY;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY = TOKEN_KEY;
   // A rotation window: the previous key still opens what it sealed.
-  process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS = PREVIOUS_KEY;
+  process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS = PREVIOUS_KEY;
   sql = getSql();
   await runMigrations();
 });
@@ -52,12 +52,12 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeSql();
   await container?.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
-  if (originalTokenKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
-  else process.env.TOKEN_ENCRYPTION_KEY = originalTokenKey;
-  if (originalPreviousKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS;
-  else process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS = originalPreviousKey;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
+  if (originalTokenKey === undefined) delete process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY;
+  else process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY = originalTokenKey;
+  if (originalPreviousKey === undefined) delete process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS;
+  else process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS = originalPreviousKey;
   // The "@/auth" graph keeps this file's NextAuth stub until cleared.
   vi.resetModules();
 });

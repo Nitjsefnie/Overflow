@@ -16,7 +16,7 @@ function probe(extra = "") {
     const source = readFileSync(route, "utf8");
     writeFileSync(route, `${source}\n${extra}\n`);
     const env = { ...process.env };
-    delete env.DATABASE_URL;
+    delete env.OVERFLOW_DATABASE_URL;
     return spawnSync(process.execPath, ["--experimental-transform-types", "--import",
       join(root, "scripts/register-path-aliases.ts"), "--input-type=module"], {
       cwd: root, env, encoding: "utf8", timeout: 90_000,
@@ -31,7 +31,7 @@ console.log(JSON.stringify(await deriveHttpSurfaceRecord()));`,
 describe("recorded non-envelope HTTP failure answers", () => {
   it("restores the error logger and emits only the real post-derivation error after concurrent calls", () => {
     const env = { ...process.env };
-    delete env.DATABASE_URL;
+    delete env.OVERFLOW_DATABASE_URL;
     const result = spawnSync(process.execPath, ["--experimental-transform-types", "--import",
       join(repoRoot, "scripts/register-path-aliases.ts"), "--input-type=module"], {
       cwd: repoRoot, env, encoding: "utf8", timeout: 90_000,

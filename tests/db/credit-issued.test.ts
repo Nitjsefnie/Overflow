@@ -11,7 +11,7 @@ import { startPostgresContainer } from "../support/postgres-container";
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 6_400_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 function nextExternalId(): number {
   return ++externalId;
@@ -21,7 +21,7 @@ describe("hourly credit issued", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({ database: "credit_issued_test", user: "credit_issued_test" });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     execFileSync("pnpm", ["db:migrate"], { env: process.env, stdio: "pipe" });
     sql = getSql();
   });
@@ -29,8 +29,8 @@ describe("hourly credit issued", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it("groups positive creditor legs by merge hour or adjustment creation hour, newest first", async () => {

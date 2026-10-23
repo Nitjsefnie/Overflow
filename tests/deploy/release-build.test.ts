@@ -46,7 +46,7 @@ function build(release: string) {
   // No timeout here or on the cases that call this: a loaded box only slows the build, and a kill proves nothing.
   const result = spawnSync(process.execPath, [path.join(project, "node_modules/next/dist/bin/next"), "build", "--webpack"], {
     cwd: tree,
-    env: { ...process.env, NEXT_DIST_DIR: release, NEXT_TELEMETRY_DISABLED: "1" },
+    env: { ...process.env, OVERFLOW_NEXT_DIST_DIR: release, NEXT_TELEMETRY_DISABLED: "1" },
     encoding: "utf8",
   });
   console.log(`Next build ${release}: exit ${result.status}`);

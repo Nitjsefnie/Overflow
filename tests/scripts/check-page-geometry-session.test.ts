@@ -126,11 +126,11 @@ describe("setSessionCookie — the CDP delivery contract (issue 453)", () => {
  */
 describe("spawnedServerEnv — the spawned server's host trust (issue 453)", () => {
   it("grants the host trust a production server refuses to assume for itself", () => {
-    const env = spawnedServerEnv({ DATABASE_URL: "postgresql://example/db" });
+    const env = spawnedServerEnv({ OVERFLOW_DATABASE_URL: "postgresql://example/db" });
 
     expect(env.AUTH_TRUST_HOST).toBe("true");
     // The run's own environment rides along unchanged.
-    expect(env.DATABASE_URL).toBe("postgresql://example/db");
+    expect(env.OVERFLOW_DATABASE_URL).toBe("postgresql://example/db");
   });
 
   it("preserves an explicit trust decision already in the environment", () => {
@@ -153,7 +153,7 @@ describe("spawnedServerEnv — the spawned server's host trust (issue 453)", () 
  * The gate process's own .env loading (issue 453, round 4). The spawned
  * `next start` loads the repo-root .env family for itself, but the run's
  * seeding and secret reads happen in THIS process — after the branch added
- * authed contracts, a preflight-passing .env-only run threw "DATABASE_URL is
+ * authed contracts, a preflight-passing .env-only run threw "OVERFLOW_DATABASE_URL is
  * not set" from the very variable the preflight had just declared satisfied.
  * The semantics are the db:migrate precedent (node's --env-file-if-exists):
  * .env at the repo root only, a missing file is a no-op, and an
@@ -166,25 +166,25 @@ describe("loadRepoEnvFile — the gate process's own .env (issue 453 round 4)", 
     const applied = await loadRepoEnvFile({
       repoRoot: "/fake-root",
       env,
-      readFileFn: async () => "DATABASE_URL=postgresql://example/db\nAUTH_SECRET=the-secret\n",
+      readFileFn: async () => "OVERFLOW_DATABASE_URL=postgresql://example/db\nAUTH_SECRET=the-secret\n",
     });
 
-    expect(applied).toEqual(["DATABASE_URL", "AUTH_SECRET"]);
-    expect(env.DATABASE_URL).toBe("postgresql://example/db");
+    expect(applied).toEqual(["OVERFLOW_DATABASE_URL", "AUTH_SECRET"]);
+    expect(env.OVERFLOW_DATABASE_URL).toBe("postgresql://example/db");
     expect(env.AUTH_SECRET).toBe("the-secret");
   });
 
   it("prefers an already-exported variable over the .env value", async () => {
-    const env: Record<string, string> = { DATABASE_URL: "from-exported-environment" };
+    const env: Record<string, string> = { OVERFLOW_DATABASE_URL: "from-exported-environment" };
 
     const applied = await loadRepoEnvFile({
       repoRoot: "/fake-root",
       env,
-      readFileFn: async () => "DATABASE_URL=from-dotenv-file\n",
+      readFileFn: async () => "OVERFLOW_DATABASE_URL=from-dotenv-file\n",
     });
 
     expect(applied).toEqual([]);
-    expect(env.DATABASE_URL).toBe("from-exported-environment");
+    expect(env.OVERFLOW_DATABASE_URL).toBe("from-exported-environment");
   });
 
   it("treats a missing .env as a no-op, the way CI without one still runs", async () => {
@@ -199,7 +199,7 @@ describe("loadRepoEnvFile — the gate process's own .env (issue 453 round 4)", 
     });
 
     expect(applied).toEqual([]);
-    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.OVERFLOW_DATABASE_URL).toBeUndefined();
   });
 
   it("parses the shapes .env files actually carry", async () => {
@@ -211,14 +211,14 @@ describe("loadRepoEnvFile — the gate process's own .env (issue 453 round 4)", 
       readFileFn: async () =>
         [
           "# a comment line",
-          "export TOKEN_ENCRYPTION_KEY=\"abc def\"",
+          "export OVERFLOW_TOKEN_ENCRYPTION_KEY=\"abc def\"",
           "EMPTY=",
           "BROKEN LINE WITHOUT AN EQUALS SIGN",
           "=VALUE_WITH_NO_KEY",
         ].join("\n") + "\n",
     });
 
-    expect(env.TOKEN_ENCRYPTION_KEY).toBe("abc def");
+    expect(env.OVERFLOW_TOKEN_ENCRYPTION_KEY).toBe("abc def");
     expect(env.EMPTY).toBe("");
     expect(env.BROKEN).toBeUndefined();
     expect(env[""]).toBeUndefined();
@@ -226,7 +226,7 @@ describe("loadRepoEnvFile — the gate process's own .env (issue 453 round 4)", 
 
   it("strips an unquoted # comment the way node's --env-file and @next/env do", async () => {
     // The differential that forced this pin: BOTH real consumers strip an
-    // unquoted # unconditionally (not only after whitespace), so a DATABASE_URL
+    // unquoted # unconditionally (not only after whitespace), so a OVERFLOW_DATABASE_URL
     // whose password carries # must not seed a different URL than the server
     // renders against.
     const env: Record<string, string> = {};
@@ -235,10 +235,10 @@ describe("loadRepoEnvFile — the gate process's own .env (issue 453 round 4)", 
       repoRoot: "/fake-root",
       env,
       readFileFn: async () =>
-        "DATABASE_URL=postgresql://me:p#ss@host/db\nB=trail # inline comment\n",
+        "OVERFLOW_DATABASE_URL=postgresql://me:p#ss@host/db\nB=trail # inline comment\n",
     });
 
-    expect(env.DATABASE_URL).toBe("postgresql://me:p");
+    expect(env.OVERFLOW_DATABASE_URL).toBe("postgresql://me:p");
     expect(env.B).toBe("trail");
   });
 
@@ -249,10 +249,10 @@ describe("loadRepoEnvFile — the gate process's own .env (issue 453 round 4)", 
       repoRoot: "/fake-root",
       env,
       readFileFn: async () =>
-        "DATABASE_URL=\"postgresql://me:p#ss@host/db\"\nexport AUTH_SECRET='s#cret'\n",
+        "OVERFLOW_DATABASE_URL=\"postgresql://me:p#ss@host/db\"\nexport AUTH_SECRET='s#cret'\n",
     });
 
-    expect(env.DATABASE_URL).toBe("postgresql://me:p#ss@host/db");
+    expect(env.OVERFLOW_DATABASE_URL).toBe("postgresql://me:p#ss@host/db");
     expect(env.AUTH_SECRET).toBe("s#cret");
   });
 });
@@ -342,7 +342,7 @@ describe("seedFixtureUsers (issue 453)", () => {
   let container: StartedTestContainer | undefined;
   let sql: Sql;
   let databaseUrl: string;
-  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
   beforeAll(async () => {
     const started = await startPostgresContainer({
@@ -352,7 +352,7 @@ describe("seedFixtureUsers (issue 453)", () => {
     });
     container = started.container;
     databaseUrl = started.databaseUrl;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     // The second run replays every migration against the installed schema, the
     // same re-runnability guard the other container suites apply.
@@ -365,9 +365,9 @@ describe("seedFixtureUsers (issue 453)", () => {
     await container?.stop();
 
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 

@@ -606,17 +606,17 @@ describe("runRelay", () => {
 
   function relayEnv(over: Record<string, string> = {}): Record<string, string> {
     return {
-      LEDGER_APP_ID: "5118623",
-      LEDGER_INSTALLATION_ID: "166057493",
-      LEDGER_APP_KEY: keyPem,
+      OVERFLOW_LEDGER_APP_ID: "5118623",
+      OVERFLOW_LEDGER_INSTALLATION_ID: "166057493",
+      OVERFLOW_LEDGER_APP_KEY: keyPem,
       GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
-      GITHUB_WORKFLOW_RUN_ID: RUN_ID,
-      GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD_SHA,
-      GITHUB_WORKFLOW_RUN_PATH: PATH_CI,
-      GITHUB_WORKFLOW_RUN_CONCLUSION: "success",
-      GITHUB_WORKFLOW_RUN_HTML_URL: HTML_URL,
-      GITHUB_WORKFLOW_RUN_EVENT: "push",
-      GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_ID: RUN_ID,
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD_SHA,
+      OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: PATH_CI,
+      OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "success",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: HTML_URL,
+      OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "push",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
       ...RELAY_OWN_RUN_ENV,
       ...over,
     };
@@ -665,7 +665,7 @@ describe("runRelay", () => {
     ]);
 
     const [ownJob, mint, jobsRequest] = fetchStub.requests;
-    expect(headersOf(ownJob ?? { url: "", init: {} }).authorization).toBe(`Bearer ${RELAY_OWN_RUN_ENV.RELAY_RERUN_TOKEN}`);
+    expect(headersOf(ownJob ?? { url: "", init: {} }).authorization).toBe(`Bearer ${RELAY_OWN_RUN_ENV.OVERFLOW_RELAY_RERUN_TOKEN}`);
     // The App JWT authenticates the mint; the minted token authenticates
     // everything after it.
     expect(mint?.init.method).toBe("POST");
@@ -743,7 +743,7 @@ describe("runRelay", () => {
       noSweepRuns(),
     ]);
     await runRelay({
-      env: relayEnv({ GITHUB_WORKFLOW_RUN_HEAD_SHA: prHeadSha }),
+      env: relayEnv({ OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: prHeadSha }),
       fetchFn: fetchStub.fn,
       delayFn: makeDelay().fn,
       readPinMap: async () => PIN_MAP,
@@ -862,13 +862,13 @@ describe("runRelay", () => {
     const delay = makeDelay();
     const result = await runRelay({
       env: relayEnv({
-        GITHUB_WORKFLOW_RUN_ID: "",
-        GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
-        GITHUB_WORKFLOW_RUN_PATH: "",
-        GITHUB_WORKFLOW_RUN_CONCLUSION: "",
-        GITHUB_WORKFLOW_RUN_HTML_URL: "",
-        GITHUB_WORKFLOW_RUN_EVENT: "",
-        LEDGER_DISPATCH_RUN_ID: RUN_ID,
+        OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: "",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: "",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "",
+        OVERFLOW_LEDGER_DISPATCH_RUN_ID: RUN_ID,
       }),
       fetchFn: fetchStub.fn,
       delayFn: delay.fn,
@@ -891,12 +891,12 @@ describe("runRelay", () => {
     await expect(
       runRelay({
         env: relayEnv({
-          GITHUB_WORKFLOW_RUN_ID: "",
-          GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
-          GITHUB_WORKFLOW_RUN_PATH: "",
-          GITHUB_WORKFLOW_RUN_CONCLUSION: "",
-          GITHUB_WORKFLOW_RUN_HTML_URL: "",
-          GITHUB_WORKFLOW_RUN_EVENT: "",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: "",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: "",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "",
         }),
         fetchFn: fetchStub.fn,
         delayFn: makeDelay().fn,
@@ -910,7 +910,7 @@ describe("runRelay", () => {
     const fetchStub = makeFetch([token(), noSweepRuns()]);
     await expect(
       runRelay({
-        env: relayEnv({ GITHUB_WORKFLOW_RUN_HEAD_SHA: "deadbeef" }),
+        env: relayEnv({ OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: "deadbeef" }),
         fetchFn: fetchStub.fn,
         delayFn: makeDelay().fn,
         readPinMap: async () => PIN_MAP,
@@ -935,7 +935,7 @@ describe("runRelay", () => {
   it("relays nothing when no required context is pinned to the triggering run's path", async () => {
     const fetchStub = makeRefusalFetch([token()]);
     const result = await runRelay({
-      env: relayEnv({ GITHUB_WORKFLOW_RUN_PATH: PATH_ACTIONLINT }),
+      env: relayEnv({ OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: PATH_ACTIONLINT }),
       fetchFn: fetchStub.fn,
       delayFn: makeDelay().fn,
       readPinMap: async () => ({ verify: PATH_CI }),
@@ -951,14 +951,14 @@ describe("runRelay", () => {
   /** The workflow_dispatch recovery's environment: no workflow_run fields, only the run id. */
   function dispatchEnv(over: Record<string, string> = {}): Record<string, string> {
     return relayEnv({
-      GITHUB_WORKFLOW_RUN_ID: "",
-      GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
-      GITHUB_WORKFLOW_RUN_PATH: "",
-      GITHUB_WORKFLOW_RUN_CONCLUSION: "",
-      GITHUB_WORKFLOW_RUN_HTML_URL: "",
-      GITHUB_WORKFLOW_RUN_EVENT: "",
-      GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "",
-      LEDGER_DISPATCH_RUN_ID: RUN_ID,
+      OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "",
+      OVERFLOW_LEDGER_DISPATCH_RUN_ID: RUN_ID,
       ...over,
     });
   }
@@ -1017,8 +1017,8 @@ describe("runRelay", () => {
         const error = await caughtError(
           runRelay({
             env: relayEnv({
-              GITHUB_WORKFLOW_RUN_EVENT: event,
-              GITHUB_WORKFLOW_RUN_HEAD_BRANCH: headBranch,
+              OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: event,
+              OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: headBranch,
             }),
             fetchFn: fetchStub.fn,
             delayFn: makeDelay().fn,
@@ -1050,7 +1050,7 @@ describe("runRelay", () => {
       ]);
       const error = await caughtError(
         runRelay({
-          env: cancelledPrEnv({ GITHUB_WORKFLOW_RUN_EVENT: "pull_request" }),
+          env: cancelledPrEnv({ OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "pull_request" }),
           fetchFn: fetchStub.fn,
           delayFn: makeDelay().fn,
           readPinMap: async () => PIN_MAP,
@@ -1063,7 +1063,7 @@ describe("runRelay", () => {
 
     it("no-ops when a push run's head branch is absent", async () => {
       const env = relayEnv();
-      delete env.GITHUB_WORKFLOW_RUN_HEAD_BRANCH;
+      delete env.OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH;
       const fetchStub = makeRefusalFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
       const error = await caughtError(
         runRelay({
@@ -1077,11 +1077,11 @@ describe("runRelay", () => {
       expect(fetchStub.requests.map((request) => request.url)).toEqual([OWN_JOB_URL, TOKEN_URL, RUN_URL, PULLS_URL, SWEEP_RUNS_URL]);
     });
 
-    it("no-ops when GITHUB_WORKFLOW_RUN_EVENT is absent", async () => {
+    it("no-ops when OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT is absent", async () => {
       // An event the relay was not told is not evidence of any event: the
       // missing value must read as the empty string, which no rule trusts.
-      const env = relayEnv({ GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main" });
-      delete env.GITHUB_WORKFLOW_RUN_EVENT;
+      const env = relayEnv({ OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main" });
+      delete env.OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT;
       const fetchStub = makeRefusalFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
       const error = await caughtError(
         runRelay({
@@ -1183,8 +1183,8 @@ describe("runRelay", () => {
       const fetchStub = makeFetch([token(), ...acceptingOutcomes()]);
       const result = await runRelay({
         env: relayEnv({
-          GITHUB_WORKFLOW_RUN_EVENT: event,
-          GITHUB_WORKFLOW_RUN_HEAD_BRANCH: headBranch,
+          OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: event,
+          OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: headBranch,
         }),
         fetchFn: fetchStub.fn,
         delayFn: makeDelay().fn,
@@ -1229,9 +1229,9 @@ describe("runRelay", () => {
       const viaWorkflowRun = makeRefusalFetch([token()]);
       const result = await runRelay({
         env: relayEnv({
-          GITHUB_WORKFLOW_RUN_PATH: PATH_ACTIONLINT,
-          GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
-          GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: PATH_ACTIONLINT,
+          OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
         }),
         fetchFn: viaWorkflowRun.fn,
         delayFn: makeDelay().fn,
@@ -1267,7 +1267,7 @@ describe("runRelay", () => {
           noSweepRuns(),
         ]);
         const result = await runRelay({
-          env: relayEnv({ GITHUB_WORKFLOW_RUN_PATH: runPath }),
+          env: relayEnv({ OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: runPath }),
           fetchFn: fetchStub.fn,
           delayFn: makeDelay().fn,
           readPinMap: async () => TWO_PATH_PIN_MAP,
@@ -1301,9 +1301,9 @@ describe("runRelay", () => {
       const error = await caughtError(
         runRelay({
           env: relayEnv({
-            GITHUB_WORKFLOW_RUN_PATH: PATH_CI_PR,
-            GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
-            GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
+            OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: PATH_CI_PR,
+            OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
+            OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
           }),
           fetchFn: fetchStub.fn,
           delayFn: makeDelay().fn,
@@ -1333,9 +1333,9 @@ describe("runRelay", () => {
       const error = await caughtError(
         runRelay({
           env: relayEnv({
-            GITHUB_WORKFLOW_RUN_PATH: PATH_CI,
-            GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
-            GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
+            OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: PATH_CI,
+            OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
+            OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
           }),
           fetchFn: fetchStub.fn,
           delayFn: makeDelay().fn,
@@ -1355,9 +1355,9 @@ describe("runRelay", () => {
       const fetchStub = makeRefusalFetch([token()]);
       const result = await runRelay({
         env: relayEnv({
-          GITHUB_WORKFLOW_RUN_PATH: PATH_ACTIONLINT,
-          GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
-          GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: PATH_ACTIONLINT,
+          OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
         }),
         fetchFn: fetchStub.fn,
         delayFn: makeDelay().fn,
@@ -1410,11 +1410,11 @@ describe("runRelay", () => {
 
   function cancelledPrEnv(over: Record<string, string> = {}): Record<string, string> {
     return relayEnv({
-      GITHUB_WORKFLOW_RUN_CONCLUSION: "cancelled",
-      GITHUB_WORKFLOW_RUN_EVENT: "pull_request_target",
-      GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
-      GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
-      RELAY_RERUN_TOKEN: "rerun-token",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "cancelled",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "pull_request_target",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
+      OVERFLOW_RELAY_RERUN_TOKEN: "rerun-token",
       ...over,
     });
   }
@@ -1607,15 +1607,15 @@ describe("runRelay", () => {
       expect(requestsTo(fetchStub.requests, RERUN_URL)).toHaveLength(1);
     });
 
-    it("rejects loudly, before any request, when RELAY_RERUN_TOKEN is missing on a cancelled PR run", async () => {
+    it("rejects loudly, before any request, when OVERFLOW_RELAY_RERUN_TOKEN is missing on a cancelled PR run", async () => {
       const fetchStub = makeFetch([token(), jobsListing([]), { status: 201, body: { id: 1 } }, noSweepRuns()]);
       await expect(
         runRelay({
           env: relayEnv({
-            GITHUB_WORKFLOW_RUN_CONCLUSION: "cancelled",
-            GITHUB_WORKFLOW_RUN_EVENT: "pull_request_target",
-            GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
-            RELAY_RERUN_TOKEN: "",
+            OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "cancelled",
+            OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "pull_request_target",
+            OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
+            OVERFLOW_RELAY_RERUN_TOKEN: "",
           }),
           fetchFn: fetchStub.fn,
           delayFn: makeDelay().fn,
@@ -1661,7 +1661,7 @@ describe("runRelay", () => {
     it("does not heal at the attempt cap and never queries the head", async () => {
       const fetchStub = makeFetch([token(), jobsListing([]), { status: 201, body: { id: 1 } }, noSweepRuns()]);
       const result = await runRelay({
-        env: cancelledPrEnv({ GITHUB_WORKFLOW_RUN_ATTEMPT: "5" }),
+        env: cancelledPrEnv({ OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: "5" }),
         fetchFn: fetchStub.fn,
         delayFn: makeDelay().fn,
         readPinMap: async () => PIN_MAP,
@@ -1689,7 +1689,7 @@ describe("runRelay", () => {
         { status: 202, body: undefined },
       ]);
       const result = await runRelay({
-        env: cancelledPrEnv({ GITHUB_WORKFLOW_RUN_ATTEMPT: "banana" }),
+        env: cancelledPrEnv({ OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: "banana" }),
         fetchFn: fetchStub.fn,
         delayFn: makeDelay().fn,
         readPinMap: async () => PIN_MAP,
@@ -1702,9 +1702,9 @@ describe("runRelay", () => {
       const fetchStub = makeFetch([token(), jobsListing([]), { status: 201, body: { id: 1 } }, noSweepRuns()]);
       const result = await runRelay({
         env: cancelledPrEnv({
-          GITHUB_WORKFLOW_RUN_EVENT: "push",
-          GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
-          GITHUB_WORKFLOW_RUN_ATTEMPT: "",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "push",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: "",
         }),
         fetchFn: fetchStub.fn,
         delayFn: makeDelay().fn,
@@ -1829,14 +1829,14 @@ describe("runRelay", () => {
       ]);
       const result = await runRelay({
         env: relayEnv({
-          GITHUB_WORKFLOW_RUN_ID: "",
-          GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
-          GITHUB_WORKFLOW_RUN_PATH: "",
-          GITHUB_WORKFLOW_RUN_CONCLUSION: "",
-          GITHUB_WORKFLOW_RUN_HTML_URL: "",
-          GITHUB_WORKFLOW_RUN_EVENT: "",
-          LEDGER_DISPATCH_RUN_ID: RUN_ID,
-          RELAY_RERUN_TOKEN: "rerun-token",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: "",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: "",
+          OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "",
+          OVERFLOW_LEDGER_DISPATCH_RUN_ID: RUN_ID,
+          OVERFLOW_RELAY_RERUN_TOKEN: "rerun-token",
         }),
         fetchFn: fetchStub.fn,
         delayFn: makeDelay().fn,
@@ -1871,8 +1871,8 @@ describe("runRelay", () => {
     /** The incident's shape: a stale pull_request run of a closed same-repo PR. */
     function untrustedWorkflowRunEnv(): Record<string, string> {
       return relayEnv({
-        GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
-        GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
       });
     }
 
@@ -2148,7 +2148,7 @@ describe("runRelay", () => {
           sweepRun(9001, { path: PATH_CI }),
           sweepRun(9002, { path: PATH_ACTIONLINT }),
         ]),
-        // At HEAD_SHA the App holds only verify — nothing ever attested
+        // At OVERFLOW_HEAD_SHA the App holds only verify — nothing ever attested
         // actionlint, because the relay instance that would have posted it was
         // cancelled while pending.
         checkRunsListing(["verify"]),

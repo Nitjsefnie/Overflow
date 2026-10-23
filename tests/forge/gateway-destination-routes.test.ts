@@ -42,7 +42,7 @@ const unresolvableInstance = "https://gitlab.invalid";
 beforeEach(() => {
   readSession.mockReset().mockResolvedValue({ user: { id: "sponsor-id", role: "MEMBER" } });
   getForgeToken.mockReset().mockResolvedValue({ token: "glpat-sponsor", identityId: "identity-1" });
-  vi.stubEnv("TOKEN_ENCRYPTION_KEY", "token-encryption-key");
+  vi.stubEnv("OVERFLOW_TOKEN_ENCRYPTION_KEY", "token-encryption-key");
 });
 
 afterEach(() => {

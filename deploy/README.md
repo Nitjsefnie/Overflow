@@ -100,10 +100,10 @@ The last command must print `10.33.0`, the version `package.json` pins.
 
 ## 4. Create the environment file
 
-The environment file holds `DATABASE_URL`, `AUTH_SECRET`, the OAuth credentials,
-`TOKEN_ENCRYPTION_KEY` (with `TOKEN_ENCRYPTION_KEY_PREVIOUS` beside it only
+The environment file holds `OVERFLOW_DATABASE_URL`, `AUTH_SECRET`, the OAuth credentials,
+`OVERFLOW_TOKEN_ENCRYPTION_KEY` (with `OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS` beside it only
 while section 11's key rotation is under way), and the public callback URLs in
-`GITHUB_WEBHOOK_URL` and `GITLAB_WEBHOOK_URL`. Registrations using repository
+`OVERFLOW_GITHUB_WEBHOOK_URL` and `OVERFLOW_GITLAB_WEBHOOK_URL`. Registrations using repository
 webhooks get their own secret, generated at registration time; App-based
 registration uses the separate App secret described below.
 The [Environment reference in `OPERATING.md`](../OPERATING.md#environment-reference)
@@ -133,7 +133,7 @@ chmod 0600 /etc/overflow/overflow.env
 The `[ -e ]` guard is what makes this safe on a host that already runs
 Overflow: `install` would otherwise truncate the secrets that are already
 there. Populate the file before section 5 — its migration step reads
-`DATABASE_URL` out of it.
+`OVERFLOW_DATABASE_URL` out of it.
 
 Optional variables configure the read-only reconciliation App for
 OAuth webhook registrations (issue 804): `GITHUB_APP_ID` is the App's id and
@@ -147,7 +147,7 @@ and one that does not falls back to the sponsor's OAuth token; either variable
 unset or empty is the OAuth-only posture. Both are read at wiring time — when
 the reconciliation background starts, or when the `pnpm reconcile` CLI builds
 its production dependencies — and a configured but unreadable key file fails
-there, before any fold. Set optional `GITHUB_APP_SLUG` to this reconciliation
+there, before any fold. Set optional `OVERFLOW_GITHUB_APP_SLUG` to this reconciliation
 App's public slug to offer its installation on the sponsor dashboard for GitHub
 repositories using the OAuth fallback; unset means no offer is shown.
 
@@ -157,7 +157,7 @@ App-based registration uses a separate GitHub App with three optional variables:
 | --- | --- |
 | `GITHUB_REGISTRATION_APP_ID` | The registration App's id. |
 | `GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH` | Path to its PEM RSA private key, readable by the `overflow` service account. |
-| `GITHUB_REGISTRATION_APP_WEBHOOK_SECRET` | The webhook secret configured on that App, used to authenticate its deliveries. |
+| `OVERFLOW_GITHUB_REGISTRATION_APP_WEBHOOK_SECRET` | The webhook secret configured on that App, used to authenticate its deliveries. |
 
 Leave these unset to keep the feature off: App-based registration is unavailable,
 and App webhook deliveries receive HTTP `503` (fail-closed). Either the App id
@@ -209,7 +209,7 @@ probe. Preserve them when constructing or changing a vhost:
   supply the origin lock or this HSTS policy.
 - **Forwarded origin.** Each proxying location sets `Host` and
   `X-Forwarded-Host` to `$host`, `X-Forwarded-Proto` to `$scheme`, and
-  `X-Forwarded-Port` to `$server_port`. Keep `APP_URL` set to the public HTTPS
+  `X-Forwarded-Port` to `$server_port`. Keep `OVERFLOW_APP_URL` set to the public HTTPS
   origin; the application's cookie-authenticated mutation guard compares the
   request's `Origin` to that configured origin.
 - **Body caps.** The required proxy body caps are 25 MiB
@@ -242,7 +242,7 @@ probe. Preserve them when constructing or changing a vhost:
   buckets. Review exemptions for the deployment's own callers rather than
   copying another host's trusted addresses.
 - **Address attestation in every location.** Follow [section 13](#13-verifying-the-privileged-action-journals-client-addresses)
-  to set `PRIVILEGED_PROXY_SECRET` and put the matching
+  to set `OVERFLOW_PRIVILEGED_PROXY_SECRET` and put the matching
   `X-Privileged-Proxy-Secret` directive in a root-only include. Include it in
   **every proxying `location`**, including `/api/overrides`, `/api/moderation`
   and `/` on the host. nginx's
@@ -287,7 +287,7 @@ pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
 mkdir "$release"
 node scripts/release.ts prepare /srv/overflow "$release"
-NEXT_DIST_DIR="$release" pnpm build
+OVERFLOW_NEXT_DIST_DIR="$release" pnpm build
 ```
 
 Each build gets a new directory at the tree root, alongside `.next`, named
@@ -315,23 +315,23 @@ the same depth. Release builds also isolate their generated types as described
 below, so a validator from the serving release cannot prevent a route from
 being removed.
 
-`next.config.ts` reads `NEXT_DIST_DIR` for this build only. It trims the value
+`next.config.ts` reads `OVERFLOW_NEXT_DIST_DIR` for this build only. It trims the value
 and rejects either path separator (`/` or `\`), absolute paths, `.` (zero depth),
 `..` and an existing symlink at the output path. Use a single directory name inside
 the tree, as above, with no `./` prefix or trailing slash. With the variable unset or blank,
 the local `build` script still uses `.next`. Do not export
-`NEXT_DIST_DIR` for the service or add it to `/etc/overflow/overflow.env`:
+`OVERFLOW_NEXT_DIST_DIR` for the service or add it to `/etc/overflow/overflow.env`:
 `next start` uses `.next` at runtime, with the variable unset.
 
 Before each release build, run
 `node scripts/release.ts prepare <tree> <releaseDir>` with the same release name
-used for `NEXT_DIST_DIR`. It generates the ignored `<releaseDir>.tsconfig.json`
+used for `OVERFLOW_NEXT_DIST_DIR`. It generates the ignored `<releaseDir>.tsconfig.json`
 beside the release directory, preserving the tracked `tsconfig.json` compiler
 settings and source includes while removing all `.next*` includes. Each release
 has its own config; for example, `.next-release-20260907T101500Z-abc1234` uses
 `.next-release-20260907T101500Z-abc1234.tsconfig.json` at the tree root.
 
-**Skipping preparation now fails loudly.** With `NEXT_DIST_DIR` set,
+**Skipping preparation now fails loudly.** With `OVERFLOW_NEXT_DIST_DIR` set,
 `next.config.ts` refuses a missing, stale or invalid generated config before
 Next can create defaults or consume it for type checking. The error prints the
 preparation command to run. A config left by a previous release cannot satisfy
@@ -351,7 +351,7 @@ pinned Next 16.3.8 updates the generated type includes in the prepared config.
 
 Next also regenerates the ignored `next-env.d.ts`. Release builds leave the
 tracked `tsconfig.json` untouched, including on failure, so no restore step is
-needed. With `NEXT_DIST_DIR` unset or blank, the preparation check does no
+needed. With `OVERFLOW_NEXT_DIST_DIR` unset or blank, the preparation check does no
 filesystem work; local development uses the tracked config and the running
 service continues to use `.next`. Start a deploy with a clean tracked tree.
 
@@ -416,7 +416,7 @@ The unit stays unchanged for this layout. Every path it names still reads
 `/srv/overflow/...`, including `ReadWritePaths=/srv/overflow/.next/cache`.
 On this host, `next start` served routes, static assets and RSC requests with
 HTTP `200` and no missing-manifest errors through the `.next` symlink, with
-`NEXT_DIST_DIR` unset at runtime. systemd resolved the writable cache path through
+`OVERFLOW_NEXT_DIST_DIR` unset at runtime. systemd resolved the writable cache path through
 the symlink too: the sandboxed process could write in that cache and got `EROFS`
 everywhere else. No service environment change or unit edit is needed.
 
@@ -818,7 +818,7 @@ the target SHA's own copy of the same file, so a map-shape change cannot
 deadlock a tree whose parser predates it. Right
 after the fetch it resolves the exact SHA being deployed and, once the
 tree-cleanliness gate passes, reads main's required checks from branch
-protection and the branch-rules endpoint (`repos/OWNER/REPO/rules/branches/main`).
+protection and the branch-rules endpoint (`repos/OWNER/OVERFLOW_REPO/rules/branches/main`).
 The gate uses their union, refusing when it is empty or either read fails for
 a reason other than not-found (HTTP 404). Every required check's latest run on that SHA must conclude
 `success` before the fast-forward, and so before install, migrations, build,
@@ -911,7 +911,7 @@ Every revision deploy finishes by upgrading existing hooks after the new release
 is serving and its readiness check succeeds. Migration 043 must precede the
 scoped-credential receiver code. Legacy hooks cannot authenticate until this
 upgrade configures their new callback UUID and independent secret. Keep the
-callback base URLs and `TOKEN_ENCRYPTION_KEY` available; change the
+callback base URLs and `OVERFLOW_TOKEN_ENCRYPTION_KEY` available; change the
 encryption key only through section 11. Avoid concurrent manual hook-configuration edits. The command
 preserves active state and unrelated subscriptions, verifies each persisted hook
 at its current numeric-ID-resolved location, then requests full upstream repair.
@@ -1175,7 +1175,7 @@ repo="${repo%.git}"
 repo_valid=0
 [[ "${repo}" =~ ^[^/]+/[^/]+$ ]] || repo_valid=$?
 if [ "${repo_valid}" -ne 0 ]; then
-  printf 'Could not parse an OWNER/REPO GitHub slug from remote.origin.url (%s); refusing to deploy.\n' "${remote_url}" >&2
+  printf 'Could not parse an OWNER/OVERFLOW_REPO GitHub slug from remote.origin.url (%s); refusing to deploy.\n' "${remote_url}" >&2
   exit 1
 fi
 required_stderr=$(mktemp)
@@ -1291,7 +1291,7 @@ pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
 mkdir "$release"
 node scripts/release.ts prepare /srv/overflow "$release"
-NEXT_DIST_DIR="$release" pnpm build
+OVERFLOW_NEXT_DIST_DIR="$release" pnpm build
 previous_release=$(readlink -f /srv/overflow/.next)
 serving_cache="$previous_release/cache"
 test -d "$serving_cache"
@@ -1443,7 +1443,7 @@ from, which is what the last paragraph of section 9 is about.
 
 ## 11. Rotating the credential encryption key
 
-`TOKEN_ENCRYPTION_KEY` seals three kinds of stored credential: each user's
+`OVERFLOW_TOKEN_ENCRYPTION_KEY` seals three kinds of stored credential: each user's
 GitHub OAuth token (`users.encrypted_oauth_token`), each linked forge access
 token (`user_forge_identities.encrypted_token`) and each registration's webhook
 secret (`registered_repositories.encrypted_webhook_secret`). Every value written
@@ -1451,7 +1451,7 @@ in the current format names the key that sealed it and is bound to its own row;
 values stored before that format carry neither until they are re-sealed (see
 "Re-sealing without changing the key" below).
 
-**This section is the only sanctioned way to change `TOKEN_ENCRYPTION_KEY`.**
+**This section is the only sanctioned way to change `OVERFLOW_TOKEN_ENCRYPTION_KEY`.**
 Replacing the value in the environment file any other way leaves every stored
 credential sealed under a key the service no longer holds, and each one fails
 until it is minted again: sponsors sign in again, forge identities are linked
@@ -1462,9 +1462,9 @@ rotation, which [section 14](#14-rotating-github-app-private-keys) carries;
 this section's steps do not extend to it and must not be applied to it.
 
 The rotation runs while the service keeps serving, and costs two restarts. It
-relies on the service reading two keys: `TOKEN_ENCRYPTION_KEY` is the current
+relies on the service reading two keys: `OVERFLOW_TOKEN_ENCRYPTION_KEY` is the current
 key, which seals every new write and opens what it sealed, and the optional
-`TOKEN_ENCRYPTION_KEY_PREVIOUS` only opens. While both are configured, every
+`OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS` only opens. While both are configured, every
 row opens under whichever of the two sealed it.
 
 Run every block as root from a fresh shell. Sourcing the environment file sets
@@ -1522,23 +1522,23 @@ out whether that key was ever configured before removing it.
 ### Step 3: configure both keys and restart
 
 This block keeps the old key in `/etc/overflow/token-encryption-key.old`,
-renames the `TOKEN_ENCRYPTION_KEY` line to `TOKEN_ENCRYPTION_KEY_PREVIOUS`
-without changing its value, appends the new key as `TOKEN_ENCRYPTION_KEY`,
+renames the `OVERFLOW_TOKEN_ENCRYPTION_KEY` line to `OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS`
+without changing its value, appends the new key as `OVERFLOW_TOKEN_ENCRYPTION_KEY`,
 confirms both lines read back as the two saved keys, and restores section 4's
 ownership and mode. It refuses, changing nothing, unless:
 
 - step 2's file holds a 43-character key;
 - the environment file ends with a newline, so the appended line cannot be
   glued onto the last one;
-- no line names `TOKEN_ENCRYPTION_KEY_PREVIOUS`, comments included. A file
+- no line names `OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS`, comments included. A file
   copied from `.env.example` carries its commented
-  `# TOKEN_ENCRYPTION_KEY_PREVIOUS=` line and its explanation; delete both, and
-  any empty `TOKEN_ENCRYPTION_KEY_PREVIOUS=` line, before running the block;
-- exactly one line names `TOKEN_ENCRYPTION_KEY` at all, comments included (the
+  `# OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=` line and its explanation; delete both, and
+  any empty `OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=` line, before running the block;
+- exactly one line names `OVERFLOW_TOKEN_ENCRYPTION_KEY` at all, comments included (the
   pre-restart rollback counts the same way, so a file this block accepts is one
   the rollback accepts), and that line holds the bare value and nothing else: no
   quotes, spaces or comment. Rewrite a quoted line as
-  `TOKEN_ENCRYPTION_KEY=<value>` first; systemd and the shell read the bare
+  `OVERFLOW_TOKEN_ENCRYPTION_KEY=<value>` first; systemd and the shell read the bare
   form identically;
 - no `token-encryption-key.old` from an earlier rotation is in the way. Such a
   file belongs with that rotation's dump, so rename it rather than removing it.
@@ -1548,16 +1548,16 @@ ownership and mode. It refuses, changing nothing, unless:
 set -e
 grep -Eqx '[A-Za-z0-9_-]{43}' /etc/overflow/token-encryption-key.new || { echo "Refusing: token-encryption-key.new does not hold a 43-character key." >&2; exit 1; }
 test -z "$(tail -c 1 /etc/overflow/overflow.env)" || { echo "Refusing: overflow.env does not end with a newline." >&2; exit 1; }
-test "$(grep -c 'TOKEN_ENCRYPTION_KEY_PREVIOUS' /etc/overflow/overflow.env)" = 0 || { echo "Refusing: overflow.env already names TOKEN_ENCRYPTION_KEY_PREVIOUS." >&2; exit 1; }
-test "$(grep -c 'TOKEN_ENCRYPTION_KEY' /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env must name TOKEN_ENCRYPTION_KEY on exactly one line." >&2; exit 1; }
-grep -Eqx 'TOKEN_ENCRYPTION_KEY=[A-Za-z0-9_-]{43}' /etc/overflow/overflow.env || { echo "Refusing: the TOKEN_ENCRYPTION_KEY value is not bare." >&2; exit 1; }
+test "$(grep -c 'OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS' /etc/overflow/overflow.env)" = 0 || { echo "Refusing: overflow.env already names OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS." >&2; exit 1; }
+test "$(grep -c 'OVERFLOW_TOKEN_ENCRYPTION_KEY' /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env must name OVERFLOW_TOKEN_ENCRYPTION_KEY on exactly one line." >&2; exit 1; }
+grep -Eqx 'OVERFLOW_TOKEN_ENCRYPTION_KEY=[A-Za-z0-9_-]{43}' /etc/overflow/overflow.env || { echo "Refusing: the OVERFLOW_TOKEN_ENCRYPTION_KEY value is not bare." >&2; exit 1; }
 test ! -e /etc/overflow/token-encryption-key.old || { echo "Refusing: token-encryption-key.old already exists." >&2; exit 1; }
 install -o root -g root -m 0600 /dev/null /etc/overflow/token-encryption-key.old
-sed -n 's/^TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env > /etc/overflow/token-encryption-key.old
-sed -i 's/^TOKEN_ENCRYPTION_KEY=/TOKEN_ENCRYPTION_KEY_PREVIOUS=/' /etc/overflow/overflow.env
-{ printf 'TOKEN_ENCRYPTION_KEY='; cat /etc/overflow/token-encryption-key.new; printf '\n'; } >> /etc/overflow/overflow.env
-test "$(sed -n 's/^TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.new)" || { echo "The edited file does not read back as the saved keys; roll back as below." >&2; exit 1; }
-test "$(sed -n 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.old)" || { echo "The edited file does not read back as the saved keys; roll back as below." >&2; exit 1; }
+sed -n 's/^OVERFLOW_TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env > /etc/overflow/token-encryption-key.old
+sed -i 's/^OVERFLOW_TOKEN_ENCRYPTION_KEY=/OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=/' /etc/overflow/overflow.env
+{ printf 'OVERFLOW_TOKEN_ENCRYPTION_KEY='; cat /etc/overflow/token-encryption-key.new; printf '\n'; } >> /etc/overflow/overflow.env
+test "$(sed -n 's/^OVERFLOW_TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.new)" || { echo "The edited file does not read back as the saved keys; roll back as below." >&2; exit 1; }
+test "$(sed -n 's/^OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.old)" || { echo "The edited file does not read back as the saved keys; roll back as below." >&2; exit 1; }
 rm /etc/overflow/token-encryption-key.new
 chown root:root /etc/overflow/overflow.env
 chmod 0600 /etc/overflow/overflow.env
@@ -1617,7 +1617,7 @@ printf 'Re-encryption exit status: %s\nCheck exit status: %s\n' "$reencrypt_stat
 
 Load the keys from the service's own environment file, as here, and never type
 them on the command line. The script seals every row it rewrites under whatever
-`TOKEN_ENCRYPTION_KEY` it is given, so a valid key the service does not hold
+`OVERFLOW_TOKEN_ENCRYPTION_KEY` it is given, so a valid key the service does not hold
 would re-seal those rows under a key the service cannot open.
 
 The first command opens every stored credential not yet sealed under the
@@ -1655,7 +1655,7 @@ waiting for that, clear the reported row's token:
 ```bash
 set -a; . /etc/overflow/overflow.env; set +a
 row_id='REPLACE-WITH-REPORTED-ID'
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "update users set encrypted_oauth_token = null where id = '$row_id'"
+psql "$OVERFLOW_DATABASE_URL" -v ON_ERROR_STOP=1 -c "update users set encrypted_oauth_token = null where id = '$row_id'"
 ```
 
 Expect `UPDATE 1`; `UPDATE 0` means no user has that id, so check it against
@@ -1674,7 +1674,7 @@ reported row's token; never delete the row:
 ```bash
 set -a; . /etc/overflow/overflow.env; set +a
 row_id='REPLACE-WITH-REPORTED-ID'
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "update user_forge_identities set encrypted_token = null where id = '$row_id'"
+psql "$OVERFLOW_DATABASE_URL" -v ON_ERROR_STOP=1 -c "update user_forge_identities set encrypted_token = null where id = '$row_id'"
 ```
 
 Expect `UPDATE 1`; `UPDATE 0` means no identity has that id. The row keeps its
@@ -1697,7 +1697,7 @@ fails there as well.
 ```bash
 set -a; . /etc/overflow/overflow.env; set +a
 row_id='REPLACE-WITH-REPORTED-ID'
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where id = '$row_id' and unregistered_at is null"
+psql "$OVERFLOW_DATABASE_URL" -v ON_ERROR_STOP=1 -c "update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where id = '$row_id' and unregistered_at is null"
 ```
 
 Expect `UPDATE 1`, then run the `webhooks:upgrade` package script with the same
@@ -1721,7 +1721,7 @@ expectations:
 ```bash
 (
 set -e
-sed -i '/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/d' /etc/overflow/overflow.env
+sed -i '/^OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=/d' /etc/overflow/overflow.env
 chown root:root /etc/overflow/overflow.env
 chmod 0600 /etc/overflow/overflow.env
 )
@@ -1754,11 +1754,11 @@ application and inspect its journal as in section 7. Keep
   ```bash
   (
   set -e
-  test "$(grep -c 'TOKEN_ENCRYPTION_KEY' /etc/overflow/overflow.env)" = 2 && test "$(grep -c '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env does not hold exactly the two key lines step 3 wrote." >&2; exit 1; }
-  test "$(sed -n 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.old)" || { echo "Refusing: the previous key does not match token-encryption-key.old." >&2; exit 1; }
-  sed -i -e '/^TOKEN_ENCRYPTION_KEY=/d' -e 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/TOKEN_ENCRYPTION_KEY=/' /etc/overflow/overflow.env
-  test "$(grep -c 'TOKEN_ENCRYPTION_KEY' /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env does not name the key exactly once; token-encryption-key.old is kept." >&2; exit 1; }
-  test "$(sed -n 's/^TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.old)" || { echo "Refusing: the key does not match token-encryption-key.old, which is kept." >&2; exit 1; }
+  test "$(grep -c 'OVERFLOW_TOKEN_ENCRYPTION_KEY' /etc/overflow/overflow.env)" = 2 && test "$(grep -c '^OVERFLOW_TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env does not hold exactly the two key lines step 3 wrote." >&2; exit 1; }
+  test "$(sed -n 's/^OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.old)" || { echo "Refusing: the previous key does not match token-encryption-key.old." >&2; exit 1; }
+  sed -i -e '/^OVERFLOW_TOKEN_ENCRYPTION_KEY=/d' -e 's/^OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=/OVERFLOW_TOKEN_ENCRYPTION_KEY=/' /etc/overflow/overflow.env
+  test "$(grep -c 'OVERFLOW_TOKEN_ENCRYPTION_KEY' /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env does not name the key exactly once; token-encryption-key.old is kept." >&2; exit 1; }
+  test "$(sed -n 's/^OVERFLOW_TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.old)" || { echo "Refusing: the key does not match token-encryption-key.old, which is kept." >&2; exit 1; }
   rm /etc/overflow/token-encryption-key.old
   )
   ```
@@ -1773,8 +1773,8 @@ application and inspect its journal as in section 7. Keep
   ```bash
   (
   set -e
-  test "$(grep -c 'TOKEN_ENCRYPTION_KEY' /etc/overflow/overflow.env)" = 2 && test "$(grep -c '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env)" = 1 && test "$(grep -c '^TOKEN_ENCRYPTION_KEY_PREVIOUS=' /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env does not hold exactly one current and one previous key line." >&2; exit 1; }
-  sed -i -e 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/TOKEN_ENCRYPTION_KEY=/' -e t -e 's/^TOKEN_ENCRYPTION_KEY=/TOKEN_ENCRYPTION_KEY_PREVIOUS=/' /etc/overflow/overflow.env
+  test "$(grep -c 'OVERFLOW_TOKEN_ENCRYPTION_KEY' /etc/overflow/overflow.env)" = 2 && test "$(grep -c '^OVERFLOW_TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env)" = 1 && test "$(grep -c '^OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=' /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env does not hold exactly one current and one previous key line." >&2; exit 1; }
+  sed -i -e 's/^OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=/OVERFLOW_TOKEN_ENCRYPTION_KEY=/' -e t -e 's/^OVERFLOW_TOKEN_ENCRYPTION_KEY=/OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=/' /etc/overflow/overflow.env
   )
   ```
 
@@ -1786,11 +1786,11 @@ application and inspect its journal as in section 7. Keep
   key is still held, going back is another rotation by this section. If the new
   key is lost, the step 1 dump together with the old key is the only way back:
   restore it as section (e.2) of [backup-restore.md](backup-restore.md)
-  describes, with `TOKEN_ENCRYPTION_KEY` set to the old key and no previous key.
+  describes, with `OVERFLOW_TOKEN_ENCRYPTION_KEY` set to the old key and no previous key.
   Everything written since the dump is lost.
 
 Section 9's release rollback is not a key rollback. A build older than the
-key-identified credential format reads no `TOKEN_ENCRYPTION_KEY_PREVIOUS` and
+key-identified credential format reads no `OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS` and
 cannot open any credential written or re-sealed in that format, whichever key
 sealed it.
 
@@ -1818,7 +1818,7 @@ key the pass seals under:
 
 1. Take step 1's backup. That dump holds the old format, which an older release
    can still read.
-2. Run step 4's block. The environment file names only `TOKEN_ENCRYPTION_KEY`,
+2. Run step 4's block. The environment file names only `OVERFLOW_TOKEN_ENCRYPTION_KEY`,
    so the script opens each old-format value with it and re-seals it under the
    same key, bound to its row.
 3. Repair any row it reports undecryptable as step 5 describes, and run step
@@ -1838,7 +1838,7 @@ only reads:
 
 ```bash
 set -a; . /etc/overflow/overflow.env; set +a
-psql "$DATABASE_URL" -tAc "select count(*) from registered_repositories where unregistered_at is not null and webhook_credential_id is not null"
+psql "$OVERFLOW_DATABASE_URL" -tAc "select count(*) from registered_repositories where unregistered_at is not null and webhook_credential_id is not null"
 ```
 
 Its statement is idempotent. The previous release keeps serving from the
@@ -1850,7 +1850,7 @@ repeat the count, which must then print `0`:
 
 ```bash
 set -a; . /etc/overflow/overflow.env; set +a
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where unregistered_at is not null and webhook_credential_id is not null"
+psql "$OVERFLOW_DATABASE_URL" -v ON_ERROR_STOP=1 -c "update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where unregistered_at is not null and webhook_credential_id is not null"
 ```
 
 ## 12. Failure alerts
@@ -2968,7 +2968,7 @@ itself, so an unmarked address in the journal is a claim, not a fact.
 To keep the journal honest about the difference, the application marks an
 address verified only when the request also carries the
 `x-privileged-proxy-secret` header with exactly the value of the
-`PRIVILEGED_PROXY_SECRET` environment variable. Only nginx — and the operator
+`OVERFLOW_PRIVILEGED_PROXY_SECRET` environment variable. Only nginx — and the operator
 who configured both — hold that secret, so a header that carries it cannot
 come from a forger on loopback.
 
@@ -2983,7 +2983,7 @@ marker added. The steps below close that gap.
    openssl rand -hex 32
    ```
 
-2. Put `PRIVILEGED_PROXY_SECRET=<value>` in `/etc/overflow/overflow.env`
+2. Put `OVERFLOW_PRIVILEGED_PROXY_SECRET=<value>` in `/etc/overflow/overflow.env`
    (root:root `0600`, like the rest of that file), and restart the service so
    the running process picks the variable up:
 
@@ -3016,7 +3016,7 @@ marker added. The steps below close that gap.
    `include /etc/nginx/overflow-privileged-proxy.conf;`
 
    The literal is generated per host: it is the same value
-   `PRIVILEGED_PROXY_SECRET` carries in `/etc/overflow/overflow.env`.
+   `OVERFLOW_PRIVILEGED_PROXY_SECRET` carries in `/etc/overflow/overflow.env`.
 
 4. Validate and reload nginx:
 
@@ -3046,7 +3046,7 @@ unverified.
 The reconciliation App and the check-publishing App are separate identities
 with separate keys. Rotate each by its own procedure below. A rotation of
 one App does not replace the other App's credential. Section 11 owns
-`TOKEN_ENCRYPTION_KEY`; neither procedure below applies to that key.
+`OVERFLOW_TOKEN_ENCRYPTION_KEY`; neither procedure below applies to that key.
 
 ### Reconciliation App: host-only
 
@@ -3055,7 +3055,7 @@ mint its installation token. This App has Metadata, Issues and Pull requests
 read access and no webhook. The reconciliation path reads the PEM file
 `GITHUB_APP_PRIVATE_KEY_PATH` names, alongside `GITHUB_APP_ID`. This procedure
 is the only sanctioned way to change that App's private key; it does not
-extend to `TOKEN_ENCRYPTION_KEY`, which section 11 owns.
+extend to `OVERFLOW_TOKEN_ENCRYPTION_KEY`, which section 11 owns.
 
 The reconciliation App's key is host-only; no CI secret is derived from it.
 The PEM lives at the path
@@ -3209,7 +3209,7 @@ copy as Rolling back describes. When `"skipped":false` carries a `runId`,
 confirm that run completed:
 
 ```bash
-psql "$DATABASE_URL" -tAc "select status, completed_at is not null from reconciliation_runs where id = 'REPLACE-WITH-THE-RUNID'"
+psql "$OVERFLOW_DATABASE_URL" -tAc "select status, completed_at is not null from reconciliation_runs where id = 'REPLACE-WITH-THE-RUNID'"
 ```
 
 Expect `COMPLETED|t`. With reconciliation completed, step 5 may retire the

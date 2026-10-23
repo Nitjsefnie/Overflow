@@ -83,7 +83,7 @@ function drainFailureLines(logged: ConsoleCapture): unknown[][] {
 }
 
 describe("the reconciliation worker's drain failure logging during a database outage", () => {
-  const databaseUrlOriginal = process.env.DATABASE_URL;
+  const databaseUrlOriginal = process.env.OVERFLOW_DATABASE_URL;
   let started: StartedPostgres;
   let databaseUrl: string;
 
@@ -101,7 +101,7 @@ describe("the reconciliation worker's drain failure logging during a database ou
       // this suite on one host cannot fight over a fixed port.
     });
     databaseUrl = started.databaseUrl;
-    process.env.DATABASE_URL = databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = databaseUrl;
     await runMigrations();
     await closeSql();
     testState.sql = postgres(databaseUrl, { max: 10 });
@@ -126,9 +126,9 @@ describe("the reconciliation worker's drain failure logging during a database ou
       // The outage already stopped the container; a second stop is bookkeeping.
     }
     if (databaseUrlOriginal === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = databaseUrlOriginal;
+      process.env.OVERFLOW_DATABASE_URL = databaseUrlOriginal;
     }
   });
 

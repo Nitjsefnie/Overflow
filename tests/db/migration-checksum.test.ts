@@ -25,7 +25,7 @@ const tempDirectories = createOwnedTempDirectoryRegistry([fixturePrefix]);
 const foreignTempDirectories = createOwnedTempDirectoryRegistry([`${fixturePrefix}fixtures-`]);
 let foreignFixtureDirectory: string | undefined;
 
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 let container: StartedTestContainer | undefined;
 let adminSql: Sql | undefined;
 let adminDatabaseUrl = "";
@@ -76,7 +76,7 @@ describe("migration checksums", () => {
     await fixtureDirectory("001.sql", "select 1;");
   });
 
-  it.skipIf(process.env.TEMP_DIRECTORY_TEARDOWN_PROBE !== "1")("cleans fixtures despite database teardown failure", async () => {
+  it.skipIf(process.env.OVERFLOW_TEMP_DIRECTORY_TEARDOWN_PROBE !== "1")("cleans fixtures despite database teardown failure", async () => {
     await fixtureDirectory("001.sql", "select 1;");
     const end = adminSql!.end.bind(adminSql);
     vi.spyOn(adminSql!, "end").mockImplementationOnce(async () => {
@@ -313,9 +313,9 @@ function databaseUrlFor(databaseName: string): string {
 
 function restoreDatabaseUrl(): void {
   if (originalDatabaseUrl === undefined) {
-    delete process.env.DATABASE_URL;
+    delete process.env.OVERFLOW_DATABASE_URL;
   } else {
-    process.env.DATABASE_URL = originalDatabaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   }
 }
 
@@ -335,11 +335,11 @@ function announcedAdoptionNames(chunks: readonly unknown[]): string[] {
 /** Runs one case against a database of its own, then closes its client and restores the admin URL. */
 async function onNewDatabase<T>(databaseName: string, body: (sql: Sql) => Promise<T>): Promise<T> {
   await admin()`create database ${admin()(databaseName)}`;
-  process.env.DATABASE_URL = databaseUrlFor(databaseName);
+  process.env.OVERFLOW_DATABASE_URL = databaseUrlFor(databaseName);
   try {
     return await body(getSql());
   } finally {
     await closeSql();
-    process.env.DATABASE_URL = adminDatabaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = adminDatabaseUrl;
   }
 }

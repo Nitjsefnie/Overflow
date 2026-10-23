@@ -255,7 +255,7 @@ describe("local development database exposure", () => {
     expect(
       contents,
       `${ENVIRONMENT_FILE} no longer looks like the shipped file.`,
-    ).toMatch(/^DATABASE_URL=/m);
+    ).toMatch(/^OVERFLOW_DATABASE_URL=/m);
     expect(declaration.exec(contents)?.[0] ?? null).toBeNull();
   });
 });

@@ -47,7 +47,7 @@ const FETCH = /\bgit\b[^\n]*\bfetch\b/;
  * Matched against the NAME alone, never the expression it holds.
  */
 const PR_NUMBER_NAME =
-  /(^|[^A-Z0-9_])(PR_NUMBER|PR_ID|PULL_NUMBER|PULL_REQUEST_ID|PULL_REQUEST_NUMBER)([^A-Z0-9_]|$)/i;
+  /(^|[^A-Z0-9_])(OVERFLOW_PR_NUMBER|PR_ID|PULL_NUMBER|PULL_REQUEST_ID|PULL_REQUEST_NUMBER)([^A-Z0-9_]|$)/i;
 
 function fetchSteps(): WorkflowStep[] {
   return steps.filter((step) => FETCH.test(step.run ?? ""));
@@ -89,20 +89,20 @@ describe("the verify job's git fetches", () => {
     const step = materialise[0]!;
 
     // Both ends of the merge, as SHA values under no pull-request-ref name —
-    // not PR_NUMBER, not a head REF: the trust lives in the bind below, not
+    // not OVERFLOW_PR_NUMBER, not a head REF: the trust lives in the bind below, not
     // in the spelling. Nothing is named merge_commit_sha either, because that
     // field is computed asynchronously and can name the previous head's merge.
-    expect(step.env?.HEAD_SHA).toBe("${{ steps.pr.outputs.head_sha }}");
-    expect(step.env?.BASE_SHA).toBe("${{ steps.pr.outputs.base_sha }}");
-    expect(step.run).toContain('git fetch --no-tags origin "${HEAD_SHA:?}"');
+    expect(step.env?.OVERFLOW_HEAD_SHA).toBe("${{ steps.pr.outputs.head_sha }}");
+    expect(step.env?.OVERFLOW_BASE_SHA).toBe("${{ steps.pr.outputs.base_sha }}");
+    expect(step.run).toContain('git fetch --no-tags origin "${OVERFLOW_HEAD_SHA:?}"');
     expect(step.run).not.toContain("merge_commit_sha");
-    expect(step.run).not.toContain("PR_NUMBER");
+    expect(step.run).not.toContain("OVERFLOW_PR_NUMBER");
 
     // The trust boundary is untouched: what is materialised must be a
     // two-parent merge of exactly this event's base and head, or the step
     // fails closed.
-    expect(step.run).toContain('git merge-tree --write-tree "${BASE_SHA:?}" "${HEAD_SHA:?}"');
-    expect(step.run).toContain('[ "${second_parent}" != "${HEAD_SHA}" ]');
+    expect(step.run).toContain('git merge-tree --write-tree "${OVERFLOW_BASE_SHA:?}" "${OVERFLOW_HEAD_SHA:?}"');
+    expect(step.run).toContain('[ "${second_parent}" != "${OVERFLOW_HEAD_SHA}" ]');
     expect(step.run).toContain("exit 1");
   });
 });

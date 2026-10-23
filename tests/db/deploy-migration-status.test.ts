@@ -67,7 +67,7 @@ describe("pending deploy migration status", () => {
     const result = spawnSync(process.execPath, ["scripts/deploy-migration-status.ts"], {
       cwd: repositoryRoot,
       encoding: "utf8",
-      env: { ...process.env, DATABASE_URL: databaseUrl },
+      env: { ...process.env, OVERFLOW_DATABASE_URL: databaseUrl },
       timeout: 10_000,
     });
 
@@ -86,7 +86,7 @@ describe("pending deploy migration status", () => {
       const result = spawnSync(process.execPath, ["scripts/deploy-migration-status.ts"], {
         cwd: repositoryRoot,
         encoding: "utf8",
-        env: { ...process.env, DATABASE_URL: databaseUrl },
+        env: { ...process.env, OVERFLOW_DATABASE_URL: databaseUrl },
         timeout: 10_000,
       });
       expect(result.error).toBeUndefined();

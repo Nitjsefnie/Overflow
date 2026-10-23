@@ -193,7 +193,7 @@ function runBackup(
      */
     backupDirectory?: string;
     /** Leaves one of the required variables out of the environment entirely. */
-    omit?: "DATABASE_URL" | "OVERFLOW_BACKUP_AGE_RECIPIENT" | "OVERFLOW_BACKUP_DISCORD_CHANNEL";
+    omit?: "OVERFLOW_DATABASE_URL" | "OVERFLOW_BACKUP_AGE_RECIPIENT" | "OVERFLOW_BACKUP_DISCORD_CHANNEL";
     recipient?: string;
     channelValue?: string;
   } = {},
@@ -230,7 +230,7 @@ function runBackup(
 
     const childEnv = {
       NODE_ENV: "test" as const,
-      DATABASE_URL: databaseUrl,
+      OVERFLOW_DATABASE_URL: databaseUrl,
       OVERFLOW_BACKUP_AGE_RECIPIENT: options.recipient ?? recipient,
       OVERFLOW_BACKUP_DISCORD_CHANNEL: options.channelValue ?? channel,
       OVERFLOW_BACKUP_DIR: backupDirectory,
@@ -341,11 +341,11 @@ function createdDaysAgo(ageDays: number): string {
 }
 
 describe("db-offhost-backup.sh environment validation", () => {
-  it("refuses to run without DATABASE_URL, before anything runs", () => {
-    const run = runBackup({ omit: "DATABASE_URL" });
+  it("refuses to run without OVERFLOW_DATABASE_URL, before anything runs", () => {
+    const run = runBackup({ omit: "OVERFLOW_DATABASE_URL" });
 
     expect(run.status).not.toBe(0);
-    expect(run.stderr).toContain("DATABASE_URL");
+    expect(run.stderr).toContain("OVERFLOW_DATABASE_URL");
     expect(run.dumpArgv, "nothing may be dumped on a refusal").toBeNull();
     expect(run.mbCalls, "and the mailbox must not be touched at all").toEqual([]);
   });

@@ -23,9 +23,9 @@ function env(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
 
 describe("authTrustHost", () => {
   it("trusts a production deployment configured from only the documented settings", () => {
-    // The issue 649 case: APP_URL present and parsable, no operator variable.
+    // The issue 649 case: OVERFLOW_APP_URL present and parsable, no operator variable.
     expect(
-      authTrustHost(env({ NODE_ENV: "production", APP_URL: "http://127.0.0.1:3111" })),
+      authTrustHost(env({ NODE_ENV: "production", OVERFLOW_APP_URL: "http://127.0.0.1:3111" })),
     ).toBe(true);
   });
 
@@ -40,7 +40,7 @@ describe("authTrustHost", () => {
     expect(authTrustHost(env({ NODE_ENV: "production" }))).toBe(false);
   });
 
-  it("reads a missing, blank, whitespace or malformed APP_URL as distrust", () => {
+  it("reads a missing, blank, whitespace or malformed OVERFLOW_APP_URL as distrust", () => {
     for (const [label, appUrl] of [
       ["missing", undefined],
       ["blank", ""],
@@ -49,14 +49,14 @@ describe("authTrustHost", () => {
       ["opaque origin", "data:text/html,hi"],
     ] as const) {
       expect(
-        authTrustHost(env({ NODE_ENV: "production", APP_URL: appUrl })),
+        authTrustHost(env({ NODE_ENV: "production", OVERFLOW_APP_URL: appUrl })),
         label,
       ).toBe(false);
     }
   });
 
   it("keeps an operator's AUTH_URL decisive, exactly as @auth/core reads it", () => {
-    const appUrl = { APP_URL: "http://127.0.0.1:3111" };
+    const appUrl = { OVERFLOW_APP_URL: "http://127.0.0.1:3111" };
     // A set value trusts ...
     expect(
       authTrustHost(env({ NODE_ENV: "production", AUTH_URL: "https://overflow.test", ...appUrl })),
@@ -64,13 +64,13 @@ describe("authTrustHost", () => {
     expect(
       authTrustHost(env({ NODE_ENV: "production", AUTH_URL: "https://overflow.test" })),
     ).toBe(true);
-    // ... and a set-but-blank one distrusts, APP_URL notwithstanding — the
+    // ... and a set-but-blank one distrusts, OVERFLOW_APP_URL notwithstanding — the
     // same verdict @auth/core's own chain reaches for a blank first alternative.
     expect(authTrustHost(env({ NODE_ENV: "production", AUTH_URL: "", ...appUrl }))).toBe(false);
   });
 
   it("keeps an operator's AUTH_TRUST_HOST decisive, exactly as @auth/core reads it", () => {
-    const appUrl = { APP_URL: "http://127.0.0.1:3111" };
+    const appUrl = { OVERFLOW_APP_URL: "http://127.0.0.1:3111" };
     expect(
       authTrustHost(env({ NODE_ENV: "production", AUTH_TRUST_HOST: "true", ...appUrl })),
     ).toBe(true);
@@ -88,21 +88,21 @@ describe("authTrustHost", () => {
     expect(authTrustHost(env({ NODE_ENV: "production", VERCEL: "" }))).toBe(false);
   });
 
-  it("derives trust from the origin APP_URL names, ignoring any path", () => {
+  it("derives trust from the origin OVERFLOW_APP_URL names, ignoring any path", () => {
     expect(
-      authTrustHost(env({ NODE_ENV: "production", APP_URL: "https://overflow.test/some/path" })),
+      authTrustHost(env({ NODE_ENV: "production", OVERFLOW_APP_URL: "https://overflow.test/some/path" })),
     ).toBe(true);
   });
 });
 
-describe("the NextAuth configuration derives Auth.js trust from APP_URL", () => {
+describe("the NextAuth configuration derives Auth.js trust from OVERFLOW_APP_URL", () => {
   beforeEach(() => {
     vi.resetModules();
     // The documented environment: NODE_ENV=production and the .env.example
     // variables, with NO AUTH_URL and NO AUTH_TRUST_HOST. The odd port keeps
     // the test's server distinct from any local one; nothing binds it.
     vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("APP_URL", "http://127.0.0.1:3111");
+    vi.stubEnv("OVERFLOW_APP_URL", "http://127.0.0.1:3111");
     vi.stubEnv("AUTH_SECRET", "test-only-secret-that-is-long-enough-0123456789");
     vi.stubEnv("AUTH_GITHUB_ID", "placeholder-client-id");
     vi.stubEnv("AUTH_GITHUB_SECRET", "placeholder-client-secret");
@@ -133,12 +133,12 @@ describe("the NextAuth configuration derives Auth.js trust from APP_URL", () => 
     expect(response.status).toBe(200);
   });
 
-  it("answers /api/auth/providers with 500 when the environment carries no APP_URL", async () => {
-    // The other half of the wiring: production with no APP_URL and no operator
+  it("answers /api/auth/providers with 500 when the environment carries no OVERFLOW_APP_URL", async () => {
+    // The other half of the wiring: production with no OVERFLOW_APP_URL and no operator
     // variable must not default to trust. A constant-true trustHost — the
     // blanket shape the derivation exists to avoid — answers 200 here, so this
     // case fails for it while every 200 case above still passes.
-    vi.stubEnv("APP_URL", undefined);
+    vi.stubEnv("OVERFLOW_APP_URL", undefined);
     const { NextRequest } = await import("next/server");
     const { GET } = await import("@/auth");
     const response = await GET(new NextRequest("http://127.0.0.1:3111/api/auth/providers"));

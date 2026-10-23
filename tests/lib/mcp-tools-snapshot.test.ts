@@ -54,7 +54,7 @@ describe("MCP tool surface snapshot", () => {
   });
 
   it("enforces the combined HTTP and MCP SemVer requirement", () => {
-    const base = baseCommit(process.env.MCP_SNAPSHOT_BASE_COMMIT ?? process.env.HTTP_SNAPSHOT_BASE_COMMIT, "MCP");
+    const base = baseCommit(process.env.OVERFLOW_MCP_SNAPSHOT_BASE_COMMIT ?? process.env.OVERFLOW_HTTP_SNAPSHOT_BASE_COMMIT, "MCP");
     assertSnapshotVersions(readSurfaceSnapshotsAt(base), { http: httpSnapshot, mcp: snapshot });
   });
 

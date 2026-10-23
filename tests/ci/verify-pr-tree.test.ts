@@ -183,8 +183,8 @@ function stepEnv(
     if (output) {
       const source = output[1] === "pr-tree" ? outputs
         : output[1] === "pr" ? {
-          head_sha: given.HEAD_SHA, base_sha: given.BASE_SHA,
-          base_ref: given.BASE_REF, pr_number: given.PR_NUMBER,
+          head_sha: given.OVERFLOW_HEAD_SHA, base_sha: given.OVERFLOW_BASE_SHA,
+          base_ref: given.OVERFLOW_BASE_REF, pr_number: given.OVERFLOW_PR_NUMBER,
         } : byStep[output[1]!] ?? {};
       if (source[output[2]!] === undefined) throw new Error(`${key}: no ${output[1]} output ${output[2]}`);
       resolved[key] = source[output[2]!]!;
@@ -221,7 +221,7 @@ async function runStep(
     encoding: "utf8",
     env: {
       ...scratchGitEnv,
-      ...stepEnv(step, outputs, { BASE_SHA: fx.base, HEAD_SHA: fx.head, ...given }, byStep),
+      ...stepEnv(step, outputs, { OVERFLOW_BASE_SHA: fx.base, OVERFLOW_HEAD_SHA: fx.head, ...given }, byStep),
       GITHUB_WORKSPACE: fx.workspace,
       GITHUB_EVENT_NAME: "workflow_run",
       GITHUB_OUTPUT: output,
@@ -265,8 +265,8 @@ async function runStepOnOpenStdin(
     env: {
       ...scratchGitEnv,
       ...stepEnv(step, {}, {
-        BASE_SHA: fx.base,
-        HEAD_SHA: fx.head,
+        OVERFLOW_BASE_SHA: fx.base,
+        OVERFLOW_HEAD_SHA: fx.head,
         MERGE_BIND_SHA: fx.merge,
         RUNNER_TEMP: runnerTemp,
       }, {}),
@@ -339,8 +339,8 @@ async function materialise(
     options.step ?? stepRunning("git worktree add --detach"),
     fx,
     {
-      BASE_SHA: fx.base,
-      HEAD_SHA: fx.head,
+      OVERFLOW_BASE_SHA: fx.base,
+      OVERFLOW_HEAD_SHA: fx.head,
       MERGE_BIND_SHA: fx.merge,
       RUNNER_TEMP: runnerTemp,
       ...options.env,
@@ -415,7 +415,7 @@ describe("the pull request tree the workflow_run leg judges", () => {
     expect(hasCommit(UNFETCHABLE_HEAD, fx.workspace), "the workspace must NOT hold this head").toBe(false);
 
     const { result, outputs, runnerTemp } = await materialise(fx, {
-      env: { HEAD_SHA: UNFETCHABLE_HEAD },
+      env: { OVERFLOW_HEAD_SHA: UNFETCHABLE_HEAD },
     });
 
     expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
@@ -437,7 +437,7 @@ describe("the pull request tree the workflow_run leg judges", () => {
     expect(hasCommit(fx.base, fx.workspace), "the workspace must NOT already hold the base").toBe(false);
 
     const { result, outputs, runnerTemp } = await materialise(fx, {
-      env: { BASE_SHA: UNFETCHABLE_BASE },
+      env: { OVERFLOW_BASE_SHA: UNFETCHABLE_BASE },
     });
 
     expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
@@ -461,19 +461,19 @@ describe("the pull request tree the workflow_run leg judges", () => {
     const fx = await fixture({ "src/a.ts": "export const a = 3;\n" });
     const step = stepRunning("git worktree add --detach");
 
-    const wrong = '"${BASE_SHA:?}^"';
+    const wrong = '"${OVERFLOW_BASE_SHA:?}^"';
     const mutant: Step = {
       ...step,
       run: (step.run ?? "")
         .replace(
-          'git merge-tree --write-tree "${BASE_SHA:?}" "${HEAD_SHA:?}"',
-          'git merge-tree --write-tree "${BASE_SHA:?}" ' + wrong,
+          'git merge-tree --write-tree "${OVERFLOW_BASE_SHA:?}" "${OVERFLOW_HEAD_SHA:?}"',
+          'git merge-tree --write-tree "${OVERFLOW_BASE_SHA:?}" ' + wrong,
         )
-        .replace('-p "${BASE_SHA:?}" -p "${HEAD_SHA:?}"', '-p "${BASE_SHA:?}" -p ' + wrong),
+        .replace('-p "${OVERFLOW_BASE_SHA:?}" -p "${OVERFLOW_HEAD_SHA:?}"', '-p "${OVERFLOW_BASE_SHA:?}" -p ' + wrong),
     };
     expect(mutant.run, "the mutant must have replaced the head the merge is built from").not.toBe(step.run);
     expect(mutant.run, "the fetch must still name the event's head").toContain(
-      'git fetch --no-tags origin "${HEAD_SHA:?}"',
+      'git fetch --no-tags origin "${OVERFLOW_HEAD_SHA:?}"',
     );
 
     const { result, outputs } = await materialise(fx, { step: mutant });
@@ -490,8 +490,8 @@ describe("the pull request tree the workflow_run leg judges", () => {
     const mutant: Step = {
       ...step,
       run: (step.run ?? "").replace(
-        '-p "${BASE_SHA:?}" -p "${HEAD_SHA:?}"',
-        '-p "${BASE_SHA:?}^" -p "${HEAD_SHA:?}"',
+        '-p "${OVERFLOW_BASE_SHA:?}" -p "${OVERFLOW_HEAD_SHA:?}"',
+        '-p "${OVERFLOW_BASE_SHA:?}^" -p "${OVERFLOW_HEAD_SHA:?}"',
       ),
     };
     expect(mutant.run, "the mutant must have replaced the base the merge commit is bound to").not.toBe(step.run);
@@ -605,7 +605,7 @@ describe("a pull request that replaces the gate script guarding what it changed"
     const result = await runStep(
       detect,
       fx,
-      { EVENT_NAME: "workflow_run", PUSH_BEFORE: "", DISPATCH_BASE: "", PR_NUMBER: "1" },
+      { OVERFLOW_EVENT_NAME: "workflow_run", OVERFLOW_PUSH_BEFORE: "", OVERFLOW_DISPATCH_BASE: "", OVERFLOW_PR_NUMBER: "1" },
       outputs,
     );
     expect(result.status, result.stderr).toBe(0);
@@ -619,7 +619,7 @@ describe("a pull request that replaces the gate script guarding what it changed"
     const result = await runStep(
       stepRunning("/scripts/docs-only.ts"),
       fx,
-      { EVENT_NAME: "workflow_run", PUSH_BEFORE: "", DISPATCH_BASE: "", PR_NUMBER: "1" },
+      { OVERFLOW_EVENT_NAME: "workflow_run", OVERFLOW_PUSH_BEFORE: "", OVERFLOW_DISPATCH_BASE: "", OVERFLOW_PR_NUMBER: "1" },
       outputs,
     );
     expect(result.status, result.stderr).toBe(0);
@@ -761,7 +761,7 @@ describe("the awaited suite run's id the workflow_run leg requires", () => {
     const awaiter = stepRunning("/scripts/await-pr-suite.ts");
     expect(awaiter.id).toBeDefined();
     const required = steps.filter(
-      (step) => step.env?.RUN_ID === `\${{ steps.${awaiter.id}.outputs.run_id }}`,
+      (step) => step.env?.OVERFLOW_RUN_ID === `\${{ steps.${awaiter.id}.outputs.run_id }}`,
     );
     expect(required.map((step) => step.name)).toHaveLength(1);
     return required[0]!;
@@ -831,7 +831,7 @@ case "$*" in
 esac
 `, { mode: 0o755 });
     const fresh = await runStep(stepRunning("/scripts/ci-base-freshness.sh"), fx, {
-      GH_TOKEN: "fixture", REPO_SLUG: "Nitjsefnie/Overflow", BASE_REF: "main", PR_NUMBER: "1",
+      GH_TOKEN: "fixture", OVERFLOW_REPO_SLUG: "Nitjsefnie/Overflow", OVERFLOW_BASE_REF: "main", OVERFLOW_PR_NUMBER: "1",
       CURRENT_BASE: base, ADVANCE_FILES: `CHANGELOG.md\n${advance ?? ""}`,
       PATH: `${bin}:${process.env.PATH ?? ""}`,
     }, made.outputs);

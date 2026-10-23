@@ -295,7 +295,7 @@ describe("the instance statement (issue 1077)", () => {
   });
 
   it("names the hosted instance and carries no self-hosted statement on the hosted origin", async () => {
-    vi.stubEnv("APP_URL", "https://overflow.nitjsefni.eu");
+    vi.stubEnv("OVERFLOW_APP_URL", "https://overflow.nitjsefni.eu");
     await renderTermsPage();
 
     expect(
@@ -310,7 +310,7 @@ describe("the instance statement (issue 1077)", () => {
   });
 
   it("renders the plain self-hosted statement on another origin", async () => {
-    vi.stubEnv("APP_URL", "https://selfhost.example");
+    vi.stubEnv("OVERFLOW_APP_URL", "https://selfhost.example");
     await renderTermsPage();
 
     const statement = document.querySelector("p.self-hosted-statement");
@@ -323,7 +323,7 @@ describe("the instance statement (issue 1077)", () => {
   });
 
   it("renders the configured operator's name in the statement", async () => {
-    vi.stubEnv("APP_URL", "https://selfhost.example");
+    vi.stubEnv("OVERFLOW_APP_URL", "https://selfhost.example");
     vi.stubEnv("CONTROLLER_NAME", "Example Operator");
     await renderTermsPage();
 

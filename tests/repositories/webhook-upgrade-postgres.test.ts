@@ -15,7 +15,7 @@ import { POST } from "@/app/api/github/webhooks/route";
 import { runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
 
 const key = Buffer.alloc(32, 23).toString("base64url");
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 let started: StartedPostgres;
 let sql: Sql;
 const repositoryIds: string[] = [];
@@ -23,7 +23,7 @@ const sponsorIds: string[] = [];
 
 beforeAll(async () => {
   started = await startPostgresContainer({ database: "hook_upgrade", user: "upgrade", password: "upgrade" });
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
   for (let index = 0; index < 3; index++) {
@@ -44,8 +44,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeSql();
   await started?.container.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
 });
 
 describe("upgrading actual persisted registrations", () => {
@@ -129,8 +129,8 @@ describe("upgrading actual persisted registrations", () => {
         (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme)
       values (45, 'comments/current', ${sponsorIds[0]!}, 'PUBLIC', 84, ${sql.json(validDifficultyScheme())}) returning id
     `;
-    const previousKey = process.env.TOKEN_ENCRYPTION_KEY;
-    process.env.TOKEN_ENCRYPTION_KEY = key;
+    const previousKey = process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY;
+    process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY = key;
     const credential = (await new PostgresRepositoryStore(sql, key).stageWebhookCredential({
       repositoryId: registered.id, provider: "github", instanceUrl: null, projectId: 45, webhookId: 84,
     }))!;
@@ -162,15 +162,15 @@ describe("upgrading actual persisted registrations", () => {
       await sql`delete from repository_reconciliation_jobs where repository_id = ${registered!.id}`;
       await sql`delete from repository_reconciliation_dirty_subjects where repository_id = ${registered!.id}`;
       await sql`delete from registered_repositories where id = ${registered!.id}`;
-      if (previousKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
-      else process.env.TOKEN_ENCRYPTION_KEY = previousKey;
+      if (previousKey === undefined) delete process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY;
+      else process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY = previousKey;
     }
   });
 
   it("enumerates only active registrations and reports missing sponsor tokens through the actual command", () => {
     const result = spawnSync("pnpm", ["--silent", "webhooks:upgrade"], {
       cwd: process.cwd(), encoding: "utf8", timeout: 60_000,
-      env: { ...process.env, NODE_OPTIONS: "", DATABASE_URL: started.databaseUrl, TOKEN_ENCRYPTION_KEY: key, GITHUB_WEBHOOK_SECRET: "" },
+      env: { ...process.env, NODE_OPTIONS: "", OVERFLOW_DATABASE_URL: started.databaseUrl, OVERFLOW_TOKEN_ENCRYPTION_KEY: key, GITHUB_WEBHOOK_SECRET: "" },
     });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(1);

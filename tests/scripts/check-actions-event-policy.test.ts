@@ -782,9 +782,9 @@ describe("Actions event policy entry orchestration", () => {
 
   function appEnv(appKey: string): Record<string, string | undefined> {
     return {
-      LEDGER_APP_ID: "5118623",
-      LEDGER_INSTALLATION_ID: "166057493",
-      LEDGER_APP_KEY: appKey,
+      OVERFLOW_LEDGER_APP_ID: "5118623",
+      OVERFLOW_LEDGER_INSTALLATION_ID: "166057493",
+      OVERFLOW_LEDGER_APP_KEY: appKey,
       GITHUB_SHA: "a".repeat(40),
     };
   }
@@ -963,7 +963,7 @@ describe("Actions event policy entry orchestration", () => {
     expect(result.outcome).toBe("fail");
     expect(result.exitCode).toBe(1);
     expect(result.message).toMatch(/could not be minted/);
-    expect(result.message).toContain("LEDGER_APP_KEY");
+    expect(result.message).toContain("OVERFLOW_LEDGER_APP_KEY");
     expect(result.message).toMatch(/fails closed/i);
     expect(warnings).toEqual([]);
     expect(calls.some(({ url }) => new URL(url).pathname === POLICY_LIST_PATH)).toBe(false);
@@ -985,7 +985,7 @@ describe("Actions event policy entry orchestration", () => {
     expect(result.outcome).toBe("fail");
     expect(result.exitCode).toBe(1);
     expect(result.message).toMatch(/could not be minted/);
-    expect(result.message).toContain("LEDGER_APP_KEY");
+    expect(result.message).toContain("OVERFLOW_LEDGER_APP_KEY");
     expect(warnings).toEqual([]);
     expect(calls.some(({ url }) => new URL(url).pathname === POLICY_LIST_PATH)).toBe(false);
   });
@@ -1005,7 +1005,7 @@ describe("Actions event policy entry orchestration", () => {
     expect(result.outcome).toBe("fail");
     expect(result.exitCode).toBe(1);
     expect(result.message).toMatch(/mint returned no token/);
-    expect(result.message).toContain("LEDGER_APP_KEY");
+    expect(result.message).toContain("OVERFLOW_LEDGER_APP_KEY");
     expect(warnings).toEqual([]);
     expect(calls.some(({ url }) => url.includes("/app/installations/"))).toBe(true);
     expect(calls.some(({ url }) => new URL(url).pathname === POLICY_LIST_PATH)).toBe(false);
@@ -1026,7 +1026,7 @@ describe("Actions event policy entry orchestration", () => {
     expect(result.outcome).toBe("fail");
     expect(result.exitCode).toBe(1);
     expect(result.message).toMatch(/could not be minted/);
-    expect(result.message).toContain("LEDGER_APP_KEY");
+    expect(result.message).toContain("OVERFLOW_LEDGER_APP_KEY");
     expect(warnings).toEqual([]);
     expect(calls.some(({ url }) => new URL(url).pathname === POLICY_LIST_PATH)).toBe(false);
   });
@@ -1046,7 +1046,7 @@ describe("Actions event policy entry orchestration", () => {
     expect(result.outcome).toBe("fail");
     expect(result.exitCode).toBe(1);
     expect(result.message).toMatch(/could not be minted/);
-    expect(result.message).toContain("LEDGER_APP_KEY");
+    expect(result.message).toContain("OVERFLOW_LEDGER_APP_KEY");
     expect(result.message).toMatch(/fails closed/i);
     expect(warnings).toEqual([]);
     expect(calls).toEqual([]);
@@ -1119,7 +1119,7 @@ describe("Actions event policy entry orchestration", () => {
     expect(result.outcome).toBe("fail");
     expect(result.exitCode).toBe(1);
     expect(result.message).toMatch(/could not be minted/);
-    expect(result.message).toContain("LEDGER_APP_KEY");
+    expect(result.message).toContain("OVERFLOW_LEDGER_APP_KEY");
     expect(warnings).toEqual([]);
     expect(calls.some(({ url }) => new URL(url).pathname === POLICY_LIST_PATH)).toBe(false);
     expect(calls.some(({ url }) => url.endsWith("/check-runs"))).toBe(false);

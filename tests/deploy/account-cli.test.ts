@@ -119,24 +119,24 @@ describe("account CLI grammar", () => {
     expect(lines).toEqual(['{"failure":"ACCOUNT_COMMAND_FAILED"}']);
   });
 
-  it("resolves no database client for a usage error, even with no DATABASE_URL", async () => {
+  it("resolves no database client for a usage error, even with no OVERFLOW_DATABASE_URL", async () => {
     // No sql supplied, so the only way to a client is the default getSql()
-    // path — and with no DATABASE_URL that throws. closeSql() first empties
+    // path — and with no OVERFLOW_DATABASE_URL that throws. closeSql() first empties
     // the module-level client cache, which earlier files in the same worker
-    // (isolate: false) may have filled under their own DATABASE_URL: without
+    // (isolate: false) may have filled under their own OVERFLOW_DATABASE_URL: without
     // it, an eager getSql() before parsing would ride that cached client
     // instead of re-reading the deleted variable and throwing. Exit 2 with
     // the bare usage line therefore proves parsing happened before any
     // client was resolved.
     const lines: string[] = [];
     const writeOnlyDependencies = { write: (line: string) => lines.push(line) } as unknown as AccountCliDependencies;
-    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
     await closeSql();
-    delete process.env.DATABASE_URL;
+    delete process.env.OVERFLOW_DATABASE_URL;
     try {
       expect(await runAccountCli(["export", "--github-user-id", "0"], writeOnlyDependencies)).toBe(2);
     } finally {
-      if (previousDatabaseUrl !== undefined) process.env.DATABASE_URL = previousDatabaseUrl;
+      if (previousDatabaseUrl !== undefined) process.env.OVERFLOW_DATABASE_URL = previousDatabaseUrl;
     }
     expect(lines).toEqual([usageLine]);
   });
@@ -245,7 +245,7 @@ describe("documented account commands", () => {
 describe("account CLI with PostgreSQL", () => {
   let started: StartedPostgres;
   let sql: Sql;
-  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
   let seedCounter = 0;
 
@@ -277,7 +277,7 @@ describe("account CLI with PostgreSQL", () => {
       user: "account_cli_test",
       password: "account_cli_test",
     });
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   }, 120_000);
@@ -285,8 +285,8 @@ describe("account CLI with PostgreSQL", () => {
   afterAll(async () => {
     await closeSql();
     await started.container.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   }, 120_000);
 
   it("exports a seeded account", async () => {
@@ -345,7 +345,7 @@ describe("account CLI with PostgreSQL", () => {
     const githubUserId = await seedUser("documented-run");
     const home = tempDirectories.create(join(tmpdir(), "account-cli-home-"));
     try {
-      const environment: Record<string, string> = { PATH: process.env.PATH!, HOME: home, DATABASE_URL: started.databaseUrl };
+      const environment: Record<string, string> = { PATH: process.env.PATH!, HOME: home, OVERFLOW_DATABASE_URL: started.databaseUrl };
       const statuses: (number | null)[] = [];
       const results: ReturnType<typeof spawnDocumented>[] = [];
       for (const command of documentedCommands) {

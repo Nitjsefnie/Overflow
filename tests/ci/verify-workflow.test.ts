@@ -156,7 +156,7 @@ describe("the verify workflow's ratchet documents", () => {
       ratchet?.if,
       "the step carries no event gate: its file's closed trigger set is the gate",
     ).toBeUndefined();
-    expect(ratchet?.run).toBe('node scripts/check-ratchets.ts HEAD "$HEAD_SHA"');
+    expect(ratchet?.run).toBe('node scripts/check-ratchets.ts HEAD "$OVERFLOW_HEAD_SHA"');
   });
 });
 
@@ -214,14 +214,14 @@ describe("the verify workflow's migration immutability step", () => {
     expect(
       step?.env,
       "the merge commit's SHA arrives as the materialise step's output, through env:",
-    ).toEqual({ MERGE_SHA: "${{ steps.pr-tree.outputs.merge_sha }}" });
+    ).toEqual({ OVERFLOW_MERGE_SHA: "${{ steps.pr-tree.outputs.merge_sha }}" });
     expect(
       step?.run,
       "the base checkout's copy of the script must judge the merge commit's first parent " +
         "against the merge commit — never the pull request tree's copy, and never the raw head " +
         "(issue 841)",
     ).toBe(
-      'node "${GITHUB_WORKSPACE}/scripts/check-migration-edits.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"',
+      'node "${GITHUB_WORKSPACE}/scripts/check-migration-edits.ts" "${OVERFLOW_MERGE_SHA:?}^1" "${OVERFLOW_MERGE_SHA}"',
     );
     expect(Boolean(step?.["continue-on-error"])).toBe(false);
   });
@@ -297,13 +297,13 @@ describe("the verify workflow's legal revision currency step", () => {
     expect(
       step?.env,
       "the merge commit's SHA arrives as the materialise step's output, through env:",
-    ).toEqual({ MERGE_SHA: "${{ steps.pr-tree.outputs.merge_sha }}" });
+    ).toEqual({ OVERFLOW_MERGE_SHA: "${{ steps.pr-tree.outputs.merge_sha }}" });
     expect(
       step?.run,
       "the base checkout's copy of the per-commit walk must judge every commit of the merge " +
         "commit's range, over the full history the base checkout fetched",
     ).toBe(
-      'node "${GITHUB_WORKSPACE}/scripts/check-legal-revisions.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"',
+      'node "${GITHUB_WORKSPACE}/scripts/check-legal-revisions.ts" "${OVERFLOW_MERGE_SHA:?}^1" "${OVERFLOW_MERGE_SHA}"',
     );
     expect(Boolean(step?.["continue-on-error"])).toBe(false);
   });
@@ -528,25 +528,25 @@ describe("the required workflows' base-freshness step", () => {
 
     const expectedEnv = {
       GH_TOKEN: "${{ github.token }}",
-      REPO_SLUG: "${{ github.repository }}",
-      BASE_SHA: "${{ github.event.pull_request.base.sha }}",
-      BASE_REF: "${{ github.event.pull_request.base.ref }}",
-      PR_NUMBER: "${{ github.event.pull_request.number }}",
-      HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+      OVERFLOW_REPO_SLUG: "${{ github.repository }}",
+      OVERFLOW_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+      OVERFLOW_BASE_REF: "${{ github.event.pull_request.base.ref }}",
+      OVERFLOW_PR_NUMBER: "${{ github.event.pull_request.number }}",
+      OVERFLOW_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
     };
 
     expect(
       verifyStep.env,
-      "Base freshness must take exactly these six inputs from these sources — a rewired BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source, and missing PR_NUMBER or HEAD_SHA leaves the script unable to fetch the PR's file list or to name the head on the certificate it issues",
+      "Base freshness must take exactly these six inputs from these sources — a rewired OVERFLOW_BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source, and missing OVERFLOW_PR_NUMBER or OVERFLOW_HEAD_SHA leaves the script unable to fetch the PR's file list or to name the head on the certificate it issues",
     ).toEqual({ ...expectedEnv,
-      BASE_SHA: "${{ steps.pr-tree.outputs.freshness_base_sha }}",
-      BASE_REF: "${{ steps.pr.outputs.base_ref }}",
-      PR_NUMBER: "${{ steps.pr.outputs.pr_number }}",
-      HEAD_SHA: "${{ steps.pr.outputs.head_sha }}",
+      OVERFLOW_BASE_SHA: "${{ steps.pr-tree.outputs.freshness_base_sha }}",
+      OVERFLOW_BASE_REF: "${{ steps.pr.outputs.base_ref }}",
+      OVERFLOW_PR_NUMBER: "${{ steps.pr.outputs.pr_number }}",
+      OVERFLOW_HEAD_SHA: "${{ steps.pr.outputs.head_sha }}",
     });
     expect(
       actionlintStep.env,
-      "Base freshness must take exactly these six inputs from these sources — a rewired BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source, and missing PR_NUMBER or HEAD_SHA leaves the script unable to fetch the PR's file list or to name the head on the certificate it issues",
+      "Base freshness must take exactly these six inputs from these sources — a rewired OVERFLOW_BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source, and missing OVERFLOW_PR_NUMBER or OVERFLOW_HEAD_SHA leaves the script unable to fetch the PR's file list or to name the head on the certificate it issues",
     ).toEqual(expectedEnv);
   });
 
@@ -755,9 +755,9 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
     // This file receives nothing but workflow_run, so the tree searched
     // is always the pull request's and its path is the materialise step's
     // output — the step no longer branches on the event to decide that.
-    expect(step?.env).toEqual({ PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
+    expect(step?.env).toEqual({ OVERFLOW_PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
     expect(step?.run).toContain(
-      'cd "${PR_TREE:?the pull request tree was not materialised}"\n',
+      'cd "${OVERFLOW_PR_TREE:?the pull request tree was not materialised}"\n',
     );
     expect(step?.run).not.toContain("GITHUB_EVENT_NAME");
     expect(step?.if).toBe("${{ steps.pr.outputs.superseded != 'true' }}");
@@ -768,10 +768,10 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
     const step = pushSteps.find((step) => step.name === markerName);
     expect(step).toBeDefined();
     expect(step?.run).toContain("git grep -nI -E '^(<{7}( |$)|>{7}( |$)|={7}$)' -- .");
-    expect(step?.env, "ci.yml has no materialise step, so there is no PR_TREE to pass").toEqual(
+    expect(step?.env, "ci.yml has no materialise step, so there is no OVERFLOW_PR_TREE to pass").toEqual(
       undefined,
     );
-    expect(step?.run).not.toContain("PR_TREE");
+    expect(step?.run).not.toContain("OVERFLOW_PR_TREE");
     expect(step?.if).toBeUndefined();
     expect(Boolean(step?.["continue-on-error"])).toBe(false);
   });
@@ -795,8 +795,8 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
     expect(
       step?.run,
       "the base checkout's copy judges the merge tree's outgoing range",
-    ).toBe('python3 "${GITHUB_WORKSPACE}/scripts/commit_scopes.py" --root "${PR_TREE:?}"');
-    expect(step?.env).toEqual({ PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
+    ).toBe('python3 "${GITHUB_WORKSPACE}/scripts/commit_scopes.py" --root "${OVERFLOW_PR_TREE:?}"');
+    expect(step?.env).toEqual({ OVERFLOW_PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
     expect(
       step?.if,
       "the step skips only API-proven superseded cancellations",

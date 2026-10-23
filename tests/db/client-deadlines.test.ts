@@ -62,8 +62,8 @@ const migrationFixture = vi.hoisted(() => ({
  * bound is the old behaviour, not the new one).
  */
 describe("database client deadlines", () => {
-  const databaseUrlOriginal = process.env.DATABASE_URL;
-  const statementTimeoutOriginal = process.env.DATABASE_STATEMENT_TIMEOUT_MS;
+  const databaseUrlOriginal = process.env.OVERFLOW_DATABASE_URL;
+  const statementTimeoutOriginal = process.env.OVERFLOW_DATABASE_STATEMENT_TIMEOUT_MS;
 
   let started: StartedPostgres;
   let databaseUrl: string;
@@ -79,21 +79,21 @@ describe("database client deadlines", () => {
       initScripts: [{ name: "661_own_container.sql", content: "select 1;" }],
     });
     databaseUrl = started.databaseUrl;
-    process.env.DATABASE_URL = databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = databaseUrl;
   });
 
   afterAll(async () => {
     await closeSql();
     await started?.container.stop();
     if (databaseUrlOriginal === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = databaseUrlOriginal;
+      process.env.OVERFLOW_DATABASE_URL = databaseUrlOriginal;
     }
     if (statementTimeoutOriginal === undefined) {
-      delete process.env.DATABASE_STATEMENT_TIMEOUT_MS;
+      delete process.env.OVERFLOW_DATABASE_STATEMENT_TIMEOUT_MS;
     } else {
-      process.env.DATABASE_STATEMENT_TIMEOUT_MS = statementTimeoutOriginal;
+      process.env.OVERFLOW_DATABASE_STATEMENT_TIMEOUT_MS = statementTimeoutOriginal;
     }
   });
 
@@ -106,9 +106,9 @@ describe("database client deadlines", () => {
   async function openPoolWithStatementTimeout(statementTimeoutMs: string | undefined) {
     await closeSql();
     if (statementTimeoutMs === undefined) {
-      delete process.env.DATABASE_STATEMENT_TIMEOUT_MS;
+      delete process.env.OVERFLOW_DATABASE_STATEMENT_TIMEOUT_MS;
     } else {
-      process.env.DATABASE_STATEMENT_TIMEOUT_MS = statementTimeoutMs;
+      process.env.OVERFLOW_DATABASE_STATEMENT_TIMEOUT_MS = statementTimeoutMs;
     }
     return getSql();
   }
@@ -301,7 +301,7 @@ describe("database client deadlines", () => {
     ["a non-numeric value", "abc"],
     ["a negative value", "-5"],
     ["zero", "0"],
-  ])("refuses %s for DATABASE_STATEMENT_TIMEOUT_MS at client construction", async (_shape, invalid) => {
+  ])("refuses %s for OVERFLOW_DATABASE_STATEMENT_TIMEOUT_MS at client construction", async (_shape, invalid) => {
     // A set-but-invalid value used to flow into the startup packet as-is: the
     // empty string in particular silently disabled the deadline the default
     // exists to guarantee (issue 661). Construction is the loud failure point —
@@ -311,7 +311,7 @@ describe("database client deadlines", () => {
     );
   });
 
-  it("keeps the 600000 default when DATABASE_STATEMENT_TIMEOUT_MS is unset", async () => {
+  it("keeps the 600000 default when OVERFLOW_DATABASE_STATEMENT_TIMEOUT_MS is unset", async () => {
     const sql = await openPoolWithStatementTimeout(undefined);
     expect(await showStatementTimeout(sql)).toBe("10min");
   });

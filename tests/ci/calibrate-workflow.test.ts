@@ -220,10 +220,10 @@ describe("the push-recalibration job", () => {
       "the token and the document reach the shell through env, never through ${{ }} in the run block, " +
         "and the network-git pins mirror what the script set",
     ).toEqual({
-      MASTER_PUSH_DEPLOY_KEY: "${{ secrets.MASTER_PUSH_DEPLOY_KEY }}",
-      SIMULATE_REFUSED_RAISE: "${{ inputs.simulate-refused-raise }}",
+      OVERFLOW_MASTER_PUSH_DEPLOY_KEY: "${{ secrets.MASTER_PUSH_DEPLOY_KEY }}",
+      OVERFLOW_SIMULATE_REFUSED_RAISE: "${{ inputs.simulate-refused-raise }}",
       GH_TOKEN: "${{ github.token }}",
-      DOCUMENT: "${{ needs.calibrate.outputs.document }}",
+      OVERFLOW_DOCUMENT: "${{ needs.calibrate.outputs.document }}",
       GIT_TERMINAL_PROMPT: "0",
       GIT_ASKPASS: "true",
     });

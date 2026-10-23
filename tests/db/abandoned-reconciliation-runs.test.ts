@@ -11,13 +11,13 @@ import { startPostgresContainer } from "../support/postgres-container";
 let sql: Sql;
 let container: StartedTestContainer;
 let databaseUrl: string;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 beforeAll(async () => {
   const started = await startPostgresContainer({ database: "abandoned_runs", user: "abandoned_runs", password: "abandoned_runs" });
   container = started.container;
   databaseUrl = started.databaseUrl;
-  process.env.DATABASE_URL = databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = databaseUrl;
   sql = getSql();
   await runMigrations();
 });
@@ -29,8 +29,8 @@ beforeEach(async () => {
 afterAll(async () => {
   await closeSql();
   await container?.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
 });
 
 describe("abandoned reconciliation runs", () => {

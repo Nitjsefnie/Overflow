@@ -51,7 +51,7 @@ const OPENING_LABELED_AT = "2026-08-30T10:00:00.000Z";
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 let sponsorId: string;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 const tokenEncryptionKey = Buffer.alloc(32, 41).toString("base64url");
 
 type FixtureActor = { login: string | null; githubUserId: number | null };
@@ -95,7 +95,7 @@ beforeAll(async () => {
     password: "overflow_sponsor_rename_fold_test",
   });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
   // One account sponsors all repositories in this suite: `users.github_login` is unique, so
@@ -107,9 +107,9 @@ afterAll(async () => {
   await closeSql();
   await container?.stop();
   if (originalDatabaseUrl === undefined) {
-    delete process.env.DATABASE_URL;
+    delete process.env.OVERFLOW_DATABASE_URL;
   } else {
-    process.env.DATABASE_URL = originalDatabaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   }
 });
 

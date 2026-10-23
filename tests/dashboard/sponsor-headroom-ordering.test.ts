@@ -14,7 +14,7 @@ import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 describe("sponsor headroom ordering against PostgreSQL", () => {
   describe("equal balances with different reservations", () => {
     let container: StartedTestContainer | undefined;
-    const originalDatabaseUrl = process.env.DATABASE_URL;
+    const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
     beforeAll(async () => {
       const started = await startPostgresContainer({
@@ -23,7 +23,7 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
         password: "sponsor_headroom_repro",
       });
       container = started.container;
-      process.env.DATABASE_URL = started.databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
       sql = getSql();
       await runMigrations();
       await seedReproWorld();
@@ -33,9 +33,9 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
       await closeSql();
       await container?.stop();
       if (originalDatabaseUrl === undefined) {
-        delete process.env.DATABASE_URL;
+        delete process.env.OVERFLOW_DATABASE_URL;
       } else {
-        process.env.DATABASE_URL = originalDatabaseUrl;
+        process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
       }
     });
 
@@ -58,7 +58,7 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
 
   describe("exact settled balances", () => {
     let container: StartedTestContainer | undefined;
-    const originalDatabaseUrl = process.env.DATABASE_URL;
+    const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
     beforeAll(async () => {
       const started = await startPostgresContainer({
@@ -67,7 +67,7 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
         password: "sponsor_headroom_tiers",
       });
       container = started.container;
-      process.env.DATABASE_URL = started.databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
       sql = getSql();
       await runMigrations();
       await seedTierWorld();
@@ -77,9 +77,9 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
       await closeSql();
       await container?.stop();
       if (originalDatabaseUrl === undefined) {
-        delete process.env.DATABASE_URL;
+        delete process.env.OVERFLOW_DATABASE_URL;
       } else {
-        process.env.DATABASE_URL = originalDatabaseUrl;
+        process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
       }
     });
 
@@ -338,6 +338,6 @@ function reserveExternalIds(count: number): number {
 /**
  * One module-level client binding shared by both blocks: vitest runs describe
  * blocks sequentially, and each block's afterAll closes the pooled client via
- * closeSql so the next block's getSql rebuilds it against the new DATABASE_URL.
+ * closeSql so the next block's getSql rebuilds it against the new OVERFLOW_DATABASE_URL.
  */
 let sql: Sql;

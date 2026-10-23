@@ -20,7 +20,7 @@ afterAll(() => { vi.resetModules(); });
 const decryptionFailure = "Unable to decrypt stored credential.";
 const currentKey = Buffer.alloc(32, 41).toString("base64url");
 const retiredKey = Buffer.alloc(32, 42).toString("base64url");
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
@@ -58,7 +58,7 @@ describe("stored credentials are bound to their row", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({ database: "binding", user: "binding", password: "binding" });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -66,8 +66,8 @@ describe("stored credentials are bound to their row", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it("refuses a webhook secret copied into another repository's row", async () => {

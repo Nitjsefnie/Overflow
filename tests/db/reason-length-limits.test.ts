@@ -10,7 +10,7 @@ import { startPostgresContainer } from "../support/postgres-container";
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 5_900_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 // Built from the shared constant, not a restated literal: if the API cap moves
 // ahead of the migration, these boundary rows fail instead of passing quietly.
@@ -37,7 +37,7 @@ describe("reason length limits (migration 049)", () => {
       password: "reason_length_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
     await runMigrations();
@@ -48,9 +48,9 @@ describe("reason length limits (migration 049)", () => {
     await container?.stop();
 
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 

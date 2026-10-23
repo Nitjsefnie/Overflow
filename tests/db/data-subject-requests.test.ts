@@ -17,7 +17,7 @@ import { startPostgresContainer } from "../support/postgres-container";
 let sql: Sql;
 let container: StartedTestContainer;
 let databaseUrl: string;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 // 32 raw bytes, base64url: a real key so the sponsor credential round-trips.
 const TEST_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64url");
@@ -31,7 +31,7 @@ beforeAll(async () => {
   });
   container = started.container;
   databaseUrl = started.databaseUrl;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
 });
@@ -39,8 +39,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeSql();
   await container?.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
 });
 
 // ---------------------------------------------------------------------------

@@ -53,7 +53,7 @@ const deployedStatusCheckBody = `
   )
 `;
 
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 let container: StartedTestContainer | undefined;
 let adminSql: Sql | undefined;
 let adminDatabaseUrl = "";
@@ -193,7 +193,7 @@ describe("the settled status check a fresh database enforces", () => {
 
   beforeAll(async () => {
     await admin()`create database status_check_enforcement`;
-    process.env.DATABASE_URL = databaseUrlFor("status_check_enforcement");
+    process.env.OVERFLOW_DATABASE_URL = databaseUrlFor("status_check_enforcement");
     await runMigrations();
     const sql = getSql();
     sponsorId = (await insertAccount(sql, "check-sponsor", "ACTIVE")).id;
@@ -202,7 +202,7 @@ describe("the settled status check a fresh database enforces", () => {
 
   afterAll(async () => {
     await closeSql();
-    process.env.DATABASE_URL = adminDatabaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = adminDatabaseUrl;
   });
 
   it.each([
@@ -328,21 +328,21 @@ function databaseUrlFor(databaseName: string): string {
 
 function restoreDatabaseUrl(): void {
   if (originalDatabaseUrl === undefined) {
-    delete process.env.DATABASE_URL;
+    delete process.env.OVERFLOW_DATABASE_URL;
   } else {
-    process.env.DATABASE_URL = originalDatabaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   }
 }
 
-/** Runs `body` against a database of its own, then closes the client and restores DATABASE_URL. */
+/** Runs `body` against a database of its own, then closes the client and restores OVERFLOW_DATABASE_URL. */
 async function onNewDatabase<T>(databaseName: string, body: (sql: Sql) => Promise<T>): Promise<T> {
   await admin()`create database ${admin()(databaseName)}`;
-  process.env.DATABASE_URL = databaseUrlFor(databaseName);
+  process.env.OVERFLOW_DATABASE_URL = databaseUrlFor(databaseName);
   try {
     return await body(getSql());
   } finally {
     await closeSql();
-    process.env.DATABASE_URL = adminDatabaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = adminDatabaseUrl;
   }
 }
 

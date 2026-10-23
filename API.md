@@ -98,7 +98,7 @@ session must carry a GitHub sign-in completed within the last 10 minutes; when
 it does not, the panel offers the GitHub sign-in, which returns to the same page;
 then generate the token again. Because
 the session cookie is the only credential, the endpoint is same-origin only: the
-request must carry an `Origin` header equal to the origin of `APP_URL` (its
+request must carry an `Origin` header equal to the origin of `OVERFLOW_APP_URL` (its
 scheme, host and port; any path is ignored), and it must either send no body or
 declare `Content-Type: application/json`. Success is HTTP `201` with
 `{ "token": "<new-token>", "createdAt": "<ISO-8601 timestamp>", "expiresAt": "<ISO-8601 timestamp>", "confirmedAt": null }`,
@@ -112,11 +112,11 @@ Failures use `{ "error": { "code": "...", "message": "..." } }`:
 | HTTP | Code | Exact message | Meaning / next step |
 | --- | --- | --- | --- |
 | 401 | `UNAUTHENTICATED` | `Sign in is required.` | Sign in through GitHub in the browser. |
-| 403 | `FORBIDDEN` | `The request origin is not allowed.` | The request carried no `Origin` header or one that is not the origin of `APP_URL`. Mint the token from the Overflow page in the browser. |
+| 403 | `FORBIDDEN` | `The request origin is not allowed.` | The request carried no `Origin` header or one that is not the origin of `OVERFLOW_APP_URL`. Mint the token from the Overflow page in the browser. |
 | 403 | `REAUTHENTICATION_REQUIRED` | `Confirm your GitHub sign-in to issue an API token.` | The session's last GitHub sign-in was more than 10 minutes ago, or the session predates this check. Sign in with GitHub again from the panel, then generate the token. |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` | The request declared a `Content-Type` that is not `application/json`. Send no `Content-Type` at all, or send `application/json`. |
 | 429 | `RATE_LIMITED` | `Too many requests of this kind. Retry after the number of seconds the Retry-After header names.` | The account's hourly minting bound (`RATE_LIMIT_TOKENS_PER_HOUR`, default 5) is spent. Wait out the response's `Retry-After` interval, then retry. |
-| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | The deployment's `APP_URL` is missing or malformed, so it cannot recognize its own origin. Fix the server configuration; nothing about the request will help. |
+| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | The deployment's `OVERFLOW_APP_URL` is missing or malformed, so it cannot recognize its own origin. Fix the server configuration; nothing about the request will help. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to issue an API token.` | Session lookup or token storage failed; retry when the service recovers. |
 
 ### Submit a repository
@@ -142,7 +142,7 @@ A bearer-token request is exempt from the origin check — a script is not a
 browser and sends no `Origin` header — but it is not exempt from the content
 type: `Content-Type: application/json` is required either way. The same endpoint
 reached with a browser session cookie instead of a bearer token is
-same-origin only, so its `Origin` must equal the origin of `APP_URL`.
+same-origin only, so its `Origin` must equal the origin of `OVERFLOW_APP_URL`.
 
 The JSON body contains these fields, required unless marked optional. Extra
 fields, including extra fields inside label objects, are rejected.
@@ -213,7 +213,7 @@ linked identity must hold maintainer permission on it — directly or inherited
 through its group; a project failing either is refused before anything is
 stored. A project hook is installed with its own independently generated secret
 and a callback UUID bound to that project and instance. Deliveries arrive at the
-GitLab receiver configured under `GITLAB_WEBHOOK_URL`; credential material is
+GitLab receiver configured under `OVERFLOW_GITLAB_WEBHOOK_URL`; credential material is
 encrypted at rest and omitted from API responses. The initial import is queued
 exactly as for a GitHub registration. The *Register a repository* form takes
 GitLab submissions, and `PATCH` accepts the same body. The catalog labels must
@@ -332,7 +332,7 @@ exactly as a GitLab registration does:
 | 403 | `GITHUB_ACCESS` | `GitHub answered 404 for the request to read the repository labels. GitHub returns 404 rather than 403 when it will not reveal a resource, which can indicate missing authorization. The repository may also have been renamed, moved or deleted. This may be caused by missing authorization for the Overflow OAuth application. Review Overflow's authorization at https://github.com/settings/applications, then retry.` | (GitHub query) GitHub hid the labels read; treat it as missing authorization until checked. |
 | 429 | `GITHUB_RATE_LIMITED` | `GitHub rate-limited the request to read the repository labels (HTTP <status>). Please retry later.` | (GitHub query) GitHub limited the read; GitHub may append a `Retry after <N> seconds.` sentence when it supplies a delay. Wait out any delay, then retry. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to read the repository labels on GitHub.` | (GitHub query) The account's stored GitHub credential was unavailable, or the read failed after the repository was found. |
-| 503 | `CONFIGURATION` | `Token encryption is not configured.` | (GitLab query) The deployment has no `TOKEN_ENCRYPTION_KEY`, so linked identities cannot be read. Fix the server configuration; nothing about the request will help. |
+| 503 | `CONFIGURATION` | `Token encryption is not configured.` | (GitLab query) The deployment has no `OVERFLOW_TOKEN_ENCRYPTION_KEY`, so linked identities cannot be read. Fix the server configuration; nothing about the request will help. |
 | 400 | `INVALID_REQUEST` | `The instance URL must be an absolute URL.` / `The instance URL must use https.` / `The instance URL must name a host.` | (GitLab query) The `instance` value is malformed. Submit the instance's `https` URL. |
 | 400 | `INVALID_REQUEST` | `The GitLab project id must be a positive integer.` / `Submit the GitLab project as a positive numeric id or a path with namespace, like group/project.` | (GitLab query) The `project` value is malformed. |
 | 404 | `NOT_FOUND` | `No GitLab identity is linked for <instance>. Link one on the dashboard's Forge identities page, then retry.` | (GitLab query) Link a GitLab identity for exactly this instance, then retry. |
@@ -392,7 +392,7 @@ App credential and operator instead.
 | 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid token format or is unknown (including a revoked token, and an expired one — an unused token whose 30-minute delivery window closed, or a confirmed token past the 90 days its first use started, so an expired token is refused exactly like an unknown one). Check the copied token or generate a replacement in the browser. |
 | 401 | `UNAUTHENTICATED` | `Sign in is required.` | No recognized bearer credential and no signed-in session. Supply the bearer header or sign in. |
 | 401 | `GITHUB_CREDENTIALS` | `GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to <step>. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry registration.` | GitHub rejected the stored GitHub authorization for the account (expired or revoked); the account's Overflow session is fine. Refresh the authorization by signing out and back in, then retry the registration. `<step>` is `read its granted permissions` when the rejection came from the granted-scope check that precedes OAuth-hook GitHub registration, otherwise the lookup, label-read, or webhook-create step that died. |
-| 403 | `FORBIDDEN` | `The request origin is not allowed.` | A browser (session-cookie) request carried no `Origin` header or one that is not the origin of `APP_URL`. A bearer-token request never reaches this: its origin is not consulted. |
+| 403 | `FORBIDDEN` | `The request origin is not allowed.` | A browser (session-cookie) request carried no `Origin` header or one that is not the origin of `OVERFLOW_APP_URL`. A bearer-token request never reaches this: its origin is not consulted. |
 | 403 | `FORBIDDEN` | `The account is not eligible to register repositories.` | The account is banned or recalibrating. Resolve the account restriction; regenerating the token does not remove it. |
 | 403 | `GITHUB_WEBHOOK_SCOPE_REQUIRED` | `The GitHub authorization Overflow holds for your account cannot administer repository webhooks: registration needs the admin:repo_hook scope. Use "Sign in to register a repository" to authorize webhook administration with the same GitHub account, then register again.` | For `registrationMethod: "oauth_hook"` only: the account signed in as a contributor, which grants GitHub nothing beyond public identity, and the scopes GitHub reports for the stored authorization (its `X-OAuth-Scopes`) include neither `admin:repo_hook` nor a scope that subsumes it for public repositories (`repo`, `public_repo`). Answered before any repository or webhook request, for session and bearer callers alike. In the browser, use the landing page's "Sign in to register a repository" or the same action on the registration page; GitHub keeps the account and adds the grant. A bearer token then works without being regenerated: it resolves to the account's stored authorization. |
 | 403 | `FORBIDDEN` | `Only public GitHub repositories can be registered.` | Choose a public repository. |
@@ -405,7 +405,7 @@ App credential and operator instead.
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` | The request declared a `Content-Type` that is not `application/json`. This applies to bearer-token requests too, and is answered before the token is looked up. |
 | 429 | `GITHUB_RATE_LIMITED` | `GitHub rate-limited the request to <step> (HTTP <status>). Please retry registration later.` | GitHub limited a setup step. `<status>` is 429, or 403 carrying rate-limit evidence; GitHub may append a `Retry after <N> seconds.` sentence when it supplies a delay, and the message ends with the retry instruction either way. Wait out the delay if given, then retry. `<step>` is `read its granted permissions` when the limit hit the granted-scope check that precedes OAuth-hook GitHub registration, otherwise the lookup, label-read, or webhook-create step. |
 | 429 | `RATE_LIMITED` | `Too many requests of this kind. Retry after the number of seconds the Retry-After header names.` | The credential's hourly bound of repository changes (`RATE_LIMIT_REPOSITORIES_PER_HOUR`, default 10) is spent; registration, catalog change and unregistration draw on it together, keyed by the credential that acts. Wait out the response's `Retry-After` interval, then retry. |
-| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | The deployment's `APP_URL` is missing or malformed. Only a browser request reaches this; a bearer-token request does not read `APP_URL`. |
+| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | The deployment's `OVERFLOW_APP_URL` is missing or malformed. Only a browser request reaches this; a bearer-token request does not read `OVERFLOW_APP_URL`. |
 | 500 | `INTERNAL_ERROR` | `Unable to initialize repository registration.` | Credential/session or live-role lookup failed, or registration wiring could not be built. Check service configuration and account access; the cause is logged on the server. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to initialize repository registration.` | An unclassified flow failure interrupted registration, including forge reads, the GitHub granted-scope probe, or store/provider lookups. Check service health, forge availability and account access before retrying; the error is logged on the server. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to retrieve the submitted GitHub repository.` | GitHub repository lookup failed; check the reference, access, and GitHub availability. |
@@ -550,7 +550,7 @@ being gone leaves the local row untouched and surfaces as registration's
 All three methods require a browser session for a `MEMBER` or `MODERATOR`;
 an Overflow API bearer token does not authenticate this route. `POST` and
 `DELETE` additionally re-read the account's live role, require an `Origin`
-equal to the origin of `APP_URL`, and accept only an absent `Content-Type` or
+equal to the origin of `OVERFLOW_APP_URL`, and accept only an absent `Content-Type` or
 `application/json` (parameters such as `charset=utf-8` are allowed). Send
 `Content-Type: application/json` with either JSON body. Both writes read at
 most `4 KiB`; extra body fields are rejected.
@@ -576,16 +576,16 @@ All three methods answer failures through `{ "error": { "code": "...", "message"
 | 413 | `PAYLOAD_TOO_LARGE` | `The request body is too large.` (writes): the body exceeds `4 KiB`. |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` (writes): a declared non-JSON media type. |
 | 429 | `RATE_LIMITED` | `Too many requests of this kind. Retry after the number of seconds the Retry-After header names.` (writes): the account's hourly bound of link and unlink operations (`RATE_LIMIT_FORGE_IDENTITIES_PER_HOUR`, default 5) is spent. Wait out the response's `Retry-After` interval, then retry. |
-| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` (writes): `APP_URL` is absent or malformed. |
+| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` (writes): `OVERFLOW_APP_URL` is absent or malformed. |
 | 502 | `UPSTREAM_FAILURE` | (All methods) Session lookup or store construction failed; (GET) the identity list read failed; (POST/DELETE) the live account-role lookup failed, the link/unlink service returned this code, or another error was thrown during linking/unlinking. Session, store, list, live-role, and unexpected link/unlink failures use `The forge identity operation could not complete.`; a service `UPSTREAM_FAILURE` uses the service's message. |
-| 503 | `CONFIGURATION` | `Token encryption is not configured.` (POST): set `TOKEN_ENCRYPTION_KEY` on the server. |
+| 503 | `CONFIGURATION` | `Token encryption is not configured.` (POST): set `OVERFLOW_TOKEN_ENCRYPTION_KEY` on the server. |
 
 ## Account data and deletion
 
 These HTTP routes back the signed-in member's **Your account data** dashboard
 controls. They require a browser session for a `MEMBER` or `MODERATOR`, not an
 Overflow API bearer token. Both mutations require an `Origin` equal to the
-origin of `APP_URL`; a declared `Content-Type` must be `application/json`
+origin of `OVERFLOW_APP_URL`; a declared `Content-Type` must be `application/json`
 (optional parameters are accepted). Their error envelope is
 `{ "error": { "code": "...", "message": "..." } }`.
 
@@ -621,7 +621,7 @@ describes what the deletion retains and scrubs.
 | 413 | `PAYLOAD_TOO_LARGE` | `The request body is too large.` | DELETE: body exceeds `4 KiB`. |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` | Both: a declared non-JSON media type. |
 | 429 | `RATE_LIMITED` | `Too many requests of this kind. Retry after the number of seconds the Retry-After header names.` | POST: the account's hourly export bound (`RATE_LIMIT_EXPORT_PER_HOUR`, default 3) is spent. Wait out the response's `Retry-After` interval, then retry. |
-| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | Both: `APP_URL` is absent or malformed. |
+| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | Both: `OVERFLOW_APP_URL` is absent or malformed. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to export account data.` or `Unable to delete account.` | The corresponding session, database, or operation failed. |
 
 ## Reading the ledger over the API
@@ -806,7 +806,7 @@ the shared credential table and the roster service-error rules above apply:
 | 413 | `PAYLOAD_TOO_LARGE` | `The request body is too large.` | The body exceeds `32 KiB`. |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` | A declared non-JSON media type was sent; use `application/json`. |
 | 422 | `INVALID_REQUEST` | `Invalid moderator role request.` | Malformed JSON, missing or extra fields, a non-UUID `targetAccountId`, or a non-boolean `moderator`. |
-| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | `APP_URL` is absent or malformed for a browser-session write. |
+| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | `OVERFLOW_APP_URL` is absent or malformed for a browser-session write. |
 
 ## Settlement and calibration overrides
 
@@ -1033,8 +1033,8 @@ set no `Cache-Control` header.
 | 200 | `application/json` | `{ "resource": "<overflow-origin>/api/mcp", "bearer_methods_supported": ["header"] }`. |
 | 500 | `application/json` | `{ "error": { "code": "MISCONFIGURED", "message": "The server is not configured to accept this request." } }`. |
 
-`<overflow-origin>` is the origin of `APP_URL` (scheme, host and port;
-any path is ignored). An absent, blank, malformed or opaque-origin `APP_URL`
+`<overflow-origin>` is the origin of `OVERFLOW_APP_URL` (scheme, host and port;
+any path is ignored). An absent, blank, malformed or opaque-origin `OVERFLOW_APP_URL`
 produces the `500` above. The document advertises bearer credentials in the
 `Authorization` header; it contains no `authorization_servers` field.
 
@@ -1043,7 +1043,7 @@ produces the `500` above. The document advertises bearer credentials in the
 `GET /third-party-notices.txt` serves the build-generated production dependency
 notices, including package names and versions, licence identifiers, full licence
 texts and any accompanying notices. It reads the file from the running build's
-distribution directory (`NEXT_DIST_DIR`, or `.next` when unset or blank),
+distribution directory (`OVERFLOW_NEXT_DIST_DIR`, or `.next` when unset or blank),
 pinning that directory's real path on first use so a later symlink switch
 does not change the notices served by that process. The handler sets no
 `Cache-Control` header.

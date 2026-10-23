@@ -87,17 +87,17 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
   /** The workflow_run trigger's env, in the incident's shape. */
   function relayEnv(over: Record<string, string> = {}): Record<string, string> {
     return {
-      ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623",
-      LEDGER_INSTALLATION_ID: "166057493",
-      LEDGER_APP_KEY: keyPem,
+      ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623",
+      OVERFLOW_LEDGER_INSTALLATION_ID: "166057493",
+      OVERFLOW_LEDGER_APP_KEY: keyPem,
       GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
-      GITHUB_WORKFLOW_RUN_ID: RUN_ID,
-      GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD_SHA,
-      GITHUB_WORKFLOW_RUN_PATH: PATH_ACTIONLINT,
-      GITHUB_WORKFLOW_RUN_CONCLUSION: "failure",
-      GITHUB_WORKFLOW_RUN_HTML_URL: HTML_URL,
-      GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
-      GITHUB_WORKFLOW_RUN_HEAD_BRANCH: HEAD_BRANCH,
+      OVERFLOW_GITHUB_WORKFLOW_RUN_ID: RUN_ID,
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD_SHA,
+      OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: PATH_ACTIONLINT,
+      OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "failure",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: HTML_URL,
+      OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: HEAD_BRANCH,
       ...over,
     };
   }
@@ -152,14 +152,14 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
    */
   function dispatchEnv(over: Record<string, string> = {}): Record<string, string> {
     return relayEnv({
-      GITHUB_WORKFLOW_RUN_ID: "",
-      GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
-      GITHUB_WORKFLOW_RUN_PATH: "",
-      GITHUB_WORKFLOW_RUN_CONCLUSION: "",
-      GITHUB_WORKFLOW_RUN_HTML_URL: "",
-      GITHUB_WORKFLOW_RUN_EVENT: "",
-      GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "",
-      LEDGER_DISPATCH_RUN_ID: RUN_ID,
+      OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "",
+      OVERFLOW_LEDGER_DISPATCH_RUN_ID: RUN_ID,
       ...over,
     });
   }
@@ -306,7 +306,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
     [
       "the run names no head branch",
       {},
-      { GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "" },
+      { OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "" },
       /names no head branch/,
     ],
     [

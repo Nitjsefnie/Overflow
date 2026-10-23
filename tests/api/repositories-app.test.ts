@@ -31,8 +31,8 @@ async function wiring(configured = true) {
   readConfig.mockReset().mockReturnValue(configured ? { appId: "202", privateKey } : null);
   vi.stubEnv("GITHUB_REGISTRATION_APP_ID", "202");
   vi.stubEnv("GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH", "/synthetic/registration-key.pem");
-  vi.stubEnv("GITHUB_WEBHOOK_URL", "");
-  vi.stubEnv("DATABASE_URL", "postgres://overflow:overflow@127.0.0.1:1/overflow");
+  vi.stubEnv("OVERFLOW_GITHUB_WEBHOOK_URL", "");
+  vi.stubEnv("OVERFLOW_DATABASE_URL", "postgres://overflow:overflow@127.0.0.1:1/overflow");
   const calls: { path: string; method: string; authorization: string | null }[] = [];
   vi.stubGlobal("fetch", async (url: RequestInfo | URL, init?: RequestInit) => {
     const path = new URL(String(url)).pathname;
@@ -98,7 +98,7 @@ describe("repository App route wiring", () => {
 
   it.each([undefined, "oauth_hook"])("retains the hook scope probe with method %s", async (registrationMethod) => {
     const h = await wiring();
-    vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+    vi.stubEnv("OVERFLOW_GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
     const response = await h.POST(request({ ...input, registrationMethod }));
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ error: { code: "GITHUB_WEBHOOK_SCOPE_REQUIRED" } });
@@ -121,7 +121,7 @@ describe("repository App route wiring", () => {
     { label: "OAuth hook", registrationMethod: "oauth_hook", githubWebhookId: 501 },
   ] as const)("unregisters an $label row with its method-specific HTTP answer", async ({ registrationMethod, githubWebhookId }) => {
     const h = await wiring();
-    if (registrationMethod === "oauth_hook") vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+    if (registrationMethod === "oauth_hook") vi.stubEnv("OVERFLOW_GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
     const stored = { ...repository, registrationMethod, githubWebhookId };
     vi.spyOn(h.proto, "findRepositoryRegistrationStateByOwnerName").mockResolvedValue({ repository: stored, unregisteredAt: null });
     const deactivate = vi.spyOn(h.proto, "unregisterRepository").mockResolvedValue({ kind: "UNREGISTERED", repository: stored });

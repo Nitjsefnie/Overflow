@@ -17,7 +17,7 @@ import { startPostgresContainer } from "../support/postgres-container";
  */
 let container: StartedTestContainer | undefined;
 let sql: Sql;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 const mutated: FoldPolicyViolation = { code: "OPENING_LABEL_MUTATED", githubIssueId: 71_301 };
 const missing: FoldPolicyViolation = { code: "OPENING_LABEL_MISSING", githubIssueId: 71_302 };
@@ -35,7 +35,7 @@ describe("policy violations are recorded when they newly appear", () => {
       database: "policy_violation_test", user: "policy_violation_test", password: "policy_violation_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -43,8 +43,8 @@ describe("policy violations are recorded when they newly appear", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it("records each violation once and nothing when the repository is reconciled again unchanged", async () => {

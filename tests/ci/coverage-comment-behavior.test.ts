@@ -160,9 +160,9 @@ describe("the coverage comment workflow's run blocks", () => {
     // runner's own environment can stand in for a value the case omits.
     const childEnv: NodeJS.ProcessEnv = { ...process.env };
     for (const key of [
-      "GH_TOKEN", "REPO_SLUG", "HEAD_BRANCH", "HEAD_OWNER", "HEAD_REPO", "HEAD_SHA",
-      "CONCLUSION", "PR_NUMBER", "SAME_REPO", "RUN_EVENT",
-      "PR_FOUND", "PR_OUTCOME", "COMMENT_OUTCOME",
+      "GH_TOKEN", "OVERFLOW_REPO_SLUG", "OVERFLOW_HEAD_BRANCH", "OVERFLOW_HEAD_OWNER", "OVERFLOW_HEAD_REPO", "OVERFLOW_HEAD_SHA",
+      "OVERFLOW_CONCLUSION", "OVERFLOW_PR_NUMBER", "OVERFLOW_SAME_REPO", "OVERFLOW_RUN_EVENT",
+      "OVERFLOW_PR_FOUND", "OVERFLOW_PR_OUTCOME", "OVERFLOW_COMMENT_OUTCOME",
     ]) {
       delete childEnv[key];
     }
@@ -212,12 +212,12 @@ describe("the coverage comment workflow's run blocks", () => {
   function resolveEnv(head: { owner: string; repo: string; sha?: string }): Record<string, string> {
     return {
       GH_TOKEN: "stub-token",
-      REPO_SLUG,
-      HEAD_BRANCH: BRANCH,
-      HEAD_OWNER: head.owner,
-      HEAD_REPO: head.repo,
-      HEAD_SHA: head.sha ?? EVENT_SHA,
-      RUN_EVENT: "pull_request",
+      OVERFLOW_REPO_SLUG: REPO_SLUG,
+      OVERFLOW_HEAD_BRANCH: BRANCH,
+      OVERFLOW_HEAD_OWNER: head.owner,
+      OVERFLOW_HEAD_REPO: head.repo,
+      OVERFLOW_HEAD_SHA: head.sha ?? EVENT_SHA,
+      OVERFLOW_RUN_EVENT: "pull_request",
     };
   }
 
@@ -320,7 +320,7 @@ describe("the coverage comment workflow's run blocks", () => {
       async (event) => {
         const outcome = await runBlock(
           resolveRun,
-          { ...resolveEnv({ owner: BASE_OWNER, repo: REPO_SLUG }), RUN_EVENT: event },
+          { ...resolveEnv({ owner: BASE_OWNER, repo: REPO_SLUG }), OVERFLOW_RUN_EVENT: event },
           { pulls: [candidate(90, BASE_OWNER, REPO_SLUG, EVENT_SHA)] },
         );
 
@@ -340,7 +340,7 @@ describe("the coverage comment workflow's run blocks", () => {
       async (event) => {
         const outcome = await runBlock(
           resolveRun,
-          { ...resolveEnv({ owner: BASE_OWNER, repo: REPO_SLUG }), RUN_EVENT: event },
+          { ...resolveEnv({ owner: BASE_OWNER, repo: REPO_SLUG }), OVERFLOW_RUN_EVENT: event },
           { pulls: [candidate(91, BASE_OWNER, REPO_SLUG, EVENT_SHA)] },
         );
 
@@ -370,7 +370,7 @@ describe("the coverage comment workflow's run blocks", () => {
         resolveRun,
         {
           ...resolveEnv({ owner: BASE_OWNER, repo: REPO_SLUG }),
-          RUN_EVENT: "pull_request_target",
+          OVERFLOW_RUN_EVENT: "pull_request_target",
         },
         { pulls: [candidate(94, BASE_OWNER, FORK_REPO, EVENT_SHA)] },
       );
@@ -400,7 +400,7 @@ describe("the coverage comment workflow's run blocks", () => {
       const sentinel = "SENTINEL-656-same-owner-copy";
       const body = await runBlock(
         bodyRun,
-        { CONCLUSION: "success", HEAD_BRANCH: BRANCH, PR_NUMBER: "92", SAME_REPO: resolved.outputs.same_repo },
+        { OVERFLOW_CONCLUSION: "success", OVERFLOW_HEAD_BRANCH: BRANCH, OVERFLOW_PR_NUMBER: "92", OVERFLOW_SAME_REPO: resolved.outputs.same_repo },
         {
           artifact: {
             measured: true,
@@ -444,7 +444,7 @@ describe("the coverage comment workflow's run blocks", () => {
     }
 
     function bodyEnv(sameRepo: "true" | "false"): Record<string, string> {
-      return { CONCLUSION: "success", HEAD_BRANCH: BRANCH, PR_NUMBER: "21", SAME_REPO: sameRepo };
+      return { OVERFLOW_CONCLUSION: "success", OVERFLOW_HEAD_BRANCH: BRANCH, OVERFLOW_PR_NUMBER: "21", OVERFLOW_SAME_REPO: sameRepo };
     }
 
     // The reference "not measurable" body is whatever the step writes for an
@@ -482,9 +482,9 @@ describe("the coverage comment workflow's run blocks", () => {
     it.each([
       ["unset", undefined],
       ["empty", ""],
-    ])("takes the fork path when SAME_REPO is %s, never the verbatim markdown", async (_label, sameRepo) => {
-      const env: Record<string, string> = { CONCLUSION: "success", HEAD_BRANCH: BRANCH, PR_NUMBER: "21" };
-      if (sameRepo !== undefined) env.SAME_REPO = sameRepo;
+    ])("takes the fork path when OVERFLOW_SAME_REPO is %s, never the verbatim markdown", async (_label, sameRepo) => {
+      const env: Record<string, string> = { OVERFLOW_CONCLUSION: "success", OVERFLOW_HEAD_BRANCH: BRANCH, OVERFLOW_PR_NUMBER: "21" };
+      if (sameRepo !== undefined) env.OVERFLOW_SAME_REPO = sameRepo;
       const outcome = await runBlock(bodyRun, env, { artifact: artifact() });
 
       expect(outcome.result.status, log(outcome)).toBe(0);
@@ -539,7 +539,7 @@ describe("the coverage comment workflow's run blocks", () => {
 
   describe("posting or updating the marker-identified comment", () => {
     const BOT = "github-actions[bot]";
-    const upsertEnv = { GH_TOKEN: "stub-token", REPO_SLUG, PR_NUMBER: "21" };
+    const upsertEnv = { GH_TOKEN: "stub-token", OVERFLOW_REPO_SLUG: REPO_SLUG, OVERFLOW_PR_NUMBER: "21" };
     const own: IssueComment = { id: 502, user: { login: BOT }, body: `${MARKER}\n\nold report` };
     // Lookalike authors: another app's bot, the bare name, and a suffixed
     // name — each would pass a cheaper reading of the exact-login predicate.
@@ -590,11 +590,11 @@ describe("the coverage comment workflow's run blocks", () => {
     // outcome "skipped", and an unset output reads as the empty string.
     const checkEnv = (found: string, prOutcome: string, commentOutcome: string): Record<string, string> => ({
       GH_TOKEN: "stub-token",
-      REPO_SLUG,
-      HEAD_SHA: EVENT_SHA,
-      PR_FOUND: found,
-      PR_OUTCOME: prOutcome,
-      COMMENT_OUTCOME: commentOutcome,
+      OVERFLOW_REPO_SLUG: REPO_SLUG,
+      OVERFLOW_HEAD_SHA: EVENT_SHA,
+      OVERFLOW_PR_FOUND: found,
+      OVERFLOW_PR_OUTCOME: prOutcome,
+      OVERFLOW_COMMENT_OUTCOME: commentOutcome,
     });
 
     const checkRunPosts = (outcome: RunOutcome): string[][] =>

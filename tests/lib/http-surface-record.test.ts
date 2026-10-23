@@ -24,7 +24,7 @@ export async function GET(): Promise<Response> {
 
 function probe(root: string, count: number) {
   const env = { ...process.env };
-  delete env.DATABASE_URL;
+  delete env.OVERFLOW_DATABASE_URL;
   return spawnSync(process.execPath, ["--experimental-transform-types", "--import",
     join(root, "scripts/register-path-aliases.ts"), "--input-type=module"], {
     cwd: root, env, encoding: "utf8", timeout: 90_000,

@@ -45,9 +45,9 @@ import { startPostgresContainer } from "../support/postgres-container";
 describe("statement deadline waiter paths", () => {
   useTrustedOrigin();
 
-  const databaseUrlOriginal = process.env.DATABASE_URL;
-  const statementTimeoutOriginal = process.env.DATABASE_STATEMENT_TIMEOUT_MS;
-  const tokenKeyOriginal = process.env.TOKEN_ENCRYPTION_KEY;
+  const databaseUrlOriginal = process.env.OVERFLOW_DATABASE_URL;
+  const statementTimeoutOriginal = process.env.OVERFLOW_DATABASE_STATEMENT_TIMEOUT_MS;
+  const tokenKeyOriginal = process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY;
   const tokenKey = Buffer.alloc(32, 23).toString("base64url");
 
   let container: StartedTestContainer | undefined;
@@ -63,8 +63,8 @@ describe("statement deadline waiter paths", () => {
     });
     container = started.container;
     databaseUrl = started.databaseUrl;
-    process.env.DATABASE_URL = started.databaseUrl;
-    process.env.TOKEN_ENCRYPTION_KEY = tokenKey;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY = tokenKey;
     sql = getSql() as unknown as Sql;
     await runMigrations();
   });
@@ -76,12 +76,12 @@ describe("statement deadline waiter paths", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (databaseUrlOriginal === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = databaseUrlOriginal;
-    if (statementTimeoutOriginal === undefined) delete process.env.DATABASE_STATEMENT_TIMEOUT_MS;
-    else process.env.DATABASE_STATEMENT_TIMEOUT_MS = statementTimeoutOriginal;
-    if (tokenKeyOriginal === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
-    else process.env.TOKEN_ENCRYPTION_KEY = tokenKeyOriginal;
+    if (databaseUrlOriginal === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = databaseUrlOriginal;
+    if (statementTimeoutOriginal === undefined) delete process.env.OVERFLOW_DATABASE_STATEMENT_TIMEOUT_MS;
+    else process.env.OVERFLOW_DATABASE_STATEMENT_TIMEOUT_MS = statementTimeoutOriginal;
+    if (tokenKeyOriginal === undefined) delete process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY;
+    else process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY = tokenKeyOriginal;
   });
 
   /**
@@ -92,7 +92,7 @@ describe("statement deadline waiter paths", () => {
    */
   async function openPoolWithDeadline(statementTimeoutMs: string): Promise<Sql> {
     await closeSql();
-    process.env.DATABASE_STATEMENT_TIMEOUT_MS = statementTimeoutMs;
+    process.env.OVERFLOW_DATABASE_STATEMENT_TIMEOUT_MS = statementTimeoutMs;
     sql = getSql() as unknown as Sql;
     return sql;
   }
@@ -416,5 +416,5 @@ function publishedIssue(seq: number): { githubIssueId: number; number: number } 
  * coordination clients.
  */
 function newStore(): PostgresFoldStore {
-  return new PostgresFoldStore(getSql(), process.env.TOKEN_ENCRYPTION_KEY, getCoordinationSql());
+  return new PostgresFoldStore(getSql(), process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY, getCoordinationSql());
 }

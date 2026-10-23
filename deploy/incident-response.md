@@ -180,7 +180,7 @@ already demoted. Moderator gates read the current database role for both
 session and bearer requests, so a cached JWT role does not preserve moderator
 authority. Demotion leaves ordinary member access available.
 
-Remove the target's numeric GitHub user ID from `MODERATOR_GITHUB_USER_IDS`
+Remove the target's numeric GitHub user ID from `OVERFLOW_MODERATOR_GITHUB_USER_IDS`
 in the service environment before restarting: `src/auth.ts` and
 `src/lib/auth/account-store.ts` make that list a floor that promotes the
 account again at sign-in. Removing the ID alone does not demote the stored
@@ -430,7 +430,7 @@ The app listens on `127.0.0.1`, but loopback is not a trust boundary: any
 local process can reach the listener and set `X-Real-IP` itself, so an
 address in the journal is a claim unless the request also carried the
 `x-privileged-proxy-secret` header with exactly the value of
-`PRIVILEGED_PROXY_SECRET`, in which case the entry's `clientAddressVerified`
+`OVERFLOW_PRIVILEGED_PROXY_SECRET`, in which case the entry's `clientAddressVerified`
 is true. Only nginx (and the operator who configured both sides) hold that
 secret, so a verified flag says the address is the one nginx recorded.
 `readClientAddress` validates a single address with `node:net` `isIP()`,
@@ -603,7 +603,7 @@ the host credential from the Actions secret.
    the App is not recoverable by re-registering either.
 2. **The host PEM and the Actions secret belong to separate Apps.** The
    file at `GITHUB_APP_PRIVATE_KEY_PATH` is the read-only reconciliation App's
-   key. The `LEDGER_APP_KEY` secret belongs to the check-publishing App,
+   key. The `OVERFLOW_LEDGER_APP_KEY` secret belongs to the check-publishing App,
    whose credential is absent from the host. Rotate each App's key separately;
    never copy the reconciliation key into the relay's Actions secret.
 3. **The relay fires unattended today, and a gate would change that.** Read
@@ -689,7 +689,7 @@ action, and as of this writing it has not been done.
    to stay readable by the account the service runs as, which is why
    `/etc/overflow` is left traversable on a reconciliation App host. The path is absent if
    the host runs the OAuth-only posture, and that absence is itself the record.
-   The separate check-publishing App's `LEDGER_APP_KEY` secret on the `overflow-ledger`
+   The separate check-publishing App's `OVERFLOW_LEDGER_APP_KEY` secret on the `overflow-ledger`
    environment — is observable only by an account that can read the
    repository's settings, so record that you could not read it when you could
    not. Never `cat` the file, never paste its contents, and never record the

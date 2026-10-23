@@ -77,7 +77,7 @@ describe("docker-compose.yml", () => {
     expect(app.user).toBeUndefined();
   });
 
-  it("feeds the app .env and pins DATABASE_URL at the compose layer", () => {
+  it("feeds the app .env and pins OVERFLOW_DATABASE_URL at the compose layer", () => {
     const app = compose.services.app;
     const envFiles = (app.env_file ?? []).map((entry) =>
       typeof entry === "string"
@@ -86,7 +86,7 @@ describe("docker-compose.yml", () => {
     );
     expect(envFiles).toEqual([{ path: ".env", required: true }]);
     expect(app.environment).toEqual({
-      DATABASE_URL: "postgresql://overflow:overflow_local_only@postgres:5432/overflow",
+      OVERFLOW_DATABASE_URL: "postgresql://overflow:overflow_local_only@postgres:5432/overflow",
     });
   });
 

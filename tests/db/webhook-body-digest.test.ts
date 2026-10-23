@@ -14,7 +14,7 @@ import { startPostgresContainer } from "../support/postgres-container";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 const GITHUB_SECRET = "body-digest-github-secret";
 const GITHUB_CREDENTIAL_ID = "181a4fbb-64d1-44fd-82da-cd191613798c";
@@ -26,7 +26,7 @@ describe("webhook body-digest replay dedup", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({ database: "body_digest", user: "body_digest", password: "body_digest" });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -34,8 +34,8 @@ describe("webhook body-digest replay dedup", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   describe("github receiver", () => {

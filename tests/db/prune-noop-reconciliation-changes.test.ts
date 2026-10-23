@@ -16,7 +16,7 @@ import { closeSql, getSql } from "@/lib/db/client";
  */
 let started: StartedPostgres;
 let sql: Sql;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 let runId: string;
 
 const CREDITOR_ID = "00000000-0000-4000-8000-000000000001";
@@ -174,7 +174,7 @@ beforeAll(async () => {
   started = await startPostgresContainer({
     database: "prune_noop_test", user: "prune_noop_test", password: "prune_noop_test",
   });
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
 });
@@ -197,8 +197,8 @@ beforeEach(async () => {
 afterAll(async () => {
   await closeSql();
   await started?.container.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
 });
 
 describe("pruning no-op reconciliation changes", () => {

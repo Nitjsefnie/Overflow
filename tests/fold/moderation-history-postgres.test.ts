@@ -34,7 +34,7 @@ const scheme = {
 let sql: Sql;
 let container: StartedTestContainer | undefined;
 let store: PostgresFoldStore;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 beforeAll(async () => {
   const started = await startPostgresContainer({
@@ -42,7 +42,7 @@ beforeAll(async () => {
     user: "overflow_1186_fold_ordering",
   });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   await runMigrations();
   sql = postgres(started.databaseUrl, { connection: { TimeZone: "Europe/Prague" } });
   await sql`
@@ -88,8 +88,8 @@ afterAll(async () => {
   await sql?.end();
   await closeSql();
   await container?.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
 });
 
 function issue(): RepositoryFoldIssue {

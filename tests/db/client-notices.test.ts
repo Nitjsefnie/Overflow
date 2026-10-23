@@ -11,7 +11,7 @@ describe("shared database client notices", () => {
   let consoleLog: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    vi.stubEnv("DATABASE_URL", "postgres://overflow:overflow@127.0.0.1:1/overflow");
+    vi.stubEnv("OVERFLOW_DATABASE_URL", "postgres://overflow:overflow@127.0.0.1:1/overflow");
     postgresHarness.factory.mockClear();
     postgresHarness.client.end.mockClear();
     stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);

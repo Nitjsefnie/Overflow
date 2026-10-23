@@ -32,7 +32,7 @@ import type { EligibleIssueFilters, EligibleIssueProjection } from "@/lib/dashbo
  */
 describe("eligible issues query shape against PostgreSQL", () => {
   let container: StartedTestContainer | undefined;
-  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
   let realSql: Sql;
 
   beforeAll(async () => {
@@ -42,7 +42,7 @@ describe("eligible issues query shape against PostgreSQL", () => {
       password: "eligible_issues_query_shape",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = realSql = getSql();
     await runMigrations();
     await seedShapeWorld();
@@ -52,9 +52,9 @@ describe("eligible issues query shape against PostgreSQL", () => {
     await closeSql();
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 
@@ -592,6 +592,6 @@ function reserveExternalIds(count: number): number {
 
 /**
  * One module-level client binding: the beforeAll assigns it after
- * DATABASE_URL points at the container, and closeSql in afterAll releases it.
+ * OVERFLOW_DATABASE_URL points at the container, and closeSql in afterAll releases it.
  */
 let sql: Sql;

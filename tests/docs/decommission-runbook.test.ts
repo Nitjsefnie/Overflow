@@ -284,12 +284,12 @@ describe("decommissioning runbook", () => {
   });
 
   describe("forge inventories against the migrated schema", () => {
-    const originalDatabaseUrl = process.env.DATABASE_URL;
+    const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
     let started: StartedPostgres | undefined;
 
     beforeAll(async () => {
       started = await startPostgresContainer({ database: "decommission", user: "decommission" });
-      process.env.DATABASE_URL = started.databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
       const sql = getSql();
       await runMigrations();
       const [sponsor] = await sql<{ id: string }[]>`
@@ -320,8 +320,8 @@ describe("decommissioning runbook", () => {
     afterAll(async () => {
       await closeSql();
       await started?.container.stop();
-      if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-      else process.env.DATABASE_URL = originalDatabaseUrl;
+      if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+      else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     });
 
     for (const heading of [phaseHeadings[1]!, phaseHeadings[3]!]) {

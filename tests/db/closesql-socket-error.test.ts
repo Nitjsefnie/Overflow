@@ -5,7 +5,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 const inFlightSleepSeconds = 300;
 const inFlightStatement = `select pg_sleep(${inFlightSleepSeconds})`;
 let container: StartedTestContainer | undefined;
@@ -82,15 +82,15 @@ describe("closing the shared clients before a socket error", () => {
       }
     }
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it("settles a shutdown already waiting when the socket is reset with ECONNRESET", async () => {
     const target = new URL(databaseUrl);
     const proxy = await startResetProxy({ host: target.hostname, port: Number(target.port) });
     target.host = `127.0.0.1:${proxy.port}`;
-    process.env.DATABASE_URL = target.toString();
+    process.env.OVERFLOW_DATABASE_URL = target.toString();
     const sql = getSql();
     const observer = postgres(databaseUrl, { max: 1 });
     const observed: string[] = [];

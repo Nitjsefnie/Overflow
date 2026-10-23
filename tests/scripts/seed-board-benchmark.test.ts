@@ -142,14 +142,14 @@ describe("session cookie minting", () => {
 describe("seeding against PostgreSQL", () => {
   let sql: Sql;
   let container: Awaited<ReturnType<typeof startPostgresContainer>>["container"] | undefined;
-  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
   beforeAll(async () => {
     const started = await startPostgresContainer({
       database: "seed_board_benchmark", user: "seed_board_benchmark", password: "seed_board_benchmark",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
     await seedBoardBenchmark(SMALL_WORLD);
@@ -158,8 +158,8 @@ describe("seeding against PostgreSQL", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it("reports the bench member's session epoch from the row it wrote", async () => {
@@ -268,14 +268,14 @@ describe("seeding above the pull_request_issues bind-parameter ceiling", () => {
 
   let sql: Sql;
   let container: Awaited<ReturnType<typeof startPostgresContainer>>["container"] | undefined;
-  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
   beforeAll(async () => {
     const started = await startPostgresContainer({
       database: "seed_board_benchmark_ceiling", user: "seed_board_benchmark", password: "seed_board_benchmark",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
     await seedBoardBenchmark(ABOVE_CEILING);
@@ -284,8 +284,8 @@ describe("seeding above the pull_request_issues bind-parameter ceiling", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it("seeds every pull_request_issues row above the 65,535-parameter limit", async () => {

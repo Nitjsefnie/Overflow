@@ -171,8 +171,8 @@ describe("GitHub webhook route", () => {
     ]);
 
     expect(routePathname).toBe("/api/github/webhooks");
-    expect(environmentExample).toContain(`GITHUB_WEBHOOK_URL=https://<public-host>${routePathname}`);
-    expect(operating).toContain(`GITHUB_WEBHOOK_URL=https://<public-host>${routePathname}`);
+    expect(environmentExample).toContain(`OVERFLOW_GITHUB_WEBHOOK_URL=https://<public-host>${routePathname}`);
+    expect(operating).toContain(`OVERFLOW_GITHUB_WEBHOOK_URL=https://<public-host>${routePathname}`);
     expect(environmentExample).not.toContain("/api/webhooks/github");
     expect(operating).not.toContain("/api/webhooks/github");
   });
@@ -761,8 +761,8 @@ describe("GitHub webhook route", () => {
   });
 
   it("rejects an invalid signature before constructing production persistence dependencies", async () => {
-    const originalDatabaseUrl = process.env.DATABASE_URL;
-    delete process.env.DATABASE_URL;
+    const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
+    delete process.env.OVERFLOW_DATABASE_URL;
     const getSql = vi.spyOn(database, "getSql").mockReturnValue(vi.fn() as unknown as SqlClient);
     const credentialLookup = vi.spyOn(PostgresRepositoryStore.prototype, "findWebhookCredential")
       .mockResolvedValue(webhookCredential("github", secret));
@@ -786,9 +786,9 @@ describe("GitHub webhook route", () => {
       getSql.mockRestore();
       credentialLookup.mockRestore();
       if (originalDatabaseUrl === undefined) {
-        delete process.env.DATABASE_URL;
+        delete process.env.OVERFLOW_DATABASE_URL;
       } else {
-        process.env.DATABASE_URL = originalDatabaseUrl;
+        process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
       }
     }
   });

@@ -317,7 +317,7 @@ describe("missingMigrations", () => {
  * answers: the shapes a broken deployment actually produces.
  */
 describe("readiness endpoint against real databases", () => {
-  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
   let container: StartedTestContainer | undefined;
 
   afterEach(() => {
@@ -331,7 +331,7 @@ describe("readiness endpoint against real databases", () => {
       password: "readiness_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     await closeSql();
     // The probe reads schema_migrations, so the empty per-suite database has
     // to be brought up to the build before any case can expect a 200.
@@ -342,8 +342,8 @@ describe("readiness endpoint against real databases", () => {
     try {
       await closeSql();
       await container?.stop();
-      if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-      else process.env.DATABASE_URL = originalDatabaseUrl;
+      if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+      else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     } finally {
       await readinessDirectories.disposeAsync();
     }
@@ -618,7 +618,7 @@ describe("readiness endpoint against real databases", () => {
 
     try {
       const credentials = ["probe", "probe"].join(":");
-      process.env.DATABASE_URL = `postgresql://${credentials}@127.0.0.1:${port}/probe`;
+      process.env.OVERFLOW_DATABASE_URL = `postgresql://${credentials}@127.0.0.1:${port}/probe`;
       await closeSql();
 
       // A fresh production handler, not the shared GET export: that export's

@@ -11,12 +11,12 @@ import { startPostgresContainer } from "../support/postgres-container";
 
 let sql: Sql;
 let container: StartedTestContainer;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 beforeAll(async () => {
   const started = await startPostgresContainer({ database: "retention_indexes", user: "retention_indexes" });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
 });
@@ -24,8 +24,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeSql();
   await container?.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
 });
 
 it("serves the expired-run FK check through the run index while the real prune drains history", async () => {
@@ -34,12 +34,12 @@ it("serves the expired-run FK check through the run index while the real prune d
   await sql`insert into reconciliation_changes (reconciliation_run_id, entity_kind, change_kind)
     select id, 'SETTLEMENT', 'ADD' from reconciliation_runs cross join generate_series(1, 20)`;
   await sql`analyze reconciliation_changes`;
-  if (process.env.RETENTION_DROP_RUN_INDEX === "1") {
+  if (process.env.OVERFLOW_RETENTION_DROP_RUN_INDEX === "1") {
     await sql`drop index reconciliation_changes_run_idx`;
   }
   const probe = observeRetentionSql(sql, {
     observeRunFk: true,
-    disableTransactionIndexes: process.env.RETENTION_FORCE_SEQ_FK === "1",
+    disableTransactionIndexes: process.env.OVERFLOW_RETENTION_FORCE_SEQ_FK === "1",
   });
   const result = await pruneExpiredMaintenanceRows(probe.client);
   const seq = probe.fk.reduce((sum, batch) => sum + batch.seq, 0);

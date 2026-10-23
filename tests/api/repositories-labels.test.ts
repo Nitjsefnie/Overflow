@@ -646,11 +646,11 @@ describe("GET /api/repositories/labels (GitLab)", () => {
   it("answers a structured 503 when token encryption is not configured", async () => {
     readSession.mockResolvedValue(memberSession());
     // The pin controls the variable it pins: the verify job exports
-    // TOKEN_ENCRYPTION_KEY for every test it runs, so absence cannot be read
+    // OVERFLOW_TOKEN_ENCRYPTION_KEY for every test it runs, so absence cannot be read
     // from the ambient environment — it is deleted here and restored whatever
     // the case answers.
-    const previousKey = process.env.TOKEN_ENCRYPTION_KEY;
-    delete process.env.TOKEN_ENCRYPTION_KEY;
+    const previousKey = process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY;
+    delete process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY;
     try {
       stubGitLabGatewayLabels(["bug"]);
       getForgeToken.mockResolvedValue({ token: "gitlab-pat", identityId: "identity-1" });
@@ -664,8 +664,8 @@ describe("GET /api/repositories/labels (GitLab)", () => {
       });
       expect(getForgeToken).not.toHaveBeenCalled();
     } finally {
-      if (previousKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
-      else process.env.TOKEN_ENCRYPTION_KEY = previousKey;
+      if (previousKey === undefined) delete process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY;
+      else process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY = previousKey;
     }
   });
 
@@ -786,7 +786,7 @@ function gitlabLabelsRequest(project = "group/proj"): Request {
 }
 
 function stubLinkedIdentity(token = "gitlab-pat"): void {
-  vi.stubEnv("TOKEN_ENCRYPTION_KEY", "token-encryption-key");
+  vi.stubEnv("OVERFLOW_TOKEN_ENCRYPTION_KEY", "token-encryption-key");
   getForgeToken.mockResolvedValue({ token, identityId: "identity-1" });
 }
 

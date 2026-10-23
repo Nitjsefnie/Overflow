@@ -14,30 +14,30 @@ describe("readClientAddress", () => {
 
   function setProxySecret(value: string | undefined): void {
     if (!hadSecret) {
-      hadSecret = "PRIVILEGED_PROXY_SECRET" in process.env;
-      savedSecret = process.env.PRIVILEGED_PROXY_SECRET;
+      hadSecret = "OVERFLOW_PRIVILEGED_PROXY_SECRET" in process.env;
+      savedSecret = process.env.OVERFLOW_PRIVILEGED_PROXY_SECRET;
     }
     if (value === undefined) {
-      delete process.env.PRIVILEGED_PROXY_SECRET;
+      delete process.env.OVERFLOW_PRIVILEGED_PROXY_SECRET;
     } else {
-      process.env.PRIVILEGED_PROXY_SECRET = value;
+      process.env.OVERFLOW_PRIVILEGED_PROXY_SECRET = value;
     }
   }
 
   afterEach(() => {
     vi.unstubAllEnvs();
     if (hadSecret) {
-      process.env.PRIVILEGED_PROXY_SECRET = savedSecret;
+      process.env.OVERFLOW_PRIVILEGED_PROXY_SECRET = savedSecret;
     } else {
-      delete process.env.PRIVILEGED_PROXY_SECRET;
+      delete process.env.OVERFLOW_PRIVILEGED_PROXY_SECRET;
     }
     hadSecret = false;
     savedSecret = undefined;
   });
 
   it("verifies the prefixed proxy secret before the legacy secret", () => {
-    setProxySecret("legacy-proxy");
-    vi.stubEnv("OVERFLOW_PRIVILEGED_PROXY_SECRET", proxySecret);
+    vi.stubEnv("PRIVILEGED_PROXY_SECRET", "legacy-proxy");
+    setProxySecret(proxySecret);
 
     expect(readClientAddress(requestWith({ "x-real-ip": "203.0.113.7", [secretHeaderName]: proxySecret })))
       .toEqual({ clientAddress: "203.0.113.7", clientAddressVerified: true });
@@ -46,8 +46,8 @@ describe("readClientAddress", () => {
   });
 
   it("leaves addresses unverified when the prefixed proxy secret is empty", () => {
-    setProxySecret(proxySecret);
-    vi.stubEnv("OVERFLOW_PRIVILEGED_PROXY_SECRET", "");
+    vi.stubEnv("PRIVILEGED_PROXY_SECRET", proxySecret);
+    setProxySecret("");
 
     expect(readClientAddress(requestWith({ "x-real-ip": "203.0.113.7", [secretHeaderName]: proxySecret })))
       .toEqual({ clientAddress: "203.0.113.7", clientAddressVerified: false });

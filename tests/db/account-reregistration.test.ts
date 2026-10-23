@@ -12,7 +12,7 @@ import { getCurrentUserRole } from "@/lib/moderation/current-role";
 
 let sql: Sql;
 let container: StartedTestContainer;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 beforeAll(async () => {
   const started = await startPostgresContainer({
@@ -21,7 +21,7 @@ beforeAll(async () => {
     password: "account_reregistration_test",
   });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
 });
@@ -29,8 +29,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeSql();
   await container?.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
 });
 
 const reRegisteredToken = Buffer.from("re-registered-oauth-token-bytes", "utf8");
@@ -166,7 +166,7 @@ describe("account re-registration after deletion", () => {
     expect(restored.id).toBe(seeded.id);
     // The stored role of a deleted row is not a floor: re-sign-in after
     // deletion comes back MEMBER unless the resolved sign-in role (the
-    // MODERATOR_GITHUB_USER_IDS floor) is MODERATOR.
+    // OVERFLOW_MODERATOR_GITHUB_USER_IDS floor) is MODERATOR.
     expect(restored.role).toBe("MEMBER");
     const [row] = await sql<{ role: string; deleted_at: Date | null }[]>`
       select role, deleted_at from users where id = ${seeded.id}
@@ -185,7 +185,7 @@ describe("account re-registration after deletion", () => {
     const outcome = await deleteAccount(sql, 9_900_003, { confirm: true });
     expect(outcome.kind).toBe("DELETED");
 
-    // The MODERATOR_GITHUB_USER_IDS floor re-applies at sign-in: this is the
+    // The configured-moderator floor re-applies at sign-in: this is the
     // role upsertGitHubIdentity resolves for a configured id, regardless of
     // the deleted row's stored role.
     const restored = await upsertGitHubAccount({

@@ -13,7 +13,7 @@ import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 9_500_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 const tokenEncryptionKey = Buffer.alloc(32, 25).toString("base64url");
 const notBefore = new Date("2030-01-02T04:04:05.678Z");
 
@@ -21,7 +21,7 @@ describe("persisted reconciliation cooldown", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({ database: "cooldown", user: "cooldown", password: "cooldown" });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -30,9 +30,9 @@ describe("persisted reconciliation cooldown", () => {
     await closeSql();
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 
@@ -94,7 +94,7 @@ describe("persisted reconciliation cooldown", () => {
     const ownerAcquired = signal();
     const releaseOwner = signal();
     const contenderBlocked = signal();
-    const contenderSql = postgres(process.env.DATABASE_URL!, {
+    const contenderSql = postgres(process.env.OVERFLOW_DATABASE_URL!, {
       transform: {
         row: (row) => {
           // Observe PostgreSQL rejecting the contender's real lock attempt; preserve every row.

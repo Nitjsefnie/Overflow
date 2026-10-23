@@ -17,7 +17,7 @@ import { startPostgresContainer } from "../support/postgres-container";
  */
 let container: StartedTestContainer | undefined;
 let sql: Sql;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 describe("reconciliation compares timestamps as instants", () => {
   beforeAll(async () => {
@@ -25,7 +25,7 @@ describe("reconciliation compares timestamps as instants", () => {
       database: "timestamp_canonical_test", user: "timestamp_canonical_test", password: "timestamp_canonical_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -33,8 +33,8 @@ describe("reconciliation compares timestamps as instants", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it("records nothing and rewrites nothing for an unchanged repository whose fold timestamps have no milliseconds", async () => {

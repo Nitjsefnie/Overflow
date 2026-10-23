@@ -4,7 +4,7 @@ import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 
 const database = "overflow_closesql_death_test";
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 let container: StartedTestContainer | undefined;
 
@@ -20,15 +20,15 @@ describe("closing the shared clients after a backend dies mid-query", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({ database, user: database, password: database });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   });
 
   afterAll(async () => {
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 

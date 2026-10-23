@@ -133,7 +133,7 @@ function runCommand(command: string, databaseUrl?: string, cwd = repositoryRoot)
       environment.APPDATA = configDirectory;
       environment.LOCALAPPDATA = configDirectory;
     }
-    if (databaseUrl !== undefined) environment.DATABASE_URL = databaseUrl;
+    if (databaseUrl !== undefined) environment.OVERFLOW_DATABASE_URL = databaseUrl;
     // The migrate default-branch guard's disposable-database switch is part of
     // the documented script's own interface, not host config supplying behavior:
     // this suite's container database is disposable by construction, and a

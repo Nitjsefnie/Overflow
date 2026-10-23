@@ -12,7 +12,7 @@ import { verifiedRepositoryAt } from "../support/verified-repository";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 const tokenEncryptionKey = Buffer.alloc(32, 29).toString("base64url");
 
 const abandonedIssueGitHubId = 9_100_001;
@@ -37,7 +37,7 @@ beforeAll(async () => {
     password: "overflow_removal_fold_test",
   });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
 });
@@ -46,9 +46,9 @@ afterAll(async () => {
   await closeSql();
   await container?.stop();
   if (originalDatabaseUrl === undefined) {
-    delete process.env.DATABASE_URL;
+    delete process.env.OVERFLOW_DATABASE_URL;
   } else {
-    process.env.DATABASE_URL = originalDatabaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   }
 });
 

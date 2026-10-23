@@ -15,14 +15,14 @@ import { startPostgresContainer } from "../support/postgres-container";
 
 let container: StartedTestContainer;
 let sql: Sql;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 const first = new Date("2026-09-08T09:00:00Z");
 const second = new Date("2026-09-08T09:02:00Z");
 
 beforeAll(async () => {
   const started = await startPostgresContainer({ database: "evidence", user: "evidence", password: "evidence" });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
 });
@@ -30,8 +30,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeSql();
   await container?.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
 });
 
 describe("durable reconciliation evidence", () => {

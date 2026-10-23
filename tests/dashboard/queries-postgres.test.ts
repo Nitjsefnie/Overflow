@@ -9,7 +9,7 @@ import { getDashboard, listAuditCandidates, listModerationRepositories } from "@
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 70_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 /** Accounts seeded out of alphabetical order, so a projection that keeps insertion order is visible. */
 const seeded = {
@@ -31,7 +31,7 @@ describe("audit targeting against PostgreSQL", () => {
       password: "overflow_audit_targeting_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -46,9 +46,9 @@ describe("audit targeting against PostgreSQL", () => {
     await closeSql();
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 
@@ -304,7 +304,7 @@ it("offers a live account but excludes two distinct deleted accounts with the sa
     database: "overflow_deleted_audit_targets_test",
     user: "overflow_deleted_audit_targets_test",
   });
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   try {
     sql = getSql();
     await runMigrations();
@@ -320,9 +320,9 @@ it("offers a live account but excludes two distinct deleted accounts with the sa
     await closeSql();
     await started.container.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   }
 });

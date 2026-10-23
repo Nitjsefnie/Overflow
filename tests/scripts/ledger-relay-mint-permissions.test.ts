@@ -107,31 +107,31 @@ function makeDelay() {
 
 function relayEnv(over: Record<string, string> = {}): Record<string, string> {
   return {
-    ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623",
-    LEDGER_INSTALLATION_ID: "166057493",
-    LEDGER_APP_KEY: keyPem,
+    ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623",
+    OVERFLOW_LEDGER_INSTALLATION_ID: "166057493",
+    OVERFLOW_LEDGER_APP_KEY: keyPem,
     GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
-    GITHUB_WORKFLOW_RUN_ID: RUN_ID,
-    GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD_SHA,
-    GITHUB_WORKFLOW_RUN_PATH: PATH_CI,
-    GITHUB_WORKFLOW_RUN_CONCLUSION: "success",
-    GITHUB_WORKFLOW_RUN_HTML_URL: HTML_URL,
-    GITHUB_WORKFLOW_RUN_EVENT: "push",
-    GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_ID: RUN_ID,
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD_SHA,
+    OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: PATH_CI,
+    OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "success",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: HTML_URL,
+    OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "push",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
     ...over,
   };
 }
 
 function dispatchEnv(over: Record<string, string> = {}): Record<string, string> {
   return relayEnv({
-    GITHUB_WORKFLOW_RUN_ID: "",
-    GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
-    GITHUB_WORKFLOW_RUN_PATH: "",
-    GITHUB_WORKFLOW_RUN_CONCLUSION: "",
-    GITHUB_WORKFLOW_RUN_HTML_URL: "",
-    GITHUB_WORKFLOW_RUN_EVENT: "",
-    GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "",
-    LEDGER_DISPATCH_RUN_ID: RUN_ID,
+    OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: "",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: "",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "",
+    OVERFLOW_LEDGER_DISPATCH_RUN_ID: RUN_ID,
     ...over,
   });
 }
@@ -139,26 +139,26 @@ function dispatchEnv(over: Record<string, string> = {}): Record<string, string> 
 /** The workflow_run trigger's cancelled-PR heal candidate. */
 function workflowRunHealEnv(): Record<string, string> {
   return relayEnv({
-    GITHUB_WORKFLOW_RUN_CONCLUSION: "cancelled",
-    GITHUB_WORKFLOW_RUN_EVENT: "pull_request_target",
-    GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
-    GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
-    RELAY_RERUN_TOKEN: "rerun-token",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "cancelled",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "pull_request_target",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
+    OVERFLOW_RELAY_RERUN_TOKEN: "rerun-token",
   });
 }
 
 /** The scheduled sweep-only start (issue 1116): no triggering run at all. */
 function sweepOnlyEnv(): Record<string, string> {
   return relayEnv({
-    GITHUB_WORKFLOW_RUN_ID: "",
-    GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
-    GITHUB_WORKFLOW_RUN_PATH: "",
-    GITHUB_WORKFLOW_RUN_CONCLUSION: "",
-    GITHUB_WORKFLOW_RUN_HTML_URL: "",
-    GITHUB_WORKFLOW_RUN_EVENT: "",
-    GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "",
-    LEDGER_DISPATCH_RUN_ID: "",
-    LEDGER_SWEEP_ONLY: "true",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: "",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: "",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "",
+    OVERFLOW_LEDGER_DISPATCH_RUN_ID: "",
+    OVERFLOW_LEDGER_SWEEP_ONLY: "true",
   });
 }
 
@@ -328,7 +328,7 @@ async function runDispatchFlow(): Promise<Recorded[]> {
     { status: 202, body: undefined },
   ]);
   await runRelay({
-    env: dispatchEnv({ RELAY_RERUN_TOKEN: "rerun-token" }),
+    env: dispatchEnv({ OVERFLOW_RELAY_RERUN_TOKEN: "rerun-token" }),
     fetchFn: fetchStub.fn,
     delayFn: makeDelay().fn,
     readPinMap: async () => PIN_MAP,
@@ -510,7 +510,7 @@ describe("the relay's installation-token mint (issue 1051)", () => {
       }
       if (key === "POST rerun" || key === "GET own job") {
         // The rerun and the relay's read of its own job's start authenticate
-        // with the workflow's own RELAY_RERUN_TOKEN (the rerun needs actions:
+        // with the workflow's own OVERFLOW_RELAY_RERUN_TOKEN (the rerun needs actions:
         // write, which the App does not hold, and the job-start read precedes
         // the mint), so they are deliberately outside the App token's
         // enumeration.

@@ -14,12 +14,12 @@ let sql: Sql;
 let sponsorId: string;
 let otherSponsorId: string;
 let externalId = 42_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 beforeAll(async () => {
   const started = await startPostgresContainer({ database: "app_install_offers", user: "app_install_offers" });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
   const sponsors = await sql<{ id: string }[]>`
@@ -32,8 +32,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeSql();
   await container?.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
 });
 
 async function repository(overrides: {

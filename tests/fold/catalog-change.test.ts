@@ -13,7 +13,7 @@ import type { GitHubIssue } from "@/lib/github/types";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 const tokenEncryptionKey = Buffer.alloc(32, 23).toString("base64url");
 
 // The acceptance timeline for issue 180. Closure A's evidence window closes
@@ -37,7 +37,7 @@ describe("changing a repository's difficulty catalog", () => {
       password: "catalog_change",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -46,9 +46,9 @@ describe("changing a repository's difficulty catalog", () => {
     await closeSql();
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 

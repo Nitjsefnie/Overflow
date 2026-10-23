@@ -21,7 +21,7 @@ import { startPostgresContainer } from "../support/postgres-container";
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 77_300_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 const SAMPLE_STARTED_AT = "2020-01-01T00:00:00.000Z";
 const SAMPLE_ENDED_AT = "2030-01-01T00:00:00.000Z";
@@ -39,7 +39,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       password: "credit_adjustment_store_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -49,9 +49,9 @@ describe("PostgreSQL recalibration credit adjustments", () => {
     await container?.stop();
 
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 

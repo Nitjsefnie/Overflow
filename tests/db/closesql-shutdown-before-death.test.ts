@@ -5,7 +5,7 @@ import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getCoordinationSql, getSql } from "@/lib/db/client";
 
 const database = "overflow_closesql_shutdown_test";
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 /**
  * The statement below is found again by its text in `pg_stat_activity`, so the duration it is
@@ -41,15 +41,15 @@ describe("closing the shared clients before the backend of an in-flight query di
     const started = await startPostgresContainer({ database, user: database, password: database });
     container = started.container;
     databaseUrl = started.databaseUrl;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   });
 
   afterAll(async () => {
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 

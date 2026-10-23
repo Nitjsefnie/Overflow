@@ -61,7 +61,7 @@ describe("webhook upgrade CLI", () => {
   ])("reaches the actual package command with args $args and preserves exit $status", ({ args, status, output }) => {
     const result = spawnSync("pnpm", ["--silent", "webhooks:upgrade", ...args], {
       cwd: process.cwd(), encoding: "utf8", timeout: 60_000,
-      env: { ...process.env, NODE_OPTIONS: "", DATABASE_URL: "", GITHUB_WEBHOOK_SECRET: "" },
+      env: { ...process.env, NODE_OPTIONS: "", OVERFLOW_DATABASE_URL: "", GITHUB_WEBHOOK_SECRET: "" },
     });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(status);

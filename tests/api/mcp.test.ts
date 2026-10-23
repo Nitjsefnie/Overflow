@@ -397,11 +397,11 @@ describe("authentication discovery for a credential-less request", () => {
     expect(dependencies.defineTools).not.toHaveBeenCalled();
   });
 
-  it("answers the misconfiguration refusal, not a discovery 401, when APP_URL is unset", async () => {
-    // The fail-closed arm: with no parsable APP_URL the guard has already
+  it("answers the misconfiguration refusal, not a discovery 401, when OVERFLOW_APP_URL is unset", async () => {
+    // The fail-closed arm: with no parsable OVERFLOW_APP_URL the guard has already
     // refused with its own 500 before any discovery answer exists, and no
     // origin is available to advertise in WWW-Authenticate anyway.
-    vi.stubEnv("APP_URL", "");
+    vi.stubEnv("OVERFLOW_APP_URL", "");
     const dependencies = endpointDependencies();
     const request = new Request(`${trustedOrigin}/api/mcp`, {
       method: "POST",
@@ -473,10 +473,10 @@ describe("authentication discovery on the member gate's 401 answers", () => {
 
   it("leaves the bearer rejection challenge-less when no origin is available to advertise", async () => {
     // The fail-closed arm, mirroring the probe answer above: the bearer path
-    // still reaches the gate's 401 with an unparsable APP_URL (the origin
+    // still reaches the gate's 401 with an unparsable OVERFLOW_APP_URL (the origin
     // guard is not consulted for a deliberately attached credential), but no
     // origin exists to advertise, so the 401 goes out unchanged.
-    vi.stubEnv("APP_URL", "");
+    vi.stubEnv("OVERFLOW_APP_URL", "");
     const dependencies = endpointDependencies();
 
     const response = await createMcpPostHandler(dependencies)(
@@ -710,7 +710,7 @@ describe("transport-to-wrapped-route composition", () => {
     const { endpoint } = auditOpenComposition({ endpoint: gate, moderation: gate });
     const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
     const proxySecret = "mcp-proxy-secret-1044";
-    vi.stubEnv("PRIVILEGED_PROXY_SECRET", proxySecret);
+    vi.stubEnv("OVERFLOW_PRIVILEGED_PROXY_SECRET", proxySecret);
 
     try {
       await createMcpPostHandler(endpoint)(

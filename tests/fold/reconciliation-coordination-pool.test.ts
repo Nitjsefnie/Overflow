@@ -84,18 +84,18 @@ function storeOverPool(coordinationSql: SqlClient): PostgresFoldStore {
 }
 
 describe("reconciliation coordination pool", () => {
-  it("constructs over an injected client without a configured DATABASE_URL", () => {
-    const originalDatabaseUrl = process.env.DATABASE_URL;
-    delete process.env.DATABASE_URL;
+  it("constructs over an injected client without a configured OVERFLOW_DATABASE_URL", () => {
+    const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
+    delete process.env.OVERFLOW_DATABASE_URL;
     try {
       // A caller that hands the store its own client asks for no process-wide
       // one, so nothing about coordination may be resolved at construction.
       expect(() => new PostgresFoldStore({} as unknown as SqlClient, "token-key")).not.toThrow();
     } finally {
       if (originalDatabaseUrl === undefined) {
-        delete process.env.DATABASE_URL;
+        delete process.env.OVERFLOW_DATABASE_URL;
       } else {
-        process.env.DATABASE_URL = originalDatabaseUrl;
+        process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
       }
     }
   });

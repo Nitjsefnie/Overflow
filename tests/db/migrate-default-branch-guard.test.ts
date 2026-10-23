@@ -228,7 +228,7 @@ describe("the CLI against a real database", () => {
 
   /** Runs the migrate runner exactly as `pnpm db:migrate` does, in the private worktree. */
   function runCli(guard: "skip" | undefined): ReturnType<typeof spawnSync> {
-    const env: NodeJS.ProcessEnv = { ...process.env, DATABASE_URL: containerUrl };
+    const env: NodeJS.ProcessEnv = { ...process.env, OVERFLOW_DATABASE_URL: containerUrl };
     if (guard === "skip") {
       env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD = "skip";
     } else {

@@ -44,7 +44,7 @@ function listArtifacts(step: Step, artifactNames: string[]): string {
       'const fs = require("node:fs");',
       'const args = process.argv.slice(2);',
       'const query = args[args.indexOf("--jq") + 1];',
-      'const endpoint = `repos/${process.env.REPO}/actions/runs/${process.env.RUN_ID}/artifacts`;',
+      'const endpoint = `repos/${process.env.OVERFLOW_REPO}/actions/runs/${process.env.OVERFLOW_RUN_ID}/artifacts`;',
       'if (args[0] !== "api" || !args.includes(endpoint) || !args.includes("--paginate")',
       '  || !args.includes("Cache-Control: no-cache")',
       '  || query !== ".artifacts[] | select(.expired != true) | .name") process.exit(2);',
@@ -57,7 +57,7 @@ function listArtifacts(step: Step, artifactNames: string[]): string {
     chmodSync(join(root, "gh"), 0o755);
     const result = spawnSync("bash", ["--noprofile", "--norc", "-euo", "pipefail", "-c", step.run!], {
       env: { ...process.env, NODE_ENV: "test", PATH: `${root}:${process.env.PATH}`,
-        REPO: "fixture/project", RUN_ID: "42", ARTIFACT_LIST: join(root, "artifacts.json"), GITHUB_OUTPUT: output },
+        OVERFLOW_REPO: "fixture/project", OVERFLOW_RUN_ID: "42", ARTIFACT_LIST: join(root, "artifacts.json"), GITHUB_OUTPUT: output },
       encoding: "utf8", timeout: 5_000,
     });
     expect(result.error).toBeUndefined();
@@ -84,8 +84,8 @@ describe("the comment-share measurement and privileged handoff", () => {
       .find((step) => step.id === "stage");
     expect(stage).toBeDefined();
     expect(stage!.if).toBe("github.event_name == 'push'");
-    expect(stage!.env?.BASE_SHA).toBe("${{ github.sha }}");
-    expect(stage!.run).toMatch(/if \[ "\$\(git rev-parse HEAD\)" != "\$BASE_SHA" \]; then[\s\S]*?exit 1/);
+    expect(stage!.env?.OVERFLOW_BASE_SHA).toBe("${{ github.sha }}");
+    expect(stage!.run).toMatch(/if \[ "\$\(git rev-parse HEAD\)" != "\$OVERFLOW_BASE_SHA" \]; then[\s\S]*?exit 1/);
   });
 
   // Unchanged records must not start another automated push chain.
@@ -105,7 +105,7 @@ describe("the comment-share measurement and privileged handoff", () => {
     expect(listing?.run).toBeDefined();
     const runId = download!.with?.["run-id"];
     expect(runId).toBeTypeOf("string");
-    expect(runId).toBe(listing!.env?.RUN_ID);
+    expect(runId).toBe(listing!.env?.OVERFLOW_RUN_ID);
     expect(runId).toMatch(/\bgithub\.event\.workflow_run\.id\b/);
     expect(listArtifacts(listing!, [artifactName as string])).toBe("records=true\n");
     expect(listArtifacts(listing!, [])).toBe("records=false\n");
@@ -127,14 +127,14 @@ describe("the comment-share measurement and privileged handoff", () => {
   it("checks out no source and fails closed when the deploy key is empty", () => {
     const steps = readWorkflow("ratchet-push.yml").jobs.push.steps;
     expect(steps.some((step) => /^actions\/checkout(?:@|$)/.test(step.uses ?? ""))).toBe(false);
-    const push = steps.find((step) => Object.hasOwn(step.env ?? {}, "MASTER_PUSH_DEPLOY_KEY"));
+    const push = steps.find((step) => Object.hasOwn(step.env ?? {}, "OVERFLOW_MASTER_PUSH_DEPLOY_KEY"));
     expect(push).toBeDefined();
     // Execute only this guard: a later artifact failure must not stand in
     // for rejecting an empty key, and no privileged side effect may run.
-    const guard = push!.run!.match(/^if \[ -z "\$\{MASTER_PUSH_DEPLOY_KEY:-\}" \]; then\n[\s\S]*?^fi$/m);
+    const guard = push!.run!.match(/^if \[ -z "\$\{OVERFLOW_MASTER_PUSH_DEPLOY_KEY:-\}" \]; then\n[\s\S]*?^fi$/m);
     expect(guard, "the empty-key guard must be present as a complete block").not.toBeNull();
     const result = spawnSync("bash", ["--noprofile", "--norc", "-c", guard![0]], {
-      env: { PATH: process.env.PATH, NODE_ENV: "test", MASTER_PUSH_DEPLOY_KEY: "" },
+      env: { PATH: process.env.PATH, NODE_ENV: "test", OVERFLOW_MASTER_PUSH_DEPLOY_KEY: "" },
       encoding: "utf8",
       timeout: 5_000,
     });

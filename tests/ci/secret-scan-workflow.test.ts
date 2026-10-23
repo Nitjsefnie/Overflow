@@ -13,7 +13,7 @@ const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "secret
 
 const workflowVersion = String(parse(
   readFileSync(resolve(".github/workflows/secret-scan.yml"), "utf8"),
-).jobs["secret-scan"].steps.find((step: { name?: string }) => step.name === "Install gitleaks").env.GITLEAKS_VERSION);
+).jobs["secret-scan"].steps.find((step: { name?: string }) => step.name === "Install gitleaks").env.OVERFLOW_GITLEAKS_VERSION);
 
 const FAKE_GITLEAKS_VERSION = workflowVersion;
 
@@ -108,8 +108,8 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     const fetch = scan.steps.find((step) => step.name === "Fetch the pull request head");
     if (pr) {
       expect(fetch?.if).toBeUndefined();
-      expect(fetch?.env).toEqual({ PR_NUMBER: "${{ github.event.pull_request.number }}" });
-      expect(fetch?.run).toBe('git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"');
+      expect(fetch?.env).toEqual({ OVERFLOW_PR_NUMBER: "${{ github.event.pull_request.number }}" });
+      expect(fetch?.run).toBe('git fetch --no-tags origin "+refs/pull/${OVERFLOW_PR_NUMBER}/head:refs/remotes/pr/head"');
       const installIndex = scan.steps.findIndex((step) => step.name === "Install gitleaks");
       expect(scan.steps.indexOf(fetch!)).toBeGreaterThan(scan.steps.indexOf(checkouts[0]));
       expect(scan.steps.indexOf(fetch!)).toBeLessThan(installIndex);
@@ -134,9 +134,9 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     const upload = scan.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
     expect(scanStep?.run).toBe("bash scripts/secret-scan.sh");
     expect(scanStep?.if).toBeUndefined();
-    expect(scanStep?.env).toEqual({ GITLEAKS_REPORT_PATH: "gitleaks-report.json" });
+    expect(scanStep?.env).toEqual({ OVERFLOW_GITLEAKS_REPORT_PATH: "gitleaks-report.json" });
     expect(upload?.if).toBe("${{ always() }}");
-    expect(upload?.with?.path).toBe(scanStep?.env?.GITLEAKS_REPORT_PATH);
+    expect(upload?.with?.path).toBe(scanStep?.env?.OVERFLOW_GITLEAKS_REPORT_PATH);
     const checks = scan.steps.filter((step) => /scripts\/secret-scan-baseline\.sh/.test(step.run ?? ""));
     expect(checks.map((step) => [step.if, step.run])).toEqual([
       [undefined, pr ? "bash scripts/secret-scan-baseline.sh refs/remotes/pr/head" : "bash scripts/secret-scan-baseline.sh"],
@@ -348,7 +348,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
         ...install!.env,
         // This fixture's real digest, so `sha256sum -c` is a real check. The
         // fixture digest makes checksum validation execute on real bytes.
-        GITLEAKS_SHA256: digest,
+        OVERFLOW_GITLEAKS_SHA256: digest,
       };
 
       const installed = spawnSync("bash", ["-e", "-c", install!.run!], {
@@ -447,7 +447,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       Description: "fixture",
       StartLine: 116,
       EndLine: 116,
-      Match: 'TOKEN_ENCRYPTION_KEY", "REDACTED"',
+      Match: 'OVERFLOW_TOKEN_ENCRYPTION_KEY", "REDACTED"',
       Secret: "REDACTED",
       File: file,
       Commit: commit,

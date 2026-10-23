@@ -21,14 +21,14 @@ let container: StartedTestContainer | undefined;
 let sql: Sql;
 let store: PostgresRepositoryStore;
 let externalId = 9_920_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 const privateKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey
   .export({ type: "pkcs8", format: "pem" }).toString();
 
 beforeAll(async () => {
   const started = await startPostgresContainer({ database: "app_registration", user: "app_registration" });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
   store = new PostgresRepositoryStore(sql, Buffer.alloc(32, 43).toString("base64url"));
@@ -36,8 +36,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeSql();
   await container?.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   vi.resetModules();
 });
 

@@ -434,7 +434,7 @@ describe("forge identity writes for a deleted account (issue 733)", () => {
   let sql: Sql;
   let container: StartedTestContainer | undefined;
   let deletedAccountId = "";
-  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
   beforeAll(async () => {
     const started = await startPostgresContainer({
@@ -443,7 +443,7 @@ describe("forge identity writes for a deleted account (issue 733)", () => {
       password: "forge_deleted_account_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = postgres(started.databaseUrl, { max: 1 });
     await runMigrations();
     const githubUserId = 7_330_002;
@@ -461,8 +461,8 @@ describe("forge identity writes for a deleted account (issue 733)", () => {
     await closeSql();
     await sql.end();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it("refuses a link with the member-gate envelope when the account row is deleted", async () => {

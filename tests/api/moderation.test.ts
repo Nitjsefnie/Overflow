@@ -1664,8 +1664,8 @@ describe("moderation mutations reachable only from the deployment's own origin",
 
   // A server that cannot name its own origin cannot tell a forged request from
   // a real one, so it refuses both rather than trusting whatever arrives.
-  it("refuses a moderator role change when APP_URL is unset, without any database work", async () => {
-    vi.stubEnv("APP_URL", undefined);
+  it("refuses a moderator role change when OVERFLOW_APP_URL is unset, without any database work", async () => {
+    vi.stubEnv("OVERFLOW_APP_URL", undefined);
     const dependencies = unusedDependencies();
 
     const response = await createModeratorPostHandler(dependencies)(

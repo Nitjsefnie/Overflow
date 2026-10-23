@@ -40,8 +40,8 @@ describe("GitHub OAuth scope", () => {
     { name: "does not substitute the next account id", id: 4248, login: "neighbor", ids: "4249", legacy: undefined, role: "MEMBER" },
     { name: "grants the configured neighboring account", id: 4249, login: "configured-neighbor", ids: "4249", legacy: undefined, role: "MODERATOR" },
   ])("bootstrap $name", async ({ id, login, ids, legacy, role }) => {
-    vi.stubEnv("TOKEN_ENCRYPTION_KEY", Buffer.alloc(32, 1).toString("base64url"));
-    vi.stubEnv("MODERATOR_GITHUB_USER_IDS", ids);
+    vi.stubEnv("OVERFLOW_TOKEN_ENCRYPTION_KEY", Buffer.alloc(32, 1).toString("base64url"));
+    vi.stubEnv("OVERFLOW_MODERATOR_GITHUB_USER_IDS", ids);
     vi.stubEnv("MODERATOR_GITHUB_LOGINS", legacy);
     mocks.sql.mockResolvedValue([{ id: "claimant-uuid", role: "MEMBER" }]);
     await import("@/auth");
@@ -70,8 +70,8 @@ describe("GitHub OAuth scope", () => {
     await import("@/auth");
     const config = mocks.nextAuth.mock.calls[0]![0];
     const signIn = config.callbacks!.signIn!;
-    const previousKey = process.env.TOKEN_ENCRYPTION_KEY;
-    process.env.TOKEN_ENCRYPTION_KEY = Buffer.alloc(32, 1).toString("base64url");
+    const previousKey = process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY;
+    process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY = Buffer.alloc(32, 1).toString("base64url");
     mocks.sql.mockResolvedValue([{ id: "claimant-uuid", role: "MEMBER" }]);
     mocks.claimGitHubIdentity.mockReset();
     try {
@@ -83,8 +83,8 @@ describe("GitHub OAuth scope", () => {
       })).resolves.toBe(true);
       expect(mocks.claimGitHubIdentity).toHaveBeenCalledExactlyOnceWith(mocks.sql, "claimant-uuid", 4242);
     } finally {
-      if (previousKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
-      else process.env.TOKEN_ENCRYPTION_KEY = previousKey;
+      if (previousKey === undefined) delete process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY;
+      else process.env.OVERFLOW_TOKEN_ENCRYPTION_KEY = previousKey;
     }
   });
 

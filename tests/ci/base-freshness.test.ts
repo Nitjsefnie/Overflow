@@ -130,7 +130,7 @@ describe("scripts/ci-base-freshness.sh", () => {
 
     const env: NodeJS.ProcessEnv = { ...process.env };
     for (const key of [
-      "GH_TOKEN", "REPO_SLUG", "BASE_SHA", "BASE_REF", "PR_NUMBER", "HEAD_SHA",
+      "GH_TOKEN", "OVERFLOW_REPO_SLUG", "OVERFLOW_BASE_SHA", "OVERFLOW_BASE_REF", "OVERFLOW_PR_NUMBER", "OVERFLOW_HEAD_SHA",
       "STUB_FAIL", "STUB_SILENT", "STUB_CURRENT_SHA", "STUB_TOTAL_COMMITS",
       "STUB_ADVANCE_ENTRIES", "STUB_PR_ENTRIES", "STUB_ADVANCE_ENTRY_COUNT",
     ]) {
@@ -138,11 +138,11 @@ describe("scripts/ci-base-freshness.sh", () => {
     }
     Object.assign(env, {
       GH_TOKEN: "stub-token",
-      REPO_SLUG: REPO_SLUG,
-      BASE_SHA: BASE_SHA,
-      BASE_REF: BASE_REF,
-      PR_NUMBER: "510",
-      HEAD_SHA: HEAD_SHA,
+      OVERFLOW_REPO_SLUG: REPO_SLUG,
+      OVERFLOW_BASE_SHA: BASE_SHA,
+      OVERFLOW_BASE_REF: BASE_REF,
+      OVERFLOW_PR_NUMBER: "510",
+      OVERFLOW_HEAD_SHA: HEAD_SHA,
       STUB_CURRENT_SHA: config.currentSha ?? CURRENT_SHA,
       STUB_TOTAL_COMMITS: config.totalCommits ?? "1",
       STUB_ADVANCE_ENTRIES: encodeEntries(config.advanceFiles ?? []),
@@ -304,10 +304,10 @@ describe("scripts/ci-base-freshness.sh", () => {
     expect(result.status, "a >200-commit advance is too large to certify as irrelevant").not.toBe(0);
   });
 
-  it("fails closed when PR_NUMBER is not provided", async () => {
+  it("fails closed when OVERFLOW_PR_NUMBER is not provided", async () => {
     const result = await runScript(
       { currentSha: CURRENT_SHA, totalCommits: "1", advanceFiles: ["third.md"], prFiles: ["src/app/page.tsx"] },
-      { env: { PR_NUMBER: undefined } },
+      { env: { OVERFLOW_PR_NUMBER: undefined } },
     );
 
     expect(result.status, "no PR number means the PR's file list cannot be fetched").not.toBe(0);

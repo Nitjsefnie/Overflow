@@ -39,7 +39,7 @@ const sqlStub = ((strings: TemplateStringsArray, ...values: unknown[]) => {
 beforeEach(() => {
   failOfferRead = false;
   getDashboard.mockResolvedValue(dashboard());
-  vi.stubEnv("GITHUB_APP_SLUG", "overflow-reconcile");
+  vi.stubEnv("OVERFLOW_GITHUB_APP_SLUG", "overflow-reconcile");
   vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise<Response>(() => {})));
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
@@ -88,7 +88,7 @@ describe("dashboard page installation offer wiring", () => {
   });
 
   it.each([undefined, "", "invalid/slug"])("skips the offer read when the slug is %s", async (slug) => {
-    vi.stubEnv("GITHUB_APP_SLUG", slug);
+    vi.stubEnv("OVERFLOW_GITHUB_APP_SLUG", slug);
     failOfferRead = true;
     render(await DashboardPage());
     expect(document.querySelector("#registered-repositories-heading")).not.toBeNull();
