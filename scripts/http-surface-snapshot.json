@@ -1,6 +1,6 @@
 {
   "snapshotFormat": 2,
-  "httpServerVersion": "1.4.0",
+  "httpServerVersion": "1.5.0",
   "errorEnvelope": {
     "error": {
       "code": "string",
@@ -134,6 +134,10 @@
           "id": "string"
         },
         "asDecider": {
+          "createdAt": "string",
+          "id": "string"
+        },
+        "asLandedCommitAuthor": {
           "createdAt": "string",
           "id": "string"
         }
@@ -801,6 +805,7 @@
       "decision": "null",
       "id": "string",
       "issueId": "string",
+      "landedCommitAuthorId": "string",
       "landedCommitUrl": "string",
       "landedPullRequestId": "null",
       "moderatorFigure": "null",
@@ -820,6 +825,7 @@
         "decision": "null",
         "id": "string",
         "issueId": "string",
+        "landedCommitAuthorId": "string",
         "landedCommitUrl": "string",
         "landedPullRequestId": "null",
         "moderatorFigure": "null",
@@ -861,6 +867,7 @@
       "decision": "null",
       "id": "string",
       "issueId": "string",
+      "landedCommitAuthorId": "string",
       "landedCommitUrl": "string",
       "landedPullRequestId": "null",
       "moderatorFigure": "null",
@@ -880,6 +887,7 @@
         "decision": "string",
         "id": "string",
         "issueId": "string",
+        "landedCommitAuthorId": "string",
         "landedCommitUrl": "string",
         "landedPullRequestId": "null",
         "moderatorFigure": "number",

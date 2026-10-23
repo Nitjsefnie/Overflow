@@ -1,3 +1,4 @@
+import { resolveLandedCommitAuthor, type CommitAuthorResult } from "@/lib/moderation/closed-pr-dispute-commit";
 import { getSql } from "@/lib/db/client";
 import type { EnforcementState, PullRequestState, SqlClient } from "@/lib/db/types";
 import { disputeComparisons, reviewEvidence } from "@/lib/moderation/closed-pr-dispute-evidence";
@@ -20,6 +21,7 @@ type RequestRow = {
   issue_id: string;
   landed_pull_request_id: string | null;
   landed_commit_url: string | null;
+  landed_commit_author_id: string | null;
   request_reason: string;
   state: ClosedPrDisputeState;
   decision: ClosedPrDisputeDecision | null;
@@ -35,7 +37,11 @@ type RequestRow = {
 type Repository = { owner_name: string; provider: string; instance_url: string | null };
 
 export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
-  public constructor(private readonly sql: SqlClient = getSql()) {}
+  public constructor(
+    private readonly sql: SqlClient = getSql(),
+    private readonly resolveCommitAuthor: (url: string) => Promise<CommitAuthorResult> =
+      (url) => resolveLandedCommitAuthor(sql, url),
+  ) {}
 
   public async fileDispute(
     input: ClosedPrDisputeFilingInput & { accountId: string },
@@ -96,6 +102,7 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
 
       let landedPullRequestId = automaticLanding?.id ?? null;
       let landedCommitUrl: string | null = null;
+      let landedCommitAuthorId: string | null = null;
       if (automaticLanding === undefined) {
         if (hasPullRequestUrl) {
           const number = landedPullRequestNumber(input.landedPullRequestUrl!, pullRequest);
@@ -109,6 +116,9 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
           landedPullRequestId = landing.id;
         } else if (hasCommitUrl && input.landedCommitUrl!.trim().length > 0) {
           landedCommitUrl = input.landedCommitUrl!.trim();
+          const author = await this.resolveCommitAuthor(landedCommitUrl);
+          if (author.kind !== "ok") return author;
+          landedCommitAuthorId = author.accountId;
         } else {
           return { kind: "invalid_input" };
         }
@@ -116,12 +126,12 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
 
       const [row] = await transaction<RequestRow[]>`
         insert into closed_pr_dispute_requests (
-          contributor_id, pull_request_id, issue_id, landed_pull_request_id, landed_commit_url, request_reason
+          contributor_id, pull_request_id, issue_id, landed_pull_request_id, landed_commit_url, landed_commit_author_id, request_reason
         ) values (
           ${input.accountId}, ${pullRequest.id}, ${pullRequest.issue_id},
-          ${landedPullRequestId}, ${landedCommitUrl}, ${input.reason}
+          ${landedPullRequestId}, ${landedCommitUrl}, ${landedCommitAuthorId}, ${input.reason}
         )
-        returning id, contributor_id, pull_request_id, issue_id, landed_pull_request_id, landed_commit_url,
+        returning id, contributor_id, pull_request_id, issue_id, landed_pull_request_id, landed_commit_url, landed_commit_author_id,
           request_reason, state, decision, decided_by, decided_by_sole_moderator, decided_reason,
           decided_at, moderator_figure, awarded_points, created_at
       `;
@@ -149,7 +159,7 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
     const { decision, figure, decidedReason } = parsed.data;
     return this.sql.begin(async (transaction): Promise<ClosedPrDisputeStoreResult<ClosedPrDisputeRequest>> => {
       const [request] = await transaction<(RequestRow & { decision_time: Date })[]>`
-        select id, contributor_id, pull_request_id, issue_id, landed_pull_request_id, landed_commit_url,
+        select id, contributor_id, pull_request_id, issue_id, landed_pull_request_id, landed_commit_url, landed_commit_author_id,
           request_reason, state, decision, decided_by, decided_by_sole_moderator, decided_reason,
           decided_at, moderator_figure, awarded_points, created_at, now() as decision_time
         from closed_pr_dispute_requests where id = ${input.requestId} for update
@@ -175,8 +185,8 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
         select id from users where role = 'MODERATOR' and deleted_at is null order by id
       `;
       if (!liveModerators.some((moderator) => moderator.id === input.moderatorAccountId)) return { kind: "forbidden" };
-      // Commit evidence stores no landing account: its conflict set is sponsor + contributor.
-      const conflicted = [related.sponsor_id, request.contributor_id, related.landing_author_id]
+      // Both PR and commit evidence attribute the landing to an account.
+      const conflicted = [related.sponsor_id, request.contributor_id, related.landing_author_id, request.landed_commit_author_id]
         .includes(input.moderatorAccountId);
       if (conflicted && liveModerators.length > 1) return { kind: "forbidden_imposer" };
       const soleModerator = liveModerators.length === 1;
@@ -204,7 +214,7 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
           decided_reason = ${decidedReason}, decided_at = now(),
           moderator_figure = ${decision === "GRANTED" ? figure! : null}, awarded_points = ${awardedPoints}
         where id = ${request.id}
-        returning id, contributor_id, pull_request_id, issue_id, landed_pull_request_id, landed_commit_url,
+        returning id, contributor_id, pull_request_id, issue_id, landed_pull_request_id, landed_commit_url, landed_commit_author_id,
           request_reason, state, decision, decided_by, decided_by_sole_moderator, decided_reason,
           decided_at, moderator_figure, awarded_points, created_at
       `;
@@ -251,7 +261,7 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
 
   public async listRequestsForModeration(): Promise<ClosedPrDisputeRequest[]> {
     const rows = await this.sql<RequestRow[]>`
-      select id, contributor_id, pull_request_id, issue_id, landed_pull_request_id, landed_commit_url,
+      select id, contributor_id, pull_request_id, issue_id, landed_pull_request_id, landed_commit_url, landed_commit_author_id,
         request_reason, state, decision, decided_by, decided_by_sole_moderator, decided_reason,
         decided_at, moderator_figure, awarded_points, created_at
       from closed_pr_dispute_requests
@@ -266,7 +276,7 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
 
   public async listRequestsForAccount(accountId: string): Promise<ClosedPrDisputeRequest[]> {
     const rows = await this.sql<RequestRow[]>`
-      select id, contributor_id, pull_request_id, issue_id, landed_pull_request_id, landed_commit_url,
+      select id, contributor_id, pull_request_id, issue_id, landed_pull_request_id, landed_commit_url, landed_commit_author_id,
         request_reason, state, decision, decided_by, decided_by_sole_moderator, decided_reason,
         decided_at, moderator_figure, awarded_points, created_at
       from closed_pr_dispute_requests where contributor_id = ${accountId}
@@ -305,6 +315,7 @@ function toRequest(row: RequestRow): ClosedPrDisputeRequest {
     issueId: row.issue_id,
     landedPullRequestId: row.landed_pull_request_id,
     landedCommitUrl: row.landed_commit_url,
+    landedCommitAuthorId: row.landed_commit_author_id,
     requestReason: row.request_reason,
     state: row.state,
     decision: row.decision,

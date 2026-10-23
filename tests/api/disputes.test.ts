@@ -42,7 +42,7 @@ const recorded: ClosedPrDisputeRequest = {
   decidedAt: null,
   issueId: eventId,
   landedPullRequestId: eventId,
-  landedCommitUrl: null,
+  landedCommitUrl: null, landedCommitAuthorId: null,
   moderatorFigure: null,
   awardedPoints: null,
 };

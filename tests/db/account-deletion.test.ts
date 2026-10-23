@@ -684,10 +684,10 @@ describe("account deletion as pseudonymisation", () => {
     `;
     const [dispute] = await sql<{ id: string }[]>`
       insert into closed_pr_dispute_requests (
-        contributor_id, pull_request_id, issue_id, landed_pull_request_id, request_reason,
+        contributor_id, pull_request_id, issue_id, landed_commit_url, landed_commit_author_id, request_reason,
         state, decision, decided_by, decided_reason, decided_at, moderator_figure, awarded_points
       ) values (
-        ${exporter.id}, ${disputedPr!.id}, ${issueId}, ${pullRequestId}, 'Export fixture dispute',
+        ${exporter.id}, ${disputedPr!.id}, ${issueId}, 'https://example.test/commit/landed', ${exporter.id}, 'Export fixture dispute',
         'DECIDED', 'GRANTED', ${exporter.id}, 'Contribution landed elsewhere', now(), 4, 2
       ) returning id
     `;

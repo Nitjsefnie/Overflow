@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
@@ -9,6 +9,7 @@ import type { EnforcementState, PullRequestState } from "@/lib/db/types";
 import type { GitHubPullRequestReview } from "@/lib/github/types";
 import { ClosedPrDisputeService } from "@/lib/moderation/closed-pr-dispute-service";
 import { PostgresClosedPrDisputeStore } from "@/lib/moderation/closed-pr-dispute-store";
+import { PostgresSponsorCredentialStore } from "@/lib/fold/sponsor-credential-store";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer } from "../support/postgres-container";
 
@@ -34,6 +35,8 @@ afterAll(async () => {
   else process.env.DATABASE_URL = originalDatabaseUrl;
 });
 
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
 describe("closed PR dispute filing", () => {
   it.each(["ACTIVE", "BANNED"] satisfies EnforcementState[])(
     "auto-resolves the same issue's landing and journals the live %s state without changing eligibility",
@@ -51,7 +54,7 @@ describe("closed PR dispute filing", () => {
       const result = await store().fileDispute(filing(fixture));
       expect(result).toMatchObject({ kind: "ok", value: {
         contributorId: fixture.contributorId, pullRequestId: fixture.pullRequestId, issueId: fixture.issueId,
-        landedPullRequestId: landing.id, landedCommitUrl: null, requestReason: "My contribution landed elsewhere.",
+        landedPullRequestId: landing.id, landedCommitUrl: null, landedCommitAuthorId: null, requestReason: "My contribution landed elsewhere.",
         state: "OPEN", decision: null, decidedBy: null, decidedBySoleModerator: false,
         decidedReason: null, decidedAt: null, moderatorFigure: null, awardedPoints: null,
         createdAt: expect.any(String),
@@ -122,13 +125,88 @@ describe("closed PR dispute filing", () => {
       } });
   });
 
-  it("accepts nonblank commit text without requiring a PR row", async () => {
+  it("records the resolved commit author on filing and both lists", async () => {
     const fixture = await buildFixture();
-    await expect(service().fileDispute({ id: fixture.contributorId }, {
-      pullRequestId: fixture.pullRequestId, reason: "  Direct push.  ", landedCommitUrl: "  landing commit reference  ",
-    })).resolves.toMatchObject({
-      landedCommitUrl: "landing commit reference", landedPullRequestId: null, requestReason: "Direct push.",
+    const authorId = await insertUser();
+    const resolver = async () => ({ kind: "ok" as const, accountId: authorId });
+    const commitStore = new PostgresClosedPrDisputeStore(sql, resolver);
+    const url = `https://github.com/${fixture.ownerName}/commit/${"a".repeat(40)}`;
+    const request = await new ClosedPrDisputeService(commitStore).fileDispute({ id: fixture.contributorId }, {
+      ...filing(fixture), reason: "  Direct push.  ", landedCommitUrl: `  ${url}  `,
     });
+    expect(request).toMatchObject({ landedCommitUrl: url, landedPullRequestId: null,
+      landedCommitAuthorId: authorId, requestReason: "Direct push." });
+    expect(await sql`select landed_commit_author_id from closed_pr_dispute_requests where id = ${request.id}`)
+      .toEqual([{ landed_commit_author_id: authorId }]);
+    expect((await commitStore.listRequestsForAccount(fixture.contributorId))[0].landedCommitAuthorId).toBe(authorId);
+    expect((await commitStore.listRequestsForModeration()).find((row) => row.id === request.id)?.landedCommitAuthorId).toBe(authorId);
+  });
+
+  it.each([
+    ["unresolved_commit_author", /commit.*author/i],
+    ["unlinked_commit_author", /author.*linked.*account/i],
+  ] as const)("refuses %s with its named reason and no writes", async (kind, message) => {
+    const fixture = await buildFixture();
+    const commitStore = new PostgresClosedPrDisputeStore(sql, async () => ({ kind }));
+    await expect(new ClosedPrDisputeService(commitStore).fileDispute({ id: fixture.contributorId }, {
+      ...filing(fixture), landedCommitUrl: `https://github.com/${fixture.ownerName}/commit/${"b".repeat(40)}`,
+    })).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringMatching(message) });
+    await expectNoRequests(fixture);
+  });
+
+  it("resolves a GitHub commit in a registered repository to its numeric author account", async () => {
+    const fixture = await buildFixture();
+    const landing = await buildFixture();
+    const [author] = await sql`select github_user_id from users where id = ${landing.contributorId}`;
+    vi.spyOn(PostgresSponsorCredentialStore.prototype, "getGitHubAccessToken").mockResolvedValue("test-access-token");
+    vi.stubGlobal("fetch", async (_input: unknown, init: RequestInit) => {
+      const { variables } = JSON.parse(String(init.body));
+      expect(variables).toEqual({ owner: "owner", name: landing.ownerName.split("/")[1], sha: "c".repeat(40) });
+      return Response.json({ data: { repository: { object: { author: { user: { databaseId: Number(author.github_user_id) } } } } } });
+    });
+    await expect(service().fileDispute({ id: fixture.contributorId }, {
+      ...filing(fixture), landedCommitUrl: `https://github.com/${landing.ownerName.toUpperCase()}/commit/${"c".repeat(40)}`,
+    })).resolves.toMatchObject({ landedCommitAuthorId: landing.contributorId });
+  });
+
+  it.each([null, 123])("refuses a commit with an unresolved or unlinked forge author (%s)", async (authorId) => {
+    const fixture = await buildFixture();
+    vi.spyOn(PostgresSponsorCredentialStore.prototype, "getGitHubAccessToken").mockResolvedValue("test-access-token");
+    vi.stubGlobal("fetch", async () => Response.json({ data: {
+      repository: { object: { author: { user: authorId === null ? null : { databaseId: authorId } } } },
+    } }));
+    await expect(service().fileDispute({ id: fixture.contributorId }, {
+      ...filing(fixture), landedCommitUrl: `https://github.com/${fixture.ownerName}/commit/${"c".repeat(40)}`,
+    })).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringMatching(
+      authorId === null ? /commit.*author/i : /author.*linked.*account/i,
+    ) });
+    await expectNoRequests(fixture);
+  });
+
+  it.each(["malformed", "unregistered", "credentials", "branch", "gitlab"])("refuses %s commit URLs", async (kind) => {
+    const fixture = await buildFixture();
+    const [author] = await sql`select github_user_id from users where id = ${fixture.contributorId}`;
+    vi.spyOn(PostgresSponsorCredentialStore.prototype, "getGitHubAccessToken").mockResolvedValue("test-access-token");
+    const requests: unknown[] = [];
+    vi.stubGlobal("fetch", async (input: unknown) => {
+      requests.push(input);
+      return Response.json({ data: { repository: { object: { author: { user: {
+        databaseId: Number(author.github_user_id),
+      } } } } } });
+    });
+    const urls: Record<string, string> = {
+      malformed: "landing commit reference", unregistered: `https://github.com/elsewhere/repo/commit/${"d".repeat(40)}`,
+      credentials: `https://someone@github.com/${fixture.ownerName}/commit/${"d".repeat(40)}`,
+      branch: `https://github.com/${fixture.ownerName}/commit/main`,
+      gitlab: `https://gitlab.example.test/${fixture.ownerName}/-/commit/${"d".repeat(40)}`,
+    };
+    if (kind === "gitlab") await sql`update registered_repositories set provider = 'gitlab',
+      instance_url = 'https://gitlab.example.test' where id = ${fixture.repositoryId}`;
+    await expect(service().fileDispute({ id: fixture.contributorId }, {
+      ...filing(fixture), landedCommitUrl: urls[kind],
+    })).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringMatching(/commit.*author/i) });
+    expect(requests).toEqual([]);
+    await expectNoRequests(fixture);
   });
 
   it("looks up supplied PR numbers only in the target's registered repository", async () => {
@@ -367,7 +445,7 @@ describe("closed PR dispute decisions", () => {
     },
   );
 
-  it("uses only sponsor and contributor conflicts for a commit landing", async () => {
+  it("refuses the recorded commit author while another live moderator exists", async () => {
     const fixture = await decisionFixture(true);
     for (const id of [fixture.sponsorId, fixture.contributorId, fixture.landingCreditorId]) {
       await sql`update users set role = 'MODERATOR' where id = ${id}`;
@@ -376,9 +454,25 @@ describe("closed PR dispute decisions", () => {
       await expect(store().decideDispute({ ...decision(fixture), moderatorAccountId: id }))
         .resolves.toEqual({ kind: "forbidden_imposer" });
     }
-    // No PR/forge identity records a landing author for the supplied commit.
     await expect(store().decideDispute({ ...decision(fixture), moderatorAccountId: fixture.landingCreditorId }))
-      .resolves.toMatchObject({ kind: "ok", value: { decidedBy: fixture.landingCreditorId, decidedBySoleModerator: false } });
+      .resolves.toEqual({ kind: "forbidden_imposer" });
+    await expectUndecided(fixture.requestId);
+  });
+
+  it("allows the recorded commit author as the sole live moderator", async () => {
+    const fixture = await decisionFixture(true);
+    await sql`update users set role = 'MEMBER' where role = 'MODERATOR'`;
+    await sql`update users set role = 'MODERATOR' where id = ${fixture.landingCreditorId}`;
+    await expect(store().decideDispute({ ...decision(fixture), moderatorAccountId: fixture.landingCreditorId }))
+      .resolves.toMatchObject({ kind: "ok", value: {
+        landedCommitAuthorId: fixture.landingCreditorId, decidedBySoleModerator: true,
+      } });
+  });
+
+  it("maps a legacy commit row's absent author to null", async () => {
+    const fixture = await decisionFixture(true);
+    await sql`update closed_pr_dispute_requests set landed_commit_author_id = null where id = ${fixture.requestId}`;
+    expect((await store().listRequestsForAccount(fixture.contributorId))[0].landedCommitAuthorId).toBeNull();
   });
 
   it.each(["sponsorId", "contributorId", "landingCreditorId", "moderatorId"] as const)(
@@ -989,7 +1083,9 @@ async function decisionFixture(commit = false) {
   const landingCreditorId = await insertUser();
   await sql`update users set role = 'MODERATOR' where id = ${moderatorId}`;
   const landing = commit ? null : await insertPullRequest({ ...fixture, contributorId: landingCreditorId }, "MERGED");
-  const request = await service().fileDispute({ id: fixture.contributorId }, {
+  const filingService = new ClosedPrDisputeService(new PostgresClosedPrDisputeStore(sql,
+    async () => ({ kind: "ok" as const, accountId: landingCreditorId })));
+  const request = await filingService.fileDispute({ id: fixture.contributorId }, {
     ...filing(fixture), ...(commit ? { landedCommitUrl: "https://example.test/commit/landed" } : {}),
   });
   await sql`insert into repository_reconciliation_evidence

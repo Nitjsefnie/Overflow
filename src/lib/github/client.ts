@@ -1,3 +1,5 @@
+import { hasNextLink, lastLinkPage } from "@/lib/github/link-pagination";
+import { getCommitAuthor } from "@/lib/github/commit-author";
 import { checkpointSweepRestRequest, withFreshSweepReads } from "@/lib/fold/sweep-pass";
 import { z } from "zod";
 import { checkSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
@@ -103,6 +105,10 @@ export class GitHubGateway implements ForgeGateway {
     const response = await this.request(`/repos/${segment(repository.owner)}/${segment(repository.name)}`);
 
     return toGitHubRepository(await responseJson<GitHubRestRepository>(response));
+  }
+
+  public getCommitAuthor(repository: GitHubRepositoryReference, sha: string): Promise<number | null> {
+    return getCommitAuthor(this.graphql, repository, sha);
   }
 
   public async getRepositoryById(githubRepositoryId: number): Promise<GitHubRepository | null> {
@@ -1439,24 +1445,6 @@ async function responseJson<T>(response: GitHubRestResponse): Promise<T> {
   } catch {
     throw new Error("GitHub API response was invalid.");
   }
-}
-
-function hasNextLink(linkHeader: string | null): boolean {
-  return linkHeader?.split(",").some((link) => /rel="?next"?/.test(link)) ?? false;
-}
-
-/**
- * The rel="last" page number, or null when it is absent or unusable — an
- * UNKNOWN collection size that is never treated as small. Absent rel="next"
- * never reaches this: that case already means a single page.
- */
-function lastLinkPage(linkHeader: string | null): number | null {
-  const last = linkHeader?.split(",").find((link) => /rel="?last"?/.test(link));
-  if (last === undefined) return null;
-  const target = /<([^>]+)>/.exec(last)?.[1];
-  if (target === undefined) return null;
-  const page = Number(new URL(target, "https://api.github.com").searchParams.get("page"));
-  return Number.isSafeInteger(page) && page >= 1 ? page : null;
 }
 
 /** Unique ids match the exact count and contain the REST lower bound.
