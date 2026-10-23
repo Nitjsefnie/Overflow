@@ -34,11 +34,11 @@ afterAll(async () => {
 });
 
 describe("paused full-pass pages", () => {
-  it.each(["OVERFLOW_RECONCILIATION_SWEEP_PAGE_CEILING", "OVERFLOW_RECONCILIATION_SWEEP_PAGE_CEILING"])("reads the page ceiling from %s when no override is supplied", async (name) => {
+  it.each(["RECONCILIATION_SWEEP_PAGE_CEILING", "OVERFLOW_RECONCILIATION_SWEEP_PAGE_CEILING"])("reads the page ceiling from %s when no override is supplied", async (name) => {
     const previous = process.env.OVERFLOW_RECONCILIATION_SWEEP_PAGE_CEILING;
     try {
       vi.stubEnv("OVERFLOW_RECONCILIATION_SWEEP_PAGE_CEILING", undefined);
-      vi.stubEnv("OVERFLOW_RECONCILIATION_SWEEP_PAGE_CEILING", "3");
+      vi.stubEnv("RECONCILIATION_SWEEP_PAGE_CEILING", "3");
       vi.stubEnv(name, "2");
       const f = await materializeRepositoryFixture(sql);
       const pass = await new PostgresSweepPassStore(sql).open({ repositoryId: f.repositoryId,

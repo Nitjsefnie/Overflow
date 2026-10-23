@@ -362,7 +362,7 @@ for (const line of [
   "repo_valid=0",
   "[[ \"${repo}\" =~ ^[^/]+/[^/]+$ ]] || repo_valid=$?",
   "if [ \"${repo_valid}\" -ne 0 ] ; then",
-  "printf 'Could not parse an OWNER/OVERFLOW_REPO GitHub slug from remote.origin.url (%s); refusing to deploy.\\n' \"${remote_url}\" > & 2",
+  "printf 'Could not parse an OWNER/REPO GitHub slug from remote.origin.url (%s); refusing to deploy.\\n' \"${remote_url}\" > & 2",
   "exit 1",
   "if required_response=$ ( gh api \"repos/$repo/branches/main/protection\" --include 2>\"${required_stderr}\" ) ; then",
   "required_body=${required_response#*$'\\n'}",

@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 it("rebuilds a warmed production audit handler with the registered role mock after resetting modules", async () => {
-  const roleFailure = vi.spyOn(console, "error");
+  const roleFailure = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.stubEnv("OVERFLOW_DATABASE_URL", undefined);
   vi.stubEnv("DATABASE_URL", undefined);
   productionAuth.mockResolvedValue(memberSession);

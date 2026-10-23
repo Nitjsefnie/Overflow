@@ -818,7 +818,7 @@ the target SHA's own copy of the same file, so a map-shape change cannot
 deadlock a tree whose parser predates it. Right
 after the fetch it resolves the exact SHA being deployed and, once the
 tree-cleanliness gate passes, reads main's required checks from branch
-protection and the branch-rules endpoint (`repos/OWNER/OVERFLOW_REPO/rules/branches/main`).
+protection and the branch-rules endpoint (`repos/OWNER/REPO/rules/branches/main`).
 The gate uses their union, refusing when it is empty or either read fails for
 a reason other than not-found (HTTP 404). Every required check's latest run on that SHA must conclude
 `success` before the fast-forward, and so before install, migrations, build,
@@ -1175,7 +1175,7 @@ repo="${repo%.git}"
 repo_valid=0
 [[ "${repo}" =~ ^[^/]+/[^/]+$ ]] || repo_valid=$?
 if [ "${repo_valid}" -ne 0 ]; then
-  printf 'Could not parse an OWNER/OVERFLOW_REPO GitHub slug from remote.origin.url (%s); refusing to deploy.\n' "${remote_url}" >&2
+  printf 'Could not parse an OWNER/REPO GitHub slug from remote.origin.url (%s); refusing to deploy.\n' "${remote_url}" >&2
   exit 1
 fi
 required_stderr=$(mktemp)
