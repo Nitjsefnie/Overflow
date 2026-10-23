@@ -110,7 +110,7 @@ readonly BASELINE_PATH="$REPO_ROOT/.github/gitleaks-baseline.json"
 
 # Unqualified by default so the report lands where the caller ran the script.
 # The workflow sets this to the path it uploads as an artifact.
-readonly REPORT_PATH="${GITLEAKS_REPORT_PATH:-gitleaks-report.json}"
+readonly REPORT_PATH="${OVERFLOW_GITLEAKS_REPORT_PATH:-${GITLEAKS_REPORT_PATH:-gitleaks-report.json}}"
 
 # A missing binary is a runner that failed, not a clean history. Refusing here
 # is what keeps a broken install from reading as "no secrets found".

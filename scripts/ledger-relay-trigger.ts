@@ -63,15 +63,15 @@ export type Trigger =
   | { kind: "sweep-only" };
 
 export function parseTrigger(env: Record<string, string | undefined>): Trigger {
-  const sweepOnlyRaw = env.LEDGER_SWEEP_ONLY ?? "";
+  const sweepOnlyRaw = env.OVERFLOW_LEDGER_SWEEP_ONLY ?? env.LEDGER_SWEEP_ONLY ?? "";
   if (sweepOnlyRaw !== "" && sweepOnlyRaw !== "true" && sweepOnlyRaw !== "false") {
     throw new Error(
       `LEDGER_SWEEP_ONLY must be exactly "true" or "false" (got ${JSON.stringify(sweepOnlyRaw)})`,
     );
   }
   const sweepOnly = sweepOnlyRaw === "true";
-  const runId = env.GITHUB_WORKFLOW_RUN_ID ?? "";
-  const dispatchRunId = env.LEDGER_DISPATCH_RUN_ID ?? "";
+  const runId = env.OVERFLOW_GITHUB_WORKFLOW_RUN_ID ?? env.GITHUB_WORKFLOW_RUN_ID ?? "";
+  const dispatchRunId = env.OVERFLOW_LEDGER_DISPATCH_RUN_ID ?? env.LEDGER_DISPATCH_RUN_ID ?? "";
   if (sweepOnly && (runId !== "" || dispatchRunId !== "")) {
     throw new Error(
       "LEDGER_SWEEP_ONLY=true is a sweep-only relay: no triggering run may be named alongside it " +
@@ -80,11 +80,11 @@ export function parseTrigger(env: Record<string, string | undefined>): Trigger {
   }
   if (runId !== "") {
     assertShape(runId, DIGITS, "GITHUB_WORKFLOW_RUN_ID must be a workflow-run id");
-    const headSha = env.GITHUB_WORKFLOW_RUN_HEAD_SHA ?? "";
+    const headSha = env.OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA ?? env.GITHUB_WORKFLOW_RUN_HEAD_SHA ?? "";
     assertShape(headSha, SHA_40, "GITHUB_WORKFLOW_RUN_HEAD_SHA must be a 40-hex SHA");
-    const path = env.GITHUB_WORKFLOW_RUN_PATH ?? "";
+    const path = env.OVERFLOW_GITHUB_WORKFLOW_RUN_PATH ?? env.GITHUB_WORKFLOW_RUN_PATH ?? "";
     assertShape(path, PIN_SHAPE, "GITHUB_WORKFLOW_RUN_PATH must be a workflow path");
-    const htmlUrl = env.GITHUB_WORKFLOW_RUN_HTML_URL ?? "";
+    const htmlUrl = env.OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL ?? env.GITHUB_WORKFLOW_RUN_HTML_URL ?? "";
     if (htmlUrl === "") {
       throw new Error("GITHUB_WORKFLOW_RUN_HTML_URL is required for the check-run's details_url");
     }
@@ -94,11 +94,11 @@ export function parseTrigger(env: Record<string, string | undefined>): Trigger {
         runId,
         headSha,
         path,
-        conclusion: normalizedConclusion(env.GITHUB_WORKFLOW_RUN_CONCLUSION),
+        conclusion: normalizedConclusion(env.OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION ?? env.GITHUB_WORKFLOW_RUN_CONCLUSION),
         htmlUrl,
-        event: env.GITHUB_WORKFLOW_RUN_EVENT ?? "",
-        headBranch: env.GITHUB_WORKFLOW_RUN_HEAD_BRANCH ?? "",
-        runAttempt: normalizedAttempt(env.GITHUB_WORKFLOW_RUN_ATTEMPT),
+        event: env.OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT ?? env.GITHUB_WORKFLOW_RUN_EVENT ?? "",
+        headBranch: env.OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH ?? env.GITHUB_WORKFLOW_RUN_HEAD_BRANCH ?? "",
+        runAttempt: normalizedAttempt(env.OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT ?? env.GITHUB_WORKFLOW_RUN_ATTEMPT),
         runStartedAt: null,
         headRepository: "",
       },

@@ -51,11 +51,11 @@ jobs:
       # needs to preserve pending claims. The archive is checksum-verified.
       # Keep the repository, version and checksum identical in both
       # actionlint jobs: actionlint.yml and pr-gates.yml.
-      ACTIONLINT_REPO: Nitjsefnie-OSC/actionlint
-      ACTIONLINT_VERSION: 1.7.12-queue.1
+      OVERFLOW_ACTIONLINT_REPO: Nitjsefnie-OSC/actionlint
+      OVERFLOW_ACTIONLINT_VERSION: 1.7.12-queue.1
       # sha256 of actionlint_1.7.12-queue.1_linux_amd64.tar.gz from the fork's
       # checksums file. Bump the repository, version and checksum together.
-      ACTIONLINT_SHA256: dcc2c42a7caaa197dfe63584a3851f62ef260f80b2cf221baaf05479661e1521
+      OVERFLOW_ACTIONLINT_SHA256: dcc2c42a7caaa197dfe63584a3851f62ef260f80b2cf221baaf05479661e1521
 
     steps:
       # The default checkout: on push it is the pushed commit and on dispatch
@@ -71,10 +71,10 @@ jobs:
 
       - name: Install actionlint
         run: |
-          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tarball="actionlint_${OVERFLOW_ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           curl -fsSL --retry 3 -o "$tarball" \
-            "https://github.com/${ACTIONLINT_REPO}/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
-          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+            "https://github.com/${OVERFLOW_ACTIONLINT_REPO}/releases/download/v${OVERFLOW_ACTIONLINT_VERSION}/${tarball}"
+          echo "${OVERFLOW_ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "$tarball" actionlint
           ./actionlint --version
 

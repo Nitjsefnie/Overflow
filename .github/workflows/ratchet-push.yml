@@ -35,14 +35,14 @@ jobs:
         id: list
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
+          OVERFLOW_REPO: ${{ github.repository }}
+          OVERFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           # A failed API call is an error, never evidence of unchanged records.
           # Pagination and uncached reads cover every live artifact of this run.
           set -o pipefail
           names="$(gh api -H 'Cache-Control: no-cache' --paginate \
-            "repos/$REPO/actions/runs/$RUN_ID/artifacts" \
+            "repos/$OVERFLOW_REPO/actions/runs/$OVERFLOW_RUN_ID/artifacts" \
             --jq '.artifacts[] | select(.expired != true) | .name' \
             | sort -u)"
           records=false
@@ -65,13 +65,13 @@ jobs:
       - name: Push the tightened record to main
         if: steps.list.outputs.records == 'true'
         env:
-          MASTER_PUSH_DEPLOY_KEY: ${{ secrets.MASTER_PUSH_DEPLOY_KEY }}
+          OVERFLOW_MASTER_PUSH_DEPLOY_KEY: ${{ secrets.MASTER_PUSH_DEPLOY_KEY }}
           GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
+          OVERFLOW_REPO: ${{ github.repository }}
         run: |
           # Fail closed: the environment key is the only push credential.
           # Missing configuration must never fall back to the workflow token.
-          if [ -z "${MASTER_PUSH_DEPLOY_KEY:-}" ]; then
+          if [ -z "${OVERFLOW_MASTER_PUSH_DEPLOY_KEY:-}" ]; then
             echo "MASTER_PUSH_DEPLOY_KEY is empty: the main-push environment is missing its secret" >&2
             exit 1
           fi
@@ -84,14 +84,14 @@ jobs:
           eval "$(ssh-agent -s)" >/dev/null
           # Scope key lifetime to this step, including every early-exit path.
           trap 'kill "$SSH_AGENT_PID" 2>/dev/null || true' EXIT
-          ssh-add <(printf '%s\n' "$MASTER_PUSH_DEPLOY_KEY") >/dev/null
+          ssh-add <(printf '%s\n' "$OVERFLOW_MASTER_PUSH_DEPLOY_KEY") >/dev/null
           mkdir -p ~/.ssh
           # Trust only GitHub's host keys published by its HTTPS Meta endpoint.
           # Fetch failure aborts before git connects; strict host checking stays on.
           gh api -H 'Cache-Control: no-cache' meta \
             --jq '.ssh_keys[] | "github.com " + .' >> ~/.ssh/known_hosts
           export GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=yes'
-          remote="git@github.com:${REPO}.git"
+          remote="git@github.com:${OVERFLOW_REPO}.git"
           scratch="$RUNNER_TEMP/ratchet-repo"
           # Bare plumbing preserves every other main blob without materializing
           # a fetched worktree. Validation runs outside source with isolated Python.

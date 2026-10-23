@@ -1,3 +1,4 @@
+import { readEnv } from "../src/lib/env.ts";
 import { pathToFileURL } from "node:url";
 import { closeSql, getSql } from "../src/lib/db/client.ts";
 import { GitHubGateway } from "../src/lib/github/client.ts";
@@ -37,7 +38,7 @@ export async function runWebhookUpgradeCli(
 function productionDependencies(write: (line: string) => void): WebhookUpgradeCliDependencies {
   const registrations = new PostgresRepositoryStore();
   const queue = new PostgresFoldStore();
-  const tokenEncryptionKey = process.env.TOKEN_ENCRYPTION_KEY;
+  const tokenEncryptionKey = readEnv("TOKEN_ENCRYPTION_KEY");
   if (tokenEncryptionKey === undefined || tokenEncryptionKey.length === 0) {
     throw new Error("Token encryption key must be configured.");
   }
@@ -56,7 +57,7 @@ function productionDependencies(write: (line: string) => void): WebhookUpgradeCl
     },
     createGateway: (accessToken, owner) => new GitHubGateway({ accessToken, owner }),
     createGitLabGateway: (instanceUrl, token) => new GitLabGateway({ instanceUrl, token }),
-    webhookUrls: { github: process.env.GITHUB_WEBHOOK_URL ?? "", gitlab: process.env.GITLAB_WEBHOOK_URL ?? "" },
+    webhookUrls: { github: readEnv("GITHUB_WEBHOOK_URL") ?? "", gitlab: readEnv("GITLAB_WEBHOOK_URL") ?? "" },
     write,
   };
 }

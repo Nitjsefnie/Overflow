@@ -31,9 +31,9 @@ export type MintOutcome = { token?: string; warning?: string };
 function ledgerAppCredentials(
   env: Record<string, string | undefined>,
 ): { appId: string; installationId: string; appKey: string } | undefined {
-  const appId = env.LEDGER_APP_ID?.trim();
-  const installationId = env.LEDGER_INSTALLATION_ID?.trim();
-  const appKey = env.LEDGER_APP_KEY;
+  const appId = (env.OVERFLOW_LEDGER_APP_ID ?? env.LEDGER_APP_ID)?.trim();
+  const installationId = (env.OVERFLOW_LEDGER_INSTALLATION_ID ?? env.LEDGER_INSTALLATION_ID)?.trim();
+  const appKey = env.OVERFLOW_LEDGER_APP_KEY ?? env.LEDGER_APP_KEY;
   if (appId === undefined || appId === "") return undefined;
   if (installationId === undefined || installationId === "") return undefined;
   if (appKey === undefined || appKey === "") return undefined;

@@ -34,11 +34,11 @@ jobs:
         id: stage
         if: github.event_name == 'push'
         env:
-          BASE_SHA: ${{ github.sha }}
+          OVERFLOW_BASE_SHA: ${{ github.sha }}
         run: |
           # Bind the handoff base to the exact checkout the action measured.
           # A mismatched tree must never tighten records on another revision.
-          if [ "$(git rev-parse HEAD)" != "$BASE_SHA" ]; then
+          if [ "$(git rev-parse HEAD)" != "$OVERFLOW_BASE_SHA" ]; then
             echo 'Checkout does not match the measured run head' >&2
             exit 1
           fi

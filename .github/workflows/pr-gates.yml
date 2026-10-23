@@ -43,11 +43,11 @@ jobs:
       # The fork release is the same upstream code plus
       # that one schema key. Keep these three in step with actionlint.yml, which
       # installs the same gate on the push and dispatch legs.
-      ACTIONLINT_REPO: Nitjsefnie-OSC/actionlint
-      ACTIONLINT_VERSION: 1.7.12-queue.1
+      OVERFLOW_ACTIONLINT_REPO: Nitjsefnie-OSC/actionlint
+      OVERFLOW_ACTIONLINT_VERSION: 1.7.12-queue.1
       # sha256 of actionlint_1.7.12-queue.1_linux_amd64.tar.gz from the fork's
       # checksums file. Bump the repository, version and checksum together.
-      ACTIONLINT_SHA256: dcc2c42a7caaa197dfe63584a3851f62ef260f80b2cf221baaf05479661e1521
+      OVERFLOW_ACTIONLINT_SHA256: dcc2c42a7caaa197dfe63584a3851f62ef260f80b2cf221baaf05479661e1521
 
     steps:
       # No ref input at all: GitHub points GITHUB_REF at the default branch and
@@ -64,8 +64,8 @@ jobs:
       # shell through env:, never through ${{ }} interpolation in run:.
       - name: Fetch the pull request head
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+          OVERFLOW_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: git fetch --no-tags origin "+refs/pull/${OVERFLOW_PR_NUMBER}/head:refs/remotes/pr/head"
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -73,10 +73,10 @@ jobs:
 
       - name: Install actionlint
         run: |
-          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tarball="actionlint_${OVERFLOW_ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           curl -fsSL --retry 3 -o "$tarball" \
-            "https://github.com/${ACTIONLINT_REPO}/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
-          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+            "https://github.com/${OVERFLOW_ACTIONLINT_REPO}/releases/download/v${OVERFLOW_ACTIONLINT_VERSION}/${tarball}"
+          echo "${OVERFLOW_ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "$tarball" actionlint
           ./actionlint --version
 
@@ -126,11 +126,11 @@ jobs:
       - name: Base freshness
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO_SLUG: ${{ github.repository }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OVERFLOW_REPO_SLUG: ${{ github.repository }}
+          OVERFLOW_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          OVERFLOW_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          OVERFLOW_PR_NUMBER: ${{ github.event.pull_request.number }}
+          OVERFLOW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: bash scripts/ci-base-freshness.sh
 
   ratchet-guard:
@@ -172,8 +172,8 @@ jobs:
       # ${{ }} interpolation in the script.
       - name: Fetch the pull request head
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+          OVERFLOW_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: git fetch --no-tags origin "+refs/pull/${OVERFLOW_PR_NUMBER}/head:refs/remotes/pr/head"
 
       # The base of the comparison is the checked-out commit itself — under
       # pull_request_target that is main's tip when the event fired (GITHUB_SHA) — never
@@ -189,8 +189,8 @@ jobs:
       # concurrency group has already cancelled the superseded run.
       - name: Ratchet documents
         env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/check-ratchets.ts HEAD "$HEAD_SHA"
+          OVERFLOW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ratchets.ts HEAD "$OVERFLOW_HEAD_SHA"
 
   secret-scan:
     permissions:
@@ -219,8 +219,8 @@ jobs:
       # never interpolation into run. gitleaks walks all refs, including this one.
       - name: Fetch the pull request head
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+          OVERFLOW_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: git fetch --no-tags origin "+refs/pull/${OVERFLOW_PR_NUMBER}/head:refs/remotes/pr/head"
 
       # The gitleaks ACTION is deliberately not used: it decides the scanner's
       # version, so a bump inside it would move the rule set under a committed
@@ -244,20 +244,20 @@ jobs:
       # a simulated runner, so the line cannot be dropped again silently.
       - name: Install gitleaks
         env:
-          GITLEAKS_VERSION: 8.30.1
+          OVERFLOW_GITLEAKS_VERSION: 8.30.1
           # sha256 of gitleaks_8.30.1_linux_x64.tar.gz from the release's own
           # gitleaks_8.30.1_checksums.txt. Bump the version and checksum
           # together, and with PINNED_GITLEAKS_VERSION in
           # scripts/secret-scan.sh.
-          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          OVERFLOW_GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
         # The github-env ignore covers the constant value written:
         # "${RUNNER_TEMP}/gitleaks-bin"; no untrusted value reaches GITHUB_PATH
         # under any event, and bare-name resolution (command -v gitleaks in
         # scripts/secret-scan.sh) depends on this line. (issue 984)
         run: | # zizmor: ignore[github-env]
-          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tarball="gitleaks_${OVERFLOW_GITLEAKS_VERSION}_linux_x64.tar.gz"
           curl -fsSL --retry 3 -o "$tarball" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+            "https://github.com/gitleaks/gitleaks/releases/download/v${OVERFLOW_GITLEAKS_VERSION}/${tarball}"
           # sha256sum is the LAST stage of this pipeline, which is what makes it
           # safe under a runner's `bash -e`: with no pipefail a pipeline's
           # status is the last stage's, so the step inherits THIS check's
@@ -266,7 +266,7 @@ jobs:
           # invisible, and the downloader's own flags (`-f -sS -L
           # --retry 3`) are what cover the download. Do not reorder these two
           # commands, and do not append a stage after sha256sum.
-          echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
+          echo "${OVERFLOW_GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
           install_dir="${RUNNER_TEMP}/gitleaks-bin"
           mkdir -p "$install_dir"
           tar -xzf "$tarball" -C "$install_dir" gitleaks
@@ -280,7 +280,7 @@ jobs:
       # message rather than producing findings the baseline cannot explain.
       - name: Scan the full history
         env:
-          GITLEAKS_REPORT_PATH: gitleaks-report.json
+          OVERFLOW_GITLEAKS_REPORT_PATH: gitleaks-report.json
         run: bash scripts/secret-scan.sh
 
       # `if: always()` is the only thing that makes a RED run leave the report
@@ -384,10 +384,10 @@ jobs:
           # the event's merge_commit_sha, which GitHub computes asynchronously
           # and can name the previous head's merge (the ci-pr.yml pr-tree
           # step's documented reason).
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OVERFLOW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           # The base this event is about — the same commit GitHub's own merge
           # preview merges into.
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          OVERFLOW_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           # actions/checkout's default: checking the tree out fetches no LFS
           # object the pull request's attributes point at.
           GIT_LFS_SKIP_SMUDGE: "1"
@@ -396,12 +396,12 @@ jobs:
           # by its SHA, and this event's base, fetched only when the checkout
           # does not already hold it. A SHA fetch follows no ref the pull
           # request could move; no refs/pull refspec is used anywhere.
-          if ! git fetch --quiet --no-tags origin "${HEAD_SHA:?}"; then
-            echo "::error::could not fetch the pull request's head ${HEAD_SHA} from origin; refusing to audit a tree this event is not about" >&2
+          if ! git fetch --quiet --no-tags origin "${OVERFLOW_HEAD_SHA:?}"; then
+            echo "::error::could not fetch the pull request's head ${OVERFLOW_HEAD_SHA} from origin; refusing to audit a tree this event is not about" >&2
             exit 1
           fi
-          if ! git cat-file -e "${BASE_SHA:?}^{commit}" 2>/dev/null; then
-            if ! git fetch --quiet --no-tags origin "${BASE_SHA:?}"; then
+          if ! git cat-file -e "${OVERFLOW_BASE_SHA:?}^{commit}" 2>/dev/null; then
+            if ! git fetch --quiet --no-tags origin "${OVERFLOW_BASE_SHA:?}"; then
               echo "::error::could not fetch the pull request's base commit; refusing to audit a tree this event is not about" >&2
               exit 1
             fi
@@ -413,12 +413,12 @@ jobs:
           # fall back to — a pull request that does not merge cleanly cannot
           # be audited, and a red here is fail-closed, the same direction
           # ci-pr.yml's verify job takes a conflict.
-          if merged_tree=$(git merge-tree --write-tree "${BASE_SHA:?}" "${HEAD_SHA:?}" 2>&1); then
+          if merged_tree=$(git merge-tree --write-tree "${OVERFLOW_BASE_SHA:?}" "${OVERFLOW_HEAD_SHA:?}" 2>&1); then
             :
           else
             merge_status=$?
             if [ "${merge_status}" -eq 1 ]; then
-              echo "::error::the pull request's head ${HEAD_SHA} does not merge cleanly into its base ${BASE_SHA}; rebase the branch onto the base and push again."
+              echo "::error::the pull request's head ${OVERFLOW_HEAD_SHA} does not merge cleanly into its base ${OVERFLOW_BASE_SHA}; rebase the branch onto the base and push again."
             else
               # git exits 1 on a merge-tree conflict and reserves everything
               # else for its own failure: a git without --write-tree answers

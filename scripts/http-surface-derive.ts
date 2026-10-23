@@ -273,15 +273,15 @@ export function mutationRequest(path: string, method: string, body?: unknown): R
  * derivation must not leak environment into the process it runs in.
  */
 export async function withAppUrl<T>(run: () => Promise<T>): Promise<T> {
-  const configured = process.env.APP_URL;
-  process.env.APP_URL = "https://overflow.example";
+  const configured = process.env.OVERFLOW_APP_URL;
+  process.env.OVERFLOW_APP_URL = "https://overflow.example";
   try {
     return await run();
   } finally {
     if (configured === undefined) {
-      delete process.env.APP_URL;
+      delete process.env.OVERFLOW_APP_URL;
     } else {
-      process.env.APP_URL = configured;
+      process.env.OVERFLOW_APP_URL = configured;
     }
   }
 }

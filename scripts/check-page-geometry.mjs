@@ -112,7 +112,7 @@ function parseLayoutCheckPortOrExit(value) {
   }
 }
 
-const PORT = parseLayoutCheckPortOrExit(process.env.LAYOUT_CHECK_PORT);
+const PORT = parseLayoutCheckPortOrExit(process.env.OVERFLOW_LAYOUT_CHECK_PORT ?? process.env.LAYOUT_CHECK_PORT);
 const BASE_URL = (flaggedValue("--base-url") ?? `http://127.0.0.1:${PORT}`).replace(/\/+$/, "");
 
 /**
@@ -197,7 +197,7 @@ export async function loadRepoEnvFile({ repoRoot: root = repoRoot, env = process
  */
 export function missingRequiredEnv(env = process.env, envFileExists = repoEnvFileExists) {
   return REQUIRED_ENV.filter((name) => {
-    const value = env[name];
+    const value = env[`OVERFLOW_${name}`] ?? env[name];
     if (value !== undefined && value !== "") return false;
     return !envFileExists();
   });
@@ -661,8 +661,8 @@ function discoverChrome() {
     .filter(Boolean)
     .concat("/usr/bin"))];
 
-  const candidates = [];
-  if (process.env.LAYOUT_CHECK_CHROME) candidates.push(process.env.LAYOUT_CHECK_CHROME);
+  const configuredChrome = process.env.OVERFLOW_LAYOUT_CHECK_CHROME ?? process.env.LAYOUT_CHECK_CHROME;
+  const candidates = configuredChrome ? [configuredChrome] : [];
   for (const name of ["google-chrome-stable", "google-chrome", "chromium", "chromium-browser"]) {
     for (const dir of searchDirs) candidates.push(join(dir, name));
   }
@@ -887,7 +887,7 @@ async function readFileHead(path) {
 export function spawnedServerEnv(env = process.env) {
   const existing = env.AUTH_TRUST_HOST;
   return {
-    ...env, APP_URL: "https://overflow.nitjsefni.eu", // controller-config.ts selects hosted defaults by origin.
+    ...env, OVERFLOW_APP_URL: "https://overflow.nitjsefni.eu", // controller-config.ts selects hosted defaults by origin.
     AUTH_TRUST_HOST: existing !== undefined && existing !== "" ? existing : "true",
   };
 }
@@ -1175,7 +1175,7 @@ async function main() {
 
     // The session fixture (issue 453) seeds before any contract runs — in
     // --base-url mode too: the database is whatever DATABASE_URL names.
-    const databaseUrl = process.env.DATABASE_URL;
+    const databaseUrl = process.env.OVERFLOW_DATABASE_URL ?? process.env.DATABASE_URL;
     if (databaseUrl === undefined || databaseUrl === "") {
       throw new Error(
         "DATABASE_URL is not set — the geometry fixture users cannot be seeded. " +

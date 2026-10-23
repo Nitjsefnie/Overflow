@@ -112,7 +112,7 @@ jobs:
       - name: Refuse a pull request that changes the audit suppression list
         if: github.event_name == 'pull_request'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          OVERFLOW_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           file=package.json
           ws_file=pnpm-workspace.yaml
@@ -425,7 +425,7 @@ jobs:
             printf '%s\n' "${sanitized}/site"
           }
 
-          if ! git fetch --quiet --depth=1 origin "${BASE_SHA:?}"; then
+          if ! git fetch --quiet --depth=1 origin "${OVERFLOW_BASE_SHA:?}"; then
             echo "::error::could not fetch the pull request's base commit; refusing to judge the suppression list without it" >&2
             exit 1
           fi
@@ -485,8 +485,8 @@ jobs:
           # value (no ${{ }} in run blocks). github.event.before is the
           # previous tip on main for a push, and the all-zeros SHA when there
           # is no previous tip — a new branch or a force push.
-          EVENT_NAME: ${{ github.event_name }}
-          BEFORE_SHA: ${{ github.event.before }}
+          OVERFLOW_EVENT_NAME: ${{ github.event_name }}
+          OVERFLOW_BEFORE_SHA: ${{ github.event.before }}
         run: |
           # THE FAST PATH IS AN OUTCOME, NOT A SKIP (issue 1149 fix round 2).
           # The deploy gate derives its required set from branch protection,
@@ -501,13 +501,13 @@ jobs:
           # that is not an ancestor of the pushed HEAD, and a diff error are
           # all ambiguity, and ambiguity audits. The schedule and dispatch
           # legs never enter this branch — they audit unconditionally.
-          if [ "${EVENT_NAME:?}" = "push" ] \
-            && [[ "${BEFORE_SHA:?}" != *$'\n'* ]] \
-            && printf '%s' "${BEFORE_SHA}" | grep -Eq '^[0-9a-f]{40}$' \
-            && [ "${BEFORE_SHA}" != "0000000000000000000000000000000000000000" ] \
-            && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null \
-            && git merge-base --is-ancestor "${BEFORE_SHA}" HEAD 2>/dev/null \
-            && git diff --quiet "${BEFORE_SHA}" HEAD -- package.json pnpm-lock.yaml; then
+          if [ "${OVERFLOW_EVENT_NAME:?}" = "push" ] \
+            && [[ "${OVERFLOW_BEFORE_SHA:?}" != *$'\n'* ]] \
+            && printf '%s' "${OVERFLOW_BEFORE_SHA}" | grep -Eq '^[0-9a-f]{40}$' \
+            && [ "${OVERFLOW_BEFORE_SHA}" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "${OVERFLOW_BEFORE_SHA}^{commit}" 2>/dev/null \
+            && git merge-base --is-ancestor "${OVERFLOW_BEFORE_SHA}" HEAD 2>/dev/null \
+            && git diff --quiet "${OVERFLOW_BEFORE_SHA}" HEAD -- package.json pnpm-lock.yaml; then
             echo "no manifest change since the previous push — audit skipped, context green"
             exit 0
           fi

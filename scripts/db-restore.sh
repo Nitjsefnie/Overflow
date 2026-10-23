@@ -73,7 +73,8 @@ case "$target" in
         ;;
 esac
 
-if [ -z "${DATABASE_URL:-}" ]; then
+database_url=${OVERFLOW_DATABASE_URL:-${DATABASE_URL:-}}
+if [ -z "$database_url" ]; then
     fail "DATABASE_URL is not set; refusing to guess where to restore"
 fi
 
@@ -82,11 +83,11 @@ if [ ! -f "$dump" ]; then
 fi
 
 # The URL's last path segment is the database it names; swap it for the target.
-base=${DATABASE_URL%%\?*}
+base=${database_url%%\?*}
 query=""
-case "$DATABASE_URL" in
+case "$database_url" in
     *\?*)
-        query=${DATABASE_URL#*\?}
+        query=${database_url#*\?}
         ;;
 esac
 url_database=${base##*/}

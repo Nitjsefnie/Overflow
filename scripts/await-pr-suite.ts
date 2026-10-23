@@ -332,15 +332,15 @@ function parseConfig(env: Record<string, string | undefined>): AwaitConfig {
   if (token === "") {
     throw new Error("GH_TOKEN is required");
   }
-  const headSha = env.HEAD_SHA ?? "";
+  const headSha = env.OVERFLOW_HEAD_SHA ?? env.HEAD_SHA ?? "";
   if (!SHA_40.test(headSha)) {
     throw new Error(`HEAD_SHA must be a 40-hex SHA (got ${JSON.stringify(headSha)})`);
   }
-  const runId = env.SUITE_RUN_ID;
+  const runId = env.OVERFLOW_SUITE_RUN_ID ?? env.SUITE_RUN_ID;
   if (runId !== undefined && (!POSITIVE_INTEGER.test(runId) || !Number.isSafeInteger(Number(runId)))) {
     throw new Error("SUITE_RUN_ID must be a positive safe integer");
   }
-  const attempt = env.SUITE_RUN_ATTEMPT;
+  const attempt = env.OVERFLOW_SUITE_RUN_ATTEMPT ?? env.SUITE_RUN_ATTEMPT;
   if (runId !== undefined && (attempt === undefined || !POSITIVE_INTEGER.test(attempt) || !Number.isSafeInteger(Number(attempt)))) {
     throw new Error("SUITE_RUN_ATTEMPT must be the triggering run's positive safe attempt number");
   }

@@ -95,14 +95,14 @@ jobs:
     # Placeholders satisfy configuration validation without carrying production
     # credentials or granting access to an external system.
     env:
-      DATABASE_URL: postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci
+      OVERFLOW_DATABASE_URL: postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci
       AUTH_SECRET: ci-placeholder-auth-secret-not-for-production
       AUTH_GITHUB_ID: ci-placeholder-github-client-id
       AUTH_GITHUB_SECRET: ci-placeholder-github-client-secret
-      TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-      APP_URL: https://overflow.invalid
-      GITHUB_WEBHOOK_URL: https://overflow.invalid/api/github/webhooks
-      MODERATOR_GITHUB_USER_IDS: "1"
+      OVERFLOW_TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      OVERFLOW_APP_URL: https://overflow.invalid
+      OVERFLOW_GITHUB_WEBHOOK_URL: https://overflow.invalid/api/github/webhooks
+      OVERFLOW_MODERATOR_GITHUB_USER_IDS: "1"
       # Actions `env:` is step-scoped. A pin on only the install step leaves
       # later `pnpm` steps resolving the checkout's `packageManager`. At job
       # scope every `pnpm` step inherits both pins, so there is no step left
@@ -183,22 +183,22 @@ jobs:
       - name: Detect docs-only change
         id: detect-docs
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          PUSH_BEFORE: ${{ github.event.before }}
-          DISPATCH_BASE: ${{ inputs.base }}
+          OVERFLOW_EVENT_NAME: ${{ github.event_name }}
+          OVERFLOW_PUSH_BEFORE: ${{ github.event.before }}
+          OVERFLOW_DISPATCH_BASE: ${{ inputs.base }}
         run: |
           git fetch --depth=2 origin "${GITHUB_SHA}"
           base=""
-          if [ "${EVENT_NAME}" = push ]; then
-            base="${PUSH_BEFORE}"
+          if [ "${OVERFLOW_EVENT_NAME}" = push ]; then
+            base="${OVERFLOW_PUSH_BEFORE}"
             if [ -z "${base}" ] || [ -z "${base//0/}" ] \
               || ! git fetch --depth=1 origin "${base}"; then
               base=""
             else
               git fetch --no-tags --unshallow origin "${GITHUB_SHA}"
             fi
-          elif [ "${EVENT_NAME}" = workflow_dispatch ] && [ -n "${DISPATCH_BASE}" ]; then
-            base="${DISPATCH_BASE}"
+          elif [ "${OVERFLOW_EVENT_NAME}" = workflow_dispatch ] && [ -n "${OVERFLOW_DISPATCH_BASE}" ]; then
+            base="${OVERFLOW_DISPATCH_BASE}"
             if [[ "${base}" == *$'\n'* ]] || ! printf '%s' "${base}" | grep -Eq '^[0-9a-f]{40}$'; then
               echo "::error::Dispatch base has invalid format; expected 40 lowercase hexadecimal characters" >&2
               exit 1
@@ -408,10 +408,10 @@ jobs:
 
       - name: Commit and push the recalibrated floor
         env:
-          MASTER_PUSH_DEPLOY_KEY: ${{ secrets.MASTER_PUSH_DEPLOY_KEY }}
-          SIMULATE_REFUSED_RAISE: ${{ inputs.simulate-refused-raise }}
+          OVERFLOW_MASTER_PUSH_DEPLOY_KEY: ${{ secrets.MASTER_PUSH_DEPLOY_KEY }}
+          OVERFLOW_SIMULATE_REFUSED_RAISE: ${{ inputs.simulate-refused-raise }}
           GH_TOKEN: ${{ github.token }}
-          DOCUMENT: ${{ needs.calibrate.outputs.document }}
+          OVERFLOW_DOCUMENT: ${{ needs.calibrate.outputs.document }}
           # Network git must fail, not hang waiting for credentials.
           GIT_TERMINAL_PROMPT: "0"
           GIT_ASKPASS: "true"
@@ -420,10 +420,10 @@ jobs:
 
           if [ -n "${PUSH_REMOTE_URL:-}" ]; then
             PUSH_URL="${PUSH_REMOTE_URL}"
-          elif [ -n "${SIMULATE_REFUSED_RAISE:-}" ] && [ "$SIMULATE_REFUSED_RAISE" != false ]; then
+          elif [ -n "${OVERFLOW_SIMULATE_REFUSED_RAISE:-}" ] && [ "$OVERFLOW_SIMULATE_REFUSED_RAISE" != false ]; then
             echo "Simulated raise deliberately skips the deploy key so protection refuses the push." >&2
             PUSH_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          elif [ -n "${MASTER_PUSH_DEPLOY_KEY:-}" ]; then
+          elif [ -n "${OVERFLOW_MASTER_PUSH_DEPLOY_KEY:-}" ]; then
             # Use SSH when the environment supplies the deploy key. With no key,
             # the fallback below uses GITHUB_TOKEN; a simulated refusal above
             # deliberately forces that token path even when the key is present.
@@ -431,7 +431,7 @@ jobs:
             # The agent is stopped when this step ends, whatever its outcome: the key
             # never outlives the step that loaded it.
             trap 'kill "$SSH_AGENT_PID" 2>/dev/null || true' EXIT
-            ssh-add <(printf '%s\n' "$MASTER_PUSH_DEPLOY_KEY") >/dev/null
+            ssh-add <(printf '%s\n' "$OVERFLOW_MASTER_PUSH_DEPLOY_KEY") >/dev/null
             mkdir -p ~/.ssh
             # GitHub SSH host keys, published by GitHub's Meta endpoint.
             printf '%s\n' \
@@ -446,7 +446,7 @@ jobs:
 
           # The document arrives through env and is written verbatim; the
           # diff below judges it against the record HEAD carries.
-          printf '%s\n' "$DOCUMENT" > "$DOC_PATH"
+          printf '%s\n' "$OVERFLOW_DOCUMENT" > "$DOC_PATH"
 
           # Secrets that must never reach the output: the push and fetch URLs
           # carry the token and git echoes failing URLs verbatim, so every
@@ -540,10 +540,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      SHELLCHECK_REPO: koalaman/shellcheck
-      SHELLCHECK_VERSION: 0.11.0
+      OVERFLOW_SHELLCHECK_REPO: koalaman/shellcheck
+      OVERFLOW_SHELLCHECK_VERSION: 0.11.0
       # sha256 of shellcheck-v0.11.0.linux.x86_64.tar.xz; bump with the version.
-      SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+      OVERFLOW_SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
 
     steps:
       # The default checkout: the pushed main tip on a push, the dispatched
@@ -556,11 +556,11 @@ jobs:
 
       - name: Install ShellCheck
         run: |
-          tarball="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          tarball="shellcheck-v${OVERFLOW_SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
           curl -fsSL --retry 3 -o "$tarball" \
-            "https://github.com/${SHELLCHECK_REPO}/releases/download/v${SHELLCHECK_VERSION}/${tarball}"
-          echo "${SHELLCHECK_SHA256}  ${tarball}" | sha256sum -c -
-          tar -xJf "$tarball" --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+            "https://github.com/${OVERFLOW_SHELLCHECK_REPO}/releases/download/v${OVERFLOW_SHELLCHECK_VERSION}/${tarball}"
+          echo "${OVERFLOW_SHELLCHECK_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xJf "$tarball" --strip-components=1 "shellcheck-v${OVERFLOW_SHELLCHECK_VERSION}/shellcheck"
           ./shellcheck --version
 
       # The gate: any diagnostic fails the job, so a red run means a script in

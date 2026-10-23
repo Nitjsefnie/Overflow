@@ -2,6 +2,7 @@
 // Real production SQL workloads. Setup, migration and postcondition reads are
 // outside the counter; every postgres.js debug callback inside the operation
 // counts, including transaction and reconciliation coordination statements.
+import { readEnv } from "../src/lib/env.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -249,7 +250,7 @@ export async function measurePerfWorkloads(databaseUrl: string): Promise<Measure
     created = true;
     const migration = spawnSync("pnpm", ["db:migrate"], {
       cwd: fileURLToPath(new URL("../", import.meta.url)), encoding: "utf8",
-      env: { ...process.env, DATABASE_URL: scratch.href, PERF_EXPECTED_DATABASE: name,
+      env: { ...process.env, OVERFLOW_DATABASE_URL: scratch.href, OVERFLOW_PERF_EXPECTED_DATABASE: name,
         NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${new URL("./perf-node-setup.mjs", import.meta.url).href}` },
     });
     if (migration.error) throw migration.error;
@@ -274,7 +275,7 @@ export async function measurePerfWorkloads(databaseUrl: string): Promise<Measure
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    const url = process.env.DATABASE_URL;
+    const url = readEnv("DATABASE_URL");
     if (!url) throw new Error("DATABASE_URL must name the migrated CI or disposable test database");
     console.log(JSON.stringify(await measurePerfWorkloads(url)));
   } catch (error) {

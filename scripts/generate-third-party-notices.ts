@@ -18,7 +18,7 @@ export type NoticeResult = { ok: true; text: string } | { ok: false; missing: st
 
 export function resolveNoticesOutputPath(env: Record<string, string | undefined> = process.env): string {
   // Keep this dist-dir convention in step with next.config.ts.
-  return join(env.NEXT_DIST_DIR?.trim() || ".next", "third-party-notices.txt");
+  return join((env.OVERFLOW_NEXT_DIST_DIR ?? env.NEXT_DIST_DIR)?.trim() || ".next", "third-party-notices.txt");
 }
 
 type ReadLicenceFile = (directory: string, includeNotice?: boolean) => string | undefined;

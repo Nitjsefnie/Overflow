@@ -7,7 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 /** One run owns its detached process groups, signal hooks and work directory. */
 export class OwnedProcesses {
-  constructor(workDir = null, { graceMs = 1000, keepWorkDir = process.env.LAYOUT_CHECK_KEEP_WORKDIR === "1" } = {}) {
+  constructor(workDir = null, { graceMs = 1000, keepWorkDir = (process.env.OVERFLOW_LAYOUT_CHECK_KEEP_WORKDIR ?? process.env.LAYOUT_CHECK_KEEP_WORKDIR) === "1" } = {}) {
     this.workDir = workDir;
     this.graceMs = graceMs;
     this.keepWorkDir = keepWorkDir;

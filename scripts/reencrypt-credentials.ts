@@ -1,3 +1,4 @@
+import { readEnv } from "../src/lib/env.ts";
 import { pathToFileURL } from "node:url";
 import { closeSql, getSql } from "../src/lib/db/client.ts";
 import type { SqlClient } from "../src/lib/db/types.ts";
@@ -6,7 +7,7 @@ import {
   decryptToken,
   encryptToken,
   isEnvelopeCurrent,
-  loadTokenKeySet,
+  tokenKeySetFrom,
   type CredentialBinding,
   type TokenKeySet,
 } from "../src/lib/security/token-cipher.ts";
@@ -172,7 +173,7 @@ export async function runCredentialReencryptionCli(
   }
   let keys: TokenKeySet;
   try {
-    keys = dependencies?.keys ?? loadTokenKeySet(process.env);
+    keys = dependencies?.keys ?? tokenKeySetFrom(readEnv("TOKEN_ENCRYPTION_KEY"), readEnv("TOKEN_ENCRYPTION_KEY_PREVIOUS"));
   } catch {
     write(JSON.stringify({ failure: "KEYS_INVALID" }));
     return 1;
