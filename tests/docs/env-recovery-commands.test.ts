@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import MarkdownIt from "markdown-it";
@@ -21,19 +21,47 @@ afterEach(() => fixtures.dispose());
 
 function runCommands(body: string, configuration: string) {
   const directory = fixtures.create();
-  writeFileSync(join(directory, "overflow.env"), configuration);
+  const envFile = join(directory, "overflow.env");
+  writeFileSync(envFile, configuration, { mode: 0o640 });
+  chmodSync(envFile, 0o640);
+  // Exercise the operator's permissions even when the test runner is root.
+  const identity = process.getuid?.() === 0 ? { uid: 65534, gid: 65534 } : {};
+  if (identity.uid !== undefined && identity.gid !== undefined) {
+    chownSync(directory, identity.uid, identity.gid);
+    chownSync(envFile, identity.uid, identity.gid);
+  }
   const env = { ...process.env };
   for (const name of ["DATABASE_URL", "TOKEN_ENCRYPTION_KEY", "TOKEN_ENCRYPTION_KEY_PREVIOUS"]) {
     delete env[name];
     delete env[`OVERFLOW_${name}`];
   }
   const result = spawnSync("bash", ["-eu", "-c", body.replaceAll("overflow-<stamp>.dump", "overflow-fixture.dump").replaceAll("/etc/overflow", directory).replaceAll("/srv/overflow", directory)], {
-    env, encoding: "utf8", cwd: directory,
+    env, encoding: "utf8", cwd: directory, ...identity,
   });
   return { ...result, directory };
 }
 
 describe("recovery commands read either environment spelling", () => {
+  it("generates a private key as the unprivileged file owner", () => {
+    const generation = blocks(guide).find((block) => block.includes("wc -c < /etc/overflow/token-encryption-key.new"));
+    expect(generation).toBeDefined();
+    const result = runCommands(generation!, "");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("43");
+    expect(statSync(join(result.directory, "token-encryption-key.new")).mode & 0o777).toBe(0o600);
+  });
+
+  it("retires the previous key as its owner while preserving the environment file mode", () => {
+    const key = randomBytes(32).toString("base64url");
+    const previous = randomBytes(32).toString("base64url");
+    const retirement = blocks(guide).find((block) => block.includes("sed -i '/^OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=/d'"));
+    expect(retirement).toBeDefined();
+    const result = runCommands(retirement!, `OVERFLOW_TOKEN_ENCRYPTION_KEY=${key}\nOVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=${previous}\n`);
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(join(result.directory, "overflow.env"), "utf8")).toBe(`OVERFLOW_TOKEN_ENCRYPTION_KEY=${key}\n`);
+    expect(statSync(join(result.directory, "overflow.env")).mode & 0o777).toBe(0o640);
+  });
+
   it("preserves an empty canonical URL and refuses backup despite a valid legacy URL", () => {
     const result = runCommands(`${loading}\nprintf '<%s>' "$OVERFLOW_DATABASE_URL"\nOVERFLOW_PG_DUMP=false bash "${process.cwd()}/scripts/db-backup.sh" --output-dir "$PWD/backups"`,
       `DATABASE_URL=${legacyUrl}\nOVERFLOW_DATABASE_URL=\n`);
@@ -82,6 +110,8 @@ describe("recovery commands read either environment spelling", () => {
     const result = runCommands(`printf '%s' '${newKey}' > /etc/overflow/token-encryption-key.new\n${rotation}`, configuration);
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(join(result.directory, "token-encryption-key.old"), "utf8").trim()).toBe(oldKey);
+    expect(statSync(join(result.directory, "token-encryption-key.old")).mode & 0o777).toBe(0o640);
+    expect(statSync(join(result.directory, "overflow.env")).mode & 0o777).toBe(0o640);
     const loaded = runCommands(`set -a; . /etc/overflow/overflow.env; set +a\nprintf '%s\\n' "$OVERFLOW_TOKEN_ENCRYPTION_KEY" "$OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS"`, readFileSync(join(result.directory, "overflow.env"), "utf8"));
     expect(loaded.status, loaded.stderr).toBe(0);
     expect(loaded.stdout.trim().split("\n")).toEqual([newKey, oldKey]);

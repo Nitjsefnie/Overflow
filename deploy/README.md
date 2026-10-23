@@ -1517,7 +1517,7 @@ directory, if the rollback window has to outlast that.
 
 ### Step 2: generate the new key
 
-The key goes straight into a root-only file and is never printed, so it stays
+The key goes straight into a private file owned by the operator and is never printed, so it stays
 out of terminal scrollback. This block and the other guarded edits below run in
 a subshell, `( … )`, so a refusal ends the subshell with a message and leaves
 your shell open:
@@ -1526,7 +1526,7 @@ your shell open:
 (
 set -e
 test ! -e /etc/overflow/token-encryption-key.new || { echo "Refusing: token-encryption-key.new already exists." >&2; exit 1; }
-install -o root -g root -m 0600 /dev/null /etc/overflow/token-encryption-key.new
+umask 077
 node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))" > /etc/overflow/token-encryption-key.new
 wc -c < /etc/overflow/token-encryption-key.new
 )
@@ -1543,8 +1543,11 @@ otherwise `TOKEN_ENCRYPTION_KEY`. It keeps that old key in
 `/etc/overflow/token-encryption-key.old` and writes the selected line as
 `OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS`
 without changing its value, appends the new key as `OVERFLOW_TOKEN_ENCRYPTION_KEY`,
-confirms both lines read back as the two saved keys, and restores section 4's
-ownership and mode. It refuses, changing nothing, unless:
+confirms both lines read back as the two saved keys, and preserves the
+environment file's mode. Run these file edits as its owner, with write access
+to its directory; keep section 4's private permissions. The saved copy
+inherits the environment file's mode without changing ownership. It refuses,
+changing nothing, unless:
 
 - step 2's file holds a 43-character key;
 - the environment file ends with a newline, so the appended line cannot be
@@ -1575,15 +1578,13 @@ test "$(grep -c 'TOKEN_ENCRYPTION_KEY_PREVIOUS' /etc/overflow/overflow.env)" = 0
 test "$(grep -c "$key_name" /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env must name $key_name on exactly one line." >&2; exit 1; }
 grep -Eqx "$key_name=[A-Za-z0-9_-]{43}" /etc/overflow/overflow.env || { echo "Refusing: the $key_name value is not bare." >&2; exit 1; }
 test ! -e /etc/overflow/token-encryption-key.old || { echo "Refusing: token-encryption-key.old already exists." >&2; exit 1; }
-install -o root -g root -m 0600 /dev/null /etc/overflow/token-encryption-key.old
+cp --preserve=mode /etc/overflow/overflow.env /etc/overflow/token-encryption-key.old
 sed -n "s/^$key_name=//p" /etc/overflow/overflow.env > /etc/overflow/token-encryption-key.old
 sed -i "s/^$key_name=/OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=/" /etc/overflow/overflow.env
 { printf 'OVERFLOW_TOKEN_ENCRYPTION_KEY='; cat /etc/overflow/token-encryption-key.new; printf '\n'; } >> /etc/overflow/overflow.env
 test "$(sed -n 's/^OVERFLOW_TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.new)" || { echo "The edited file does not read back as the saved keys; roll back as below." >&2; exit 1; }
 test "$(sed -n 's/^OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.old)" || { echo "The edited file does not read back as the saved keys; roll back as below." >&2; exit 1; }
 rm /etc/overflow/token-encryption-key.new
-chown root:root /etc/overflow/overflow.env
-chmod 0600 /etc/overflow/overflow.env
 )
 ```
 
@@ -1740,8 +1741,6 @@ expectations:
 (
 set -e
 sed -i '/^OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=/d' /etc/overflow/overflow.env
-chown root:root /etc/overflow/overflow.env
-chmod 0600 /etc/overflow/overflow.env
 )
 ```
 
