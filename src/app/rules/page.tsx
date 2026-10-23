@@ -86,6 +86,7 @@ function RulesSections() {
           <li>Work in a repository you sponsor does not change balances.</li>
           <li>Open issues assigned to outside contributors reserve points from your balance.</li>
           <li>Available headroom is your settled balance minus those reservations; it can be negative.</li>
+          <li>A balance funds a posted price; it does not guarantee that anyone will pick the work up.</li>
           <li>Credits earned before signing in wait until you claim your GitHub identity.</li>
         </ul>
       </section>
