@@ -5,7 +5,7 @@ import type { Sql } from "postgres";
 import { closeSql, getSql } from "@/lib/db/client";
 import { exportAccount } from "@/lib/accounts/export";
 import type { GitHubIssue, GitHubPullRequest } from "@/lib/github/types";
-import { GitHubApiError } from "@/lib/github/errors";
+import { GitHubApiError, GitHubGraphqlRequestError } from "@/lib/github/errors";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository } from "@/lib/fold/reconcile";
 import { GitLabApiError } from "@/lib/gitlab/api-error";
@@ -109,8 +109,31 @@ describe("closed PR URL filing", () => {
     expect(await sql`select * from pull_request_issues where repository_id = ${f.repositoryId}`).toEqual([]);
   });
 
-  it.each([true, false])("collects unreferenced dispute evidence through normal sweeps and grants only with reviews (available=%s)", async (available) => {
-    const f = await fixture();
+  it.each([
+    { provider: 'github', kind: 'healthy', cached: false, leg: 'reviews' },
+    { provider: 'github', kind: '404', cached: false, leg: 'reviews' },
+    { provider: 'gitlab', kind: '404', cached: false, leg: 'reviews' },
+    { provider: 'gitlab', kind: '404', cached: true, leg: 'reviews' },
+    { provider: 'gitlab', kind: '404', cached: true, leg: 'diff' },
+    { provider: 'github', kind: '404', cached: true, leg: 'reviews' },
+    { provider: 'github', kind: '404', cached: true, leg: 'diff' },
+    { provider: 'github', kind: 'repository', cached: true, leg: 'reviews' },
+    { provider: 'github', kind: 'pull request', cached: true, leg: 'reviews' },
+    { provider: 'gitlab', kind: 'server', cached: true, leg: 'reviews' },
+    { provider: 'github', kind: 'server', cached: true, leg: 'reviews' },
+    { provider: 'github', kind: 'transport', cached: true, leg: 'reviews' },
+    { provider: 'github', kind: 'rate limit', cached: true, leg: 'reviews' },
+    { provider: 'gitlab', kind: 'closing 404', cached: false, leg: 'reviews' },
+  ])("collects dispute evidence and preserves sweep failure semantics ($provider/$kind, cached=$cached, $leg)", async ({ provider, kind, cached, leg }) => {
+    const available = kind === 'healthy';
+    const fatal = ['server', 'transport', 'rate limit', 'closing 404'].includes(kind);
+    const f = await fixture(provider);
+    if (provider === 'gitlab') {
+      await sql`insert into user_forge_identities (user_id, provider, instance_url, forge_user_id, forge_login, verified_at)
+        values (${f.accountId}, 'gitlab', ${f.origin}, ${f.forgeId}, 'author', now())`;
+      vi.spyOn(GitLabGateway.prototype, 'getPullRequest').mockResolvedValue({ ...f.pr, sourceSha: null, squashCommitSha: null });
+      vi.spyOn(GitLabGateway.prototype, 'getPullRequestDiff').mockResolvedValue(f.rawDiff);
+    }
     const request = await service().fileDispute({ id: f.accountId }, filing(f));
     const evidence = () => sql`select payload from repository_reconciliation_evidence_facts
       where repository_id = ${f.repositoryId} and kind = 'pull_request' and subject_key = ${String(f.pr.id)}`;
@@ -130,14 +153,28 @@ describe("closed PR URL filing", () => {
       closingPullRequests: [landing] };
     const reviews = [{ id: 901, state: 'CHANGES_REQUESTED' as const, submittedAt: '2026-09-01T10:00:00Z', dismissal: null }];
     let rawDiff = f.rawDiff;
+    let failing = !available && !cached;
+    const fail = () => {
+      if (kind === 'transport') throw new Error('GitHub request failed: fixture');
+      if (['repository', 'pull request', 'rate limit'].includes(kind)) throw new GitHubGraphqlRequestError(
+        `GitHub GraphQL request failed. NOT_FOUND: Could not resolve to a ${kind === 'pull request' ? 'PullRequest' : 'Repository'} with the name 'fixture'.`,
+        kind === 'rate limit', kind === 'rate limit' ? 120 : null, 200,
+      );
+      if (provider === 'gitlab') throw new GitLabApiError(kind === 'server' ? 503 : 404);
+      throw new GitHubApiError(kind === 'server' ? 503 : 404);
+    };
+    const targetNumber = kind === 'closing 404' ? 42 : 41;
     const readReviews = vi.fn(async (_repo: unknown, number: number) => {
-      if (number === 41 && !available) throw new GitHubApiError(404);
+      if (number === targetNumber && failing && leg === 'reviews') fail();
       return number === 41 ? reviews : [];
     });
     const gateway = {
       getRepositoryById: verifiedRepositoryAt(f.ownerName), listIssues: async () => [issue],
       getIssue: async () => null, getPullRequestClosingIssues: async () => [],
-      getPullRequestReviews: readReviews, getPullRequestDiff: async (_repo: unknown, number: number) => number === 41 ? rawDiff : 'landing diff',
+      getPullRequestReviews: readReviews, getPullRequestDiff: async (_repo: unknown, number: number) => {
+        if (number === targetNumber && failing && leg === 'diff') fail();
+        return number === 41 ? rawDiff : 'landing diff';
+      },
     };
     const foldStore = new PostgresFoldStore(sql);
     vi.spyOn(foldStore, 'getGitHubAccessToken').mockResolvedValue('test-auth');
@@ -146,13 +183,32 @@ describe("closed PR URL filing", () => {
       return reconcileRepository({ store: foldStore, github: partial ? { ...gateway, listIssues: async () => [] } : gateway },
         f.repositoryId, { reason: partial ? 'WEBHOOK' : 'SWEEP' });
     };
-    expect(await sweep()).toMatchObject({ skipped: false });
+    if (cached) expect(await sweep()).toMatchObject({ skipped: false });
+    const priorFacts = cached ? await evidence() : [];
+    if (cached) expect(priorFacts).toHaveLength(1);
+    if (cached) failing = true;
+    if (fatal) {
+      readReviews.mockClear();
+      await expect(sweep(cached)).rejects.toMatchObject({ message: 'Unable to reconcile repository.',
+        ...(kind === 'rate limit' ? { rateLimited: true, retryAfterSeconds: 120, notBefore: expect.any(Date) } : {}),
+      });
+      expect(readReviews.mock.calls.filter(call => call[1] === targetNumber))
+        .toHaveLength(provider === 'github' && ['server', 'transport'].includes(kind) ? 3 : 1);
+      expect(await evidence()).toEqual(priorFacts);
+      return;
+    }
+    expect(await sweep(cached)).toMatchObject({ skipped: false });
     const [moderator] = await sql<{ id: string }[]>`insert into users (github_user_id, github_login, role)
       values (${sequence++}, 'grant-moderator', 'MODERATOR') returning id`;
     const decision = { requestId: request.id, moderatorAccountId: moderator.id,
       decision: 'GRANTED' as const, figure: 6, decidedReason: 'Original work landed.' };
     if (!available) {
       expect(await evidence()).toEqual([]);
+      expect(await sql`select payload from repository_reconciliation_evidence_facts
+        where repository_id = ${f.repositoryId} and kind = 'pull_request' and subject_key = ${String(landing.id)}`)
+        .toEqual([expect.objectContaining({ payload: expect.objectContaining({ rawDiff: 'landing diff' }) })]);
+      expect((await service().listDisputes()).find(row => row.id === request.id)?.comparison?.closedPullRequest)
+        .toMatchObject({ number: 41, title: f.pr.title, reviews: null, rawDiff: null });
       expect(await new PostgresClosedPrDisputeStore(sql).decideDispute(decision)).toEqual({ kind: 'insufficient_evidence' });
       return;
     }

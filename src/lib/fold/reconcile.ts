@@ -6,7 +6,7 @@ import type { GitHubIssueListOptions } from "@/lib/github/client";
 import { DEFAULT_GRAPHQL_BUDGET_RESERVE, type GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
 import { withTransientRequestRetry } from "@/lib/fold/reconciliation-retry";
-import { GitHubApiError, findGitHubRateLimitError, githubRateLimitNotBefore, isGitHubSubjectNotFoundError, MAX_ERROR_CAUSE_READS } from "@/lib/github/errors";
+import { GitHubApiError, GitHubGraphqlRequestError, findGitHubRateLimitError, githubRateLimitNotBefore, isGitHubSubjectNotFoundError, MAX_ERROR_CAUSE_READS } from "@/lib/github/errors";
 import { GitHubResponseTooLargeError } from "@/lib/github/response-text";
 import { GitLabApiError } from "@/lib/gitlab/client";
 import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
@@ -423,9 +423,11 @@ async function reconcileRepositoryWhileCoordinated(
                 ],
                 discardUnresolvableSubject,
                 dirtyPullRequestSubjects,
+                new Set(disputePullRequests.map(pr => pr.id)),
               );
-              for (const [id, evidence] of refreshedEvidence) pullRequestEvidence.set(id, evidence);
-              const retainedPrIds = new Set([...referencedPullRequests, ...disputePullRequests].map(({ id }) => id));
+              for (const [id, evidence] of refreshedEvidence.evidence) pullRequestEvidence.set(id, evidence);
+              const retainedPrIds = new Set([...referencedPullRequests, ...disputePullRequests]
+                .filter(pr => !refreshedEvidence.missingDisputePrIds.has(pr.id)).map(({ id }) => id));
               for (const id of pullRequestEvidence.keys()) if (!retainedPrIds.has(id)) pullRequestEvidence.delete(id);
               return { githubIssues, pullRequestEvidence };
             },
@@ -596,6 +598,13 @@ function pullRequestDiscardReason(error: unknown): SubjectDiscardReason | null {
   return null;
 }
 
+function disputePullRequestDiscardReason(error: unknown): SubjectDiscardReason | null {
+  if (error instanceof GitLabApiError && error.status === 404) return "NOT_FOUND";
+  if (error instanceof GitHubGraphqlRequestError && error.status === 200 && !error.rateLimited
+    && /^GitHub GraphQL request failed\. NOT_FOUND: Could not resolve to a Repository\b[^;]*$/.test(error.message)) return "NOT_FOUND";
+  return pullRequestDiscardReason(error);
+}
+
 // The ISSUE per-subject read draws the same definitive arm on either forge:
 // the GraphQL shape answers the flattened NOT_FOUND message the default
 // classifier matches, GitHub's REST read answers its fixed 404 error, and a
@@ -627,12 +636,10 @@ function defaultSubjectDiscardReason(error: unknown): SubjectDiscardReason | nul
 // would retry the run forever — so the subject's dirty row, when one
 // exists, is discarded (keyed with its generation, so a genuine re-enqueue
 // still reconciles) and the subject is omitted from the returned evidence
-// map. Omission is therefore read two ways: a subject the evidence cache
-// has never seen falls back to reviews [] / rawDiff "" in the snapshot,
-// while one the cache already holds keeps its last-known evidence until
-// the next full pass (at most six hours), because refreshed entries merge
-// over the cache and nothing erases a cached subject that stops
-// refreshing. Blank it instead and a probably-transient read failure
+// map. An ordinary closing reference the cache already holds keeps its last-known
+// evidence until the next full pass (at most six hours); a definitively missing
+// dispute PR also leaves retention, so stale facts cannot authorize a grant.
+// Blank an ordinary reference instead and a probably-transient read failure
 // blanks a settlement's proof to the empty diff. A diff over GitHub's
 // 20000-line cap (a fixed 406 on either evidence leg) and a body past the
 // client's success-path byte cap both deliberately join this arm beside
@@ -653,8 +660,10 @@ async function collectPullRequestEvidence(
     classifyDiscard?: (error: unknown) => SubjectDiscardReason | null,
   ) => Promise<boolean>,
   dirtyPullRequestSubjects: ReadonlyMap<number, DirtyReconciliationSubject>,
-): Promise<Map<number, { reviews: GitHubPullRequestReview[]; rawDiff: string }>> {
+  disputePullRequestIds: ReadonlySet<number>,
+): Promise<{ evidence: Map<number, { reviews: GitHubPullRequestReview[]; rawDiff: string }>; missingDisputePrIds: Set<number> }> {
   const uniqueEvidencePullRequests = new Map(pullRequests.map(pr => [pr.id, pr]));
+  const missingDisputePrIds = new Set<number>();
   const evidence = await mapWithConcurrency(
     [...uniqueEvidencePullRequests.values()],
     reconciliationConcurrency,
@@ -668,20 +677,23 @@ async function collectPullRequestEvidence(
           },
         ] as const;
       } catch (error) {
+        const disputed = disputePullRequestIds.has(pullRequest.id);
+        const reason = disputed ? disputePullRequestDiscardReason(error) : pullRequestDiscardReason(error);
         if (!(await discardUnresolvableSubject(
           error,
           "PULL_REQUEST",
           pullRequest,
           dirtyPullRequestSubjects.get(pullRequest.id),
-          pullRequestDiscardReason,
+          () => reason,
         ))) {
           throw error;
         }
+        if (disputed && reason === "NOT_FOUND") missingDisputePrIds.add(pullRequest.id);
         return null;
       }
     },
   );
-  return new Map(evidence.filter((entry) => entry !== null));
+  return { evidence: new Map(evidence.filter((entry) => entry !== null)), missingDisputePrIds };
 }
 
 async function declineCrawl(
