@@ -26,7 +26,7 @@ const currentKey = Buffer.alloc(32, 51).toString("base64url");
 const previousKey = legacyV1Key;
 const unknownKey = Buffer.alloc(32, 53).toString("base64url");
 const keys: TokenKeySet = { current: currentKey, previous: previousKey };
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 const instanceUrl = "https://reencrypt.example.com";
 const decryptionFailure = "Unable to decrypt stored credential.";
 
@@ -140,7 +140,7 @@ describe("re-encrypting stored credentials under the current key", () => {
     const started = await startPostgresContainer({ database: "reencrypt", user: "reencrypt", password: "reencrypt" });
     container = started.container;
     databaseUrl = started.databaseUrl;
-    process.env.DATABASE_URL = databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -148,8 +148,8 @@ describe("re-encrypting stored credentials under the current key", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   beforeEach(async () => {
@@ -407,8 +407,8 @@ describe("re-encrypting stored credentials under the current key", () => {
     const invoke = (argumentsList: string[], previous: string) => spawnSync(
       "pnpm", ["--silent", "credentials:reencrypt", ...argumentsList], {
         cwd: process.cwd(), encoding: "utf8", timeout: 60_000,
-        env: { ...process.env, NODE_OPTIONS: "", DATABASE_URL: databaseUrl,
-          TOKEN_ENCRYPTION_KEY: currentKey, TOKEN_ENCRYPTION_KEY_PREVIOUS: previous },
+        env: { ...process.env, NODE_OPTIONS: "", OVERFLOW_DATABASE_URL: databaseUrl,
+          OVERFLOW_TOKEN_ENCRYPTION_KEY: currentKey, OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS: previous },
       });
     const before = await snapshot();
 

@@ -102,7 +102,7 @@ function harness(replies: Reply[], env: Record<string, string | undefined> = {})
       env: {
         GITHUB_REPOSITORY: REPO,
         GH_TOKEN: TOKEN,
-        HEAD_SHA: SHA,
+        OVERFLOW_HEAD_SHA: SHA,
         SUITE_DEADLINE_SECONDS: "300",
         SUITE_POLL_SECONDS: "30",
         ...env,
@@ -469,9 +469,9 @@ describe("awaitPrSuite — input validation", () => {
     ["GITHUB_REPOSITORY with a leading-dot repo", { GITHUB_REPOSITORY: "a/.b" }],
     ["missing GH_TOKEN", { GH_TOKEN: undefined }],
     ["empty GH_TOKEN", { GH_TOKEN: "" }],
-    ["missing HEAD_SHA", { HEAD_SHA: undefined }],
-    ["a short HEAD_SHA", { HEAD_SHA: "abc1234" }],
-    ["an uppercase HEAD_SHA", { HEAD_SHA: "A".repeat(40) }],
+    ["missing OVERFLOW_HEAD_SHA", { OVERFLOW_HEAD_SHA: undefined }],
+    ["a short OVERFLOW_HEAD_SHA", { OVERFLOW_HEAD_SHA: "abc1234" }],
+    ["an uppercase OVERFLOW_HEAD_SHA", { OVERFLOW_HEAD_SHA: "A".repeat(40) }],
     ["a non-numeric deadline", { SUITE_DEADLINE_SECONDS: "soon" }],
     ["a zero deadline", { SUITE_DEADLINE_SECONDS: "0" }],
     ["a negative poll", { SUITE_POLL_SECONDS: "-5" }],
@@ -509,7 +509,7 @@ describe("the CLI, as a spawned process", () => {
       const runs = mode === "empty-then-hang" ? [] : [{
         id: 555,
         path: ".github/workflows/pr-suite.yml",
-        head_sha: process.env.HEAD_SHA,
+        head_sha: process.env.OVERFLOW_HEAD_SHA,
         event: "pull_request",
         status: "completed",
         conclusion: mode === "failure" ? "failure" : "success",
@@ -546,10 +546,10 @@ describe("the CLI, as a spawned process", () => {
     }
   }
 
-  const GOOD_ENV = { GITHUB_REPOSITORY: REPO, GH_TOKEN: TOKEN, HEAD_SHA: SHA };
+  const GOOD_ENV = { GITHUB_REPOSITORY: REPO, GH_TOKEN: TOKEN, OVERFLOW_HEAD_SHA: SHA };
 
   it("exits 2 with one ::error:: line on a malformed environment", () => {
-    const result = run(SCRIPT.pathname, { HEAD_SHA: "abc" });
+    const result = run(SCRIPT.pathname, { OVERFLOW_HEAD_SHA: "abc" });
     expect(result.status).toBe(2);
     expect(errorLines(result.stdout.split("\n"))).toHaveLength(1);
   });
@@ -558,7 +558,7 @@ describe("the CLI, as a spawned process", () => {
     withDir((dir) => {
       const link = join(dir, "await-pr-suite.ts");
       symlinkSync(SCRIPT.pathname, link);
-      const result = run(link, { HEAD_SHA: "abc" });
+      const result = run(link, { OVERFLOW_HEAD_SHA: "abc" });
       expect(result.status).toBe(2);
       expect(errorLines(result.stdout.split("\n"))).toHaveLength(1);
     });
@@ -608,7 +608,7 @@ describe("the CLI, as a spawned process", () => {
 
 describe("awaitPrSuite — exact triggering run", () => {
   function exact(run = suiteRun(), status = 200, newer: FakeRun[] = [], listStatus = 200) {
-    const h = harness([], { SUITE_RUN_ID: "100", SUITE_RUN_ATTEMPT: "1" });
+    const h = harness([], { OVERFLOW_SUITE_RUN_ID: "100", OVERFLOW_SUITE_RUN_ATTEMPT: "1" });
     h.deps.fetchFn = (async (input: string | URL | Request) => {
       h.calls.push({ url: String(input), headers: {}, signal: undefined });
       return String(input).includes("/actions/workflows/")
@@ -675,7 +675,7 @@ describe("awaitPrSuite — exact triggering run", () => {
 
   it.each([undefined, "", "0", "bad"])("an invalid judged attempt %s cannot certify", async (attempt) => {
     const h = exact();
-    h.deps.env.SUITE_RUN_ATTEMPT = attempt;
+    h.deps.env.OVERFLOW_SUITE_RUN_ATTEMPT = attempt;
     expect((await awaitPrSuite(h.deps)).exitCode).toBe(2);
     expect(h.calls).toEqual([]);
   });
@@ -691,7 +691,7 @@ describe("awaitPrSuite — exact triggering run", () => {
 
   it.each(["", "0", "-1", "1x", "100\n"])("rejects invalid explicit run id %s", async (id) => {
     const h = exact();
-    h.deps.env.SUITE_RUN_ID = id;
+    h.deps.env.OVERFLOW_SUITE_RUN_ID = id;
     expect((await awaitPrSuite(h.deps)).exitCode).toBe(2);
     expect(h.calls).toEqual([]);
   });
@@ -700,7 +700,7 @@ describe("awaitPrSuite — exact triggering run", () => {
 describe("complete supersession pagination without waiting", () => {
   const history = Array.from({ length: 101 }, (_, n) => suiteRun({ id: 2000 - n }));
   function paged(replies: Array<unknown | Error>, run = history[0]!) {
-    const h = harness([], { SUITE_RUN_ID: String(run.id), SUITE_RUN_ATTEMPT: "1" });
+    const h = harness([], { OVERFLOW_SUITE_RUN_ID: String(run.id), OVERFLOW_SUITE_RUN_ATTEMPT: "1" });
     h.deps.fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
       h.calls.push({ url: String(input), headers: (init?.headers ?? {}) as Record<string, string>, signal: init?.signal });
       const url = new URL(String(input));

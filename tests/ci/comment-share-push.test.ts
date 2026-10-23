@@ -12,7 +12,7 @@ const recordsPath = ".github/comment-share.json";
 const roots: string[] = [];
 const workflow = parse(readFileSync(resolve(".github/workflows/ratchet-push.yml"), "utf8"));
 const push = workflow.jobs.push.steps.find((step: { env?: Record<string, string> }) =>
-  Object.hasOwn(step.env ?? {}, "MASTER_PUSH_DEPLOY_KEY"));
+  Object.hasOwn(step.env ?? {}, "OVERFLOW_MASTER_PUSH_DEPLOY_KEY"));
 const start = push.run.indexOf('scratch="$RUNNER_TEMP/ratchet-repo"');
 if (start < 0) throw new Error("the bare Git writer must be present");
 // Only transport/authentication is replaced; fetch through push is the real workflow.

@@ -114,7 +114,7 @@ type StepResult = { status: number | null; stdout: string; stderr: string };
 
 /**
  * Executes the pin step's real `run:` text the way the runner does: bash with
- * the runner's flags, MERGE_SHA resolved from the case's merge commit, a fresh
+ * the runner's flags, OVERFLOW_MERGE_SHA resolved from the case's merge commit, a fresh
  * RUNNER_TEMP, and cwd the scratch repository that holds the objects — the
  * checkout the runner executes steps in holds the fetched objects too.
  */
@@ -141,7 +141,7 @@ async function runStep(
       encoding: "utf8",
       env: {
         ...scratchGitEnv,
-        MERGE_SHA: merge.merge,
+        OVERFLOW_MERGE_SHA: merge.merge,
         RUNNER_TEMP: runnerTemp,
         ZIZMOR_PIP_STUB_LOG: log,
         ...(options.stubExit !== undefined ? { ZIZMOR_PIP_STUB_EXIT: options.stubExit } : {}),
@@ -191,8 +191,8 @@ const BAD_MANIFEST_1007 =
 describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   it("is wired as the brief pins it: base-defined, token-free, between the scope gate and the suite await", () => {
     const step = theStep();
-    expect(step.env, "the step maps MERGE_SHA and nothing else — no token, no PR_TREE").toEqual({
-      MERGE_SHA: "${{ steps.pr-tree.outputs.merge_sha }}",
+    expect(step.env, "the step maps OVERFLOW_MERGE_SHA and nothing else — no token, no OVERFLOW_PR_TREE").toEqual({
+      OVERFLOW_MERGE_SHA: "${{ steps.pr-tree.outputs.merge_sha }}",
     });
     expect(step.if, "only a superseded cancellation may skip the gate").toBe("${{ steps.pr.outputs.superseded != 'true' }}");
     expect(step["continue-on-error"], "the gate must not tolerate its own failure").toBeFalsy();
@@ -201,7 +201,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     expect(names.indexOf(STEP_NAME)).toBeLessThan(names.indexOf("Await the pull request suite"));
     expect(step.run, "the read is from git objects").toContain("git ls-tree");
     expect(step.run).toContain("git cat-file blob");
-    for (const forbidden of ["GH_TOKEN", "GITHUB_TOKEN", "PR_TREE"]) {
+    for (const forbidden of ["GH_TOKEN", "GITHUB_TOKEN", "OVERFLOW_PR_TREE"]) {
       expect(step.run, `the run block must not touch ${forbidden}`).not.toContain(forbidden);
     }
   });

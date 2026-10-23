@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { assessClaimPath } from "@/lib/domain/claim-path";
 
-const restAssignment = 'gh api -X POST "repos/$REPO/issues/$ISSUE/assignees"';
+const restAssignment = 'gh api -X POST "repos/$OVERFLOW_REPO/issues/$ISSUE/assignees"';
 
 function workflow(trigger: string, assignment = restAssignment) {
   return {
@@ -83,10 +83,10 @@ describe("claim path assessment", () => {
   });
 
   it.each([
-    ["semicolon", 'gh api -X POST -f "assignees[]=$ACTOR" repos/$REPO/issues/$ISSUE/assignees; echo assigned'],
-    ["line continuation", 'gh api -X POST repos/$REPO/issues/$ISSUE/assignees\\\n  -f "assignees[]=$ACTOR"'],
+    ["semicolon", 'gh api -X POST -f "assignees[]=$ACTOR" repos/$OVERFLOW_REPO/issues/$ISSUE/assignees; echo assigned'],
+    ["line continuation", 'gh api -X POST repos/$OVERFLOW_REPO/issues/$ISSUE/assignees\\\n  -f "assignees[]=$ACTOR"'],
     ["closing quote", restAssignment],
-    ["line ending", 'gh api -X POST repos/$REPO/issues/$ISSUE/assignees'],
+    ["line ending", 'gh api -X POST repos/$OVERFLOW_REPO/issues/$ISSUE/assignees'],
   ])("accepts a REST collection followed by a %s", (_terminator, assignment) => {
     expect(assessClaimPath([workflow("on: issue_comment", assignment)], new Set())).toBe("EVIDENCE_FOUND");
   });
@@ -116,12 +116,12 @@ describe("claim path assessment", () => {
   });
 
   it("accepts assigning the commenter before deleting the claim comment across a shell continuation", () => {
-    const assignment = 'gh api -X POST "repos/$REPO/issues/$ISSUE/assignees" -f "assignees[]=$ACTOR" && \\\n  gh api -X DELETE "repos/$REPO/issues/comments/$COMMENT"';
+    const assignment = 'gh api -X POST "repos/$OVERFLOW_REPO/issues/$ISSUE/assignees" -f "assignees[]=$ACTOR" && \\\n  gh api -X DELETE "repos/$OVERFLOW_REPO/issues/comments/$COMMENT"';
     expect(assessClaimPath([workflow("on: issue_comment", assignment)], new Set())).toBe("EVIDENCE_FOUND");
   });
 
   it.each(["&&", "||", ";", "|", "&"])("accepts assignment separated from an unrelated deletion by %s", (separator) => {
-    const assignment = `${restAssignment} -f "assignees[]=$ACTOR" ${separator} gh api -X DELETE "repos/$REPO/issues/comments/$COMMENT"`;
+    const assignment = `${restAssignment} -f "assignees[]=$ACTOR" ${separator} gh api -X DELETE "repos/$OVERFLOW_REPO/issues/comments/$COMMENT"`;
     expect(assessClaimPath([workflow("on: issue_comment", assignment)], new Set())).toBe("EVIDENCE_FOUND");
   });
 
@@ -166,20 +166,20 @@ describe("claim path assessment", () => {
     '-X "DELETE"',
     "-X 'DELETE'",
   ])("rejects a REST collection line naming deletion with %s", (deletion) => {
-    expect(assessClaimPath([workflow("on: issue_comment", `gh api ${deletion} "repos/$REPO/issues/$ISSUE/assignees"`)], new Set())).toBe("NO_EVIDENCE_FOUND");
+    expect(assessClaimPath([workflow("on: issue_comment", `gh api ${deletion} "repos/$OVERFLOW_REPO/issues/$ISSUE/assignees"`)], new Set())).toBe("NO_EVIDENCE_FOUND");
   });
 
   for (const [ending, newline] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
     it.each([
-      ["before", `gh api -X DELETE \\${newline}  "repos/$REPO/issues/$ISSUE/assignees"`],
-      ["after", `gh api "repos/$REPO/issues/$ISSUE/assignees" \\${newline}  -X DELETE`],
+      ["before", `gh api -X DELETE \\${newline}  "repos/$OVERFLOW_REPO/issues/$ISSUE/assignees"`],
+      ["after", `gh api "repos/$OVERFLOW_REPO/issues/$ISSUE/assignees" \\${newline}  -X DELETE`],
     ])(`rejects a DELETE method %s the endpoint across a ${ending} shell continuation`, (_order, assignment) => {
       expect(assessClaimPath([workflow("on: issue_comment", assignment)], new Set())).toBe("NO_EVIDENCE_FOUND");
     });
   }
 
   it.each(["removeAssignees", "removeAssigneesFromAssignable"])("rejects an unclaim command wrapped in a shell function named %s", (name) => {
-    const assignment = `${name}() {\n  gh api --method DELETE "$@"\n}\n${name} "repos/$REPO/issues/$ISSUE/assignees" -f "assignees[]=$ACTOR"`;
+    const assignment = `${name}() {\n  gh api --method DELETE "$@"\n}\n${name} "repos/$OVERFLOW_REPO/issues/$ISSUE/assignees" -f "assignees[]=$ACTOR"`;
     expect(assessClaimPath([workflow("on: issue_comment", assignment)], new Set())).toBe("NO_EVIDENCE_FOUND");
   });
 
@@ -233,9 +233,9 @@ describe("claim path assessment", () => {
   });
 
   it.each([
-    "repos/$REPO/issues/$ISSUE/assignees-extra",
-    "repos/$REPO/pulls/$ISSUE/assignees",
-    "repos/$REPO/issues/$ISSUE/comments/assignees",
+    "repos/$OVERFLOW_REPO/issues/$ISSUE/assignees-extra",
+    "repos/$OVERFLOW_REPO/pulls/$ISSUE/assignees",
+    "repos/$OVERFLOW_REPO/issues/$ISSUE/comments/assignees",
     "removeAssigneesFromAssignable",
     "issues.removeAssignees",
   ])("rejects a reference to a different surface: %s", (assignment) => {
@@ -245,9 +245,9 @@ describe("claim path assessment", () => {
 
 describe("known limits of textual evidence, not guaranteed runtime assignment", () => {
   it.each([
-    ["an Actions fallback || separator inside the quoted endpoint", 'gh api -X POST "repos/$REPO/issues/${{ github.event.issue.number || inputs.issue_number }}/assignees" -f "assignees[]=$ACTOR"'],
-    ["a jq pipe separator inside the quoted endpoint command substitution", 'gh api -X POST "repos/$REPO/issues/$(jq -r \'.issue | .number\' "$GITHUB_EVENT_PATH")/assignees" -f "assignees[]=$ACTOR"'],
-    ["a semicolon separator inside the quoted endpoint required-variable expansion", 'gh api -X POST "repos/$REPO/issues/${ISSUE:?Missing issue number; refusing to assign}/assignees" -f "assignees[]=$ACTOR"'],
+    ["an Actions fallback || separator inside the quoted endpoint", 'gh api -X POST "repos/$OVERFLOW_REPO/issues/${{ github.event.issue.number || inputs.issue_number }}/assignees" -f "assignees[]=$ACTOR"'],
+    ["a jq pipe separator inside the quoted endpoint command substitution", 'gh api -X POST "repos/$OVERFLOW_REPO/issues/$(jq -r \'.issue | .number\' "$GITHUB_EVENT_PATH")/assignees" -f "assignees[]=$ACTOR"'],
+    ["a semicolon separator inside the quoted endpoint required-variable expansion", 'gh api -X POST "repos/$OVERFLOW_REPO/issues/${ISSUE:?Missing issue number; refusing to assign}/assignees" -f "assignees[]=$ACTOR"'],
   ])("deliberately reports NO_EVIDENCE_FOUND for %s", (_limit, assignment) => {
     const content = [
       "name: Claim an issue",
@@ -264,7 +264,7 @@ describe("known limits of textual evidence, not guaranteed runtime assignment", 
       "      - name: Assign the commenter",
       "        env:",
       "          GH_TOKEN: ${{ github.token }}",
-      "          REPO: ${{ github.repository }}",
+      "          OVERFLOW_REPO: ${{ github.repository }}",
       "          ISSUE: ${{ github.event.issue.number }}",
       "          ACTOR: ${{ github.event.comment.user.login }}",
       "        run: |",

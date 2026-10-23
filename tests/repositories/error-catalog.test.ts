@@ -483,7 +483,7 @@ const routeLevelAnswers: Record<string, string> = {
   "Sign in is required.": "the route's session/bearer gate answers before registerRepository runs",
   "The request origin is not allowed.": "the route's origin check answers before registerRepository runs",
   "The request must use the application/json content type.": "the route's content-type gate answers before the token is read",
-  "The server is not configured to accept this request.": "answered by src/lib/security/request-origin.ts when APP_URL is missing or malformed, before registerRepository runs; pinned by tests/security/request-origin.test.ts",
+  "The server is not configured to accept this request.": "answered by src/lib/security/request-origin.ts when OVERFLOW_APP_URL is missing or malformed, before registerRepository runs; pinned by tests/security/request-origin.test.ts",
   "Unable to initialize repository registration.": "the route answers internal authorization/wiring failures with 500 INTERNAL_ERROR and unclassified forge failures with 502 UPSTREAM_FAILURE; pinned by tests/api/repositories.test.ts",
   "The GitHub authorization Overflow holds for your account cannot administer repository webhooks: registration needs the admin:repo_hook scope. Use \"Sign in to register a repository\" to authorize webhook administration with the same GitHub account, then register again.":
     "the route's granted-scope check (issue 599, src/lib/auth/github-granted-scopes.ts) answers before registerRepository runs; pinned by tests/api/repositories.test.ts",

@@ -33,7 +33,7 @@ import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 1_000_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 type QueryableSql = Sql | TransactionSql;
 
 describe("initial PostgreSQL materialization", () => {
@@ -44,7 +44,7 @@ describe("initial PostgreSQL materialization", () => {
       password: "overflow_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
     await runMigrations();
@@ -55,9 +55,9 @@ describe("initial PostgreSQL materialization", () => {
     await container?.stop();
 
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 
@@ -245,7 +245,7 @@ describe("initial PostgreSQL materialization", () => {
     { name: "non-sponsor", sponsorAuthored: false },
     { name: "sponsor with different login case", sponsorAuthored: true },
   ])("checks opening authority on upgrade with $name evidence", async ({ sponsorAuthored }) => {
-    const databaseUrl = process.env.DATABASE_URL!;
+    const databaseUrl = process.env.OVERFLOW_DATABASE_URL!;
     const upgradeDatabaseUrl = new URL(databaseUrl);
     const databaseName = `opening_authority_upgrade_${nextExternalId()}`;
     upgradeDatabaseUrl.pathname = `/${databaseName}`;
@@ -253,7 +253,7 @@ describe("initial PostgreSQL materialization", () => {
     await closeSql();
 
     try {
-      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      process.env.OVERFLOW_DATABASE_URL = upgradeDatabaseUrl.toString();
       const upgradeSql = getSql();
       await runMigrations({ upTo: "012_unwritable_closure_kinds.sql" });
       const issue = await insertIssue(upgradeSql);
@@ -296,13 +296,13 @@ describe("initial PostgreSQL materialization", () => {
         : [{ name: "013_immutable_github_identity.sql" }]);
     } finally {
       await closeSql();
-      process.env.DATABASE_URL = databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = databaseUrl;
       sql = getSql();
     }
   });
 
   it("refuses the self-work calibration upgrade while an issue holds a second calibration", async () => {
-    const databaseUrl = process.env.DATABASE_URL!;
+    const databaseUrl = process.env.OVERFLOW_DATABASE_URL!;
     const upgradeDatabaseUrl = new URL(databaseUrl);
     const databaseName = `calibration_issue_unique_upgrade_${nextExternalId()}`;
     upgradeDatabaseUrl.pathname = `/${databaseName}`;
@@ -310,7 +310,7 @@ describe("initial PostgreSQL materialization", () => {
     await closeSql();
 
     try {
-      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      process.env.OVERFLOW_DATABASE_URL = upgradeDatabaseUrl.toString();
       const upgradeSql = getSql();
       await runMigrations({ upTo: "032_immutable_claim_assignee_identity.sql" });
       const issue = await insertIssue(upgradeSql);
@@ -350,20 +350,20 @@ describe("initial PostgreSQL materialization", () => {
       `).resolves.toEqual([{ conname: "self_work_calibrations_issue_unique" }]);
     } finally {
       await closeSql();
-      process.env.DATABASE_URL = databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = databaseUrl;
       sql = getSql();
     }
   });
 
   it("backfills legacy unwritable closures before enforcing the kind/pull-request constraint", async () => {
-    const databaseUrl = process.env.DATABASE_URL!;
+    const databaseUrl = process.env.OVERFLOW_DATABASE_URL!;
     const upgradeDatabaseUrl = new URL(databaseUrl);
     upgradeDatabaseUrl.pathname = "/overflow_upgrade_test";
     await sql`create database overflow_upgrade_test`;
     await closeSql();
 
     try {
-      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      process.env.OVERFLOW_DATABASE_URL = upgradeDatabaseUrl.toString();
       const upgradeSql = getSql();
       // Apply every predecessor, including API tokens, before testing the closure migration upgrade.
       await runMigrations({ upTo: "011_api_tokens.sql" });
@@ -404,13 +404,13 @@ describe("initial PostgreSQL materialization", () => {
       await expect(readClosure()).resolves.toEqual(expected);
     } finally {
       await closeSql();
-      process.env.DATABASE_URL = databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = databaseUrl;
       sql = getSql();
     }
   });
 
   it("refuses the difficulty scheme upgrade while a legacy repository has no scheme", async () => {
-    const databaseUrl = process.env.DATABASE_URL!;
+    const databaseUrl = process.env.OVERFLOW_DATABASE_URL!;
     const upgradeDatabaseUrl = new URL(databaseUrl);
     const databaseName = `difficulty_scheme_refusal_${nextExternalId()}`;
     upgradeDatabaseUrl.pathname = `/${databaseName}`;
@@ -418,7 +418,7 @@ describe("initial PostgreSQL materialization", () => {
     await closeSql();
 
     try {
-      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      process.env.OVERFLOW_DATABASE_URL = upgradeDatabaseUrl.toString();
       const upgradeSql = getSql();
       await runMigrations({ upTo: "001_initial.sql" });
       const ownerName = "legacy/awaiting-a-scheme";
@@ -435,13 +435,13 @@ describe("initial PostgreSQL materialization", () => {
       `).resolves.toEqual([]);
     } finally {
       await closeSql();
-      process.env.DATABASE_URL = databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = databaseUrl;
       sql = getSql();
     }
   });
 
   it("refuses the difficulty scheme upgrade when the hand-added column is still null", async () => {
-    const databaseUrl = process.env.DATABASE_URL!;
+    const databaseUrl = process.env.OVERFLOW_DATABASE_URL!;
     const upgradeDatabaseUrl = new URL(databaseUrl);
     const databaseName = `difficulty_scheme_unbackfilled_${nextExternalId()}`;
     upgradeDatabaseUrl.pathname = `/${databaseName}`;
@@ -449,7 +449,7 @@ describe("initial PostgreSQL materialization", () => {
     await closeSql();
 
     try {
-      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      process.env.OVERFLOW_DATABASE_URL = upgradeDatabaseUrl.toString();
       const upgradeSql = getSql();
       await runMigrations({ upTo: "001_initial.sql" });
       const ownerName = "legacy/still-awaiting-a-scheme";
@@ -464,13 +464,13 @@ describe("initial PostgreSQL materialization", () => {
       `).resolves.toEqual([]);
     } finally {
       await closeSql();
-      process.env.DATABASE_URL = databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = databaseUrl;
       sql = getSql();
     }
   });
 
   it("refuses the difficulty scheme upgrade with a null hand-added column outside public", async () => {
-    const databaseUrl = process.env.DATABASE_URL!;
+    const databaseUrl = process.env.OVERFLOW_DATABASE_URL!;
     const upgradeDatabaseUrl = new URL(databaseUrl);
     const databaseName = `difficulty_scheme_nonpublic_${nextExternalId()}`;
     const schemaName = "overflow_upgrade";
@@ -480,7 +480,7 @@ describe("initial PostgreSQL materialization", () => {
     await closeSql();
 
     try {
-      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      process.env.OVERFLOW_DATABASE_URL = upgradeDatabaseUrl.toString();
       const upgradeSql = getSql();
       await upgradeSql`create schema ${upgradeSql(schemaName)}`;
       await runMigrations({ upTo: "001_initial.sql" });
@@ -507,13 +507,13 @@ describe("initial PostgreSQL materialization", () => {
       `).resolves.toEqual([]);
     } finally {
       await closeSql();
-      process.env.DATABASE_URL = databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = databaseUrl;
       sql = getSql();
     }
   });
 
   it("rejects an invalid difficulty scheme already backfilled by hand", async () => {
-    const databaseUrl = process.env.DATABASE_URL!;
+    const databaseUrl = process.env.OVERFLOW_DATABASE_URL!;
     const upgradeDatabaseUrl = new URL(databaseUrl);
     const databaseName = `difficulty_scheme_invalid_${nextExternalId()}`;
     upgradeDatabaseUrl.pathname = `/${databaseName}`;
@@ -521,7 +521,7 @@ describe("initial PostgreSQL materialization", () => {
     await closeSql();
 
     try {
-      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      process.env.OVERFLOW_DATABASE_URL = upgradeDatabaseUrl.toString();
       const upgradeSql = getSql();
       await runMigrations({ upTo: "001_initial.sql" });
       const ownerName = "legacy/invalid-scheme";
@@ -542,13 +542,13 @@ describe("initial PostgreSQL materialization", () => {
       `).resolves.toEqual([]);
     } finally {
       await closeSql();
-      process.env.DATABASE_URL = databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = databaseUrl;
       sql = getSql();
     }
   });
 
   it("counts and lists legacy repositories in owner-name order in the difficulty scheme refusal", async () => {
-    const databaseUrl = process.env.DATABASE_URL!;
+    const databaseUrl = process.env.OVERFLOW_DATABASE_URL!;
     const upgradeDatabaseUrl = new URL(databaseUrl);
     const databaseName = `difficulty_scheme_ordered_${nextExternalId()}`;
     upgradeDatabaseUrl.pathname = `/${databaseName}`;
@@ -556,7 +556,7 @@ describe("initial PostgreSQL materialization", () => {
     await closeSql();
 
     try {
-      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      process.env.OVERFLOW_DATABASE_URL = upgradeDatabaseUrl.toString();
       const upgradeSql = getSql();
       await runMigrations({ upTo: "001_initial.sql" });
       await insertSchemelessRepository(upgradeSql, "legacy/z-last");
@@ -571,13 +571,13 @@ describe("initial PostgreSQL materialization", () => {
       `).resolves.toEqual([]);
     } finally {
       await closeSql();
-      process.env.DATABASE_URL = databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = databaseUrl;
       sql = getSql();
     }
   });
 
   it("upgrades a refused database once its difficulty scheme is backfilled by hand", async () => {
-    const databaseUrl = process.env.DATABASE_URL!;
+    const databaseUrl = process.env.OVERFLOW_DATABASE_URL!;
     const upgradeDatabaseUrl = new URL(databaseUrl);
     const databaseName = `difficulty_scheme_recovery_${nextExternalId()}`;
     upgradeDatabaseUrl.pathname = `/${databaseName}`;
@@ -585,7 +585,7 @@ describe("initial PostgreSQL materialization", () => {
     await closeSql();
 
     try {
-      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      process.env.OVERFLOW_DATABASE_URL = upgradeDatabaseUrl.toString();
       const upgradeSql = getSql();
       await runMigrations({ upTo: "001_initial.sql" });
       const ownerName = "legacy/backfilled-by-hand";
@@ -634,13 +634,13 @@ describe("initial PostgreSQL materialization", () => {
       `).resolves.toEqual([{ difficulty_scheme: validDifficultyScheme() }]);
     } finally {
       await closeSql();
-      process.env.DATABASE_URL = databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = databaseUrl;
       sql = getSql();
     }
   });
 
   it("upgrades a database holding no repository through the difficulty scheme migration", async () => {
-    const databaseUrl = process.env.DATABASE_URL!;
+    const databaseUrl = process.env.OVERFLOW_DATABASE_URL!;
     const upgradeDatabaseUrl = new URL(databaseUrl);
     const databaseName = `difficulty_scheme_empty_${nextExternalId()}`;
     upgradeDatabaseUrl.pathname = `/${databaseName}`;
@@ -648,7 +648,7 @@ describe("initial PostgreSQL materialization", () => {
     await closeSql();
 
     try {
-      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      process.env.OVERFLOW_DATABASE_URL = upgradeDatabaseUrl.toString();
       const upgradeSql = getSql();
       await runMigrations({ upTo: "001_initial.sql" });
       await expect(upgradeSql`select count(*)::integer as count from registered_repositories`)
@@ -662,7 +662,7 @@ describe("initial PostgreSQL materialization", () => {
       `).resolves.toEqual([{ name: "002_repository_difficulty_scheme.sql" }]);
     } finally {
       await closeSql();
-      process.env.DATABASE_URL = databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = databaseUrl;
       sql = getSql();
     }
   });
@@ -695,7 +695,7 @@ describe("initial PostgreSQL materialization", () => {
   });
 
   it("adds the cross-repository closure kind to a database already migrated to 016", async () => {
-    const databaseUrl = process.env.DATABASE_URL!;
+    const databaseUrl = process.env.OVERFLOW_DATABASE_URL!;
     const upgradeDatabaseUrl = new URL(databaseUrl);
     const databaseName = `cross_repository_upgrade_${nextExternalId()}`;
     upgradeDatabaseUrl.pathname = `/${databaseName}`;
@@ -703,7 +703,7 @@ describe("initial PostgreSQL materialization", () => {
     await closeSql();
 
     try {
-      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      process.env.OVERFLOW_DATABASE_URL = upgradeDatabaseUrl.toString();
       const upgradeSql = getSql();
       await runMigrations({ upTo: "016_repository_identity_verification.sql" });
       await expect(upgradeSql`
@@ -722,7 +722,7 @@ describe("initial PostgreSQL materialization", () => {
       `).resolves.toEqual([{ kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST" }]);
     } finally {
       await closeSql();
-      process.env.DATABASE_URL = databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = databaseUrl;
       sql = getSql();
     }
   });
@@ -2828,7 +2828,7 @@ describe("initial PostgreSQL materialization", () => {
     const ownerRun = reconcileRepository({ store: ownerStore, github: ownerGateway }, repositoryId);
     await ownerFetchStarted;
 
-    const observer = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const observer = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1 });
     const waiterRuns = Array.from({ length: sharedPoolCapacity }, (_, index) => {
       const points = index + 1;
       const waiterStore = new PostgresFoldStore(sql, tokenEncryptionKey);
@@ -2892,7 +2892,7 @@ describe("initial PostgreSQL materialization", () => {
     ];
     // A work pool small enough that a coordinator drawing from it would consume
     // every connection the reconciliations it protects still need.
-    const workSql = postgres(process.env.DATABASE_URL!, { max: 2 });
+    const workSql = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 2 });
     const interactions: string[] = [];
     let holders = 0;
     let markEveryLockHeld!: () => void;
@@ -3606,7 +3606,7 @@ describe("initial PostgreSQL materialization", () => {
   });
 
   it("assigns existing reconciliation changes a recorded sequence in insertion order", async () => {
-    const databaseUrl = process.env.DATABASE_URL!;
+    const databaseUrl = process.env.OVERFLOW_DATABASE_URL!;
     const upgradeDatabaseUrl = new URL(databaseUrl);
     const databaseName = `recorded_seq_upgrade_${nextExternalId()}`;
     upgradeDatabaseUrl.pathname = `/${databaseName}`;
@@ -3614,7 +3614,7 @@ describe("initial PostgreSQL materialization", () => {
     await closeSql();
 
     try {
-      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      process.env.OVERFLOW_DATABASE_URL = upgradeDatabaseUrl.toString();
       const upgradeSql = getSql();
       // Everything before the recorded sequence: the rows this run writes are
       // existing rows from the upgrade's point of view.
@@ -3744,7 +3744,7 @@ describe("initial PostgreSQL materialization", () => {
       expect(new Set(recordedSeqs).size).toBe(recordedSeqs.length);
     } finally {
       await closeSql();
-      process.env.DATABASE_URL = databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = databaseUrl;
       sql = getSql();
     }
   });

@@ -7,7 +7,7 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { mintApiToken } from "@/lib/security/api-token";
 import { API_TOKEN_LIFETIME_DAYS } from "@/lib/tokens/lifetime";
 
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 let container: StartedTestContainer | undefined;
 let userId: string;
 let previousRows: Record<string, unknown>[];
@@ -73,7 +73,7 @@ beforeEach(async () => {
     password: "overflow_credentials_migration",
   });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   await runMigrations({ upTo: "052_repository_policy_violations.sql" });
   const sql = getSql();
   const [user] = await sql<{ id: string }[]>`
@@ -90,8 +90,8 @@ beforeEach(async () => {
 afterEach(async () => {
   await closeSql();
   await container?.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
 });
 
 describe("privileged action credential migration", () => {

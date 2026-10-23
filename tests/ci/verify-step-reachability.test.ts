@@ -1411,7 +1411,7 @@ const ZIZMOR_PIN_STEP_NAME = "Verify the zizmor pin's hashes match its version";
 /** The step's FULL run text, pinned line for line: the exception is sanctioned only when the workflow step is byte-identical to this, so ANY future addition - a flag, a variable, a probe - de-sanctions the step and re-arms the reachability assertions. Extracted verbatim from the step as shipped (never hand-copied). */
 const ZIZMOR_PIN_RUN_TEXT = [
   "manifest=.github/requirements-zizmor.txt",
-  "entries=$(git ls-tree \"${MERGE_SHA:?}\" -- \"${manifest}\")",
+  "entries=$(git ls-tree \"${OVERFLOW_MERGE_SHA:?}\" -- \"${manifest}\")",
   "count=0",
   "entry_mode=\"\"",
   "entry_type=\"\"",
@@ -1815,18 +1815,18 @@ const SUPPRESSION_PIN_RUN_TEXT = [
   "  printf '%s\\n' \"${sanitized}/site\"",
   "}",
   "",
-  "base_blob=$(blob_of \"${BASE_SHA:?}\")",
-  "merge_blob=$(blob_of \"${MERGE_SHA:?}\")",
+  "base_blob=$(blob_of \"${OVERFLOW_BASE_SHA:?}\")",
+  "merge_blob=$(blob_of \"${OVERFLOW_MERGE_SHA:?}\")",
   "base_value=$(value_of \"${base_blob}\") || exit 1",
   "merge_value=$(value_of \"${merge_blob}\") || exit 1",
   "if [ \"${base_value}\" != \"${merge_value}\" ]; then",
   "  echo \"::error::this pull request changes pnpm.auditConfig; a pull request cannot change the audit suppression list — the list moves only through a maintainer-reviewed merge\"",
   "  exit 1",
   "fi",
-  "base_ws=$(optional_entry_of \"${BASE_SHA:?}\" \"${ws_file}\")",
-  "merge_ws=$(optional_entry_of \"${MERGE_SHA:?}\" \"${ws_file}\")",
+  "base_ws=$(optional_entry_of \"${OVERFLOW_BASE_SHA:?}\" \"${ws_file}\")",
+  "merge_ws=$(optional_entry_of \"${OVERFLOW_MERGE_SHA:?}\" \"${ws_file}\")",
   "if [ \"${base_ws}\" != \"${merge_ws}\" ]; then",
-  "  pyyaml_site=$(install_pyyaml \"${BASE_SHA:?}\") || exit 1",
+  "  pyyaml_site=$(install_pyyaml \"${OVERFLOW_BASE_SHA:?}\") || exit 1",
   "  base_ws_value=$(ws_value_of \"${base_ws}\") || exit 1",
   "  merge_ws_value=$(ws_value_of \"${merge_ws}\") || exit 1",
   "  if [ \"${base_ws_value}\" != \"${merge_ws_value}\" ]; then",
@@ -1835,8 +1835,8 @@ const SUPPRESSION_PIN_RUN_TEXT = [
   "  fi",
   "fi",
   "",
-  "base_npmrc=$(optional_entry_of \"${BASE_SHA:?}\" \"${npmrc_file}\")",
-  "merge_npmrc=$(optional_entry_of \"${MERGE_SHA:?}\" \"${npmrc_file}\")",
+  "base_npmrc=$(optional_entry_of \"${OVERFLOW_BASE_SHA:?}\" \"${npmrc_file}\")",
+  "merge_npmrc=$(optional_entry_of \"${OVERFLOW_MERGE_SHA:?}\" \"${npmrc_file}\")",
   "if [ \"${base_npmrc}\" != \"${merge_npmrc}\" ]; then",
   "  base_npmrc_value=$(npmrc_value_of \"${base_npmrc}\") || exit 1",
   "  merge_npmrc_value=$(npmrc_value_of \"${merge_npmrc}\") || exit 1",
@@ -1951,21 +1951,21 @@ describe("the untrusted-write detector the boundary assertions rely on", () => {
   });
 
   it("refuses writes into either tree and file-moving commands", () => {
-    expect(untrustedWrites('echo x > "$PR_TREE/coverage/coverage-summary.json"')).not.toEqual([]);
+    expect(untrustedWrites('echo x > "$OVERFLOW_PR_TREE/coverage/coverage-summary.json"')).not.toEqual([]);
     expect(untrustedWrites('echo x >> "$GITHUB_WORKSPACE/scripts/x.ts"')).not.toEqual([]);
-    expect(untrustedWrites("echo PR_TREE=x >> \"$GITHUB_ENV\"")).not.toEqual([]);
-    expect(untrustedWrites('mkdir -p "${PR_TREE}/coverage"')).not.toEqual([]);
+    expect(untrustedWrites("echo OVERFLOW_PR_TREE=x >> \"$GITHUB_ENV\"")).not.toEqual([]);
+    expect(untrustedWrites('mkdir -p "${OVERFLOW_PR_TREE}/coverage"')).not.toEqual([]);
     expect(untrustedWrites("mkdir coverage")).not.toEqual([]);
     expect(untrustedWrites("mkdir -- coverage")).not.toEqual([]);
     expect(untrustedWrites('cp "$a" "$GITHUB_WORKSPACE/scripts/"')).not.toEqual([]);
-    expect(untrustedWrites('tar -xf a.tar -C "$PR_TREE"')).not.toEqual([]);
+    expect(untrustedWrites('tar -xf a.tar -C "$OVERFLOW_PR_TREE"')).not.toEqual([]);
   });
 });
 
 describe("the untrusted-execution detector the boundary assertions rely on", () => {
   it("accepts a base-checkout script invocation and plain git", () => {
     expect(untrustedExecutions('node "$GITHUB_WORKSPACE/scripts/check-migration-edits.ts" a b')).toEqual([]);
-    expect(untrustedExecutions('python3 "${GITHUB_WORKSPACE}/scripts/commit_scopes.py" --root "$PR_TREE"')).toEqual([]);
+    expect(untrustedExecutions('python3 "${GITHUB_WORKSPACE}/scripts/commit_scopes.py" --root "$OVERFLOW_PR_TREE"')).toEqual([]);
     expect(untrustedExecutions('bash "$GITHUB_WORKSPACE/scripts/ci-base-freshness.sh"')).toEqual([]);
     expect(untrustedExecutions("git grep -nI -E 'x' -- .")).toEqual([]);
     expect(untrustedExecutions('echo "npm_config_registry is a job variable"')).toEqual([]);
@@ -1975,12 +1975,12 @@ describe("the untrusted-execution detector the boundary assertions rely on", () 
     expect(untrustedExecutions("pnpm test --run")).not.toEqual([]);
     expect(untrustedExecutions("x=$(npx tsc)")).not.toEqual([]);
     expect(untrustedExecutions("node scripts/check-migration-edits.ts HEAD^1 HEAD")).not.toEqual([]);
-    expect(untrustedExecutions('cd "$PR_TREE" && node ./scripts/docs-only.ts HEAD^1')).not.toEqual([]);
-    expect(untrustedExecutions('node "$PR_TREE/scripts/check-module-size.ts"')).not.toEqual([]);
-    expect(untrustedExecutions('node "$PR_TREE/tool.mjs"')).not.toEqual([]);
+    expect(untrustedExecutions('cd "$OVERFLOW_PR_TREE" && node ./scripts/docs-only.ts HEAD^1')).not.toEqual([]);
+    expect(untrustedExecutions('node "$OVERFLOW_PR_TREE/scripts/check-module-size.ts"')).not.toEqual([]);
+    expect(untrustedExecutions('node "$OVERFLOW_PR_TREE/tool.mjs"')).not.toEqual([]);
     expect(untrustedExecutions("bash scripts/ci-base-freshness.sh")).not.toEqual([]);
     expect(untrustedExecutions("./scripts/run.sh")).not.toEqual([]);
-    expect(untrustedExecutions('node -e "require(process.env.PR_TREE)"')).not.toEqual([]);
+    expect(untrustedExecutions('node -e "require(process.env.OVERFLOW_PR_TREE)"')).not.toEqual([]);
     expect(untrustedExecutions('node "$GITHUB_WORKSPACE/../pr-tree/scripts/x.ts"')).not.toEqual([]);
   });
 });
@@ -2146,19 +2146,19 @@ for (const scenario of PRT_SCENARIOS) {
       // read of the event's asynchronously computed merge commit
       // (tests/ci/verify-fetch-provenance.test.ts pins the pattern repo-wide
       // for this job).
-      expect(step.run).toContain('git fetch --no-tags origin "${HEAD_SHA:?}"');
+      expect(step.run).toContain('git fetch --no-tags origin "${OVERFLOW_HEAD_SHA:?}"');
       expect(step.run).not.toContain("merge_commit_sha");
       expect((step as { env?: Record<string, string> }).env).toEqual({
-        HEAD_SHA: "${{ steps.pr.outputs.head_sha }}",
-        BASE_SHA: "${{ steps.pr.outputs.base_sha }}",
+        OVERFLOW_HEAD_SHA: "${{ steps.pr.outputs.head_sha }}",
+        OVERFLOW_BASE_SHA: "${{ steps.pr.outputs.base_sha }}",
         // actions/checkout's default: the worktree checkout fetches no LFS
         // object the pull request's attributes point at.
         GIT_LFS_SKIP_SMUDGE: "1",
       });
       // The trust boundary: what is materialised must be a two-parent merge of
       // exactly this event's base and head, or the step fails closed.
-      expect(step.run).toContain('git merge-tree --write-tree "${BASE_SHA:?}" "${HEAD_SHA:?}"');
-      expect(step.run).toContain('[ "${second_parent}" != "${HEAD_SHA}" ]');
+      expect(step.run).toContain('git merge-tree --write-tree "${OVERFLOW_BASE_SHA:?}" "${OVERFLOW_HEAD_SHA:?}"');
+      expect(step.run).toContain('[ "${second_parent}" != "${OVERFLOW_HEAD_SHA}" ]');
       // Materialised before any gate reads it.
       expect(steps.indexOf(step)).toBeLessThan(
         steps.indexOf(runsContaining(steps, "git grep -nI")[0]!),
@@ -2171,7 +2171,7 @@ for (const scenario of PRT_SCENARIOS) {
       const required = steps.filter((step) =>
         Object.values((step as { env?: Record<string, string> }).env ?? {}).includes(
           `\${{ steps.${awaiter.id ?? "(no id)"}.outputs.run_id }}`,
-        ) && (step.run ?? "").includes("RUN_ID"),
+        ) && (step.run ?? "").includes("OVERFLOW_RUN_ID"),
       );
       expect(awaiter.id, "the awaiter must carry an id its run_id output is read by").toBeDefined();
       expect(required.map(label), "exactly one step must check the run id").toHaveLength(1);
@@ -2219,8 +2219,8 @@ for (const scenario of PRT_SCENARIOS) {
         // The floor reads exactly the downloaded file, by the creator's output.
         const floor = runsContaining(steps, COVERAGE_FLOOR_COMMAND);
         expect(floor).toHaveLength(1);
-        expect(floor[0]!.run).toContain('--summary "${SUMMARY_DIR:?}/coverage-summary.json"');
-        expect((floor[0] as { env?: Record<string, string> }).env?.SUMMARY_DIR).toBe(
+        expect(floor[0]!.run).toContain('--summary "${OVERFLOW_SUMMARY_DIR:?}/coverage-summary.json"');
+        expect((floor[0] as { env?: Record<string, string> }).env?.OVERFLOW_SUMMARY_DIR).toBe(
           `\${{ steps.${destination![1]}.outputs.dir }}`,
         );
       },

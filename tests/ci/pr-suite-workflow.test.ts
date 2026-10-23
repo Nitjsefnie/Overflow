@@ -458,7 +458,7 @@ describe("the pull request suite workflow", () => {
     expect(suite.env).toEqual(expect.objectContaining({
       COREPACK_ENABLE_PROJECT_SPEC: "0",
       npm_config_registry: "https://registry.npmjs.org/",
-      DATABASE_URL: "postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci",
+      OVERFLOW_DATABASE_URL: "postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci",
     }));
     // The job's environment is an exact SET, for the same reason the step's keys
     // and the job's keys are: an environment every step inherits is an input to
@@ -483,15 +483,15 @@ describe("the pull request suite workflow", () => {
         "`PIP_CONFIG_FILE`) there lets the pull request supply the artifact the hashes are " +
         "checked against. Add a key here deliberately, with its reason.",
     ).toEqual([
-      "APP_URL",
+      "OVERFLOW_APP_URL",
       "AUTH_GITHUB_ID",
       "AUTH_GITHUB_SECRET",
       "AUTH_SECRET",
       "COREPACK_ENABLE_PROJECT_SPEC",
-      "DATABASE_URL",
-      "GITHUB_WEBHOOK_URL",
-      "MODERATOR_GITHUB_USER_IDS",
-      "TOKEN_ENCRYPTION_KEY",
+      "OVERFLOW_DATABASE_URL",
+      "OVERFLOW_GITHUB_WEBHOOK_URL",
+      "OVERFLOW_MODERATOR_GITHUB_USER_IDS",
+      "OVERFLOW_TOKEN_ENCRYPTION_KEY",
       "npm_config_registry",
     ]);
   });

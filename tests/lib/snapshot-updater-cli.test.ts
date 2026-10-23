@@ -40,7 +40,7 @@ function fixture(changed: boolean = true): string {
 
 function run(root: string, script: string, version?: string) {
   const env = { ...process.env };
-  delete env.DATABASE_URL;
+  delete env.OVERFLOW_DATABASE_URL;
   return spawnSync(process.execPath, ["--experimental-transform-types", "--import",
     join(root, "scripts/register-path-aliases.ts"), join(root, "scripts", script),
     ...(version === undefined ? [] : ["--version", version]),

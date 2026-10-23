@@ -46,7 +46,7 @@ let sql: Sql;
 let drill: Sql | undefined;
 let backupDir: string;
 let dumpPath: string | undefined;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 /** The tables the comparison holds against the seed, in a stable order. */
 const comparedTables: ReadonlyArray<{ table: string; orderBy: string; columns: string[] }> = [
@@ -96,7 +96,7 @@ describe("the backup and restore procedure", () => {
     container = started.container;
     sourceDatabaseUrl = started.databaseUrl;
     sourceDatabaseName = new URL(started.databaseUrl).pathname.slice(1);
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -113,8 +113,8 @@ describe("the backup and restore procedure", () => {
     await closeSql();
     await drill?.end();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   // Reap processes before removing their fixture files, even after a failed case.
@@ -135,13 +135,13 @@ describe("the backup and restore procedure", () => {
     }
   });
 
-  it("refuses to back up without DATABASE_URL", () => {
+  it("refuses to back up without OVERFLOW_DATABASE_URL", () => {
     const env: NodeJS.ProcessEnv = { ...process.env };
-    delete env.DATABASE_URL;
+    delete env.OVERFLOW_DATABASE_URL;
     const result = runScript(backupScript, ["--output-dir", backupDir], env);
 
     expect(result.status, result.stderr).not.toBe(0);
-    expect(result.stderr).toContain("DATABASE_URL");
+    expect(result.stderr).toContain("OVERFLOW_DATABASE_URL");
   });
 
   it("writes a dump pg_restore can list, prints its path, and prunes past retention", () => {
@@ -259,7 +259,7 @@ describe("the backup and restore procedure", () => {
     expect(existsSync(oldPartial), "the partial from the earlier crashed run").toBe(false);
   });
 
-  it("refuses to restore onto the database DATABASE_URL names without --allow-live", async () => {
+  it("refuses to restore onto the database OVERFLOW_DATABASE_URL names without --allow-live", async () => {
     const dump = await ensureDump();
     const [before] = await sql`select count(*)::int as count from issues`;
     const result = runScript(
@@ -544,12 +544,12 @@ async function ensureDump(): Promise<string> {
   return dumpPath;
 }
 
-/** Environment for a script run: container-internal DATABASE_URL, exec'd client tools. */
+/** Environment for a script run: container-internal OVERFLOW_DATABASE_URL, exec'd client tools. */
 function scriptEnv(): NodeJS.ProcessEnv {
   const exec = (tool: string) => `docker exec -i ${container!.getId()} ${tool}`;
   return {
     ...process.env,
-    DATABASE_URL: containerInternalUrl(sourceDatabaseName!),
+    OVERFLOW_DATABASE_URL: containerInternalUrl(sourceDatabaseName!),
     OVERFLOW_PG_DUMP: exec("pg_dump"),
     OVERFLOW_PG_RESTORE: exec("pg_restore"),
   };

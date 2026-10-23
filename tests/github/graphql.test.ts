@@ -552,7 +552,7 @@ describe("GitHubGateway incremental issue reads", () => {
 });
 
 describe("GitHubGateway GraphQL source adapter", () => {
-  it("logs optional per-page cost only with DEBUG_GITHUB_COST enabled", async () => {
+  it("logs optional per-page cost only with OVERFLOW_DEBUG_GITHUB_COST enabled", async () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     const queries: string[] = [];
     let includeRateLimit = true;
@@ -567,10 +567,10 @@ describe("GitHubGateway GraphQL source adapter", () => {
       },
     });
     try {
-      vi.stubEnv("DEBUG_GITHUB_COST", undefined);
+      vi.stubEnv("OVERFLOW_DEBUG_GITHUB_COST", undefined);
       await gateway.listIssues({ owner: "octo", name: "overflow" });
       expect(info).not.toHaveBeenCalled();
-      vi.stubEnv("DEBUG_GITHUB_COST", "1");
+      vi.stubEnv("OVERFLOW_DEBUG_GITHUB_COST", "1");
       await gateway.listIssues({ owner: "octo", name: "overflow" });
       expect(info.mock.calls).toEqual([["GitHub RepositoryIssues cost", {
         repository: "octo/overflow", cursor: null, cost: 17, remaining: 4983,

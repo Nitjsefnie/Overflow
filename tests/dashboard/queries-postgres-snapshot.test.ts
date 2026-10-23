@@ -11,7 +11,7 @@ let sql: Sql;
 /** A second, independent session: the commit that lands mid-projection. */
 let otherSession: Sql;
 let externalId = 63_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 const seeded = {
   memberId: "",
@@ -47,7 +47,7 @@ describe("the dashboard projection reads one database snapshot", () => {
       password: "dashboard_snapshot_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     otherSession = postgres(started.databaseUrl, { max: 1 });
     await runMigrations();
@@ -59,9 +59,9 @@ describe("the dashboard projection reads one database snapshot", () => {
     await otherSession?.end();
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 

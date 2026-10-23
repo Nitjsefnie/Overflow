@@ -39,11 +39,11 @@ describe("the required verify suite chain", () => {
     expect(source).not.toContain("github.event.pull_request");
     const resolver = verify.steps.find((step: { id?: string }) => step.id === "pr");
     expect(resolver?.run).toContain("/scripts/resolve-suite-pull-request.ts");
-    expect(resolver?.env?.SUITE_RUN_ID).toBe("${{ github.event.workflow_run.id }}");
+    expect(resolver?.env?.OVERFLOW_SUITE_RUN_ID).toBe("${{ github.event.workflow_run.id }}");
     for (const step of verify.steps) expect(step.run ?? "").not.toContain("${{");
     const awaiter = verify.steps.find((step: { id?: string }) => step.id === "suite");
-    expect(awaiter.env.SUITE_RUN_ID).toBe("${{ github.event.workflow_run.id }}");
-    expect(awaiter.env.SUITE_RUN_ATTEMPT).toBe("${{ github.event.workflow_run.run_attempt }}");
-    expect(awaiter.env.HEAD_SHA).toBe("${{ steps.pr.outputs.head_sha }}");
+    expect(awaiter.env.OVERFLOW_SUITE_RUN_ID).toBe("${{ github.event.workflow_run.id }}");
+    expect(awaiter.env.OVERFLOW_SUITE_RUN_ATTEMPT).toBe("${{ github.event.workflow_run.run_attempt }}");
+    expect(awaiter.env.OVERFLOW_HEAD_SHA).toBe("${{ steps.pr.outputs.head_sha }}");
   });
 });

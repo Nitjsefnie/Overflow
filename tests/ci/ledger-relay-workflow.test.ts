@@ -7,8 +7,8 @@ import * as relayHttp from "../../scripts/ledger-relay-http.ts";
 import { RELAY_JOB_NAME, RELAY_JOB_TIMEOUT_MINUTES } from "../../scripts/ledger-relay-job-budget.ts";
 
 /**
- * The relay mints its App installation token from the LEDGER_APP_ID and
- * LEDGER_INSTALLATION_ID literals pinned in its step env, so a silently
+ * The relay mints its App installation token from the OVERFLOW_LEDGER_APP_ID and
+ * OVERFLOW_LEDGER_INSTALLATION_ID literals pinned in its step env, so a silently
  * altered literal repoints every relay posting at another App installation
  * whose check-runs protection and the deploy gate read as the ledger App's —
  * and the suite gave it no cover: the final review's mutant (5118624 for
@@ -58,7 +58,7 @@ describe("the ledger relay workflow's pinned App identity", () => {
       expect(step["timeout-minutes"], "each relay job step needs its own time bound").toBeTypeOf("number");
       expect(step["timeout-minutes"]).toBeGreaterThan(0);
     }
-    const relaySteps = steps.filter((step) => step.env?.LEDGER_APP_ID !== undefined);
+    const relaySteps = steps.filter((step) => step.env?.OVERFLOW_LEDGER_APP_ID !== undefined);
     expect(relaySteps).toHaveLength(1);
     const worstCaseMs = relayHttp.RUN_DEADLINE_MS + relayHttp.REQUEST_TIMEOUT_MS +
       relayHttp.BACKOFF_MS.reduce((sum, delay) => sum + delay, 0);
@@ -89,8 +89,8 @@ describe("the ledger relay workflow's pinned App identity", () => {
 
   it("carries the ledger App id exactly once, as the literal the gate and tests pin", () => {
     expect(
-      envValues("LEDGER_APP_ID"),
-      "the relay job must carry env LEDGER_APP_ID exactly once — the App id every " +
+      envValues("OVERFLOW_LEDGER_APP_ID"),
+      "the relay job must carry env OVERFLOW_LEDGER_APP_ID exactly once — the App id every " +
         "relay check-run is posted under, which branch protection and the deploy " +
         "gate read back",
     ).toEqual(["5118623"]);
@@ -98,8 +98,8 @@ describe("the ledger relay workflow's pinned App identity", () => {
 
   it("carries the App installation id exactly once, as the pinned literal", () => {
     expect(
-      envValues("LEDGER_INSTALLATION_ID"),
-      "the relay job must carry env LEDGER_INSTALLATION_ID exactly once — the " +
+      envValues("OVERFLOW_LEDGER_INSTALLATION_ID"),
+      "the relay job must carry env OVERFLOW_LEDGER_INSTALLATION_ID exactly once — the " +
         "installation the step mints its token for",
     ).toEqual(["166057493"]);
   });
@@ -113,27 +113,27 @@ describe("the ledger relay workflow's pinned App identity", () => {
     ).toEqual({ contents: "read", actions: "write" });
   });
 
-  it("passes the workflow's own token as RELAY_RERUN_TOKEN exactly once", () => {
+  it("passes the workflow's own token as OVERFLOW_RELAY_RERUN_TOKEN exactly once", () => {
     expect(
-      envValues("RELAY_RERUN_TOKEN"),
-      "the relay step must carry RELAY_RERUN_TOKEN exactly once — the " +
+      envValues("OVERFLOW_RELAY_RERUN_TOKEN"),
+      "the relay step must carry OVERFLOW_RELAY_RERUN_TOKEN exactly once — the " +
         "repo-scoped workflow token the job-start read and the rerun-heal authenticate with",
     ).toEqual(["${{ github.token }}"]);
   });
 
-  it("passes the triggering run's attempt as GITHUB_WORKFLOW_RUN_ATTEMPT exactly once", () => {
+  it("passes the triggering run's attempt as OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT exactly once", () => {
     expect(
-      envValues("GITHUB_WORKFLOW_RUN_ATTEMPT"),
-      "the relay step must carry GITHUB_WORKFLOW_RUN_ATTEMPT exactly once — " +
+      envValues("OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT"),
+      "the relay step must carry OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT exactly once — " +
         "the triggering run's attempt number, which the rerun-heal's attempt " +
         "cap compares against (issue 861)",
     ).toEqual(["${{ github.event.workflow_run.run_attempt }}"]);
   });
 
-  it("passes the triggering run's head branch as GITHUB_WORKFLOW_RUN_HEAD_BRANCH exactly once", () => {
+  it("passes the triggering run's head branch as OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH exactly once", () => {
     expect(
-      envValues("GITHUB_WORKFLOW_RUN_HEAD_BRANCH"),
-      "the relay step must carry GITHUB_WORKFLOW_RUN_HEAD_BRANCH exactly once, through env — " +
+      envValues("OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH"),
+      "the relay step must carry OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH exactly once, through env — " +
         "the head branch the relay's trusted-producer check reads for push, " +
         "workflow_dispatch and schedule runs",
     ).toEqual(["${{ github.event.workflow_run.head_branch }}"]);
@@ -169,10 +169,10 @@ describe("the ledger relay workflow's pinned App identity", () => {
     ).toBe("ledger-relay");
   });
 
-  it("passes the sweep-only predicate as LEDGER_SWEEP_ONLY exactly once, as the pinned expression", () => {
+  it("passes the sweep-only predicate as OVERFLOW_LEDGER_SWEEP_ONLY exactly once, as the pinned expression", () => {
     expect(
-      envValues("LEDGER_SWEEP_ONLY"),
-      "the relay step must carry LEDGER_SWEEP_ONLY exactly once — the event " +
+      envValues("OVERFLOW_LEDGER_SWEEP_ONLY"),
+      "the relay step must carry OVERFLOW_LEDGER_SWEEP_ONLY exactly once — the event " +
         "predicate that makes a scheduled start (or a workflow_dispatch without " +
         "a run_id) sweep-only, which the script fails closed on; every mode " +
         "still shares the literal ledger-relay concurrency group",

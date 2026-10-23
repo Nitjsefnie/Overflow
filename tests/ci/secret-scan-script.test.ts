@@ -248,7 +248,7 @@ describe("the provenance check, against a repository this suite builds", () => {
     'import { describe, it } from "vitest";',
     'describe("fixtures", () => {',
     '  it("names a key", () => {',
-    '    vi.stubEnv("TOKEN_ENCRYPTION_KEY", "inert-placeholder");',
+    '    vi.stubEnv("OVERFLOW_TOKEN_ENCRYPTION_KEY", "inert-placeholder");',
     "  });",
     "});",
   ].join("\n");
@@ -275,8 +275,8 @@ describe("the provenance check, against a repository this suite builds", () => {
     // The positive case, and it is the one that makes the negative cases mean
     // something. A checker that rejects everything would pass every rejection
     // test below while being useless.
-    expect(sourceLine, "the synthetic commit must carry the line the fixtures read").toContain("TOKEN_ENCRYPTION_KEY");
-    expect(provenanceViolations(finding('TOKEN_ENCRYPTION_KEY", "REDACTED"'), sourceLine)).toEqual([]);
+    expect(sourceLine, "the synthetic commit must carry the line the fixtures read").toContain("OVERFLOW_TOKEN_ENCRYPTION_KEY");
+    expect(provenanceViolations(finding('OVERFLOW_TOKEN_ENCRYPTION_KEY", "REDACTED"'), sourceLine)).toEqual([]);
     // And the shape a rule produces when its match IS the secret: nothing left.
     expect(provenanceViolations(finding("REDACTED"), sourceLine)).toEqual([]);
   });
@@ -537,7 +537,7 @@ describe("scripts/secret-scan.sh", () => {
     exitCode?: number;
     /** Run with no gitleaks on PATH at all. */
     absent?: boolean;
-    /** A GITLEAKS_REPORT_PATH to set, or undefined for the script's own default. */
+    /** A OVERFLOW_GITLEAKS_REPORT_PATH to set, or undefined for the script's own default. */
     reportPath?: string;
 
     script?: string;
@@ -615,7 +615,7 @@ describe("scripts/secret-scan.sh", () => {
     await chmod(stub, 0o755);
 
     const env: NodeJS.ProcessEnv = { ...process.env };
-    for (const key of ["GITLEAKS_REPORT_PATH", "STUB_ARGV_FILE", "STUB_VERSION", "STUB_EXIT"]) {
+    for (const key of ["OVERFLOW_GITLEAKS_REPORT_PATH", "STUB_ARGV_FILE", "STUB_VERSION", "STUB_EXIT"]) {
       delete env[key];
     }
     // A PATH that carries only bash's own essentials. When the case supplies a
@@ -629,7 +629,7 @@ describe("scripts/secret-scan.sh", () => {
       STUB_VERSION: config.version ?? PINNED_VERSION,
       STUB_EXIT: String(config.exitCode ?? 0),
     });
-    if (config.reportPath !== undefined) env.GITLEAKS_REPORT_PATH = config.reportPath;
+    if (config.reportPath !== undefined) env.OVERFLOW_GITLEAKS_REPORT_PATH = config.reportPath;
 
     const result = spawnSync("bash", [script], { cwd: workDir, env, encoding: "utf8" });
     const argv = existsSync(argvFile)
@@ -790,7 +790,7 @@ describe("scripts/secret-scan.sh", () => {
 
     const NARROWED_SUBTREE = "tests";
 
-    const FAULT = process.env["SECRET_SCAN_TEST_FAULT"] ?? "";
+    const FAULT = process.env["OVERFLOW_SECRET_SCAN_TEST_FAULT"] ?? "";
 
     const FAULTS: Record<string, { needle: string; replacement: string; description: string }> = {
       "narrowed-target": {
@@ -830,7 +830,7 @@ describe("scripts/secret-scan.sh", () => {
       if (FAULT !== "") {
         const fault = FAULTS[FAULT];
         if (fault === undefined) {
-          throw new Error(`SECRET_SCAN_TEST_FAULT names no fault in this file: '${FAULT}'`);
+          throw new Error(`OVERFLOW_SECRET_SCAN_TEST_FAULT names no fault in this file: '${FAULT}'`);
         }
         if (!source.includes(fault.needle)) {
           throw new Error(
@@ -857,7 +857,7 @@ describe("scripts/secret-scan.sh", () => {
         repo,
         {
           [`${NARROWED_SUBTREE}/fixtures/plain.ts`]: "export const plain = true;\n",
-          [PLANTED_PATH]: `TOKEN_ENCRYPTION_KEY = "${plantedValue}"\n`,
+          [PLANTED_PATH]: `OVERFLOW_TOKEN_ENCRYPTION_KEY = "${plantedValue}"\n`,
         },
         "commit the credential-shaped line",
       );
@@ -884,10 +884,10 @@ describe("scripts/secret-scan.sh", () => {
 
     it("stages the tracked script byte for byte when no fault is injected", () => {
       // The switch above is inert, and this is what says so. Without it, a
-      // `SECRET_SCAN_TEST_FAULT` left over in a shell's environment would quietly
+      // `OVERFLOW_SECRET_SCAN_TEST_FAULT` left over in a shell's environment would quietly
       // run the whole block against a mutated script, and every green result here
       // would be a claim about a script this repository does not ship.
-      expect(FAULT, "SECRET_SCAN_TEST_FAULT is set, so this run is a fault-injection run").toBe("");
+      expect(FAULT, "OVERFLOW_SECRET_SCAN_TEST_FAULT is set, so this run is a fault-injection run").toBe("");
       expect(readFileSync(planted.script, "utf8")).toBe(readFileSync(scriptPath, "utf8"));
       expect(readFileSync(control.script, "utf8")).toBe(readFileSync(scriptPath, "utf8"));
     });
@@ -938,7 +938,7 @@ describe("scripts/secret-scan.sh", () => {
     });
 
     it("hands the scanner the history subcommand and a target whose history carries the secret", async () => {
-      // `GITLEAKS_REPORT_PATH` is set exactly as `.github/workflows/secret-scan.yml`
+      // `OVERFLOW_GITLEAKS_REPORT_PATH` is set exactly as `.github/workflows/secret-scan.yml`
       // sets it, so the run below is the workflow's scan step with the checkout
       // swapped for the fixture — rather than a near-miss of it.
       const { argv, status, output } = await runScript({ script: planted.script, reportPath: "gitleaks-report.json" });

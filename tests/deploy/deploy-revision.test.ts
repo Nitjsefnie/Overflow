@@ -284,7 +284,7 @@ exit 0
     expect(install!.env.npm_config_package_import_method).toBe("copy");
     expect(install!.env.OVERFLOW_FIXTURE_ENV_MARKER).toBe("");
     expect(migrate!.env.OVERFLOW_FIXTURE_ENV_MARKER).toBe("loaded");
-    expect(build!.env.NEXT_DIST_DIR).toBe(release);
+    expect(build!.env.OVERFLOW_NEXT_DIST_DIR).toBe(release);
     const [listing] = byCommand("find").filter((entry) => entry.args.includes("-printf"));
     const [sort] = byCommand("sort");
     expect(listing!.env.LC_ALL).toBe("C");

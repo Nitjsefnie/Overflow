@@ -118,7 +118,7 @@ it("keeps the workdir when the debug environment flag is set", async () => {
   await writeFile(script, `import { OwnedProcesses } from ${JSON.stringify(pathToFileURL(modulePath).href)};
     await new OwnedProcesses(${JSON.stringify(path)}).cleanup();`);
   const child = spawn(process.execPath, [script], {
-    env: { ...process.env, LAYOUT_CHECK_KEEP_WORKDIR: "1" }, stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, OVERFLOW_LAYOUT_CHECK_KEEP_WORKDIR: "1" }, stdio: ["ignore", "pipe", "pipe"],
   });
   children.push(child);
   let output = "";
@@ -150,7 +150,7 @@ it.each(["SIGTERM", "SIGINT"] as const)("cleans descendants and workdir on %s", 
 
 it("honors --base-url even when it names the default spawned-server URL", async () => {
   const child = spawn(process.execPath, ["scripts/check-page-geometry.mjs", "--base-url", "http://127.0.0.1:3219"], {
-    env: { ...process.env, DATABASE_URL: "", LAYOUT_CHECK_PORT: "3219", LAYOUT_CHECK_CHROME: process.execPath },
+    env: { ...process.env, OVERFLOW_DATABASE_URL: "", OVERFLOW_LAYOUT_CHECK_PORT: "3219", OVERFLOW_LAYOUT_CHECK_CHROME: process.execPath },
     stdio: ["ignore", "pipe", "pipe"],
   });
   children.push(child);
@@ -172,7 +172,7 @@ it("prints a preserved workdir even on synchronous failure exit", async () => {
     const child = owner.spawn(process.execPath, ['-e', ${JSON.stringify(tree)}], { stdio: ['ignore', 'pipe', 'ignore'] });
     child.stdout.once('data', data => { process.stdout.write(data); process.exit(2); });`);
   const child = spawn(process.execPath, [script], {
-    detached: true, env: { ...process.env, LAYOUT_CHECK_KEEP_WORKDIR: "1" }, stdio: ["ignore", "pipe", "pipe"],
+    detached: true, env: { ...process.env, OVERFLOW_LAYOUT_CHECK_KEEP_WORKDIR: "1" }, stdio: ["ignore", "pipe", "pipe"],
   });
   children.push(child);
   let output = "";

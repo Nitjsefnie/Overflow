@@ -51,8 +51,8 @@ function world() {
     throw new Error(`unexpected request ${url}`);
   }) as typeof fetch;
   const deps: RelayDeps = {
-    env: { ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
-      GITHUB_REPOSITORY: REPO, LEDGER_SWEEP_ONLY: "true" },
+    env: { ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623", OVERFLOW_LEDGER_INSTALLATION_ID: "166057493", OVERFLOW_LEDGER_APP_KEY: key,
+      GITHUB_REPOSITORY: REPO, OVERFLOW_LEDGER_SWEEP_ONLY: "true" },
     fetchFn, delayFn: async (ms) => { state.delays.push(ms); },
     readPinMap: async () => ({ verify: ".github/workflows/ci.yml" }),
   };
@@ -212,11 +212,11 @@ describe("ledger relay request lifetime", () => {
       throw new DOMException("request timed out", "TimeoutError");
     };
     const env = mode === "sweep" ? w.deps.env : {
-      ...w.deps.env, LEDGER_SWEEP_ONLY: "false", GITHUB_WORKFLOW_RUN_ID: "9001",
-      GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD, GITHUB_WORKFLOW_RUN_PATH: ".github/workflows/ci.yml",
-      GITHUB_WORKFLOW_RUN_CONCLUSION: "success", GITHUB_WORKFLOW_RUN_EVENT: "push",
-      GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main", GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
-      GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/${REPO}/actions/runs/9001`,
+      ...w.deps.env, OVERFLOW_LEDGER_SWEEP_ONLY: "false", OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "9001",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD, OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: ".github/workflows/ci.yml",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "success", OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "push",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main", OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/${REPO}/actions/runs/9001`,
     };
 
     const result = await w.run({ env });
@@ -375,7 +375,7 @@ describe("ledger relay request lifetime", () => {
     };
 
     const result = await w.run({ requestTimeoutMs: 5, env: {
-      ...w.deps.env, RELAY_RERUN_TOKEN: ["rerun", "test"].join("-"),
+      ...w.deps.env, OVERFLOW_RELAY_RERUN_TOKEN: ["rerun", "test"].join("-"),
     } });
 
     expect(result.rerunDispatched).toBe(true);

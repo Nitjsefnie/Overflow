@@ -10,7 +10,7 @@ import { startPostgresContainer } from "../support/postgres-container";
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 71_000_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 const adjustmentCreatedAt = "2026-10-01T12:00:00.000Z";
 
 type RequestFields = Record<string, string | number | boolean | null>;
@@ -18,7 +18,7 @@ type RequestFields = Record<string, string | number | boolean | null>;
 beforeAll(async () => {
   const started = await startPostgresContainer({ database: "closed_pr_disputes", user: "closed_pr_disputes" });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
   await runMigrations();
@@ -27,8 +27,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeSql();
   await container?.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
 });
 
 describe("closed PR dispute schema", () => {
@@ -77,14 +77,14 @@ describe("closed PR dispute schema", () => {
   });
 
   it("refuses the issue-grant upgrade with duplicate issue ids and resumes after they are resolved", async () => {
-    const databaseUrl = process.env.DATABASE_URL!;
+    const databaseUrl = process.env.OVERFLOW_DATABASE_URL!;
     const upgradeUrl = new URL(databaseUrl);
     const databaseName = `dispute_issue_unique_upgrade_${externalId++}`;
     upgradeUrl.pathname = `/${databaseName}`;
     await sql`create database ${sql(databaseName)}`;
     await closeSql();
     try {
-      process.env.DATABASE_URL = upgradeUrl.toString();
+      process.env.OVERFLOW_DATABASE_URL = upgradeUrl.toString();
       sql = getSql();
       await runMigrations({ upTo: "073_dispute_credit_limit_replay.sql" });
       const affectedIssueIds: string[] = [];
@@ -115,7 +115,7 @@ describe("closed PR dispute schema", () => {
         .toEqual([{ indexname: "closed_pr_dispute_requests_one_grant_per_issue" }]);
     } finally {
       await closeSql();
-      process.env.DATABASE_URL = databaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = databaseUrl;
       sql = getSql();
     }
   });

@@ -122,7 +122,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
       "github.event_name == 'pull_request'",
     );
     expect(step.env, "the leg maps the event's base SHA and nothing else").toEqual({
-      BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+      OVERFLOW_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
     });
     expect(step["continue-on-error"], "the leg must not tolerate its own failure").toBeFalsy();
     const names = steps.map((entry) => entry.name);
@@ -131,13 +131,13 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     );
     const run = step.run ?? "";
     expect(run, "the base is fetched by its pinned event SHA").toContain(
-      'git fetch --quiet --depth=1 origin "${BASE_SHA:?}"',
+      'git fetch --quiet --depth=1 origin "${OVERFLOW_BASE_SHA:?}"',
     );
     expect(run, "no refs/pull refspec anywhere").not.toContain("refs/pull");
     expect(run, "no shell interpolation of event values — they arrive through env:").not.toContain(
       "${{",
     );
-    for (const forbidden of ["PR_NUMBER", "PR_ID", "GH_TOKEN", "GITHUB_TOKEN"]) {
+    for (const forbidden of ["OVERFLOW_PR_NUMBER", "PR_ID", "GH_TOKEN", "GITHUB_TOKEN"]) {
       expect(run, `the run block must not touch ${forbidden}`).not.toContain(forbidden);
     }
     expect(run, "the read is from git objects").toContain("git ls-tree");
@@ -313,7 +313,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
         ...process.env,
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_CONFIG_NOSYSTEM: "1",
-        BASE_SHA: overrides.baseSha ?? fx.base,
+        OVERFLOW_BASE_SHA: overrides.baseSha ?? fx.base,
         RUNNER_TEMP: runnerTemp,
         PYYAML_PIP_LOG: argvLog,
         ...(overrides.failPip ? { PYYAML_PIP_STUB_EXIT: "1" } : {}),
@@ -747,11 +747,11 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     // reads the event's SHAs through env.
     const tailOf = (run: string): string =>
       run.slice(run.indexOf("base_blob="))
-        .replaceAll("blob_of FETCH_HEAD", `blob_of "\${BASE_SHA:?}"`)
-        .replaceAll("optional_entry_of FETCH_HEAD", `optional_entry_of "\${BASE_SHA:?}"`)
-        .replaceAll("install_pyyaml FETCH_HEAD", `install_pyyaml "\${BASE_SHA:?}"`)
-        .replaceAll("blob_of HEAD", `blob_of "\${MERGE_SHA:?}"`)
-        .replaceAll("optional_entry_of HEAD", `optional_entry_of "\${MERGE_SHA:?}"`);
+        .replaceAll("blob_of FETCH_HEAD", `blob_of "\${OVERFLOW_BASE_SHA:?}"`)
+        .replaceAll("optional_entry_of FETCH_HEAD", `optional_entry_of "\${OVERFLOW_BASE_SHA:?}"`)
+        .replaceAll("install_pyyaml FETCH_HEAD", `install_pyyaml "\${OVERFLOW_BASE_SHA:?}"`)
+        .replaceAll("blob_of HEAD", `blob_of "\${OVERFLOW_MERGE_SHA:?}"`)
+        .replaceAll("optional_entry_of HEAD", `optional_entry_of "\${OVERFLOW_MERGE_SHA:?}"`);
     expect(tailOf(theirs), "the comparison tail is the same logic").toBe(tailOf(mine));
   });
 });

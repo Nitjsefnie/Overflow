@@ -29,7 +29,7 @@ afterAll(() => { vi.resetModules(); });
 const GITHUB_USER_ID_BASE = 76_402_500;
 let nextGithubUserId = GITHUB_USER_ID_BASE;
 
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 let container: StartedTestContainer | undefined;
 let sql: Sql | undefined;
 
@@ -40,7 +40,7 @@ beforeAll(async () => {
     password: "session_guard",
   });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   await runMigrations();
   sql = postgres(started.databaseUrl, { max: 1 });
 });
@@ -50,9 +50,9 @@ afterAll(async () => {
   await closeSql();
   await container?.stop();
   if (originalDatabaseUrl === undefined) {
-    delete process.env.DATABASE_URL;
+    delete process.env.OVERFLOW_DATABASE_URL;
   } else {
-    process.env.DATABASE_URL = originalDatabaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   }
 });
 

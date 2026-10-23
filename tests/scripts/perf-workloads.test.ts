@@ -28,7 +28,7 @@ beforeAll(async () => {
   databaseUrl = postgresConnectionUrl({ ...options, password, ...await startedPostgresEndpoint(container) });
   process.env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD = "skip";
   const migration = spawnSync("pnpm", ["db:migrate"], {
-    cwd: root, encoding: "utf8", env: { ...process.env, DATABASE_URL: databaseUrl },
+    cwd: root, encoding: "utf8", env: { ...process.env, OVERFLOW_DATABASE_URL: databaseUrl },
   });
   expect(migration.status, migration.stderr).toBe(0);
   sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
@@ -63,7 +63,7 @@ it("measures all real workloads twice deterministically without touching the par
 
 it("runs the workflow's plain Node command against an isolated migrated database", () => {
   const gate = spawnSync(process.execPath, ["scripts/check-perf-budget.ts"], {
-    cwd: root, encoding: "utf8", env: { ...process.env, DATABASE_URL: databaseUrl },
+    cwd: root, encoding: "utf8", env: { ...process.env, OVERFLOW_DATABASE_URL: databaseUrl },
   });
   expect(gate.stderr).not.toContain("Transform Types is an experimental feature");
   expect(gate.status, `${gate.stdout}\n${gate.stderr}`).toBe(0);
@@ -74,7 +74,7 @@ it("refuses the database query override before it can truncate the parent sentin
   const override = new URL(databaseUrl);
   override.searchParams.set("database", "overflow_ci");
   const gate = spawnSync(process.execPath, ["scripts/check-perf-budget.ts"], {
-    cwd: root, encoding: "utf8", env: { ...process.env, DATABASE_URL: override.href },
+    cwd: root, encoding: "utf8", env: { ...process.env, OVERFLOW_DATABASE_URL: override.href },
   });
   const users = await sql`select github_login from users where github_user_id = 1`;
   const databases = await sql`select datname from pg_database where datname like 'overflow_perf_%'`;
@@ -128,8 +128,8 @@ it("refuses an effective-database mismatch before the operation can write", asyn
 it("proves the migration process uses the expected scratch database before migrations", () => {
   const preload = new URL("../../scripts/perf-node-setup.mjs", import.meta.url).href;
   const migration = spawnSync("pnpm", ["db:migrate"], {
-    cwd: root, encoding: "utf8", env: { ...process.env, DATABASE_URL: databaseUrl,
-      PERF_EXPECTED_DATABASE: "overflow_perf_other",
+    cwd: root, encoding: "utf8", env: { ...process.env, OVERFLOW_DATABASE_URL: databaseUrl,
+      OVERFLOW_PERF_EXPECTED_DATABASE: "overflow_perf_other",
       NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${preload}` },
   });
   expect(migration.status, migration.stdout + migration.stderr).not.toBe(0);

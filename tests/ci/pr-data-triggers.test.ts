@@ -47,7 +47,7 @@ const COMMAND_PATTERNS = [
  * spellings this repository's own fetch steps use; the dotted forms are the
  * event-context spellings; `head.*`, `merge_ref` and the `check_*` families
  * cover the merge-commit and check-suite shapes. Matching is case-insensitive
- * on both sides, so `PR_NUMBER` and `head.sha` match as themselves.
+ * on both sides, so `OVERFLOW_PR_NUMBER` and `head.sha` match as themselves.
  *
  * Five of these are broad enough to match a non-pull-request value (`head_sha`
  * is an ordinary name for a push's before-SHA). That is kept, deliberately:
@@ -375,7 +375,7 @@ describe("the detector's own reading scope", () => {
       on: { push: { branches: ["main"] } },
       jobs: {
         probe: {
-          env: { HEAD_SHA: "${{ github.event.before }}" },
+          env: { OVERFLOW_HEAD_SHA: "${{ github.event.before }}" },
           steps: [{ name: "Note", run: "echo nothing to fetch here" }],
         },
       },
@@ -437,8 +437,8 @@ describe("the detector's own reading scope", () => {
           steps: [
             {
               name: "Fetch the pull request head",
-              env: { PR_NUMBER: "${{ github.event.pull_request.number }}" },
-              run: 'git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"',
+              env: { OVERFLOW_PR_NUMBER: "${{ github.event.pull_request.number }}" },
+              run: 'git fetch --no-tags origin "+refs/pull/${OVERFLOW_PR_NUMBER}/head:refs/remotes/pr/head"',
             },
           ],
         },
@@ -597,9 +597,9 @@ describe("the narrowly admitted workflow_run PR-data class", () => {
 jobs:
   verify:
     steps:
-      - run: git fetch origin "$HEAD_SHA"
+      - run: git fetch origin "$OVERFLOW_HEAD_SHA"
         env:
-          HEAD_SHA: "\${{ github.event.workflow_run.head_sha }}"
+          OVERFLOW_HEAD_SHA: "\${{ github.event.workflow_run.head_sha }}"
 `;
   it("admits ci-pr alone, and rejects the same PR-reading workflow under another path", () => {
     const candidate = parse(text) as Workflow;

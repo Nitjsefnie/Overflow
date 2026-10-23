@@ -382,7 +382,7 @@ describe("the dependency audit workflow's audit step", () => {
         PATH: `${join(home, "bin")}:${process.env.PATH}`,
         AUDIT_STUB_DIR: home,
 
-        EVENT_NAME: "schedule",
+        OVERFLOW_EVENT_NAME: "schedule",
       };
       // Omitting the key entirely is how the shipped default is exercised.
       if (options?.delaySeconds !== undefined) {

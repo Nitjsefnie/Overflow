@@ -117,7 +117,7 @@ describe("member standings projections", () => {
 describe("member standings in PostgreSQL", () => {
   let database: StartedPostgres | undefined;
   let sql: Sql;
-  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
   const logins = ["alpha", "mira", "pat", "quinn", "zeta"];
   const accountIds: Record<string, string> = {};
 
@@ -127,7 +127,7 @@ describe("member standings in PostgreSQL", () => {
       user: "members_test",
       password: "members_test",
     });
-    process.env.DATABASE_URL = database.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = database.databaseUrl;
     sql = getSql();
     await runMigrations();
     await runMigrations();
@@ -148,9 +148,9 @@ describe("member standings in PostgreSQL", () => {
     await closeSql();
     await database?.container.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 

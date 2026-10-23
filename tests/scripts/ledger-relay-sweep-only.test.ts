@@ -6,7 +6,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { renderRelayResult, runRelay } from "../../scripts/ledger-relay.ts";
 
 /**
- * Issue 1116's sweep-only relay starts: LEDGER_SWEEP_ONLY=true with no
+ * Issue 1116's sweep-only relay starts: OVERFLOW_LEDGER_SWEEP_ONLY=true with no
  * triggering run anywhere runs the orphan sweep ALONE — no mirror, no heal —
  * and fails closed on every ambiguity between the mode and a named run. The
  * suite is its own module because tests/scripts/ledger-relay.test.ts sits at
@@ -127,18 +127,18 @@ describe("sweep-only relay runs (issue 1116)", () => {
    */
   function sweepOnlyEnv(over: Record<string, string> = {}): Record<string, string> {
     return {
-      ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623",
-      LEDGER_INSTALLATION_ID: "166057493",
-      LEDGER_APP_KEY: KEY_PEM,
+      ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623",
+      OVERFLOW_LEDGER_INSTALLATION_ID: "166057493",
+      OVERFLOW_LEDGER_APP_KEY: KEY_PEM,
       GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
-      GITHUB_WORKFLOW_RUN_ID: "",
-      GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
-      GITHUB_WORKFLOW_RUN_PATH: "",
-      GITHUB_WORKFLOW_RUN_CONCLUSION: "",
-      GITHUB_WORKFLOW_RUN_HTML_URL: "",
-      GITHUB_WORKFLOW_RUN_EVENT: "",
-      GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "",
-      LEDGER_SWEEP_ONLY: "true",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "",
+      OVERFLOW_LEDGER_SWEEP_ONLY: "true",
       ...over,
     };
   }
@@ -196,8 +196,8 @@ describe("sweep-only relay runs (issue 1116)", () => {
   });
 
   it.each([
-    ["the workflow_run run id", { GITHUB_WORKFLOW_RUN_ID: RUN_ID }],
-    ["the dispatch run id", { LEDGER_DISPATCH_RUN_ID: RUN_ID }],
+    ["the workflow_run run id", { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: RUN_ID }],
+    ["the dispatch run id", { OVERFLOW_LEDGER_DISPATCH_RUN_ID: RUN_ID }],
   ])("refuses sweep-only mode when %s is also set", async (_name, over) => {
     const fetchStub = makeFetch([token(), sweepListing([])]);
     const error = await caughtError(
@@ -210,7 +210,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
     );
 
     expect(error, "a sweep-only start names no triggering run").toBeInstanceOf(Error);
-    expect(error?.message).toContain("LEDGER_SWEEP_ONLY");
+    expect(error?.message).toContain("OVERFLOW_LEDGER_SWEEP_ONLY");
     expect(error?.message).toContain("no triggering run may be named");
     expect(fetchStub.requests.map((request) => request.url)).toEqual([OWN_JOB_URL, TOKEN_URL, SWEEP_RUNS_URL]);
   });
@@ -223,11 +223,11 @@ describe("sweep-only relay runs (issue 1116)", () => {
     ["mixed case", "True"],
     ["leading whitespace", " true"],
     ["a digit", "1"],
-  ])("refuses a LEDGER_SWEEP_ONLY value that is neither true nor false: %j (%s)", async (_name, value) => {
+  ])("refuses a OVERFLOW_LEDGER_SWEEP_ONLY value that is neither true nor false: %j (%s)", async (_name, value) => {
     const fetchStub = makeFetch([token(), sweepListing([])]);
     const error = await caughtError(
       runRelay({
-        env: sweepOnlyEnv({ LEDGER_SWEEP_ONLY: value }),
+        env: sweepOnlyEnv({ OVERFLOW_LEDGER_SWEEP_ONLY: value }),
         fetchFn: fetchStub.fn,
         delayFn: makeDelay().fn,
         readPinMap: async () => PIN_MAP,
@@ -235,15 +235,15 @@ describe("sweep-only relay runs (issue 1116)", () => {
     );
 
     expect(error, "an ambiguous mode must fail closed").toBeInstanceOf(Error);
-    expect(error?.message).toContain('LEDGER_SWEEP_ONLY must be exactly "true" or "false"');
+    expect(error?.message).toContain('OVERFLOW_LEDGER_SWEEP_ONLY must be exactly "true" or "false"');
     expect(fetchStub.requests.map((request) => request.url)).toEqual([OWN_JOB_URL, TOKEN_URL, SWEEP_RUNS_URL]);
   });
 
-  it("reads LEDGER_SWEEP_ONLY=false with no run id as today's no-triggering-run refusal", async () => {
+  it("reads OVERFLOW_LEDGER_SWEEP_ONLY=false with no run id as today's no-triggering-run refusal", async () => {
     const fetchStub = makeFetch([token(), sweepListing([])]);
     const error = await caughtError(
       runRelay({
-        env: sweepOnlyEnv({ LEDGER_SWEEP_ONLY: "false" }),
+        env: sweepOnlyEnv({ OVERFLOW_LEDGER_SWEEP_ONLY: "false" }),
         fetchFn: fetchStub.fn,
         delayFn: makeDelay().fn,
         readPinMap: async () => PIN_MAP,

@@ -22,8 +22,8 @@ async function scratch() {
   return path;
 }
 function launch(preload: string, args: string[] = [], env: Record<string, string | undefined> = {}) {
-  const environment: NodeJS.ProcessEnv = { ...process.env, LAYOUT_CHECK_KEEP_WORKDIR: "", LAYOUT_CHECK_CHROME: process.execPath, ...env };
-  if (env.DATABASE_URL === undefined) delete environment.DATABASE_URL;
+  const environment: NodeJS.ProcessEnv = { ...process.env, OVERFLOW_LAYOUT_CHECK_KEEP_WORKDIR: "", OVERFLOW_LAYOUT_CHECK_CHROME: process.execPath, ...env };
+  if (env.OVERFLOW_DATABASE_URL === undefined) delete environment.OVERFLOW_DATABASE_URL;
   const child = spawn(process.execPath, ["--import", preload, "scripts/check-page-geometry.mjs", ...args], {
     cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"],
     env: environment,
@@ -157,7 +157,7 @@ const startupFixture = `
     fs.renameSync(record + '.tmp', record);
     if (kind === 'server') {
       require('node:http').createServer((_req, res) => res.end('fixture')).listen(
-        Number(process.env.LAYOUT_CHECK_PORT), '127.0.0.1', () => console.log('Ready in fixture'));
+        Number(process.env.OVERFLOW_LAYOUT_CHECK_PORT), '127.0.0.1', () => console.log('Ready in fixture'));
     }
     // Chrome remains silent: the real gate waits in its launch path until
     // the test sends the signal, without needing a fake CDP implementation.
@@ -208,7 +208,7 @@ it.each(["SIGTERM", "SIGINT"] as const)("owns both real-entrypoint startup trees
     syncBuiltinESMExports();
   `);
   const run = launch(preload, [], {
-    DATABASE_URL: "postgresql://127.0.0.1:1/unused_fixture", LAYOUT_CHECK_PORT: String(await freePort()), DEPTH: "0",
+    OVERFLOW_DATABASE_URL: "postgresql://127.0.0.1:1/unused_fixture", OVERFLOW_LAYOUT_CHECK_PORT: String(await freePort()), DEPTH: "0",
   });
   interface Pids { parent: number; grandchild: number }
   let server: Pids | undefined;

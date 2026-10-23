@@ -8,7 +8,7 @@ import { closeSql } from "@/lib/db/client";
 
 /**
  * `POST /api/tokens` as a scripted HTTP client sends it: a real Auth.js
- * session cookie, an `Origin` equal to `APP_URL`'s origin and a JSON content
+ * session cookie, an `Origin` equal to `OVERFLOW_APP_URL`'s origin and a JSON content
  * type. Those three headers are everything a client holding only the cookie
  * can produce, so they must not be enough to mint — minting also needs a
  * GitHub sign-in within the last ten minutes, recorded in the JWT by the OAuth
@@ -39,7 +39,7 @@ const authSecret = "tokens-session-cookie-test-secret-not-for-production";
 const now = new Date("2026-09-26T12:00:00.000Z");
 const nowSeconds = now.getTime() / 1000;
 
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 let container: StartedTestContainer | undefined;
 let sql: Sql | undefined;
 let userId = "";
@@ -53,7 +53,7 @@ beforeAll(async () => {
     password: "overflow_token_session",
   });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   await runMigrations();
   sql = postgres(started.databaseUrl, { max: 1 });
   const [user] = await sql<{ id: string }[]>`
@@ -66,7 +66,7 @@ beforeAll(async () => {
   vi.stubEnv("AUTH_SECRET", authSecret);
   vi.stubEnv("AUTH_URL", appUrl);
   vi.stubEnv("AUTH_TRUST_HOST", "true");
-  vi.stubEnv("APP_URL", appUrl);
+  vi.stubEnv("OVERFLOW_APP_URL", appUrl);
   // A fresh graph, so @/auth reads this environment when the route first loads
   // it and the route's database client is the one closed below.
   vi.resetModules();
@@ -83,9 +83,9 @@ afterAll(async () => {
   await sql?.end();
   await container?.stop();
   if (originalDatabaseUrl === undefined) {
-    delete process.env.DATABASE_URL;
+    delete process.env.OVERFLOW_DATABASE_URL;
   } else {
-    process.env.DATABASE_URL = originalDatabaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   }
 });
 

@@ -10,7 +10,7 @@ import { PostgresSettlementOverrideStore } from "@/lib/overrides/postgres-store"
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 70_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 describe("PostgreSQL settlement override requests", () => {
   beforeAll(async () => {
@@ -20,7 +20,7 @@ describe("PostgreSQL settlement override requests", () => {
       password: "overflow_override_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -29,9 +29,9 @@ describe("PostgreSQL settlement override requests", () => {
     await closeSql();
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 

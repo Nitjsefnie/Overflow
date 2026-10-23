@@ -77,15 +77,15 @@ function world(kind: "verify" | "pr-gates" = "verify") {
   const blocked = deferred();
   const released = deferred();
   const baseEnv = {
-    ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493",
-    LEDGER_APP_KEY: key, GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456",
-    RELAY_RERUN_TOKEN: ["rerun", "test"].join("-"),
+    ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623", OVERFLOW_LEDGER_INSTALLATION_ID: "166057493",
+    OVERFLOW_LEDGER_APP_KEY: key, GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456",
+    OVERFLOW_RELAY_RERUN_TOKEN: ["rerun", "test"].join("-"),
   };
   const mirrorEnv = (run: Body) => ({
-    ...baseEnv, GITHUB_WORKFLOW_RUN_ID: String(run.id), GITHUB_WORKFLOW_RUN_HEAD_SHA: String(run.head_sha),
-    GITHUB_WORKFLOW_RUN_PATH: String(run.path), GITHUB_WORKFLOW_RUN_CONCLUSION: String(run.conclusion),
-    GITHUB_WORKFLOW_RUN_HTML_URL: String(run.html_url), GITHUB_WORKFLOW_RUN_EVENT: String(run.event),
-    GITHUB_WORKFLOW_RUN_HEAD_BRANCH: String(run.head_branch), GITHUB_WORKFLOW_RUN_ATTEMPT: String(run.run_attempt),
+    ...baseEnv, OVERFLOW_GITHUB_WORKFLOW_RUN_ID: String(run.id), OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: String(run.head_sha),
+    OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: String(run.path), OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: String(run.conclusion),
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: String(run.html_url), OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: String(run.event),
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: String(run.head_branch), OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: String(run.run_attempt),
   });
   const fetchFn = (async (input: unknown, init: RequestInit = {}) => {
     const url = String(input);
@@ -151,7 +151,7 @@ function world(kind: "verify" | "pr-gates" = "verify") {
     throw new Error(`unexpected request ${url}`);
   }) as typeof fetch;
   const relay = (mode: "mirror" | "sweep", run = initial, env: Record<string, string | undefined> = {}) => runRelay({
-    env: { ...(mode === "mirror" ? mirrorEnv(run) : { ...baseEnv, LEDGER_SWEEP_ONLY: "true" }), ...env },
+    env: { ...(mode === "mirror" ? mirrorEnv(run) : { ...baseEnv, OVERFLOW_LEDGER_SWEEP_ONLY: "true" }), ...env },
     fetchFn, delayFn: async () => {}, readPinMap: async () => pins,
   });
   return { state, blocked, released, fetchFn, relay };
@@ -188,11 +188,11 @@ describe("unsuccessful upstream suites cannot receive App success", () => {
     let reads = 0;
     const result = await runRelay({
       env: mode === "sweep" ? {
-        ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
-        GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", LEDGER_SWEEP_ONLY: "true",
+        ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623", OVERFLOW_LEDGER_INSTALLATION_ID: "166057493", OVERFLOW_LEDGER_APP_KEY: key,
+        GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", OVERFLOW_LEDGER_SWEEP_ONLY: "true",
       } : {
-        ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
-        GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", LEDGER_DISPATCH_RUN_ID: "9001",
+        ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623", OVERFLOW_LEDGER_INSTALLATION_ID: "166057493", OVERFLOW_LEDGER_APP_KEY: key,
+        GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", OVERFLOW_LEDGER_DISPATCH_RUN_ID: "9001",
       },
       fetchFn: (async (input, init) => {
         if (String(input) === `${ROOT}/actions/runs/8001` && ++reads > 1) {
@@ -238,7 +238,7 @@ describe("issue 1195 newest-completed publication regressions", () => {
       w.state.suites = [lastSuite, middleSuite, oldSuite];
       w.state.producers = [lastVerify, middleVerify, oldVerify];
       const resolution = await resolveSuitePullRequest({
-        env: { GITHUB_REPOSITORY: REPO, GH_TOKEN: ["test", "only"].join("-"), SUITE_RUN_ID: "11001" },
+        env: { GITHUB_REPOSITORY: REPO, GH_TOKEN: ["test", "only"].join("-"), OVERFLOW_SUITE_RUN_ID: "11001" },
         fetchFn: w.fetchFn,
       });
       expect(resolution.exitCode).toBe(1);
@@ -298,7 +298,7 @@ describe("issue 1195 newest-completed publication regressions", () => {
     w.released.resolve();
     expect((await olderSweep).sweepOnly).toBe(true);
     const resolution = await resolveSuitePullRequest({
-      env: { GITHUB_REPOSITORY: REPO, GH_TOKEN: ["test", "only"].join("-"), SUITE_RUN_ID: "8002" },
+      env: { GITHUB_REPOSITORY: REPO, GH_TOKEN: ["test", "only"].join("-"), OVERFLOW_SUITE_RUN_ID: "8002" },
       fetchFn: w.fetchFn,
     });
     expect(resolution.exitCode).toBe(1);
@@ -402,18 +402,18 @@ describe("fix round 2 pending recovery and malformed identity probes", () => {
     }) as typeof fetch;
     const producer = w.state.producers[0];
     const baseEnv = {
-      ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
+      ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623", OVERFLOW_LEDGER_INSTALLATION_ID: "166057493", OVERFLOW_LEDGER_APP_KEY: key,
       GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456",
     };
     const mirrorEnv = {
-      ...baseEnv, GITHUB_WORKFLOW_RUN_ID: String(producer.id),
-      GITHUB_WORKFLOW_RUN_HEAD_SHA: String(producer.head_sha), GITHUB_WORKFLOW_RUN_PATH: String(producer.path),
-      GITHUB_WORKFLOW_RUN_CONCLUSION: String(producer.conclusion), GITHUB_WORKFLOW_RUN_HTML_URL: String(producer.html_url),
-      GITHUB_WORKFLOW_RUN_EVENT: String(producer.event), GITHUB_WORKFLOW_RUN_HEAD_BRANCH: String(producer.head_branch),
-      GITHUB_WORKFLOW_RUN_ATTEMPT: String(producer.run_attempt),
+      ...baseEnv, OVERFLOW_GITHUB_WORKFLOW_RUN_ID: String(producer.id),
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: String(producer.head_sha), OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: String(producer.path),
+      OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: String(producer.conclusion), OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: String(producer.html_url),
+      OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: String(producer.event), OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: String(producer.head_branch),
+      OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: String(producer.run_attempt),
     };
     const start = (mode: "mirror" | "sweep") => runRelay({
-      env: mode === "mirror" ? mirrorEnv : { ...baseEnv, LEDGER_SWEEP_ONLY: "true" },
+      env: mode === "mirror" ? mirrorEnv : { ...baseEnv, OVERFLOW_LEDGER_SWEEP_ONLY: "true" },
       fetchFn, delayFn: async () => {}, readPinMap: async () => pins,
     });
     await start("mirror");
@@ -478,7 +478,7 @@ describe("serialized supersession publication", () => {
     w.state.suites = [failedSuite, oldSuite];
     w.state.producers = [failedVerify, oldVerify];
     const resolution = await resolveSuitePullRequest({
-      env: { GITHUB_REPOSITORY: REPO, GH_TOKEN: ["test", "only"].join("-"), SUITE_RUN_ID: "8002" }, fetchFn: w.fetchFn,
+      env: { GITHUB_REPOSITORY: REPO, GH_TOKEN: ["test", "only"].join("-"), OVERFLOW_SUITE_RUN_ID: "8002" }, fetchFn: w.fetchFn,
     });
     expect(resolution.exitCode).toBe(1);
     expect(resolution.lines[0]).toMatch(/must conclude success/);
@@ -549,13 +549,13 @@ describe("history-bound publication direction", () => {
     w.state.oversized = true;
     let writes = 0;
     const env = {
-      ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
+      ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623", OVERFLOW_LEDGER_INSTALLATION_ID: "166057493", OVERFLOW_LEDGER_APP_KEY: key,
       GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456",
-      ...(mode === "sweep" ? { LEDGER_SWEEP_ONLY: "true" } : {
-        GITHUB_WORKFLOW_RUN_ID: "9001", GITHUB_WORKFLOW_RUN_HEAD_SHA: String(failed.head_sha),
-        GITHUB_WORKFLOW_RUN_PATH: String(failed.path), GITHUB_WORKFLOW_RUN_CONCLUSION: "failure",
-        GITHUB_WORKFLOW_RUN_HTML_URL: String(failed.html_url), GITHUB_WORKFLOW_RUN_EVENT: "workflow_run",
-        GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main", GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
+      ...(mode === "sweep" ? { OVERFLOW_LEDGER_SWEEP_ONLY: "true" } : {
+        OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "9001", OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: String(failed.head_sha),
+        OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: String(failed.path), OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "failure",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: String(failed.html_url), OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "workflow_run",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main", OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
       }),
     };
     const result = await runRelay({
@@ -871,7 +871,7 @@ describe("issue 1195 every start sweeps", () => {
       w.state.producers = [orphan, trigger];
       w.state.openPulls = path !== "untrusted-dead";
       const operation = w.relay("mirror", trigger, path === "unpinned-dispatch"
-        ? { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_DISPATCH_RUN_ID: "9001" } : {});
+        ? { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "", OVERFLOW_LEDGER_DISPATCH_RUN_ID: "9001" } : {});
       if (path === "untrusted-live") await expect(operation).rejects.toThrow(
         'run 9001 (event "pull_request", head branch "feature/repro") did not execute the base branch\'s workflow definition; no required context was relayed',
       );
@@ -954,8 +954,8 @@ describe("issue 1195 sweep rerun-heal", () => {
       }
       return w.fetchFn(input as RequestInfo, init);
     }) as typeof fetch;
-    await runRelay({ env: { ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493",
-      LEDGER_APP_KEY: key, GITHUB_REPOSITORY: REPO, LEDGER_SWEEP_ONLY: "true", RELAY_RERUN_TOKEN: "test" },
+    await runRelay({ env: { ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623", OVERFLOW_LEDGER_INSTALLATION_ID: "166057493",
+      OVERFLOW_LEDGER_APP_KEY: key, GITHUB_REPOSITORY: REPO, OVERFLOW_LEDGER_SWEEP_ONLY: "true", OVERFLOW_RELAY_RERUN_TOKEN: "test" },
     fetchFn, delayFn: async () => {}, readPinMap: async () => pins });
     expect(w.state.reruns).toEqual([]);
     if (guard === "started-job" || guard === "newer-producer") {
@@ -976,9 +976,9 @@ describe("issue 1195 sweep rerun-heal", () => {
   it("fails red for a missing rerun token before any request, with or without a heal candidate", async () => {
     // The job-start read authenticates with the same workflow token.
     const w = world("pr-gates");
-    await expect(w.relay("sweep", undefined, { RELAY_RERUN_TOKEN: "" })).rejects.toThrow("RELAY_RERUN_TOKEN is required");
+    await expect(w.relay("sweep", undefined, { OVERFLOW_RELAY_RERUN_TOKEN: "" })).rejects.toThrow("RELAY_RERUN_TOKEN is required");
     w.state.producers = [gate(9001, "cancelled")];
-    await expect(w.relay("sweep", undefined, { RELAY_RERUN_TOKEN: "" })).rejects.toThrow("RELAY_RERUN_TOKEN is required");
+    await expect(w.relay("sweep", undefined, { OVERFLOW_RELAY_RERUN_TOKEN: "" })).rejects.toThrow("RELAY_RERUN_TOKEN is required");
     expect(w.state.requests).toEqual([]);
   });
 });
@@ -1032,31 +1032,31 @@ it("a refused start heals each newest cancelled orphan once across distinct head
 });
 
 describe("trigger validation still recovers displaced completions", () => {
-  const ambiguous = "LEDGER_SWEEP_ONLY=true is a sweep-only relay: no triggering run may be named alongside it " +
-    "(GITHUB_WORKFLOW_RUN_ID or LEDGER_DISPATCH_RUN_ID); unset one of the two";
+  const ambiguous = "OVERFLOW_LEDGER_SWEEP_ONLY=true is a sweep-only relay: no triggering run may be named alongside it " +
+    "(OVERFLOW_GITHUB_WORKFLOW_RUN_ID or OVERFLOW_LEDGER_DISPATCH_RUN_ID); unset one of the two";
   const absent = "no triggering run in the environment: expected GITHUB_WORKFLOW_RUN_* (workflow_run) " +
-    "or LEDGER_DISPATCH_RUN_ID (workflow_dispatch recovery)";
+    "or OVERFLOW_LEDGER_DISPATCH_RUN_ID (workflow_dispatch recovery)";
   const cases: Array<[string, Record<string, string | undefined>, string]> = [
-    ["invalid sweep-only value", { LEDGER_SWEEP_ONLY: "yes" },
-      'LEDGER_SWEEP_ONLY must be exactly "true" or "false" (got "yes")'],
-    ["sweep-only with workflow_run id", { LEDGER_SWEEP_ONLY: "true" }, ambiguous],
-    ["sweep-only with dispatch id", { LEDGER_SWEEP_ONLY: "true", GITHUB_WORKFLOW_RUN_ID: "", LEDGER_DISPATCH_RUN_ID: "9001" }, ambiguous],
-    ["malformed workflow_run id", { GITHUB_WORKFLOW_RUN_ID: "not-a-run-id" },
-      'GITHUB_WORKFLOW_RUN_ID must be a workflow-run id (got "not-a-run-id")'],
-    ["missing workflow_run head", { GITHUB_WORKFLOW_RUN_HEAD_SHA: undefined },
-      'GITHUB_WORKFLOW_RUN_HEAD_SHA must be a 40-hex SHA (got "")'],
-    ["malformed workflow_run head", { GITHUB_WORKFLOW_RUN_HEAD_SHA: "invalid-head" },
-      'GITHUB_WORKFLOW_RUN_HEAD_SHA must be a 40-hex SHA (got "invalid-head")'],
-    ["missing workflow_run path", { GITHUB_WORKFLOW_RUN_PATH: undefined },
-      'GITHUB_WORKFLOW_RUN_PATH must be a workflow path (got "")'],
-    ["malformed workflow_run path", { GITHUB_WORKFLOW_RUN_PATH: "workflows/other.yml" },
-      'GITHUB_WORKFLOW_RUN_PATH must be a workflow path (got "workflows/other.yml")'],
-    ["missing workflow_run URL", { GITHUB_WORKFLOW_RUN_HTML_URL: undefined },
-      "GITHUB_WORKFLOW_RUN_HTML_URL is required for the check-run's details_url"],
-    ["malformed dispatch id (review probe)", { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_DISPATCH_RUN_ID: "not-a-run-id" },
-      'LEDGER_DISPATCH_RUN_ID must be a workflow-run id (got "not-a-run-id")'],
-    ["no triggering identity", { GITHUB_WORKFLOW_RUN_ID: "" }, absent],
-    ["explicit false without a triggering identity", { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "false" }, absent],
+    ["invalid sweep-only value", { OVERFLOW_LEDGER_SWEEP_ONLY: "yes" },
+      'OVERFLOW_LEDGER_SWEEP_ONLY must be exactly "true" or "false" (got "yes")'],
+    ["sweep-only with workflow_run id", { OVERFLOW_LEDGER_SWEEP_ONLY: "true" }, ambiguous],
+    ["sweep-only with dispatch id", { OVERFLOW_LEDGER_SWEEP_ONLY: "true", OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "", OVERFLOW_LEDGER_DISPATCH_RUN_ID: "9001" }, ambiguous],
+    ["malformed workflow_run id", { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "not-a-run-id" },
+      'OVERFLOW_GITHUB_WORKFLOW_RUN_ID must be a workflow-run id (got "not-a-run-id")'],
+    ["missing workflow_run head", { OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: undefined },
+      'OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA must be a 40-hex SHA (got "")'],
+    ["malformed workflow_run head", { OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: "invalid-head" },
+      'OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA must be a 40-hex SHA (got "invalid-head")'],
+    ["missing workflow_run path", { OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: undefined },
+      'OVERFLOW_GITHUB_WORKFLOW_RUN_PATH must be a workflow path (got "")'],
+    ["malformed workflow_run path", { OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: "workflows/other.yml" },
+      'OVERFLOW_GITHUB_WORKFLOW_RUN_PATH must be a workflow path (got "workflows/other.yml")'],
+    ["missing workflow_run URL", { OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: undefined },
+      "OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL is required for the check-run's details_url"],
+    ["malformed dispatch id (review probe)", { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "", OVERFLOW_LEDGER_DISPATCH_RUN_ID: "not-a-run-id" },
+      'OVERFLOW_LEDGER_DISPATCH_RUN_ID must be a workflow-run id (got "not-a-run-id")'],
+    ["no triggering identity", { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "" }, absent],
+    ["explicit false without a triggering identity", { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "", OVERFLOW_LEDGER_SWEEP_ONLY: "false" }, absent],
   ];
 
   it.each(cases)("sweeps after %s and rejects with the original message", async (_name, over, message) => {
@@ -1076,20 +1076,20 @@ describe("trigger validation still recovers displaced completions", () => {
     const w = world("pr-gates");
     w.state.listingReadFails = true;
     const error = await w.relay("sweep", undefined, {
-      LEDGER_SWEEP_ONLY: "false", LEDGER_DISPATCH_RUN_ID: "not-a-run-id",
+      OVERFLOW_LEDGER_SWEEP_ONLY: "false", OVERFLOW_LEDGER_DISPATCH_RUN_ID: "not-a-run-id",
     }).catch((error: unknown) => error);
     expect(error).toBeInstanceOf(AggregateError);
     expect(((error as AggregateError).errors[0] as Error).message).toBe(
-      'LEDGER_DISPATCH_RUN_ID must be a workflow-run id (got "not-a-run-id")',
+      'OVERFLOW_LEDGER_DISPATCH_RUN_ID must be a workflow-run id (got "not-a-run-id")',
     );
-    expect((error as AggregateError).message).toContain('LEDGER_DISPATCH_RUN_ID must be a workflow-run id (got "not-a-run-id")');
+    expect((error as AggregateError).message).toContain('OVERFLOW_LEDGER_DISPATCH_RUN_ID must be a workflow-run id (got "not-a-run-id")');
     expect((error as AggregateError).message).toContain("the repository's workflow-run listing for the orphan sweep");
     expect(w.state.requests.filter((url) => url === `${ROOT}/actions/runs?per_page=100`)).toHaveLength(3);
   });
 
   it.each([
-    ["malformed head", { GITHUB_WORKFLOW_RUN_HEAD_SHA: "invalid-head" }],
-    ["ambiguous dispatch mode", { LEDGER_SWEEP_ONLY: "true", GITHUB_WORKFLOW_RUN_ID: "", LEDGER_DISPATCH_RUN_ID: "9001" }],
+    ["malformed head", { OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: "invalid-head" }],
+    ["ambiguous dispatch mode", { OVERFLOW_LEDGER_SWEEP_ONLY: "true", OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "", OVERFLOW_LEDGER_DISPATCH_RUN_ID: "9001" }],
   ] as const)("recovers a producer sharing the raw trigger id after %s using its API identity", async (_name, over) => {
     const w = world("pr-gates");
     const producer = { ...gate(9001, "failure"), head_sha: "d".repeat(40),
@@ -1119,8 +1119,8 @@ describe("panel regression: App suite visibility", () => {
     }))];
     let cappedReads = 0;
     await runRelay({
-      env: { ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
-        GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", LEDGER_DISPATCH_RUN_ID: "9001" },
+      env: { ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623", OVERFLOW_LEDGER_INSTALLATION_ID: "166057493", OVERFLOW_LEDGER_APP_KEY: key,
+        GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", OVERFLOW_LEDGER_DISPATCH_RUN_ID: "9001" },
       fetchFn: (async (input, init) => {
         const url = String(input);
         if (url === `${ROOT}/actions/runs?per_page=100`) return response({ workflow_runs: [] });
@@ -1156,8 +1156,8 @@ describe("panel regression: incremental sweep deadline", () => {
     let now = 0;
     const startedAt: number[] = [];
     const result = await runRelay({
-      env: { ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493", LEDGER_APP_KEY: key,
-        GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", LEDGER_SWEEP_ONLY: "true" },
+      env: { ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623", OVERFLOW_LEDGER_INSTALLATION_ID: "166057493", OVERFLOW_LEDGER_APP_KEY: key,
+        GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", OVERFLOW_LEDGER_SWEEP_ONLY: "true" },
       nowFn: () => now,
       fetchFn: (async (input, init) => {
         startedAt.push(now);
@@ -1299,8 +1299,8 @@ describe("mirror liveness under a slow API", () => {
       ...suite(8050 - i, "success"), head_sha: (50 - i).toString(16).padStart(40, "0"),
     }));
     let now = 0;
-    const env = { ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493",
-      LEDGER_APP_KEY: key, GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456" };
+    const env = { ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623", OVERFLOW_LEDGER_INSTALLATION_ID: "166057493",
+      OVERFLOW_LEDGER_APP_KEY: key, GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456" };
     const start = async (extra: Record<string, string>) => {
       const before = w.state.checks.length;
       await runRelay({
@@ -1319,18 +1319,18 @@ describe("mirror liveness under a slow API", () => {
 
   it("posts a completion start's own newest producer at 4 s per response after earlier starts", async () => {
     const { w, start } = slowWorld(4000);
-    await start({ LEDGER_SWEEP_ONLY: "true" });
-    await start({ LEDGER_DISPATCH_RUN_ID: "9001" });
-    await start({ LEDGER_SWEEP_ONLY: "true" });
+    await start({ OVERFLOW_LEDGER_SWEEP_ONLY: "true" });
+    await start({ OVERFLOW_LEDGER_DISPATCH_RUN_ID: "9001" });
+    await start({ OVERFLOW_LEDGER_SWEEP_ONLY: "true" });
     const fresh = verify(9051, 8051, "success");
     w.state.producers = [fresh, ...w.state.producers];
     w.state.suites = [{ ...suite(8051, "success"), head_sha: (51).toString(16).padStart(40, "0") }, ...w.state.suites];
 
     const posted = await start({
-      GITHUB_WORKFLOW_RUN_ID: "9051", GITHUB_WORKFLOW_RUN_HEAD_SHA: String(fresh.head_sha),
-      GITHUB_WORKFLOW_RUN_PATH: String(fresh.path), GITHUB_WORKFLOW_RUN_CONCLUSION: "success",
-      GITHUB_WORKFLOW_RUN_HTML_URL: String(fresh.html_url), GITHUB_WORKFLOW_RUN_EVENT: "workflow_run",
-      GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main", GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "9051", OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: String(fresh.head_sha),
+      OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: String(fresh.path), OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "success",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: String(fresh.html_url), OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "workflow_run",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main", OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
     });
 
     expect(posted[0]).toBe("9051:1");
@@ -1339,7 +1339,7 @@ describe("mirror liveness under a slow API", () => {
   it("posts a mid-window dispatch start's trigger at 4 s per response without resolving older producers", async () => {
     const { w, start } = slowWorld(4000);
 
-    const posted = await start({ LEDGER_DISPATCH_RUN_ID: "9025" });
+    const posted = await start({ OVERFLOW_LEDGER_DISPATCH_RUN_ID: "9025" });
 
     expect(posted[0]).toBe("9025:1");
     // Older candidates are the sweep's: the mirror never fetches them.
@@ -1360,7 +1360,7 @@ describe("mirror liveness under a slow API", () => {
   it("posts the oldest dispatch trigger before its deadline at 4 s per response among 49 newer producers", async () => {
     const { start } = slowWorld(4000);
 
-    const posted = await start({ LEDGER_DISPATCH_RUN_ID: "9001" });
+    const posted = await start({ OVERFLOW_LEDGER_DISPATCH_RUN_ID: "9001" });
 
     expect(posted[0]).toBe("9001:1");
   });
@@ -1370,7 +1370,7 @@ describe("mirror liveness under a slow API", () => {
     // 9030 is a rerun of 9001's pr suite, so it resolves to the trigger's head.
     w.state.producers = w.state.producers.map((run) => run.id === 9030 ? verify(9030, 8001, "failure") : run);
 
-    const posted = await start({ LEDGER_DISPATCH_RUN_ID: "9001" });
+    const posted = await start({ OVERFLOW_LEDGER_DISPATCH_RUN_ID: "9001" });
 
     expect(posted[0]).toBe("9030:1");
     expect(w.state.checks.filter((check) => check.external_id === "9001:1")).toEqual([]);
@@ -1384,8 +1384,8 @@ describe("mirror liveness under a slow API", () => {
  */
 describe("mirror reserve scope", () => {
   // Built per test: the App key exists only after beforeAll.
-  const dispatchEnv = () => ({ ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623", LEDGER_INSTALLATION_ID: "166057493",
-    LEDGER_APP_KEY: key, GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", LEDGER_DISPATCH_RUN_ID: "9001" });
+  const dispatchEnv = () => ({ ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623", OVERFLOW_LEDGER_INSTALLATION_ID: "166057493",
+    OVERFLOW_LEDGER_APP_KEY: key, GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_ID: "123456", OVERFLOW_LEDGER_DISPATCH_RUN_ID: "9001" });
 
   it("publishes a newer same-head winner found just above the reserve, whose publication runs below it", async () => {
     const w = world();

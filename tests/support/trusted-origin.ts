@@ -2,9 +2,8 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { Mock } from "vitest";
 
 /**
- * Shared fixtures for the cookie-authenticated mutation routes, every one of
- * which now refuses a request that does not come from the deployment's own
- * origin. `APP_URL` is unset in the test environment, so a route test that does
+ * Cookie-authenticated mutation fixtures bind requests to the deployment's
+ * own origin. `OVERFLOW_APP_URL` is unset in the test environment, so a route test that does
  * not stub it sees the misconfiguration refusal rather than the behaviour it
  * meant to exercise.
  */
@@ -13,16 +12,16 @@ export const trustedOrigin = "https://overflow.example";
 export const foreignOrigin = "https://attacker.example";
 
 /**
- * Stubs `APP_URL` for every test in the calling file and unstubs it afterwards,
+ * Stubs `OVERFLOW_APP_URL` for every test in the calling file and unstubs it afterwards,
  * so no test leaks its environment into the next one.
  *
  * Convention: call this once at module top level, never inside a `describe`.
- * Every guarded route in a file reads the same `APP_URL`, and a top-level call
+ * Every guarded route in a file reads the same `OVERFLOW_APP_URL`, and a top-level call
  * covers each `describe` in the file, including ones added later.
  */
 export function useTrustedOrigin(appUrl: string = trustedOrigin): void {
   beforeEach(() => {
-    vi.stubEnv("APP_URL", appUrl);
+    vi.stubEnv("OVERFLOW_APP_URL", appUrl);
   });
 
   afterEach(() => {
@@ -32,7 +31,7 @@ export function useTrustedOrigin(appUrl: string = trustedOrigin): void {
 
 /**
  * Every test request is addressed to this host, which is deliberately not the
- * trusted origin's host. The trusted origin comes from `APP_URL` and never from
+ * trusted origin's host. The trusted origin comes from `OVERFLOW_APP_URL` and never from
  * the request's own URL, so a route that compared the `Origin` header against
  * `new URL(request.url).origin` would refuse every request built here. That
  * makes each file's ordinary happy-path tests pin the distinction for free —

@@ -11,7 +11,7 @@ import { startPostgresContainer } from "../support/postgres-container";
 const tables = ["settlements", "self_work_calibrations", "unwritable_closures"] as const;
 let container: StartedTestContainer | undefined;
 let sql: Sql;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 describe("fold revision stamps", () => {
   beforeAll(async () => {
@@ -19,7 +19,7 @@ describe("fold revision stamps", () => {
       database: "fold_revision_test", user: "fold_revision_test", password: "fold_revision_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -27,8 +27,8 @@ describe("fold revision stamps", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it.each(tables)("detects stale %s rows only in their own repository", async (table) => {

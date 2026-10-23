@@ -17,13 +17,13 @@ const exportRequests = guardedRequests("/api/account/export");
 const deleteRequests = guardedRequests("/api/account");
 let sql: Sql;
 let container: StartedTestContainer;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 let nextId = 99_000_000;
 
 beforeAll(async () => {
   const started = await startPostgresContainer({ database: "account_self_service_test", user: "account_self_service_test", password: "account_self_service_test" });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
 });
@@ -31,8 +31,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeSql();
   await container?.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   // The route modules imported above are bound to the real database client;
   // drop them so a later file in a shared worker loads them under its mocks.
   vi.resetModules();

@@ -64,8 +64,8 @@ it.each([
   const live = prefixes.map((prefix) => createOwnedTempDirectory(join(directory, prefix)));
   const report = join(directory, "vitest.json");
   const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: directory, TMP: directory, TEMP: directory,
-    TEMP_DIRECTORY_TEARDOWN_PROBE: teardownFailure ? "1" : "0" };
-  delete env.DATABASE_URL;
+    OVERFLOW_TEMP_DIRECTORY_TEARDOWN_PROBE: teardownFailure ? "1" : "0" };
+  delete env.OVERFLOW_DATABASE_URL;
   const child = spawnSync("pnpm", ["test", "--run", "--maxWorkers=2", suite, "-t", filter,
     "--reporter=json", `--outputFile=${report}`], { env, encoding: "utf8", timeout: 90_000, maxBuffer: 4 * 1024 * 1024 });
   expect(child.error, child.stderr).toBeUndefined();

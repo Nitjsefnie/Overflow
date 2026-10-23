@@ -11,7 +11,7 @@ let container: StartedTestContainer | undefined;
 let sql: Sql;
 let store: PostgresFoldStore;
 let externalId = 9_700_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 const tokenEncryptionKey = Buffer.alloc(32, 26).toString("base64url");
 const firstObservation = new Date("2030-01-02T03:04:05.678Z");
 const laterObservation = new Date("2030-02-03T04:05:06.789Z");
@@ -22,7 +22,7 @@ describe("registered repository identity verification", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({ database: "identity", user: "identity", password: "identity" });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
     store = new PostgresFoldStore(sql, tokenEncryptionKey);
@@ -32,9 +32,9 @@ describe("registered repository identity verification", () => {
     await closeSql();
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 

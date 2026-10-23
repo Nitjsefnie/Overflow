@@ -162,13 +162,13 @@ fi
           {},
           {
             name: "Fetch the pull request head",
-            env: { PR_NUMBER: "${{ github.event.pull_request.number }}" },
-            run: 'git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"',
+            env: { OVERFLOW_PR_NUMBER: "${{ github.event.pull_request.number }}" },
+            run: 'git fetch --no-tags origin "+refs/pull/${OVERFLOW_PR_NUMBER}/head:refs/remotes/pr/head"',
           },
           {
             name: "Ratchet documents",
-            env: { HEAD_SHA: "${{ github.event.pull_request.head.sha }}" },
-            run: 'node scripts/check-ratchets.ts HEAD "$HEAD_SHA"',
+            env: { OVERFLOW_HEAD_SHA: "${{ github.event.pull_request.head.sha }}" },
+            run: 'node scripts/check-ratchets.ts HEAD "$OVERFLOW_HEAD_SHA"',
           },
         ],
       },
@@ -248,12 +248,12 @@ fi
           {
             name: "Validate dispatch base and ref",
             if: "${{ github.event_name == 'workflow_dispatch' }}",
-            env: { BASE_SHA: "${{ inputs.base }}" },
+            env: { OVERFLOW_BASE_SHA: "${{ inputs.base }}" },
             run: `if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
   echo "::error::Dispatch must target refs/heads/main"
   exit 1
 fi
-if [[ "$BASE_SHA" == *$'\\n'* ]] || ! printf '%s' "$BASE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+if [[ "$OVERFLOW_BASE_SHA" == *$'\\n'* ]] || ! printf '%s' "$OVERFLOW_BASE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
   echo "::error::Dispatch base must be a full lowercase 40-character SHA"
   exit 1
 fi
@@ -268,18 +268,18 @@ fi
           {
             name: "Fetch the dispatched commit",
             if: "${{ github.event_name == 'workflow_dispatch' }}",
-            env: { DISPATCHED_SHA: "${{ github.sha }}" },
-            run: 'git fetch --no-tags origin "$DISPATCHED_SHA"',
+            env: { OVERFLOW_DISPATCHED_SHA: "${{ github.sha }}" },
+            run: 'git fetch --no-tags origin "$OVERFLOW_DISPATCHED_SHA"',
           },
           {
             name: "Validate dispatch ancestry",
             if: "${{ github.event_name == 'workflow_dispatch' }}",
-            env: { DISPATCHED_SHA: "${{ github.sha }}" },
-            run: `if [[ "$(git rev-parse HEAD)" == "$DISPATCHED_SHA" ]]; then
+            env: { OVERFLOW_DISPATCHED_SHA: "${{ github.sha }}" },
+            run: `if [[ "$(git rev-parse HEAD)" == "$OVERFLOW_DISPATCHED_SHA" ]]; then
   echo "::error::Dispatch base must differ from the dispatched commit"
   exit 1
 fi
-if ! git merge-base --is-ancestor HEAD "$DISPATCHED_SHA"; then
+if ! git merge-base --is-ancestor HEAD "$OVERFLOW_DISPATCHED_SHA"; then
   echo "::error::Dispatch base must be an ancestor of the dispatched commit"
   exit 1
 fi
@@ -289,20 +289,20 @@ fi
           {
             if: "${{ github.event_name == 'push' }}",
             name: "Fetch the pushed commit",
-            env: { PUSHED_SHA: "${{ github.sha }}" },
-            run: 'git fetch --no-tags origin "$PUSHED_SHA"',
+            env: { OVERFLOW_PUSHED_SHA: "${{ github.sha }}" },
+            run: 'git fetch --no-tags origin "$OVERFLOW_PUSHED_SHA"',
           },
           {
             if: "${{ github.event_name == 'push' }}",
             name: "Ratchet documents against the previous main",
-            env: { PUSHED_SHA: "${{ github.sha }}" },
-            run: 'node scripts/check-ratchets.ts HEAD "$PUSHED_SHA"',
+            env: { OVERFLOW_PUSHED_SHA: "${{ github.sha }}" },
+            run: 'node scripts/check-ratchets.ts HEAD "$OVERFLOW_PUSHED_SHA"',
           },
           {
             name: "Ratchet documents against the last certified main tip",
             if: "${{ github.event_name == 'workflow_dispatch' }}",
-            env: { DISPATCHED_SHA: "${{ github.sha }}" },
-            run: 'node scripts/check-ratchets.ts HEAD "$DISPATCHED_SHA"',
+            env: { OVERFLOW_DISPATCHED_SHA: "${{ github.sha }}" },
+            run: 'node scripts/check-ratchets.ts HEAD "$OVERFLOW_DISPATCHED_SHA"',
           },
         ],
       },
@@ -421,9 +421,9 @@ fi
       "pnpm build",
     ]));
     expect(verify.env).toEqual(expect.objectContaining({
-      DATABASE_URL: "postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci",
-      GITHUB_WEBHOOK_URL: "https://overflow.invalid/api/github/webhooks",
-      TOKEN_ENCRYPTION_KEY: "A".repeat(43),
+      OVERFLOW_DATABASE_URL: "postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci",
+      OVERFLOW_GITHUB_WEBHOOK_URL: "https://overflow.invalid/api/github/webhooks",
+      OVERFLOW_TOKEN_ENCRYPTION_KEY: "A".repeat(43),
     }));
   });
 
@@ -480,8 +480,8 @@ fi
     // no build — the base checkout's copies of the gate scripts over the pull
     // request's materialised tree are the whole job.
     expect(verify.steps.map((step) => step.run).filter(Boolean)).toEqual(expect.arrayContaining([
-      'node "${GITHUB_WORKSPACE}/scripts/check-migration-edits.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"',
-      'node "${GITHUB_WORKSPACE}/scripts/check-legal-revisions.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"',
+      'node "${GITHUB_WORKSPACE}/scripts/check-migration-edits.ts" "${OVERFLOW_MERGE_SHA:?}^1" "${OVERFLOW_MERGE_SHA}"',
+      'node "${GITHUB_WORKSPACE}/scripts/check-legal-revisions.ts" "${OVERFLOW_MERGE_SHA:?}^1" "${OVERFLOW_MERGE_SHA}"',
       'node "${GITHUB_WORKSPACE}/scripts/await-pr-suite.ts"',
       'bash "${GITHUB_WORKSPACE}/scripts/ci-base-freshness.sh"',
     ]));
@@ -513,9 +513,9 @@ fi
     // Base freshness last, over the materialised merge tree.
     expect(verify.steps.at(-1)?.name).toBe("Base freshness");
     expect(verify.env).toEqual(expect.objectContaining({
-      DATABASE_URL: "postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci",
-      GITHUB_WEBHOOK_URL: "https://overflow.invalid/api/github/webhooks",
-      TOKEN_ENCRYPTION_KEY: "A".repeat(43),
+      OVERFLOW_DATABASE_URL: "postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci",
+      OVERFLOW_GITHUB_WEBHOOK_URL: "https://overflow.invalid/api/github/webhooks",
+      OVERFLOW_TOKEN_ENCRYPTION_KEY: "A".repeat(43),
     }));
   });
 
@@ -553,16 +553,16 @@ fi
         {},
         {
           name: "Fetch the pull request head",
-          env: { PR_NUMBER: "${{ github.event.pull_request.number }}" },
-          run: 'git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"',
+          env: { OVERFLOW_PR_NUMBER: "${{ github.event.pull_request.number }}" },
+          run: 'git fetch --no-tags origin "+refs/pull/${OVERFLOW_PR_NUMBER}/head:refs/remotes/pr/head"',
         },
         {},
         {
           name: "Install actionlint",
-          run: `tarball="actionlint_\${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          run: `tarball="actionlint_\${OVERFLOW_ACTIONLINT_VERSION}_linux_amd64.tar.gz"
 curl -fsSL --retry 3 -o "$tarball" \\
-  "https://github.com/\${ACTIONLINT_REPO}/releases/download/v\${ACTIONLINT_VERSION}/\${tarball}"
-echo "\${ACTIONLINT_SHA256}  \${tarball}" | sha256sum -c -
+  "https://github.com/\${OVERFLOW_ACTIONLINT_REPO}/releases/download/v\${OVERFLOW_ACTIONLINT_VERSION}/\${tarball}"
+echo "\${OVERFLOW_ACTIONLINT_SHA256}  \${tarball}" | sha256sum -c -
 tar -xzf "$tarball" actionlint
 ./actionlint --version
 `,
@@ -596,11 +596,11 @@ git ls-tree -z --name-only refs/remotes/pr/head:.github/workflows/ |
           name: "Base freshness",
           env: {
             GH_TOKEN: "${{ github.token }}",
-            REPO_SLUG: "${{ github.repository }}",
-            BASE_SHA: "${{ github.event.pull_request.base.sha }}",
-            BASE_REF: "${{ github.event.pull_request.base.ref }}",
-            PR_NUMBER: "${{ github.event.pull_request.number }}",
-            HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+            OVERFLOW_REPO_SLUG: "${{ github.repository }}",
+            OVERFLOW_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+            OVERFLOW_BASE_REF: "${{ github.event.pull_request.base.ref }}",
+            OVERFLOW_PR_NUMBER: "${{ github.event.pull_request.number }}",
+            OVERFLOW_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
           },
           run: "bash scripts/ci-base-freshness.sh",
         },
@@ -638,10 +638,10 @@ git ls-tree -z --name-only refs/remotes/pr/head:.github/workflows/ |
         {},
         {
           name: "Install actionlint",
-          run: `tarball="actionlint_\${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          run: `tarball="actionlint_\${OVERFLOW_ACTIONLINT_VERSION}_linux_amd64.tar.gz"
 curl -fsSL --retry 3 -o "$tarball" \\
-  "https://github.com/\${ACTIONLINT_REPO}/releases/download/v\${ACTIONLINT_VERSION}/\${tarball}"
-echo "\${ACTIONLINT_SHA256}  \${tarball}" | sha256sum -c -
+  "https://github.com/\${OVERFLOW_ACTIONLINT_REPO}/releases/download/v\${OVERFLOW_ACTIONLINT_VERSION}/\${tarball}"
+echo "\${OVERFLOW_ACTIONLINT_SHA256}  \${tarball}" | sha256sum -c -
 tar -xzf "$tarball" actionlint
 ./actionlint --version
 `,
@@ -681,7 +681,7 @@ cp .github/workflows/*.yml .github/workflows-pr/
     };
     const prEnv = await readEnv("pr-gates.yml");
     const pushEnv = await readEnv("actionlint.yml");
-    for (const key of ["ACTIONLINT_REPO", "ACTIONLINT_VERSION", "ACTIONLINT_SHA256"]) {
+    for (const key of ["OVERFLOW_ACTIONLINT_REPO", "OVERFLOW_ACTIONLINT_VERSION", "OVERFLOW_ACTIONLINT_SHA256"]) {
       expect(prEnv[key], `${key} must be present in pr-gates.yml`).toBeDefined();
       expect(pushEnv[key], `${key} must be present in actionlint.yml`).toBeDefined();
       expect(prEnv[key], `${key} must be identical in both actionlint legs`).toBe(pushEnv[key]);
@@ -804,7 +804,7 @@ cp .github/workflows/*.yml .github/workflows-pr/
         {
           name: "Refuse a pull request that changes the audit suppression list",
           if: "github.event_name == 'pull_request'",
-          env: { BASE_SHA: "${{ github.event.pull_request.base.sha }}" },
+          env: { OVERFLOW_BASE_SHA: "${{ github.event.pull_request.base.sha }}" },
           run: expect.any(String),
         },
         {},
@@ -819,8 +819,8 @@ cp .github/workflows/*.yml .github/workflows-pr/
           // the previous tip on main for a push, and the all-zeros SHA when
           // there is no previous tip — a new branch or a force push.
           env: {
-            EVENT_NAME: "${{ github.event_name }}",
-            BEFORE_SHA: "${{ github.event.before }}",
+            OVERFLOW_EVENT_NAME: "${{ github.event_name }}",
+            OVERFLOW_BEFORE_SHA: "${{ github.event.before }}",
           },
           run: `# THE FAST PATH IS AN OUTCOME, NOT A SKIP (issue 1149 fix round 2).
 # The deploy gate derives its required set from branch protection,
@@ -835,13 +835,13 @@ cp .github/workflows/*.yml .github/workflows-pr/
 # that is not an ancestor of the pushed HEAD, and a diff error are
 # all ambiguity, and ambiguity audits. The schedule and dispatch
 # legs never enter this branch — they audit unconditionally.
-if [ "\${EVENT_NAME:?}" = "push" ] \\
-  && [[ "\${BEFORE_SHA:?}" != *$'\\n'* ]] \\
-  && printf '%s' "\${BEFORE_SHA}" | grep -Eq '^[0-9a-f]{40}$' \\
-  && [ "\${BEFORE_SHA}" != "0000000000000000000000000000000000000000" ] \\
-  && git cat-file -e "\${BEFORE_SHA}^{commit}" 2>/dev/null \\
-  && git merge-base --is-ancestor "\${BEFORE_SHA}" HEAD 2>/dev/null \\
-  && git diff --quiet "\${BEFORE_SHA}" HEAD -- package.json pnpm-lock.yaml; then
+if [ "\${OVERFLOW_EVENT_NAME:?}" = "push" ] \\
+  && [[ "\${OVERFLOW_BEFORE_SHA:?}" != *$'\\n'* ]] \\
+  && printf '%s' "\${OVERFLOW_BEFORE_SHA}" | grep -Eq '^[0-9a-f]{40}$' \\
+  && [ "\${OVERFLOW_BEFORE_SHA}" != "${"0".repeat(40)}" ] \\
+  && git cat-file -e "\${OVERFLOW_BEFORE_SHA}^{commit}" 2>/dev/null \\
+  && git merge-base --is-ancestor "\${OVERFLOW_BEFORE_SHA}" HEAD 2>/dev/null \\
+  && git diff --quiet "\${OVERFLOW_BEFORE_SHA}" HEAD -- package.json pnpm-lock.yaml; then
   echo "no manifest change since the previous push — audit skipped, context green"
   exit 0
 fi

@@ -8,7 +8,7 @@ import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-director
 
 const tempDirectories = createOwnedTempDirectoryRegistry([path.join(os.tmpdir(), "overflow-next-config-"), path.join(os.tmpdir(), "overflow-next-containment-")]);
 
-const originalDistDir = process.env.NEXT_DIST_DIR;
+const originalDistDir = process.env.OVERFLOW_NEXT_DIST_DIR;
 const project = fileURLToPath(new URL("../..", import.meta.url));
 const preparedTrees: string[] = [];
 
@@ -65,9 +65,9 @@ function prepareInvalidPathConfig(value: string, tree?: string, paths = path) {
 afterEach(() => {
   vi.unstubAllEnvs();
   if (originalDistDir === undefined) {
-    delete process.env.NEXT_DIST_DIR;
+    delete process.env.OVERFLOW_NEXT_DIST_DIR;
   } else {
-    process.env.NEXT_DIST_DIR = originalDistDir;
+    process.env.OVERFLOW_NEXT_DIST_DIR = originalDistDir;
   }
   vi.doUnmock("node:fs");
   vi.restoreAllMocks();
@@ -75,7 +75,7 @@ afterEach(() => {
   vi.resetModules();
 });
 
-describe("NEXT_DIST_DIR", () => {
+describe("OVERFLOW_NEXT_DIST_DIR", () => {
   it("uses the prefixed release directory before the legacy value", async () => {
     prepareConfig("prefixed-build");
     vi.stubEnv("NEXT_DIST_DIR", "../legacy-invalid");
@@ -99,7 +99,6 @@ describe("NEXT_DIST_DIR", () => {
   });
 
   it("reports an invalid prefixed path with the existing validation error", async () => {
-    vi.stubEnv("NEXT_DIST_DIR", "");
     vi.stubEnv("OVERFLOW_NEXT_DIST_DIR", "../prefixed-invalid");
     vi.resetModules();
 
@@ -132,7 +131,7 @@ describe("NEXT_DIST_DIR", () => {
       "rejects a Windows path separator in %s",
       async (value) => {
         prepareInvalidPathConfig(value, projectDir, path.win32);
-        process.env.NEXT_DIST_DIR = value;
+        process.env.OVERFLOW_NEXT_DIST_DIR = value;
         vi.resetModules();
 
         const configImport = import("../../next.config");
@@ -143,7 +142,7 @@ describe("NEXT_DIST_DIR", () => {
 
     it("rejects a separator-free Windows drive-relative path before preparation", async () => {
       prepareInvalidPathConfig("D:build", projectDir, path.win32);
-      process.env.NEXT_DIST_DIR = "D:build";
+      process.env.OVERFLOW_NEXT_DIST_DIR = "D:build";
       vi.resetModules();
 
       const configImport = import("../../next.config");
@@ -159,7 +158,7 @@ describe("NEXT_DIST_DIR", () => {
       mapFixtureFilesystem((target) =>
         path.join(projectDir, ...path.win32.relative(windowsProjectDir, target).split("\\")),
       );
-      process.env.NEXT_DIST_DIR = "release-link";
+      process.env.OVERFLOW_NEXT_DIST_DIR = "release-link";
       vi.resetModules();
 
       const configImport = import("../../next.config");
@@ -168,7 +167,7 @@ describe("NEXT_DIST_DIR", () => {
     });
 
     it("rejects a direct external symlink", async () => {
-      process.env.NEXT_DIST_DIR = "release-link";
+      process.env.OVERFLOW_NEXT_DIST_DIR = "release-link";
       vi.resetModules();
 
       const configImport = import("../../next.config");
@@ -178,7 +177,7 @@ describe("NEXT_DIST_DIR", () => {
 
     it("rejects a new nested build directory without creating it", async () => {
       prepareInvalidPathConfig("releases/new/build-123", projectDir);
-      process.env.NEXT_DIST_DIR = "releases/new/build-123";
+      process.env.OVERFLOW_NEXT_DIST_DIR = "releases/new/build-123";
       vi.resetModules();
 
       const configImport = import("../../next.config");
@@ -198,7 +197,7 @@ describe("NEXT_DIST_DIR", () => {
     ["an absolute path with surrounding whitespace", " /tmp/overflow-build "],
   ])("rejects %s as an output path", async (_description, value) => {
     prepareInvalidPathConfig(value);
-    process.env.NEXT_DIST_DIR = value;
+    process.env.OVERFLOW_NEXT_DIST_DIR = value;
     vi.resetModules();
 
     const configImport = import("../../next.config");
@@ -213,7 +212,7 @@ describe("NEXT_DIST_DIR", () => {
     const config = JSON.parse(readFileSync(filename, "utf8"));
     config.releaseConfig.distDir = "..";
     writeFileSync(path.join(tree, "...tsconfig.json"), JSON.stringify(config));
-    process.env.NEXT_DIST_DIR = value;
+    process.env.OVERFLOW_NEXT_DIST_DIR = value;
     vi.resetModules();
 
     const configImport = import("../../next.config");
@@ -223,7 +222,7 @@ describe("NEXT_DIST_DIR", () => {
 
   it("trims surrounding whitespace from a relative path", async () => {
     prepareConfig();
-    process.env.NEXT_DIST_DIR = " \t.next-release-20260907T101500Z-abc1234\n ";
+    process.env.OVERFLOW_NEXT_DIST_DIR = " \t.next-release-20260907T101500Z-abc1234\n ";
     vi.resetModules();
 
     const { default: config } = await import("../../next.config");
@@ -234,7 +233,7 @@ describe("NEXT_DIST_DIR", () => {
 
   it.each([".", " \t.\n "])("rejects zero-depth %j", async (value) => {
     prepareInvalidPathConfig(value);
-    process.env.NEXT_DIST_DIR = value;
+    process.env.OVERFLOW_NEXT_DIST_DIR = value;
     vi.resetModules();
 
     const configImport = import("../../next.config");
@@ -252,7 +251,7 @@ describe("NEXT_DIST_DIR", () => {
     "build-output/",
   ])("rejects path separators in %j", async (value) => {
     prepareInvalidPathConfig(value);
-    process.env.NEXT_DIST_DIR = value;
+    process.env.OVERFLOW_NEXT_DIST_DIR = value;
     vi.resetModules();
 
     const configImport = import("../../next.config");
@@ -266,9 +265,9 @@ describe("NEXT_DIST_DIR", () => {
     ["whitespace-only", " \t\n "],
   ])("omits distDir when %s", async (_description, value) => {
     if (value === undefined) {
-      delete process.env.NEXT_DIST_DIR;
+      delete process.env.OVERFLOW_NEXT_DIST_DIR;
     } else {
-      process.env.NEXT_DIST_DIR = value;
+      process.env.OVERFLOW_NEXT_DIST_DIR = value;
     }
     vi.doMock("node:fs", () => ({
       lstatSync: () => { throw new Error("Unexpected filesystem work"); },
@@ -289,7 +288,7 @@ describe("NEXT_DIST_DIR", () => {
     ["a single-segment release path", ".next-release-20260907T101500Z-abc1234"],
   ])("uses %s unchanged", async (_description, value) => {
     prepareConfig(value);
-    process.env.NEXT_DIST_DIR = value;
+    process.env.OVERFLOW_NEXT_DIST_DIR = value;
     vi.resetModules();
 
     const { default: config } = await import("../../next.config");
@@ -323,13 +322,13 @@ describe("NEXT_DIST_DIR", () => {
         else config.include = ["*.ts"];
         writeFileSync(filename, JSON.stringify(config));
       }
-      process.env.NEXT_DIST_DIR = changed === "other release" ? ".next-release-20260907T101600Z-abc1234" : release;
+      process.env.OVERFLOW_NEXT_DIST_DIR = changed === "other release" ? ".next-release-20260907T101600Z-abc1234" : release;
       vi.resetModules();
 
       const configImport = import("../../next.config");
 
       await expect(configImport).rejects.toThrow("scripts/release.ts prepare");
-      await expect(configImport).rejects.toThrow(process.env.NEXT_DIST_DIR);
+      await expect(configImport).rejects.toThrow(process.env.OVERFLOW_NEXT_DIST_DIR);
     },
   );
 });
@@ -395,16 +394,16 @@ describe("framing-protection headers", () => {
     expect(conditionedFramingHeaders, route).toEqual([]);
   }
 
-  it.each(framedRoutes)("frames %s with NEXT_DIST_DIR unset", async (route) => {
-    delete process.env.NEXT_DIST_DIR;
+  it.each(framedRoutes)("frames %s with OVERFLOW_NEXT_DIST_DIR unset", async (route) => {
+    delete process.env.OVERFLOW_NEXT_DIST_DIR;
     vi.resetModules();
 
     await expectRouteFramed(route);
   });
 
-  it("frames every route with NEXT_DIST_DIR set to a prepared release dir", async () => {
+  it("frames every route with OVERFLOW_NEXT_DIST_DIR set to a prepared release dir", async () => {
     prepareConfig();
-    process.env.NEXT_DIST_DIR = ".next-release-20260907T101500Z-abc1234";
+    process.env.OVERFLOW_NEXT_DIST_DIR = ".next-release-20260907T101500Z-abc1234";
     vi.resetModules();
 
     for (const route of framedRoutes) await expectRouteFramed(route);
@@ -415,7 +414,7 @@ describe("poweredByHeader", () => {
   // Issue 1046: Next's default X-Powered-By response header advertises the
   // framework; the config must opt out so responses carry no such marker.
   it("is disabled so no X-Powered-By header is served", async () => {
-    delete process.env.NEXT_DIST_DIR;
+    delete process.env.OVERFLOW_NEXT_DIST_DIR;
     vi.resetModules();
 
     const { default: config } = await import("../../next.config");

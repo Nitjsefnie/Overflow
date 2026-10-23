@@ -23,7 +23,7 @@ const limit = 25 * 1024 * 1024;
 let sql: Sql;
 let container: StartedTestContainer | undefined;
 let dependencies: GitHubAppWebhookRouteDependencies;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 function request(body = payload(), overrides: Record<string, string | null> = {}): Request {
   const signature = createHmac("sha256", secret).update(body).digest("hex");
@@ -62,7 +62,7 @@ describe("registration App webhook receiver", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({ database: "app_webhook", user: "app_webhook" });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
     const repositoryStore = new PostgresRepositoryStore(sql);
@@ -79,8 +79,8 @@ describe("registration App webhook receiver", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it.each([
@@ -101,7 +101,7 @@ describe("registration App webhook receiver", () => {
   });
 
   it.each([undefined, ""])("fails closed with secret %j for every delivery and bounds the outage log", async (missing) => {
-    vi.stubEnv("GITHUB_REGISTRATION_APP_WEBHOOK_SECRET", missing);
+    vi.stubEnv("OVERFLOW_GITHUB_REGISTRATION_APP_WEBHOOK_SECRET", missing);
     vi.stubEnv("GITHUB_APP_WEBHOOK_SECRET", secret);
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const before = await effects();
@@ -247,7 +247,7 @@ describe("registration App webhook receiver", () => {
 
   it("production POST uses the registration secret, real stores and a persistent receiver bucket", async () => {
     const repo = await fixture();
-    vi.stubEnv("GITHUB_REGISTRATION_APP_WEBHOOK_SECRET", secret);
+    vi.stubEnv("OVERFLOW_GITHUB_REGISTRATION_APP_WEBHOOK_SECRET", secret);
     vi.spyOn(Date, "now").mockReturnValue(Date.now());
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const responses: number[] = [];

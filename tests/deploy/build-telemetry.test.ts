@@ -51,7 +51,7 @@ describe("build telemetry opt-out (issue 688)", () => {
     // prefixes off this line, so the opt-out rides the same line rather than
     // an export above it.
     expect(buildLine).toMatch(/^NEXT_TELEMETRY_DISABLED=1\b/);
-    expect(buildLine).toContain('NEXT_DIST_DIR="$release"');
+    expect(buildLine).toContain('OVERFLOW_NEXT_DIST_DIR="$release"');
     expect(buildLine).toContain("pnpm build");
   });
 

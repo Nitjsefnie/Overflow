@@ -28,7 +28,7 @@ describe("seedBoardFixtureCard (issue 1067)", () => {
   let container: StartedTestContainer | undefined;
   let sql: Sql;
   let databaseUrl: string;
-  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
   beforeAll(async () => {
     const started = await startPostgresContainer({
@@ -38,7 +38,7 @@ describe("seedBoardFixtureCard (issue 1067)", () => {
     });
     container = started.container;
     databaseUrl = started.databaseUrl;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     // The second run replays every migration against the installed schema, the
     // same re-runnability guard the other container suites apply.
@@ -50,9 +50,9 @@ describe("seedBoardFixtureCard (issue 1067)", () => {
     await container?.stop();
 
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 

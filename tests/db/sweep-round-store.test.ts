@@ -10,20 +10,20 @@ import { startPostgresContainer } from "../support/postgres-container";
 
 let sql: Sql;
 let container: StartedTestContainer;
-const original = process.env.DATABASE_URL;
+const original = process.env.OVERFLOW_DATABASE_URL;
 const at = new Date("2030-01-01T00:00:00Z");
 const next = new Date("2030-01-01T06:00:00Z");
 beforeAll(async () => {
   const started = await startPostgresContainer({ database: "sweep", user: "sweep", password: randomUUID() });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
 });
 beforeEach(async () => { await sql`delete from reconciliation_sweep_round`; });
 afterAll(async () => {
   await closeSql(); await container?.stop();
-  if (original === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = original;
+  if (original === undefined) delete process.env.OVERFLOW_DATABASE_URL; else process.env.OVERFLOW_DATABASE_URL = original;
 });
 
 describe("durable sweep round", () => {

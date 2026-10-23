@@ -785,9 +785,9 @@ function productionGitLabWiring() {
   vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken").mockResolvedValue("stored-github-oauth-token");
   vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState").mockResolvedValue("ACTIVE");
   vi.spyOn(PostgresRepositoryStore.prototype, "listAbandonedWebhookCleanups").mockResolvedValue([]);
-  vi.stubEnv("TOKEN_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-  vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
-  vi.stubEnv("GITLAB_WEBHOOK_URL", gitlabWebhookUrl);
+  vi.stubEnv("OVERFLOW_TOKEN_ENCRYPTION_KEY", ("01234567" + "89abcdef").repeat(4));
+  vi.stubEnv("OVERFLOW_GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+  vi.stubEnv("OVERFLOW_GITLAB_WEBHOOK_URL", gitlabWebhookUrl);
   const getForgeToken = vi.spyOn(PostgresForgeIdentityStore.prototype, "getForgeToken")
     .mockResolvedValue({ token: "glpat-production-wire", identityId: "identity-1" });
   const requests: Request[] = [];
@@ -999,7 +999,7 @@ describe("Overflow token registration", () => {
         .mockResolvedValue("stored-github-oauth-token");
       const enforcement = vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState")
         .mockResolvedValue("BANNED");
-      vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+      vi.stubEnv("OVERFLOW_GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
       const fetchGitHub = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }));
       vi.stubGlobal("fetch", fetchGitHub);
       const response = await POST(path === "token" ? authorizedRequest() : jsonRequest(validInput()));
@@ -1024,7 +1024,7 @@ describe("Overflow token registration", () => {
       if (path === "cookie") readSession.mockResolvedValue({ user: tokenAccount });
       vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken").mockResolvedValue("stored-oauth-token");
       vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState").mockResolvedValue("ACTIVE");
-      vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+      vi.stubEnv("OVERFLOW_GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
       // The granted-scope probe (issue 599) precedes the gateway: /user
       // answers with webhook administration; everything else is GraphQL.
       const request = vi.fn<typeof fetch>(async (input) =>
@@ -1056,9 +1056,9 @@ describe("Overflow token registration", () => {
 
   // The production GitLab wire (issue 547): every other route test stubs the
   // registration dependencies, so nothing else executes the limb of
-  // buildRegistrationDependencies that picks GITLAB_WEBHOOK_URL over the
+  // buildRegistrationDependencies that picks OVERFLOW_GITLAB_WEBHOOK_URL over the
   // GitHub callback and reads the sponsor's PAT through the identity store.
-  it("installs the GitLab hook at GITLAB_WEBHOOK_URL through the production POST wiring", async () => {
+  it("installs the GitLab hook at OVERFLOW_GITLAB_WEBHOOK_URL through the production POST wiring", async () => {
     const forge = productionGitLabWiring();
     const project = gitlabProjectPayload();
     vi.spyOn(PostgresRepositoryStore.prototype, "findRepositoryRegistrationState").mockResolvedValue(null);
@@ -1143,7 +1143,7 @@ describe("Overflow token registration", () => {
       );
     const enforcement = vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState")
       .mockResolvedValue("ACTIVE");
-    vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+    vi.stubEnv("OVERFLOW_GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
     // The granted-scope probe (issue 599) precedes the repository read: /user
     // answers with webhook administration so the flow proceeds, and the
     // repository read answers an outage.
@@ -1226,9 +1226,9 @@ describe("Overflow token registration", () => {
   });
 
   // The origin check is the only half a token request skips, and it is the only
-  // half that reads APP_URL: an unconfigured origin cannot strand a script.
-  it("registers a bearer-token request even when APP_URL is unset", async () => {
-    vi.stubEnv("APP_URL", "");
+  // half that reads OVERFLOW_APP_URL: an unconfigured origin cannot strand a script.
+  it("registers a bearer-token request even when OVERFLOW_APP_URL is unset", async () => {
+    vi.stubEnv("OVERFLOW_APP_URL", "");
     const fixture = tokenFixture();
 
     const response = await fixture.handler(authorizedRequest());
@@ -1332,7 +1332,7 @@ describe("POST /api/repositories granted-scope check", () => {
   function wireStores(oauthToken = "stored-github-oauth-token") {
     vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken").mockResolvedValue(oauthToken);
     vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState").mockResolvedValue("ACTIVE");
-    vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+    vi.stubEnv("OVERFLOW_GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
   }
 
   function requestedUrls(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>): string[] {
@@ -2359,7 +2359,7 @@ describe("repository writes for a deleted account (issue 733)", () => {
   let sql: Sql;
   let container: StartedTestContainer | undefined;
   let deletedAccountId = "";
-  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
   beforeAll(async () => {
     const started = await startPostgresContainer({
@@ -2368,7 +2368,7 @@ describe("repository writes for a deleted account (issue 733)", () => {
       password: "repositories_deleted_account_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = postgres(started.databaseUrl, { max: 1 });
     await runMigrations();
     const githubUserId = 7_330_003;
@@ -2386,8 +2386,8 @@ describe("repository writes for a deleted account (issue 733)", () => {
     await closeSql();
     await sql.end();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   /**

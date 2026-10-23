@@ -132,9 +132,9 @@ describe("the event-policy workflow", () => {
           run: "node scripts/check-actions-event-policy.ts",
           env: {
             GH_TOKEN: "${{ github.token }}",
-            LEDGER_APP_ID: "5118623",
-            LEDGER_INSTALLATION_ID: "166057493",
-            LEDGER_APP_KEY: "${{ secrets.LEDGER_APP_KEY }}",
+            OVERFLOW_LEDGER_APP_ID: "5118623",
+            OVERFLOW_LEDGER_INSTALLATION_ID: "166057493",
+            OVERFLOW_LEDGER_APP_KEY: "${{ secrets.LEDGER_APP_KEY }}",
           },
         }),
       ]),

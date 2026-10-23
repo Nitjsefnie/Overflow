@@ -98,22 +98,22 @@ describe("the server-action origin guard", () => {
     await expect(guard()).rejects.toHaveProperty("message", ORIGIN_REFUSED_MESSAGE);
   });
 
-  it("refuses as misconfigured when APP_URL is unset even when Origin is what APP_URL would have been", async () => {
+  it("refuses as misconfigured when OVERFLOW_APP_URL is unset even when Origin is what OVERFLOW_APP_URL would have been", async () => {
     givenRequestHeaders({ origin: trustedOrigin, host: "overflow.internal" });
-    vi.stubEnv("APP_URL", undefined);
+    vi.stubEnv("OVERFLOW_APP_URL", undefined);
 
     await expect(guard()).rejects.toHaveProperty("message", ORIGIN_MISCONFIGURED_MESSAGE);
   });
 
-  it("refuses as misconfigured when APP_URL is not a URL", async () => {
+  it("refuses as misconfigured when OVERFLOW_APP_URL is not a URL", async () => {
     givenRequestHeaders({ origin: trustedOrigin, host: "overflow.internal" });
-    vi.stubEnv("APP_URL", "not a url");
+    vi.stubEnv("OVERFLOW_APP_URL", "not a url");
 
     await expect(guard()).rejects.toHaveProperty("message", ORIGIN_MISCONFIGURED_MESSAGE);
   });
 
   it("resolves the production proxy shape", async () => {
-    vi.stubEnv("APP_URL", "https://overflow.nitjsefni.eu");
+    vi.stubEnv("OVERFLOW_APP_URL", "https://overflow.nitjsefni.eu");
     givenRequestHeaders({
       origin: "https://overflow.nitjsefni.eu",
       host: "overflow.nitjsefni.eu",

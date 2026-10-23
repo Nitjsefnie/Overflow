@@ -37,7 +37,7 @@ describe("Dockerfile", () => {
 
   it("bakes no secret into an ENV or ARG line", () => {
     const secretEnv =
-      /^\s*(?:ENV|ARG)\b.*(?:AUTH_SECRET|AUTH_GITHUB_SECRET|TOKEN_ENCRYPTION_KEY|GITHUB_WEBHOOK_SECRET|MODERATOR_GITHUB_USER_IDS)/;
+      /^\s*(?:ENV|ARG)\b.*(?:AUTH_SECRET|AUTH_GITHUB_SECRET|OVERFLOW_TOKEN_ENCRYPTION_KEY|GITHUB_WEBHOOK_SECRET|OVERFLOW_MODERATOR_GITHUB_USER_IDS)/;
     const offenders = dockerfile.split("\n").filter((line) => secretEnv.test(line));
     expect(offenders).toEqual([]);
   });

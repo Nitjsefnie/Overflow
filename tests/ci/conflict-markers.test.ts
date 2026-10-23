@@ -17,7 +17,7 @@ const MARKERS = ["<<<<<<< HEAD", "=======", ">>>>>>> label"];
 function scrubbedEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (/^(GITHUB_|RUNNER_|GIT_)/.test(key) || key === "PR_TREE" || key === "CI") delete env[key];
+    if (/^(GITHUB_|RUNNER_|GIT_)/.test(key) || key === "OVERFLOW_PR_TREE" || key === "CI") delete env[key];
   }
   return env;
 }
@@ -66,7 +66,7 @@ describe("the verify workflow's conflict-marker shell gate", () => {
 
   /**
    * Runs a leg's real run block in `workspace`, with only the variables the
-   * runner would give this step: the event name, and PR_TREE when the case
+   * runner would give this step: the event name, and OVERFLOW_PR_TREE when the case
    * supplies the materialise step's output.
    */
   async function run(step: Step, event: string, workspace: string, prTree?: string) {
@@ -75,7 +75,7 @@ describe("the verify workflow's conflict-marker shell gate", () => {
     await writeFile(script, step.run!);
     const env = scrubbedEnvironment();
     env.GITHUB_EVENT_NAME = event;
-    if (prTree !== undefined) env.PR_TREE = prTree;
+    if (prTree !== undefined) env.OVERFLOW_PR_TREE = prTree;
     // GitHub's bash runner uses -e and -o pipefail; rehearse the same guard.
     return spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", script], {
       cwd: workspace,
@@ -85,7 +85,7 @@ describe("the verify workflow's conflict-marker shell gate", () => {
   }
 
   it("takes the pull request tree as the materialise step's output in ci-pr.yml", () => {
-    expect(prStep?.env).toEqual({ PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
+    expect(prStep?.env).toEqual({ OVERFLOW_PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
   });
 
   it("takes no input at all in ci.yml, whose file receives no workflow_run", () => {
@@ -94,9 +94,9 @@ describe("the verify workflow's conflict-marker shell gate", () => {
       pushStep?.env,
       "ci.yml's conflict-marker step must declare no env at all — this file receives only " +
         "push and workflow_dispatch, so there is no materialised pull request tree to name, and a " +
-        "PR_TREE here would be the materialise step of a workflow that does not have one",
+        "OVERFLOW_PR_TREE here would be the materialise step of a workflow that does not have one",
     ).toEqual(undefined);
-    expect(pushStep?.run).not.toContain("PR_TREE");
+    expect(pushStep?.run).not.toContain("OVERFLOW_PR_TREE");
   });
 
   for (const event of ["push", "workflow_dispatch"]) {
@@ -114,7 +114,7 @@ describe("the verify workflow's conflict-marker shell gate", () => {
         expect(result.stdout).not.toContain("A merge-conflict marker is committed.");
       });
 
-      it("searches the checkout, never a PR_TREE this event has no business reading", async () => {
+      it("searches the checkout, never a OVERFLOW_PR_TREE this event has no business reading", async () => {
         // The materialise step does not exist in ci.yml, so a stray value can
         // reach the shell only if something named it; the assertion above
         // says nothing does, and this case says the shell would ignore one if
@@ -155,7 +155,7 @@ describe("the verify workflow's conflict-marker shell gate", () => {
       const base = await repository("Ordinary base text\n");
       for (const prTree of [undefined, ""]) {
         const result = await run(prStep!, "workflow_run", base, prTree);
-        expect(result.status, `PR_TREE ${JSON.stringify(prTree)}`).not.toBe(0);
+        expect(result.status, `OVERFLOW_PR_TREE ${JSON.stringify(prTree)}`).not.toBe(0);
         expect(result.stderr).toContain("the pull request tree was not materialised");
       }
     });

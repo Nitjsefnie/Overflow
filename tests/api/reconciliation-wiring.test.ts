@@ -120,7 +120,7 @@ describe("production reconciliation wiring", () => {
   it("records the reason each route's own dependencies enqueue with", async () => {
     const { POST: postWebhook } = await import("@/app/api/github/webhooks/route");
     const { POST: postRepository } = await import("@/app/api/repositories/route");
-    vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+    vi.stubEnv("OVERFLOW_GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
     readSession.mockResolvedValue({ user: { id: "member-1", role: "MEMBER" } });
     // The production wiring asks GitHub which scopes the sponsor token holds
     // before building the flow (issue 599); answer that one probe here so

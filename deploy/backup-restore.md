@@ -7,10 +7,10 @@ performed. The `overflow.service` unit and the deployment procedure live in
 [README.md](README.md); this file is only about the database.
 
 Values used throughout: the database is `overflow` (the name in the app's
-`DATABASE_URL`); the application **role** on this host is `overflow_app` —
+`OVERFLOW_DATABASE_URL`); the application **role** on this host is `overflow_app` —
 not `overflow`, which is only the database's name. The role name is
 host-specific: it is whichever login role owns the application's tables,
-the one whose credentials the app's `DATABASE_URL` carries. On another
+the one whose credentials the app's `OVERFLOW_DATABASE_URL` carries. On another
 host substitute that role everywhere below; every command and SQL block
 here runs verbatim on this one.
 
@@ -72,7 +72,7 @@ One accepted exposure: the scripts pass the connection string to the client
 tools as a command-line argument, which is briefly visible in the process
 list to other local processes. The file it is sourced from is `0600` and the
 box is single-administrator; if that trade ever stops being acceptable, the
-fix is parsing `DATABASE_URL` into `PG*` environment variables inside the
+fix is parsing `OVERFLOW_DATABASE_URL` into `PG*` environment variables inside the
 scripts, which libpq reads without publishing it to the process list.
 
 ## (c) Scheduled backups
@@ -81,7 +81,7 @@ scripts, which libpq reads without publishing it to the process list.
 01:30 UTC (`Persistent=true`, so a backup missed while the host was down runs
 at the next boot). The service runs `scripts/db-backup.sh` as root with
 `EnvironmentFile=/etc/overflow/backup.env` — a dedicated file carrying the
-backup role's `DATABASE_URL`, **not** the application's
+backup role's `OVERFLOW_DATABASE_URL`, **not** the application's
 `/etc/overflow/overflow.env`, so the backup path never holds the application
 role's credentials or any other secret the app needs.
 
@@ -98,7 +98,7 @@ chown root:root /etc/overflow/backup.env
 Put one line in it:
 
 ```bash
-DATABASE_URL=postgresql://overflow_backup:<password>@127.0.0.1:5432/overflow
+OVERFLOW_DATABASE_URL=postgresql://overflow_backup:<password>@127.0.0.1:5432/overflow
 ```
 
 `<password>` is the hex string generated above: hex embeds in the URL
@@ -160,8 +160,8 @@ are plain files.
 
 `scripts/db-restore.sh [--allow-live] TARGET_DATABASE DUMP_FILE` restores a
 dump with `pg_restore --clean --if-exists --no-owner --no-privileges`. The
-connection comes from `DATABASE_URL` with the target name substituted; a
-target equal to the database `DATABASE_URL` names is refused unless
+connection comes from `OVERFLOW_DATABASE_URL` with the target name substituted; a
+target equal to the database `OVERFLOW_DATABASE_URL` names is refused unless
 `--allow-live` is passed, because `--clean` drops existing objects. The
 archive is streamed on stdin, so the dump file only has to be readable by
 whoever runs the script.
@@ -210,7 +210,7 @@ scratch="overflow_drill_$(date +%s)"
     "$dump" /tmp/overflow-drill-dump-staging.dump
   install -o postgres -g postgres -m 0500 \
     /srv/overflow/scripts/db-restore.sh /tmp/overflow-drill-restore.sh
-  sudo -u postgres env DATABASE_URL=postgresql:///"$scratch" \
+  sudo -u postgres env OVERFLOW_DATABASE_URL=postgresql:///"$scratch" \
     bash /tmp/overflow-drill-restore.sh --allow-live "$scratch" \
     /tmp/overflow-drill-dump-staging.dump
 )
@@ -230,7 +230,7 @@ made — the comparison printing `MISMATCH` for every table. If there is no
 section has nothing to work from.
 
 Note the `--allow-live`: the target equals the database the drill's
-`DATABASE_URL` names, so the safety guard demands the flag be typed on
+`OVERFLOW_DATABASE_URL` names, so the safety guard demands the flag be typed on
 purpose; nothing live is named. Then compare, per public table, production
 against the scratch:
 
@@ -266,8 +266,8 @@ sudo -u postgres psql -q -d "$scratch" \
 then the listing, with its status recorded alongside it:
 
 ```bash
-scratch_url="${DATABASE_URL%/*}/$scratch"
-pending="$(DATABASE_URL="$scratch_url" node scripts/deploy-migration-status.ts)"
+scratch_url="${OVERFLOW_DATABASE_URL%/*}/$scratch"
+pending="$(OVERFLOW_DATABASE_URL="$scratch_url" node scripts/deploy-migration-status.ts)"
 status=$?
 printf 'pending migrations in %s (listing exit %s):\n%s\n' \
   "$scratch" "$status" "${pending:-(none)}"
@@ -310,7 +310,7 @@ systemctl stop overflow.service
 
 As root and from the deployment tree (`/srv/overflow`), create the replacement
 owned by the application role and restore **as the application role**, using
-its own `DATABASE_URL`: every command below is relative to that tree.
+its own `OVERFLOW_DATABASE_URL`: every command below is relative to that tree.
 `--no-owner` then makes the app role own every restored object, which is the
 production shape, so this path needs no ownership fixups at all.
 
@@ -337,8 +337,8 @@ replacement before anything else touches it:
 
 ```bash
 cd /srv/overflow
-replacement_url="${DATABASE_URL%/*}/overflow_replacement"
-DATABASE_URL="$replacement_url" pnpm db:migrate
+replacement_url="${OVERFLOW_DATABASE_URL%/*}/overflow_replacement"
+OVERFLOW_DATABASE_URL="$replacement_url" pnpm db:migrate
 ```
 
 Three things about that block are traps rather than preferences:
@@ -413,7 +413,7 @@ bind a restore — the previous release is stopped, so nothing serves against th
 old schema while this runs, and there is no mixed-version window to review:
 
 ```bash
-pending="$(DATABASE_URL="$replacement_url" node scripts/deploy-migration-status.ts)"
+pending="$(OVERFLOW_DATABASE_URL="$replacement_url" node scripts/deploy-migration-status.ts)"
 status=$?
 if [ "$status" -ne 0 ]; then
   printf 'could not list the pending migrations; the replacement is NOT verified — do not swap it in\n' >&2
@@ -485,7 +485,7 @@ systemctl start overflow.service
 
 and verify the service per deploy/README.md section 7. To repoint by
 configuration instead of renaming, skip the two `alter database` lines and
-change `DATABASE_URL` in `/etc/overflow/overflow.env` to name
+change `OVERFLOW_DATABASE_URL` in `/etc/overflow/overflow.env` to name
 `overflow_replacement` before the restart — the rename exists so the
 environment file, the unit and the deploy procedure stay untouched. Drop
 `overflow_old_<epoch>` only after a soak period: the old database is the
@@ -578,7 +578,7 @@ neither superuser nor `overflow_app`.
 
 **Migrate and verify as (e.2) has it.** The restored `schema_migrations`
 records the backup moment, so the copy is behind the tree, and (e.2)'s
-migration block — run from `/srv/overflow` with the inline `DATABASE_URL` —
+migration block — run from `/srv/overflow` with the inline `OVERFLOW_DATABASE_URL` —
 plus its schema gate apply here unchanged. On a replacement host the tree
 comes from the public repository per [deploy/README.md](README.md).
 
@@ -611,7 +611,7 @@ rename block and the service start, after the migration and its gate.
 
 **After a host loss, the restored copy is not yet a working service.** The
 order above restores the data, but the host took its environment file with
-it, and two of its entries exist nowhere else: `TOKEN_ENCRYPTION_KEY` and
+it, and two of its entries exist nowhere else: `OVERFLOW_TOKEN_ENCRYPTION_KEY` and
 `AUTH_SECRET` live only in `/etc/overflow/overflow.env` on the host, and
 their custody is deliberately not the #credentials store that keeps the age
 private key (section (i)). What the two keys protect travels only as

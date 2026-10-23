@@ -195,7 +195,7 @@ describe("DELETE /api/account", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ deleted: true });
     expect(consoleWarn).toHaveBeenCalledExactlyOnceWith(
-      "Account deletion left no live moderator. Recovery: add a GitHub user id to MODERATOR_GITHUB_USER_IDS; the list promotes its holder at their next sign-in.",
+      "Account deletion left no live moderator. Recovery: add a GitHub user id to OVERFLOW_MODERATOR_GITHUB_USER_IDS; the list promotes its holder at their next sign-in.",
     );
     expect(deps.endSession).toHaveBeenCalledTimes(1);
   });

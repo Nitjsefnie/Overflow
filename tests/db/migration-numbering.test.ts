@@ -21,7 +21,7 @@ const databaseClient = vi.hoisted(() => ({
 
 // Standing in for the directory is what lets the production entry point be driven at all, and
 // standing in for the database is what makes the run hermetic: without it, the only thing keeping
-// these cases off whatever `DATABASE_URL` names is the guard they are testing.
+// these cases off whatever `OVERFLOW_DATABASE_URL` names is the guard they are testing.
 //
 // The listing is spread over the real module rather than replacing it, so that the day anything
 // in this module graph reaches for a third `node:fs/promises` export it finds the real one

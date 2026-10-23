@@ -79,10 +79,10 @@ image.
 
 The app service needs a `.env` file beside `docker-compose.yml` with the auth
 and webhook variables from [.env.example](../.env.example): `AUTH_SECRET`,
-`AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET`, `TOKEN_ENCRYPTION_KEY`, `APP_URL`,
-`GITHUB_WEBHOOK_URL`, `GITLAB_WEBHOOK_URL`, `MODERATOR_GITHUB_USER_IDS`, and
+`AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET`, `OVERFLOW_TOKEN_ENCRYPTION_KEY`, `OVERFLOW_APP_URL`,
+`OVERFLOW_GITHUB_WEBHOOK_URL`, `OVERFLOW_GITLAB_WEBHOOK_URL`, `OVERFLOW_MODERATOR_GITHUB_USER_IDS`, and
 `GITHUB_GRAPHQL_BUDGET_RESERVE`. Compose feeds that file to the container and
-then overrides `DATABASE_URL` to reach postgres over the compose network by
+then overrides `OVERFLOW_DATABASE_URL` to reach postgres over the compose network by
 service name, so the loopback address a host-side `.env` would carry never
 reaches the app.
 
@@ -90,24 +90,24 @@ By default both services bind to loopback — the app on `127.0.0.1:3000`, the
 database on `127.0.0.1:5432` — and `APP_HOST_BIND` / `POSTGRES_HOST_BIND`
 change their host bind addresses deliberately. `POSTGRES_HOST_PORT` changes
 the database's host port from its default of `5432`; the container port stays
-`5432`. `APP_URL` must name the real public application origin, because the
+`5432`. `OVERFLOW_APP_URL` must name the real public application origin, because the
 browser mutation guard accepts only that origin; a missing, malformed or
 opaque-origin value refuses those mutations. In production, when `AUTH_URL`,
 `AUTH_TRUST_HOST`, `VERCEL` and `CF_PAGES` are all unset, Overflow enables
-Auth.js's boolean `trustHost` flag only if `APP_URL` parses to a valid,
+Auth.js's boolean `trustHost` flag only if `OVERFLOW_APP_URL` parses to a valid,
 non-opaque origin. The first defined override in that order instead decides
 the flag: non-empty enables it and empty disables it. This flag does not
-compare incoming sign-in hosts against `APP_URL` or select the OAuth origin.
+compare incoming sign-in hosts against `OVERFLOW_APP_URL` or select the OAuth origin.
 
 The installed Auth.js packages select that origin from `AUTH_URL` (or its
 legacy fallback `NEXTAUTH_URL`) when non-empty, otherwise from the request
 URL and headers. Keep any URL override's pathname at `/` or `/api/auth` so
 the generated URLs match Overflow's mount, as described in
 [API.md](../API.md#browser-authentication-routes). A parseable but wrong
-`APP_URL` can enable host trust while refusing browser mutations from the
+`OVERFLOW_APP_URL` can enable host trust while refusing browser mutations from the
 served origin; it does not itself change GitHub's OAuth callback URL. See the
 [environment reference](../OPERATING.md#environment-reference) for the
-`APP_URL` and Auth.js overrides.
+`OVERFLOW_APP_URL` and Auth.js overrides.
 
 ## Operator ownership
 
@@ -188,15 +188,15 @@ set -a
 set +a
 ```
 
-Its `DATABASE_URL` must reach the **same database** from the operator machine.
+Its `OVERFLOW_DATABASE_URL` must reach the **same database** from the operator machine.
 Compose's `postgres` hostname is for the app's container network; on the Docker
 host use the published database address and `POSTGRES_HOST_PORT` (loopback and
 5432 by default), with that database's credentials. Do not assume the URL in
 the deployment's `.env` is the app's URL: Compose overrides it. For a remote
 operator machine, arrange a private connection to that database.
 
-Supply the same `TOKEN_ENCRYPTION_KEY`, any configured
-`TOKEN_ENCRYPTION_KEY_PREVIOUS`, callback URLs and other relevant deployment
+Supply the same `OVERFLOW_TOKEN_ENCRYPTION_KEY`, any configured
+`OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS`, callback URLs and other relevant deployment
 variables. When GitHub App authentication is configured, make the **same
 private-key file** readable on the operator machine and set
 `GITHUB_APP_PRIVATE_KEY_PATH` to its local path, with the same `GITHUB_APP_ID`;
@@ -223,7 +223,7 @@ Compose route installs.
 
 From the matching operator checkout, install PostgreSQL client tools matching
 the deployment's server major (17 in the committed Compose file). With a
-backup-role `DATABASE_URL` pointing at that deployment and a private backup
+backup-role `OVERFLOW_DATABASE_URL` pointing at that deployment and a private backup
 directory selected, run:
 
 ```sh
@@ -231,7 +231,7 @@ sh scripts/db-backup.sh --output-dir /absolute/path/private-backups
 ```
 
 For a restore drill, provision a separate target database and a role that can
-restore into it, and set `DATABASE_URL` for that server/role. For the invocation
+restore into it, and set `OVERFLOW_DATABASE_URL` for that server/role. For the invocation
 below, the URL's database name must differ from `overflow_restore_drill`:
 the script refuses an equal target without `--allow-live`. Then run:
 
@@ -239,7 +239,7 @@ the script refuses an equal target without `--allow-live`. Then run:
 sh scripts/db-restore.sh overflow_restore_drill /absolute/path/private-backups/selected.dump
 ```
 
-The restore script substitutes the target database name in `DATABASE_URL` and
+The restore script substitutes the target database name in `OVERFLOW_DATABASE_URL` and
 refuses to overwrite the database the URL names unless `--allow-live` is
 passed. It restores with `--no-owner --no-privileges`; the operator must supply
 the target, role and grants. Use the [restore drill and replacement procedure](backup-restore.md#e-restoring)
@@ -267,7 +267,7 @@ one database race their migrations — so scale to one app container and let the
 platform's restart policy, not replicas, absorb failures.
 
 **Configuration arrives at runtime.** Compose supplies `.env` variables through
-`env_file` and overrides `DATABASE_URL`. When GitHub App authentication is
+`env_file` and overrides `OVERFLOW_DATABASE_URL`. When GitHub App authentication is
 configured, the code also reads the private-key file named by
 `GITHUB_APP_PRIVATE_KEY_PATH`: the operator must supply a read-only mount in a
 Compose override and make it readable by the runtime user. The committed

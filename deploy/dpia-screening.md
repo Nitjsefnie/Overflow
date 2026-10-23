@@ -84,7 +84,7 @@ account along warned, recalibrating and banned as confirmed miscalibrations
 accumulate — are applied by people acting in a moderator session: the
 moderation routes gate on `requiredModeratorSession`
 (`src/lib/moderation/route-auth.ts`), the roster of moderators is resolved at
-sign-in from the `MODERATOR_GITHUB_USER_IDS` environment entry with grants made
+sign-in from the `OVERFLOW_MODERATOR_GITHUB_USER_IDS` environment entry with grants made
 inside the product persisting in the database
 (`src/lib/moderation/roles.ts`). The transition logic itself lives in
 `src/lib/moderation/transitions.ts` and

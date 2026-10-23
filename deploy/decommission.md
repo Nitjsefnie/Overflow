@@ -57,7 +57,7 @@ something that cannot be recovered afterwards:
    tokens created.
 
 Values used throughout: the database is `overflow` (the name in the app's
-`DATABASE_URL`); the application **role** on this host is `overflow_app` and
+`OVERFLOW_DATABASE_URL`); the application **role** on this host is `overflow_app` and
 the least-privilege backup role is `overflow_backup`. The role names are
 host-specific: they are the login role that owns the application's tables and
 the read-only role
@@ -653,8 +653,8 @@ reconciliation App it is `0750 root:overflow` — traversable by the service
 account so the reconciliation App's key stays readable — and the files within it are
 `0600`:
 
-- `overflow.env` — `DATABASE_URL` with the database role's password, the
-  OAuth client credentials, `AUTH_SECRET`, and `TOKEN_ENCRYPTION_KEY`, the
+- `overflow.env` — `OVERFLOW_DATABASE_URL` with the database role's password, the
+  OAuth client credentials, `AUTH_SECRET`, and `OVERFLOW_TOKEN_ENCRYPTION_KEY`, the
   key that sealed every stored credential
   ([README.md section 11](README.md#11-rotating-the-credential-encryption-key)).
   The credentials it sealed are already destroyed with the database, and the
@@ -663,7 +663,7 @@ account so the reconciliation App's key stays readable — and the files within 
   that lives anywhere else — but a key whose ciphertext is gone elsewhere is
   still disposed of here, and `AUTH_SECRET` is what the members' outstanding
   session cookies are signed with.
-- `backup.env` — the backup role's `DATABASE_URL` and password
+- `backup.env` — the backup role's `OVERFLOW_DATABASE_URL` and password
   ([backup-restore.md](backup-restore.md#b-the-least-privilege-backup-role)),
   plus, on a deployment running the off-host copy, the age recipient public
   key and the backups channel id. The `osc` identity's token is not in the
@@ -849,7 +849,7 @@ path), or unchanged from it (no-vacuum path).
 The webhooks are gone: spot-check a repository from the sweep list and
 assert no Overflow webhook remains — the repository may carry unrelated
 webhooks, so the list need not be empty. The Overflow webhook is the one
-whose `config.url` carries the deployment's `GITHUB_WEBHOOK_URL` and the
+whose `config.url` carries the deployment's `OVERFLOW_GITHUB_WEBHOOK_URL` and the
 `hook=<uuid>` parameter registration appends.
 
 ```sh
@@ -857,7 +857,7 @@ gh api "repos/<owner>/<name>/hooks" --jq '.[] | .config.url'
 ```
 
 ```text
-No URL in the output carries the deployment's GITHUB_WEBHOOK_URL or a
+No URL in the output carries the deployment's OVERFLOW_GITHUB_WEBHOOK_URL or a
 hook=<uuid> parameter: no Overflow webhook remains.
 ```
 
@@ -866,7 +866,7 @@ including projects that appeared only in the abandoned-hook inventory. List
 their hooks with an authorized PAT, as in phase 4. Read every page: increment
 `page` and repeat the request until it returns an empty array. A failed
 request is not evidence of absence. None of the returned hook URLs may point
-at the retired deployment's `GITLAB_WEBHOOK_URL` (including the `hook=<uuid>`
+at the retired deployment's `OVERFLOW_GITLAB_WEBHOOK_URL` (including the `hook=<uuid>`
 parameter registration appends). Leave unrelated hooks alone.
 
 ```sh

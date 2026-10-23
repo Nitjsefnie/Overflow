@@ -20,17 +20,17 @@ import { verifiedRepositoryAt } from "../support/verified-repository";
 
 let sql: Sql;
 let sequence = 81_000_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 beforeAll(async () => {
   const started = await startPostgresContainer({ database: "dispute_url", user: "dispute_url" });
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   execFileSync("pnpm", ["db:migrate"], { env: { ...process.env, OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD: "skip" } });
   sql = getSql();
 });
 afterAll(async () => {
   await closeSql();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 

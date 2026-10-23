@@ -135,12 +135,12 @@ describe("the coverage comment workflow", () => {
       "the head branch is attacker-controlled and must enter the shell through env; the head repository and SHA bind the destination to the triggering run",
     ).toEqual({
       GH_TOKEN: "${{ github.token }}",
-      REPO_SLUG: "${{ github.repository }}",
-      HEAD_BRANCH: "${{ github.event.workflow_run.head_branch }}",
-      HEAD_OWNER: "${{ github.event.workflow_run.head_repository.owner.login }}",
-      HEAD_REPO: "${{ github.event.workflow_run.head_repository.full_name }}",
-      HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
-      RUN_EVENT: "${{ github.event.workflow_run.event }}",
+      OVERFLOW_REPO_SLUG: "${{ github.repository }}",
+      OVERFLOW_HEAD_BRANCH: "${{ github.event.workflow_run.head_branch }}",
+      OVERFLOW_HEAD_OWNER: "${{ github.event.workflow_run.head_repository.owner.login }}",
+      OVERFLOW_HEAD_REPO: "${{ github.event.workflow_run.head_repository.full_name }}",
+      OVERFLOW_HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
+      OVERFLOW_RUN_EVENT: "${{ github.event.workflow_run.event }}",
     });
   });
 
@@ -148,7 +148,7 @@ describe("the coverage comment workflow", () => {
     const [resolve] = steps.filter((step) => step.name === "Resolve the destination pull request");
     const guard = (resolve?.run ?? "")
       .split("\n")
-      .filter((line) => /^\s*if \[\[.*\bRUN_EVENT\b/.test(line));
+      .filter((line) => /^\s*if \[\[.*\bOVERFLOW_RUN_EVENT\b/.test(line));
     expect(
       guard,
       "the resolve step must gate the destination on the triggering run's event",
@@ -156,7 +156,7 @@ describe("the coverage comment workflow", () => {
     const condition = guard[0]?.match(/^if \[\[(.*)\]\]; then$/)?.[1];
     expect(
       condition,
-      `the guard must be one [[ ]] comparison naming RUN_EVENT, so its accepted set is readable; got: ${guard[0]}`,
+      `the guard must be one [[ ]] comparison naming OVERFLOW_RUN_EVENT, so its accepted set is readable; got: ${guard[0]}`,
     ).toBeDefined();
     // The probe universe below is a hand-typed list, so it can only report an
     // event someone thought to name. These two assertions close it: the guard
@@ -195,7 +195,7 @@ describe("the coverage comment workflow", () => {
     const accepted = probeUniverse.filter((event) => {
       const probe = spawnSync(
         "bash",
-        ["--noprofile", "--norc", "-c", `RUN_EVENT=${JSON.stringify(event)}; if [[ ${condition} ]]; then echo reject; else echo accept; fi`],
+        ["--noprofile", "--norc", "-c", `OVERFLOW_RUN_EVENT=${JSON.stringify(event)}; if [[ ${condition} ]]; then echo reject; else echo accept; fi`],
         { encoding: "utf8" },
       );
       expect(probe.status, `evaluating the guard for ${JSON.stringify(event)}: ${probe.stderr}`).toBe(0);
@@ -211,10 +211,10 @@ describe("the coverage comment workflow", () => {
     const [body] = steps.filter((step) => step.name === "Determine the comment body");
     expect(body, "the body step must exist").toBeDefined();
     expect(body.env).toEqual({
-      CONCLUSION: "${{ github.event.workflow_run.conclusion }}",
-      HEAD_BRANCH: "${{ github.event.workflow_run.head_branch }}",
-      PR_NUMBER: "${{ steps.pr.outputs.pr_number }}",
-      SAME_REPO: "${{ steps.pr.outputs.same_repo }}",
+      OVERFLOW_CONCLUSION: "${{ github.event.workflow_run.conclusion }}",
+      OVERFLOW_HEAD_BRANCH: "${{ github.event.workflow_run.head_branch }}",
+      OVERFLOW_PR_NUMBER: "${{ steps.pr.outputs.pr_number }}",
+      OVERFLOW_SAME_REPO: "${{ steps.pr.outputs.same_repo }}",
     });
   });
 

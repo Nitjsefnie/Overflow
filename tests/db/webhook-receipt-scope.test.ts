@@ -14,13 +14,13 @@ import { startPostgresContainer } from "../support/postgres-container";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 describe("scoped webhook receipts", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({ database: "receipt_scope", user: "receipt_scope", password: "receipt_scope" });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -28,8 +28,8 @@ describe("scoped webhook receipts", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it.each(["github", "gitlab"] as const)("cannot consume another %s registration's receipt with a colliding header", async (provider) => {

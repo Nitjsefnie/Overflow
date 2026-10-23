@@ -71,7 +71,7 @@ it.each([
         export default { ...config, test: { ...config.test,
           setupFiles: [...config.test.setupFiles, ${JSON.stringify(setup)}] } };`);
       const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: root, TMP: root, TEMP: root };
-      delete env.DATABASE_URL;
+      delete env.OVERFLOW_DATABASE_URL;
       const child = spawnSync("pnpm", ["test", "--run", "--maxWorkers=2", suite, "--config", config, "-t", filter,
         "--reporter=default", "--reporter=json", `--outputFile=${report}`], { env, encoding: "utf8", timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
       expect(child.error, child.stderr).toBeUndefined();

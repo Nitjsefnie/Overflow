@@ -14,14 +14,14 @@ import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 const key = Buffer.alloc(32, 31).toString("base64url");
 
 describe("repository publication fencing", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({ database: "fencing", user: "fencing", password: "fencing" });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -29,14 +29,14 @@ describe("repository publication fencing", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   // Defect: identity UPDATE uses the work pool after its coordination session died.
   it("does not let a reclaimed worker's older identity overwrite the successor", async () => {
     const { repositoryId } = await fixture();
-    const coordination = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const coordination = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1 });
     const olderStore = new PostgresFoldStore(sql, key, coordination);
     const newerStore = new PostgresFoldStore(sql, key);
     const entered = signal();
@@ -82,7 +82,7 @@ describe("repository publication fencing", () => {
   // Defect: an obsolete empty snapshot deletes the newer fold's derived facts.
   it("does not let a lost session remove a newer materialization", async () => {
     const { repositoryId, fold } = await fixture();
-    const coordination = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const coordination = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1 });
     const olderStore = new PostgresFoldStore(sql, key, coordination);
     const newerStore = new PostgresFoldStore(sql, key);
     const entered = signal();
@@ -120,7 +120,7 @@ describe("repository publication fencing", () => {
     "rejects %s after session loss even without a successor",
     async (publication) => {
       const { repositoryId, fold } = await fixture();
-      const coordination = postgres(process.env.DATABASE_URL!, { max: 1 });
+      const coordination = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1 });
       const store = new PostgresFoldStore(sql, key, coordination);
       const notBefore = new Date("2030-01-01T00:00:00Z");
       await sql`update registered_repositories set reconciliation_not_before = ${notBefore}
@@ -211,8 +211,8 @@ describe("repository publication fencing", () => {
   it.each([false, true])("retains coordination through detached COMMIT when callback failure is %s", async (failCallback) => {
     const { repositoryId } = await fixture();
     const before = await repositoryState(repositoryId);
-    const work = postgres(process.env.DATABASE_URL!, { connection: { application_name: "fence-detached-commit" } });
-    const coordination = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const work = postgres(process.env.OVERFLOW_DATABASE_URL!, { connection: { application_name: "fence-detached-commit" } });
+    const coordination = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1 });
     const reserve = coordination.reserve.bind(coordination);
     let connection!: Awaited<ReturnType<Sql["reserve"]>>;
     coordination.reserve = async () => { connection = await reserve(); return connection; };
@@ -284,9 +284,9 @@ describe("repository publication fencing", () => {
   // UPDATE. Checking ownership before acquiring the repository row fails here.
   it("holds the repository row before snapshot reads and orders an admitted fold before its successor", async () => {
     const { repositoryId, fold } = await fixture();
-    const coordination = postgres(process.env.DATABASE_URL!, { max: 1 });
-    const oldSql = postgres(process.env.DATABASE_URL!, { connection: { application_name: "fence-admitted" } });
-    const newSql = postgres(process.env.DATABASE_URL!, { connection: { application_name: "fence-successor" } });
+    const coordination = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1 });
+    const oldSql = postgres(process.env.OVERFLOW_DATABASE_URL!, { connection: { application_name: "fence-admitted" } });
+    const newSql = postgres(process.env.OVERFLOW_DATABASE_URL!, { connection: { application_name: "fence-successor" } });
     const oldStore = new PostgresFoldStore(oldSql, key, coordination);
     const newStore = new PostgresFoldStore(newSql, key);
     const locked = signal();
@@ -341,8 +341,8 @@ describe("repository publication fencing", () => {
     await sql`update registered_repositories set visibility = 'PRIVATE', unavailable_reason = 'NOT_FOUND',
       unavailable_since = now() where id = ${repositoryId}`;
     const before = await repositoryState(repositoryId);
-    const coordination = postgres(process.env.DATABASE_URL!, { max: 1 });
-    const work = postgres(process.env.DATABASE_URL!, { connection: { application_name: "fence-collision" } });
+    const coordination = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1 });
+    const work = postgres(process.env.OVERFLOW_DATABASE_URL!, { connection: { application_name: "fence-collision" } });
     const store = new PostgresFoldStore(work, key, coordination);
     const locked = signal();
     const release = signal();
@@ -377,7 +377,7 @@ describe("repository publication fencing", () => {
     await sql`create role fencing_app login password 'fencing-app'`;
     await sql`grant usage on schema public to fencing_app`;
     await sql`grant select, insert, update, delete on all tables in schema public to fencing_app`;
-    const url = new URL(process.env.DATABASE_URL!);
+    const url = new URL(process.env.OVERFLOW_DATABASE_URL!);
     url.username = "fencing_app";
     url.password = "fencing-app";
     const work = postgres(url.toString());
@@ -396,7 +396,7 @@ describe("repository publication fencing", () => {
   it.each(["different key", "shared mode"])("refuses a live backend holding only a lock with %s", async (replacement) => {
     const { repositoryId } = await fixture();
     const before = await repositoryState(repositoryId);
-    const coordination = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const coordination = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1 });
     const reserve = coordination.reserve.bind(coordination);
     let connection!: Awaited<ReturnType<Sql["reserve"]>>;
     coordination.reserve = async () => { connection = await reserve(); return connection; };
@@ -426,7 +426,7 @@ describe("repository publication fencing", () => {
   it("does not let a dead coordination session's reclaim release a successor's lock", async () => {
     const { repositoryId } = await fixture();
     const { repositoryId: successorId } = await fixture();
-    const coordination = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const coordination = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1 });
     const store = new PostgresFoldStore(sql, key, coordination);
     const olderEntered = signal();
     const olderRelease = signal();
@@ -471,7 +471,7 @@ describe("repository publication fencing", () => {
   it("does not let a failed unlock's reclaim release a successor's lock", async () => {
     const { repositoryId } = await fixture();
     const { repositoryId: successorId } = await fixture();
-    const coordination = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const coordination = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1 });
     const reserve = coordination.reserve.bind(coordination);
     // Refusal is scoped to the dead coordinator: its scope-exit unlock is the statement that
     // must not answer. The successor's own unlock has to reach the database, or the case could
@@ -542,7 +542,7 @@ describe("repository publication fencing", () => {
   // releases the successor's lock — no warning, no reclaim-skip, nothing.
   it("does not let a dead coordinator's unlock release a successor's lock on the same repository", async () => {
     const { repositoryId } = await fixture();
-    const coordination = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const coordination = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1 });
     const store = new PostgresFoldStore(sql, key, coordination);
     const olderEntered = signal();
     const olderRelease = signal();

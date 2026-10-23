@@ -76,7 +76,7 @@ const githubUserBody = {
 const now = new Date("2026-09-26T12:00:00.000Z");
 const nowSeconds = now.getTime() / 1000;
 
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 const originalAuthUrl = process.env.AUTH_URL;
 const originalNextAuthUrl = process.env.NEXTAUTH_URL;
 let container: StartedTestContainer | undefined;
@@ -92,7 +92,7 @@ beforeAll(async () => {
     password: "session_cookie_content",
   });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   await runMigrations();
   sql = postgres(started.databaseUrl, { max: 1 });
   // The row the sign-in below upserts. Seeding it here makes the tests
@@ -111,11 +111,11 @@ beforeAll(async () => {
   vi.stubEnv("AUTH_GITHUB_ID", "session-cookie-content-client-id");
   vi.stubEnv("AUTH_GITHUB_SECRET", "session-cookie-content-client-secret");
   vi.stubEnv("AUTH_TRUST_HOST", "true");
-  vi.stubEnv("APP_URL", appUrl);
-  vi.stubEnv("TOKEN_ENCRYPTION_KEY", tokenEncryptionKey);
+  vi.stubEnv("OVERFLOW_APP_URL", appUrl);
+  vi.stubEnv("OVERFLOW_TOKEN_ENCRYPTION_KEY", tokenEncryptionKey);
   // A non-matching moderator id keeps the seeded account's MEMBER role
   // deterministic.
-  vi.stubEnv("MODERATOR_GITHUB_USER_IDS", "1");
+  vi.stubEnv("OVERFLOW_MODERATOR_GITHUB_USER_IDS", "1");
   // AUTH_URL/NEXTAUTH_URL are deliberately absent: the handlers are driven
   // with plain `Request` objects, and next-auth rewrites the request origin
   // (through a NextRequest) only when one of them is set. With
@@ -140,9 +140,9 @@ afterAll(async () => {
   await sql?.end();
   await container?.stop();
   if (originalDatabaseUrl === undefined) {
-    delete process.env.DATABASE_URL;
+    delete process.env.OVERFLOW_DATABASE_URL;
   } else {
-    process.env.DATABASE_URL = originalDatabaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   }
   if (originalAuthUrl === undefined) {
     delete process.env.AUTH_URL;

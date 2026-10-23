@@ -25,7 +25,7 @@ const absentRepositoryId = "00000000-0000-4000-8000-0000000000ff";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 useTrustedOrigin();
 
@@ -44,7 +44,7 @@ describe("repository re-derivation status", () => {
       password: "rederivation_status_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
     const [account] = await sql<{ id: string }[]>`
@@ -57,8 +57,8 @@ describe("repository re-derivation status", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it.each(tables)("counts a stale %s row below the revision and back at it once restamped", async (table) => {

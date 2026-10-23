@@ -28,7 +28,7 @@ let databaseUrl: string;
 let sql: Sql;
 let store: PostgresRepositoryStore;
 let externalId = 8_600_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 const tokenEncryptionKey = Buffer.alloc(32, 19).toString("base64url");
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -41,7 +41,7 @@ describe("registering a repository against the real registered_repositories cons
     });
     container = started.container;
     databaseUrl = started.databaseUrl;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
     store = new PostgresRepositoryStore(sql, tokenEncryptionKey);
@@ -51,9 +51,9 @@ describe("registering a repository against the real registered_repositories cons
     await closeSql();
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 
@@ -564,7 +564,7 @@ describe("registering a repository against the real registered_repositories cons
 
 describe("changing a registered repository's difficulty catalog", () => {
   let container: StartedTestContainer | undefined;
-  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
   beforeAll(async () => {
     const started = await startPostgresContainer({
@@ -573,7 +573,7 @@ describe("changing a registered repository's difficulty catalog", () => {
       password: "registration_catalog",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
     store = new PostgresRepositoryStore(sql, tokenEncryptionKey);
@@ -583,9 +583,9 @@ describe("changing a registered repository's difficulty catalog", () => {
     await closeSql();
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 
@@ -817,7 +817,7 @@ describe("changing a registered repository's difficulty catalog", () => {
 
 describe("unregistering a repository against the real registered_repositories constraints", () => {
   let container: StartedTestContainer | undefined;
-  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
   beforeAll(async () => {
     const started = await startPostgresContainer({
@@ -826,7 +826,7 @@ describe("unregistering a repository against the real registered_repositories co
       password: "registration_unregistration",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
     store = new PostgresRepositoryStore(sql, tokenEncryptionKey);
@@ -836,9 +836,9 @@ describe("unregistering a repository against the real registered_repositories co
     await closeSql();
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 

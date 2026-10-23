@@ -55,7 +55,7 @@ beforeAll(async () => {
   vi.stubEnv("AUTH_GITHUB_ID", "undecryptable-session-logging-client-id");
   vi.stubEnv("AUTH_GITHUB_SECRET", "undecryptable-session-logging-client-secret");
   vi.stubEnv("AUTH_TRUST_HOST", "true");
-  vi.stubEnv("APP_URL", appUrl);
+  vi.stubEnv("OVERFLOW_APP_URL", appUrl);
   // Deliberately absent, as in tests/auth/session-cookie-content.test.ts:
   // with one set, next-auth rewrites the request origin through a NextRequest
   // before @auth/core reads it; with neither, the request's own origin is

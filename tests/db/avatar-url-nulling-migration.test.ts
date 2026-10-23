@@ -13,7 +13,7 @@ import { closeSql, getSql } from "@/lib/db/client";
  * this migration erases.
  */
 
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 let container: StartedTestContainer | undefined;
 let avatarUserId: string | undefined;
 let deletedAvatarUserId: string | undefined;
@@ -25,7 +25,7 @@ beforeAll(async () => {
     password: "overflow_1071_avatar_nulling",
   });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   // The pre-migration schema: everything through 062, so the seed below is
   // the old world's write.
   await runMigrations({ upTo: "062_webhook_delivery_body_digest.sql" });
@@ -50,8 +50,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeSql();
   await container?.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
 });
 
 describe("migration 063 nulls the stored avatar URLs", () => {

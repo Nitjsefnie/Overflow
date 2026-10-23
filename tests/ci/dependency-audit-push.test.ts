@@ -81,8 +81,8 @@ describe("the fast path is an outcome, not a skip", () => {
     // step's env block; a ${{ }} inside the run block would be an
     // interpolation channel this repository denies everywhere.
     expect(auditStep?.env).toEqual({
-      EVENT_NAME: "${{ github.event_name }}",
-      BEFORE_SHA: "${{ github.event.before }}",
+      OVERFLOW_EVENT_NAME: "${{ github.event_name }}",
+      OVERFLOW_BEFORE_SHA: "${{ github.event.before }}",
     });
     expect(auditStep?.run ?? "").not.toContain("${{");
   });
@@ -90,16 +90,16 @@ describe("the fast path is an outcome, not a skip", () => {
   it("classifies inside the script, and every ambiguity falls through to the audit", () => {
     const run = auditStep?.run ?? "";
     // The fast path is gated on the push event only.
-    expect(run).toContain('[ "${EVENT_NAME:?}" = "push" ]');
+    expect(run).toContain('[ "${OVERFLOW_EVENT_NAME:?}" = "push" ]');
     // The before-SHA must be 40 hex and not the all-zeros SHA a new branch
     // or a force push carries.
-    expect(run).toContain(`printf '%s' "\${BEFORE_SHA}" | grep -Eq '^[0-9a-f]{40}$'`);
-    expect(run).toContain('[ "${BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]');
+    expect(run).toContain(`printf '%s' "\${OVERFLOW_BEFORE_SHA}" | grep -Eq '^[0-9a-f]{40}$'`);
+    expect(run).toContain(`[ "\${OVERFLOW_BEFORE_SHA}" != "${"0".repeat(40)}" ]`);
     // The before commit must be present and an ancestor of the pushed HEAD.
-    expect(run).toContain('git cat-file -e "${BEFORE_SHA}^{commit}"');
-    expect(run).toContain('git merge-base --is-ancestor "${BEFORE_SHA}" HEAD');
+    expect(run).toContain('git cat-file -e "${OVERFLOW_BEFORE_SHA}^{commit}"');
+    expect(run).toContain('git merge-base --is-ancestor "${OVERFLOW_BEFORE_SHA}" HEAD');
     // The manifest diff is the classification itself.
-    expect(run).toContain('git diff --quiet "${BEFORE_SHA}" HEAD -- package.json pnpm-lock.yaml');
+    expect(run).toContain('git diff --quiet "${OVERFLOW_BEFORE_SHA}" HEAD -- package.json pnpm-lock.yaml');
     // The outcome is recorded inside the branch; the audit follows untouched.
     expect(run.indexOf(FAST_PATH_MARKER)).toBeGreaterThan(-1);
     expect(run.indexOf("exit 0")).toBeGreaterThan(run.indexOf(FAST_PATH_MARKER));
@@ -260,8 +260,8 @@ describe.skipIf(!LINUX_ONLY)("the audit step's classification, run over scratch 
       ...process.env,
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_CONFIG_NOSYSTEM: "1",
-      EVENT_NAME: eventName,
-      BEFORE_SHA: beforeSha ?? "",
+      OVERFLOW_EVENT_NAME: eventName,
+      OVERFLOW_BEFORE_SHA: beforeSha ?? "",
       AUDIT_STUB_DIR: stubDir,
       DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS: "7",
       PATH: `${join(home, "bin")}:${dirname(process.execPath)}:${process.env.PATH ?? ""}`,

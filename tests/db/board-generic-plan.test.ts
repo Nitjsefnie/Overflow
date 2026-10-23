@@ -34,7 +34,7 @@ import type { DashboardSql } from "@/lib/dashboard/queries";
  */
 describe("the board statement's served plan mode", () => {
   let container: StartedTestContainer | undefined;
-  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
   beforeAll(async () => {
     const started = await startPostgresContainer({
@@ -43,7 +43,7 @@ describe("the board statement's served plan mode", () => {
       password: "board_generic_plan",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     realSql = getSql();
     await runMigrations();
     await seedPlanWorld();
@@ -56,9 +56,9 @@ describe("the board statement's served plan mode", () => {
     await closeSql();
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 
@@ -195,7 +195,7 @@ const seeded = {
 
 /**
  * One module-level client binding: the beforeAll assigns it after
- * DATABASE_URL points at the container, and closeSql in afterAll releases it.
+ * OVERFLOW_DATABASE_URL points at the container, and closeSql in afterAll releases it.
  */
 let realSql: Sql;
 

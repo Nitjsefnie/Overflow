@@ -120,18 +120,18 @@ function harness(over: {
     return new Response(JSON.stringify(result));
   }) as typeof fetch;
   const env: Record<string, string | undefined> = {
-    ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623",
-    LEDGER_INSTALLATION_ID: "166057493",
-    LEDGER_APP_KEY: keyPem,
+    ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623",
+    OVERFLOW_LEDGER_INSTALLATION_ID: "166057493",
+    OVERFLOW_LEDGER_APP_KEY: keyPem,
     GITHUB_REPOSITORY: REPO,
     GITHUB_REPOSITORY_ID: REPO_ID,
-    GITHUB_WORKFLOW_RUN_ID: "9001",
-    GITHUB_WORKFLOW_RUN_HEAD_SHA: MAIN_SHA,
-    GITHUB_WORKFLOW_RUN_PATH: VERIFY_PATH,
-    GITHUB_WORKFLOW_RUN_CONCLUSION: "success",
-    GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/${REPO}/actions/runs/9001`,
-    GITHUB_WORKFLOW_RUN_EVENT: "workflow_run",
-    GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "9001",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: MAIN_SHA,
+    OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: VERIFY_PATH,
+    OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "success",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/${REPO}/actions/runs/9001`,
+    OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "workflow_run",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
     ...over.env,
   };
   return {
@@ -152,8 +152,8 @@ describe("API-backed workflow_run verify", () => {
     "posts verify from a good upstream on the PR SHA through %s, never the producer's main SHA",
     async (mode) => {
       const h = harness({ env: mode === "dispatch" ? {
-        GITHUB_WORKFLOW_RUN_ID: "",
-        LEDGER_DISPATCH_RUN_ID: "9001",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "",
+        OVERFLOW_LEDGER_DISPATCH_RUN_ID: "9001",
       } : {} });
       const result = await h.run();
       expect(result.posted).toEqual(["verify"]);
@@ -203,7 +203,7 @@ describe("API-backed workflow_run verify", () => {
   it.each([9002, undefined])("binds dispatch recovery to the requested id when the API reports %s", async (id) => {
     const h = harness({
       producer: producer({ id }),
-      env: { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_DISPATCH_RUN_ID: "9001" },
+      env: { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "", OVERFLOW_LEDGER_DISPATCH_RUN_ID: "9001" },
     });
     await expect(h.run()).rejects.toThrow(/producer.*id/);
     expect(h.requests).toContain(runsUrl);
@@ -213,7 +213,7 @@ describe("API-backed workflow_run verify", () => {
 
   it("throws for an unpinned workflow_run producer path instead of silently returning", async () => {
     const h = harness({
-      env: { GITHUB_WORKFLOW_RUN_PATH: ".github/workflows/other.yml" },
+      env: { OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: ".github/workflows/other.yml" },
       producer: producer({ path: ".github/workflows/other.yml" }),
     });
     await expect(h.run()).rejects.toThrow(/producer.*path/);
@@ -272,7 +272,7 @@ describe("API-backed workflow_run verify", () => {
 });
 
 describe("workflow_run orphan sweep", () => {
-  const sweepEnv = { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" };
+  const sweepEnv = { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "", OVERFLOW_LEDGER_SWEEP_ONLY: "true" };
 
   it("resolves orphaned verify onto the PR head before attestation and posting", async () => {
     const h = harness({ env: sweepEnv, handlers: {
@@ -363,7 +363,7 @@ describe("superseded verification never publishes", () => {
     const newer = suite({ id: 8002, status: state === "in_progress" ? state : "completed", conclusion: state === "failure" ? state : null });
     for (const orphan of [false, true]) {
       const h = harness({
-        env: orphan ? { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" } : {},
+        env: orphan ? { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "", OVERFLOW_LEDGER_SWEEP_ONLY: "true" } : {},
         handlers: {
           [suiteRunsUrl()]: { total_count: 2, workflow_runs: [suite(), newer] },
           ...(orphan ? { [runsUrl]: { workflow_runs: [producer()] } } : {}),
@@ -379,7 +379,7 @@ describe("superseded verification never publishes", () => {
     for (const orphan of [false, true]) {
       const h = harness({
         upstream: suite({ run_attempt: 2, run_started_at: "2026-10-12T10:00:00Z" }),
-        env: orphan ? { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" } : {},
+        env: orphan ? { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "", OVERFLOW_LEDGER_SWEEP_ONLY: "true" } : {},
         handlers: orphan ? { [runsUrl]: { workflow_runs: [producer()] } } : {},
       });
       const result = await h.run();
@@ -390,7 +390,7 @@ describe("superseded verification never publishes", () => {
 
   it.each([false, true])("supersession read failure throws, orphan=%s", async (orphan) => {
     const h = harness({
-      env: orphan ? { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" } : {},
+      env: orphan ? { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "", OVERFLOW_LEDGER_SWEEP_ONLY: "true" } : {},
       handlers: {
         [suiteRunsUrl()]: { httpStatus: 404 },
         ...(orphan ? { [runsUrl]: { workflow_runs: [producer()] } } : {}),
@@ -407,7 +407,7 @@ describe("publication rechecks supersession after reading job results", () => {
   it.each([false, true])("a newer failure appearing just before POST suppresses publication, orphan=%s", async (orphan) => {
     let reads = 0;
     const h = harness({
-      env: orphan ? { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" } : {},
+      env: orphan ? { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "", OVERFLOW_LEDGER_SWEEP_ONLY: "true" } : {},
       handlers: {
         [suiteRunsUrl()]: () => {
           reads += 1;
@@ -432,7 +432,7 @@ describe("complete listing for mirror and orphan supersession", () => {
   const pageUrl = (page: number) => `${API}/actions/workflows/pr-suite.yml/runs?head_sha=${PR_SHA}&event=pull_request&per_page=100&page=${page}`;
   function paged(orphan: boolean, second: unknown = { total_count: 101, workflow_runs: history.slice(100) }, first: unknown = { total_count: 101, workflow_runs: history.slice(0, 100) }) {
     return harness({
-      env: orphan ? { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" } : { GITHUB_WORKFLOW_RUN_ID: "9101" },
+      env: orphan ? { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "", OVERFLOW_LEDGER_SWEEP_ONLY: "true" } : { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "9101" },
       handlers: {
         [runUrl(8101)]: newest, [runUrl(9101)]: verify,
         [jobsUrl(9101)]: { jobs: [{ name: "verify", status: "completed", conclusion: "success" }] },
@@ -530,7 +530,7 @@ describe("producer-bound workflow_run sweep attestation", () => {
   it.each(["mirror", "sweep"])("selects a completed producer through %s when a newer listed completion is now rerunning", async (mode) => {
     const newer = producer({ id: 9002, conclusion: "failure" });
     const h = harness({
-      env: mode === "sweep" ? { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" } : {},
+      env: mode === "sweep" ? { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "", OVERFLOW_LEDGER_SWEEP_ONLY: "true" } : {},
       handlers: {
         [runsUrl]: { workflow_runs: [newer, producer()] },
         [runUrl(9002)]: { ...newer, status: "in_progress", conclusion: null, run_attempt: 2 },
@@ -556,7 +556,7 @@ describe("producer-bound workflow_run sweep attestation", () => {
       html_url: `https://github.com/${REPO}/actions/runs/9002`,
     });
     const recovery = harness({
-      env: { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" },
+      env: { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "", OVERFLOW_LEDGER_SWEEP_ONLY: "true" },
       handlers: {
         [runsUrl]: { workflow_runs: [failedVerify, producer()] },
         [runUrl(9002)]: failedVerify,
@@ -590,10 +590,10 @@ describe("trigger recency and attempt attestation", () => {
     const h = harness({
       pinMap: { actionlint: path },
       env: {
-        GITHUB_WORKFLOW_RUN_ID: "9003", GITHUB_WORKFLOW_RUN_PATH: path,
-        GITHUB_WORKFLOW_RUN_EVENT: "pull_request_target", GITHUB_WORKFLOW_RUN_HEAD_SHA: PR_SHA,
-        GITHUB_WORKFLOW_RUN_CONCLUSION: "failure", GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
-        GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/${REPO}/actions/runs/9003`,
+        OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "9003", OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: path,
+        OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "pull_request_target", OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: PR_SHA,
+        OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "failure", OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/${REPO}/actions/runs/9003`,
       },
       handlers: {
         [runsUrl]: { workflow_runs: listed ? [current, older] : [older] },
@@ -614,7 +614,7 @@ describe("trigger recency and attempt attestation", () => {
     const trigger = producer({ id: 9003 });
     const older = producer({ id: 9002, event: "pull_request_target", head_sha: PR_SHA });
     const h = harness({
-      env: { GITHUB_WORKFLOW_RUN_ID: "9003" },
+      env: { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "9003" },
       handlers: {
         [runUrl(9003)]: trigger,
         [jobsUrl(9003)]: { jobs: [{ name: "verify", run_attempt: 1, status: "completed", conclusion: "success" }] },
@@ -637,7 +637,7 @@ describe("trigger recency and attempt attestation", () => {
 
   it("replaces attempt 1's real green at the same URL with orphaned attempt 2's failure", async () => {
     const first = producer({ id: 9002 });
-    const initial = harness({ env: { GITHUB_WORKFLOW_RUN_ID: "9002" }, handlers: {
+    const initial = harness({ env: { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "9002" }, handlers: {
       [runUrl(9002)]: first,
       [jobsUrl(9002)]: { jobs: [{ name: "verify", run_attempt: 1, status: "completed", conclusion: "success" }] },
     } });
@@ -645,7 +645,7 @@ describe("trigger recency and attempt attestation", () => {
     const green = { ...initial.posts[0], external_id: "9002:1", app: { id: 5118623 } };
     const rerun = producer({ id: 9002, run_attempt: 2, conclusion: "failure" });
     const recovery = harness({
-      env: { GITHUB_WORKFLOW_RUN_ID: "", LEDGER_SWEEP_ONLY: "true" },
+      env: { OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "", OVERFLOW_LEDGER_SWEEP_ONLY: "true" },
       handlers: {
         [runsUrl]: { workflow_runs: [rerun] }, [runUrl(9002)]: rerun,
         [jobsUrl(9002)]: { jobs: [{ name: "verify", run_attempt: 2, status: "completed", conclusion: "failure" }] },

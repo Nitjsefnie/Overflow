@@ -10,7 +10,7 @@ import { listEligibleIssues, type EligibleIssueFilters } from "@/lib/dashboard/e
 
 let sql: Sql;
 let container: StartedTestContainer | undefined;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 let externalId = 9_586_000;
 const nextId = () => ++externalId;
 
@@ -20,7 +20,7 @@ describe("completed-work receiving limits against PostgreSQL", () => {
       database: "sponsor_credit_limit", user: "sponsor_credit_limit", password: "sponsor_credit_limit",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -28,8 +28,8 @@ describe("completed-work receiving limits against PostgreSQL", () => {
   afterAll(async () => {
     await closeSql();
     await container?.stop();
-    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+    else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   });
 
   it("keeps an exhausted sponsor discoverable to a contributor with no repositories", async () => {

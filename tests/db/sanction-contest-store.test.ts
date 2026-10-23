@@ -22,7 +22,7 @@ beforeAll(async () => {
     password: "sanction_contest_test",
   });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
 });
@@ -30,7 +30,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeSql();
   await container?.stop();
-  delete process.env.DATABASE_URL;
+  delete process.env.OVERFLOW_DATABASE_URL;
 });
 
 describe("migration 061 — sanction_contest_requests", () => {

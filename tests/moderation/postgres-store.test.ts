@@ -28,7 +28,7 @@ vi.mock("next-auth/providers/github", () => ({ default: () => ({ id: "github" })
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 40_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 describe("PostgreSQL account moderation transitions", () => {
   afterEach(() => { vi.unstubAllEnvs(); });
@@ -40,7 +40,7 @@ describe("PostgreSQL account moderation transitions", () => {
       password: "overflow_moderation_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
@@ -49,9 +49,9 @@ describe("PostgreSQL account moderation transitions", () => {
     await closeSql();
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 
@@ -880,8 +880,8 @@ describe("PostgreSQL account moderation transitions", () => {
       values (${nextExternalId()}, ${"shared-moderator-login"}, ${"MODERATOR"})
       returning id
     `;
-    const previous = process.env.MODERATOR_GITHUB_USER_IDS;
-    process.env.MODERATOR_GITHUB_USER_IDS = String(configuredGitHubUserId);
+    const previous = process.env.OVERFLOW_MODERATOR_GITHUB_USER_IDS;
+    process.env.OVERFLOW_MODERATOR_GITHUB_USER_IDS = String(configuredGitHubUserId);
     try {
       const roster = await new PostgresModerationStore(sql).listModerators();
       expect(roster.find((entry) => entry.accountId === configured.id)).toEqual({
@@ -896,9 +896,9 @@ describe("PostgreSQL account moderation transitions", () => {
       });
     } finally {
       if (previous === undefined) {
-        delete process.env.MODERATOR_GITHUB_USER_IDS;
+        delete process.env.OVERFLOW_MODERATOR_GITHUB_USER_IDS;
       } else {
-        process.env.MODERATOR_GITHUB_USER_IDS = previous;
+        process.env.OVERFLOW_MODERATOR_GITHUB_USER_IDS = previous;
       }
     }
   });
@@ -931,8 +931,8 @@ describe("PostgreSQL account moderation transitions", () => {
       values (${githubUserId}, ${`before-sign-in-${githubUserId}`}, ${storedRole})
       returning id
     `;
-    vi.stubEnv("TOKEN_ENCRYPTION_KEY", Buffer.alloc(32, 1).toString("base64url"));
-    vi.stubEnv("MODERATOR_GITHUB_USER_IDS", configured ? String(githubUserId) : "");
+    vi.stubEnv("OVERFLOW_TOKEN_ENCRYPTION_KEY", Buffer.alloc(32, 1).toString("base64url"));
+    vi.stubEnv("OVERFLOW_MODERATOR_GITHUB_USER_IDS", configured ? String(githubUserId) : "");
     vi.stubEnv("MODERATOR_GITHUB_LOGINS", undefined);
     await import("@/auth");
     const signIn = capturedAuth.config!.callbacks!.signIn!;
@@ -963,7 +963,7 @@ describe("PostgreSQL account moderation transitions", () => {
     const configuration = form === "mixed"
       ? `junk,0,-1, ${githubUserId} ,1e3`
       : form === "leading-zero" ? `0${githubUserId}` : `junk,0,-1,${githubUserId}abc`;
-    vi.stubEnv("MODERATOR_GITHUB_USER_IDS", configuration);
+    vi.stubEnv("OVERFLOW_MODERATOR_GITHUB_USER_IDS", configuration);
     const roster = await new PostgresModerationStore(sql).listModerators();
     expect(roster.find((entry) => entry.accountId === account.id)).toEqual({
       accountId: account.id,

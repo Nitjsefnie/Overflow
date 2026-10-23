@@ -331,35 +331,35 @@ interface MissingEnvMessageFn {
 const refusalMessage = missingEnvMessage as MissingEnvMessageFn;
 
 describe("the spawned-server environment preflight (issue 471)", () => {
-  it("reports nothing missing when DATABASE_URL is set to a value", () => {
-    expect(missingEnv({ DATABASE_URL: "postgresql://postgres:x@127.0.0.1:5432/postgres" }, () => false))
+  it("reports nothing missing when OVERFLOW_DATABASE_URL is set to a value", () => {
+    expect(missingEnv({ OVERFLOW_DATABASE_URL: "postgresql://postgres:x@127.0.0.1:5432/postgres" }, () => false))
       .toEqual([]);
   });
 
-  it("reports DATABASE_URL missing when it is set to the empty string", () => {
-    expect(missingEnv({ DATABASE_URL: "" }, () => false)).toEqual(["DATABASE_URL"]);
+  it("reports OVERFLOW_DATABASE_URL missing when it is set to the empty string", () => {
+    expect(missingEnv({ OVERFLOW_DATABASE_URL: "" }, () => false)).toEqual(["OVERFLOW_DATABASE_URL"]);
   });
 
-  it("reports nothing missing when the env lacks DATABASE_URL but a repo-root .env file exists", () => {
+  it("reports nothing missing when the env lacks OVERFLOW_DATABASE_URL but a repo-root .env file exists", () => {
     // Next.js loads repo-root .env files at server startup, so a developer
-    // whose DATABASE_URL lives only there has a working flow that must keep
+    // whose OVERFLOW_DATABASE_URL lives only there has a working flow that must keep
     // working: the file's presence satisfies the preflight.
     expect(missingEnv({}, () => true)).toEqual([]);
   });
 
-  it("reports DATABASE_URL missing when neither the env nor a repo-root .env file has it", () => {
+  it("reports OVERFLOW_DATABASE_URL missing when neither the env nor a repo-root .env file has it", () => {
     // The case the script turns into the exit-2 refusal before spawning
     // anything: the run would otherwise fail as a false layout regression.
-    expect(missingEnv({}, () => false)).toEqual(["DATABASE_URL"]);
+    expect(missingEnv({}, () => false)).toEqual(["OVERFLOW_DATABASE_URL"]);
   });
 
   it("composes the refusal message with the variable's name and BOTH remedies", () => {
     // main() prints this composition verbatim, so pinning its content here
     // pins the refusal a reader actually sees: which variable, and both ways
     // to fix it.
-    const message = refusalMessage(["DATABASE_URL"]);
+    const message = refusalMessage(["OVERFLOW_DATABASE_URL"]);
 
-    expect(message).toContain("DATABASE_URL");
+    expect(message).toContain("OVERFLOW_DATABASE_URL");
     expect(message).toContain("Set it in the environment");
     // The remedy names the repo-root .env file EXACTLY — the only env file
     // the check's own process loads — not the wider Next.js family the

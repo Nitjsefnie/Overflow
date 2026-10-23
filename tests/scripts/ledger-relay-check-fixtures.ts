@@ -21,7 +21,7 @@ export function appSuiteListing(url: string): { total_count: number; check_suite
  * these env values and answers that read with a job that has just started.
  */
 export const RELAY_OWN_RUN_ENV = {
-  GITHUB_RUN_ID: "7700", GITHUB_RUN_ATTEMPT: "1", RELAY_RERUN_TOKEN: ["rerun", "token"].join("-"),
+  GITHUB_RUN_ID: "7700", GITHUB_RUN_ATTEMPT: "1", OVERFLOW_RELAY_RERUN_TOKEN: ["rerun", "token"].join("-"),
 };
 
 export function relayJobStartUrl(root = "https://api.github.com/repos/Nitjsefnie/Overflow"): string {

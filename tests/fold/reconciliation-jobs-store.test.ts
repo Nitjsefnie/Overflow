@@ -19,7 +19,7 @@ let container: StartedTestContainer | undefined;
 let sql: Sql;
 let store: PostgresFoldStore;
 let externalId = 70_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 type JobSnapshot = {
   id: string;
@@ -184,7 +184,7 @@ describe("PostgreSQL reconciliation job queue", () => {
       password: "overflow_reconciliation_jobs_test",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
     store = new PostgresFoldStore(sql);
@@ -194,9 +194,9 @@ describe("PostgreSQL reconciliation job queue", () => {
     await closeSql();
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 
@@ -397,7 +397,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     const claimed = await claimOrFail();
     await expireLease(claimed.id);
     const before = await onlyJobFor(repositoryId);
-    const pool = postgres(process.env.DATABASE_URL ?? "", { max: 1 });
+    const pool = postgres(process.env.OVERFLOW_DATABASE_URL ?? "", { max: 1 });
     const held = await pool.reserve();
     let released = false;
     const release = () => {
@@ -495,7 +495,7 @@ describe("PostgreSQL reconciliation job queue", () => {
 
     // A second connection, so the enqueue is genuinely concurrent rather than
     // nested inside the completion's own transaction.
-    const other = postgres(process.env.DATABASE_URL ?? "", { max: 1 });
+    const other = postgres(process.env.OVERFLOW_DATABASE_URL ?? "", { max: 1 });
     const enqueued = signal();
     const release = signal();
     const enqueueing = other.begin(async (transaction) => {
@@ -542,7 +542,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     `;
     await store.enqueueReconciliationJob(freeRepositoryId, "WEBHOOK");
 
-    const other = postgres(process.env.DATABASE_URL ?? "", { max: 1 });
+    const other = postgres(process.env.OVERFLOW_DATABASE_URL ?? "", { max: 1 });
     const locked = signal();
     const release = signal();
     const holding = other.begin(async (transaction) => {

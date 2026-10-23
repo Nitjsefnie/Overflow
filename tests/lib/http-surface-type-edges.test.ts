@@ -34,7 +34,7 @@ describe("HTTP failure walk and native Node module edges", () => {
   ])("records the evaluated module for $declaration", ({ declaration, reached, recorded }) => {
     const root = edgeFixture(declaration);
     const env = { ...process.env };
-    delete env.DATABASE_URL;
+    delete env.OVERFLOW_DATABASE_URL;
     const result = spawnSync(process.execPath, ["--experimental-transform-types", "--import",
       join(root, "scripts/register-path-aliases.ts"), "--input-type=module"], {
       cwd: root, env, encoding: "utf8", timeout: 90_000,

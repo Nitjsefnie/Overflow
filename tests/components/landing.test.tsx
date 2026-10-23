@@ -11,7 +11,7 @@ vi.mock("@/auth", () => ({ signIn }));
 
 // Issue 700: the forms submit through the real server actions, which now open
 // with the origin guard, so the request headers must name the trusted origin
-// (APP_URL is stubbed by useTrustedOrigin).
+// (useTrustedOrigin sets the app URL).
 vi.mock("next/headers", async () => (await import("../support/trusted-origin")).trustedRequestHeaders());
 
 useTrustedOrigin();

@@ -401,7 +401,7 @@ exit 0
   },
   pnpm: {
     envKeys: [
-      "NEXT_DIST_DIR",
+      "OVERFLOW_NEXT_DIST_DIR",
       "npm_config_package_import_method",
       "OVERFLOW_FIXTURE_ENV_MARKER",
       "OVERFLOW_DEPLOY_MIGRATION_ACK",
@@ -409,7 +409,7 @@ exit 0
     dispatch: `
 if [ "$1" = "--silent" ]; then shift; fi
 if [ "$1" = build ]; then
-  dist="\${NEXT_DIST_DIR:?}"
+  dist="\${OVERFLOW_NEXT_DIST_DIR:?}"
   for entry in "$dist"/* "$dist"/.[!.]*; do
     [ -e "$entry" ] || continue
     case "\${entry##*/}" in

@@ -53,7 +53,7 @@ const DAY_SECONDS = 24 * 60 * 60;
 const now = new Date("2026-09-26T12:00:00.000Z");
 const nowSeconds = now.getTime() / 1000;
 
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 const originalAuthUrl = process.env.AUTH_URL;
 const originalNextAuthUrl = process.env.NEXTAUTH_URL;
 let container: StartedTestContainer | undefined;
@@ -69,7 +69,7 @@ beforeAll(async () => {
     password: "session_revocation",
   });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   await runMigrations();
   sql = postgres(started.databaseUrl, { max: 1 });
 
@@ -77,11 +77,11 @@ beforeAll(async () => {
   vi.stubEnv("AUTH_GITHUB_ID", "session-revocation-client-id");
   vi.stubEnv("AUTH_GITHUB_SECRET", "session-revocation-client-secret");
   vi.stubEnv("AUTH_TRUST_HOST", "true");
-  vi.stubEnv("APP_URL", appUrl);
-  vi.stubEnv("TOKEN_ENCRYPTION_KEY", tokenEncryptionKey);
+  vi.stubEnv("OVERFLOW_APP_URL", appUrl);
+  vi.stubEnv("OVERFLOW_TOKEN_ENCRYPTION_KEY", tokenEncryptionKey);
   // A non-matching moderator id keeps every seeded account's MEMBER role
   // deterministic.
-  vi.stubEnv("MODERATOR_GITHUB_USER_IDS", "1");
+  vi.stubEnv("OVERFLOW_MODERATOR_GITHUB_USER_IDS", "1");
   delete process.env.AUTH_URL;
   delete process.env.NEXTAUTH_URL;
 
@@ -101,9 +101,9 @@ afterAll(async () => {
   await sql?.end();
   await container?.stop();
   if (originalDatabaseUrl === undefined) {
-    delete process.env.DATABASE_URL;
+    delete process.env.OVERFLOW_DATABASE_URL;
   } else {
-    process.env.DATABASE_URL = originalDatabaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
   }
   if (originalAuthUrl === undefined) {
     delete process.env.AUTH_URL;

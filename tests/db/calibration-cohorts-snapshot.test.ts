@@ -36,7 +36,7 @@ describe("the calibration cohort loader reads one database snapshot", () => {
   /** A second, independent session: the writer whose commit lands mid-load. */
   let otherSession: Sql;
   let externalId = 62_000;
-  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
   type CohortChain = { githubIssueId: number; githubPullRequestId: number };
 
@@ -61,7 +61,7 @@ describe("the calibration cohort loader reads one database snapshot", () => {
       password: "calibration_cohorts_snapshot",
     });
     container = started.container;
-    process.env.DATABASE_URL = started.databaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
     sql = getSql();
     otherSession = postgres(started.databaseUrl, { max: 1 });
     await runMigrations();
@@ -73,9 +73,9 @@ describe("the calibration cohort loader reads one database snapshot", () => {
     await otherSession?.end();
     await container?.stop();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 

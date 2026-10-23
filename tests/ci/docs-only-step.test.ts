@@ -65,11 +65,11 @@ describe("the verify workflow's docs-only detection step", () => {
     // materialised merge tree against its first parent, so it names no event
     // value at all.
     expect(pushStep?.env).toEqual({
-      EVENT_NAME: "${{ github.event_name }}",
-      PUSH_BEFORE: "${{ github.event.before }}",
-      DISPATCH_BASE: "${{ inputs.base }}",
+      OVERFLOW_EVENT_NAME: "${{ github.event_name }}",
+      OVERFLOW_PUSH_BEFORE: "${{ github.event.before }}",
+      OVERFLOW_DISPATCH_BASE: "${{ inputs.base }}",
     });
-    expect(prStep?.env).toEqual({ PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
+    expect(prStep?.env).toEqual({ OVERFLOW_PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
     for (const found of detectSteps) {
       expect(found.run).toBeDefined();
       expect(found.run?.includes("${{")).toBe(false);
@@ -80,14 +80,14 @@ describe("the verify workflow's docs-only detection step", () => {
     const run = prStep?.run ?? "";
 
     expect(run).toBe(
-      'cd "${PR_TREE:?the pull request tree was not materialised}"\n' +
+      'cd "${OVERFLOW_PR_TREE:?the pull request tree was not materialised}"\n' +
         'changed=$(node "${GITHUB_WORKSPACE}/scripts/docs-only.ts" HEAD^1)\n' +
         'echo "docs_only=${changed}" >> "$GITHUB_OUTPUT"\n',
     );
     // The push and dispatch logic moved to the other file; this leg must not
     // carry a copy of it, because a second copy is a second thing to keep in
     // step and neither file's runner can reach it.
-    expect(run).not.toContain("EVENT_NAME");
+    expect(run).not.toContain("OVERFLOW_EVENT_NAME");
     expect(run).not.toContain("refs/pull");
   });
 
@@ -99,13 +99,13 @@ describe("the verify workflow's docs-only detection step", () => {
     // fetch first, then two --unshallow lines.
     expect(run.startsWith('git fetch --depth=2 origin "${GITHUB_SHA}"\nbase=""\n')).toBe(true);
     expect(run.match(/git fetch --no-tags --unshallow origin "\$\{GITHUB_SHA\}"/g)).toHaveLength(2);
-    expect(run).toContain('if [ "${EVENT_NAME}" = push ]; then');
+    expect(run).toContain('if [ "${OVERFLOW_EVENT_NAME}" = push ]; then');
     expect(run).toContain(
-      'elif [ "${EVENT_NAME}" = workflow_dispatch ] && [ -n "${DISPATCH_BASE}" ]; then',
+      'elif [ "${OVERFLOW_EVENT_NAME}" = workflow_dispatch ] && [ -n "${OVERFLOW_DISPATCH_BASE}" ]; then',
     );
     // And this leg must not carry the pull-request branch: it has no
-    // materialise step, so PR_TREE would be an unset variable.
-    expect(run).not.toContain("PR_TREE");
+    // materialise step, so OVERFLOW_PR_TREE would be an unset variable.
+    expect(run).not.toContain("OVERFLOW_PR_TREE");
     expect(run).not.toContain("workflow_run");
     expect(run).not.toContain("pull_request_target");
   });
@@ -160,7 +160,7 @@ describe("the verify workflow's docs-only detection step", () => {
     async function runStep(
       origin: string,
       sha: string,
-      env: { EVENT_NAME: string; PUSH_BEFORE: string; DISPATCH_BASE?: string; PR_NUMBER?: string },
+      env: { OVERFLOW_EVENT_NAME: string; OVERFLOW_PUSH_BEFORE: string; OVERFLOW_DISPATCH_BASE?: string; OVERFLOW_PR_NUMBER?: string },
       options?: { githubSha?: string },
     ) {
       counter += 1;
@@ -171,18 +171,18 @@ describe("the verify workflow's docs-only detection step", () => {
       // The event picks the file, and therefore the run block: after issue
       // 1090's split the pull-request leg lives in ci-pr.yml and the push and
       // dispatch legs in ci.yml, and no single step answers both any more.
-      const leg = env.EVENT_NAME === "workflow_run" ? prStep : pushStep;
+      const leg = env.OVERFLOW_EVENT_NAME === "workflow_run" ? prStep : pushStep;
       let prTree: Record<string, string> = {};
-      if (env.EVENT_NAME === "workflow_run") {
+      if (env.OVERFLOW_EVENT_NAME === "workflow_run") {
         // The runner state the materialise step leaves: a full-history
         // checkout of the base tip, and the merge commit `sha` as a detached
         // worktree outside it.
         const baseTip = options?.githubSha ?? sha;
-        git(checkout, "fetch", "--quiet", "origin", baseTip, `+refs/pull/${env.PR_NUMBER}/merge:refs/remotes/pr/merge`);
+        git(checkout, "fetch", "--quiet", "origin", baseTip, `+refs/pull/${env.OVERFLOW_PR_NUMBER}/merge:refs/remotes/pr/merge`);
         git(checkout, "checkout", "--quiet", "--detach", baseTip);
         const tree = `${checkout}-pr-tree`;
         git(checkout, "worktree", "add", "--quiet", "--detach", tree, sha);
-        prTree = { PR_TREE: tree };
+        prTree = { OVERFLOW_PR_TREE: tree };
       } else {
         git(checkout, "fetch", "--quiet", "--depth=1", "origin", sha);
         git(checkout, "checkout", "--quiet", "--detach", "FETCH_HEAD");
@@ -219,7 +219,7 @@ describe("the verify workflow's docs-only detection step", () => {
       await commitFiles(origin, { "src/lib/format-signed.ts": "export const formatSigned = 1;\n" }, "code");
       const head = await commitFiles(origin, { "README.md": "# scratch, edited\n" }, "docs");
 
-      const result = await runStep(origin, head, { EVENT_NAME: "push", PUSH_BEFORE: before });
+      const result = await runStep(origin, head, { OVERFLOW_EVENT_NAME: "push", OVERFLOW_PUSH_BEFORE: before });
       expect(result.status, result.stderr).toBe(0);
       expect(result.output).toBe("docs_only=false\n");
       // Later steps (the patch coverage report) still diff HEAD^1..HEAD, so
@@ -232,7 +232,7 @@ describe("the verify workflow's docs-only detection step", () => {
       const before = git(origin, "rev-parse", "HEAD");
       const head = await commitFiles(origin, { "README.md": "# scratch, edited\n" }, "docs");
 
-      const result = await runStep(origin, head, { EVENT_NAME: "push", PUSH_BEFORE: before });
+      const result = await runStep(origin, head, { OVERFLOW_EVENT_NAME: "push", OVERFLOW_PUSH_BEFORE: before });
       expect(result.status, result.stderr).toBe(0);
       expect(result.output).toBe("docs_only=true\n");
     });
@@ -243,7 +243,7 @@ describe("the verify workflow's docs-only detection step", () => {
       await commitFiles(origin, { "README.md": "# scratch, first edit\n" }, "docs one");
       const head = await commitFiles(origin, { "CONTRIBUTING.md": "# contributing\n" }, "docs two");
 
-      const result = await runStep(origin, head, { EVENT_NAME: "push", PUSH_BEFORE: before });
+      const result = await runStep(origin, head, { OVERFLOW_EVENT_NAME: "push", OVERFLOW_PUSH_BEFORE: before });
       expect(result.status, result.stderr).toBe(0);
       expect(result.output).toBe("docs_only=true\n");
     });
@@ -255,7 +255,7 @@ describe("the verify workflow's docs-only detection step", () => {
 
       // The unfetchable case is a SHA that exists in no repository.
       for (const before of ["", zeroSha, "1234567890abcdef1234567890abcdef12345678"]) {
-        const result = await runStep(origin, head, { EVENT_NAME: "push", PUSH_BEFORE: before });
+        const result = await runStep(origin, head, { OVERFLOW_EVENT_NAME: "push", OVERFLOW_PUSH_BEFORE: before });
         expect(result.status, `before ${JSON.stringify(before)}: ${result.stderr}`).toBe(0);
         expect(result.output, `before ${JSON.stringify(before)}`).toBe("docs_only=false\n");
       }
@@ -284,7 +284,7 @@ describe("the verify workflow's docs-only detection step", () => {
       const result = await runStep(
         origin,
         merge,
-        { EVENT_NAME: "workflow_run", PUSH_BEFORE: "", PR_NUMBER: "1" },
+        { OVERFLOW_EVENT_NAME: "workflow_run", OVERFLOW_PUSH_BEFORE: "", OVERFLOW_PR_NUMBER: "1" },
         // The real event's runner state: the checkout is the merge ref while
         // GITHUB_SHA points at the base tip (fix round 1, finding B).
         { githubSha: git(origin, "rev-parse", `${merge}^1`) },
@@ -304,7 +304,7 @@ describe("the verify workflow's docs-only detection step", () => {
       const result = await runStep(
         origin,
         merge,
-        { EVENT_NAME: "workflow_run", PUSH_BEFORE: before, PR_NUMBER: "1" },
+        { OVERFLOW_EVENT_NAME: "workflow_run", OVERFLOW_PUSH_BEFORE: before, OVERFLOW_PR_NUMBER: "1" },
         { githubSha: git(origin, "rev-parse", `${merge}^1`) },
       );
       expect(result.status, result.stderr).toBe(0);
@@ -320,11 +320,11 @@ describe("the verify workflow's docs-only detection step", () => {
       await commitFiles(origin, { "src/lib/format-signed.ts": "export const formatSigned = 1;\n" }, "code");
       const head = await commitFiles(origin, { "README.md": "# scratch, edited\n" }, "docs");
 
-      const result = await runStep(origin, head, { EVENT_NAME: "workflow_dispatch", PUSH_BEFORE: "" });
+      const result = await runStep(origin, head, { OVERFLOW_EVENT_NAME: "workflow_dispatch", OVERFLOW_PUSH_BEFORE: "" });
       expect(result.status, result.stderr).toBe(0);
       expect(result.output).toBe("docs_only=false\n");
 
-      const ranged = await runStep(origin, head, { EVENT_NAME: "workflow_dispatch", PUSH_BEFORE: "", DISPATCH_BASE: before });
+      const ranged = await runStep(origin, head, { OVERFLOW_EVENT_NAME: "workflow_dispatch", OVERFLOW_PUSH_BEFORE: "", OVERFLOW_DISPATCH_BASE: before });
       expect(ranged.status, ranged.stderr).toBe(0);
       expect(ranged.output).toBe("docs_only=false\n");
     });
@@ -335,7 +335,7 @@ describe("the verify workflow's docs-only detection step", () => {
       await commitFiles(origin, { "README.md": "# scratch, first edit\n" }, "docs one");
       const head = await commitFiles(origin, { "CONTRIBUTING.md": "# contributing\n" }, "docs two");
 
-      const result = await runStep(origin, head, { EVENT_NAME: "workflow_dispatch", PUSH_BEFORE: "", DISPATCH_BASE: before });
+      const result = await runStep(origin, head, { OVERFLOW_EVENT_NAME: "workflow_dispatch", OVERFLOW_PUSH_BEFORE: "", OVERFLOW_DISPATCH_BASE: before });
       expect(result.status, result.stderr).toBe(0);
       expect(result.output).toBe("docs_only=true\n");
     });
@@ -354,7 +354,7 @@ describe("the verify workflow's docs-only detection step", () => {
         [head, "differ"],
         [other, "ancestor"],
       ]) {
-        const result = await runStep(origin, head, { EVENT_NAME: "workflow_dispatch", PUSH_BEFORE: unrelated, DISPATCH_BASE: base });
+        const result = await runStep(origin, head, { OVERFLOW_EVENT_NAME: "workflow_dispatch", OVERFLOW_PUSH_BEFORE: unrelated, OVERFLOW_DISPATCH_BASE: base });
         expect(result.status, base).not.toBe(0);
         expect(result.stderr, base).toContain("::error::");
         expect(result.stderr, base).toContain(problem);

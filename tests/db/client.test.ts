@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeSql, getCoordinationSql, getSql } from "@/lib/db/client";
 
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 // Nothing listens here. Every client below is closed before it is asked to
 // connect, and only a client that was really ended refuses a query without
 // reaching for the server first.
@@ -12,9 +12,9 @@ describe("shared database clients", () => {
     await closeSql();
     vi.unstubAllEnvs();
     if (originalDatabaseUrl === undefined) {
-      delete process.env.DATABASE_URL;
+      delete process.env.OVERFLOW_DATABASE_URL;
     } else {
-      process.env.DATABASE_URL = originalDatabaseUrl;
+      process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
     }
   });
 
@@ -46,7 +46,7 @@ describe("shared database clients", () => {
   });
 
   it("ends the coordination client alongside the work client", async () => {
-    process.env.DATABASE_URL = unreachableDatabaseUrl;
+    process.env.OVERFLOW_DATABASE_URL = unreachableDatabaseUrl;
     const work = getSql();
     const coordination = getCoordinationSql();
 

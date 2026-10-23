@@ -20,7 +20,7 @@ const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "verify
  * ("Refuse a pull request that changes the audit suppression list"): verify is
  * required and its definition is the base branch's, so a hostile pull request
  * cannot delete it. This suite EXECUTES that step's real `run:` text the way
- * the runner does — bash with the runner's flags, BASE_SHA and MERGE_SHA
+ * the runner does — bash with the runner's flags, OVERFLOW_BASE_SHA and OVERFLOW_MERGE_SHA
  * resolved from the case, cwd a scratch repository holding both commits —
  * mirroring how tests/ci/verify-zizmor-step.test.ts executes the zizmor pin
  * gate. There is NO NETWORK: the step shells out only to git and python3.
@@ -225,8 +225,8 @@ async function runStep(
     encoding: "utf8",
     env: {
       ...scratchGitEnv,
-      BASE_SHA: fx.base,
-      MERGE_SHA: fx.merge,
+      OVERFLOW_BASE_SHA: fx.base,
+      OVERFLOW_MERGE_SHA: fx.merge,
       RUNNER_TEMP: runnerTemp,
       PYYAML_PIP_LOG: argvLog,
       ...(options.failPip ? { PYYAML_PIP_STUB_EXIT: "1" } : {}),
@@ -240,8 +240,8 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   it("is wired as the guard requires: base-defined event values, gated on the event, silent on success", () => {
     const step = theStep();
     expect(step.env, "the step maps the merge SHA and the event's base SHA and nothing else").toEqual({
-      MERGE_SHA: "${{ steps.pr-tree.outputs.merge_sha }}",
-      BASE_SHA: "${{ steps.pr.outputs.base_sha }}",
+      OVERFLOW_MERGE_SHA: "${{ steps.pr-tree.outputs.merge_sha }}",
+      OVERFLOW_BASE_SHA: "${{ steps.pr.outputs.base_sha }}",
     });
     expect(step.if, "the step keeps its workflow_run guard and skips superseded cancellations").toBe(
       "${{ steps.pr.outputs.superseded != 'true' && (github.event_name == 'workflow_run') }}",
@@ -257,7 +257,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     expect(step.run, "no shell interpolation of event values — they arrive through env:").not.toContain(
       "${{",
     );
-    for (const forbidden of ["GH_TOKEN", "GITHUB_TOKEN", "PR_TREE"]) {
+    for (const forbidden of ["GH_TOKEN", "GITHUB_TOKEN", "OVERFLOW_PR_TREE"]) {
       expect(step.run, `the run block must not touch ${forbidden}`).not.toContain(forbidden);
     }
     // The workspace parse needs PyYAML, which the runner image does not ship:
@@ -272,7 +272,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
       '--target "${sanitized}/site" -r "${sanitized}/requirements.txt"',
     );
     expect(step.run, "the manifest is read from the base side").toContain(
-      'install_pyyaml "${BASE_SHA:?}"',
+      'install_pyyaml "${OVERFLOW_BASE_SHA:?}"',
     );
     expect(step.run, "no pip download — the hash-gated install is the only channel").not.toContain(
       "pip download",

@@ -225,14 +225,14 @@ describe("canonical licence texts", () => {
 });
 
 describe("generator CLI", () => {
-  it("resolves the output path from NEXT_DIST_DIR or .next", () => {
+  it("resolves the output path from OVERFLOW_NEXT_DIST_DIR or .next", () => {
     const resolveOutputPath = Reflect.get(noticesGenerator, "resolveNoticesOutputPath") as
       | ((env: Record<string, string | undefined>) => string)
       | undefined;
     expect(resolveOutputPath).toBeTypeOf("function");
     if (!resolveOutputPath) return;
-    expect(resolveOutputPath({ NEXT_DIST_DIR: "release-123" })).toBe(join("release-123", "third-party-notices.txt"));
-    expect(resolveOutputPath({ NEXT_DIST_DIR: "  release-123  " })).toBe(join("release-123", "third-party-notices.txt"));
+    expect(resolveOutputPath({ OVERFLOW_NEXT_DIST_DIR: "release-123" })).toBe(join("release-123", "third-party-notices.txt"));
+    expect(resolveOutputPath({ OVERFLOW_NEXT_DIST_DIR: "  release-123  " })).toBe(join("release-123", "third-party-notices.txt"));
     expect(resolveOutputPath({})).toBe(join(".next", "third-party-notices.txt"));
   });
 
@@ -262,7 +262,7 @@ describe("generator CLI", () => {
     const result = spawnSync(process.execPath, [script], {
       cwd: root,
       encoding: "utf8",
-      env: { ...process.env, NEXT_DIST_DIR: distDir, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      env: { ...process.env, OVERFLOW_NEXT_DIST_DIR: distDir, PATH: `${bin}:${process.env.PATH ?? ""}` },
     });
 
     expect(result.status, result.stderr).toBe(0);

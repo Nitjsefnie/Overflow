@@ -17,12 +17,12 @@ import { startPostgresContainer } from "../support/postgres-container";
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 72_000_000;
-const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 beforeAll(async () => {
   const started = await startPostgresContainer({ database: "dispute_filing", user: "dispute_filing" });
   container = started.container;
-  process.env.DATABASE_URL = started.databaseUrl;
+  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   execFileSync("pnpm", ["db:migrate"], {
     env: { ...process.env, OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD: "skip" },
   });
@@ -32,8 +32,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeSql();
   await container?.stop();
-  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalDatabaseUrl === undefined) delete process.env.OVERFLOW_DATABASE_URL;
+  else process.env.OVERFLOW_DATABASE_URL = originalDatabaseUrl;
 });
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
@@ -251,7 +251,7 @@ describe("closed PR dispute filing", () => {
     vi.stubGlobal("fetch", async () => Response.json({ data: { repository: { object: {
       author: { user: { databaseId: Number(author.github_user_id) } },
     } } } }));
-    const singleConnection = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const singleConnection = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1 });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const request = new PostgresClosedPrDisputeStore(singleConnection).fileDispute({

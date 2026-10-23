@@ -138,14 +138,14 @@ describe("the committed pin drives runRelay end to end (issue 1034)", () => {
 
   function relayEnv(over: Record<string, string>): Record<string, string> {
     return {
-      ...RELAY_OWN_RUN_ENV, LEDGER_APP_ID: "5118623",
-      LEDGER_INSTALLATION_ID: "166057493",
-      LEDGER_APP_KEY: keyPem,
+      ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623",
+      OVERFLOW_LEDGER_INSTALLATION_ID: "166057493",
+      OVERFLOW_LEDGER_APP_KEY: keyPem,
       GITHUB_REPOSITORY: "Nitjsefnie/Overflow",
-      GITHUB_WORKFLOW_RUN_ID: RUN_ID,
-      GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD_SHA,
-      GITHUB_WORKFLOW_RUN_CONCLUSION: "failure",
-      GITHUB_WORKFLOW_RUN_HTML_URL: HTML_URL,
+      OVERFLOW_GITHUB_WORKFLOW_RUN_ID: RUN_ID,
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD_SHA,
+      OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "failure",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: HTML_URL,
       ...over,
     };
   }
@@ -154,22 +154,22 @@ describe("the committed pin drives runRelay end to end (issue 1034)", () => {
     [
       "the pull_request_target leg (pr-gates.yml)",
       {
-        GITHUB_WORKFLOW_RUN_PATH: PATH_SECRET_SCAN_PR,
-        GITHUB_WORKFLOW_RUN_EVENT: "pull_request_target",
-        GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: PATH_SECRET_SCAN_PR,
+        OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "pull_request_target",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
       },
     ],
     [
       "the push leg on main (secret-scan.yml)",
       {
-        GITHUB_WORKFLOW_RUN_PATH: PATH_SECRET_SCAN,
-        GITHUB_WORKFLOW_RUN_EVENT: "push",
-        GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: PATH_SECRET_SCAN,
+        OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "push",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
       },
     ],
   ])("posts the failing secret-scan check-run for a red run of %s", async (_name, over) => {
-    const jobs = producerJobs(over.GITHUB_WORKFLOW_RUN_PATH);
-    const contexts = over.GITHUB_WORKFLOW_RUN_PATH === PATH_SECRET_SCAN_PR ? PR_CONTEXTS : [CONTEXT];
+    const jobs = producerJobs(over.OVERFLOW_GITHUB_WORKFLOW_RUN_PATH);
+    const contexts = over.OVERFLOW_GITHUB_WORKFLOW_RUN_PATH === PATH_SECRET_SCAN_PR ? PR_CONTEXTS : [CONTEXT];
     const fetchStub = makeFetch([
       { status: 201, body: { token: "installation-token" } },
       { status: 200, body: { total_count: jobs.length, jobs } },
@@ -236,9 +236,9 @@ describe("the committed pin drives runRelay end to end (issue 1034)", () => {
     ]);
     const result = await runRelay({
       env: relayEnv({
-        GITHUB_WORKFLOW_RUN_PATH: PATH_SECRET_SCAN,
-        GITHUB_WORKFLOW_RUN_EVENT: "push",
-        GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: PATH_SECRET_SCAN,
+        OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "push",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "feature/some-branch",
       }),
       fetchFn: fetchStub.fn,
       delayFn: async () => {},

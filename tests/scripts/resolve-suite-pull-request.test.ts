@@ -47,7 +47,7 @@ function harness(run = suite(), candidates: unknown[] = [pr()], current: unknown
     throw new Error(`unexpected API request ${url}`);
   }) as typeof fetch;
   return {
-    deps: { env: { GITHUB_REPOSITORY: REPO, GH_TOKEN: "test-token", SUITE_RUN_ID: "123" }, fetchFn },
+    deps: { env: { GITHUB_REPOSITORY: REPO, GH_TOKEN: "test-token", OVERFLOW_SUITE_RUN_ID: "123" }, fetchFn },
     requests, headers,
   };
 }

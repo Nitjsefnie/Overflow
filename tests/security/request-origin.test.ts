@@ -12,7 +12,7 @@ afterEach(() => {
 const trustedOrigin = "https://overflow.example";
 
 function environment(appUrl?: string): NodeJS.ProcessEnv {
-  return { NODE_ENV: "test", ...(appUrl === undefined ? {} : { APP_URL: appUrl }) };
+  return { NODE_ENV: "test", ...(appUrl === undefined ? {} : { OVERFLOW_APP_URL: appUrl }) };
 }
 
 const trustedEnv = environment(trustedOrigin);
@@ -35,20 +35,20 @@ async function expectErrorResponse(
   await expect(response?.json()).resolves.toEqual({ error: { code, message } });
 }
 
-describe("reading the trusted origin from APP_URL", () => {
-  it("returns the origin of an APP_URL that is already bare", () => {
+describe("reading the trusted origin from OVERFLOW_APP_URL", () => {
+  it("returns the origin of an OVERFLOW_APP_URL that is already bare", () => {
     expect(readTrustedOrigin(environment("https://overflow.example"))).toBe(
       "https://overflow.example",
     );
   });
 
-  it("drops a path from APP_URL", () => {
+  it("drops a path from OVERFLOW_APP_URL", () => {
     expect(readTrustedOrigin(environment("https://overflow.example/sub/path"))).toBe(
       "https://overflow.example",
     );
   });
 
-  it("drops a trailing slash from APP_URL", () => {
+  it("drops a trailing slash from OVERFLOW_APP_URL", () => {
     expect(readTrustedOrigin(environment("https://overflow.example/"))).toBe(
       "https://overflow.example",
     );
@@ -66,35 +66,35 @@ describe("reading the trusted origin from APP_URL", () => {
     );
   });
 
-  // The scheme is read from APP_URL like everything else in the origin. A guard
+  // The scheme is read from OVERFLOW_APP_URL like everything else in the origin. A guard
   // that assumed https would refuse every mutation on a deployment served over
   // plain HTTP, which is the ordinary local one.
   it("keeps a non-https scheme", () => {
     expect(readTrustedOrigin(environment("http://localhost:3000"))).toBe("http://localhost:3000");
   });
 
-  it("returns null when APP_URL is undefined", () => {
+  it("returns null when OVERFLOW_APP_URL is undefined", () => {
     expect(readTrustedOrigin(environment())).toBeNull();
   });
 
-  it("returns null when APP_URL is empty", () => {
+  it("returns null when OVERFLOW_APP_URL is empty", () => {
     expect(readTrustedOrigin(environment(""))).toBeNull();
   });
 
-  it("returns null when APP_URL is whitespace only", () => {
+  it("returns null when OVERFLOW_APP_URL is whitespace only", () => {
     expect(readTrustedOrigin(environment("   "))).toBeNull();
   });
 
-  it("returns null when APP_URL is not a parsable absolute URL", () => {
+  it("returns null when OVERFLOW_APP_URL is not a parsable absolute URL", () => {
     expect(readTrustedOrigin(environment("not-a-url"))).toBeNull();
   });
 
-  it("returns null when APP_URL parses to the opaque origin", () => {
+  it("returns null when OVERFLOW_APP_URL parses to the opaque origin", () => {
     expect(readTrustedOrigin(environment("data:text/plain,overflow"))).toBeNull();
   });
 
   it("reads process.env when no environment is passed", () => {
-    vi.stubEnv("APP_URL", "https://stubbed.example/dashboard");
+    vi.stubEnv("OVERFLOW_APP_URL", "https://stubbed.example/dashboard");
 
     expect(readTrustedOrigin()).toBe("https://stubbed.example");
   });
@@ -143,7 +143,7 @@ describe("accepting a request from the trusted origin", () => {
     expect(rejectUntrustedRequest(request, trustedEnv)).toBeNull();
   });
 
-  it("accepts the trusted origin when APP_URL carries a path", () => {
+  it("accepts the trusted origin when OVERFLOW_APP_URL carries a path", () => {
     const request = mutationRequest({ origin: trustedOrigin });
 
     expect(
@@ -151,7 +151,7 @@ describe("accepting a request from the trusted origin", () => {
     ).toBeNull();
   });
 
-  it("accepts the trusted origin when APP_URL carries a trailing slash", () => {
+  it("accepts the trusted origin when OVERFLOW_APP_URL carries a trailing slash", () => {
     const request = mutationRequest({ origin: trustedOrigin });
 
     expect(
@@ -159,7 +159,7 @@ describe("accepting a request from the trusted origin", () => {
     ).toBeNull();
   });
 
-  it("accepts the trusted origin when APP_URL carries an explicit default port", () => {
+  it("accepts the trusted origin when OVERFLOW_APP_URL carries an explicit default port", () => {
     const request = mutationRequest({ origin: trustedOrigin });
 
     expect(
@@ -169,7 +169,7 @@ describe("accepting a request from the trusted origin", () => {
 
   // An http deployment must be able to trust its own origin, and the scheme
   // still has to match in both directions.
-  it("accepts an http origin when APP_URL is http", () => {
+  it("accepts an http origin when OVERFLOW_APP_URL is http", () => {
     const request = mutationRequest({
       origin: "http://localhost:3000",
       "content-type": "application/json",
@@ -179,7 +179,7 @@ describe("accepting a request from the trusted origin", () => {
   });
 
   it("reads process.env when no environment is passed", () => {
-    vi.stubEnv("APP_URL", trustedOrigin);
+    vi.stubEnv("OVERFLOW_APP_URL", trustedOrigin);
     const request = mutationRequest({
       origin: trustedOrigin,
       "content-type": "application/json",
@@ -227,8 +227,8 @@ describe("rejecting a request from an untrusted origin", () => {
   });
 
   // The inverse of the case above: an https origin is not privileged, it is
-  // simply a different origin from the http one APP_URL names.
-  it("rejects an https origin when APP_URL is http", async () => {
+  // simply a different origin from the http one OVERFLOW_APP_URL names.
+  it("rejects an https origin when OVERFLOW_APP_URL is http", async () => {
     const request = mutationRequest({ origin: "https://localhost:3000" });
 
     await expectErrorResponse(
@@ -424,10 +424,10 @@ describe("rejecting an unsupported media type without an origin check", () => {
     expect(rejectUnsupportedMediaType(request)).toBeNull();
   });
 
-  // The origin half is the only half that reads APP_URL, so an unconfigured
+  // The origin half is the only half that reads OVERFLOW_APP_URL, so an unconfigured
   // deployment cannot turn a token client's valid request into a refusal.
-  it("does not consult APP_URL", () => {
-    vi.stubEnv("APP_URL", "");
+  it("does not consult OVERFLOW_APP_URL", () => {
+    vi.stubEnv("OVERFLOW_APP_URL", "");
 
     expect(
       rejectUnsupportedMediaType(mutationRequest({ "content-type": "application/json" })),
@@ -436,7 +436,7 @@ describe("rejecting an unsupported media type without an origin check", () => {
 });
 
 describe("rejecting a request the server is not configured to accept", () => {
-  it("rejects every request when APP_URL is unset", async () => {
+  it("rejects every request when OVERFLOW_APP_URL is unset", async () => {
     const request = mutationRequest({
       origin: trustedOrigin,
       "content-type": "application/json",
@@ -450,7 +450,7 @@ describe("rejecting a request the server is not configured to accept", () => {
     );
   });
 
-  it("rejects every request when APP_URL is empty", async () => {
+  it("rejects every request when OVERFLOW_APP_URL is empty", async () => {
     const request = mutationRequest({
       origin: trustedOrigin,
       "content-type": "application/json",
@@ -464,7 +464,7 @@ describe("rejecting a request the server is not configured to accept", () => {
     );
   });
 
-  it("rejects every request when APP_URL is whitespace only", async () => {
+  it("rejects every request when OVERFLOW_APP_URL is whitespace only", async () => {
     const request = mutationRequest({
       origin: trustedOrigin,
       "content-type": "application/json",
@@ -478,7 +478,7 @@ describe("rejecting a request the server is not configured to accept", () => {
     );
   });
 
-  it("rejects every request when APP_URL is not a parsable absolute URL", async () => {
+  it("rejects every request when OVERFLOW_APP_URL is not a parsable absolute URL", async () => {
     const request = mutationRequest({
       origin: trustedOrigin,
       "content-type": "application/json",
@@ -492,7 +492,7 @@ describe("rejecting a request the server is not configured to accept", () => {
     );
   });
 
-  it("rejects every request when APP_URL parses to the opaque origin", async () => {
+  it("rejects every request when OVERFLOW_APP_URL parses to the opaque origin", async () => {
     // The opaque origin serializes to "null", which is exactly what a sandboxed
     // browsing context sends, so it must never become a matchable trusted value.
     const request = mutationRequest({

@@ -147,8 +147,8 @@ describe("pr-gates.yml's shape", () => {
       expect(step.run ?? "", `step ${step.name ?? step.uses}`).not.toContain("${{");
     }
     expect(auditStep.env).toEqual({
-      HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
-      BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+      OVERFLOW_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+      OVERFLOW_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
       GIT_LFS_SKIP_SMUDGE: "1",
     });
   });
@@ -160,12 +160,12 @@ describe("pr-gates.yml's shape", () => {
       .split("\n")
       .filter((line) => !line.trim().startsWith("#"))
       .join("\n");
-    expect(code).toContain('git fetch --quiet --no-tags origin "${HEAD_SHA:?}"');
-    expect(code).toContain('git fetch --quiet --no-tags origin "${BASE_SHA:?}"');
+    expect(code).toContain('git fetch --quiet --no-tags origin "${OVERFLOW_HEAD_SHA:?}"');
+    expect(code).toContain('git fetch --quiet --no-tags origin "${OVERFLOW_BASE_SHA:?}"');
     expect(code).not.toContain("refs/pull");
     // The merge tree is built for THIS event's two SHAs, never read from the
     // asynchronous event payload or a refs/pull merge ref.
-    expect(run).toContain('git merge-tree --write-tree "${BASE_SHA:?}" "${HEAD_SHA:?}"');
+    expect(run).toContain('git merge-tree --write-tree "${OVERFLOW_BASE_SHA:?}" "${OVERFLOW_HEAD_SHA:?}"');
     // The ls-tree single-blob discipline, per manifest, into a fresh
     // sanitized directory, and the audit reads from it.
     expect(run).toContain('git ls-tree "${1:?}" -- "${2:?}"');
@@ -259,7 +259,7 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   const DELETED = Symbol("deleted");
 
   /**
-   * A scratch origin whose `main` carries `base` at BASE_SHA, plus `head`
+   * A scratch origin whose `main` carries `base` at OVERFLOW_BASE_SHA, plus `head`
    * built on it — the two commits the step is handed as this event's head
    * and base — and a workspace (a full clone, the step's cwd, the state
    * actions/checkout's fetch-depth: 0 leaves on a pull_request_target event).
@@ -390,8 +390,8 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
         ...process.env,
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_CONFIG_NOSYSTEM: "1",
-        HEAD_SHA: fx.headSha,
-        BASE_SHA: fx.baseSha,
+        OVERFLOW_HEAD_SHA: fx.headSha,
+        OVERFLOW_BASE_SHA: fx.baseSha,
         RUNNER_TEMP: runnerTemp,
         AUDIT_STUB_DIR: stubDir,
         DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS: "7",
