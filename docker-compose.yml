@@ -30,7 +30,7 @@ services:
     env_file:
       - .env
     environment:
-      # Deliberate override of any loopback OVERFLOW_DATABASE_URL in .env: inside the
+      # Override a loopback OVERFLOW_DATABASE_URL in .env: inside the
       # compose network the app reaches postgres by service name, not loopback.
       OVERFLOW_DATABASE_URL: postgresql://overflow:overflow_local_only@postgres:5432/overflow
     ports:
