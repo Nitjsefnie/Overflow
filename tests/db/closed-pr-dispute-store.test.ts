@@ -145,7 +145,6 @@ describe("closed PR dispute filing", () => {
 
   it.each([
     ["unresolved_commit_author", /commit.*author/i],
-    ["unlinked_commit_author", /author.*linked.*account/i],
   ] as const)("refuses %s with its named reason and no writes", async (kind, message) => {
     const fixture = await buildFixture();
     const commitStore = new PostgresClosedPrDisputeStore(sql, async () => ({ kind }));
@@ -170,18 +169,33 @@ describe("closed PR dispute filing", () => {
     })).resolves.toMatchObject({ landedCommitAuthorId: landing.contributorId });
   });
 
-  it.each([null, 123])("refuses a commit with an unresolved or unlinked forge author (%s)", async (authorId) => {
+  it("refuses a commit with an unresolved forge author", async () => {
     const fixture = await buildFixture();
     vi.spyOn(PostgresSponsorCredentialStore.prototype, "getGitHubAccessToken").mockResolvedValue("test-access-token");
     vi.stubGlobal("fetch", async () => Response.json({ data: {
-      repository: { object: { author: { user: authorId === null ? null : { databaseId: authorId } } } },
+      repository: { object: { author: { user: null } } },
     } }));
     await expect(service().fileDispute({ id: fixture.contributorId }, {
       ...filing(fixture), landedCommitUrl: `https://github.com/${fixture.ownerName}/commit/${"c".repeat(40)}`,
-    })).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringMatching(
-      authorId === null ? /commit.*author/i : /author.*linked.*account/i,
-    ) });
+    })).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringMatching(/commit.*author/i) });
     await expectNoRequests(fixture);
+  });
+
+  it("files a GitHub commit with an unlinked forge author as an unknown landing account", async () => {
+    const fixture = await buildFixture();
+    vi.spyOn(PostgresSponsorCredentialStore.prototype, "getGitHubAccessToken").mockResolvedValue("test-access-token");
+    vi.stubGlobal("fetch", async () => Response.json({ data: {
+      repository: { object: { author: { user: { databaseId: 123 } } } },
+    } }));
+    const commitUrl = `https://github.com/${fixture.ownerName}/commit/${"c".repeat(40)}`;
+    const request = await service().fileDispute({ id: fixture.contributorId }, {
+      ...filing(fixture), landedCommitUrl: commitUrl,
+    });
+    expect(request).toMatchObject({ state: "OPEN", landedCommitUrl: commitUrl, landedCommitAuthorId: null });
+    expect(await sql`select landed_commit_author_id from closed_pr_dispute_requests where id = ${request.id}`)
+      .toEqual([{ landed_commit_author_id: null }]);
+    expect((await store().listRequestsForAccount(fixture.contributorId))[0].landedCommitAuthorId).toBeNull();
+    expect((await store().listRequestsForModeration()).find((row) => row.id === request.id)?.landedCommitAuthorId).toBeNull();
   });
 
   it.each(["Repository", "Commit"])("refuses a definitively missing forge %s with the named author reason", async (object) => {
@@ -255,7 +269,28 @@ describe("closed PR dispute filing", () => {
     }
   });
 
-  it.each(["malformed", "unregistered", "credentials", "branch", "gitlab"])("refuses %s commit URLs", async (kind) => {
+  it("files a registered GitLab commit with an unknown landing account without network requests", async () => {
+    const fixture = await buildFixture();
+    const instanceUrl = "https://gitlab.example.test";
+    const ownerName = `group/subgroup/${fixture.ownerName}`;
+    await sql`update registered_repositories set provider = 'gitlab',
+      instance_url = ${instanceUrl}, owner_name = ${ownerName} where id = ${fixture.repositoryId}`;
+    const requests: unknown[] = [];
+    vi.stubGlobal("fetch", async (input: unknown) => {
+      requests.push(input);
+      throw new Error("GitLab commit filing must not fetch a forge identity.");
+    });
+    const commitUrl = `${instanceUrl}/${ownerName}/-/commit/${"d".repeat(40)}`;
+    const request = await service().fileDispute({ id: fixture.contributorId }, {
+      ...filing(fixture), landedCommitUrl: commitUrl,
+    });
+    expect(request).toMatchObject({ state: "OPEN", landedCommitUrl: commitUrl, landedCommitAuthorId: null });
+    expect(await sql`select landed_commit_author_id from closed_pr_dispute_requests where id = ${request.id}`)
+      .toEqual([{ landed_commit_author_id: null }]);
+    expect(requests).toEqual([]);
+  });
+
+  it.each(["malformed", "unregistered", "credentials", "branch"])("refuses %s commit URLs", async (kind) => {
     const fixture = await buildFixture();
     const [author] = await sql`select github_user_id from users where id = ${fixture.contributorId}`;
     vi.spyOn(PostgresSponsorCredentialStore.prototype, "getGitHubAccessToken").mockResolvedValue("test-access-token");
@@ -270,10 +305,7 @@ describe("closed PR dispute filing", () => {
       malformed: "landing commit reference", unregistered: `https://github.com/elsewhere/repo/commit/${"d".repeat(40)}`,
       credentials: `https://someone@github.com/${fixture.ownerName}/commit/${"d".repeat(40)}`,
       branch: `https://github.com/${fixture.ownerName}/commit/main`,
-      gitlab: `https://gitlab.example.test/${fixture.ownerName}/-/commit/${"d".repeat(40)}`,
     };
-    if (kind === "gitlab") await sql`update registered_repositories set provider = 'gitlab',
-      instance_url = 'https://gitlab.example.test' where id = ${fixture.repositoryId}`;
     await expect(service().fileDispute({ id: fixture.contributorId }, {
       ...filing(fixture), landedCommitUrl: urls[kind],
     })).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringMatching(/commit.*author/i) });

@@ -95,6 +95,17 @@ describe("closed PR dispute page and filing", () => {
 });
 
 describe("moderation dispute list and decisions", () => {
+  it.each(["landing-author-account", null])("shows the landing account for commit evidence (%s)", (landedCommitAuthorId) => {
+    render(<ClosedPrDisputeList moderation requests={[{ ...open, landedCommitAuthorId, comparison: {
+      closedPullRequest: { number: 12, title: "Original parser", url: "https://github.com/owner/repo/pull/12",
+        reviews: null, rawDiff: null },
+      landedPullRequest: null, landedCommitUrl: open.landedCommitUrl,
+    } }]} />);
+    const landing = within(screen.getByRole("region", { name: "Landed change evidence" }));
+    expect(landing.getByText(`Landing account: ${landedCommitAuthorId ?? "unknown"}`)).toBeVisible();
+    expect(landing.getByRole("link")).toHaveAttribute("href", open.landedCommitUrl);
+  });
+
   it.each(["contributor history", "moderation queue"] as const)("scopes controls and sole-moderator labels to their rows on %s", (surface) => {
     const requests = [open, decided, decidedByAnotherModerator];
     const moderation = surface === "moderation queue";
@@ -185,4 +196,5 @@ it("shows stored source and landing evidence side by side with forge destination
   expect(landingLink).toHaveAttribute("href", "https://github.com/owner/repo/pull/19");
   expect(landing.getByText(/APPROVED/)).toHaveTextContent("102");
   expect(landing.getByText(/landed parser/)).toHaveTextContent("-old parser");
+  expect(landing.queryByText(/Landing account:/)).toBeNull();
 });
