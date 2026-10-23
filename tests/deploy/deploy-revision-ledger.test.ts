@@ -3,7 +3,7 @@
 // tests/deploy/deploy-revision.test.ts — shared fixture in
 // tests/support/deploy-revision-harness.ts — so each measured module stays
 // under the tests family ceiling (scripts/check-module-size.ts).
-import { rm, writeFile } from "node:fs/promises";
+import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ACTIONS_APP_ID,
@@ -12,6 +12,7 @@ import {
   cleanupLiveFixture,
   describeEntry,
   expectGateRefused,
+  gateLog,
   makeFixture,
   readLog,
   runDeploy,
@@ -34,6 +35,91 @@ describe("scripts/deploy-revision.sh — the ledger App as a required-check prod
       { id: 200, path: FIXTURE_PINS["deploy-gate"]!, jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
     ];
   }
+
+  it.each([
+    ["success", false], ["failure", false], ["success", true],
+  ] as const)("spends two API requests per steady-state poll after attributing sixteen pinned runs, then stops at %s (missing suites=%s)", async (conclusion, missingSuites) => {
+    const fixture = await makeFixture();
+    const runs: GateRun[] = Array.from({ length: 16 }, (_, index) => ({
+      id: index + 100,
+      suite: missingSuites ? null : undefined,
+      path: index === 15 ? FIXTURE_PINS["deploy-gate"]! : FIXTURE_PINS.verify!,
+      jobs: [{ id: index + 1000, name: index === 15 ? "deploy-gate" : "verify",
+        status: "completed", conclusion: "success" }],
+    }));
+    runs[15]!.jobs[0]!.status = "in_progress";
+    const pending = await writeGateState(fixture, "budget-pending", runs);
+    runs[15]!.jobs[0]!.status = "completed";
+    runs[15]!.jobs[0]!.conclusion = conclusion;
+    const concluded = await writeGateState(fixture, "budget-concluded", runs);
+    const result = await runDeploy(fixture, {
+      GH_SHIM_GATE_SEQUENCE: `${pending}:${pending}:${concluded}`,
+      OVERFLOW_DEPLOY_CI_TIMEOUT: "30",
+    });
+    expect(result.status, result.stderr).toBe(conclusion === "success" ? 0 : 1);
+    const entries = await readLog(fixture.shimLog);
+    if (conclusion === "failure") {
+      expect(result.stderr).toContain("deploy-gate concluded failure");
+      expectGateRefused(entries);
+    }
+    const polls: string[][] = [];
+    for (const line of gateLog(entries)) {
+      if (line.includes("/check-runs?")) polls.push([]);
+      if (polls.length && line.startsWith("gh api ")) polls.at(-1)!.push(line);
+    }
+    expect(polls.map((poll) => poll.length)).toEqual([18, 2, 2]);
+    expect(polls.flat().every((line) => line.includes("--paginate"))).toBe(true);
+    expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(24);
+    expect(entries.filter((entry) => entry.cmd === "sleep").map((entry) => entry.args)).toEqual([["60"], ["60"]]);
+  });
+
+  it("keeps an API-created check-run unattributed even inside a pinned run's suite", async () => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-same-suite-impostor", [
+      { id: 100, path: FIXTURE_PINS.verify!,
+        jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "success" }] },
+      { id: 200, path: FIXTURE_PINS["deploy-gate"]!,
+        jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
+    ], [{ id: 9999, name: "verify", suite: 10100, conclusion: "success" }]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "0" });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("verify (unattributed check-run 9999)");
+    expectGateRefused(await readLog(fixture.shimLog));
+  });
+
+  it("refreshes a changed run attempt even before its new check-run appears", async () => {
+    const fixture = await makeFixture();
+    const runs = happyPinnedRuns();
+    runs[1]!.jobs[0]!.status = "in_progress";
+    const first = await writeGateState(fixture, "attempt-first", runs);
+    runs[0]!.jobs.push({ id: 1002, name: "verify", attempt: 2, status: "completed", conclusion: "failure" });
+    runs[1]!.jobs[0]!.status = "completed";
+    const second = await writeGateState(fixture, "attempt-second", runs);
+    const checks = JSON.parse(await readFile(`${second}/check-runs.json`, "utf8"));
+    checks.check_runs = checks.check_runs.filter((check: { id: number }) => check.id !== 1002);
+    await writeFile(`${second}/check-runs-next.json`, JSON.stringify(checks));
+    await rename(`${second}/check-runs-next.json`, `${second}/check-runs.json`);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: `${first}:${second}` });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("verify concluded failure");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(9);
+    expect(entries.filter((entry) => entry.cmd === "sleep")).toHaveLength(1);
+    expectGateRefused(entries);
+  });
+
+  it("still excludes PR job IDs when the trusted app override names GitHub Actions", async () => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-actions-override", [
+      ...happyPinnedRuns(),
+      { id: 300, path: FIXTURE_PINS.verify!, event: "pull_request",
+        jobs: [{ id: 3001, name: "verify", status: "completed", conclusion: "failure" }] },
+    ]);
+    const result = await runDeploy(fixture, {
+      GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_LEDGER_APP_ID: String(ACTIONS_APP_ID),
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
 
   it.each([
     ["success", false], ["failure", false], ["success", true], ["failure", true],
@@ -256,7 +342,7 @@ describe("scripts/deploy-revision.sh — the ledger App as a required-check prod
     const checkRunsAt = entries.findIndex(isCheckRuns);
     const sleepBetween = entries
       .map(describeEntry)
-      .filter((line, at) => line === "sleep 15" && at > checkRunsAt);
+      .filter((line, at) => line === "sleep 60" && at > checkRunsAt);
     expect(sleepBetween.length).toBeGreaterThanOrEqual(1);
     expect(entries.some((entry) => entry.args[0] === "release:switch")).toBe(true);
   });

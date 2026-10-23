@@ -664,7 +664,7 @@ exit 0
     const checkRunsAt = entries.findIndex(isCheckRuns);
     const sleepBetween = entries
       .map(describeEntry)
-      .filter((line, at) => line === "sleep 15" && at > checkRunsAt);
+      .filter((line, at) => line === "sleep 60" && at > checkRunsAt);
     expect(sleepBetween.length).toBeGreaterThanOrEqual(1);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "release:switch")).toBe(true);
   });
@@ -753,7 +753,7 @@ exit 0
     const checkRunsAt = entries.findIndex(isCheckRuns);
     const sleepBetween = entries
       .map(describeEntry)
-      .filter((line, at) => line === "sleep 15" && at > checkRunsAt);
+      .filter((line, at) => line === "sleep 60" && at > checkRunsAt);
     expect(sleepBetween.length).toBeGreaterThanOrEqual(1);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "release:switch")).toBe(true);
   });

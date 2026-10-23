@@ -81,8 +81,8 @@ export const FIXTURE_URL = "http://127.0.0.1:39999/deploy-fixture";
 export const FIXTURE_HASH = "abc1234";
 export const FIXTURE_REPO = "overflow-fixture/overflow-fixture";
 export const FIXTURE_REMOTE_URL = `git@github.com:${FIXTURE_REPO}.git`;
-export const JQ_CHECKRUNS = `.check_runs[] | [.id, .name, (.app.id // 0), (.status // "unknown"), (.conclusion // "")] | map(if . == null or . == "" then "[missing]" else . end) | @tsv`;
-export const JQ_RUNS = `.workflow_runs[] | [.id, .path, .event, .head_branch] | map(if . == null or . == "" then "[missing]" else . end) | @tsv`;
+export const JQ_CHECKRUNS = `.check_runs[] | [.id, .name, (.app.id // 0), (.status // "unknown"), (.conclusion // ""), (.check_suite.id // 0)] | map(if . == null or . == "" then "[missing]" else . end) | @tsv`;
+export const JQ_RUNS = `.workflow_runs[] | [.id, .path, .event, .head_branch, (.check_suite_id // 0), (.run_attempt // 0)] | map(if . == null or . == "" then "[missing]" else . end) | @tsv`;
 export const JQ_JOBS = `.jobs[] | [.id, (if (.name // "") == "" then "(unnamed)" else .name end), (.run_attempt // 0), (.status // "unknown"), (.conclusion // "")] | map(if . == null or . == "" then "[missing]" else . end) | @tsv`;
 export const MAP_PATH = ".github/required-checks.json";
 /** The fixture's pin map: protection requires verify and deploy-gate. */
@@ -134,16 +134,19 @@ export interface GateRun {
   event?: string | null;
   /** Omitted fixtures model main; null models a missing API head branch. */
   headBranch?: string | null;
+  /** null exercises the jobs fallback when the suite identity is unavailable. */
+  suite?: number | null;
   jobs: GateJob[];
 }
 
-/** A check-run as the gate's check-runs read projects it: id, name, app id, status, conclusion. */
+/** A check-run projected by gh, including its suite identity for narrowing jobs reads. */
 export interface GateCheckRun {
   id: number;
   name: string;
   app?: number;
   status?: string;
   conclusion?: string;
+  suite?: number | null;
 }
 
 // Share check-run IDs with jobs; extra check-runs model unrelated App producers.
@@ -158,6 +161,8 @@ export async function writeGateState(
   await writeFile(path.join(directory, "runs.json"), JSON.stringify({ workflow_runs: runs.map((run) => ({
     id: run.id, path: run.path, event: run.event === undefined ? "push" : run.event,
     head_branch: run.headBranch === undefined ? "main" : run.headBranch,
+    check_suite_id: run.suite === undefined ? run.id + 10000 : run.suite,
+    run_attempt: Math.max(1, ...run.jobs.map((job) => job.attempt ?? 1)),
   })) }));
   for (const run of runs) {
     await writeFile(
@@ -173,7 +178,9 @@ export async function writeGateState(
     status: job.status,
     conclusion: job.conclusion,
   });
-  const checkRuns = [...runs.flatMap((run) => run.jobs.map(jobCheckRun)), ...extraCheckRuns];
+  const checkRuns = [...runs.flatMap((run) => run.jobs.map((job) => ({
+    ...jobCheckRun(job), suite: run.suite === undefined ? run.id + 10000 : run.suite,
+  }))), ...extraCheckRuns];
   await writeFile(
     path.join(directory, "check-runs.json"),
     JSON.stringify({ check_runs: checkRuns.map((cr) => {
@@ -184,7 +191,8 @@ export async function writeGateState(
         // in the jobs JSON but as success in its check-run body, so the fixture
         // does not silently assert a disagreement the real API never produces.
         const conclusion = cr.conclusion ?? (status === "completed" ? "success" : "");
-        return { id: cr.id, name: cr.name, app: { id: cr.app ?? ACTIONS_APP_ID }, status, conclusion };
+        return { id: cr.id, name: cr.name, app: { id: cr.app ?? ACTIONS_APP_ID }, status, conclusion,
+          check_suite: { id: cr.suite ?? null } };
       }) }),
   );
   return directory;
