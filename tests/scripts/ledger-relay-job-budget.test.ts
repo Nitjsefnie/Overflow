@@ -264,14 +264,14 @@ describe("the ledger relay's job-start budget", () => {
     expect(w.state.checks).toEqual([]);
   });
 
-  it.each(["GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "OVERFLOW_RELAY_RERUN_TOKEN"])(
+  it.each(["GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "OVERFLOW_RELAY_RERUN_TOKEN", "OVERFLOW_LEDGER_APP_ID", "OVERFLOW_LEDGER_INSTALLATION_ID", "OVERFLOW_LEDGER_APP_KEY"])(
     "exits red before any request when %s is missing",
     async (name) => {
       const w = world(JOB_STARTED_AT + seconds(30));
       const env = { ...w.env };
       delete env[name];
 
-      await expect(w.run({ env })).rejects.toThrow(new RegExp(`${name} is required`));
+      await expect(w.run({ env })).rejects.toThrow(new Error(`${name.replace(/^OVERFLOW_/, "")} is required`));
 
       expect(w.state.requests).toEqual([]);
     },

@@ -185,6 +185,19 @@ host today — because the reconciliation App private key lives under it, and
 an untraversable `/etc/overflow` leaves the key unreadable, which fails
 reconciliation startup closed.
 
+### Loading configuration for administrative commands
+
+Before a recovery or credential-maintenance block that uses the database,
+paste this block into the same shell. Repeat it after editing the environment
+file. It exports the canonical database URL for direct clients and derived
+restore URLs: a nonempty canonical value wins, otherwise the legacy value is
+used. The file itself is unchanged.
+
+```bash
+set -a; . /etc/overflow/overflow.env; set +a
+export OVERFLOW_DATABASE_URL="${OVERFLOW_DATABASE_URL:-${DATABASE_URL-}}"
+```
+
 ### Reverse-proxy requirements
 
 The unit binds Next to `127.0.0.1:3000`. The documented deployment puts nginx
@@ -1477,6 +1490,10 @@ deploy restarts the service and runs the webhook upgrade with whatever the
 environment file holds at that moment, or, from a shell sourced earlier, with
 keys the file no longer holds. Finish or roll back the rotation first.
 
+Before each database command block in this section, run the
+[configuration-loading block](#loading-configuration-for-administrative-commands)
+in the same shell, including after a key-file edit.
+
 ### Step 1: back up the database
 
 Take a fresh dump first, the way [backup-restore.md](backup-restore.md)'s drill
@@ -1486,7 +1503,6 @@ be lost.
 ```bash
 set -e
 cd /srv/overflow
-set -a; . /etc/overflow/overflow.env; set +a
 bash scripts/db-backup.sh
 ```
 
@@ -1521,8 +1537,10 @@ out whether that key was ever configured before removing it.
 
 ### Step 3: configure both keys and restart
 
-This block keeps the old key in `/etc/overflow/token-encryption-key.old`,
-renames the `OVERFLOW_TOKEN_ENCRYPTION_KEY` line to `OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS`
+This block selects `OVERFLOW_TOKEN_ENCRYPTION_KEY` when that line is present,
+otherwise `TOKEN_ENCRYPTION_KEY`. It keeps that old key in
+`/etc/overflow/token-encryption-key.old` and writes the selected line as
+`OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS`
 without changing its value, appends the new key as `OVERFLOW_TOKEN_ENCRYPTION_KEY`,
 confirms both lines read back as the two saved keys, and restores section 4's
 ownership and mode. It refuses, changing nothing, unless:
@@ -1530,11 +1548,11 @@ ownership and mode. It refuses, changing nothing, unless:
 - step 2's file holds a 43-character key;
 - the environment file ends with a newline, so the appended line cannot be
   glued onto the last one;
-- no line names `OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS`, comments included. A file
+- no line names `TOKEN_ENCRYPTION_KEY_PREVIOUS` with either prefix, comments included. A file
   copied from `.env.example` carries its commented
   `# OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=` line and its explanation; delete both, and
   any empty `OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=` line, before running the block;
-- exactly one line names `OVERFLOW_TOKEN_ENCRYPTION_KEY` at all, comments included (the
+- exactly one line names the selected key variable at all, comments included (the
   pre-restart rollback counts the same way, so a file this block accepts is one
   the rollback accepts), and that line holds the bare value and nothing else: no
   quotes, spaces or comment. Rewrite a quoted line as
@@ -1546,15 +1564,19 @@ ownership and mode. It refuses, changing nothing, unless:
 ```bash
 (
 set -e
+key_name=OVERFLOW_TOKEN_ENCRYPTION_KEY
+if ! grep -q '^OVERFLOW_TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env; then
+  key_name=TOKEN_ENCRYPTION_KEY
+fi
 grep -Eqx '[A-Za-z0-9_-]{43}' /etc/overflow/token-encryption-key.new || { echo "Refusing: token-encryption-key.new does not hold a 43-character key." >&2; exit 1; }
 test -z "$(tail -c 1 /etc/overflow/overflow.env)" || { echo "Refusing: overflow.env does not end with a newline." >&2; exit 1; }
-test "$(grep -c 'OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS' /etc/overflow/overflow.env)" = 0 || { echo "Refusing: overflow.env already names OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS." >&2; exit 1; }
-test "$(grep -c 'OVERFLOW_TOKEN_ENCRYPTION_KEY' /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env must name OVERFLOW_TOKEN_ENCRYPTION_KEY on exactly one line." >&2; exit 1; }
-grep -Eqx 'OVERFLOW_TOKEN_ENCRYPTION_KEY=[A-Za-z0-9_-]{43}' /etc/overflow/overflow.env || { echo "Refusing: the OVERFLOW_TOKEN_ENCRYPTION_KEY value is not bare." >&2; exit 1; }
+test "$(grep -c 'TOKEN_ENCRYPTION_KEY_PREVIOUS' /etc/overflow/overflow.env)" = 0 || { echo "Refusing: overflow.env already names OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS." >&2; exit 1; }
+test "$(grep -c "$key_name" /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env must name $key_name on exactly one line." >&2; exit 1; }
+grep -Eqx "$key_name=[A-Za-z0-9_-]{43}" /etc/overflow/overflow.env || { echo "Refusing: the $key_name value is not bare." >&2; exit 1; }
 test ! -e /etc/overflow/token-encryption-key.old || { echo "Refusing: token-encryption-key.old already exists." >&2; exit 1; }
 install -o root -g root -m 0600 /dev/null /etc/overflow/token-encryption-key.old
-sed -n 's/^OVERFLOW_TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env > /etc/overflow/token-encryption-key.old
-sed -i 's/^OVERFLOW_TOKEN_ENCRYPTION_KEY=/OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=/' /etc/overflow/overflow.env
+sed -n "s/^$key_name=//p" /etc/overflow/overflow.env > /etc/overflow/token-encryption-key.old
+sed -i "s/^$key_name=/OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=/" /etc/overflow/overflow.env
 { printf 'OVERFLOW_TOKEN_ENCRYPTION_KEY='; cat /etc/overflow/token-encryption-key.new; printf '\n'; } >> /etc/overflow/overflow.env
 test "$(sed -n 's/^OVERFLOW_TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.new)" || { echo "The edited file does not read back as the saved keys; roll back as below." >&2; exit 1; }
 test "$(sed -n 's/^OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.old)" || { echo "The edited file does not read back as the saved keys; roll back as below." >&2; exit 1; }
@@ -1569,7 +1591,6 @@ The re-encryption script's check mode reads the same file and writes nothing:
 
 ```bash
 cd /srv/overflow
-set -a; . /etc/overflow/overflow.env; set +a
 check_status=0
 pnpm --silent credentials:reencrypt --check || check_status=$?
 printf 'Check exit status: %s\n' "$check_status"
@@ -1607,7 +1628,6 @@ new key and still opens everything sealed under the old one.
 
 ```bash
 cd /srv/overflow
-set -a; . /etc/overflow/overflow.env; set +a
 reencrypt_status=0
 pnpm --silent credentials:reencrypt || reencrypt_status=$?
 check_status=0
@@ -1653,7 +1673,6 @@ untouched. Each one is repaired by minting the credential again.
 waiting for that, clear the reported row's token:
 
 ```bash
-set -a; . /etc/overflow/overflow.env; set +a
 row_id='REPLACE-WITH-REPORTED-ID'
 psql "$OVERFLOW_DATABASE_URL" -v ON_ERROR_STOP=1 -c "update users set encrypted_oauth_token = null where id = '$row_id'"
 ```
@@ -1672,7 +1691,6 @@ stores a fresh token in the same row. Without waiting for that, clear the
 reported row's token; never delete the row:
 
 ```bash
-set -a; . /etc/overflow/overflow.env; set +a
 row_id='REPLACE-WITH-REPORTED-ID'
 psql "$OVERFLOW_DATABASE_URL" -v ON_ERROR_STOP=1 -c "update user_forge_identities set encrypted_token = null where id = '$row_id'"
 ```
@@ -1695,7 +1713,6 @@ registration holding no credential; one still holding an unreadable secret
 fails there as well.
 
 ```bash
-set -a; . /etc/overflow/overflow.env; set +a
 row_id='REPLACE-WITH-REPORTED-ID'
 psql "$OVERFLOW_DATABASE_URL" -v ON_ERROR_STOP=1 -c "update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where id = '$row_id' and unregistered_at is null"
 ```
@@ -1731,7 +1748,6 @@ Then, from a fresh shell:
 
 ```bash
 cd /srv/overflow
-set -a; . /etc/overflow/overflow.env; set +a
 check_status=0
 pnpm --silent credentials:reencrypt --check || check_status=$?
 printf 'Check exit status: %s\n' "$check_status"
@@ -1831,13 +1847,16 @@ table applies.
 
 ### Webhook secrets of unregistered repositories
 
+Before either query below, run the
+[configuration-loading block](#loading-configuration-for-administrative-commands)
+in the same shell.
+
 Migration `048_unregistered_webhook_credentials.sql` clears the webhook
 credential of every repository unregistered before the release that clears it
 at unregistration. Before deploying it, count the rows it will clear; the query
 only reads:
 
 ```bash
-set -a; . /etc/overflow/overflow.env; set +a
 psql "$OVERFLOW_DATABASE_URL" -tAc "select count(*) from registered_repositories where unregistered_at is not null and webhook_credential_id is not null"
 ```
 
@@ -1849,7 +1868,6 @@ rolled-back release serves, keeps its secret; `pnpm db:migrate` never applies
 repeat the count, which must then print `0`:
 
 ```bash
-set -a; . /etc/overflow/overflow.env; set +a
 psql "$OVERFLOW_DATABASE_URL" -v ON_ERROR_STOP=1 -c "update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where unregistered_at is not null and webhook_credential_id is not null"
 ```
 

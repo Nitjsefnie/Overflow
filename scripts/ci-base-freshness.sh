@@ -14,14 +14,15 @@ fail_() {
   exit 1
 }
 
-OVERFLOW_REPO_SLUG=${OVERFLOW_REPO_SLUG:-${REPO_SLUG:-}}
-OVERFLOW_BASE_SHA=${OVERFLOW_BASE_SHA:-${BASE_SHA:-}}
-OVERFLOW_BASE_REF=${OVERFLOW_BASE_REF:-${BASE_REF:-}}
-OVERFLOW_PR_NUMBER=${OVERFLOW_PR_NUMBER:-${PR_NUMBER:-}}
-OVERFLOW_HEAD_SHA=${OVERFLOW_HEAD_SHA:-${HEAD_SHA:-}}
+OVERFLOW_REPO_SLUG=${OVERFLOW_REPO_SLUG-${REPO_SLUG:-}}
+OVERFLOW_BASE_SHA=${OVERFLOW_BASE_SHA-${BASE_SHA:-}}
+OVERFLOW_BASE_REF=${OVERFLOW_BASE_REF-${BASE_REF:-}}
+OVERFLOW_PR_NUMBER=${OVERFLOW_PR_NUMBER-${PR_NUMBER:-}}
+OVERFLOW_HEAD_SHA=${OVERFLOW_HEAD_SHA-${HEAD_SHA:-}}
 
-for required in OVERFLOW_REPO_SLUG OVERFLOW_BASE_SHA OVERFLOW_BASE_REF; do
-  if [ -z "${!required:-}" ]; then
+for required in REPO_SLUG BASE_SHA BASE_REF; do
+  input="OVERFLOW_$required"
+  if [ -z "${!input:-}" ]; then
     fail_ "required input $required is empty — refusing to judge the base's freshness without it."
   fi
 done
@@ -44,7 +45,7 @@ fi
 # projection counts the previous path too (issue 685): either side renaming a
 # file the other just edited is an overlap, not a disjoint advance.
 if [ -z "${OVERFLOW_PR_NUMBER:-}" ]; then
-  fail_ "OVERFLOW_PR_NUMBER is not set — the pull request's changed-file list cannot be fetched, so the advance cannot be judged. Refusing."
+  fail_ "PR_NUMBER is not set — the pull request's changed-file list cannot be fetched, so the advance cannot be judged. Refusing."
 fi
 
 pr_files=$(gh api "repos/$OVERFLOW_REPO_SLUG/pulls/$OVERFLOW_PR_NUMBER/files" --paginate --jq '.[] | (.filename, (.previous_filename // empty))') || {

@@ -87,7 +87,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-database_url=${OVERFLOW_DATABASE_URL:-${DATABASE_URL:-}}
+database_url=${OVERFLOW_DATABASE_URL-${DATABASE_URL:-}}
 if [ -z "$database_url" ]; then
     fail "DATABASE_URL is not set; refusing to guess which database to dump"
 fi
