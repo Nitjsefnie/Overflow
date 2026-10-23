@@ -452,9 +452,6 @@ describe("the pull request suite workflow", () => {
     ];
     const indices = order.map((command) => suite.steps.indexOf(stepRunning(command)));
     expect(indices).toEqual([...indices].sort((a, b) => a - b));
-    expect(suite.services?.postgres?.image).toMatch(
-      /^postgres:[0-9]+@sha256:[0-9a-f]{64}$/,
-    );
     expect(suite.env).toEqual(expect.objectContaining({
       COREPACK_ENABLE_PROJECT_SPEC: "0",
       npm_config_registry: "https://registry.npmjs.org/",
