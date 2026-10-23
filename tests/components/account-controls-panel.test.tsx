@@ -365,7 +365,7 @@ describe("account controls panel", () => {
     // A plain warning, not an error alert: nothing has gone wrong yet.
     expect(within(region).queryByRole("alert")).not.toBeInTheDocument();
     expect(warning.textContent).toContain("no in-product moderator");
-    expect(warning.textContent).toContain("OVERFLOW_MODERATOR_GITHUB_USER_IDS");
+    expect(warning.textContent).toContain("an operator adds a GitHub user id to MODERATOR_GITHUB_USER_IDS");
     expect(warning.textContent).toContain("next time it signs in");
     // The floor is configured, so the absence sentence stays off.
     expect(warning.textContent).not.toContain("No GitHub user id is configured");
@@ -385,7 +385,7 @@ describe("account controls panel", () => {
     );
 
     const warning = screen.getByRole("status");
-    expect(warning.textContent).toContain("No GitHub user id is configured in OVERFLOW_MODERATOR_GITHUB_USER_IDS right now.");
+    expect(warning.textContent).toContain("No GitHub user id is configured in MODERATOR_GITHUB_USER_IDS right now.");
   });
 
   it("renders no moderator warning for an ordinary account", () => {

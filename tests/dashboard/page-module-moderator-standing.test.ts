@@ -65,6 +65,7 @@ function accountControls(): HTMLElement {
 }
 
 beforeEach(() => {
+  vi.stubEnv("OVERFLOW_MODERATOR_GITHUB_USER_IDS", "");
   requireMemberPageSession.mockResolvedValue({
     user: { id: "internal-id", role: "MEMBER", name: "Ada Lovelace", canAdministerWebhooks: false },
   });
@@ -78,7 +79,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  delete process.env.OVERFLOW_MODERATOR_GITHUB_USER_IDS;
+  vi.unstubAllEnvs();
 });
 
 afterAll(() => vi.resetModules());
@@ -86,14 +87,14 @@ afterAll(() => vi.resetModules());
 describe("the dashboard page drives the account controls' moderator-standing props", () => {
   it("warns when the signed-in account is the instance's last live moderator and a floor is configured", async () => {
     standingRows = [{ is_live_moderator: true, other_live_moderators: 0 }];
-    process.env.OVERFLOW_MODERATOR_GITHUB_USER_IDS = "583231";
+    vi.stubEnv("OVERFLOW_MODERATOR_GITHUB_USER_IDS", "583231");
 
     await renderDashboardPage();
 
     const warning = within(accountControls()).getByRole("status");
     expect(warning).toBeVisible();
     expect(warning.textContent).toContain("no in-product moderator");
-    expect(warning.textContent).toContain("OVERFLOW_MODERATOR_GITHUB_USER_IDS");
+    expect(warning.textContent).toContain("an operator adds a GitHub user id to MODERATOR_GITHUB_USER_IDS");
     // The floor is configured, so the absence sentence stays off.
     expect(warning.textContent).not.toContain("No GitHub user id is configured");
     expect(getSql).toHaveBeenCalledTimes(1);
@@ -105,12 +106,12 @@ describe("the dashboard page drives the account controls' moderator-standing pro
     await renderDashboardPage();
 
     const warning = within(accountControls()).getByRole("status");
-    expect(warning.textContent).toContain("No GitHub user id is configured in OVERFLOW_MODERATOR_GITHUB_USER_IDS right now.");
+    expect(warning.textContent).toContain("No GitHub user id is configured in MODERATOR_GITHUB_USER_IDS right now.");
   });
 
   it("warns through the real predicate: a second live moderator keeps the warning down", async () => {
     standingRows = [{ is_live_moderator: true, other_live_moderators: 1 }];
-    process.env.OVERFLOW_MODERATOR_GITHUB_USER_IDS = "583231";
+    vi.stubEnv("OVERFLOW_MODERATOR_GITHUB_USER_IDS", "583231");
 
     await renderDashboardPage();
 

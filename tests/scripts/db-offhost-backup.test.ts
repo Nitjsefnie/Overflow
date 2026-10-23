@@ -345,7 +345,7 @@ describe("db-offhost-backup.sh environment validation", () => {
     const run = runBackup({ omit: "OVERFLOW_DATABASE_URL" });
 
     expect(run.status).not.toBe(0);
-    expect(run.stderr).toContain("OVERFLOW_DATABASE_URL");
+    expect(run.stderr).toContain("db-offhost-backup.sh: DATABASE_URL is not set; refusing to guess which database to dump");
     expect(run.dumpArgv, "nothing may be dumped on a refusal").toBeNull();
     expect(run.mbCalls, "and the mailbox must not be touched at all").toEqual([]);
   });
