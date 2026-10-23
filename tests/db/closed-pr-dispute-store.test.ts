@@ -9,6 +9,7 @@ import type { EnforcementState, PullRequestState } from "@/lib/db/types";
 import type { GitHubPullRequestReview } from "@/lib/github/types";
 import { ClosedPrDisputeService } from "@/lib/moderation/closed-pr-dispute-service";
 import { PostgresClosedPrDisputeStore } from "@/lib/moderation/closed-pr-dispute-store";
+import { closedPrDisputeErrorResponse } from "@/lib/moderation/closed-pr-dispute-route";
 import { PostgresSponsorCredentialStore } from "@/lib/fold/sponsor-credential-store";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -182,6 +183,52 @@ describe("closed PR dispute filing", () => {
     ) });
     await expectNoRequests(fixture);
   });
+
+  it.each(["Repository", "Commit"])("refuses a definitively missing forge %s with the named author reason", async (object) => {
+    const fixture = await buildFixture();
+    vi.spyOn(PostgresSponsorCredentialStore.prototype, "getGitHubAccessToken").mockResolvedValue("test-access-token");
+    vi.stubGlobal("fetch", async () => Response.json({
+      data: { repository: object === "Repository" ? null : { object: null } },
+      errors: [{ type: "NOT_FOUND", message: `Could not resolve to a ${object} with the name 'owner/repo'.`,
+        path: object === "Repository" ? ["repository"] : ["repository", "object"] }],
+    }));
+    const error = await service().fileDispute({ id: fixture.contributorId }, {
+      ...filing(fixture), landedCommitUrl: `https://github.com/${fixture.ownerName}/commit/${"c".repeat(40)}`,
+    }).catch((error: unknown) => error);
+    expect(error).toMatchObject({ name: "ClosedPrDisputeError", code: "CONFLICT",
+      message: expect.stringMatching(/commit.*author/i) });
+    expect(closedPrDisputeErrorResponse(error).status).toBe(409);
+    await expectNoRequests(fixture);
+  });
+
+  it.each(["transport", "server", "endpoint missing", "rate limit", "permission", "other object", "mixed verdict"])(
+    "preserves %s forge failures as upstream errors", async (kind) => {
+      const fixture = await buildFixture();
+      vi.spyOn(PostgresSponsorCredentialStore.prototype, "getGitHubAccessToken").mockResolvedValue("test-access-token");
+      const message = "Could not resolve to a Repository with the name 'owner/repo'.";
+      vi.stubGlobal("fetch", async () => {
+        if (kind === "transport") throw new Error(message);
+        if (kind === "server" || kind === "endpoint missing") return new Response(message, {
+          status: kind === "server" ? 503 : 404,
+        });
+        return Response.json({ data: { repository: null }, errors: [
+          { type: kind === "permission" ? "FORBIDDEN" : "NOT_FOUND",
+            message: kind === "other object" ? "Could not resolve to an Issue with the number of 1." : message,
+            ...(kind === "rate limit" ? { code: "RATE_LIMIT" } : {}) },
+          ...(kind === "mixed verdict" ? [{ type: "FORBIDDEN", message: "Access refused." }] : []),
+        ] });
+      });
+      const error = await service().fileDispute({ id: fixture.contributorId }, {
+        ...filing(fixture), landedCommitUrl: `https://github.com/${fixture.ownerName}/commit/${"c".repeat(40)}`,
+      }).catch((error: unknown) => error);
+      expect(error).toMatchObject({ name: kind === "server" || kind === "endpoint missing"
+        ? "GitHubApiError" : "GitHubGraphqlRequestError", rateLimited: kind === "rate limit" });
+      const response = closedPrDisputeErrorResponse(error);
+      expect(response.status).toBe(502);
+      expect(await response.json()).toMatchObject({ error: { code: "UPSTREAM_FAILURE" } });
+      await expectNoRequests(fixture);
+    },
+  );
 
   it("resolves the commit using the filing transaction with a single connection", async () => {
     const fixture = await buildFixture();

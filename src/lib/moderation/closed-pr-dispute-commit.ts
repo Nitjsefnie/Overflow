@@ -1,6 +1,7 @@
 import type { TransactionClient } from "@/lib/db/types";
 import { PostgresSponsorCredentialStore } from "@/lib/fold/sponsor-credential-store";
 import { GitHubGateway } from "@/lib/github/client";
+import { GitHubGraphqlRequestError } from "@/lib/github/errors";
 
 export type CommitAuthorResult =
   | { kind: "ok"; accountId: string }
@@ -32,7 +33,13 @@ export async function resolveLandedCommitAuthor(sql: TransactionClient, value: s
   if (token === null) return unresolved;
   const [owner, name] = repository.owner_name.split("/");
   const forgeId = await new GitHubGateway({ accessToken: token, owner: repository.sponsor_id })
-    .getCommitAuthor({ owner, name }, match[2]);
+    .getCommitAuthor({ owner, name }, match[2]).catch((error: unknown) => {
+      if (error instanceof GitHubGraphqlRequestError && error.status === 200 && !error.rateLimited
+        && /^GitHub GraphQL request failed\. NOT_FOUND: Could not resolve to a (Repository|Commit)\b[^;]*$/.test(error.message)) {
+        return null;
+      }
+      throw error;
+    });
   if (forgeId === null) return unresolved;
   // Match the fold and forge-person procedure's GitHub numeric identity mapping.
   const [account] = await sql<{ id: string }[]>`select id from users where github_user_id = ${forgeId}`;
