@@ -7,6 +7,7 @@ import { formatInstant } from "@/lib/format-instant";
 import { plural } from "@/lib/plural";
 import type { BannedAccountProjection } from "@/lib/moderation/banned-accounts";
 import type { OpenContestRequestProjection } from "@/lib/moderation/sanction-contest-service";
+import type { CreditIssuedProjection } from "@/lib/dashboard/ledger-panels";
 import type {
   AuditCandidateProjection,
   EnforcementHistoryProjection,
@@ -68,6 +69,13 @@ export default async function ModerationPage() {
   }
   const settlementCorrections = await listSettlementCorrections(session.user);
   const unwritableClosures = await loadUnwritableClosures(session.user.id);
+  let creditIssued: CreditIssuedProjection[] | null;
+  try {
+    const { listCreditIssued } = await import("@/lib/dashboard/ledger-panels");
+    creditIssued = await listCreditIssued();
+  } catch {
+    creditIssued = null;
+  }
   try {
     const {
       listEnforcementHistory,
@@ -291,6 +299,28 @@ export default async function ModerationPage() {
               <li key={event.id}>
                 {formatInstant(event.createdAt)} · {event.targetLogin}: {event.priorState} → {event.newState} · {event.reason}
                 {event.recalibrationPlan === null ? null : <pre>{JSON.stringify(event.recalibrationPlan, null, 2)}</pre>}
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
+      <section className="surface" aria-labelledby="credit-issued-heading">
+        <p className="eyebrow">Ledger activity</p>
+        <h2 id="credit-issued-heading">Credit issued</h2>
+        <p>
+          Positive creditor legs from settlements and moderation adjustments, grouped per UTC hour.
+          Credit earned before sign-in and granted overrides land on their merge date, so recent buckets can still move.
+        </p>
+        {creditIssued === null ? (
+          <p role="alert">The credit issued could not be loaded.</p>
+        ) : creditIssued.length === 0 ? (
+          <p>No credit issued is recorded.</p>
+        ) : (
+          <ol>
+            {creditIssued.map((bucket) => (
+              <li key={bucket.bucketStartedAt}>
+                <time dateTime={bucket.bucketStartedAt}>{formatInstant(bucket.bucketStartedAt)}</time>
+                {" · "}<strong>{bucket.issuedTotal}</strong> {plural(bucket.issuedTotal, "credit")}
               </li>
             ))}
           </ol>
