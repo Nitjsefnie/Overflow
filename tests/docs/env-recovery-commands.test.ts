@@ -34,6 +34,14 @@ function runCommands(body: string, configuration: string) {
 }
 
 describe("recovery commands read either environment spelling", () => {
+  it("preserves an empty canonical URL and refuses backup despite a valid legacy URL", () => {
+    const result = runCommands(`${loading}\nprintf '<%s>' "$OVERFLOW_DATABASE_URL"\nOVERFLOW_PG_DUMP=false bash "${process.cwd()}/scripts/db-backup.sh" --output-dir "$PWD/backups"`,
+      `DATABASE_URL=${legacyUrl}\nOVERFLOW_DATABASE_URL=\n`);
+    expect(result.stdout).toBe("<>");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("DATABASE_URL is not set; refusing to guess which database to dump");
+  });
+
   it.each([
     ["legacy", `DATABASE_URL=${legacyUrl}\n`, legacyUrl],
     ["canonical", `OVERFLOW_DATABASE_URL=${canonicalUrl}\n`, canonicalUrl],
