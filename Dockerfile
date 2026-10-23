@@ -64,6 +64,7 @@ COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/next.config.ts ./next.config.ts
 COPY --from=build /app/db ./db
 COPY --from=build /app/src/lib/db ./src/lib/db
+COPY --from=build /app/src/lib/env.ts ./src/lib/env.ts
 COPY --from=build /app/scripts/migrate.ts ./scripts/migrate.ts
 COPY --from=build /app/scripts/migration-compatibility.ts ./scripts/migration-compatibility.ts
 COPY --from=build /app/LICENSE ./LICENSE
