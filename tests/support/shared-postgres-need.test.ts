@@ -38,6 +38,32 @@ describe("runNeedsSharedPostgres", () => {
     })).toBe(true);
   });
 
+  it("resolves the environment alias to its source file before a directory index", () => {
+    const sources = new Map([
+      ["tests/unit/solo.test.ts", 'import "@/lib/env";'],
+      [resolve("src/lib/env.ts"), "export const readEnv = () => undefined;"],
+      [resolve("src/lib/env/index.ts"), "startPostgresContainer();"],
+    ]);
+    const warnings: string[] = [];
+    expect(runNeedsSharedPostgres(["tests/unit/solo.test.ts"], (path) => {
+      const contents = sources.get(path);
+      if (contents === undefined) throw new Error(`ENOENT: ${path}`);
+      return contents;
+    }, (message) => warnings.push(message))).toBe(false);
+    expect(warnings).toEqual([]);
+  });
+
+  it("starts postgres conservatively when the environment alias cannot be read", () => {
+    const warnings: string[] = [];
+    expect(runNeedsSharedPostgres(["tests/unit/solo.test.ts"], (path) => {
+      if (path === "tests/unit/solo.test.ts") return 'import "@/lib/env";';
+      throw new Error(`ENOENT: ${path}`);
+    }, (message) => warnings.push(message))).toBe(true);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(resolve("src/lib/env.ts"));
+    expect(warnings[0]).not.toContain("index.cjs");
+  });
+
   it("finds a database dependency after an import cycle without reading a module twice", () => {
     const sources = new Map([
       ["tests/fold/solo.test.ts", 'import "../support/cycle";'],
@@ -164,13 +190,13 @@ describe("runNeedsSharedPostgres", () => {
     expect(warnings[0]).toContain("tests/db/gone.test.ts");
   });
 
-  it("returns false when its only file is unreadable, and warns once", () => {
+  it("returns true when its only file is unreadable, and warns once", () => {
     const warnings: string[] = [];
     expect(
       runNeedsSharedPostgres(["tests/db/gone.test.ts"], () => {
         throw new Error("ENOENT: no such file");
       }, (message) => warnings.push(message)),
-    ).toBe(false);
+    ).toBe(true);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("tests/db/gone.test.ts");
   });
@@ -179,7 +205,7 @@ describe("runNeedsSharedPostgres", () => {
     const warnings: string[] = [];
     expect(runNeedsSharedPostgres(["tests/db/gone.test.ts"], () => {
       throw new Error("ENOENT: no such file");
-    }, (message) => warnings.push(message))).toBe(false);
+    }, (message) => warnings.push(message))).toBe(true);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("tests/db/gone.test.ts");
     expect(warnings[0]).toContain("ENOENT: no such file");
