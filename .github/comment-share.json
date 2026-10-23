@@ -389,7 +389,7 @@
   ],
   "scripts/http-surface-fixtures.ts": [
     4963,
-    24111
+    24140
   ],
   "scripts/http-surface-record.ts": [
     658,
@@ -657,7 +657,7 @@
   ],
   "src/lib/accounts/export.ts": [
     3136,
-    14555
+    14782
   ],
   "src/lib/auth/account-store.ts": [
     4497,
@@ -733,7 +733,7 @@
   ],
   "src/lib/db/migration-manifest.ts": [
     1523,
-    4534
+    4627
   ],
   "src/lib/db/redact-postgres-error.ts": [
     747,
@@ -780,8 +780,8 @@
     11540
   ],
   "src/lib/fold/reconcile.ts": [
-    8296,
-    30466
+    7766,
+    30704
   ],
   "src/lib/fold/reconciliation-budget.ts": [
     800,
@@ -833,7 +833,7 @@
   ],
   "src/lib/forge/postgres-identities-store.ts": [
     1477,
-    5417
+    5495
   ],
   "src/lib/format-instant.ts": [
     1143,
@@ -1553,7 +1553,7 @@
   ],
   "tests/forge/gitlab-commit-read-fold-boundary.test.ts": [
     1968,
-    9724
+    9747
   ],
   "tests/forge/gitlab-webhook-token.test.ts": [
     383,
