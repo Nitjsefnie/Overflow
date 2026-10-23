@@ -987,7 +987,7 @@ shared by both routes:
 | 401 | `UNAUTHENTICATED` | A valid member credential is required. |
 | 403 | `FORBIDDEN` | Wrong contributor, a non-moderator on the moderation route, a conflicted deciding moderator while another exists, or a refused request origin. |
 | 404 | `NOT_FOUND` | The account or dispute request was not found. |
-| 409 | `ALREADY_GRANTED` | This closed PR already received a granted dispute. A second grant is refused atomically; re-filing after denial remains allowed. |
+| 409 | `ALREADY_GRANTED` | This issue has already been credited through a granted dispute. A second grant is refused atomically; re-filing after denial remains allowed. |
 | 409 | `CONFLICT` | The message names the failed check: repository registration, PR resolution or state, missing recorded issue, an existing OPEN request, an already credited issue, or an already decided request. |
 | 413 | `PAYLOAD_TOO_LARGE` | POST body exceeds `32 KiB`. |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | POST declares a content type other than JSON. |

@@ -57,7 +57,7 @@ function fixture(remaining?: number) {
       getDirtyReconciliationSubjects: async () => [],
       discardDirtyReconciliationSubject: async () => {},
       withRepositoryReconciliation: async (_id, work) => work(),
-      getRepository: async () => ({ id: "repository-1", githubRepositoryId: 4242, ownerName: "octo/overflow",
+      getRepository: async () => ({ disputePullRequests: [], id: "repository-1", githubRepositoryId: 4242, ownerName: "octo/overflow",
         registeredAt: "2026-09-07T09:00:00Z", active: true, difficultyScheme: validDifficultyScheme(),
         difficultySchemeVersions: [],
         sponsor: { id: "sponsor-1", githubUserId: 1, githubLogin: "octo", enforcementState: "ACTIVE" } }),

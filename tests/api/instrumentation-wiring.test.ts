@@ -67,6 +67,7 @@ vi.mock("@/lib/fold/postgres-store", () => ({
     async getRepository(repositoryId: string): Promise<ReconciliationRepository | null> {
       if (repositoryId !== "repository-1") return null;
       return {
+        disputePullRequests: [],
         id: repositoryId,
         githubRepositoryId: 1,
         ownerName: "group/project",

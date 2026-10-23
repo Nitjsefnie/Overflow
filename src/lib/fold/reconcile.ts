@@ -21,7 +21,6 @@ import type { ReconciliationCostCharge, ReconciliationFairnessAssessment } from 
 import {
   RECONCILIATION_EVIDENCE_FORMAT,
   type DirtyReconciliationSubject,
-  type NarrowedCachedPullRequest,
   type ReconciliationEvidence,
   type ReconciliationSynchronization,
 } from "@/lib/fold/reconciliation-evidence";
@@ -30,7 +29,6 @@ import type {
   GitHubIssue,
   GitHubIssueReference,
   GitHubSubject,
-  GitHubPullRequest,
   GitHubPullRequestReview,
   GitHubRepository,
   GitHubRepositoryReference,
@@ -53,7 +51,9 @@ export const FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE =
 // Reconciliation resolves the registered repository by the identity GitHub cannot
 // reassign, and so does the fold: the snapshot repository carries it, so there is
 // one declaration of where the registered identity lives rather than two.
-export type ReconciliationRepository = RepositoryFoldSnapshot["repository"];
+export type ReconciliationRepository = RepositoryFoldSnapshot["repository"] & {
+  disputePullRequests: GitHubSubject[];
+};
 
 export type RepositoryUnavailableReason = "NOT_FOUND" | "NOT_PUBLIC" | "IDENTITY_MISMATCH";
 
@@ -404,24 +404,28 @@ async function reconcileRepositoryWhileCoordinated(
               const githubIssues = [...retained.values()];
               const pullRequestEvidence = new Map((full ? [] : cached!.pullRequests)
                 .map(({ id, reviews, rawDiff }) => [id, { reviews, rawDiff }]));
-              const referencedPullRequests = githubIssues.flatMap(({ closingPullRequests }) => closingPullRequests);
+              // Closing references must meet the fold's repository and state checks.
+              const referencedPullRequests = githubIssues.flatMap(({ closingPullRequests }) => closingPullRequests)
+                .filter(pr => (pr.state === "CLOSED" || (pr.state === "MERGED" && pr.mergedAt !== null))
+                  && belongsToRegisteredRepository(repository, pr));
+              const disputePullRequests = repository.disputePullRequests;
+              const changedPullRequestIds = new Set([...changed.values()].flatMap(({ closingPullRequests }) => closingPullRequests.map(pr => pr.id)));
               const dirtyPullRequestSubjects = new Map(dirtySubjects
                 .filter(({ kind }) => kind === "PULL_REQUEST")
                 .map((subject) => [subject.id, subject]));
               const refreshedEvidence = await collectPullRequestEvidence(
                 dependencies.github,
                 reference,
-                repository,
-                full ? referencedPullRequests : [
-                  ...[...changed.values()].flatMap(({ closingPullRequests }) => closingPullRequests),
-                  ...referencedPullRequests.filter(({ id }) => dirtyPullRequestSubjects.has(id) || !pullRequestEvidence.has(id)),
+                [
+                  ...referencedPullRequests.filter(({ id }) => full || changedPullRequestIds.has(id)
+                    || dirtyPullRequestSubjects.has(id) || !pullRequestEvidence.has(id)),
+                  ...disputePullRequests,
                 ],
                 discardUnresolvableSubject,
                 dirtyPullRequestSubjects,
               );
               for (const [id, evidence] of refreshedEvidence) pullRequestEvidence.set(id, evidence);
-              const retainedPrIds = new Set(referencedPullRequests.filter((pr) => (pr.state === "CLOSED" || (pr.state === "MERGED" && pr.mergedAt !== null))
-                && belongsToRegisteredRepository(repository, pr)).map(({ id }) => id));
+              const retainedPrIds = new Set([...referencedPullRequests, ...disputePullRequests].map(({ id }) => id));
               for (const id of pullRequestEvidence.keys()) if (!retainedPrIds.has(id)) pullRequestEvidence.delete(id);
               return { githubIssues, pullRequestEvidence };
             },
@@ -640,10 +644,7 @@ function defaultSubjectDiscardReason(error: unknown): SubjectDiscardReason | nul
 async function collectPullRequestEvidence(
   github: ReconciliationGateway,
   reference: GitHubRepositoryReference,
-  registered: ReconciliationRepository,
-  // Bodyless cached pull requests mix with fresh reads here: the narrowing
-  // (issue 681) leaves them without a body, and nothing below reads one.
-  pullRequests: ReadonlyArray<GitHubPullRequest | NarrowedCachedPullRequest>,
+  pullRequests: readonly GitHubSubject[],
   discardUnresolvableSubject: (
     failure: unknown,
     kind: DirtyReconciliationSubject["kind"],
@@ -653,19 +654,7 @@ async function collectPullRequestEvidence(
   ) => Promise<boolean>,
   dirtyPullRequestSubjects: ReadonlyMap<number, DirtyReconciliationSubject>,
 ): Promise<Map<number, { reviews: GitHubPullRequestReview[]; rawDiff: string }>> {
-  // A closing reference can name a pull request in another repository, and its
-  // number means nothing here: reading it from the registered repository would
-  // fingerprint whichever pull request happens to carry that number. Overflow's
-  // authority ends at the registered repository, so its evidence is not read.
-  // The fold makes the same call through the same predicate, because the two
-  // disagreeing is what puts an empty diff behind a settlement's proof.
-  const uniqueEvidencePullRequests = new Map(
-    pullRequests
-      .filter((pullRequest) =>
-        (pullRequest.state === "CLOSED" || (pullRequest.state === "MERGED" && pullRequest.mergedAt !== null)) &&
-        belongsToRegisteredRepository(registered, pullRequest))
-      .map((pullRequest) => [pullRequest.id, pullRequest]),
-  );
+  const uniqueEvidencePullRequests = new Map(pullRequests.map(pr => [pr.id, pr]));
   const evidence = await mapWithConcurrency(
     [...uniqueEvidencePullRequests.values()],
     reconciliationConcurrency,

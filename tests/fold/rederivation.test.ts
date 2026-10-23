@@ -137,6 +137,7 @@ function fixture(request: Date | null = null, attemptCount = 1) {
     discardDirtyReconciliationSubject: async () => {},
     withRepositoryReconciliation: async <T>(_id: string, work: () => Promise<T>) => work(),
     getRepository: vi.fn<ReconciliationStore["getRepository"]>(async () => ({
+      disputePullRequests: [],
       id: "repo-1", githubRepositoryId: 4242, ownerName: "octo/repo", active: true,
       registeredAt: "2026-01-01T00:00:00Z", difficultyScheme: validDifficultyScheme(),
       difficultySchemeVersions: [],

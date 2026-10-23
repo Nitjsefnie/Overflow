@@ -6,6 +6,7 @@ import { validDifficultyScheme } from "../support/difficulty-scheme";
 
 const token = randomBytes(24).toString("base64url");
 const repository: ReconciliationRepository = {
+  disputePullRequests: [],
   id: "repository-1", githubRepositoryId: 4242, ownerName: "example/repository", active: true,
   registeredAt: "2030-01-01T00:00:00.000Z",
   sponsor: { id: "sponsor-1", githubUserId: 1, githubLogin: "sponsor", enforcementState: "ACTIVE" },

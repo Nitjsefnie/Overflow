@@ -22,6 +22,7 @@ type RepositoryRow = {
   sponsor_github_login: string;
   sponsor_enforcement_state: EnforcementState;
   sponsor_moderation_events: unknown;
+  dispute_pull_requests: { id: string; number: number }[];
 };
 
 type UserRow = {
@@ -115,7 +116,14 @@ export class PostgresRepositoryLookupStore {
           ) order by events.created_at, events.id)
           from moderation_events as events
           where events.target_user_id = sponsors.id
-        ), '[]'::jsonb) as sponsor_moderation_events
+        ), '[]'::jsonb) as sponsor_moderation_events,
+        coalesce((
+          select jsonb_agg(jsonb_build_object('id', pr.github_pull_request_id::text, 'number', pr.pull_request_number)
+            order by pr.github_pull_request_id)
+          from pull_requests pr
+          where pr.repository_id = repositories.id
+            and exists (select 1 from closed_pr_dispute_requests requests where requests.pull_request_id = pr.id)
+        ), '[]'::jsonb) as dispute_pull_requests
       from registered_repositories as repositories
       join users as sponsors on sponsors.id = repositories.sponsor_id
       where repositories.id = ${repositoryId}
@@ -277,6 +285,7 @@ function toReconciliationRepository(
     difficultySchemeVersions,
     provider: row.provider ?? "github",
     instanceUrl: row.instance_url,
+    disputePullRequests: row.dispute_pull_requests.map(pr => ({ id: toSafeInteger(pr.id), number: pr.number })),
     sponsor: {
       id: row.sponsor_id,
       githubUserId: toSafeInteger(row.sponsor_github_user_id),

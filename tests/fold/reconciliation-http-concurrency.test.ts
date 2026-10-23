@@ -75,6 +75,7 @@ it("drains active PR collectors before releasing coordination and retains their 
       try { return await work(); } finally { coordinated = false; released = true; }
     },
     getRepository: async () => ({
+      disputePullRequests: [],
       id: "repository", githubRepositoryId: 5001, ownerName: "sponsor/repository", active: true,
       registeredAt: "2026-01-01T00:00:00Z",
       difficultySchemeVersions: [],
@@ -196,6 +197,7 @@ it("settles every started HTTP request before a failed fold rejects and releases
       try { return await work(); } finally { events.push({ event: "released", outstanding: outstanding() }); }
     },
     getRepository: async () => ({
+      disputePullRequests: [],
       id: "repository", githubRepositoryId: 5001, ownerName: "sponsor/repository", active: true,
       registeredAt: "2026-01-01T00:00:00Z",
       difficultySchemeVersions: [],
@@ -316,6 +318,7 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
     discardDirtyReconciliationSubject: async () => {},
     withRepositoryReconciliation: async (_id, work) => work(),
     getRepository: async () => ({
+      disputePullRequests: [],
       id: "repository", githubRepositoryId: 5001, ownerName: "sponsor/repository", active: true,
       registeredAt: "2026-01-01T00:00:00.000Z",
       difficultySchemeVersions: [],
