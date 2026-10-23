@@ -1172,8 +1172,8 @@
     34162
   ],
   "tests/auth/account-deletion-sign-in-action.test.ts": [
-    190,
-    922
+    185,
+    917
   ],
   "tests/auth/bounded-logger.test.ts": [
     1845,
@@ -1272,8 +1272,8 @@
     6978
   ],
   "tests/components/landing.test.tsx": [
-    8194,
-    21450
+    8189,
+    21445
   ],
   "tests/components/legal-revisions-marker.test.tsx": [
     6803,
@@ -1346,10 +1346,6 @@
   "tests/db/client-deadlines.test.ts": [
     6132,
     14372
-  ],
-  "tests/db/client.test.ts": [
-    152,
-    916
   ],
   "tests/db/closesql-connection-death.test.ts": [
     843,
@@ -1672,12 +1668,12 @@
     7907
   ],
   "tests/security/sign-in-actions.test.ts": [
-    684,
-    2462
+    679,
+    2457
   ],
   "tests/security/sign-out-action.test.ts": [
-    195,
-    1258
+    190,
+    1253
   ],
   "tests/support/advisory-lock-probe.ts": [
     667,
@@ -1724,8 +1720,8 @@
     7144
   ],
   "tests/support/shared-postgres-need.ts": [
-    1196,
-    5490
+    831,
+    5140
   ],
   "tests/support/stylesheet-rules.ts": [
     816,
@@ -1736,8 +1732,8 @@
     9087
   ],
   "tests/support/trusted-origin.ts": [
-    2096,
-    3683
+    2074,
+    3670
   ],
   "tests/support/unhandled-rejection-probe.test.ts": [
     1390,
