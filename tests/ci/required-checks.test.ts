@@ -86,7 +86,7 @@ describe(".github/required-checks.json", () => {
       const privileged = events.some((event) => event === "pull_request_target" || event === "workflow_run");
       for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
         for (const [index, step] of (job.steps ?? []).entries()) {
-          if (!step.uses?.startsWith("actions/checkout")) continue;
+          if (!step.uses?.toLowerCase().startsWith("actions/checkout@")) continue;
           checked += 1;
           const scope = `${file}/${jobId}/step ${index + 1}`;
           expect(step.with?.["persist-credentials"], `${scope} must explicitly disable token persistence`).toBe(false);
