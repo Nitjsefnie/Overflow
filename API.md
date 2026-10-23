@@ -898,7 +898,7 @@ pass the service's own message through the error envelope:
 
 ## Closed PR disputes
 
-The stored contributor of a CLOSED, unmerged pull request can request credit
+The contributor of a CLOSED, unmerged pull request can request credit
 when its change lands elsewhere. Both routes accept a session or API token;
 the moderation route requires the account's current moderator role. Filing
 and decision each record a moderation event. The contributor page is
@@ -906,12 +906,21 @@ and decision each record a moderation event. The contributor page is
 
 | Route | Request | Success |
 | --- | --- | --- |
-| `POST /api/disputes` | `{ "pullRequestId": <stored PR uuid>, "reason": <nonblank, ≤2000 characters>, "landedPullRequestUrl"?: <URL>, "landedCommitUrl"?: <URL> }` | `200` `{ "request": <dispute request> }`. The credential's account must be the stored PR author; the PR must be CLOSED and unmerged, with at most one OPEN dispute. |
+| `POST /api/disputes` | `{ "pullRequestUrl"?: <closed PR URL>, "pullRequestId"?: <stored PR uuid>, "reason": <nonblank, ≤2000 characters>, "landedPullRequestUrl"?: <URL>, "landedCommitUrl"?: <URL> }` | `200` `{ "request": <dispute request> }`. Supply exactly one of `pullRequestUrl` and `pullRequestId`; the credential's account must be the PR author, and the PR must be CLOSED and unmerged, with at most one OPEN dispute. |
 | `GET /api/disputes` | None. | `200`: an array of the credential's own dispute requests, newest first, including decided history. |
 | `POST /api/moderation/disputes` | `{ "requestId": <uuid>, "decision": "GRANTED" \| "DENIED", "reason": <nonblank, ≤2000 characters>, "figure"?: <integer 1–10> }` | `200` `{ "request": <decided dispute request> }`. A GRANTED decision requires `figure`; DENIED does not. The moderator identity comes from the credential, never from the body. |
 | `GET /api/moderation/disputes` | None. | `200`: an array of all requests, OPEN first (oldest first), then decided history (newest first). |
 
-Filing uses an already stored MERGED PR for the same issue automatically. When
+A URL resolving to a stored PR follows the same rules as its UUID. For a PR
+not yet stored, its repository must be registered; the forge must confirm it
+is CLOSED and unmerged, and its numeric author identity must map to the filing
+account (GitLab identities are scoped to the registered instance). Supply a
+`landedPullRequestUrl` resolving to a recorded MERGED PR in that repository with
+a recorded issue. The dispute uses that issue, and filing atomically stores the
+closed PR, its raw-diff SHA-256 proof and its issue link. A commit-only landing
+cannot identify an issue for an unrecorded PR and is refused with a named reason.
+
+For a stored closed PR, filing uses an already stored MERGED PR for the same issue automatically. When
 one exists, omit both landed URLs. Otherwise supply exactly one: a merged PR
 URL for the same registered repository, or a landed commit URL. Supplying both
 URLs, a non-merged or wrong-repository landing PR, or no landed evidence is
@@ -979,7 +988,7 @@ shared by both routes:
 | 403 | `FORBIDDEN` | Wrong contributor, a non-moderator on the moderation route, a conflicted deciding moderator while another exists, or a refused request origin. |
 | 404 | `NOT_FOUND` | The account or dispute request was not found. |
 | 409 | `ALREADY_GRANTED` | This closed PR already received a granted dispute. A second grant is refused atomically; re-filing after denial remains allowed. |
-| 409 | `CONFLICT` | The PR cannot be disputed in its current state, already has an OPEN request, or the request was already decided. |
+| 409 | `CONFLICT` | The message names the failed check: repository registration, PR resolution or state, missing recorded issue, an existing OPEN request, an already credited issue, or an already decided request. |
 | 413 | `PAYLOAD_TOO_LARGE` | POST body exceeds `32 KiB`. |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | POST declares a content type other than JSON. |
 | 422 | `INVALID_REQUEST` | Unparsable or strict-schema-invalid POST body, including a missing grant figure. Message: `Invalid closed PR dispute request.` or `Invalid closed PR dispute decision.` |

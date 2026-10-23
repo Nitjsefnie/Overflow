@@ -22,12 +22,14 @@ const DISPUTES_BODY_LIMIT_BYTES = 32 * 1024; // 32 KiB
 
 export const closedPrDisputeSchema = z
   .object({
-    pullRequestId: z.string().uuid(),
+    pullRequestId: z.string().uuid().optional(),
+    pullRequestUrl: z.string().trim().url().optional(),
     reason: reasonText(),
     landedPullRequestUrl: z.string().trim().url().optional(),
     landedCommitUrl: z.string().trim().url().optional(),
   })
-  .strict();
+  .strict()
+  .refine((input) => (input.pullRequestId === undefined) !== (input.pullRequestUrl === undefined));
 
 export type ClosedPrDisputeRouteDependencies = {
   getSession: () => Promise<MemberRouteSession | null>;

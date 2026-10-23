@@ -84,9 +84,9 @@ describe("closed PR dispute filing", () => {
     const fixture = await buildFixture();
     await insertPullRequest(fixture, "MERGED");
     await expect(store().fileDispute({ ...filing(fixture), accountId: fixture.sponsorId }))
-      .resolves.toEqual({ kind: "forbidden" });
+      .resolves.toEqual({ kind: "not_pull_request_author" });
     await sql`update pull_requests set author_id = null where id = ${fixture.pullRequestId}`;
-    await expect(store().fileDispute(filing(fixture))).resolves.toEqual({ kind: "forbidden" });
+    await expect(store().fileDispute(filing(fixture))).resolves.toEqual({ kind: "not_pull_request_author" });
     await expectNoRequests(fixture);
   });
 
@@ -94,14 +94,14 @@ describe("closed PR dispute filing", () => {
     const fixture = await buildFixture();
     await sql`update pull_requests set state = ${state} where id = ${fixture.pullRequestId}`;
     await expect(store().fileDispute({ ...filing(fixture), landedCommitUrl: "A landing commit" }))
-      .resolves.toEqual({ kind: "invalid_state" });
+      .resolves.toEqual({ kind: state === "MERGED" ? "pull_request_merged" : "pull_request_not_closed" });
     await expectNoRequests(fixture);
   });
 
-  it("refuses unknown PRs as invalid state and unknown accounts as not found", async () => {
+  it("names unknown PRs and refuses unknown accounts as not found", async () => {
     const fixture = await buildFixture();
     await expect(store().fileDispute({ ...filing(fixture), pullRequestId: randomUUID() }))
-      .resolves.toEqual({ kind: "invalid_state" });
+      .resolves.toEqual({ kind: "pull_request_not_found" });
     await expect(store().fileDispute({ ...filing(fixture), accountId: randomUUID() }))
       .resolves.toEqual({ kind: "not_found" });
   });
@@ -112,7 +112,7 @@ describe("closed PR dispute filing", () => {
     await insertPullRequest(fixture, "CLOSED");
     const otherIssueId = await insertIssue(fixture.repositoryId);
     await insertPullRequest({ ...fixture, issueId: otherIssueId }, "MERGED");
-    await expect(store().fileDispute(filing(fixture))).resolves.toEqual({ kind: "invalid_input" });
+    await expect(store().fileDispute(filing(fixture))).resolves.toEqual({ kind: "landing_required" });
     await expectNoRequests(fixture);
   });
 
@@ -287,7 +287,7 @@ describe("closed PR dispute filing", () => {
     const foreignLanding = await insertPullRequest(other, "MERGED");
     const url = foreignLanding.url.replace(other.ownerName, fixture.ownerName);
     await expect(store().fileDispute({ ...filing(fixture), landedPullRequestUrl: url }))
-      .resolves.toEqual({ kind: "invalid_input" });
+      .resolves.toEqual({ kind: "landing_not_recorded" });
     await expectNoRequests(fixture);
   });
 
@@ -303,7 +303,7 @@ describe("closed PR dispute filing", () => {
     const number = landing.url.split("/").at(-1);
     const url = `${instanceUrl}/${ownerName}/-/merge_requests/${number}`;
     await expect(store().fileDispute({ ...filing(fixture), landedPullRequestUrl: url.replace(instanceUrl, "https://other.example.test") }))
-      .resolves.toEqual({ kind: "invalid_input" });
+      .resolves.toEqual({ kind: "landing_not_recorded" });
     await expect(service().fileDispute({ id: fixture.contributorId }, { ...filing(fixture), landedPullRequestUrl: ` ${url} ` }))
       .resolves.toMatchObject({ landedPullRequestId: landing.id, landedCommitUrl: null });
   });
@@ -315,7 +315,7 @@ describe("closed PR dispute filing", () => {
       ...filing(fixture),
       ...(kind !== "commit" ? { landedPullRequestUrl: landing.url } : {}),
       ...(kind !== "pull" ? { landedCommitUrl: "commit reference" } : {}),
-    })).resolves.toEqual({ kind: "invalid_input" });
+    })).resolves.toEqual({ kind: kind === "both" ? "conflicting_landing_evidence" : "automatic_landing_exists" });
     await expectNoRequests(fixture);
   });
 
@@ -324,7 +324,7 @@ describe("closed PR dispute filing", () => {
     const landing = await insertPullRequest({ ...fixture, issueId: await insertIssue(fixture.repositoryId) }, "MERGED");
     await expect(store().fileDispute({
       ...filing(fixture), landedPullRequestUrl: landing.url, landedCommitUrl: "commit reference",
-    })).resolves.toEqual({ kind: "invalid_input" });
+    })).resolves.toEqual({ kind: "conflicting_landing_evidence" });
     await expectNoRequests(fixture);
   });
 
@@ -332,7 +332,7 @@ describe("closed PR dispute filing", () => {
     const fixture = await buildFixture();
     const landing = await insertPullRequest(fixture, state);
     await expect(store().fileDispute({ ...filing(fixture), landedPullRequestUrl: landing.url }))
-      .resolves.toEqual({ kind: "invalid_input" });
+      .resolves.toEqual({ kind: "landing_not_recorded" });
     await expectNoRequests(fixture);
   });
 
@@ -347,7 +347,7 @@ describe("closed PR dispute filing", () => {
         "malformed": "not a pull request URL", "overflow number": `https://github.com/${fixture.ownerName}/pull/99999999999999999999`,
       };
       await expect(store().fileDispute({ ...filing(fixture), landedPullRequestUrl: urls[kind] }))
-        .resolves.toEqual({ kind: "invalid_input" });
+        .resolves.toEqual({ kind: kind === "malformed" ? "invalid_input" : "landing_not_recorded" });
       await expectNoRequests(fixture);
     },
   );
@@ -368,7 +368,7 @@ describe("closed PR dispute filing", () => {
     const fixture = await buildFixture();
     await insertPullRequest(fixture, "MERGED");
     const results = await Promise.all([store().fileDispute(filing(fixture)), store().fileDispute(filing(fixture))]);
-    expect(results.map((result) => result.kind).sort()).toEqual(["invalid_state", "ok"]);
+    expect(results.map((result) => result.kind).sort()).toEqual(["dispute_already_open", "ok"]);
     expect(await store().listRequestsForAccount(fixture.contributorId)).toHaveLength(1);
   });
 
@@ -1225,3 +1225,34 @@ async function waitingOnBackend(holderPid: number): Promise<number> {
   `;
   return activity.waiting;
 }
+
+describe("recorded PR filing refusal messages", () => {
+  it.each([
+    ['OPEN', 'The pull request is not closed.'],
+    ['MERGED', 'The pull request has already been merged.'],
+    ['author', 'The pull request was not authored by this account.'],
+    ['missing', 'The pull request is not recorded with Overflow.'],
+    ['landing', 'A landed pull request URL or commit URL is required.'],
+    ['unrecorded landing', 'The landed pull request URL does not resolve to a recorded merged pull request.'],
+    ['both landing URLs', 'Supply only one landing evidence URL.'],
+    ['automatic landing', 'A merged pull request is already recorded for this issue; leave the landing evidence URLs blank.'],
+    ['already open', 'This pull request already has an open dispute.'],
+  ])("names %s", async (cause, message) => {
+    const f = await buildFixture();
+    let input = { ...filing(f), landedPullRequestUrl: undefined as string | undefined, landedCommitUrl: undefined as string | undefined };
+    if (cause === 'OPEN' || cause === 'MERGED') await sql`update pull_requests set state = ${cause} where id = ${f.pullRequestId}`;
+    if (cause === 'author') await sql`update pull_requests set author_id = ${f.sponsorId} where id = ${f.pullRequestId}`;
+    if (cause === 'missing') input = { ...input, pullRequestId: randomUUID() };
+    if (cause === 'unrecorded landing') input.landedPullRequestUrl = `https://github.com/${f.ownerName}/pull/99`;
+    if (cause === 'both landing URLs') {
+      input.landedPullRequestUrl = `https://github.com/${f.ownerName}/pull/99`;
+      input.landedCommitUrl = `https://github.com/${f.ownerName}/commit/${'a'.repeat(40)}`;
+    }
+    if (cause === 'automatic landing' || cause === 'already open') {
+      const landing = await insertPullRequest(f, 'MERGED');
+      if (cause === 'automatic landing') input.landedPullRequestUrl = landing.url;
+      else await service().fileDispute({ id: f.contributorId }, filing(f));
+    }
+    await expect(service().fileDispute({ id: f.contributorId }, input)).rejects.toMatchObject({ message });
+  });
+});

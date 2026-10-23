@@ -39,7 +39,8 @@ export type ClosedPrDisputeRequest = {
 };
 
 export type ClosedPrDisputeFilingInput = {
-  pullRequestId: string;
+  pullRequestId?: string;
+  pullRequestUrl?: string;
   reason: string;
   landedPullRequestUrl?: string;
   landedCommitUrl?: string;
@@ -53,10 +54,30 @@ export const closedPrDisputeDecisionSchema = z.object({
 
 export type ClosedPrDisputeDecisionInput = z.input<typeof closedPrDisputeDecisionSchema>;
 
+const filingRefusals = {
+  repository_not_registered: ["CONFLICT", "The pull request repository is not registered with Overflow."],
+  pull_request_not_found: ["CONFLICT", "The pull request is not recorded with Overflow."],
+  unresolved_pull_request: ["CONFLICT", "The pull request URL could not be resolved on the forge."],
+  pull_request_not_closed: ["CONFLICT", "The pull request is not closed."],
+  pull_request_merged: ["CONFLICT", "The pull request has already been merged."],
+  not_pull_request_author: ["FORBIDDEN", "The pull request was not authored by this account."],
+  unlinked_pull_request_author: ["FORBIDDEN", "The pull request author has no linked Overflow account."],
+  landing_required: ["INVALID_INPUT", "A landed pull request URL or commit URL is required."],
+  landing_not_recorded: ["INVALID_INPUT", "The landed pull request URL does not resolve to a recorded merged pull request."],
+  landing_issue_missing: ["CONFLICT", "The landed pull request has no recorded issue."],
+  pull_request_issue_missing: ["CONFLICT", "The closed pull request has no recorded issue."],
+  commit_landing_without_issue: ["INVALID_INPUT", "A commit URL cannot identify an issue for an unrecorded pull request; supply a landed pull request URL."],
+  conflicting_landing_evidence: ["INVALID_INPUT", "Supply only one landing evidence URL."],
+  automatic_landing_exists: ["INVALID_INPUT", "A merged pull request is already recorded for this issue; leave the landing evidence URLs blank."],
+  dispute_already_open: ["CONFLICT", "This pull request already has an open dispute."],
+} as const satisfies Record<string, readonly [ClosedPrDisputeErrorCode, string]>;
+
+export type ClosedPrDisputeFilingRefusal = keyof typeof filingRefusals;
+
 export type ClosedPrDisputeStoreResult<T> =
   | { kind: "ok"; value: T }
   | { kind: "not_found" }
-  | { kind: "invalid_state" }
+  | { kind: ClosedPrDisputeFilingRefusal }
   | { kind: "already_decided" }
   | { kind: "already_granted" }
   | { kind: "issue_already_credited" }
@@ -95,7 +116,11 @@ export class ClosedPrDisputeService {
     account: { id: string },
     input: ClosedPrDisputeFilingInput,
   ): Promise<ClosedPrDisputeRequest> {
-    const pullRequestId = normalizeText(input.pullRequestId, "Pull request identifier");
+    if ((input.pullRequestId === undefined) === (input.pullRequestUrl === undefined)) {
+      throw new ClosedPrDisputeError("INVALID_INPUT", "Supply a pull request URL or identifier.");
+    }
+    const pullRequestId = input.pullRequestId === undefined ? undefined : normalizeText(input.pullRequestId, "Pull request identifier");
+    const pullRequestUrl = input.pullRequestUrl === undefined ? undefined : normalizeText(input.pullRequestUrl, "Pull request URL");
     const reason = reasonText().safeParse(input.reason);
     if (!reason.success) {
       throw new ClosedPrDisputeError("INVALID_INPUT", "A nonblank reason of at most 2000 characters is required.");
@@ -103,6 +128,7 @@ export class ClosedPrDisputeService {
     return unwrap(await this.store.fileDispute({
       accountId: account.id,
       pullRequestId,
+      pullRequestUrl,
       reason: reason.data,
       landedPullRequestUrl: input.landedPullRequestUrl === undefined
         ? undefined : normalizeText(input.landedPullRequestUrl, "Landed pull request URL"),
@@ -138,13 +164,15 @@ function normalizeText(value: unknown, label: string): string {
 }
 
 function unwrap<T>(result: ClosedPrDisputeStoreResult<T>): T {
+  if (result.kind in filingRefusals) {
+    const [code, message] = filingRefusals[result.kind as ClosedPrDisputeFilingRefusal];
+    throw new ClosedPrDisputeError(code, message);
+  }
   switch (result.kind) {
     case "ok":
       return result.value;
     case "not_found":
       throw new ClosedPrDisputeError("NOT_FOUND", "No such account or dispute request.");
-    case "invalid_state":
-      throw new ClosedPrDisputeError("CONFLICT", "This pull request cannot be disputed right now.");
     case "forbidden":
       throw new ClosedPrDisputeError("FORBIDDEN", "This account may not perform this dispute action.");
     case "forbidden_imposer":
@@ -163,5 +191,7 @@ function unwrap<T>(result: ClosedPrDisputeStoreResult<T>): T {
       throw new ClosedPrDisputeError("CONFLICT", "The landed commit author has no linked Overflow account.");
     case "invalid_input":
       throw new ClosedPrDisputeError("INVALID_INPUT", "Invalid dispute input.");
+    default:
+      throw new Error("Unknown dispute result.");
   }
 }

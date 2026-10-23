@@ -1,6 +1,7 @@
+import { resolveDisputeTarget, landedPullRequestNumber } from "@/lib/moderation/closed-pr-dispute-target";
 import { resolveLandedCommitAuthor, type CommitAuthorResult } from "@/lib/moderation/closed-pr-dispute-commit";
 import { getSql } from "@/lib/db/client";
-import type { EnforcementState, PullRequestState, SqlClient, TransactionClient } from "@/lib/db/types";
+import type { EnforcementState, SqlClient, TransactionClient } from "@/lib/db/types";
 import { disputeComparisons, reviewEvidence } from "@/lib/moderation/closed-pr-dispute-evidence";
 import { countReviewRoundsAsOf } from "@/lib/fold/review-rounds";
 import { closedPrDisputeDecisionSchema } from "@/lib/moderation/closed-pr-dispute-service";
@@ -34,8 +35,6 @@ type RequestRow = {
   created_at: string | Date;
 };
 
-type Repository = { owner_name: string; provider: string; instance_url: string | null };
-
 export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
   public constructor(
     private readonly sql: SqlClient = getSql(),
@@ -50,7 +49,7 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
     return this.fileDisputeInTransaction(input).catch((error: unknown) => {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "23505"
         && "constraint_name" in error && error.constraint_name === "closed_pr_dispute_requests_one_open_per_pull_request") {
-        return { kind: "invalid_state" };
+        return { kind: "dispute_already_open" };
       }
       throw error;
     });
@@ -66,19 +65,16 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
       `;
       if (account === undefined) return { kind: "not_found" };
 
-      const [pullRequest] = await transaction<({
-        id: string; author_id: string | null; issue_id: string; repository_id: string; state: PullRequestState;
-      } & Repository)[]>`
-        select pr.id, pr.author_id, pr.issue_id, pr.repository_id, pr.state,
-          repositories.owner_name, repositories.provider, repositories.instance_url
-        from pull_requests as pr
-        join registered_repositories as repositories on repositories.id = pr.repository_id
-        where pr.id = ${input.pullRequestId}
-        for update of pr
-      `;
-      if (pullRequest === undefined) return { kind: "invalid_state" };
-      if (pullRequest.author_id !== input.accountId) return { kind: "forbidden" };
-      if (pullRequest.state !== "CLOSED") return { kind: "invalid_state" };
+      const target = await resolveDisputeTarget(transaction, input);
+      if (target.kind !== "ok") return target;
+      const { pullRequest, declaredLandingId } = target.value;
+      if (pullRequest.author_id !== input.accountId) return { kind: "not_pull_request_author" };
+      if (pullRequest.state === "MERGED") return { kind: "pull_request_merged" };
+      if (pullRequest.state !== "CLOSED") return { kind: "pull_request_not_closed" };
+      if (pullRequest.issue_id === null) return { kind: "pull_request_issue_missing" };
+      const [open] = await transaction`select id from closed_pr_dispute_requests
+        where pull_request_id = ${pullRequest.id} and state = 'OPEN' limit 1`;
+      if (open !== undefined) return { kind: "dispute_already_open" };
 
       const [credited] = await transaction<{ id: string }[]>`
         select id from closed_pr_dispute_requests
@@ -87,7 +83,7 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
       `;
       if (credited !== undefined) return { kind: "issue_already_credited" };
 
-      const [automaticLanding] = await transaction<{ id: string }[]>`
+      const [automaticLanding] = declaredLandingId !== null ? [{ id: declaredLandingId }] : await transaction<{ id: string }[]>`
         select id from pull_requests
         where issue_id = ${pullRequest.issue_id} and state = 'MERGED'
         order by merged_at asc nulls last, id asc
@@ -95,9 +91,9 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
       `;
       const hasPullRequestUrl = input.landedPullRequestUrl !== undefined;
       const hasCommitUrl = input.landedCommitUrl !== undefined;
-      if ((automaticLanding !== undefined && (hasPullRequestUrl || hasCommitUrl))
-        || (hasPullRequestUrl && hasCommitUrl)) {
-        return { kind: "invalid_input" };
+      if (hasPullRequestUrl && hasCommitUrl) return { kind: "conflicting_landing_evidence" };
+      if (declaredLandingId === null && automaticLanding !== undefined && (hasPullRequestUrl || hasCommitUrl)) {
+        return { kind: "automatic_landing_exists" };
       }
 
       let landedPullRequestId = automaticLanding?.id ?? null;
@@ -106,13 +102,13 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
       if (automaticLanding === undefined) {
         if (hasPullRequestUrl) {
           const number = landedPullRequestNumber(input.landedPullRequestUrl!, pullRequest);
-          if (number === null) return { kind: "invalid_input" };
+          if (number === null) return { kind: URL.canParse(input.landedPullRequestUrl!) ? "landing_not_recorded" : "invalid_input" };
           const [landing] = await transaction<{ id: string }[]>`
             select id from pull_requests
             where repository_id = ${pullRequest.repository_id}
               and pull_request_number = ${number} and state = 'MERGED'
           `;
-          if (landing === undefined) return { kind: "invalid_input" };
+          if (landing === undefined) return { kind: "landing_not_recorded" };
           landedPullRequestId = landing.id;
         } else if (hasCommitUrl && input.landedCommitUrl!.trim().length > 0) {
           landedCommitUrl = input.landedCommitUrl!.trim();
@@ -120,7 +116,7 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
           if (author.kind !== "ok") return author;
           landedCommitAuthorId = author.accountId;
         } else {
-          return { kind: "invalid_input" };
+          return { kind: "landing_required" };
         }
       }
 
@@ -284,27 +280,6 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
     `;
     return rows.map(toRequest);
   }
-}
-
-function landedPullRequestNumber(value: string, repository: Repository): number | null {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return null;
-  }
-  const origin = repository.provider === "github" ? "https://github.com" : repository.instance_url;
-  const marker = repository.provider === "github" ? "pull" : "-/merge_requests";
-  const prefix = `/${repository.owner_name}/${marker}/`;
-  const path = repository.provider === "github" ? url.pathname.toLowerCase() : url.pathname;
-  const expectedPrefix = repository.provider === "github" ? prefix.toLowerCase() : prefix;
-  if (url.origin !== origin || url.username !== "" || url.password !== "" || !path.startsWith(expectedPrefix)) {
-    return null;
-  }
-  const suffix = path.slice(expectedPrefix.length);
-  if (!/^[1-9][0-9]*\/?$/.test(suffix)) return null;
-  const number = Number(suffix.replace(/\/$/, ""));
-  return Number.isSafeInteger(number) && number <= 2_147_483_647 ? number : null;
 }
 
 function toRequest(row: RequestRow): ClosedPrDisputeRequest {
