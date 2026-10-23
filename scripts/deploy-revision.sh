@@ -320,8 +320,9 @@ required_checks_gate() {
       fi
       [ "$run_eligible" -eq 0 ] || is_pinned_path "$run_path" || continue
       read_jobs=0
-      if [ -n "${cached_attempts[$run_id]+set}" ] \
-        && { [ "${cached_attempts[$run_id]}" != "$run_attempt" ] || [ "$run_attempt" = 0 ]; }; then
+      # A new run's jobs can become visible before its check-runs do.
+      if [ -z "${cached_attempts[$run_id]+set}" ] \
+        || { [ "${cached_attempts[$run_id]}" != "$run_attempt" ] || [ "$run_attempt" = 0 ]; }; then
         read_jobs=1
       fi
       while IFS=$'\t' read -r cr_id cr_name cr_app cr_status cr_conclusion cr_suite; do

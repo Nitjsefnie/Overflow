@@ -108,6 +108,29 @@ describe("scripts/deploy-revision.sh — the ledger App as a required-check prod
     expectGateRefused(entries);
   });
 
+  it("reads a newly listed pinned run before its check-run appears instead of accepting an older green", async () => {
+    const fixture = await makeFixture();
+    const runs = happyPinnedRuns();
+    runs[1]!.jobs[0]!.status = "in_progress";
+    const first = await writeGateState(fixture, "new-run-first", runs);
+    runs[1]!.jobs[0]!.status = "completed";
+    runs.push({ id: 300, path: FIXTURE_PINS.verify!,
+      jobs: [{ id: 3001, name: "verify", status: "completed", conclusion: "failure" }] });
+    const second = await writeGateState(fixture, "new-run-second", runs);
+    const checks = JSON.parse(await readFile(`${second}/check-runs.json`, "utf8"));
+    checks.check_runs = checks.check_runs.filter((check: { id: number }) => check.id !== 3001);
+    await writeFile(`${second}/check-runs-next.json`, JSON.stringify(checks));
+    await rename(`${second}/check-runs-next.json`, `${second}/check-runs.json`);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: `${first}:${second}` });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("verify concluded failure");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(9);
+    expect(entries.filter((entry) => entry.cmd === "gh" && entry.args[1]?.includes("/runs/300/jobs?"))).toHaveLength(1);
+    expect(entries.filter((entry) => entry.cmd === "sleep").map((entry) => entry.args)).toEqual([["60"]]);
+    expectGateRefused(entries);
+  });
+
   it("still excludes PR job IDs when the trusted app override names GitHub Actions", async () => {
     const fixture = await makeFixture();
     const state = await writeGateState(fixture, "gate-actions-override", [
