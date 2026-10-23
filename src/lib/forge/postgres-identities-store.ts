@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { credentialBinding, decryptToken, tokenKeySetFrom } from "@/lib/security/token-cipher";
 import type { ForgeIdentityStore, ForgeIdentityView } from "@/lib/forge/identities";
@@ -20,12 +20,12 @@ type IdentityRow = {
  * another account inserts nothing and returns nothing — the caller's refusal.
  */
 export class PostgresForgeIdentityStore implements ForgeIdentityStore {
-  private readonly sql: Sql;
+  private readonly sql: SqlClient | TransactionClient;
   private readonly tokenEncryptionKey: string | undefined;
   private readonly previousTokenEncryptionKey: string | undefined;
 
   public constructor(
-    sql: Sql,
+    sql: SqlClient | TransactionClient,
     tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY,
     previousTokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS,
   ) {

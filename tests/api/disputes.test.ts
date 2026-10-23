@@ -249,6 +249,22 @@ describe("GET /api/disputes", () => {
 });
 
 describe("dispute filing evidence and token identity", () => {
+  it("accepts a closed PR URL instead of an export id", async () => {
+    const fileDispute = vi.fn().mockResolvedValue(recorded);
+    const deps = postDependencies({ createService: vi.fn().mockResolvedValue({ fileDispute }) });
+    const body = { pullRequestUrl: "https://github.com/owner/repo/pull/43", reason: "My change landed." };
+    const response = await createClosedPrDisputePostHandler(deps)(jsonRequest(body));
+    expect(response.status).toBe(200);
+    expect(fileDispute).toHaveBeenCalledExactlyOnceWith({ id: memberId }, body);
+  });
+  it.each([
+    { pullRequestUrl: "not a URL", reason: "Why." },
+    { ...payload(), pullRequestUrl: "https://github.com/owner/repo/pull/43" },
+  ])("refuses malformed or ambiguous PR identifiers", async (body) => {
+    const response = await createClosedPrDisputePostHandler(postDependencies())(jsonRequest(body));
+    expect(response.status).toBe(422);
+  });
+
   it.each(["landedPullRequestUrl", "landedCommitUrl"] as const)("passes %s through to the service", async (field) => {
     const fileDispute = vi.fn().mockResolvedValue(recorded);
     const deps = postDependencies({ createService: vi.fn().mockResolvedValue({ fileDispute }) });

@@ -31,7 +31,7 @@ function renderPage(requests: ClosedPrDisputeRequest[] | null = []) {
   return render(<ClosedPrDisputesContent memberName="Ada" isModerator={false} requests={requests} />);
 }
 function enterFiling() {
-  fireEvent.change(screen.getByLabelText("Closed pull request ID"), { target: { value: requestId } });
+  fireEvent.change(screen.getByLabelText("Closed pull request URL"), { target: { value: "https://github.com/owner/repo/pull/43" } });
   fireEvent.change(screen.getByLabelText("Why should this closed PR be credited?"), { target: { value: " My change landed. " } });
 }
 function mockResponse(body: unknown, status = 200) {
@@ -46,6 +46,7 @@ function enterDecision() {
 describe("closed PR dispute page and filing", () => {
   it("offers accessible filing and history regions", () => {
     renderPage([open, decided]);
+    expect(screen.getByLabelText("Closed pull request URL")).toHaveAttribute("type", "url");
     expect(screen.getByRole("region", { name: "Request a closed PR dispute" })).toBeVisible();
     const history = screen.getByRole("list", { name: "Your closed PR disputes" });
     const entries = within(history).getAllByRole("listitem");
@@ -76,7 +77,7 @@ describe("closed PR dispute page and filing", () => {
     if (evidence === "commit") fireEvent.change(screen.getByLabelText("Landed commit URL (optional)"), { target: { value: url } });
     fireEvent.click(screen.getByRole("button", { name: "Request the dispute" }));
     await waitFor(() => expect(screen.getByRole("status")).toBeVisible());
-    const body = { pullRequestId: requestId, reason: "My change landed.",
+    const body = { pullRequestUrl: "https://github.com/owner/repo/pull/43", reason: "My change landed.",
       ...(evidence === "pull request" ? { landedPullRequestUrl: url } : {}),
       ...(evidence === "commit" ? { landedCommitUrl: url } : {}) };
     expect(fetchMock).toHaveBeenCalledWith("/api/disputes", {

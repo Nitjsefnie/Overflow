@@ -6,7 +6,7 @@ import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 
 export function ClosedPrDisputeRequestForm() {
   const router = useRouter();
-  const [pullRequestId, setPullRequestId] = useState("");
+  const [pullRequestUrl, setPullRequestUrl] = useState("");
   const [reason, setReason] = useState("");
   const [landedPullRequestUrl, setLandedPullRequestUrl] = useState("");
   const [landedCommitUrl, setLandedCommitUrl] = useState("");
@@ -15,15 +15,15 @@ export function ClosedPrDisputeRequestForm() {
 
   async function fileDispute() {
     setFeedback(null);
-    if (!pullRequestId.trim() || !reason.trim()) {
-      setFeedback({ kind: "error", message: "Enter the closed pull request ID and a nonblank reason." });
+    if (!pullRequestUrl.trim() || !reason.trim()) {
+      setFeedback({ kind: "error", message: "Enter the closed pull request URL and a nonblank reason." });
       return;
     }
     setPending(true);
     try {
       const response = await fetch("/api/disputes", {
         method: "POST", headers: { "content-type": "application/json" }, credentials: "same-origin",
-        body: JSON.stringify({ pullRequestId: pullRequestId.trim(), reason: reason.trim(),
+        body: JSON.stringify({ pullRequestUrl: pullRequestUrl.trim(), reason: reason.trim(),
           ...(landedPullRequestUrl.trim() ? { landedPullRequestUrl: landedPullRequestUrl.trim() } : {}),
           ...(landedCommitUrl.trim() ? { landedCommitUrl: landedCommitUrl.trim() } : {}),
         }),
@@ -46,11 +46,11 @@ export function ClosedPrDisputeRequestForm() {
   return (
     <div className="override-request">
       <label className="field" htmlFor="dispute-pull-request">
-        <span>Closed pull request ID</span>
-        <input id="dispute-pull-request" name="pullRequestId" className="field-input" value={pullRequestId}
-          onChange={(event) => setPullRequestId(event.target.value)} required />
+        <span>Closed pull request URL</span>
+        <input id="dispute-pull-request" name="pullRequestUrl" className="field-input" type="url" value={pullRequestUrl}
+          onChange={(event) => setPullRequestUrl(event.target.value)} required />
       </label>
-      <p className="mono-meta">Find the closed PR’s ID in the authored pull requests in your <a href="/api/account/export">account data export</a>. Leave both evidence URLs blank when a merged PR for the same issue is already recorded. Otherwise supply one landed URL.</p>
+      <p className="mono-meta">Paste your closed PR’s URL. Leave both evidence URLs blank when a merged PR for the same issue is already recorded for it; otherwise supply one landed URL. If the closed PR has no recorded issue, supply a landed PR URL so its issue can be credited.</p>
       <label className="field" htmlFor="dispute-landed-pr">
         <span>Landed pull request URL (optional)</span>
         <input id="dispute-landed-pr" name="landedPullRequestUrl" className="field-input" type="url" value={landedPullRequestUrl}

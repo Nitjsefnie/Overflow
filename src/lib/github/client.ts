@@ -1,3 +1,4 @@
+import { getPullRequestNode, type GitHubGraphqlPullRequestNode } from "@/lib/github/pull-request";
 import { hasNextLink, lastLinkPage } from "@/lib/github/link-pagination";
 import { getCommitAuthor } from "@/lib/github/commit-author";
 import { checkpointSweepRestRequest, withFreshSweepReads } from "@/lib/fold/sweep-pass";
@@ -202,6 +203,11 @@ export class GitHubGateway implements ForgeGateway {
       this.getIssueClosingPullRequests(repository, node.number, node.closedByPullRequestsReferences),
     ]);
     return toGitHubIssue(node, labels, timeline, closingPullRequests);
+  }
+
+  public async getPullRequest(repository: GitHubRepositoryReference, pullRequestNumber: number): Promise<GitHubPullRequest | null> {
+    const node = await getPullRequestNode(this.graphql, repository, pullRequestNumber);
+    return node === null ? null : toGitHubPullRequest(node);
   }
 
   public async getPullRequestClosingIssues(
@@ -938,20 +944,6 @@ type GitHubGraphqlIssueNode = {
 };
 
 type GitHubGraphqlAssignee = { login: string; databaseId?: number | null };
-
-type GitHubGraphqlPullRequestNode = {
-  databaseId: number | null;
-  number: number;
-  title: string;
-  body: string;
-  url: string;
-  state: "OPEN" | "CLOSED" | "MERGED";
-  mergedAt: string | null;
-  mergeCommit: { oid: string } | null;
-  commits: { nodes: Array<{ commit: { committedDate: string } }> };
-  author: GitHubGraphqlAccount | null;
-  repository: { databaseId: unknown; nameWithOwner: unknown } | null;
-};
 
 type GitHubGraphqlIssueTimelineNode =
   | {
