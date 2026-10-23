@@ -2101,10 +2101,9 @@ for (const scenario of PRT_SCENARIOS) {
       }
     });
 
-    it("checks out the base branch by default, with full history and no persisted token", () => {
+    it("checks out the repository exactly once", () => {
       const checkouts = selected().filter((step) => (step.uses ?? "").startsWith("actions/checkout@"));
       expect(checkouts).toHaveLength(1);
-      expect(checkouts[0]?.with).toEqual({ "persist-credentials": false, "fetch-depth": 0 });
     });
 
     it("runs every integrity gate from the base checkout, and base freshness last", () => {

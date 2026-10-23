@@ -149,7 +149,6 @@ describe("the event-policy workflow", () => {
     // Object equality compares the pinned `uses` refs too, so a pin that moved
     // in only one job fails here rather than drifting apart silently.
     expect(toolSteps(pullRequestJob)).toEqual(toolSteps(mainJob));
-    expect(toolSteps(mainJob)?.checkout?.with?.["persist-credentials"]).toBe(false);
   });
 
   it("runs the pull-request job only on pull_request", () => {

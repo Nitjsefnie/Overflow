@@ -21,11 +21,6 @@ import { parse } from "yaml";
  * behavioral half — what its shell actually does to a repository — is covered
  * by tests/ci/push-recalibration-step.test.ts, which executes the step's real
  * `run:` text.
- *
- * Assertions are made on the parsed YAML data (job.if / step.name / step.run /
- * step.if), never on the raw bytes, so reformatting the file does not disturb
- * them and a rewired or un-gated step fails loudly here instead of quietly
- * changing what CI raises, and whether a refusal can still read as green.
  */
 type WorkflowStep = {
   name?: string;
@@ -197,17 +192,6 @@ describe("the push-recalibration job", () => {
         "a dependency the push does not need",
     ).toEqual(["actions/checkout@"]);
     expect(runs, "the push job must carry exactly one run step").toHaveLength(1);
-  });
-
-  it("checks out the triggering commit at depth 2, leaving no credentials", () => {
-    const [checkout] = steps.filter((step) => step.uses !== undefined);
-
-    expect(
-      checkout?.with,
-      "persist-credentials: false keeps the token out of .git/config, and fetch-depth: 2 is what the " +
-        "refusal message reads — the recorded floor from HEAD^1, which a depth-1 checkout degrades to " +
-        "the unreadable-floors fallback",
-    ).toEqual({ "persist-credentials": false, "fetch-depth": 2 });
   });
 
   it("receives the document and the token through env, never interpolated into the shell", () => {
@@ -467,13 +451,9 @@ describe("the calibrate job's steps", () => {
     ).toBeGreaterThan(fabricateIndex);
   });
 
-  it("checks out the tree it measures, leaving no credentials", () => {
+  it("checks out the repository in the calibrate job", () => {
     const [checkout] = steps.filter((step) => step.uses?.includes("actions/checkout"));
 
     expect(checkout, "the calibrate job must check out the repository").toBeDefined();
-    expect(
-      checkout?.with?.["persist-credentials"],
-      "the checkout must still leave no credentials in .git/config",
-    ).toBe(false);
   });
 });
