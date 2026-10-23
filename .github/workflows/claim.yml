@@ -45,7 +45,7 @@ jobs:
       pull-requests: write
 
     steps:
-      - uses: Nitjsefnie-Actions/claim@45b7fb1deffe739a38d98e1e89c421bf4d27a5c9 # v2.0.6
+      - uses: Nitjsefnie-Actions/claim@5c64e8d23bce50b761feaad02958d7c30fc6829d # v2.1.0
         with:
           # The claim policy, from the action's own reference block. Without it the limits are
           # unenforced: one account can hold an unbounded number of claims, so a handful of
