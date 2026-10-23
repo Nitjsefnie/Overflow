@@ -1244,8 +1244,8 @@
     7460
   ],
   "tests/ci/required-checks.test.ts": [
-    1439,
-    6546
+    1382,
+    6528
   ],
   "tests/ci/verify-fetch-provenance.test.ts": [
     1396,
