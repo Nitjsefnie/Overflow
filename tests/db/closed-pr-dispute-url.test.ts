@@ -85,6 +85,19 @@ async function absent(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe("closed PR URL filing", () => {
+  it("refuses an unrecorded PR after sponsor unregistration before fetching the forge", async () => {
+    const f = await fixture();
+    await sql`update registered_repositories set active = false, unregistered_at = now() where id = ${f.repositoryId}`;
+    const forgeFetch = vi.fn(fetch);
+    vi.stubGlobal("fetch", forgeFetch);
+    await expect(service().fileDispute({ id: f.accountId }, filing(f))).rejects.toMatchObject({
+      code: "CONFLICT", message: "The pull request repository is not registered with Overflow.",
+    });
+    expect(forgeFetch).not.toHaveBeenCalled();
+    await absent(f);
+    expect(await sql`select * from pull_request_issues where repository_id = ${f.repositoryId}`).toEqual([]);
+  });
+
   it("names a missing GitLab merge request", async () => {
     const f = await fixture("gitlab");
     vi.spyOn(GitLabGateway.prototype, "getPullRequest").mockRejectedValue(new GitLabApiError(404));
@@ -105,8 +118,9 @@ describe("closed PR URL filing", () => {
     await absent(f);
   });
 
-  it("persists an unreferenced closed PR, raw-diff proof and issue link and includes it in the account export", async () => {
+  it.each([true, false])("persists an unreferenced closed PR while registration stands, including moderation inactivity (active=%s)", async (active) => {
     const f = await fixture();
+    await sql`update registered_repositories set active = ${active} where id = ${f.repositoryId}`;
     const request = await service().fileDispute({ id: f.accountId }, filing(f));
     expect(request).toMatchObject({ contributorId: f.accountId, issueId: f.issueId, landedPullRequestId: f.landingId, state: "OPEN" });
     const [pr] = await sql`select * from pull_requests where id = ${request.pullRequestId}`;
@@ -119,8 +133,12 @@ describe("closed PR URL filing", () => {
     const exported = await exportAccount(sql, f.forgeId);
     expect(exported?.authoredPullRequests).toEqual(expect.arrayContaining([expect.objectContaining({ id: pr.id })]));
   });
-  it.each(["url", "uuid"])("keeps recorded PR filing and automatic landing unchanged (%s)", async (identifier) => {
+  it.each([
+    { identifier: "url", unregistered: false }, { identifier: "uuid", unregistered: false },
+    { identifier: "url", unregistered: true }, { identifier: "uuid", unregistered: true },
+  ])("keeps recorded PR filing and automatic landing unchanged ($identifier, unregistered=$unregistered)", async ({ identifier, unregistered }) => {
     const f = await fixture();
+    if (unregistered) await sql`update registered_repositories set active = false, unregistered_at = now() where id = ${f.repositoryId}`;
     const [pr] = await sql<{ id: string }[]>`insert into pull_requests
       (github_pull_request_id, repository_id, issue_id, pull_request_number, title, body, url, author_id, state)
       values (${f.pr.id}, ${f.repositoryId}, ${f.issueId}, 41, 'Recorded', '', ${f.url}, ${f.accountId}, 'CLOSED') returning id`;
@@ -135,7 +153,7 @@ describe("closed PR URL filing", () => {
     ['merged PR', 'The pull request has already been merged.'],
     ['unlinked author', 'The pull request author has no linked Overflow account.'],
     ['different author', 'The pull request was not authored by this account.'],
-    ['missing landing', 'A landed pull request URL or commit URL is required.'],
+    ['missing landing', 'A landed pull request URL is required for an unrecorded pull request.'],
     ['commit landing', 'A commit URL cannot identify an issue for an unrecorded pull request; supply a landed pull request URL.'],
     ['missing landed PR', 'The landed pull request URL does not resolve to a recorded merged pull request.'],
     ['open landed PR', 'The landed pull request URL does not resolve to a recorded merged pull request.'],

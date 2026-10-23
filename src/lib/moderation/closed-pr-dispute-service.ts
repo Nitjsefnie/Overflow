@@ -63,6 +63,7 @@ const filingRefusals = {
   not_pull_request_author: ["FORBIDDEN", "The pull request was not authored by this account."],
   unlinked_pull_request_author: ["FORBIDDEN", "The pull request author has no linked Overflow account."],
   landing_required: ["INVALID_INPUT", "A landed pull request URL or commit URL is required."],
+  unrecorded_landing_required: ["INVALID_INPUT", "A landed pull request URL is required for an unrecorded pull request."],
   landing_not_recorded: ["INVALID_INPUT", "The landed pull request URL does not resolve to a recorded merged pull request."],
   landing_issue_missing: ["CONFLICT", "The landed pull request has no recorded issue."],
   pull_request_issue_missing: ["CONFLICT", "The closed pull request has no recorded issue."],

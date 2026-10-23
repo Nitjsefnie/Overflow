@@ -10,7 +10,7 @@ import { GitLabGateway } from "@/lib/gitlab/client";
 import type { GitHubPullRequest } from "@/lib/github/types";
 import type { ClosedPrDisputeFilingInput, ClosedPrDisputeStoreResult } from "@/lib/moderation/closed-pr-dispute-service";
 
-type Repository = { id: string; owner_name: string; provider: string; instance_url: string | null; sponsor_id: string; github_repository_id: string | number };
+type Repository = { id: string; owner_name: string; provider: string; instance_url: string | null; sponsor_id: string; github_repository_id: string | number; unregistered_at: Date | null };
 export type DisputeTarget = { id: string; author_id: string | null; issue_id: string | null; repository_id: string; state: PullRequestState } & Pick<Repository, "owner_name" | "provider" | "instance_url">;
 type Target = { pullRequest: DisputeTarget; declaredLandingId: string | null };
 
@@ -45,7 +45,7 @@ export async function resolveDisputeTarget(
   if (input.pullRequestUrl !== undefined) {
     const parsed = parsePullRequestUrl(input.pullRequestUrl);
     if (parsed === null) return { kind: 'invalid_input' };
-    [repository] = await sql<Repository[]>`select id, owner_name, provider, instance_url, sponsor_id, github_repository_id
+    [repository] = await sql<Repository[]>`select id, owner_name, provider, instance_url, sponsor_id, github_repository_id, unregistered_at
       from registered_repositories where provider = ${parsed.provider}
       and ((${parsed.provider === 'github'} and lower(owner_name) = ${parsed.ownerName.toLowerCase()})
         or (${parsed.provider === 'gitlab'} and owner_name = ${parsed.ownerName} and instance_url = ${parsed.origin}))`;
@@ -64,6 +64,7 @@ export async function resolveDisputeTarget(
   `;
   if (recorded !== undefined) return { kind: 'ok', value: { pullRequest: recorded, declaredLandingId: null } };
   if (repository === undefined || number === undefined) return { kind: 'pull_request_not_found' };
+  if (repository.unregistered_at !== null) return { kind: 'repository_not_registered' };
 
   const fetched = await fetchPullRequest(sql, repository, number);
   if (fetched === null) return { kind: 'unresolved_pull_request' };
@@ -79,7 +80,7 @@ export async function resolveDisputeTarget(
   if (author.id !== input.accountId) return { kind: 'not_pull_request_author' };
   if (input.landedPullRequestUrl !== undefined && input.landedCommitUrl !== undefined) return { kind: 'conflicting_landing_evidence' };
   if (input.landedCommitUrl !== undefined) return { kind: 'commit_landing_without_issue' };
-  if (input.landedPullRequestUrl === undefined) return { kind: 'landing_required' };
+  if (input.landedPullRequestUrl === undefined) return { kind: 'unrecorded_landing_required' };
   const landingNumber = landedPullRequestNumber(input.landedPullRequestUrl, repository);
   if (landingNumber === null) return { kind: URL.canParse(input.landedPullRequestUrl) ? 'landing_not_recorded' : 'invalid_input' };
   const [landing] = await sql<{ id: string; issue_id: string | null }[]>`select id, issue_id from pull_requests
