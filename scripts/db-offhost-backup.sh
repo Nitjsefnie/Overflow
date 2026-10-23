@@ -88,7 +88,7 @@ if [ "$#" -gt 0 ]; then
     fail "unknown argument: $1"
 fi
 
-database_url=${OVERFLOW_DATABASE_URL:-${DATABASE_URL:-}}
+database_url=${OVERFLOW_DATABASE_URL-${DATABASE_URL:-}}
 if [ -z "$database_url" ]; then
     fail "DATABASE_URL is not set; refusing to guess which database to dump"
 fi

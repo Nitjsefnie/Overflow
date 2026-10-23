@@ -539,6 +539,7 @@ describe("scripts/secret-scan.sh", () => {
     absent?: boolean;
     /** A OVERFLOW_GITLEAKS_REPORT_PATH to set, or undefined for the script's own default. */
     reportPath?: string;
+    legacyReportPath?: string;
 
     script?: string;
   };
@@ -615,7 +616,7 @@ describe("scripts/secret-scan.sh", () => {
     await chmod(stub, 0o755);
 
     const env: NodeJS.ProcessEnv = { ...process.env };
-    for (const key of ["OVERFLOW_GITLEAKS_REPORT_PATH", "STUB_ARGV_FILE", "STUB_VERSION", "STUB_EXIT"]) {
+    for (const key of ["OVERFLOW_GITLEAKS_REPORT_PATH", "GITLEAKS_REPORT_PATH", "STUB_ARGV_FILE", "STUB_VERSION", "STUB_EXIT"]) {
       delete env[key];
     }
     // A PATH that carries only bash's own essentials. When the case supplies a
@@ -630,6 +631,7 @@ describe("scripts/secret-scan.sh", () => {
       STUB_EXIT: String(config.exitCode ?? 0),
     });
     if (config.reportPath !== undefined) env.OVERFLOW_GITLEAKS_REPORT_PATH = config.reportPath;
+    if (config.legacyReportPath !== undefined) env.GITLEAKS_REPORT_PATH = config.legacyReportPath;
 
     const result = spawnSync("bash", [script], { cwd: workDir, env, encoding: "utf8" });
     const argv = existsSync(argvFile)
@@ -638,6 +640,13 @@ describe("scripts/secret-scan.sh", () => {
     const report = join(workDir, config.reportPath ?? "gitleaks-report.json");
     return { status: result.status, output: `${result.stdout}\n${result.stderr}`, argv, report };
   }
+
+  it("keeps an empty canonical report path authoritative over a legacy path", async () => {
+    const result = await runScript({ reportPath: "", legacyReportPath: "legacy-report.json" });
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain("stub gitleaks: no --report-path was passed");
+    expect(result.argv).not.toContain("legacy-report.json");
+  });
 
   /** The value that follows `flag` in the recorded argv, or undefined. */
   const valueAfter = (argv: string[], flag: string): string | undefined => {

@@ -178,16 +178,16 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
   const nowFn = inputDeps.nowFn ?? Date.now;
   const deps: RunDeps = { ...inputDeps, nowFn, deadlineMs: nowFn() + RUN_DEADLINE_MS };
   const { env } = deps;
-  const appId = required(env, "OVERFLOW_LEDGER_APP_ID");
-  const installationId = required(env, "OVERFLOW_LEDGER_INSTALLATION_ID");
-  const appKey = required(env, "OVERFLOW_LEDGER_APP_KEY");
+  const appId = required(env, "OVERFLOW_LEDGER_APP_ID", "LEDGER_APP_ID");
+  const installationId = required(env, "OVERFLOW_LEDGER_INSTALLATION_ID", "LEDGER_INSTALLATION_ID");
+  const appKey = required(env, "OVERFLOW_LEDGER_APP_KEY", "LEDGER_APP_KEY");
   const repo = required(env, "GITHUB_REPOSITORY");
   assertShape(repo, /^[^/]+\/[^/]+$/, "GITHUB_REPOSITORY must name OWNER/REPO");
   assertShape(appId, DIGITS, "LEDGER_APP_ID must be the App's numeric id");
   assertShape(installationId, DIGITS, "LEDGER_INSTALLATION_ID must be the numeric installation id");
   const ownJob = {
     repo, runId: required(env, "GITHUB_RUN_ID"), runAttempt: required(env, "GITHUB_RUN_ATTEMPT"),
-    workflowToken: required(env, "OVERFLOW_RELAY_RERUN_TOKEN"),
+    workflowToken: required(env, "OVERFLOW_RELAY_RERUN_TOKEN", "RELAY_RERUN_TOKEN"),
   };
   assertShape(ownJob.runId, DIGITS, "GITHUB_RUN_ID must be the relay run's numeric id");
   assertShape(ownJob.runAttempt, DIGITS, "GITHUB_RUN_ATTEMPT must be the relay run's numeric attempt");
@@ -479,10 +479,10 @@ async function readRawPinMap(): Promise<unknown> {
   return JSON.parse(await readFile(".github/required-checks.json", "utf8")) as unknown;
 }
 
-function required(env: Record<string, string | undefined>, name: string): string {
+function required(env: Record<string, string | undefined>, name: string, displayName = name): string {
   const value = env[name] ?? env[name.replace(/^OVERFLOW_/, "")] ?? "";
   if (value === "") {
-    throw new Error(`${name} is required`);
+    throw new Error(`${displayName} is required`);
   }
   return value;
 }

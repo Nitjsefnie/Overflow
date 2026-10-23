@@ -170,10 +170,11 @@ whoever runs the script.
 
 The quarterly drill (section (g)). Everything here is read-only against
 production; the scratch database is dropped afterwards. As root, from the
-deployment tree:
+deployment tree. First run README.md's
+[configuration-loading block](README.md#loading-configuration-for-administrative-commands)
+in the same shell; the later URL derivation uses its normalized value:
 
 ```bash
-set -a; . /etc/overflow/overflow.env; set +a
 # Named before the drill runs, because the later blocks of this section — the
 # comparison, the grant, the listing, the dropdb — need it, and a subshell
 # cannot hand a variable back to the shell it was typed in.
@@ -312,11 +313,12 @@ As root and from the deployment tree (`/srv/overflow`), create the replacement
 owned by the application role and restore **as the application role**, using
 its own `OVERFLOW_DATABASE_URL`: every command below is relative to that tree.
 `--no-owner` then makes the app role own every restored object, which is the
-production shape, so this path needs no ownership fixups at all.
+production shape, so this path needs no ownership fixups at all. First run
+README.md's [configuration-loading block](README.md#loading-configuration-for-administrative-commands)
+in the same shell, before restoring or deriving the replacement URL:
 
 ```bash
 sudo -u postgres createdb -O overflow_app overflow_replacement
-set -a; . /etc/overflow/overflow.env; set +a
 bash scripts/db-restore.sh overflow_replacement \
   /var/backups/overflow/overflow-<stamp>.dump
 ```

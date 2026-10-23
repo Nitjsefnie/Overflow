@@ -186,6 +186,27 @@ describe("scripts/ci-base-freshness.sh", () => {
     expect(output(result), "the unchanged-base certificate must say the base is unchanged").toMatch(/unchanged/i);
   });
 
+  it.each(["REPO_SLUG", "BASE_SHA", "BASE_REF", "PR_NUMBER"])(
+    "keeps an empty canonical %s authoritative and displays the legacy name",
+    async (name) => {
+      const result = await runScript(
+        { advanceFiles: ["other.md"], prFiles: ["page.tsx"] },
+        { env: { [`OVERFLOW_${name}`]: "", [name]: name === "PR_NUMBER" ? "510" : "legacy" } },
+      );
+      expect(result.status).toBe(1);
+      const message = name === "PR_NUMBER"
+        ? "PR_NUMBER is not set — the pull request's changed-file list cannot be fetched, so the advance cannot be judged. Refusing."
+        : `required input ${name} is empty — refusing to judge the base's freshness without it.`;
+      expect(result.stdout.trim()).toBe(`::error::Base freshness: ${message}`);
+    },
+  );
+
+  it("keeps an empty canonical head SHA out of the certificate", async () => {
+    const result = await runScript({ currentSha: BASE_SHA }, { env: { OVERFLOW_HEAD_SHA: "", HEAD_SHA: "legacy-head" } });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(`Base freshness: CERTIFIED — the base branch main is unchanged: still at ${BASE_SHA}, exactly the commit the required checks ran against. Pull request head: .`);
+  });
+
   it("certifies a disjoint advance and names the advance range", async () => {
     const result = await runScript({
       currentSha: CURRENT_SHA,
