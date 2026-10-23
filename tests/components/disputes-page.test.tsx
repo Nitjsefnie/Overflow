@@ -14,7 +14,7 @@ vi.mock("@/lib/auth/sign-out-action", () => ({ signOutAction: vi.fn() }));
 const requestId = "00000000-0000-4000-8000-000000000004";
 const open: ClosedPrDisputeRequest = {
   id: requestId, contributorId: requestId, pullRequestId: requestId, issueId: requestId,
-  landedPullRequestId: null, landedCommitUrl: "https://example.test/commit/landed",
+  landedPullRequestId: null, landedCommitUrl: "https://example.test/commit/landed", landedCommitAuthorId: null,
   requestReason: "My closed change landed elsewhere.", state: "OPEN", decision: null,
   decidedBy: null, decidedBySoleModerator: false, decidedReason: null,
   moderatorFigure: null, awardedPoints: null, createdAt: "2026-10-01T10:00:00.000Z", decidedAt: null,

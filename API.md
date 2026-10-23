@@ -27,6 +27,8 @@ the security reason and the change.
 
 **Version history:**
 
+- 1.5.0: Closed-PR dispute responses add `landedCommitAuthorId`; account
+  exports include disputes that name the account as the landing commit author.
 - 1.4.0: `POST /api/account/export` adds closed-PR dispute requests and their
   credit adjustments and lines, including contributor and deciding-moderator records.
   Adds contributor filing/history at `/api/disputes` and moderator
@@ -916,6 +918,12 @@ URLs, a non-merged or wrong-repository landing PR, or no landed evidence is
 refused with `422` `INVALID_INPUT`. Reasons and supplied URLs are trimmed;
 POST schemas reject unknown fields. Both POST bodies are limited to `32 KiB`.
 
+Commit evidence must name a commit in a registered repository and resolve to
+its author's Overflow account. GitHub commits resolve through the forge's
+numeric author identity. Unresolvable commits and authors without an account
+are refused with `409` `CONFLICT` and an explanation naming the reason.
+GitLab commit URLs currently receive the unresolvable-author refusal.
+
 A dispute request carries:
 
 ```json
@@ -926,6 +934,7 @@ A dispute request carries:
   "issueId": "uuid",
   "landedPullRequestId": null,
   "landedCommitUrl": "https://github.com/owner/repo/commit/landed",
+  "landedCommitAuthorId": "uuid",
   "requestReason": "The change landed elsewhere.",
   "state": "DECIDED",
   "decision": "GRANTED",
@@ -944,13 +953,14 @@ The contributor can obtain the stored closed PR UUID from `authoredPullRequests`
 The moderation queue also projects `comparison`: the closed and landed PR numbers, titles, canonical forge URLs, and their stored reviews and raw diffs. Missing or omitted evidence is null; commit landings show a validated forge commit link without fetching content.
 
 `landedPullRequestId` is a UUID or null; `landedCommitUrl` is a string or null.
+`landedCommitAuthorId` records the commit author's account UUID and is null
+for PR landings and legacy commit evidence.
 OPEN requests have null decision, decider, decision reason/time, figure and
 award, and `decidedBySoleModerator: false`. A denial leaves figure and award
 null. A grant records the figure and `awardedPoints = max(0, figure − stored
 review rounds)`; an award of zero still grants the request. A sponsor,
 contributor or landing author cannot decide while another live moderator
-exists. Commit-only landing evidence has no stored landing account; its
-conflict set is sponsor and contributor. The sole-moderator path records `decidedBySoleModerator: true`.
+exists, including the recorded commit author. The sole-moderator path records `decidedBySoleModerator: true`.
 
 A positive grant appends a sponsor-targeted credit adjustment with an award
 leg to the contributor. A landing settlement credited to a third account is

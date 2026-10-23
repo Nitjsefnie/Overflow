@@ -9,6 +9,7 @@ import { fixtureMemberId, fixtureTargetId, fixtureOverrideRequestId } from "./ht
 const filed: ClosedPrDisputeRequest = {
   id: fixtureOverrideRequestId, contributorId: fixtureMemberId, pullRequestId: fixtureTargetId,
   issueId: fixtureTargetId, landedPullRequestId: null, landedCommitUrl: "https://github.com/example/repo/commit/landed",
+  landedCommitAuthorId: fixtureMemberId,
   requestReason: "The closed change landed elsewhere.", state: "OPEN", decision: null,
   decidedBy: null, decidedBySoleModerator: false, decidedReason: null, decidedAt: null,
   moderatorFigure: null, awardedPoints: null, createdAt: "2026-10-01T10:00:00.000Z",

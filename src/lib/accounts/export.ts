@@ -86,7 +86,7 @@ export type AccountExport = {
   moderatorRoleChanges: { asTarget: AccountExportRow[]; asActor: AccountExportRow[] };
   settlementOverrideRequests: { asRequester: AccountExportRow[]; asDecider: AccountExportRow[] };
   sanctionContestRequests: { asAccount: AccountExportRow[]; asDecider: AccountExportRow[] };
-  closedPrDisputeRequests: { asContributor: AccountExportRow[]; asDecider: AccountExportRow[] };
+  closedPrDisputeRequests: { asContributor: AccountExportRow[]; asDecider: AccountExportRow[]; asLandedCommitAuthor: AccountExportRow[] };
   reconciliationRuns: { asRequester: AccountExportRow[]; asGraphqlCostSponsor: AccountExportRow[] };
   repositoryReconciliationUsage: AccountExportRow[];
   moderationCreditAdjustments: AccountExportRow[];
@@ -173,6 +173,7 @@ export const userForeignKeyExports: readonly UserForeignKeyExportEntry[] = [
   { table: "sanction_contest_requests", column: "decided_by", path: "sanctionContestRequests.asDecider", kind: "jsonb", orderBy: ["created_at", "id"] },
   { table: "closed_pr_dispute_requests", column: "contributor_id", path: "closedPrDisputeRequests.asContributor", kind: "jsonb", orderBy: ["created_at", "id"] },
   { table: "closed_pr_dispute_requests", column: "decided_by", path: "closedPrDisputeRequests.asDecider", kind: "jsonb", orderBy: ["created_at", "id"] },
+  { table: "closed_pr_dispute_requests", column: "landed_commit_author_id", path: "closedPrDisputeRequests.asLandedCommitAuthor", kind: "jsonb", orderBy: ["created_at", "id"] },
   { table: "reconciliation_runs", column: "requested_by_user_id", path: "reconciliationRuns.asRequester", kind: "jsonb", orderBy: ["started_at", "id"] },
   { table: "reconciliation_runs", column: "graphql_cost_sponsor_id", path: "reconciliationRuns.asGraphqlCostSponsor", kind: "jsonb", orderBy: ["started_at", "id"] },
   {
@@ -384,7 +385,7 @@ export async function exportAccount(
         moderatorRoleChanges: { asTarget: [], asActor: [] },
         settlementOverrideRequests: { asRequester: [], asDecider: [] },
         sanctionContestRequests: { asAccount: [], asDecider: [] },
-        closedPrDisputeRequests: { asContributor: [], asDecider: [] },
+        closedPrDisputeRequests: { asContributor: [], asDecider: [], asLandedCommitAuthor: [] },
         reconciliationRuns: { asRequester: [], asGraphqlCostSponsor: [] },
         repositoryReconciliationUsage: [],
         moderationCreditAdjustments: [],

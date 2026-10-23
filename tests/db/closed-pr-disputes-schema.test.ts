@@ -188,7 +188,7 @@ describe("closed PR dispute schema", () => {
       .rejects.toMatchObject({ code: "23514" });
   });
 
-  it.each(["contributor_id", "pull_request_id", "issue_id", "landed_pull_request_id", "decided_by"])(
+  it.each(["contributor_id", "pull_request_id", "issue_id", "landed_pull_request_id", "landed_commit_author_id", "decided_by"])(
     "requires an existing %s reference", async (column) => {
       const fixture = await buildFixture();
       const fields: RequestFields = { ...grantFields(fixture), [column]: randomUUID() };

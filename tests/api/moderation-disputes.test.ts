@@ -14,7 +14,7 @@ const moderatorId = "00000000-0000-4000-8000-000000000001";
 const requestId = "00000000-0000-4000-8000-000000000002";
 const decided: ClosedPrDisputeRequest = {
   id: requestId, contributorId: requestId, pullRequestId: requestId, issueId: requestId,
-  landedPullRequestId: null, landedCommitUrl: "https://example.test/commit/landed",
+  landedPullRequestId: null, landedCommitUrl: "https://example.test/commit/landed", landedCommitAuthorId: null,
   requestReason: "My closed change landed elsewhere.", state: "DECIDED", decision: "GRANTED",
   decidedBy: moderatorId, decidedBySoleModerator: true, decidedReason: "The evidence supports the claim.",
   moderatorFigure: 5, awardedPoints: 3,
