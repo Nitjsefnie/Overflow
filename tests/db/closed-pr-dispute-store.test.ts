@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { Sql } from "postgres";
+import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 import { closeSql, getSql } from "@/lib/db/client";
@@ -181,6 +181,31 @@ describe("closed PR dispute filing", () => {
       authorId === null ? /commit.*author/i : /author.*linked.*account/i,
     ) });
     await expectNoRequests(fixture);
+  });
+
+  it("resolves the commit using the filing transaction with a single connection", async () => {
+    const fixture = await buildFixture();
+    const [author] = await sql`select github_user_id from users where id = ${fixture.sponsorId}`;
+    vi.spyOn(PostgresSponsorCredentialStore.prototype, "getGitHubAccessToken").mockResolvedValue("test-access-token");
+    vi.stubGlobal("fetch", async () => Response.json({ data: { repository: { object: {
+      author: { user: { databaseId: Number(author.github_user_id) } },
+    } } } }));
+    const singleConnection = postgres(process.env.DATABASE_URL!, { max: 1 });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const request = new PostgresClosedPrDisputeStore(singleConnection).fileDispute({
+        ...filing(fixture), landedCommitUrl: `https://github.com/${fixture.ownerName}/commit/${"e".repeat(40)}`,
+      });
+      const result = await Promise.race([request, new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), 2_000);
+      })]);
+      expect(result, "filing must not wait for a second pool connection").toMatchObject({
+        kind: "ok", value: { landedCommitAuthorId: fixture.sponsorId },
+      });
+    } finally {
+      clearTimeout(timer);
+      await singleConnection.end({ timeout: 0 });
+    }
   });
 
   it.each(["malformed", "unregistered", "credentials", "branch", "gitlab"])("refuses %s commit URLs", async (kind) => {
