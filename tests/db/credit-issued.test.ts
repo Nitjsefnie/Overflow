@@ -35,7 +35,8 @@ describe("hourly credit issued", () => {
 
   it("groups positive creditor legs by merge hour or adjustment creation hour, newest first", async () => {
     const sponsorId = await insertUser(sql);
-    const first = await insertSettlement(sponsorId, 4, "2026-09-01T10:05:00Z");
+    const first = await insertSettlement(sponsorId, 4, "2026-09-01T10:00:00Z");
+    await insertSettlement(sponsorId, 6, null);
     await insertSettlement(sponsorId, 2, "2026-09-01T10:59:59Z");
     await insertSettlement(sponsorId, 0, "2026-09-01T11:05:00Z");
     await insertSettlement(sponsorId, 0, "2026-09-01T11:05:00Z", "unsettled");
@@ -110,7 +111,7 @@ describe("hourly credit issued", () => {
 async function insertSettlement(
   sponsorId: string,
   credits: number,
-  mergedAt: string,
+  mergedAt: string | null,
   kind: "outsider" | "unsettled" = "outsider",
 ): Promise<{ id: string; creditorId: string; pullRequestId: string; issueId: string }> {
   const creditorId = await insertUser(sql);
@@ -128,7 +129,7 @@ async function insertSettlement(
   return { id: settlement.id, creditorId, pullRequestId: pullRequest.id, issueId: pullRequest.issueId };
 }
 
-async function insertMergedPullRequest(client: Sql, mergedAt: string): Promise<{ id: string; issueId: string }> {
+async function insertMergedPullRequest(client: Sql, mergedAt: string | null): Promise<{ id: string; issueId: string }> {
   const issue = await insertIssue(client);
   const contributorId = await insertUser(client);
   const githubPullRequestId = nextExternalId();
