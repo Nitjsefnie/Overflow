@@ -1,3 +1,4 @@
+import { readEnv } from "@/lib/env";
 import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { credentialBinding, decryptToken, tokenKeySetFrom } from "@/lib/security/token-cipher";
@@ -26,8 +27,8 @@ export class PostgresForgeIdentityStore implements ForgeIdentityStore {
 
   public constructor(
     sql: SqlClient | TransactionClient,
-    tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY,
-    previousTokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS,
+    tokenEncryptionKey: string | undefined = readEnv("TOKEN_ENCRYPTION_KEY"),
+    previousTokenEncryptionKey: string | undefined = readEnv("TOKEN_ENCRYPTION_KEY_PREVIOUS"),
   ) {
     this.sql = sql;
     this.tokenEncryptionKey = tokenEncryptionKey;

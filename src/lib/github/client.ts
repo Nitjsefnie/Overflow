@@ -1,3 +1,4 @@
+import { readEnv } from "@/lib/env";
 import { getPullRequestNode, type GitHubGraphqlPullRequestNode } from "@/lib/github/pull-request";
 import { hasNextLink, lastLinkPage } from "@/lib/github/link-pagination";
 import { getCommitAuthor } from "@/lib/github/commit-author";
@@ -30,7 +31,6 @@ import type {
   GitHubWebhook,
   GitHubWebhookConfiguration,
 } from "@/lib/github/types";
-
 const defaultApiUrl = "https://api.github.com";
 const defaultTimeoutMs = 10_000;
 const githubApiVersion = "2022-11-28";
@@ -523,7 +523,7 @@ export class GitHubGateway implements ForgeGateway {
       repository: { issues: GitHubGraphqlPage<GitHubGraphqlIssueNode> } | null;
       rateLimit?: { cost: number; limit: number; remaining: number; resetAt: string } | null;
     }>(issuesQuery, { owner: repository.owner, name: repository.name, cursor, since });
-    if (process.env.DEBUG_GITHUB_COST && data.rateLimit != null) {
+    if (readEnv("DEBUG_GITHUB_COST") && data.rateLimit != null) {
       console.info("GitHub RepositoryIssues cost", {
         repository: `${repository.owner}/${repository.name}`,
         cursor,

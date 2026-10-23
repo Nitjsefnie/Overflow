@@ -34,10 +34,12 @@ afterAll(async () => {
 });
 
 describe("paused full-pass pages", () => {
-  it("reads the page ceiling from the environment when no override is supplied", async () => {
+  it.each(["RECONCILIATION_SWEEP_PAGE_CEILING", "OVERFLOW_RECONCILIATION_SWEEP_PAGE_CEILING"])("reads the page ceiling from %s when no override is supplied", async (name) => {
     const previous = process.env.RECONCILIATION_SWEEP_PAGE_CEILING;
     try {
-      process.env.RECONCILIATION_SWEEP_PAGE_CEILING = "2";
+      vi.stubEnv("OVERFLOW_RECONCILIATION_SWEEP_PAGE_CEILING", undefined);
+      vi.stubEnv("RECONCILIATION_SWEEP_PAGE_CEILING", "3");
+      vi.stubEnv(name, "2");
       const f = await materializeRepositoryFixture(sql);
       const pass = await new PostgresSweepPassStore(sql).open({ repositoryId: f.repositoryId,
         evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
@@ -47,6 +49,7 @@ describe("paused full-pass pages", () => {
       expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
       expect(await pass.read("third")).toBeUndefined();
     } finally {
+      vi.unstubAllEnvs();
       if (previous === undefined) delete process.env.RECONCILIATION_SWEEP_PAGE_CEILING;
       else process.env.RECONCILIATION_SWEEP_PAGE_CEILING = previous;
     }

@@ -63,6 +63,7 @@ function prepareInvalidPathConfig(value: string, tree?: string, paths = path) {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   if (originalDistDir === undefined) {
     delete process.env.NEXT_DIST_DIR;
   } else {
@@ -75,6 +76,36 @@ afterEach(() => {
 });
 
 describe("NEXT_DIST_DIR", () => {
+  it("uses the prefixed release directory before the legacy value", async () => {
+    prepareConfig("prefixed-build");
+    vi.stubEnv("NEXT_DIST_DIR", "../legacy-invalid");
+    vi.stubEnv("OVERFLOW_NEXT_DIST_DIR", " prefixed-build ");
+    vi.resetModules();
+
+    const { default: config } = await import("../../next.config");
+
+    expect(config.distDir).toBe("prefixed-build");
+    expect(config.typescript?.tsconfigPath).toBe("prefixed-build.tsconfig.json");
+  });
+
+  it("omits distDir for an empty prefixed value even when the legacy value is set", async () => {
+    vi.stubEnv("NEXT_DIST_DIR", "../legacy-invalid");
+    vi.stubEnv("OVERFLOW_NEXT_DIST_DIR", "");
+    vi.resetModules();
+
+    const { default: config } = await import("../../next.config");
+
+    expect(config).not.toHaveProperty("distDir");
+  });
+
+  it("reports an invalid prefixed path with the existing validation error", async () => {
+    vi.stubEnv("NEXT_DIST_DIR", "");
+    vi.stubEnv("OVERFLOW_NEXT_DIST_DIR", "../prefixed-invalid");
+    vi.resetModules();
+
+    await expectPathRefusal(import("../../next.config"), "../prefixed-invalid");
+  });
+
   describe("filesystem containment", () => {
     let fixtureDir: string;
     let projectDir: string;

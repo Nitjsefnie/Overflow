@@ -1,3 +1,4 @@
+import { readEnv } from "@/lib/env";
 import type { JSONValue } from "postgres";
 import type { CalibrationPair } from "@/lib/calibration/statistics";
 import { getSql } from "@/lib/db/client";
@@ -414,7 +415,7 @@ export class PostgresModerationStore implements ModerationStore {
   }
 
   public async listModerators(): Promise<ModeratorSummary[]> {
-    const configured = normalizeModeratorGitHubUserIds(process.env.MODERATOR_GITHUB_USER_IDS);
+    const configured = normalizeModeratorGitHubUserIds(readEnv("MODERATOR_GITHUB_USER_IDS"));
     const rows = await this.sql<{ id: string; github_user_id: number | string; github_login: string }[]>`
       select id, github_user_id, github_login from users
       where role = 'MODERATOR' and deleted_at is null

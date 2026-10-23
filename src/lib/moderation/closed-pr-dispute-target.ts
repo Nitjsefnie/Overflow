@@ -1,3 +1,4 @@
+import { readEnv } from "@/lib/env";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { PullRequestState, TransactionClient } from "@/lib/db/types";
@@ -108,7 +109,7 @@ async function fetchPullRequest(sql: TransactionClient, repository: Repository, 
   const slash = repository.owner_name.lastIndexOf('/');
   const reference = { owner: repository.owner_name.slice(0, slash), name: repository.owner_name.slice(slash + 1) };
   const credential = repository.provider === 'github'
-    ? await new PostgresSponsorCredentialStore(sql, process.env.TOKEN_ENCRYPTION_KEY, process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS).getGitHubAccessToken(repository.sponsor_id)
+    ? await new PostgresSponsorCredentialStore(sql, readEnv("TOKEN_ENCRYPTION_KEY"), readEnv("TOKEN_ENCRYPTION_KEY_PREVIOUS")).getGitHubAccessToken(repository.sponsor_id)
     : (await new PostgresForgeIdentityStore(sql).getForgeToken(repository.sponsor_id, repository.instance_url!))?.token;
   if (!credential) throw new Error('Forge credential is unavailable for the pull request lookup.');
   const gateway = repository.provider === 'github'

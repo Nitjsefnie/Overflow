@@ -1,3 +1,4 @@
+import { readEnv } from "@/lib/env";
 import NextAuth from "next-auth";
 import GitHub from "next-auth/providers/github";
 import type { UserRole } from "@/lib/db/types";
@@ -246,12 +247,12 @@ export async function upsertGitHubIdentity(
   accessToken: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<PersistedGitHubUser> {
-  const tokenEncryptionKey = process.env.TOKEN_ENCRYPTION_KEY;
+  const tokenEncryptionKey = readEnv("TOKEN_ENCRYPTION_KEY");
   if (tokenEncryptionKey === undefined || tokenEncryptionKey.length === 0) {
     throw new Error("Token encryption key must be configured.");
   }
 
-  const role = normalizeModeratorGitHubUserIds(process.env.MODERATOR_GITHUB_USER_IDS).has(identity.githubUserId)
+  const role = normalizeModeratorGitHubUserIds(readEnv("MODERATOR_GITHUB_USER_IDS")).has(identity.githubUserId)
     ? "MODERATOR"
     : "MEMBER";
   const tokenBinding = credentialBinding.userOAuthToken(identity.githubUserId);
@@ -260,7 +261,7 @@ export async function upsertGitHubIdentity(
   // key seals, and a previous key, when configured, still opens what it
   // sealed during a rotation window. Encryption of anything new stays on the
   // current key; the stored-token probe decrypts with the whole set.
-  const tokenKeys = tokenKeySetFrom(tokenEncryptionKey, process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS);
+  const tokenKeys = tokenKeySetFrom(tokenEncryptionKey, readEnv("TOKEN_ENCRYPTION_KEY_PREVIOUS"));
   // Stored-token continuity (issue 1154): GitHub issues a new authorization
   // carrying only the scopes the sign-in requested, so a contributor sign-in
   // mints a zero-scope token that must not overwrite the token the sponsor's

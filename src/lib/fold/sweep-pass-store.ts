@@ -1,3 +1,4 @@
+import { readEnv } from "@/lib/env";
 import { repositoryLockNamespace } from "@/lib/fold/repository-coordination";
 import { randomUUID } from "node:crypto";
 import { getSql } from "@/lib/db/client";
@@ -9,7 +10,9 @@ type PassRow = { pass_id: string; scan_started_at: Date; dirty_subjects: DirtyRe
 export class PostgresSweepPassStore {
   public constructor(
     private readonly connection?: SqlClient,
-    private readonly pageCeiling: number = readSweepPassPageCeiling(process.env),
+    private readonly pageCeiling: number = readSweepPassPageCeiling({
+      RECONCILIATION_SWEEP_PAGE_CEILING: readEnv("RECONCILIATION_SWEEP_PAGE_CEILING"),
+    }),
   ) {}
   private get sql(): SqlClient { return this.connection ?? getSql(); }
 

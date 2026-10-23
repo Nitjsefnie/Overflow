@@ -1,3 +1,4 @@
+import { readEnv } from "../../lib/env.ts";
 import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -14,7 +15,7 @@ export function resolveNoticesFilePath(root = process.cwd()): string {
     // The target is selected at runtime; tracing it during build would pull
     // the whole project into the route bundle.
     realpathSync(/*turbopackIgnore: true*/ join(
-      /*turbopackIgnore: true*/ root, process.env.NEXT_DIST_DIR?.trim() || ".next",
+      /*turbopackIgnore: true*/ root, readEnv("NEXT_DIST_DIR")?.trim() || ".next",
     )),
     "third-party-notices.txt",
   );

@@ -1,3 +1,4 @@
+import { readEnv } from "@/lib/env";
 import { errorResponse } from "@/lib/http/error-response";
 import { getSql } from "@/lib/db/client";
 import type { UserRole } from "@/lib/db/types";
@@ -239,7 +240,7 @@ async function gitlabLabelsResponse(
   userId: string,
   reference: { provider: "gitlab"; instance: string; project: string },
 ): Promise<Response> {
-  const tokenEncryptionKey = process.env.TOKEN_ENCRYPTION_KEY;
+  const tokenEncryptionKey = readEnv("TOKEN_ENCRYPTION_KEY");
   if (tokenEncryptionKey === undefined || tokenEncryptionKey.length === 0) {
     return errorResponse(503, "CONFIGURATION", "Token encryption is not configured.");
   }
