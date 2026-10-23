@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readEnv } from "@/lib/env";
 
+/**
+ * Issue 1320 gives self-defined variables the OVERFLOW_ prefix. Legacy names
+ * remain deployment fallbacks; prefixed values win, including an empty string.
+ */
 afterEach(() => {
   vi.unstubAllEnvs();
 });
