@@ -37,12 +37,12 @@ async function expectErrorResponse(
 
 describe("reading the trusted origin from OVERFLOW_APP_URL", () => {
   it("prefers the canonical origin in an injected environment", () => {
-    expect(readTrustedOrigin({ OVERFLOW_APP_URL: " https://canonical.example/path ", APP_URL: "https://legacy.example" }))
+    expect(readTrustedOrigin({ ...environment(" https://canonical.example/path "), APP_URL: "https://legacy.example" }))
       .toBe("https://canonical.example");
   });
 
   it("keeps an empty canonical value instead of a legacy origin in an injected environment", () => {
-    expect(readTrustedOrigin({ OVERFLOW_APP_URL: "", APP_URL: "https://legacy.example" })).toBeNull();
+    expect(readTrustedOrigin({ ...environment(""), APP_URL: "https://legacy.example" })).toBeNull();
   });
 
   it("returns the origin of an OVERFLOW_APP_URL that is already bare", () => {
