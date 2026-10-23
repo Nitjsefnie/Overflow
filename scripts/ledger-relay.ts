@@ -178,16 +178,16 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
   const nowFn = inputDeps.nowFn ?? Date.now;
   const deps: RunDeps = { ...inputDeps, nowFn, deadlineMs: nowFn() + RUN_DEADLINE_MS };
   const { env } = deps;
-  const appId = required(env, "LEDGER_APP_ID");
-  const installationId = required(env, "LEDGER_INSTALLATION_ID");
-  const appKey = required(env, "LEDGER_APP_KEY");
+  const appId = required(env, "OVERFLOW_LEDGER_APP_ID");
+  const installationId = required(env, "OVERFLOW_LEDGER_INSTALLATION_ID");
+  const appKey = required(env, "OVERFLOW_LEDGER_APP_KEY");
   const repo = required(env, "GITHUB_REPOSITORY");
   assertShape(repo, /^[^/]+\/[^/]+$/, "GITHUB_REPOSITORY must name OWNER/REPO");
   assertShape(appId, DIGITS, "LEDGER_APP_ID must be the App's numeric id");
   assertShape(installationId, DIGITS, "LEDGER_INSTALLATION_ID must be the numeric installation id");
   const ownJob = {
     repo, runId: required(env, "GITHUB_RUN_ID"), runAttempt: required(env, "GITHUB_RUN_ATTEMPT"),
-    workflowToken: required(env, "RELAY_RERUN_TOKEN"),
+    workflowToken: required(env, "OVERFLOW_RELAY_RERUN_TOKEN"),
   };
   assertShape(ownJob.runId, DIGITS, "GITHUB_RUN_ID must be the relay run's numeric id");
   assertShape(ownJob.runAttempt, DIGITS, "GITHUB_RUN_ATTEMPT must be the relay run's numeric attempt");
@@ -280,7 +280,7 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
         // A refused trigger has no proven producer identity. Do not resolve it
         // again inside the sweep and strand unrelated eligible completions.
         skipTrigger: attestationRun === undefined,
-        rerunToken: env.RELAY_RERUN_TOKEN,
+        rerunToken: env.OVERFLOW_RELAY_RERUN_TOKEN ?? env.RELAY_RERUN_TOKEN,
         rerun: (id, rerunToken) => apiCall<unknown>(deps, {
           url: `${API_ROOT}/repos/${repo}/actions/runs/${id}/rerun`, method: "POST",
           headers: { ...API_HEADERS, authorization: `Bearer ${rerunToken}` },
@@ -480,7 +480,7 @@ async function readRawPinMap(): Promise<unknown> {
 }
 
 function required(env: Record<string, string | undefined>, name: string): string {
-  const value = env[name] ?? "";
+  const value = env[name] ?? env[name.replace(/^OVERFLOW_/, "")] ?? "";
   if (value === "") {
     throw new Error(`${name} is required`);
   }

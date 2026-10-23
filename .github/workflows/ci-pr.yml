@@ -51,14 +51,14 @@ jobs:
     # migration or connects to a database, because the pull request's own code —
     # which is what would need the schema — runs in pr-suite.yml.
     env:
-      DATABASE_URL: postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci
+      OVERFLOW_DATABASE_URL: postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci
       AUTH_SECRET: ci-placeholder-auth-secret-not-for-production
       AUTH_GITHUB_ID: ci-placeholder-github-client-id
       AUTH_GITHUB_SECRET: ci-placeholder-github-client-secret
-      TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-      APP_URL: https://overflow.invalid
-      GITHUB_WEBHOOK_URL: https://overflow.invalid/api/github/webhooks
-      MODERATOR_GITHUB_USER_IDS: "1"
+      OVERFLOW_TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      OVERFLOW_APP_URL: https://overflow.invalid
+      OVERFLOW_GITHUB_WEBHOOK_URL: https://overflow.invalid/api/github/webhooks
+      OVERFLOW_MODERATOR_GITHUB_USER_IDS: "1"
 
     steps:
       # workflow_run defaults to the trusted default branch's checkout, not
@@ -80,7 +80,7 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
-          SUITE_RUN_ID: ${{ github.event.workflow_run.id }}
+          OVERFLOW_SUITE_RUN_ID: ${{ github.event.workflow_run.id }}
         run: node "${GITHUB_WORKSPACE}/scripts/resolve-suite-pull-request.ts"
 
       # The pull request enters as git objects only: the suite's head SHA and
@@ -102,26 +102,26 @@ jobs:
         env:
           # The API-bound suite head and current PR base, not the workflow_run
           # producer's own default-branch SHA or an asynchronous merge preview.
-          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
-          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          OVERFLOW_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          OVERFLOW_BASE_SHA: ${{ steps.pr.outputs.base_sha }}
           # actions/checkout's default: checking the tree out fetches no LFS
           # object the pull request's attributes point at.
           GIT_LFS_SKIP_SMUDGE: "1"
         run: |
-          if ! git fetch --no-tags origin "${HEAD_SHA:?}"; then
-            echo "::error::could not fetch the pull request's head ${HEAD_SHA} from origin; refusing to judge a tree this event is not about"
+          if ! git fetch --no-tags origin "${OVERFLOW_HEAD_SHA:?}"; then
+            echo "::error::could not fetch the pull request's head ${OVERFLOW_HEAD_SHA} from origin; refusing to judge a tree this event is not about"
             exit 1
           fi
-          if ! git cat-file -e "${BASE_SHA:?}^{commit}" 2>/dev/null; then
-            if ! git fetch --no-tags origin "${BASE_SHA:?}"; then
-              echo "::error::could not fetch the pull request's base ${BASE_SHA} from origin; refusing to judge a tree this event is not about"
+          if ! git cat-file -e "${OVERFLOW_BASE_SHA:?}^{commit}" 2>/dev/null; then
+            if ! git fetch --no-tags origin "${OVERFLOW_BASE_SHA:?}"; then
+              echo "::error::could not fetch the pull request's base ${OVERFLOW_BASE_SHA} from origin; refusing to judge a tree this event is not about"
               exit 1
             fi
           fi
           # Main's linear history makes this fork point no newer than the base
           # the suite tested. Freshness must cover the entire potentially
           # untested advance; static gates still merge the current PR base.
-          if ! freshness_base=$(git merge-base --all "${BASE_SHA:?}" "${HEAD_SHA:?}"); then
+          if ! freshness_base=$(git merge-base --all "${OVERFLOW_BASE_SHA:?}" "${OVERFLOW_HEAD_SHA:?}"); then
             echo "::error::could not compute the freshness merge-base; refusing to certify"
             exit 1
           fi
@@ -130,12 +130,12 @@ jobs:
             echo "::error::freshness requires exactly one merge-base commit; refusing to certify"
             exit 1
           fi
-          if merged_tree=$(git merge-tree --write-tree "${BASE_SHA:?}" "${HEAD_SHA:?}" 2>&1); then
+          if merged_tree=$(git merge-tree --write-tree "${OVERFLOW_BASE_SHA:?}" "${OVERFLOW_HEAD_SHA:?}" 2>&1); then
             :
           else
             merge_status=$?
             if [ "${merge_status}" -eq 1 ]; then
-              echo "::error::the pull request's head ${HEAD_SHA} does not merge cleanly into its base ${BASE_SHA}; rebase the branch onto the base and push again."
+              echo "::error::the pull request's head ${OVERFLOW_HEAD_SHA} does not merge cleanly into its base ${OVERFLOW_BASE_SHA}; rebase the branch onto the base and push again."
             else
               # git exits 1 on a merge-tree conflict and reserves everything else
               # for its own failure: a git without --write-tree answers an
@@ -153,14 +153,14 @@ jobs:
           # leaves stdin open turns this into a step that hangs.
           merge_sha=$(git -c user.name='Overflow verify' -c user.email='verify@localhost' \
             -c commit.gpgSign=false \
-            commit-tree "${merged_tree}" -p "${BASE_SHA:?}" -p "${HEAD_SHA:?}" \
+            commit-tree "${merged_tree}" -p "${OVERFLOW_BASE_SHA:?}" -p "${OVERFLOW_HEAD_SHA:?}" \
             -m "Overflow verify: this pull request's head merged into its base")
           read -r _ first_parent second_parent extra_parent \
             <<< "$(git rev-list --parents -n 1 "${merge_sha}")"
           if [ -z "${first_parent}" ] || [ -n "${extra_parent}" ] \
-            || [ "${first_parent}" != "${BASE_SHA}" ] \
-            || [ "${second_parent}" != "${HEAD_SHA}" ]; then
-            echo "::error::the merge built for this event (${merge_sha}) is not a two-parent merge of its base ${BASE_SHA} and the event's head ${HEAD_SHA}; refusing to judge a tree this event is not about"
+            || [ "${first_parent}" != "${OVERFLOW_BASE_SHA}" ] \
+            || [ "${second_parent}" != "${OVERFLOW_HEAD_SHA}" ]; then
+            echo "::error::the merge built for this event (${merge_sha}) is not a two-parent merge of its base ${OVERFLOW_BASE_SHA} and the event's head ${OVERFLOW_HEAD_SHA}; refusing to judge a tree this event is not about"
             exit 1
           fi
           pr_tree="${RUNNER_TEMP}/pr-tree"
@@ -186,9 +186,9 @@ jobs:
       - name: Check no tracked file carries a merge-conflict marker
         if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
-          PR_TREE: ${{ steps.pr-tree.outputs.path }}
+          OVERFLOW_PR_TREE: ${{ steps.pr-tree.outputs.path }}
         run: |
-          cd "${PR_TREE:?the pull request tree was not materialised}"
+          cd "${OVERFLOW_PR_TREE:?the pull request tree was not materialised}"
           # git grep exits 1 for "no match" and above 1 for an error it could
           # not run, and a guard that reads its own error as a clean tree is
           # the false green this step exists to prevent.
@@ -216,9 +216,9 @@ jobs:
         if: ${{ steps.pr.outputs.superseded != 'true' }}
         id: detect-docs
         env:
-          PR_TREE: ${{ steps.pr-tree.outputs.path }}
+          OVERFLOW_PR_TREE: ${{ steps.pr-tree.outputs.path }}
         run: |
-          cd "${PR_TREE:?the pull request tree was not materialised}"
+          cd "${OVERFLOW_PR_TREE:?the pull request tree was not materialised}"
           changed=$(node "${GITHUB_WORKSPACE}/scripts/docs-only.ts" HEAD^1)
           echo "docs_only=${changed}" >> "$GITHUB_OUTPUT"
 
@@ -231,9 +231,9 @@ jobs:
       - name: Module size ceilings
         if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
-          PR_TREE: ${{ steps.pr-tree.outputs.path }}
+          OVERFLOW_PR_TREE: ${{ steps.pr-tree.outputs.path }}
         run: |
-          cd "${PR_TREE:?the pull request tree was not materialised}"
+          cd "${OVERFLOW_PR_TREE:?the pull request tree was not materialised}"
           node "${GITHUB_WORKSPACE}/scripts/check-module-size.ts"
 
       # No ratchet-document step here: ratchet-guard.yml runs main's copy of
@@ -249,8 +249,8 @@ jobs:
       - name: Migration immutability
         if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
-          MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
-        run: node "${GITHUB_WORKSPACE}/scripts/check-migration-edits.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"
+          OVERFLOW_MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
+        run: node "${GITHUB_WORKSPACE}/scripts/check-migration-edits.ts" "${OVERFLOW_MERGE_SHA:?}^1" "${OVERFLOW_MERGE_SHA}"
 
       # Unlike the migration step above — which compares the range's two
       # endpoints — the legal-revision gate walks EVERY commit of base..head:
@@ -261,8 +261,8 @@ jobs:
       - name: Legal revision currency
         if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
-          MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
-        run: node "${GITHUB_WORKSPACE}/scripts/check-legal-revisions.ts" "${MERGE_SHA:?}^1" "${MERGE_SHA}"
+          OVERFLOW_MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
+        run: node "${GITHUB_WORKSPACE}/scripts/check-legal-revisions.ts" "${OVERFLOW_MERGE_SHA:?}^1" "${OVERFLOW_MERGE_SHA}"
 
       # CONTRIBUTING.md allows a workflow's name as a scope only with type
       # ci. This belongs in the already-required verify job: a new job would
@@ -272,8 +272,8 @@ jobs:
       - name: Refuse a commit whose scope names a workflow outside the ci type
         if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
-          PR_TREE: ${{ steps.pr-tree.outputs.path }}
-        run: python3 "${GITHUB_WORKSPACE}/scripts/commit_scopes.py" --root "${PR_TREE:?}"
+          OVERFLOW_PR_TREE: ${{ steps.pr-tree.outputs.path }}
+        run: python3 "${GITHUB_WORKSPACE}/scripts/commit_scopes.py" --root "${OVERFLOW_PR_TREE:?}"
 
       # Issue 1099. pr-suite.yml's pin check runs under `pull_request` — the pull
       # request's own definition — so a pull request can delete the one step its
@@ -298,10 +298,10 @@ jobs:
       - name: Verify the zizmor pin's hashes match its version
         if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
-          MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
+          OVERFLOW_MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
         run: |
           manifest=.github/requirements-zizmor.txt
-          entries=$(git ls-tree "${MERGE_SHA:?}" -- "${manifest}")
+          entries=$(git ls-tree "${OVERFLOW_MERGE_SHA:?}" -- "${manifest}")
           count=0
           entry_mode=""
           entry_type=""
@@ -425,8 +425,8 @@ jobs:
       - name: Refuse a pull request that changes the audit suppression list
         if: ${{ steps.pr.outputs.superseded != 'true' && (github.event_name == 'workflow_run') }}
         env:
-          MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
-          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          OVERFLOW_MERGE_SHA: ${{ steps.pr-tree.outputs.merge_sha }}
+          OVERFLOW_BASE_SHA: ${{ steps.pr.outputs.base_sha }}
         run: |
           file=package.json
           ws_file=pnpm-workspace.yaml
@@ -742,18 +742,18 @@ jobs:
             printf '%s\n' "${sanitized}/site"
           }
 
-          base_blob=$(blob_of "${BASE_SHA:?}")
-          merge_blob=$(blob_of "${MERGE_SHA:?}")
+          base_blob=$(blob_of "${OVERFLOW_BASE_SHA:?}")
+          merge_blob=$(blob_of "${OVERFLOW_MERGE_SHA:?}")
           base_value=$(value_of "${base_blob}") || exit 1
           merge_value=$(value_of "${merge_blob}") || exit 1
           if [ "${base_value}" != "${merge_value}" ]; then
             echo "::error::this pull request changes pnpm.auditConfig; a pull request cannot change the audit suppression list — the list moves only through a maintainer-reviewed merge"
             exit 1
           fi
-          base_ws=$(optional_entry_of "${BASE_SHA:?}" "${ws_file}")
-          merge_ws=$(optional_entry_of "${MERGE_SHA:?}" "${ws_file}")
+          base_ws=$(optional_entry_of "${OVERFLOW_BASE_SHA:?}" "${ws_file}")
+          merge_ws=$(optional_entry_of "${OVERFLOW_MERGE_SHA:?}" "${ws_file}")
           if [ "${base_ws}" != "${merge_ws}" ]; then
-            pyyaml_site=$(install_pyyaml "${BASE_SHA:?}") || exit 1
+            pyyaml_site=$(install_pyyaml "${OVERFLOW_BASE_SHA:?}") || exit 1
             base_ws_value=$(ws_value_of "${base_ws}") || exit 1
             merge_ws_value=$(ws_value_of "${merge_ws}") || exit 1
             if [ "${base_ws_value}" != "${merge_ws_value}" ]; then
@@ -762,8 +762,8 @@ jobs:
             fi
           fi
           
-          base_npmrc=$(optional_entry_of "${BASE_SHA:?}" "${npmrc_file}")
-          merge_npmrc=$(optional_entry_of "${MERGE_SHA:?}" "${npmrc_file}")
+          base_npmrc=$(optional_entry_of "${OVERFLOW_BASE_SHA:?}" "${npmrc_file}")
+          merge_npmrc=$(optional_entry_of "${OVERFLOW_MERGE_SHA:?}" "${npmrc_file}")
           if [ "${base_npmrc}" != "${merge_npmrc}" ]; then
             base_npmrc_value=$(npmrc_value_of "${base_npmrc}") || exit 1
             merge_npmrc_value=$(npmrc_value_of "${merge_npmrc}") || exit 1
@@ -787,9 +787,9 @@ jobs:
         id: suite
         env:
           GH_TOKEN: ${{ github.token }}
-          SUITE_RUN_ID: ${{ github.event.workflow_run.id }}
-          SUITE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
-          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          OVERFLOW_SUITE_RUN_ID: ${{ github.event.workflow_run.id }}
+          OVERFLOW_SUITE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          OVERFLOW_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: node "${GITHUB_WORKSPACE}/scripts/await-pr-suite.ts"
 
       # Success must be a positive signal here too, not the absence of a
@@ -798,10 +798,10 @@ jobs:
       - name: Require the awaited suite run's id
         if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
-          RUN_ID: ${{ steps.suite.outputs.run_id }}
+          OVERFLOW_RUN_ID: ${{ steps.suite.outputs.run_id }}
         run: |
-          if [[ "${RUN_ID}" == *$'\n'* ]] || ! printf '%s' "${RUN_ID}" | grep -Eq '^[1-9][0-9]*$'; then
-            echo "::error::the suite awaiter wrote no run id (got '${RUN_ID}'); refusing to pass without a suite outcome"
+          if [[ "${OVERFLOW_RUN_ID}" == *$'\n'* ]] || ! printf '%s' "${OVERFLOW_RUN_ID}" | grep -Eq '^[1-9][0-9]*$'; then
+            echo "::error::the suite awaiter wrote no run id (got '${OVERFLOW_RUN_ID}'); refusing to pass without a suite outcome"
             exit 1
           fi
 
@@ -842,11 +842,11 @@ jobs:
       - name: Coverage floor over the suite's summary
         if: ${{ steps.pr.outputs.superseded != 'true' && (steps.detect-docs.outputs.docs_only != 'true') }}
         env:
-          PR_TREE: ${{ steps.pr-tree.outputs.path }}
-          SUMMARY_DIR: ${{ steps.suite-coverage.outputs.dir }}
+          OVERFLOW_PR_TREE: ${{ steps.pr-tree.outputs.path }}
+          OVERFLOW_SUMMARY_DIR: ${{ steps.suite-coverage.outputs.dir }}
         run: |
-          cd "${PR_TREE:?the pull request tree was not materialised}"
-          node "${GITHUB_WORKSPACE}/scripts/check-coverage-floor.ts" --summary "${SUMMARY_DIR:?}/coverage-summary.json"
+          cd "${OVERFLOW_PR_TREE:?the pull request tree was not materialised}"
+          node "${GITHUB_WORKSPACE}/scripts/check-coverage-floor.ts" --summary "${OVERFLOW_SUMMARY_DIR:?}/coverage-summary.json"
 
       # Static gates judge the current PR base, but the suite may have tested
       # an older base. Freshness begins at the head/current-base merge-base:
@@ -873,9 +873,9 @@ jobs:
         if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO_SLUG: ${{ github.repository }}
-          BASE_SHA: ${{ steps.pr-tree.outputs.freshness_base_sha }}
-          BASE_REF: ${{ steps.pr.outputs.base_ref }}
-          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
-          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          OVERFLOW_REPO_SLUG: ${{ github.repository }}
+          OVERFLOW_BASE_SHA: ${{ steps.pr-tree.outputs.freshness_base_sha }}
+          OVERFLOW_BASE_REF: ${{ steps.pr.outputs.base_ref }}
+          OVERFLOW_PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          OVERFLOW_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: bash "${GITHUB_WORKSPACE}/scripts/ci-base-freshness.sh"

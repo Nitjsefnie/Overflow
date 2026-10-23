@@ -88,7 +88,8 @@ if [ "$#" -gt 0 ]; then
     fail "unknown argument: $1"
 fi
 
-if [ -z "${DATABASE_URL:-}" ]; then
+database_url=${OVERFLOW_DATABASE_URL:-${DATABASE_URL:-}}
+if [ -z "$database_url" ]; then
     fail "DATABASE_URL is not set; refusing to guess which database to dump"
 fi
 
@@ -188,7 +189,7 @@ $pg_dump_cmd --format=plain \
     --exclude-table-data=repository_reconciliation_jobs \
     --exclude-table-data=repository_reconciliation_usage \
     --exclude-table-data=reconciliation_sweep_pages \
-    "$DATABASE_URL" > "$plain"
+    "$database_url" > "$plain"
 
 if [ ! -s "$plain" ]; then
     fail "the reduced dump is empty; refusing to continue ($pg_dump_cmd wrote no SQL)"

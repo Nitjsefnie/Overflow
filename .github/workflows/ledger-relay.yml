@@ -103,24 +103,24 @@ jobs:
       - name: Relay the required checks under the ledger App
         timeout-minutes: 11
         env:
-          LEDGER_APP_ID: "5118623"
-          LEDGER_INSTALLATION_ID: "166057493"
-          LEDGER_APP_KEY: ${{ secrets.LEDGER_APP_KEY }}
-          GITHUB_WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
-          GITHUB_WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          GITHUB_WORKFLOW_RUN_PATH: ${{ github.event.workflow_run.path }}
-          GITHUB_WORKFLOW_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          GITHUB_WORKFLOW_RUN_HTML_URL: ${{ github.event.workflow_run.html_url }}
-          GITHUB_WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
+          OVERFLOW_LEDGER_APP_ID: "5118623"
+          OVERFLOW_LEDGER_INSTALLATION_ID: "166057493"
+          OVERFLOW_LEDGER_APP_KEY: ${{ secrets.LEDGER_APP_KEY }}
+          OVERFLOW_GITHUB_WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: ${{ github.event.workflow_run.path }}
+          OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: ${{ github.event.workflow_run.html_url }}
+          OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
           # With the event, decides whether the run executed main's definition;
           # a pinned run that did not is refused, and the sweep still runs.
-          GITHUB_WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          GITHUB_WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
-          RELAY_RERUN_TOKEN: ${{ github.token }}
+          OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          OVERFLOW_RELAY_RERUN_TOKEN: ${{ github.token }}
           # Rule: the job-start read uses the runner's default GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT; never set them here.
-          LEDGER_DISPATCH_RUN_ID: ${{ inputs.run_id }}
+          OVERFLOW_LEDGER_DISPATCH_RUN_ID: ${{ inputs.run_id }}
           # A schedule or a dispatch without run_id has no triggering run to
           # mirror. Carry the sweep-only mode so the script fails closed on
           # ambiguity with a named run; every mode sweeps and shares one group.
-          LEDGER_SWEEP_ONLY: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_id == '') }}
+          OVERFLOW_LEDGER_SWEEP_ONLY: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_id == '') }}
         run: node scripts/ledger-relay.ts

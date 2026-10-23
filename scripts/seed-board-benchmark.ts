@@ -21,6 +21,7 @@
 // data. Only one credential ever leaves stdout: the throwaway bench API token,
 // which authenticates nothing but this benchmark database.
 
+import { readEnv } from "../src/lib/env.ts";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { encode } from "next-auth/jwt";
@@ -607,7 +608,7 @@ export async function seedBoardBenchmark(options: SeedOptions, suppliedSql?: Sql
 }
 
 function requireDatabaseUrl(): string {
-  const databaseUrl = process.env.DATABASE_URL;
+  const databaseUrl = readEnv("DATABASE_URL");
   if (databaseUrl === undefined || databaseUrl.length === 0) {
     throw new Error("DATABASE_URL must be set (or pass --database-url) before seeding the benchmark world.");
   }

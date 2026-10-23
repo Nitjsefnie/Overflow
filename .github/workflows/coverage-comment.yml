@@ -81,12 +81,12 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO_SLUG: ${{ github.repository }}
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
-          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          OVERFLOW_REPO_SLUG: ${{ github.repository }}
+          OVERFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          OVERFLOW_HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+          OVERFLOW_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          OVERFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          OVERFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
         run: |
           set -euo pipefail
           # Only a pull-request-triggered run measured a pull request's own
@@ -105,23 +105,23 @@ jobs:
           # head-labelled <base owner>:<branch>, which a fork's pull request
           # (<fork owner>:<branch>) is not, so nothing would match and the
           # run would exit silently.
-          if [[ "$RUN_EVENT" != "pull_request" && "$RUN_EVENT" != "pull_request_target" ]]; then
-            echo "the triggering pr suite run was a ${RUN_EVENT} run, not a pull_request or pull_request_target run; nothing to comment on"
+          if [[ "$OVERFLOW_RUN_EVENT" != "pull_request" && "$OVERFLOW_RUN_EVENT" != "pull_request_target" ]]; then
+            echo "the triggering pr suite run was a ${OVERFLOW_RUN_EVENT} run, not a pull_request or pull_request_target run; nothing to comment on"
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # A deleted head repository leaves nothing to bind the destination
           # to: silent exit, exit 0.
-          if [[ -z "$HEAD_OWNER" || -z "$HEAD_REPO" ]]; then
+          if [[ -z "$OVERFLOW_HEAD_OWNER" || -z "$OVERFLOW_HEAD_REPO" ]]; then
             echo "the triggering run's head repository no longer exists; nothing to comment on"
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          prs=$(gh api -X GET "repos/$REPO_SLUG/pulls" \
-            -f state=open -f head="$HEAD_OWNER:$HEAD_BRANCH" -f per_page=100)
+          prs=$(gh api -X GET "repos/$OVERFLOW_REPO_SLUG/pulls" \
+            -f state=open -f head="$OVERFLOW_HEAD_OWNER:$OVERFLOW_HEAD_BRANCH" -f per_page=100)
           # A deleted fork has head.repo null; null.full_name is null in jq, so
           # it simply does not match.
-          matches=$(printf '%s' "$prs" | jq -c --arg repo "$HEAD_REPO" --arg sha "$HEAD_SHA" \
+          matches=$(printf '%s' "$prs" | jq -c --arg repo "$OVERFLOW_HEAD_REPO" --arg sha "$OVERFLOW_HEAD_SHA" \
             '[.[] | select(.head.repo.full_name == $repo and .head.sha == $sha) | .number]')
           count=$(printf '%s' "$matches" | jq 'length')
           # Zero matches — a merged or closed PR, a main push, or a PR head
@@ -137,7 +137,7 @@ jobs:
             1)
               pr_number=$(printf '%s' "$matches" | jq -r '.[0]')
               same_repo=false
-              if [[ "$HEAD_REPO" == "$REPO_SLUG" ]]; then
+              if [[ "$OVERFLOW_HEAD_REPO" == "$OVERFLOW_REPO_SLUG" ]]; then
                 same_repo=true
               fi
               echo "found=true" >> "$GITHUB_OUTPUT"
@@ -178,23 +178,23 @@ jobs:
         if: steps.pr.outputs.found == 'true'
         shell: bash
         env:
-          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
-          SAME_REPO: ${{ steps.pr.outputs.same_repo }}
+          OVERFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          OVERFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          OVERFLOW_PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          OVERFLOW_SAME_REPO: ${{ steps.pr.outputs.same_repo }}
         run: |
           set -euo pipefail
           marker="<!-- overflow:coverage-comment -->"
           body_file="comment-body.md"
           stale="a percentage carried over from an earlier run is stale, not current"
 
-          if [[ "$CONCLUSION" != "success" ]]; then
-            printf '%s\n\nThe pr suite run concluded %s, so patch coverage was not measured for it; %s.\n' "$marker" "$CONCLUSION" "$stale" > "$body_file"
+          if [[ "$OVERFLOW_CONCLUSION" != "success" ]]; then
+            printf '%s\n\nThe pr suite run concluded %s, so patch coverage was not measured for it; %s.\n' "$marker" "$OVERFLOW_CONCLUSION" "$stale" > "$body_file"
           elif [[ ! -f patch-coverage/patch-coverage.json ]]; then
             printf '%s\n\nNo patch coverage report could be retrieved for this run, so patch coverage was not measured for it; %s.\n' "$marker" "$stale" > "$body_file"
           elif [[ "$(jq -r '.measured // false' patch-coverage/patch-coverage.json)" != "true" ]]; then
             printf '%s\n\nThe patch-coverage artifact from this run is not measurable, so patch coverage was not measured for it; %s.\n' "$marker" "$stale" > "$body_file"
-          elif [[ "${SAME_REPO:-}" != "true" ]]; then
+          elif [[ "${OVERFLOW_SAME_REPO:-}" != "true" ]]; then
             # Fork head: only the two totals are read, and only as validated
             # integers. jq 1.7 prints an untouched literal as written (3.0,
             # 1E+3, -0), so each is re-derived by arithmetic before printing;
@@ -225,13 +225,13 @@ jobs:
             # and the event's head branch; today's artifact carries neither
             # field, so this is the loud failure for a future shape that does.
             claimed_pr=$(jq -r '.pr // .pr_number // empty' patch-coverage/patch-coverage.json)
-            if [[ -n "$claimed_pr" && "$claimed_pr" != "$PR_NUMBER" ]]; then
-              echo "::error::the artifact claims pull request ${claimed_pr} but the triggering event resolves to pull request ${PR_NUMBER}; refusing to comment"
+            if [[ -n "$claimed_pr" && "$claimed_pr" != "$OVERFLOW_PR_NUMBER" ]]; then
+              echo "::error::the artifact claims pull request ${claimed_pr} but the triggering event resolves to pull request ${OVERFLOW_PR_NUMBER}; refusing to comment"
               exit 1
             fi
             claimed_branch=$(jq -r '.head_branch // .branch // empty' patch-coverage/patch-coverage.json)
-            if [[ -n "$claimed_branch" && "$claimed_branch" != "$HEAD_BRANCH" ]]; then
-              echo "::error::the artifact claims branch ${claimed_branch} but the triggering event carries branch ${HEAD_BRANCH}; refusing to comment"
+            if [[ -n "$claimed_branch" && "$claimed_branch" != "$OVERFLOW_HEAD_BRANCH" ]]; then
+              echo "::error::the artifact claims branch ${claimed_branch} but the triggering event carries branch ${OVERFLOW_HEAD_BRANCH}; refusing to comment"
               exit 1
             fi
             {
@@ -257,19 +257,19 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO_SLUG: ${{ github.repository }}
-          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          OVERFLOW_REPO_SLUG: ${{ github.repository }}
+          OVERFLOW_PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
         run: |
           set -euo pipefail
-          ids=$(gh api --paginate "repos/$REPO_SLUG/issues/$PR_NUMBER/comments" \
+          ids=$(gh api --paginate "repos/$OVERFLOW_REPO_SLUG/issues/$OVERFLOW_PR_NUMBER/comments" \
             --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- overflow:coverage-comment -->"))) | .id')
           nl=$'\n'
           comment_id=${ids%%"$nl"*}
           if [[ -n "$comment_id" ]]; then
-            gh api -X PATCH "repos/$REPO_SLUG/issues/comments/$comment_id" -F body=@"comment-body.md"
+            gh api -X PATCH "repos/$OVERFLOW_REPO_SLUG/issues/comments/$comment_id" -F body=@"comment-body.md"
             echo "updated comment ${comment_id} in place"
           else
-            gh api -X POST "repos/$REPO_SLUG/issues/$PR_NUMBER/comments" -F body=@"comment-body.md"
+            gh api -X POST "repos/$OVERFLOW_REPO_SLUG/issues/$OVERFLOW_PR_NUMBER/comments" -F body=@"comment-body.md"
             echo "posted a new comment"
           fi
 
@@ -283,26 +283,26 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO_SLUG: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          PR_FOUND: ${{ steps.pr.outputs.found }}
-          PR_OUTCOME: ${{ steps.pr.outcome }}
-          COMMENT_OUTCOME: ${{ steps.comment.outcome }}
+          OVERFLOW_REPO_SLUG: ${{ github.repository }}
+          OVERFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          OVERFLOW_PR_FOUND: ${{ steps.pr.outputs.found }}
+          OVERFLOW_PR_OUTCOME: ${{ steps.pr.outcome }}
+          OVERFLOW_COMMENT_OUTCOME: ${{ steps.comment.outcome }}
         run: |
           set -euo pipefail
-          if [[ "$PR_FOUND" != "true" && "$PR_OUTCOME" == "success" ]]; then
+          if [[ "$OVERFLOW_PR_FOUND" != "true" && "$OVERFLOW_PR_OUTCOME" == "success" ]]; then
             echo "no destination pull request; nothing to report"
             exit 0
           fi
           conclusion=success
           summary="posted or updated the patch coverage comment"
-          if [[ "$PR_FOUND" != "true" || "$COMMENT_OUTCOME" != "success" ]]; then
+          if [[ "$OVERFLOW_PR_FOUND" != "true" || "$OVERFLOW_COMMENT_OUTCOME" != "success" ]]; then
             conclusion=failure
             summary="the coverage comment job failed before it could post or update the comment; see the job log"
           fi
-          gh api -X POST "repos/$REPO_SLUG/check-runs" \
+          gh api -X POST "repos/$OVERFLOW_REPO_SLUG/check-runs" \
             -F name="coverage comment" \
-            -F head_sha="$HEAD_SHA" \
+            -F head_sha="$OVERFLOW_HEAD_SHA" \
             -F status=completed \
             -F conclusion="$conclusion" \
             -F output.title="patch coverage" \

@@ -87,7 +87,8 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-if [ -z "${DATABASE_URL:-}" ]; then
+database_url=${OVERFLOW_DATABASE_URL:-${DATABASE_URL:-}}
+if [ -z "$database_url" ]; then
     fail "DATABASE_URL is not set; refusing to guess which database to dump"
 fi
 
@@ -147,7 +148,7 @@ trap 'rm -f "$partial"' EXIT HUP INT TERM
 
 # pg_dump writes the custom-format archive; the partial name keeps a failed or
 # interrupted dump from ever matching the overflow-*.dump prune-and-restore set.
-$pg_dump_cmd --format=custom "$DATABASE_URL" > "$partial"
+$pg_dump_cmd --format=custom "$database_url" > "$partial"
 
 if [ ! -s "$partial" ]; then
     fail "the dump is empty; refusing to keep it ($intended)"
