@@ -7,7 +7,7 @@ import { formatInstant } from "@/lib/format-instant";
 import { plural } from "@/lib/plural";
 import type { BannedAccountProjection } from "@/lib/moderation/banned-accounts";
 import type { OpenContestRequestProjection } from "@/lib/moderation/sanction-contest-service";
-import type { CreditIssuedProjection } from "@/lib/dashboard/ledger-panels";
+import type { CreditIssuedProjection, PickupProjection } from "@/lib/dashboard/ledger-panels";
 import type {
   AuditCandidateProjection,
   EnforcementHistoryProjection,
@@ -75,6 +75,13 @@ export default async function ModerationPage() {
     creditIssued = await listCreditIssued();
   } catch {
     creditIssued = null;
+  }
+  let pickup: PickupProjection | null;
+  try {
+    const { listPickup } = await import("@/lib/dashboard/ledger-panels");
+    pickup = await listPickup();
+  } catch {
+    pickup = null;
   }
   try {
     const {
@@ -324,6 +331,30 @@ export default async function ModerationPage() {
               </li>
             ))}
           </ol>
+        )}
+      </section>
+      <section className="surface" aria-labelledby="pickup-heading">
+        <p className="eyebrow">Open issue stock</p>
+        <h2 id="pickup-heading">Pickup</h2>
+        <p>
+          Posted prices of open issues assigned to outside contributors compared with those awaiting an assignee.
+          Issues assigned to their own sponsor are excluded.
+        </p>
+        {pickup === null ? (
+          <p role="alert">Pickup could not be loaded.</p>
+        ) : pickup.outsideAssignedIssueCount === 0 && pickup.unassignedIssueCount === 0 ? (
+          <p>No open issues are outside-assigned or unassigned.</p>
+        ) : (
+          <dl className="proof-grid">
+            <div>
+              <dt>Outside-assigned posted price</dt>
+              <dd><strong>{pickup.outsideAssignedPostedPrice}</strong></dd>
+            </div>
+            <div>
+              <dt>Unassigned posted price</dt>
+              <dd><strong>{pickup.unassignedPostedPrice}</strong></dd>
+            </div>
+          </dl>
         )}
       </section>
       <section className="surface" aria-labelledby="github-budget-heading">
