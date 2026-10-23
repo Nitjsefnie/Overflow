@@ -66,11 +66,10 @@ beforeAll(async () => {
 });
 
 describe(".github/required-checks.json", () => {
-  it("requires non-persisted credentials and default checkouts in privileged workflows", async () => {
-    // This is a security-policy invariant: a legitimate checkout action,
-    // SHA or version bump does not change it. Persisting a privileged token
-    // or replacing the trusted checkout is a security regression, so only a
-    // bad edit breaks this policy. It pins no action revision or other input.
+  it("requires non-persisted credentials in every workflow and default checkouts in privileged workflows", async () => {
+    // Every checkout must disable token persistence; privileged workflows
+    // must also keep the trusted default ref and repository. These security
+    // invariants survive legitimate checkout action SHA or version bumps.
     let checked = 0;
     for (const file of workflowFiles) {
       const workflow = parse(await readFile(resolve(workflowsDir, file), "utf8")) as {
@@ -84,19 +83,21 @@ describe(".github/required-checks.json", () => {
         : typeof workflow.on === "string"
           ? [workflow.on]
           : Object.keys((workflow.on ?? {}) as Record<string, unknown>);
-      if (!events.some((event) => event === "pull_request_target" || event === "workflow_run")) continue;
+      const privileged = events.some((event) => event === "pull_request_target" || event === "workflow_run");
       for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
         for (const [index, step] of (job.steps ?? []).entries()) {
           if (!step.uses?.startsWith("actions/checkout")) continue;
           checked += 1;
           const scope = `${file}/${jobId}/step ${index + 1}`;
           expect(step.with?.["persist-credentials"], `${scope} must explicitly disable token persistence`).toBe(false);
-          expect(step.with ?? {}, `${scope} must use the trusted default ref`).not.toHaveProperty("ref");
-          expect(step.with ?? {}, `${scope} must use the trusted repository`).not.toHaveProperty("repository");
+          if (privileged) {
+            expect(step.with ?? {}, `${scope} must use the trusted default ref`).not.toHaveProperty("ref");
+            expect(step.with ?? {}, `${scope} must use the trusted repository`).not.toHaveProperty("repository");
+          }
         }
       }
     }
-    expect(checked, "the checkout boundary must inspect actual privileged checkouts").toBeGreaterThan(0);
+    expect(checked, "the checkout boundary must inspect actual checkouts").toBeGreaterThan(0);
   });
 
   it("pins at least the checks branch protection on main requires", () => {
