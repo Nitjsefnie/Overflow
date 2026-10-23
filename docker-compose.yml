@@ -30,12 +30,12 @@ services:
     env_file:
       - .env
     environment:
-      # Deliberate override of any loopback DATABASE_URL in .env: inside the
+      # Deliberate override of any loopback OVERFLOW_DATABASE_URL in .env: inside the
       # compose network the app reaches postgres by service name, not loopback.
-      DATABASE_URL: postgresql://overflow:overflow_local_only@postgres:5432/overflow
+      OVERFLOW_DATABASE_URL: postgresql://overflow:overflow_local_only@postgres:5432/overflow
     ports:
       # Loopback only by default, like postgres; set APP_HOST_BIND to widen.
-      # APP_URL must still name the address users browse to.
+      # OVERFLOW_APP_URL must still name the address users browse to.
       - "${APP_HOST_BIND:-127.0.0.1}:3000:3000"
     healthcheck:
       # Same readiness probe the image's HEALTHCHECK runs (issue 688), in

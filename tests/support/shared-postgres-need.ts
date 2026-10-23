@@ -73,15 +73,9 @@ function dependencyPaths(path: string, specifier: string): string[] {
  * Whether any of the run's test files needs the shared postgres server
  * (issues 1070, 1146): checks the test files and their local runtime import
  * graph for the marker. Type-only imports do not request a database. The
- * provider module itself is a leaf: its definition of the startup API is not
- * a request to call it (it also exports database-free utilities). Read or scan errors
- * on an individual file are no-match for that file plus a stderr warning —
- * a vanished file between spec resolution and the scan must not crash the
- * run, and must not silently decide a DB run needs no server. The empty list
- * is false (no files, no suite, no need): vitest resolves the specifications
- * before global setup and throws FilesNotFoundError on zero, so the reachable
- * cases are all non-empty, and a missed need fails a DB suite loudly while an
- * unneeded start is the defect this scan exists to prevent.
+ * provider module is a leaf: its startup definition is not a request to call it.
+ * An unreadable dependency conservatively requests the server and warns, so a
+ * resolution failure cannot silently skip setup. An empty list is false.
  *
  * Test files keep the original substring semantics (even a comment matches).
  * Dependencies require a runtime identifier or string reference: inherited comments
@@ -109,7 +103,7 @@ export function runNeedsSharedPostgres(
       try {
         contents = readFile(path);
       } catch (error) {
-        failure = error;
+        failure ??= error;
         continue;
       }
       resolved = true;
@@ -129,7 +123,10 @@ export function runNeedsSharedPostgres(
       }
       break;
     }
-    if (!resolved) warn(`shared-postgres need scan: could not read ${candidates[0]} (${String(failure)}); treating it as not needing the shared postgres`);
+    if (!resolved) {
+      warn(`shared-postgres need scan: could not read ${candidates[0]} (${String(failure)}); starting the shared postgres conservatively`);
+      return true;
+    }
   }
   return false;
 }

@@ -1,13 +1,14 @@
 import { errorResponse } from "@/lib/http/error-response";
+import { readEnv } from "@/lib/env";
 
 /**
  * Cookie-authenticated mutation routes are reachable from any page a browser
  * loads: the session cookie rides along on a cross-site form post or fetch. The
  * guard here is what makes those routes same-origin only.
  *
- * `APP_URL` is read at call time rather than at module load so that a test can
+ * `OVERFLOW_APP_URL` is read at call time rather than at module load so that a test can
  * stub it and so that a deployment cannot bake a stale value into the bundle.
- * A missing or unparsable `APP_URL` fails closed: an unconfigured server
+ * A missing or unparsable `OVERFLOW_APP_URL` fails closed: an unconfigured server
  * refuses the mutation instead of trusting an arbitrary origin.
  */
 
@@ -15,7 +16,7 @@ const jsonMediaType = "application/json";
 const opaqueOrigin = "null";
 
 export function readTrustedOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
-  const configured = env.APP_URL?.trim();
+  const configured = (env === process.env ? readEnv("APP_URL") : env.OVERFLOW_APP_URL ?? env.APP_URL)?.trim();
   if (configured === undefined || configured === "") {
     return null;
   }
@@ -63,7 +64,7 @@ export function rejectUntrustedRequest(
  * sends no `Origin` header — but it still may not smuggle a non-JSON body past a
  * handler that only ever parses JSON.
  *
- * It reads nothing from the environment, so an unconfigured `APP_URL` cannot
+ * It reads nothing from the environment, so an unconfigured `OVERFLOW_APP_URL` cannot
  * strand a client that never depended on it.
  */
 export function rejectUnsupportedMediaType(request: Request): Response | null {
