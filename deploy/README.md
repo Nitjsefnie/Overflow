@@ -838,9 +838,16 @@ a reason other than not-found (HTTP 404). Every required check's latest run on t
 `success` before the fast-forward, and so before install, migrations, build,
 switch or restart. A failed, cancelled or otherwise non-successful conclusion refuses
 immediately, and a check whose latest run is queued, in progress or has not
-been created yet makes the script wait, polling every 15 seconds until
+been created yet makes the script wait, polling every 60 seconds until
 `OVERFLOW_DEPLOY_CI_TIMEOUT` (default 900) seconds elapse, then refusing with
 the still-pending checks named, an absent run reported as `<check> (absent)`.
+Each poll lists check-runs and workflow runs with pagination. Jobs are read
+to prove check-run attribution when their IDs are not yet known, or when a
+run's attempt changes. Later polls reuse that job identity and read current
+outcomes from check-runs; suite identity only narrows fallback reads and
+cannot certify a check by itself. When all relevant job IDs and run attempts
+are known and unchanged, a poll costs two requests if each listing fits on one page. Unattributed checks
+still hold the gate, and any failed read refuses the deploy.
 Every required check must therefore report on the exact main tip being
 deployed: a check that runs only on pull requests never runs on the SHA a
 rebase merge lands, so the gate would wait it out as `<check> (absent)` and
