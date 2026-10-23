@@ -31,6 +31,7 @@ describe("sponsor gateway marks a rejected GitLab credential", () => {
 
   function repositoryRow(overrides: Partial<ReconciliationRepository> = {}): ReconciliationRepository {
     return {
+      disputePullRequests: [],
       id: "repo-1",
       githubRepositoryId: 1,
       ownerName: "g/p",

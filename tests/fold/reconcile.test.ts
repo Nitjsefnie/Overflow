@@ -2031,6 +2031,7 @@ function reconciliationDependencies(
     setReconciliationCooldown: vi.fn().mockResolvedValue(undefined),
     withRepositoryReconciliation: vi.fn(async <T>(_repositoryId: string, work: () => Promise<T>) => work()),
     getRepository: vi.fn().mockResolvedValue({
+      disputePullRequests: [],
       id: "repository",
       githubRepositoryId: 5001,
       ownerName: "octo/example",

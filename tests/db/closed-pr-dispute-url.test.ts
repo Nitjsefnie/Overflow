@@ -4,7 +4,10 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { Sql } from "postgres";
 import { closeSql, getSql } from "@/lib/db/client";
 import { exportAccount } from "@/lib/accounts/export";
-import type { GitHubPullRequest } from "@/lib/github/types";
+import type { GitHubIssue, GitHubPullRequest } from "@/lib/github/types";
+import { GitHubApiError } from "@/lib/github/errors";
+import { PostgresFoldStore } from "@/lib/fold/postgres-store";
+import { reconcileRepository } from "@/lib/fold/reconcile";
 import { GitLabApiError } from "@/lib/gitlab/api-error";
 import { GitLabGateway } from "@/lib/gitlab/client";
 import { PostgresSponsorCredentialStore } from "@/lib/fold/sponsor-credential-store";
@@ -13,6 +16,7 @@ import { ClosedPrDisputeService } from "@/lib/moderation/closed-pr-dispute-servi
 import { PostgresClosedPrDisputeStore } from "@/lib/moderation/closed-pr-dispute-store";
 import { startPostgresContainer } from "../support/postgres-container";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
+import { verifiedRepositoryAt } from "../support/verified-repository";
 
 let sql: Sql;
 let sequence = 81_000_000;
@@ -85,6 +89,95 @@ async function absent(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe("closed PR URL filing", () => {
+  it("refuses an already credited landing issue before persisting an unrecorded PR", async () => {
+    const f = await fixture();
+    const [other] = await sql<{ id: string }[]>`insert into users (github_user_id, github_login)
+      values (${sequence++}, 'prior-contributor') returning id`;
+    const [priorPr] = await sql<{ id: string }[]>`insert into pull_requests
+      (github_pull_request_id, repository_id, issue_id, pull_request_number, title, body, url, author_id, state)
+      values (${sequence++}, ${f.repositoryId}, ${f.issueId}, 43, 'Prior contribution', '',
+        ${f.url.replace('/41', '/43')}, ${other.id}, 'CLOSED') returning id`;
+    await sql`insert into closed_pr_dispute_requests
+      (contributor_id, pull_request_id, issue_id, landed_pull_request_id, request_reason,
+       state, decision, decided_by, decided_reason, decided_at, moderator_figure, awarded_points)
+      values (${other.id}, ${priorPr.id}, ${f.issueId}, ${f.landingId}, 'Prior claim',
+        'DECIDED', 'GRANTED', ${other.id}, 'Prior grant', now(), 1, 0)`;
+    await expect(service().fileDispute({ id: f.accountId }, filing(f))).rejects.toMatchObject({
+      code: 'CONFLICT', message: 'this issue has already been credited through a granted dispute',
+    });
+    await absent(f);
+    expect(await sql`select * from pull_request_issues where repository_id = ${f.repositoryId}`).toEqual([]);
+  });
+
+  it.each([true, false])("collects unreferenced dispute evidence through normal sweeps and grants only with reviews (available=%s)", async (available) => {
+    const f = await fixture();
+    const request = await service().fileDispute({ id: f.accountId }, filing(f));
+    const evidence = () => sql`select payload from repository_reconciliation_evidence_facts
+      where repository_id = ${f.repositoryId} and kind = 'pull_request' and subject_key = ${String(f.pr.id)}`;
+    expect(await evidence()).toEqual([]);
+    const [storedIssue] = await sql`select github_issue_id from issues where id = ${f.issueId}`;
+    const [storedLanding] = await sql`select github_pull_request_id from pull_requests where id = ${f.landingId}`;
+    const landing: GitHubPullRequest = { ...f.pr, id: Number(storedLanding.github_pull_request_id), number: 42,
+      url: f.landingUrl, state: 'MERGED', mergedAt: '2026-09-01T12:00:00Z',
+      mergeCommitOid: 'a'.repeat(40), finalCommitAt: '2026-09-01T11:00:00Z' };
+    const issue: GitHubIssue = { id: Number(storedIssue.github_issue_id), number: 1, title: 'Landing issue', body: '',
+      url: `https://github.com/${f.ownerName}/issues/1`, state: 'OPEN', stateReason: null,
+      updatedAt: '2026-09-01T12:05:00Z', createdAt: '2026-08-30T09:00:00Z', closedAt: null,
+      authorLogin: f.pr.authorLogin, authorGitHubUserId: f.forgeId, claimAssigneeGitHubLogin: null,
+      claimAssigneeGitHubUserId: null, labels: ['M'], comments: [],
+      history: [{ kind: 'LABELED', id: 'opening', actorLogin: f.pr.authorLogin,
+        actorGitHubUserId: f.forgeId, label: 'M', createdAt: '2026-08-30T10:00:00Z' }],
+      closingPullRequests: [landing] };
+    const reviews = [{ id: 901, state: 'CHANGES_REQUESTED' as const, submittedAt: '2026-09-01T10:00:00Z', dismissal: null }];
+    let rawDiff = f.rawDiff;
+    const readReviews = vi.fn(async (_repo: unknown, number: number) => {
+      if (number === 41 && !available) throw new GitHubApiError(404);
+      return number === 41 ? reviews : [];
+    });
+    const gateway = {
+      getRepositoryById: verifiedRepositoryAt(f.ownerName), listIssues: async () => [issue],
+      getIssue: async () => null, getPullRequestClosingIssues: async () => [],
+      getPullRequestReviews: readReviews, getPullRequestDiff: async (_repo: unknown, number: number) => number === 41 ? rawDiff : 'landing diff',
+    };
+    const foldStore = new PostgresFoldStore(sql);
+    vi.spyOn(foldStore, 'getGitHubAccessToken').mockResolvedValue('test-auth');
+    const sweep = async (partial = false) => {
+      await foldStore.withRepositoryReconciliation(f.repositoryId, () => foldStore.setReconciliationCooldown(f.repositoryId, null));
+      return reconcileRepository({ store: foldStore, github: partial ? { ...gateway, listIssues: async () => [] } : gateway },
+        f.repositoryId, { reason: partial ? 'WEBHOOK' : 'SWEEP' });
+    };
+    expect(await sweep()).toMatchObject({ skipped: false });
+    const [moderator] = await sql<{ id: string }[]>`insert into users (github_user_id, github_login, role)
+      values (${sequence++}, 'grant-moderator', 'MODERATOR') returning id`;
+    const decision = { requestId: request.id, moderatorAccountId: moderator.id,
+      decision: 'GRANTED' as const, figure: 6, decidedReason: 'Original work landed.' };
+    if (!available) {
+      expect(await evidence()).toEqual([]);
+      expect(await new PostgresClosedPrDisputeStore(sql).decideDispute(decision)).toEqual({ kind: 'insufficient_evidence' });
+      return;
+    }
+    expect(await evidence()).toEqual([expect.objectContaining({ payload: expect.objectContaining({ reviews, rawDiff }) })]);
+    expect((await service().listDisputes()).find(row => row.id === request.id)?.comparison?.closedPullRequest)
+      .toMatchObject({ number: 41, reviews, rawDiff });
+    expect(readReviews.mock.calls.map(call => call[1]).sort()).toEqual([41, 42]);
+    readReviews.mockClear();
+    reviews.push({ ...reviews[0], id: 902, submittedAt: '2026-09-02T10:00:00Z' });
+    rawDiff = 'updated disputed diff';
+    expect(await sweep(true)).toMatchObject({ skipped: false });
+    expect(readReviews.mock.calls.map(call => call[1])).toEqual([41]);
+    expect(await evidence()).toEqual([expect.objectContaining({ payload: expect.objectContaining({ reviews, rawDiff }) })]);
+    expect(await new PostgresClosedPrDisputeStore(sql).decideDispute(decision))
+      .toMatchObject({ kind: 'ok', value: { decision: 'GRANTED', awardedPoints: 4 } });
+    // A decided request and a closing reference share one refresh; removing the reference still retains it.
+    issue.closingPullRequests.push(f.pr);
+    readReviews.mockClear();
+    expect(await sweep()).toMatchObject({ skipped: false });
+    expect(readReviews.mock.calls.map(call => call[1]).sort()).toEqual([41, 42]);
+    issue.closingPullRequests = [landing];
+    expect(await sweep()).toMatchObject({ skipped: false });
+    expect(await evidence()).toEqual([expect.objectContaining({ payload: expect.objectContaining({ reviews, rawDiff }) })]);
+  });
+
   it("refuses an unrecorded PR after sponsor unregistration before fetching the forge", async () => {
     const f = await fixture();
     await sql`update registered_repositories set active = false, unregistered_at = now() where id = ${f.repositoryId}`;

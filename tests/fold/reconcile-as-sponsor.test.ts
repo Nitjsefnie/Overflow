@@ -367,6 +367,7 @@ function createHarness(options: {
   const repository: ReconciliationRepository | null =
     options.repository === undefined
       ? {
+          disputePullRequests: [],
           id: "repo-1",
           githubRepositoryId: 4_242,
           ownerName: "example/repository",

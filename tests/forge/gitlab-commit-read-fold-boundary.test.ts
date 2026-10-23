@@ -41,6 +41,7 @@ describe("a credential failure on the GitLab MR commits read never folds a settl
 
   function repositoryRow(): ReconciliationRepository {
     return {
+      disputePullRequests: [],
       id: REPOSITORY_ID,
       githubRepositoryId: 278964,
       ownerName: "gitlab-org/gitlab",
