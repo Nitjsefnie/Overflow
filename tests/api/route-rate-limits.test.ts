@@ -130,11 +130,35 @@ describe("resolveRouteRateLimit", () => {
     ["zero", "0"],
     ["negative", "-2"],
     ["infinite", "1e999"],
+    ["fractional capacity below one", "0.5"],
+    ["small fractional capacity", "0.1"],
   ])("falls back to the documented default for a %s env value", (_label, value) => {
     expect(resolveRouteRateLimit({ RATE_LIMIT_EXAMPLE_PER_HOUR: value }, spec)).toEqual({
       capacity: 7,
       refillPerMinute: 7 / 60,
     });
+  });
+
+  it.each(["1", "1.5"])("preserves supported capacity %s", (raw) => {
+    expect(resolveRouteRateLimit({ RATE_LIMIT_EXAMPLE_PER_HOUR: raw }, spec).capacity).toBe(Number(raw));
+  });
+
+  it.each(["0.5", "0.1"])("admits and refills with the fallback for unsupported capacity %s", (raw) => {
+    let now = 0;
+    const gate = createRouteRateGate({
+      className: "test", limiter: createRateLimiter({ nowMs: () => now }),
+      limits: resolveRouteRateLimit({ RATE_LIMIT_EXAMPLE_PER_HOUR: raw }, spec),
+    });
+    for (let index = 0; index < spec.defaultPerHour; index++) expect(gate("fixture")).toBeNull();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const declined = gate("fixture");
+      expect(declined?.status).toBe(429);
+      now += Number(declined!.headers.get("retry-after")) * 1000;
+      expect(gate("fixture")).toBeNull();
+      now += 24 * 60 * 60_000;
+      expect(gate("fixture")).toBeNull();
+    } finally { warn.mockRestore(); }
   });
 
   it("carries the five documented classes with their env names and defaults", () => {
