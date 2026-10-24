@@ -81,7 +81,6 @@ describe("repositories carrying a stored reconciliation auth path fold on the sp
     vi.stubGlobal("fetch", async () => {
       throw new Error("the fold must not reach the forge through a fetch here");
     });
-    const oauthToken = ["stored", "sponsor", "oauth", "token"].join("-");
     const built: Array<{ token: string; owner: string }> = [];
     const createGateway = (token: string, owner: string): ReconciliationGateway => {
       built.push({ token, owner });
@@ -94,7 +93,7 @@ describe("repositories carrying a stored reconciliation auth path fold on the sp
         getPullRequestDiff: async () => "",
       };
     };
-    const { repositoryId, sponsorId } = await registeredRepository({ storedPath: "github-app-installation" });
+    const { repositoryId, sponsorId, oauthToken } = await registeredRepository({ storedPath: "github-app-installation" });
 
     await expect(reconcileRepositoryAsSponsor(new PostgresFoldStore(sql, tokenEncryptionKey), repositoryId, createGateway))
       .resolves.toMatchObject({ repositoryId, skipped: false });
@@ -110,7 +109,6 @@ describe("repositories carrying a stored reconciliation auth path fold on the sp
     vi.stubGlobal("fetch", async () => {
       throw new Error("the fold must not reach the forge through a fetch here");
     });
-    const oauthToken = ["stored", "sponsor", "oauth", "token"].join("-");
     const built: Array<{ token: string; owner: string }> = [];
     const createGateway = (token: string, owner: string): ReconciliationGateway => {
       built.push({ token, owner });
@@ -123,7 +121,7 @@ describe("repositories carrying a stored reconciliation auth path fold on the sp
         getPullRequestDiff: async () => "",
       };
     };
-    const { repositoryId, sponsorId } = await registeredRepository({ registrationMethod: "app" });
+    const { repositoryId, sponsorId, oauthToken } = await registeredRepository({ registrationMethod: "app" });
 
     await expect(reconcileRepositoryAsSponsor(new PostgresFoldStore(sql, tokenEncryptionKey), repositoryId, createGateway))
       .resolves.toMatchObject({ repositoryId, skipped: false });
