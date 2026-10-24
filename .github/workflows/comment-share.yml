@@ -6,8 +6,11 @@ on:
 permissions:
   contents: read
 concurrency:
+  # Repo-wide group bounds PR runs; queue: max holds a peer PR's pending run
+  # that the default single slot would cancel.
   group: comment-share-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
   cancel-in-progress: false
+  queue: max
 jobs:
   comment-share:
     runs-on: ubuntu-latest
@@ -29,7 +32,7 @@ jobs:
       # Staging stays keyless and follows this workflow's successful gate.
       # A records-only push runs it once more, but an unchanged records file
       # stages no artifact and terminates the push chain: JSON is not source
-      # the action measures. The base must name the exact measured run head.
+      # the action measures.
       - name: Stage changed records for the ratchet push
         id: stage
         if: github.event_name == 'push'
@@ -43,7 +46,6 @@ jobs:
             exit 1
           fi
           # Exit code one means changed data; higher codes are a broken diff.
-          # An unchanged record stages nothing and ends the automated push chain.
           changed=0
           git diff --quiet -- .github/comment-share.json || changed=$?
           if [ "$changed" -gt 1 ]; then
