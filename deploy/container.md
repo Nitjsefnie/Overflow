@@ -71,9 +71,9 @@ build it with the script first. To build under another tag, pass it to
 `scripts/container-build.sh [tag]` and point compose at that image with an
 override file.
 
-The image builds from digest-pinned bases — the `FROM` lines in `Dockerfile`
-name both, for the application image and for the database — so the same
-source always resolves the
+The image builds from the digest-pinned base its `FROM` lines in `Dockerfile`
+name, and `docker-compose.yml` pins the database image beside it, so the
+same source always resolves the
 same base bytes. A bare `docker build` without `--build-arg SOURCE_SHA=...`
 fails loudly in the Dockerfile's guard instead of producing an unlabelled
 image.
@@ -356,9 +356,9 @@ update is needed. The compose database image now rides the docker-compose
 lane, and the CI service image the `/.github/` docker lane: each digest moves
 only through such a pull request. The compose lane's pull request runs the
 database suites on the new image before it lands, because the suites start
-the image that file pins; the CI lane's changes the image the suite job's
-postgres service starts, which pr-suite exercises through its migration
-step before the merge.
+the image that file pins; the CI lane's pull request instead changes the
+image the suite job's postgres service starts, which pr-suite exercises
+through its migration step before the merge.
 
 ## The default path
 
