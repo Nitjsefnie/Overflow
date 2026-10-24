@@ -160,10 +160,8 @@ export interface RelayResult {
    */
   sweepOnly?: boolean;
   /**
-   * Issue 1355: a sweep-only start whose orphan sweep hit an exhausted rate
-   * limit past the deadline deferred to the next scheduled sweep. The message
-   * is the rate-limit error's own — it names the rate-limited surface, the
-   * reset instant and the run deadline. Undefined on every other path.
+   * Issue 1355: a sweep-only start deferred its rate-limited orphan sweep.
+   * Undefined on every other path.
    */
   sweepDeferred?: string;
 }
@@ -302,11 +300,8 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
       ];
       assertRunDeadline(deps, "completion of the relay run");
     } catch (sweepError) {
-      // Issue 1355: a sweep-only start is exit-0 when its sweep is rate-limited
-      // past the deadline — the next scheduled sweep re-posts the missing
-      // context (issue 885's orphan sweep posts the newest eligible producers
-      // of later starts). Triggered starts keep failing red; that visibility is
-      // the design.
+      // Issue 1355: a rate-limited sweep defers a sweep-only start to the next
+      // scheduled sweep; triggered starts keep failing red — that is the design.
       if (!failed && sweepOnlyStart && sweepError instanceof RateLimitExceededError) {
         result.sweepDeferred = sweepError.message;
         return result;
@@ -522,10 +517,7 @@ export function renderRelayResult(result: RelayResult): string[] {
     ...renderSweepLines(result.sweep),
   ];
   if (result.sweepOnly === true) {
-    // Issue 1116: the sweep's summary is the whole output; there is no
-    // triggering run to name and no mirror to report. The defer line (issue
-    // 1355) is the only signal that a rate-limited sweep was deferred, and it
-    // can only be set on this branch: every error path throws past rendering.
+    // The sweep's summary is the whole output; the defer line is issue 1355's only signal.
     const deferred = result.sweepDeferred === undefined ? [] :
       [`[ledger-relay] orphan-sweep: deferred to the next scheduled sweep: ${result.sweepDeferred}`];
     return [...suppressed, ...deferred, ...renderSweepLines(result.sweep)];
