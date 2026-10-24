@@ -11,9 +11,9 @@ import { parse } from "yaml";
  * BOUNDED workflows share one repository-level group per workflow across pull
  * requests. Their other event legs key on github.sha, so different commits
  * have separate groups. Literal cancel-in-progress false preserves every
- * running attempt. It does not preserve the pending attempt: GitHub keeps one
- * pending run per group by default and replaces it on a newer arrival, which
- * can drop another pull request's current head without a replacement.
+ * running attempt. GitHub keeps one pending run per group by default and
+ * replaces it on a newer arrival, so it can drop another pull request's head
+ * with no replacement; literal queue max holds up to 100 pending runs instead.
  *
  * PER_PR_REQUIRED pins the privileged aggregate per pull request: every
  * newer event reissues all four required contexts for its head.
@@ -47,8 +47,8 @@ type Workflow = {
 };
 
 /**
- * The metered workflows this repository bounds, with the exact group and
- * cancel-in-progress each carries. Written out per workflow rather than
+ * The metered workflows this repository bounds, with the exact group,
+ * cancel-in-progress and queue each carries. Written out per workflow rather than
  * generated from one template so the literal that ships is the literal this
  * suite reads.
  *
@@ -61,16 +61,16 @@ type Workflow = {
  * `cancel-in-progress` is the literal boolean `false` in all bounded workflows, for every
  * leg, not an event expression. It buys no bound (see the header), and on a
  * group shared by every pull request a `true` destroys a peer's in-flight run.
- * It does not stop GitHub cancelling the group's PENDING run — that happens by
- * default — so read the header before concluding that `false` means nothing is
- * cancelled.
+ * It does not stop GitHub cancelling the group's PENDING run; the queue does
+ * (see the header).
  */
 // Comment share serializes PR measurements; completion-driven verify is
 // explicitly classified and checked per head SHA below.
-const BOUNDED: Record<string, { group: string; "cancel-in-progress": false }> = {
+const BOUNDED: Record<string, { group: string; "cancel-in-progress": false; queue: "max" }> = {
   "comment-share.yml": {
     group: "comment-share-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
     "cancel-in-progress": false,
+    queue: "max",
   },
 };
 
@@ -120,10 +120,10 @@ const PER_PR_REQUIRED = {
  * `BOUNDED` and this table — in either direction — deserves the same attention
  * as one touching a required-check pin.
  *
- * GitHub keeps only one PENDING run per concurrency group and cancels the
- * older pending one even at `cancel-in-progress: false`, so sharing a group
- * would drop work for these. That is why the bound is applied only to the
- * metered CI workflows, each of whose runs is reproducible from the next push.
+ * By default GitHub keeps only one PENDING run per concurrency group and
+ * cancels the older pending one even at `cancel-in-progress: false`, so sharing
+ * a group would drop work for these. That is why the bound is applied only to
+ * the metered CI workflows, whose shared group queues its pending arrivals.
  */
 /**
  * The closed vocabulary of cancellation premises, and the ONE place it is
@@ -747,13 +747,13 @@ describe("the per-pull-request required gates", () => {
 });
 
 describe("the bounded workflows", () => {
-  it("carry the exact event-class group and cancel-in-progress", () => {
+  it("carry the exact event-class group, cancel-in-progress and queue", () => {
     for (const [name, expected] of Object.entries(BOUNDED)) {
-      const workflow = workflows.get(name)!;
-      expect(workflow.concurrency?.group, `${name}'s group`).toBe(expected.group);
-      expect(workflow.concurrency?.["cancel-in-progress"], `${name}'s cancel-in-progress`).toBe(
-        expected["cancel-in-progress"],
-      );
+      expect(workflows.get(name)!.concurrency, `${name}'s concurrency block`).toEqual({
+        group: expected.group,
+        "cancel-in-progress": expected["cancel-in-progress"],
+        queue: expected.queue,
+      });
     }
   });
 
@@ -797,7 +797,7 @@ describe("the bounded workflows", () => {
         `${name}'s cancel-in-progress must be the literal boolean false, on every leg. A true ` +
           "destroys a RUNNING run that may belong to a different pull request, and these are " +
           "required contexts. It does not stop GitHub cancelling the group's PENDING run — that " +
-          "happens by default and the workflow comments say so — and the bound is unaffected " +
+          "happens by default, which is why the bounded workflows also carry queue max — and the bound is unaffected " +
           "either way, since the group holds at most one running job regardless of this flag.",
       ).toBe(false);
     }
