@@ -628,9 +628,9 @@ fails closed before reaching the forge.
 Generate a NEW `AUTH_SECRET` — every session signed under the old one ends.
 Each sponsor signs in again, which stores a fresh OAuth token. Forge
 registrations are redone and webhook secrets are replaced. Every registered
-GitHub repository reads through its sponsor's token, so the list below covers
-all of them; for each, reconciliation and webhook verification stay broken
-until its sponsor returns:
+GitHub repository reads through its sponsor's token — no App carve-out
+remains. For each repository in the list below, reconciliation and webhook
+verification stay broken until its sponsor returns:
 
 - `Nitjsefnie/ai-researcher`
 - `Nitjsefnie/claudit`
