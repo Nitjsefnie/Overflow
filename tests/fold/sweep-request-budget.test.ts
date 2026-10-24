@@ -51,18 +51,19 @@ describe("sweep HTTP admission", () => {
     expect(sent).toBe(1);
   });
 
-  it("charges App installation lookup and token mint, blocking before a request when spent", async () => {
+  it("charges an App installation lookup, blocking before a request when spent", async () => {
     const { generateKeyPairSync } = await import("node:crypto");
-    const { createAppInstallationTokenResolver } = await import("@/lib/github/app-installation-auth");
+    const { createAppInstallationLookup } = await import("@/lib/github/app-installation-auth");
     const privateKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }).toString();
     let sent = 0;
-    const resolve = createAppInstallationTokenResolver({ config: { appId: "1", privateKey }, fetch: async () => {
+    const lookup = createAppInstallationLookup({ config: { appId: "1", privateKey }, fetch: async () => {
       sent++; return Response.json({ id: 7 });
     } });
-    let admitted = 0;
-    await expect(withSweepRequestBudget(async () => ++admitted <= 1 ? null : new Date("2030-01-01T06:00:00Z"),
-      () => resolve("owner/repository"))).rejects.toBeInstanceOf(SweepBudgetSpent);
-    expect(sent).toBe(1);
+    // Spent before the lookup's first request: its own charge refuses the call
+    // and nothing is sent.
+    await expect(withSweepRequestBudget(async () => new Date("2030-01-01T06:00:00Z"),
+      () => lookup("owner/repository"))).rejects.toBeInstanceOf(SweepBudgetSpent);
+    expect(sent).toBe(0);
   });
 
   it("admits reads and logs once when the observer breaks", async () => {

@@ -1,14 +1,7 @@
-import { closeSql, getSql } from "../src/lib/db/client.ts";
+import { closeSql } from "../src/lib/db/client.ts";
 import { PostgresFoldStore } from "../src/lib/fold/postgres-store.ts";
 import { type ReconciliationSummary } from "../src/lib/fold/reconcile.ts";
 import { reconcileRepositoryAsSponsor } from "../src/lib/fold/reconcile-as-sponsor.ts";
-import { recordReconciliationAuthPath } from "../src/lib/fold/reconciliation-auth-path.ts";
-import {
-  appInstallationTokenResolverFromEnv,
-  createAppInstallationTokenResolver,
-  readGitHubRegistrationAppAuthConfig,
-} from "../src/lib/github/app-installation-auth.ts";
-import { createReconciliationAppTokenResolver } from "../src/lib/github/reconciliation-app-auth.ts";
 
 export type ReconcileCliDependencies = {
   store: Pick<PostgresFoldStore, "findRepositoryByOwnerName" | "listActiveRepositoryIds">;
@@ -65,25 +58,10 @@ async function repositoryIdsForOwnerName(
 
 function productionDependencies(): ReconcileCliDependencies {
   const store = new PostgresFoldStore();
-  // Invalid configured keys fail before any fold; unconfigured Apps leave
-  // their registrations on the existing sponsor OAuth fallback path.
-  const reconciliationResolver = appInstallationTokenResolverFromEnv(process.env);
-  const registrationConfig = readGitHubRegistrationAppAuthConfig(process.env);
-  const registrationResolver = registrationConfig === null
-    ? null : createAppInstallationTokenResolver({ config: registrationConfig });
-  const resolveAppInstallationToken = createReconciliationAppTokenResolver({
-    reconciliationResolver,
-    registrationResolver,
-    lookupRegistrationMethod: async (ownerName) =>
-      (await store.findRepositoryByOwnerName(ownerName))?.registrationMethod ?? null,
-  });
   return {
     store,
     reconcile: (repositoryId) =>
-      reconcileRepositoryAsSponsor(store, repositoryId, undefined, {
-        resolveAppInstallationToken,
-        recordAuthPath: (id, path) => recordReconciliationAuthPath(getSql(), id, path, new Date()),
-      }),
+      reconcileRepositoryAsSponsor(store, repositoryId),
     write: (line) => process.stdout.write(`${line}\n`),
   };
 }

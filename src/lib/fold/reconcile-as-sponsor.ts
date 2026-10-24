@@ -1,4 +1,3 @@
-import type { ReconciliationAuthPath } from "@/lib/fold/reconciliation-auth-path";
 import type { ReconciliationSweepControl } from "@/lib/fold/sweep-pass";
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import type { ReconciliationGateway, ReconciliationStore } from "@/lib/fold/reconcile";
@@ -8,8 +7,6 @@ import {
 } from "@/lib/fold/reconcile";
 import { ForgeCredentialRejectedError, resolveGateway } from "@/lib/forge/gateway";
 import { GitLabApiError } from "@/lib/gitlab/client";
-import type { AppInstallationTokenResolver } from "@/lib/github/app-installation-auth";
-import { GitHubApiError, GitHubGraphqlRequestError } from "@/lib/github/errors";
 
 /**
  * Folds one repository with its own sponsor's forge credentials.
@@ -46,16 +43,6 @@ export type ReconcileAsSponsorOptions = {
    * stands — see the credential guard in `sponsorGateway`.
    */
   markCredentialRejected?: (identityId: string) => Promise<void>;
-  /**
-   * Authenticates a GitHub repository's fold with the sponsor's GitHub App
-   * installation instead of the sponsor's OAuth token. `null` means no App
-   * installation exists for this repository and the fold falls back to the
-   * OAuth token; any throw fails the fold (fail-closed, the GitLab credential
-   * precedent). Logged once per memoized gateway resolution, never per read.
-   */
-  resolveAppInstallationToken?: AppInstallationTokenResolver;
-  /** Records the resolved GitHub authentication path; failure never fails the fold. */
-  recordAuthPath?: (repositoryId: string, authPath: ReconciliationAuthPath) => Promise<void>;
 };
 
 export function reconcileRepositoryAsSponsor(
@@ -80,8 +67,6 @@ export function reconcileRepositoryAsSponsor(
         createGateway,
         options?.resolveForgeToken,
         options?.markCredentialRejected,
-        options?.resolveAppInstallationToken,
-        options?.recordAuthPath,
       ),
     },
     repositoryId,
@@ -98,17 +83,8 @@ export function reconcileRepositoryAsSponsor(
  * not at all — the inactive repository, the cooled-down one — never asks for a
  * token that may no longer exist.
  *
- * GitHub repositories resolve the sponsor's OAuth token exactly as before
- * when no App resolver is wired. With one wired, the repository's App
- * installation is tried first: a resolved installation token authenticates
- * the fold (logged once as `github-app-installation`), `null` falls back to
- * the OAuth token (logged once as `sponsor-oauth-fallback`), and a throw
- * fails the fold — no fallback on anything but the definitive "no
- * installation", so a misconfigured App cannot quietly starve itself past
- * the budget it exists to protect.
- * An App-authenticated read rejected with 401 re-resolves the credential and
- * retries once, retaining the replacement gateway for later reads. The initial
- * authentication path remains recorded once for the fold.
+ * GitHub repositories resolve the sponsor's stored OAuth token; a fold that
+ * outlives it fails, and the retry semantics of its job apply.
  * GitLab repositories resolve the linked identity's decrypted PAT on the
  * repository's instance and are FAIL-CLOSED: a missing or unverified identity
  * — or an unwired resolver — throws, failing that repository's reconciliation,
@@ -124,16 +100,7 @@ export function sponsorGateway(
   createGateway: (accessToken: string, owner: string) => ReconciliationGateway,
   resolveForgeToken?: (userId: string, instanceUrl: string) => Promise<{ token: string; identityId: string } | null>,
   markCredentialRejected?: (identityId: string) => Promise<void>,
-  resolveAppInstallationToken?: AppInstallationTokenResolver,
-  recordAuthPath?: (repositoryId: string, authPath: ReconciliationAuthPath) => Promise<void>,
 ): ReconciliationGateway {
-  const record = async (authPath: ReconciliationAuthPath): Promise<void> => {
-    try {
-      await recordAuthPath?.(repositoryId, authPath);
-    } catch (error) {
-      console.error(`Recording reconciliation authentication failed for repository ${repositoryId}.`, error);
-    }
-  };
   let resolving: Promise<ReconciliationGateway> | undefined;
   const gateway = (): Promise<ReconciliationGateway> => {
     resolving ??= (async () => {
@@ -171,33 +138,6 @@ export function sponsorGateway(
           markCredentialRejected === undefined ? undefined : () => markCredentialRejected(credential.identityId),
         );
       }
-      if (resolveAppInstallationToken !== undefined) {
-        const appToken = await resolveAppInstallationToken(repository.ownerName);
-        if (appToken !== null) {
-          const authPath = appToken.app === "registration" ? "registration-app-installation" : "github-app-installation";
-          console.info("Reconciliation authentication", {
-            repositoryId,
-            authPath,
-            installationId: appToken.installationId,
-          });
-          await record(authPath);
-          return guardGitHubAppCredential(
-            createGateway(appToken.token, repository.sponsor.id),
-            repositoryId,
-            async () => {
-              const refreshed = await resolveAppInstallationToken(repository.ownerName);
-              const accessToken = refreshed?.token ?? await store.getGitHubAccessToken(repository.sponsor.id);
-              if (accessToken === null) {
-                throw new Error("GitHub access token was not available.");
-              }
-              return createGateway(accessToken, repository.sponsor.id);
-            },
-          );
-        }
-        const authPath = "sponsor-oauth-fallback";
-        console.info("Reconciliation authentication", { repositoryId, authPath });
-        await record(authPath);
-      }
       const accessToken = await store.getGitHubAccessToken(repository.sponsor.id);
       if (accessToken === null) {
         throw new Error("GitHub access token was not available.");
@@ -219,36 +159,6 @@ export function sponsorGateway(
   };
 }
 
-/** Re-resolve rejected App credentials and retry each read at most once. */
-function guardGitHubAppCredential(
-  gateway: ReconciliationGateway,
-  repositoryId: string,
-  refresh: () => Promise<ReconciliationGateway>,
-): ReconciliationGateway {
-  const guarded = async <T>(read: (current: ReconciliationGateway) => Promise<T>): Promise<T> => {
-    try {
-      return await read(gateway);
-    } catch (error) {
-      if (!(error instanceof GitHubApiError || error instanceof GitHubGraphqlRequestError) || error.status !== 401) {
-        throw error;
-      }
-      console.warn("Refreshing reconciliation authentication mid-fold", { repositoryId });
-      gateway = await refresh();
-      return read(gateway);
-    }
-  };
-  return {
-    getRepositoryById: (githubRepositoryId) => guarded((current) => current.getRepositoryById(githubRepositoryId)),
-    listIssues: (repository, options) => guarded((current) => current.listIssues(repository, options)),
-    getIssue: (repository, subject) => guarded((current) => current.getIssue(repository, subject)),
-    getPullRequestClosingIssues: (repository, subject) =>
-      guarded((current) => current.getPullRequestClosingIssues(repository, subject)),
-    getPullRequestReviews: (repository, pullRequestNumber) =>
-      guarded((current) => current.getPullRequestReviews(repository, pullRequestNumber)),
-    getPullRequestDiff: (repository, pullRequestNumber) =>
-      guarded((current) => current.getPullRequestDiff(repository, pullRequestNumber)),
-  };
-}
 
 /**
  * The credential guard around a GitLab fold's reads: an instance refusing a

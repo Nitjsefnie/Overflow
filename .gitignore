@@ -277,7 +277,6 @@ src/lib/fold/*
 !src/lib/fold/sweep-pass.ts
 !src/lib/fold/sweep-pass-store.ts
 !src/lib/fold/policy-violation-record.ts
-!src/lib/fold/reconciliation-auth-path.ts
 !src/lib/github/
 src/lib/github/*
 !src/lib/github/*.ts
@@ -430,8 +429,8 @@ tests/db/*
 !tests/db/sweep-pass-store.test.ts
 !tests/db/postgres-url-host.test.ts
 !tests/db/reconciliation-evidence.test.ts
+!tests/db/reconciliation-auth-path-retired.test.ts
 !tests/db/reconciliation-cost.test.ts
-!tests/db/reconciliation-auth-path.test.ts
 !tests/db/policy-violation-recording.test.ts
 !tests/deploy/
 tests/deploy/*
@@ -448,7 +447,7 @@ tests/domain/*
 tests/fold/*
 !tests/fold/*.ts
 !tests/fold/reconciliation-fairness.test.ts
-!tests/fold/reconciliation-auth-path.test.ts
+!tests/fold/reconciliation-oauth-only.test.ts
 !tests/fold/sweep-request-budget.test.ts
 !tests/fold/incremental-reconciliation.test.ts
 !tests/github/

@@ -1,7 +1,6 @@
 import { createPublicKey, createVerify, generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { mintAppJwt } from "../../scripts/ledger-relay.ts";
-import { readGitHubAppAuthConfig } from "@/lib/github/app-installation-auth";
 
 /**
  * Issue 1032's code half: the rotation procedure in deploy/README.md section
@@ -17,13 +16,11 @@ import { readGitHubAppAuthConfig } from "@/lib/github/app-installation-auth";
  *    by an unregistered key does not — and that unregistering the old half
  *    is what stops the old key's JWTs (the deletion boundary that closes the
  *    rollback window).
- * 2. Neither key-reading code path pins a key identity or a PEM shape, so
- *    no code change ships with the rotation: both paths sign with whatever
- *    key material they are handed, and a freshly generated key exercises the
+ * 2. The relay's key-reading path pins no key identity or PEM shape, so
+ *    no code change ships with the rotation: it signs with whatever
+ *    key material it is handed, and a freshly generated key exercises the
  *    identical path. `mintAppJwt` is the relay's mint (the Actions-side
- *    secret copy); `readGitHubAppAuthConfig` is the host copy's wiring gate
- *    (the reconciliation path), which must accept the replacement PEM a
- *    rotation installs and hand exactly that material to the mint.
+ *    secret copy).
  *
  * Every key in this file is generated at test time. Nothing here, or in the
  * procedure, touches the live key.
@@ -85,37 +82,5 @@ describe("mintAppJwt under the two-key overlap", () => {
         Buffer.from(mintAppJwt(appId, pem, 1_793_000_000_000).split(".")[1]!, "base64url").toString("utf8"),
       ) as Record<string, unknown>;
     expect(payloadOf(rsaPrivatePem())).toEqual(payloadOf(rsaPrivatePem()));
-  });
-});
-
-describe("readGitHubAppAuthConfig accepts a freshly generated replacement key", () => {
-  it("wires the new key and, one replacement later, only the new key's material", () => {
-    const oldKey = rsaPrivatePem();
-    const newKey = rsaPrivatePem();
-    const files: Record<string, string> = { "/keys/app.pem": oldKey };
-    const read = (path: string) => {
-      const contents = files[path];
-      if (contents === undefined) throw new Error(`ENOENT: ${path}`);
-      return contents;
-    };
-    const before = readGitHubAppAuthConfig({ GITHUB_APP_ID: appId, GITHUB_APP_PRIVATE_KEY_PATH: "/keys/app.pem" }, read);
-    expect(before).toEqual({ appId, privateKey: oldKey });
-
-    // The rotation's host half: the file is replaced in place; the same
-    // wiring call now hands the mint the new key's bytes and nothing else.
-    files["/keys/app.pem"] = newKey;
-    const after = readGitHubAppAuthConfig({ GITHUB_APP_ID: appId, GITHUB_APP_PRIVATE_KEY_PATH: "/keys/app.pem" }, read);
-    expect(after).toEqual({ appId, privateKey: newKey });
-  });
-
-  it("the wired key material is what signs — the JWT minted from a freshly wired key verifies", () => {
-    const newKey = rsaPrivatePem();
-    const config = readGitHubAppAuthConfig(
-      { GITHUB_APP_ID: appId, GITHUB_APP_PRIVATE_KEY_PATH: "/keys/app.pem" },
-      () => newKey,
-    );
-    expect(config).not.toBeNull();
-    const verifier = registeredVerifier([publicHalfOf(newKey)]);
-    expect(verifier(mintAppJwt(appId, config!.privateKey, Date.now()))).toBe(true);
   });
 });

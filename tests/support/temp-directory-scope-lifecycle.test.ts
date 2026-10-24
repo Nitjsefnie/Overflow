@@ -14,7 +14,6 @@ it.each([
   { suite: "tests/db/migrate-default-branch-guard.test.ts", prefixes: ["migrate-guard-repository-"], filter: "prefers origin/HEAD", passes: 0, fault: ["child", "spawnSync", "migrate-guard-repository-"] },
   { suite: "tests/deploy/deploy-readme-fallback.test.ts", prefixes: ["overflow-readme-fallback-"], filter: "refuses a stray ignored source", passes: 0, fault: ["async", "mkdir", "overflow-readme-fallback-"] },
   { suite: "tests/deploy/deploy-revision.test.ts", prefixes: ["overflow-deploy-revision-"], filter: "completes when old-release readiness", passes: 0, fault: ["async", "mkdir", "overflow-deploy-revision-"] },
-  { suite: "tests/fold/reconciliation-app-routing.test.ts", prefixes: ["reconciliation-app-keys-"], filter: "routes the composite", passes: 0, fault: ["sync", "writeFileSync", "reconciliation-app-keys-"] },
   { suite: "tests/scripts/check-legal-revisions.test.ts", prefixes: ["legal-revisions-"], filter: "exits 1 over a violating range", passes: 0, fault: ["async", "mkdir", "legal-revisions-"] },
   { suite: "tests/scripts/db-migrate-env-file.test.ts", prefixes: ["db-migrate-env-file-"], filter: "loads .env when", passes: 0, fault: ["sync", "mkdirSync", "db-migrate-env-file-"] },
   { suite: "tests/support/scratch-git.test.ts", prefixes: ["scratch-git-"], filter: "ignores config", passes: 0, fault: ["async", "realpath", "scratch-git-"] },

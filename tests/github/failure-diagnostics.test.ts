@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
 import { GitHubApiError, GitHubGraphqlRequestError } from "@/lib/github/errors";
 import { GitHubGraphqlClient } from "@/lib/github/graphql";
-import { createAppInstallationTokenResolver } from "@/lib/github/app-installation-auth";
+import { createAppInstallationLookup } from "@/lib/github/app-installation-auth";
 import { errorLogToken } from "@/lib/webhooks/log-field";
 
 const repository = { owner: "octo", name: "overflow" };
@@ -174,19 +174,18 @@ describe("GitHub failure diagnostics", () => {
     expect(errorLogToken(error)).toContain('body="Denied [REDACTED]" retry-after="60"');
   });
 
-  it.each(["lookup", "mint"])("captures App %s diagnostics and redacts the signed JWT", async (stage) => {
+  it("captures App lookup diagnostics and redacts the signed JWT", async () => {
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     let jwt = "";
-    const resolver = createAppInstallationTokenResolver({
+    const lookup = createAppInstallationLookup({
       config: { appId: "42", privateKey: privateKey.export({ type: "pkcs8", format: "pem" }).toString() },
       now: () => new Date("2030-01-02T03:04:05Z"),
       fetch: async (_input, init) => {
         jwt = new Headers(init?.headers).get("authorization")!.slice("Bearer ".length);
-        if (stage === "mint" && init?.method === "GET") return Response.json({ id: 42 });
         return new Response(`Denied ${jwt}`, { status: 403, headers: { "retry-after": "60" } });
       },
     });
-    const error = await resolver("octo/overflow").catch((error: unknown) => error);
+    const error = await lookup("octo/overflow").catch((error: unknown) => error);
     expect((error as GitHubApiError).body).toBe("Denied [REDACTED]");
     expect(errorLogToken(error)).toContain('body="Denied [REDACTED]" retry-after="60"');
     expect(errorLogToken(error)).not.toContain(jwt);
