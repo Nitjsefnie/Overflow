@@ -116,6 +116,28 @@ function gateOverTwoPerHour(clock: { value: number }): RouteRateGate {
 describe("resolveRouteRateLimit", () => {
   const spec = { envName: "RATE_LIMIT_EXAMPLE_PER_HOUR", defaultPerHour: 7 };
 
+  it.each(Object.entries(EXPENSIVE_ROUTE_RATE_CLASSES))("honors prefixed configuration and fallback for %s", (_name, entry) => {
+    const canonical = `OVERFLOW_${entry.envName}`;
+    for (const [environment, capacity] of [
+      [{ [canonical]: "1" }, 1],
+      [{ [entry.envName]: "9" }, 9],
+      [{ [canonical]: "1", [entry.envName]: "9" }, 1],
+      [{ [canonical]: "", [entry.envName]: "9" }, entry.defaultPerHour],
+      [{ [canonical]: "invalid", [entry.envName]: "9" }, entry.defaultPerHour],
+      [{}, entry.defaultPerHour],
+    ] as const) {
+      expect(resolveRouteRateLimit(environment, entry)).toEqual({ capacity, refillPerMinute: capacity / 60 });
+    }
+  });
+
+  it("enforces the prefixed bound through the gate when a legacy bound is also present", () => {
+    const gate = createRouteRateGate({ className: "test", limiter: createRateLimiter({ nowMs: () => 0 }),
+      limits: resolveRouteRateLimit({ OVERFLOW_RATE_LIMIT_EXAMPLE_PER_HOUR: "1", RATE_LIMIT_EXAMPLE_PER_HOUR: "9" }, spec) });
+    expect(gate("fixture")).toBeNull();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try { expect(gate("fixture")?.status).toBe(429); } finally { warn.mockRestore(); }
+  });
+
   it("derives the bound from a valid env value: capacity is the value, refill is value/60 per minute", () => {
     expect(resolveRouteRateLimit({ RATE_LIMIT_EXAMPLE_PER_HOUR: "12" }, spec)).toEqual({
       capacity: 12,
