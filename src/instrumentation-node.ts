@@ -12,12 +12,7 @@ import {
 } from "@/lib/fold/sweep";
 import { FailureLogger } from "@/lib/worker/failure-logger";
 import { DrainSummaryLogger } from "@/lib/logging/drain-summary-logger";
-import {
-  appInstallationTokenResolverFromEnv,
-  createAppInstallationTokenResolver,
-  readGitHubRegistrationAppAuthConfig,
-} from "@/lib/github/app-installation-auth";
-import { createReconciliationAppTokenResolver } from "@/lib/github/reconciliation-app-auth";
+import { readGitHubRegistrationAppAuthConfig } from "@/lib/github/app-installation-auth";
 import { errorLogToken } from "@/lib/webhooks/log-field";
 import { installJournalLevels } from "@/lib/logging/journal-levels";
 
@@ -43,17 +38,14 @@ export async function registerNodejs(): Promise<void> {
     return;
   }
 
-  // Construct both App resolvers once. Invalid configured keys fail startup;
-  // an unconfigured App leaves its registrations on the OAuth fallback path.
-  const reconciliationResolver = appInstallationTokenResolverFromEnv(process.env);
-  const registrationConfig = readGitHubRegistrationAppAuthConfig(process.env);
-  const registrationResolver = registrationConfig === null
-    ? null : createAppInstallationTokenResolver({ config: registrationConfig });
+  // A misconfigured registration App key still fails startup: the wiring-time
+  // reader throws, though its result is unused. The reconciliation App
+  // variables production keeps set in its environment are read never.
+  readGitHubRegistrationAppAuthConfig(process.env);
 
   const { PostgresFoldStore } = await import("@/lib/fold/postgres-store");
   const { finalizeAbandonedRuns } = await import("@/lib/fold/abandoned-runs");
   const { reconcileRepositoryAsSponsor } = await import("@/lib/fold/reconcile-as-sponsor");
-  const { recordReconciliationAuthPath } = await import("@/lib/fold/reconciliation-auth-path");
   const { PostgresForgeIdentityStore } = await import("@/lib/forge/postgres-identities-store");
   const { pruneExpiredMaintenanceRows } = await import("@/lib/retention/prune");
   const { getSql, getCoordinationSql } = await import("@/lib/db/client");
@@ -65,12 +57,6 @@ export async function registerNodejs(): Promise<void> {
     openPass: sweepPasses.open.bind(sweepPasses),
     discardPass: sweepPasses.discardByRepository.bind(sweepPasses),
   };
-  const resolveAppInstallationToken = createReconciliationAppTokenResolver({
-    reconciliationResolver,
-    registrationResolver,
-    lookupRegistrationMethod: async (ownerName) =>
-      (await store.findRepositoryByOwnerName(ownerName))?.registrationMethod ?? null,
-  });
   try {
     await finalizeAbandonedRuns(getSql(), getCoordinationSql());
   } catch (error) {
@@ -105,8 +91,6 @@ export async function registerNodejs(): Promise<void> {
           reconcileRepositoryAsSponsor(store, repositoryId, undefined, {
             ...options,
             sweep,
-            resolveAppInstallationToken,
-            recordAuthPath: (id, path) => recordReconciliationAuthPath(getSql(), id, path, new Date()),
             resolveForgeToken,
             markCredentialRejected: async (identityId) => {
               const repository = await store.getRepository(repositoryId);

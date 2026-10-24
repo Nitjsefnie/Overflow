@@ -2,8 +2,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 
 /**
  * `register()` is Next.js's instrumentation hook: whatever it throws at server
- * start, Next catches and retries per request, so a misconfigured GitHub App
- * key (an unreadable key file throws at wiring time) used to sit the unit
+ * start, Next catches and retries per request, so a misconfigured registration
+ * App key (an unreadable key file throws at wiring time) used to sit the unit
  * `active` serving 500s on every route, forever, seen by nobody (issue 846).
  * What this pins is that any throw from the Node wiring is fatal at the
  * boundary — the process exits so systemd restarts it and the start limit
@@ -24,7 +24,7 @@ const { resolverFactory, startSweep, startWorker, drain, sweep, finalizeRuns, wo
 
 vi.mock("@/lib/github/app-installation-auth", async (importActual) => ({
   ...await importActual<typeof import("@/lib/github/app-installation-auth")>(),
-  appInstallationTokenResolverFromEnv: resolverFactory,
+  readGitHubRegistrationAppAuthConfig: resolverFactory,
 }));
 
 vi.mock("@/lib/fold/abandoned-runs", () => ({ finalizeAbandonedRuns: finalizeRuns }));
@@ -65,7 +65,7 @@ afterEach(() => {
 afterAll(() => { vi.resetModules(); });
 
 describe("server instrumentation fail-closed boundary", () => {
-  it("exits fatally when the Node wiring throws, as a misconfigured GitHub App key does", async () => {
+  it("exits fatally when the Node wiring throws, as a misconfigured registration App key does", async () => {
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
     vi.stubEnv("NEXT_PHASE", "");
     vi.stubEnv("OVERFLOW_DISABLE_RECONCILIATION_SWEEP", "");
