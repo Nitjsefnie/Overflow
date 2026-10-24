@@ -156,7 +156,9 @@ export interface RelayResult {
   /**
    * Issue 1116: the start was sweep-only — no triggering run, so the mirror
    * is skipped and the sweep's own summary and heal lines are the whole
-   * output. Undefined on every other path.
+   * output. Pre-set from the env before parseTrigger's validation (issue
+   * 1355), so it reads false — not undefined — wherever the env does not name
+   * the mode; the renderer reads only === true.
    */
   sweepOnly?: boolean;
   /**
