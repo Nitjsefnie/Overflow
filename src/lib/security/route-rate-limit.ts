@@ -64,7 +64,7 @@ export function resolveRouteRateLimit(
   env: Record<string, string | undefined>,
   spec: RouteRateClassSpec,
 ): RouteRateLimits {
-  const raw = env[spec.envName];
+  const raw = env[`OVERFLOW_${spec.envName}`] ?? env[spec.envName];
   if (raw !== undefined) {
     const parsed = Number(raw);
     if (Number.isFinite(parsed) && parsed >= 1) {
