@@ -8,8 +8,8 @@
     7792
   ],
   ".github/workflows/actionlint.yml": [
-    2336,
-    3641
+    2335,
+    3703
   ],
   ".github/workflows/ci-pr.yml": [
     16043,
@@ -56,8 +56,8 @@
     9490
   ],
   ".github/workflows/ratchet-guard.yml": [
-    3579,
-    5864
+    3577,
+    5988
   ],
   ".github/workflows/ratchet-push.yml": [
     1870,
