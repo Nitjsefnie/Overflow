@@ -99,9 +99,8 @@ export const EXCLUSIONS: readonly PathClass[] = [
         ".gitignore",
         ".dockerignore",
         ".env.example",
-        // The hashed pip requirements file the actionlint workflow installs
-        // zizmor from: reviewed artifact pins, not program code.
-        // The two hashed pip requirements files (zizmor, PyYAML): reviewed
+        // The two hashed pip requirements files, installed by the actionlint
+        // workflow (zizmor) and the ci-pr suppression gate (PyYAML): reviewed
         // artifact pins, not program code.
         ".github/requirements-zizmor.txt",
         ".github/requirements-pyyaml.txt",
