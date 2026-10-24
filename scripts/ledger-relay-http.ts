@@ -62,7 +62,6 @@ export async function apiCall<T>(
   reconcile?: () => Promise<{ retry: true } | { retry: false; value: T }>,
 ): Promise<T> {
   let lastMessage = "";
-  let lastRateLimitResetMs: number | undefined;
   let rateLimitWaited = false;
   const retryCount = retryTransient ? BACKOFF_MS.length : 0;
   for (let attempt = 0; attempt <= retryCount; attempt += 1) {
@@ -86,7 +85,6 @@ export async function apiCall<T>(
       text = await response.text();
     } catch (error) {
       lastMessage = error instanceof Error ? error.message : String(error);
-      lastRateLimitResetMs = undefined;
       if (request.method === "POST" && reconcile !== undefined) {
         const outcome = await reconcile();
         if (!outcome.retry) return outcome.value;
@@ -106,8 +104,7 @@ export async function apiCall<T>(
     const nowMs = (deps.nowFn ?? Date.now)();
     const resetMs = rateLimitResetMs(response, text, nowMs);
     if (resetMs !== undefined) {
-      if (retryTransient && resetMs + RATE_LIMIT_RESET_MARGIN_MS <= deps.deadlineMs) {
-        lastRateLimitResetMs = resetMs;
+      if (attempt < retryCount && resetMs + RATE_LIMIT_RESET_MARGIN_MS <= deps.deadlineMs) {
         rateLimitWaited = true;
         await deps.delayFn(Math.max(0, resetMs - nowMs));
         continue;
@@ -118,15 +115,7 @@ export async function apiCall<T>(
         resetMs,
       );
     }
-    lastRateLimitResetMs = undefined;
     if (response.status < 500 && response.status !== 429) throw new Error(`${what} failed: ${lastMessage}`);
-  }
-  if (lastRateLimitResetMs !== undefined) {
-    throw new RateLimitExceededError(
-      `${what} failed: GitHub rate limit exhausted after ${retryCount + 1} attempts; the limit resets at ` +
-        `${new Date(lastRateLimitResetMs).toISOString()} and the run deadline is ${new Date(deps.deadlineMs).toISOString()}`,
-      lastRateLimitResetMs,
-    );
   }
   throw new Error(`${what} failed after ${retryCount + 1} attempts: ${lastMessage}`);
 }

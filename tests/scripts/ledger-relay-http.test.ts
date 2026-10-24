@@ -478,10 +478,8 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
     expect(state.requests).toEqual([10_000, 13_000]);
   });
 
-  it("throws RateLimitExceededError with the last reset when every attempt answers rate-limited and each wait fits", async () => {
-    // 30 s, 50 s and 55 s all fit the 60 s deadline with the 5 s margin; the
-    // three waits exhaust the three attempts, so the tail throws.
-    const { deps, state } = rateLimitDeps([rateLimited(30), rateLimited(50), rateLimited(55)]);
+  it.each([403, 429])("does not wait after the final rate-limited HTTP %s attempt", async (status) => {
+    const { deps, state } = rateLimitDeps([rateLimited(30, status), rateLimited(50, status), rateLimited(55, status)]);
 
     const error = await caught(apiCall(deps, theCall, what));
 
@@ -489,8 +487,9 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
     expect((error as RateLimitExceededError).resetMs).toBe(55_000);
     expect(error.message).toContain(new Date(55_000).toISOString());
     expect(error.message).toContain(new Date(60_000).toISOString());
-    expect(state.delays).toEqual([20_000, 20_000, 5_000]);
+    expect(state.delays).toEqual([20_000, 20_000]);
     expect(state.requests).toEqual([10_000, 30_000, 50_000]);
+    expect(state.now).toBe(50_000);
   });
 
   it("keeps a triggered start red when its mirror job listing is rate-limited past the deadline", async () => {
