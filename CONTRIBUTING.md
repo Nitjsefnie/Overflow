@@ -606,9 +606,10 @@ The two consequences to hold on to:
   price it at all.
 - **`settled:` has a window with two halves.** The label must be applied by the
   repository sponsor between the closing pull request's **final commit** and its
-  **merge**, and a nonblank comment from the sponsor must name
-  the label. Both halves are the evidence; a label with no comment, or a comment
-  that does not name the label, settles nothing. A comment edited after the
+  **merge**, and the sponsor must post a nonblank comment between fifteen
+  minutes before the label and fifteen minutes after the merge. Both halves are
+  the evidence, and the comment's wording is not checked; a label with no
+  comment settles nothing. A comment edited after the
   window closes settles nothing either — its current body is not evidence of
   what was written before the close. Exactly one actual-catalog label may be
   active — two settle nothing. Labels on the pull request never price anything.
