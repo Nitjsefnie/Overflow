@@ -567,4 +567,44 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
     expect(state.delays).toEqual([4_000]);
     expect(state.requests).toEqual([10_000, 14_000]);
   });
+
+  it("restores the backoff slot after a rate-limit wait when the next answer is a 500", async () => {
+    const { deps, state } = rateLimitDeps([
+      rateLimited(14),
+      new Response("try again", { status: 500 }),
+      new Response(JSON.stringify({ jobs: [] })),
+    ]);
+
+    await expect(apiCall(deps, theCall, what)).resolves.toEqual({ jobs: [] });
+
+    // The wait consumed attempt 1's backoff slot; attempt 2's 500 retry takes
+    // the next slot in the ladder.
+    expect(state.delays).toEqual([4_000, 2_000]);
+    expect(state.requests).toEqual([10_000, 14_000, 16_000]);
+  });
+
+  it("does not let an earlier rate limit name a later network failure", async () => {
+    const delays: number[] = [];
+    let now = 10_000;
+    let requests = 0;
+    const deps: RelayHttpDeps = {
+      deadlineMs: 60_000,
+      nowFn: () => now,
+      delayFn: async (ms) => { delays.push(ms); now += ms; },
+      fetchFn: async () => {
+        requests += 1;
+        if (requests === 1) return rateLimited(14);
+        throw new TypeError("fetch failed");
+      },
+    };
+
+    const error = await caught(apiCall(deps, theCall, what));
+
+    // The network failure cleared the classified reset: the tail is the plain
+    // attempts error, not the rate limit a sweep-only start would defer on.
+    expect(error).not.toBeInstanceOf(RateLimitExceededError);
+    expect(error.message).toContain("failed after 3 attempts: fetch failed");
+    expect(delays).toEqual([4_000, 2_000]);
+    expect(requests).toBe(3);
+  });
 });
