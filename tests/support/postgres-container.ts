@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeSync } from "node:fs";
 import { createServer } from "node:net";
+import { resolve } from "node:path";
 import { inject } from "vitest";
 import { parse } from "yaml";
 import { GenericContainer, Wait, getContainerRuntimeClient, type StartedTestContainer, type StoppedTestContainer, type WaitStrategy } from "testcontainers";
@@ -273,10 +274,11 @@ export function publishPostgresOnLoopback(container: GenericContainer, hostPort:
 
 /**
  * Pinned by digest (issue 461) so every DB suite runs the same postgres bytes;
- * read from docker-compose.yml (issue 1335): the one file that writes it.
+ * read from docker-compose.yml (issue 1335) — from vitest's cwd, not
+ * import.meta.url: a page origin in DOM envs.
  */
 export const POSTGRES_IMAGE = (
-  parse(readFileSync(new URL("../../docker-compose.yml", import.meta.url), "utf8")) as {
+  parse(readFileSync(resolve("docker-compose.yml"), "utf8")) as {
     services: { postgres: { image: string } };
   }
 ).services.postgres.image;
