@@ -156,14 +156,13 @@ export interface RelayResult {
   /**
    * Issue 1116: the start was sweep-only — no triggering run, so the mirror
    * is skipped and the sweep's own summary and heal lines are the whole
-   * output. Pre-set from the env before parseTrigger's validation (issue
-   * 1355), so it reads false — not undefined — wherever the env does not name
-   * the mode; the renderer reads only === true.
+   * output. Pre-set from the env (issue 1355), so false — not undefined —
+   * unless the env names the mode.
    */
   sweepOnly?: boolean;
   /**
-   * Issue 1355: a sweep-only start deferred its rate-limited orphan sweep.
-   * Undefined on every other path.
+   * Issue 1355: a sweep-only start deferred its rate-limited sweep; undefined
+   * on every other path.
    */
   sweepDeferred?: string;
 }
@@ -302,8 +301,8 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
       ];
       assertRunDeadline(deps, "completion of the relay run");
     } catch (sweepError) {
-      // Issue 1355: a rate-limited sweep defers a sweep-only start to the next
-      // scheduled sweep; triggered starts keep failing red — that is the design.
+      // Issue 1355: a rate-limited sweep defers a sweep-only start; triggered
+      // starts keep failing red, that is the design.
       if (!failed && sweepOnlyStart && sweepError instanceof RateLimitExceededError) {
         result.sweepDeferred = sweepError.message;
         return result;
@@ -519,7 +518,7 @@ export function renderRelayResult(result: RelayResult): string[] {
     ...renderSweepLines(result.sweep),
   ];
   if (result.sweepOnly === true) {
-    // The sweep's summary is the whole output; the defer line is issue 1355's only signal.
+    // The sweep's summary is the whole output; the defer line is the rate-limit signal.
     const deferred = result.sweepDeferred === undefined ? [] :
       [`[ledger-relay] orphan-sweep: deferred to the next scheduled sweep: ${result.sweepDeferred}`];
     return [...suppressed, ...deferred, ...renderSweepLines(result.sweep)];
