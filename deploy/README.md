@@ -119,8 +119,7 @@ accompany them.
 systemd reads `EnvironmentFile=` as PID 1, before it drops to `User=overflow`,
 so the service account does not need to read `overflow.env` directly. Keep that
 file `0600 root:root`: the process receives its values in the environment,
-but cannot reread the file. This restriction applies to `overflow.env`;
-reconciliation separately reads the GitHub App private-key file described below.
+but cannot reread the file. This restriction applies to `overflow.env`.
 
 ```bash
 install -d -o root -g root -m 0700 /etc/overflow
@@ -135,23 +134,15 @@ Overflow: `install` would otherwise truncate the secrets that are already
 there. Populate the file before section 5 — its migration step reads
 `OVERFLOW_DATABASE_URL` out of it.
 
-Optional variables configure the read-only reconciliation App for
-OAuth webhook registrations (issue 804): `GITHUB_APP_ID` is the App's id and
-`GITHUB_APP_PRIVATE_KEY_PATH` is the path to the App's PEM private key, at the
-host value `/etc/overflow/github-reconcile-app/private-key.pem`. Grant this App
-Metadata, Issues and Pull requests read access, with no webhook. It is separate
-from the App that publishes CI checks, which has no credential on the host.
-With both set, a GitHub
-repository that has the App installed folds with that installation's token,
-and one that does not falls back to the sponsor's OAuth token; either variable
-unset or empty is the OAuth-only posture. Both are read at wiring time — when
-the reconciliation background starts, or when the `pnpm reconcile` CLI builds
-its production dependencies — and a configured but unreadable key file fails
-there, before any fold. Set optional `OVERFLOW_GITHUB_APP_SLUG` to this reconciliation
-App's public slug to offer its installation on the sponsor dashboard for GitHub
-repositories using the OAuth fallback; unset means no offer is shown.
+A host that configured the read-only reconciliation App retires it: remove
+`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` and `OVERFLOW_GITHUB_APP_SLUG`
+from `/etc/overflow/overflow.env`, delete `/etc/overflow/github-reconcile-app/`,
+return `/etc/overflow` to the mode this section sets above, and delete the App
+in GitHub's developer settings (Settings → Developer settings → GitHub Apps →
+the app → Delete). The fold reconciles every repository with its sponsor's
+OAuth token and reads no App credential.
 
-App-based registration uses a separate GitHub App with four optional variables:
+App-based registration uses a GitHub App with three optional variables:
 
 | Variable | Value |
 | --- | --- |
@@ -165,8 +156,6 @@ and App webhook deliveries receive HTTP `503` (fail-closed). Either the App id
 or key path unset or empty disables App-based registration; an unset or empty
 webhook secret makes the receiver answer `503`. With the id and key path
 configured, an unreadable, unparseable or non-RSA key throws at wiring time.
-Keep this App's credentials separate from the read-only reconciliation App's
-`GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` above.
 
 Configure the registration App's webhook URL as
 `https://<public-host>/api/github/app-webhook` (receiver:
@@ -176,15 +165,7 @@ Configure the registration App's webhook URL as
 Grant repository permissions `metadata: read`, `issues: read` and
 `pull_requests: read`. Install the App on repositories that will register
 through it; those registrations use App deliveries instead of creating a
-repository webhook. App-registered repositories also reconcile through this
-App's installation token.
-
-On a host configured with the reconciliation App the directory is one
-deliberate deviation from the block above: `/etc/overflow` must stay
-traversable by the overflow account — `0750 root:overflow` on the production
-host today — because the reconciliation App private key lives under it, and
-an untraversable `/etc/overflow` leaves the key unreadable, which fails
-reconciliation startup closed.
+repository webhook.
 
 ### Loading configuration for administrative commands
 
@@ -1479,9 +1460,10 @@ credential sealed under a key the service no longer holds, and each one fails
 until it is minted again: sponsors sign in again, forge identities are linked
 again, webhook secrets are replaced. For the same reason, never run
 `pnpm credentials:reencrypt` against the production database outside this
-procedure. The reconciliation App private key is a different credential with its own
-rotation, which [section 14](#14-rotating-github-app-private-keys) carries;
-this section's steps do not extend to it and must not be applied to it.
+procedure. The check-publishing App's private key is a different credential
+with its own rotation, which [section 14](#14-rotating-github-app-private-keys)
+carries; this section's steps do not extend to it and must not be applied
+to it.
 
 The rotation runs while the service keeps serving, and costs two restarts. It
 relies on the service reading two keys: `OVERFLOW_TOKEN_ENCRYPTION_KEY` is the current
@@ -3069,226 +3051,9 @@ unverified.
 
 ## 14. Rotating GitHub App private keys
 
-The reconciliation App and the check-publishing App are separate identities
-with separate keys. Rotate each by its own procedure below. A rotation of
-one App does not replace the other App's credential. Section 11 owns
-`OVERFLOW_TOKEN_ENCRYPTION_KEY`; neither procedure below applies to that key.
-
-### Reconciliation App: host-only
-
-The read-only reconciliation App's private key signs the RS256 JWT used to
-mint its installation token. This App has Metadata, Issues and Pull requests
-read access and no webhook. The reconciliation path reads the PEM file
-`GITHUB_APP_PRIVATE_KEY_PATH` names, alongside `GITHUB_APP_ID`. This procedure
-is the only sanctioned way to change that App's private key; it does not
-extend to `OVERFLOW_TOKEN_ENCRYPTION_KEY`, which section 11 owns.
-
-The reconciliation App's key is host-only; no CI secret is derived from it.
-The PEM lives at the path
-[section 4](README.md#4-create-the-environment-file) names —
-`/etc/overflow/github-reconcile-app/private-key.pem` on the production host —
-with the ownership and readability discipline that section records. The
-service reads it at wiring time, at each start, never later.
-
-#### The overlap, and the fact that bounds the rollback
-
-GitHub Apps hold up to 25 private keys at once, and a JWT verifies against
-whichever registered public half it was signed by. While two keys are
-registered, JWTs minted from either verify. Add the new key first, replace
-the host file while both keys verify, and delete the old key last. GitHub
-generates the keys itself: **New key** on the App's key-pairs page downloads
-the private half once, and GitHub keeps the public half. A deleted key
-cannot be re-added; **New key** always generates a new pair. Everything
-before step 5 is recoverable by restoring the host file. After step 5, the
-only repair is forward under the new key.
-
-GitHub shows a fingerprint for every registered key pair. Prove which key
-a file holds before acting on it with the same computation GitHub's
-documentation prescribes:
-
-```bash
-openssl rsa -in /etc/overflow/github-reconcile-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64
-```
-
-Expect a short base64 string matching the fingerprint the App settings'
-key-pairs page shows for that key. Keep the fingerprints with the rotation
-record.
-
-#### Step 1: record the old key's fingerprint and stage a rollback copy
-
-Run every block as root on the deployment host, in a fresh shell. This
-block stages the rollback copy every later step requires and refuses
-rather than overwrite anything:
-
-```bash
-(
-set -e
-test "$(id -u)" = 0 || { echo "Refusing: run as root." >&2; exit 1; }
-test ! -e /etc/overflow/github-reconcile-app/private-key.pem.rotation-backup || { echo "Refusing: private-key.pem.rotation-backup already exists; finish or roll back the interrupted rotation first." >&2; exit 1; }
-printf 'old key fingerprint: '
-openssl rsa -in /etc/overflow/github-reconcile-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64
-cp -p /etc/overflow/github-reconcile-app/private-key.pem /etc/overflow/github-reconcile-app/private-key.pem.rotation-backup
-test "$(openssl rsa -in /etc/overflow/github-reconcile-app/private-key.pem.rotation-backup -pubout -outform DER | openssl sha256 -binary | openssl base64)" = "$(openssl rsa -in /etc/overflow/github-reconcile-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)" || { echo "Refusing: the rollback copy does not match the live key." >&2; exit 1; }
-)
-```
-
-Expect one `old key fingerprint:` line and no refusal. Record it with the
-rotation. It must match the App's current key on the key-pairs page. If it
-does not, the host file and the App's registered key have already diverged:
-stop and use [incident-response.md](incident-response.md) before starting a
-rotation on top of an unknown state.
-
-#### Step 2: generate the new key in the App settings and stage it on the host
-
-On the App's settings page (Settings → Developer settings → GitHub Apps →
-the reconciliation App → Credentials → Key pairs), click **New key**.
-Transfer the downloaded private half to the deployment host as the
-root-only staged file:
-
-```bash
-scp /local/path/to/the-downloaded.pem root@DEPLOY-HOST:/etc/overflow/github-reconcile-app/private-key.new.pem
-```
-
-On the host, restore its ownership and mode, prove it is a parseable RSA
-private key, and record its fingerprint:
-
-```bash
-(
-set -e
-test "$(id -u)" = 0 || { echo "Refusing: run as root." >&2; exit 1; }
-test -s /etc/overflow/github-reconcile-app/private-key.new.pem || { echo "Refusing: private-key.new.pem is missing or empty; run the transfer above first." >&2; exit 1; }
-chown root:root /etc/overflow/github-reconcile-app/private-key.new.pem
-chmod 0600 /etc/overflow/github-reconcile-app/private-key.new.pem
-openssl rsa -in /etc/overflow/github-reconcile-app/private-key.new.pem -check -noout || { echo "Refusing: private-key.new.pem is not a readable RSA private key." >&2; exit 1; }
-printf 'new key fingerprint: '
-openssl rsa -in /etc/overflow/github-reconcile-app/private-key.new.pem -pubout -outform DER | openssl sha256 -binary | openssl base64
-)
-```
-
-Expect the RSA check to pass and one `new key fingerprint:` line. The
-fingerprint must differ from step 1's and match the new entry on the App's
-key-pairs page. Record both fingerprints. The App now holds two keys and
-reconciliation keeps working with the old host key, so a pause before
-step 3 is safe.
-
-#### Step 3: replace the host key and restart the service
-
-This block replaces the live PEM in place. Redirection into the existing
-file preserves its owner, group and mode. It requires root, a matching
-rollback copy, and a staged new key whose fingerprint differs from the
-live key's:
-
-```bash
-(
-set -e
-test "$(id -u)" = 0 || { echo "Refusing: run as root." >&2; exit 1; }
-test -e /etc/overflow/github-reconcile-app/private-key.pem.rotation-backup || { echo "Refusing: private-key.pem.rotation-backup is missing; run step 1 first." >&2; exit 1; }
-test "$(openssl rsa -in /etc/overflow/github-reconcile-app/private-key.pem.rotation-backup -pubout -outform DER | openssl sha256 -binary | openssl base64)" = "$(openssl rsa -in /etc/overflow/github-reconcile-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)" || { echo "Refusing: the rollback copy does not match the live key." >&2; exit 1; }
-test -s /etc/overflow/github-reconcile-app/private-key.new.pem || { echo "Refusing: private-key.new.pem is missing; run step 2 first." >&2; exit 1; }
-old_fp=$(openssl rsa -in /etc/overflow/github-reconcile-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)
-new_fp=$(openssl rsa -in /etc/overflow/github-reconcile-app/private-key.new.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)
-test "$new_fp" != "$old_fp" || { echo "Refusing: private-key.new.pem holds the same key as the live file." >&2; exit 1; }
-cat /etc/overflow/github-reconcile-app/private-key.new.pem > /etc/overflow/github-reconcile-app/private-key.pem
-test "$(openssl rsa -in /etc/overflow/github-reconcile-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)" = "$new_fp" || { echo "The replaced file does not read back as the staged key; restore from the rollback copy as Rolling back describes." >&2; exit 1; }
-)
-```
-
-The service read the old key at its last start. Restart it now, proving
-the switch the way section 7 does:
-
-```bash
-set -e
-systemctl show overflow.service -p MainPID --value > /run/overflow-preswitch-mainpid
-systemctl restart overflow.service
-systemctl is-active overflow.service
-curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
-  --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/readiness
-printf 'MainPID before the switch: %s\nMainPID now:               %s\n' \
-  "$(cat /run/overflow-preswitch-mainpid)" \
-  "$(systemctl show overflow.service -p MainPID --value)"
-```
-
-Expect `active`, `200` and two different `MainPID` values. The reconciliation
-worker now mints from the new key's bytes; both keys still verify during
-the overlap window.
-
-#### Step 4: verify under the new key, before the old key dies
-
-Run one reconciliation explicitly. The CLI reads the host file fresh at
-wiring time. Use an OAuth webhook registration with the reconciliation App
-installed. Confirm the authentication record names `github-app-installation`
-with this App's installation id; the registration App and sponsor OAuth
-paths do not verify this key. The example uses `Nitjsefnie/Overflow`:
-
-```bash
-cd /srv/overflow
-set -a; . /etc/overflow/overflow.env; set +a
-pnpm reconcile --repository Nitjsefnie/Overflow
-```
-
-Expect one JSON summary line:
-`{"repositoryId":…,"added":…,"changed":…,"removed":…,"skipped":false,"runId":"…"}`.
-`"skipped":true` means a budget hold or cooldown deferred the run; rerun the
-block. A thrown error or a nonzero exit naming `GitHub App request failed`
-means the host credential failed under the new key: restore the rollback
-copy as Rolling back describes. When `"skipped":false` carries a `runId`,
-confirm that run completed:
-
-```bash
-psql "$OVERFLOW_DATABASE_URL" -tAc "select status, completed_at is not null from reconciliation_runs where id = 'REPLACE-WITH-THE-RUNID'"
-```
-
-Expect `COMPLETED|t`. With reconciliation completed, step 5 may retire the
-old key.
-
-#### Step 5: delete the old key and dispose of the staged files
-
-In the App settings' key-pairs page, delete the entry whose fingerprint
-matches step 1's. The rollback window is now closed: GitHub cannot re-add a
-deleted key. Dispose of the staged new-key file and the rollback copy of
-the old key. The live host file is the new key's only necessary copy:
-
-```bash
-(
-set -e
-test "$(id -u)" = 0 || { echo "Refusing: run as root." >&2; exit 1; }
-rm /etc/overflow/github-reconcile-app/private-key.new.pem /etc/overflow/github-reconcile-app/private-key.pem.rotation-backup
-)
-```
-
-#### Rolling back
-
-Everything before step 5 rolls back because the old key still verifies.
-Nothing below restores a deleted key. After step 5, repair the host
-credential forward and rerun step 4.
-
-- **Step 2 only — the new key is registered, the host file has not moved.**
-  The host still holds the old key and reconciliation works. Continue with
-  step 3, or delete the new key in the App settings to abandon the rotation.
-- **The host file moved, but the service has not restarted.** Run step 3's
-  restart block to continue. To roll back, restore the host file with the
-  block below, then delete the new key if abandoning the rotation.
-- **The host file moved and step 4 failed.** Restore the host file, restart
-  with step 3's restart block, and rerun step 4 under the old key. Delete the
-  new key in the App settings. Diagnose the staged key's failure only after
-  the old posture is proven restored.
-
-Restore the host file from the rollback copy:
-
-```bash
-(
-set -e
-test "$(id -u)" = 0 || { echo "Refusing: run as root." >&2; exit 1; }
-test -e /etc/overflow/github-reconcile-app/private-key.pem.rotation-backup || { echo "Refusing: private-key.pem.rotation-backup is missing; there is nothing to restore from." >&2; exit 1; }
-cat /etc/overflow/github-reconcile-app/private-key.pem.rotation-backup > /etc/overflow/github-reconcile-app/private-key.pem
-test "$(openssl rsa -in /etc/overflow/github-reconcile-app/private-key.pem -pubout -outform DER | openssl sha256 -binary | openssl base64)" = "$(openssl rsa -in /etc/overflow/github-reconcile-app/private-key.pem.rotation-backup -pubout -outform DER | openssl sha256 -binary | openssl base64)" || { echo "The restored file does not read back as the rollback copy." >&2; exit 1; }
-)
-```
-
-Then run step 3's restart block. Leave the staged new-key file in place
-until the new key has been deleted in the App settings and the rotation is
-closed out; step 5's disposal block then removes it.
-
+The check-publishing App is the one identity whose key rotation this section
+carries. Section 11 owns `OVERFLOW_TOKEN_ENCRYPTION_KEY`; the procedure below
+does not apply to that key.
 
 ### Check-publishing App: CI-secret-only
 
