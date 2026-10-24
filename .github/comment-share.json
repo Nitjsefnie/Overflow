@@ -28,8 +28,8 @@
     1450
   ],
   ".github/workflows/comment-share.yml": [
-    727,
-    2206
+    726,
+    2232
   ],
   ".github/workflows/coverage-comment.yml": [
     5786,
@@ -1220,8 +1220,8 @@
     6327
   ],
   "tests/ci/concurrency.test.ts": [
-    18482,
-    46169
+    18464,
+    46180
   ],
   "tests/ci/coverage-comment-workflow.test.ts": [
     1987,
