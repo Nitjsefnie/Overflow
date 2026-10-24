@@ -120,10 +120,11 @@ const PER_PR_REQUIRED = {
  * `BOUNDED` and this table — in either direction — deserves the same attention
  * as one touching a required-check pin.
  *
- * By default GitHub keeps only one PENDING run per concurrency group and
- * cancels the older pending one even at `cancel-in-progress: false`, so sharing
- * a group would drop work for these. That is why the bound is applied only to
- * the metered CI workflows, whose shared group queues its pending arrivals.
+ * A shared group makes its members wait behind one running job and, at the
+ * default single pending slot, cancels the older pending run even at
+ * `cancel-in-progress: false`. Only the metered CI workflows need the bound,
+ * because it caps their minutes, and they queue their pending arrivals; for
+ * these exceptions it would only add waits on unrelated work and dropped runs.
  */
 /**
  * The closed vocabulary of cancellation premises, and the ONE place it is
@@ -197,8 +198,8 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
    * prevent, and "reproducible from the next push" is not a defence — the next
    * push does not unblock the pull request that is already open. The premise
    * is also narrower than it looks: it covers cancellation WITHIN one pull
-   * request, not the pending run GitHub cancels in any shared group, which
-   * remains the gap the header describes.
+   * request, not the pending run GitHub cancels in a default single-slot
+   * shared group (see the header).
    */
   premise?: Premise;
 }>([
