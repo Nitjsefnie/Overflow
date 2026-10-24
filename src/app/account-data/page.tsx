@@ -122,9 +122,9 @@ export function AccountDataNotice() {
           Signing in with GitHub creates one account row in Overflow&apos;s database. The sign-in reads only the
           public fields of GitHub&apos;s <code>/user</code> endpoint: your numeric GitHub user id and your
           login. Which permission it asks GitHub for depends on the sign-in you choose. Signing in to
-          contribute requests no permission at all. Signing in to register a repository requests exactly one — the{" "}
-          <code>admin:repo_hook</code> scope, which creating and removing Overflow&apos;s webhook on a repository you
-          administer needs — and a contributor who later registers a repository is asked for that one scope then.
+          contribute requests no permission at all. Signing in to register through the webhook route requests exactly
+          one — the <code>admin:repo_hook</code> scope, which creating and removing Overflow&apos;s webhook on a repository
+          you administer needs. App registration uses the contributor sign-in, which requests no permission.
           Overflow reads no email address anywhere: it requests no email scope and reads no email endpoint.
         </p>
         <ul>
@@ -170,10 +170,10 @@ export function AccountDataNotice() {
       <section className="surface" aria-labelledby="account-data-usage-heading">
         <h2 id="account-data-usage-heading">What the tokens are used for</h2>
         <p>
-          When you register or unregister a repository, the token creates or deletes Overflow&apos;s webhook on it —
-          before creating one, Overflow asks GitHub which permissions the token holds and refuses a token without
-          webhook administration — and a labels lookup runs on any GitHub repository path you submit during
-          registration or catalog flows.
+          When you register or unregister a repository through the webhook route, the token creates or deletes
+          Overflow&apos;s webhook on it. Before creating one, Overflow asks GitHub which permissions the token holds
+          and refuses a token without webhook administration. App registration creates no webhook through the token.
+          A labels lookup runs on any GitHub repository path you submit during registration or catalog flows.
           Overflow&apos;s reconciliation re-reads the registered repository&apos;s issues, pull requests, reviews,
           and diffs — when you register or change a repository, and unattended, as a periodic sweep keeps the
           ledger current — using that repository&apos;s sponsor token. The token is never displayed in the product.

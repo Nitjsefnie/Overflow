@@ -10,6 +10,8 @@ You spent Tuesday evening fixing someone else's flaky test. The bug in your own 
 
 Go to <https://overflow.nitjsefni.eu> and sign in with GitHub. Register a repository you administer on one form: the repository and its two label catalogs. The catalog labels must already exist. Overflow installs the webhook for you.
 
+GitHub repositories register in one of two ways. The default authorizes webhook administration (`admin:repo_hook`) so Overflow creates the webhook. Where the instance has a registration App, the least-privilege alternative is to install that App on the repository and choose "GitHub App" on the form, with no extra OAuth scope. See [API.md](API.md#programmatic-repository-registration) for the API form.
+
 **You don't need a repository to start earning.** Take an issue in one that's already registered. This repository is on that ledger too. You can watch the exchange happen in its own tracker.
 
 ## How it works

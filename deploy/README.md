@@ -151,12 +151,13 @@ there, before any fold. Set optional `OVERFLOW_GITHUB_APP_SLUG` to this reconcil
 App's public slug to offer its installation on the sponsor dashboard for GitHub
 repositories using the OAuth fallback; unset means no offer is shown.
 
-App-based registration uses a separate GitHub App with three optional variables:
+App-based registration uses a separate GitHub App with four optional variables:
 
 | Variable | Value |
 | --- | --- |
 | `GITHUB_REGISTRATION_APP_ID` | The registration App's id. |
 | `GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH` | Path to its PEM RSA private key, readable by the `overflow` service account. |
+| `OVERFLOW_GITHUB_REGISTRATION_APP_SLUG` | Optional public slug of the registration App; the landing and registration pages link its install page. Unset or invalid shows no link. |
 | `OVERFLOW_GITHUB_REGISTRATION_APP_WEBHOOK_SECRET` | The webhook secret configured on that App, used to authenticate its deliveries. |
 
 Leave these unset to keep the feature off: App-based registration is unavailable,

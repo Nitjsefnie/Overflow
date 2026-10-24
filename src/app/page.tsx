@@ -2,8 +2,11 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { PublicAppShell } from "@/components/app-shell";
 import { signInAsContributor, signInForRepositoryRegistration } from "@/lib/auth/sign-in-actions";
+import { registrationAppConfigured, registrationAppInstallUrl } from "@/lib/github/registration-app-display";
+import type { RegistrationAppDisplayProps } from "@/components/registration-app-guidance";
+import { readEnv } from "@/lib/env";
 
-export function LandingPage() {
+export function LandingPage({ registrationAppConfigured = false, registrationAppInstallUrl = null }: RegistrationAppDisplayProps) {
   return (
     <main className="landing-page" id="main-content">
       <section className="landing-hero" aria-labelledby="landing-title">
@@ -19,14 +22,21 @@ export function LandingPage() {
           </button>
         </form>
         <p className="landing-action-note">
-          Contributing asks GitHub for nothing beyond your public profile. Registering a repository you
-          administer needs webhook administration on it, granted through a separate sign-in:
+          {registrationAppConfigured
+            ? "Contributing asks GitHub for nothing beyond your public profile. Registering a repository through Overflow's webhook needs webhook administration on it, granted through a separate sign-in:"
+            : "Contributing asks GitHub for nothing beyond your public profile. Registering a repository you administer needs webhook administration on it, granted through a separate sign-in:"}
         </p>
         <form action={signInForRepositoryRegistration}>
           <button className="quiet-button" type="submit">
             Sign in to register a repository
           </button>
         </form>
+        {registrationAppConfigured ? <p className="landing-action-note">
+          Or register without webhook administration: sign in with GitHub above,{" "}
+          {registrationAppInstallUrl === null ? "install this instance's registration App"
+            : <a href={registrationAppInstallUrl}>install this instance&apos;s registration App</a>}{" "}
+          on the repository, and choose &quot;GitHub App&quot; on the registration form.
+        </p> : null}
         <Link className="text-link" href="/account-data">
           What Overflow stores about your account
         </Link>
@@ -56,6 +66,7 @@ export function LandingPage() {
 }
 
 export default async function HomePage() {
+  const appConfigured = registrationAppConfigured(process.env);
   const { auth } = await import("@/auth");
   const session = await auth();
   const user = session?.user as { id?: unknown; role?: unknown } | undefined;
@@ -64,7 +75,8 @@ export default async function HomePage() {
   }
   return (
     <PublicAppShell>
-      <LandingPage />
+      <LandingPage registrationAppConfigured={appConfigured}
+        registrationAppInstallUrl={appConfigured ? registrationAppInstallUrl(readEnv("GITHUB_REGISTRATION_APP_SLUG")) : null} />
     </PublicAppShell>
   );
 }

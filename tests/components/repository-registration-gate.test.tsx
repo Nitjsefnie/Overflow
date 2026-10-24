@@ -45,6 +45,9 @@ const authorizeButton = () => screen.queryByRole("button", { name: "Authorize we
 const scopeNotice = () => screen.queryByRole("region", { name: "Webhook administration required" });
 
 beforeEach(() => {
+  vi.stubEnv("GITHUB_REGISTRATION_APP_ID", "");
+  vi.stubEnv("GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH", "");
+  vi.stubEnv("OVERFLOW_GITHUB_REGISTRATION_APP_SLUG", "");
   spyOnConsoleOutput();
   mocks.getTokenSummary.mockReset().mockResolvedValue(null);
   mocks.signInForRepositoryRegistration.mockReset();
@@ -63,6 +66,7 @@ afterEach(() => {
   } finally {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   }
 });
 
@@ -73,7 +77,39 @@ afterEach(() => {
 // does not — its hook is created with the linked identity's PAT — so the
 // Forge choice and the GitLab path stay reachable regardless.
 describe("repository registration page scope gate", () => {
+  it.each(["overflow-registration", "", "../invalid"])("guides a scope-less sponsor with App slug %s without reading a key", async (slug) => {
+    vi.stubEnv("GITHUB_REGISTRATION_APP_ID", "1");
+    vi.stubEnv("GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH", "/missing-registration-key.pem");
+    vi.stubEnv("OVERFLOW_GITHUB_REGISTRATION_APP_SLUG", slug);
+    mocks.requireMemberPageSession.mockResolvedValue(memberSession(false));
+    render(await NewRepositoryPage());
+    const notice = scopeNotice()!;
+    expect(notice.querySelectorAll("p")).toHaveLength(2);
+    expect(notice.querySelectorAll("p")[1]!.textContent).toBe("Or register through this instance's registration App, " +
+      'which needs no admin:repo_hook permission: install it on the repository, choose "GitHub App" as the registration method above, and register.');
+    const link = within(notice).queryByRole("link", { name: "install it" });
+    if (slug === "overflow-registration") expect(link).toHaveAttribute("href", "https://github.com/apps/overflow-registration/installations/new");
+    else expect(link).toBeNull();
+    expect(within(registrationForm()).getByRole("combobox", { name: "GitHub registration method" })).toHaveValue("oauth_hook");
+  });
+
+  it("rechecks configuration at each page render and leaves the catalog form unchanged", async () => {
+    mocks.requireMemberPageSession.mockResolvedValue(memberSession(false));
+    const first = render(await NewRepositoryPage());
+    expect(screen.queryByRole("combobox", { name: "GitHub registration method" })).not.toBeInTheDocument();
+    expect(scopeNotice()!.querySelectorAll("p")).toHaveLength(1);
+    first.unmount();
+    vi.stubEnv("GITHUB_REGISTRATION_APP_ID", "1");
+    vi.stubEnv("GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH", "/missing.pem");
+    render(await NewRepositoryPage());
+    expect(within(registrationForm()).getByRole("combobox", { name: "GitHub registration method" })).toBeInTheDocument();
+    expect(within(screen.getByRole("form", { name: "Change a repository's difficulty catalog" }))
+      .queryByRole("combobox", { name: "GitHub registration method" })).not.toBeInTheDocument();
+  });
+
   it("uses the public-identity sign-in for App registration and restores the OAuth gate when selected", async () => {
+    vi.stubEnv("GITHUB_REGISTRATION_APP_ID", "1");
+    vi.stubEnv("GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH", "/missing.pem");
     mocks.requireMemberPageSession.mockResolvedValue(memberSession(false));
     render(await NewRepositoryPage());
 

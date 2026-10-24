@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, ty
 import type { ClaimPathVerdict } from "@/lib/domain/claim-path";
 import type { ActualDifficultyLabel, OpeningDifficultyLabel } from "@/lib/domain/difficulty-scheme";
 import { plural } from "@/lib/plural";
+import { RegistrationAppHelp, RegistrationAppAlternative, type RegistrationAppDisplayProps } from "@/components/registration-app-guidance";
 
 export type RepositoryFormValues = {
   repositoryUrl: string;
@@ -37,7 +38,7 @@ type ForgeIdentityOption = {
   forgeLogin: string;
 };
 
-type RepositoryFormProps = {
+type RepositoryFormProps = RegistrationAppDisplayProps & {
   initialValues?: RepositoryFormValues;
   /**
    * `registration` registers a new repository (POST); `catalog-change` submits
@@ -114,6 +115,8 @@ export function RepositoryForm({
   reauthorizeAction,
   appSignInAction,
   canAdministerGitHubWebhooks,
+  registrationAppConfigured = false,
+  registrationAppInstallUrl = null,
 }: RepositoryFormProps) {
   const nextOpeningRowId = useRef(initialValues.openingLabels.length);
   const [values, setValues] = useState<RepositoryFormState>(() => createFormState(initialValues));
@@ -123,7 +126,7 @@ export function RepositoryForm({
   const text = isCatalogChange ? copy["catalog-change"] : copy.registration;
   const [provider, setProvider] = useState<ForgeProvider>("github");
   const [registrationMethod, setRegistrationMethod] = useState<"oauth_hook" | "app">("oauth_hook");
-  const appRegistration = !isCatalogChange && provider === "github" && registrationMethod === "app";
+  const appRegistration = registrationAppConfigured && !isCatalogChange && provider === "github" && registrationMethod === "app";
   const [instanceUrl, setInstanceUrl] = useState("");
   const [project, setProject] = useState("");
   const [gitlabIdentities, setGitlabIdentities] = useState<ForgeIdentityOption[]>([]);
@@ -378,7 +381,7 @@ export function RepositoryForm({
         </label>
       ) : null}
 
-      {!isCatalogChange && provider === "github" ? (
+      {registrationAppConfigured && !isCatalogChange && provider === "github" ? (
         <label className="field">
           <span>GitHub registration method</span>
           <select
@@ -393,12 +396,7 @@ export function RepositoryForm({
           </select>
         </label>
       ) : null}
-      {appRegistration ? (
-        <p className="field-help">
-          Install the least-privilege GitHub App on the repositories you select. Sign-in uses public identity only;
-          no webhook-administration scope is requested.
-        </p>
-      ) : null}
+      {appRegistration ? <RegistrationAppHelp url={registrationAppInstallUrl} /> : null}
 
       {provider === "gitlab" ? (
         <>
@@ -445,6 +443,7 @@ export function RepositoryForm({
             the registration form; GitHub keeps the account and adds the grant to whatever it already holds.
             Registering a GitLab project needs no GitHub permission — choose GitLab above.
           </p>
+          {registrationAppConfigured ? <RegistrationAppAlternative url={registrationAppInstallUrl} /> : null}
         </section>
       ) : (
         <label className="field">
