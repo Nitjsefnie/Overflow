@@ -3,8 +3,6 @@ import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { BalanceCard } from "@/components/balance-card";
 import { findLiveModeratorStanding, isLastLiveModeratorStanding } from "@/lib/accounts/deletion";
-import { getAppInstallOfferRepositoryIds } from "@/lib/dashboard/app-install-offers";
-import { reconciliationAppInstallUrl } from "@/lib/github/reconciliation-app-install-url";
 import { enforcementStateLabel, visibilityLabel } from "@/lib/dashboard/labels";
 import type { DashboardProjection, RegisteredRepositoryProjection } from "@/lib/dashboard/queries";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
@@ -22,8 +20,6 @@ type DashboardContentProps = {
   memberName: string;
   isModerator: boolean;
   dashboard: DashboardProjection;
-  appInstallUrl: string | null;
-  appInstallOfferRepositoryIds: ReadonlySet<string>;
   /**
    * Whether the signed-in account is the instance's last live moderator. The
    * page computes it through the deletion path's own read; the account
@@ -43,8 +39,6 @@ export function DashboardContent({
   memberName,
   isModerator,
   dashboard,
-  appInstallUrl,
-  appInstallOfferRepositoryIds,
   isLastLiveModerator = false,
   moderatorFloorConfigured = false,
 }: DashboardContentProps) {
@@ -180,16 +174,6 @@ export function DashboardContent({
                         <dd>{reconciliation}</dd>
                       </div>
                     )}
-                    {appInstallUrl !== null && appInstallOfferRepositoryIds.has(repository.id) ? (
-                      <div>
-                        <dt>GitHub App</dt>
-                        <dd>
-                          This repository reconciles through your GitHub sign-in.{" "}
-                          <a href={appInstallUrl}>Install the GitHub App</a> and select this repository;
-                          reconciliation switches to the installation from its next run.
-                        </dd>
-                      </div>
-                    ) : null}
                     <div>
                       <dt>Unregister</dt>
                       <dd>
@@ -315,10 +299,6 @@ export default async function DashboardPage() {
     // live moderator is. A failure here degrades exactly like a failed ledger
     // read: to the error state below.
     const sql = getSql();
-    const appInstallUrl = reconciliationAppInstallUrl({ GITHUB_APP_SLUG: readEnv("GITHUB_APP_SLUG") });
-    const appInstallOfferRepositoryIds = appInstallUrl === null
-      ? new Set<string>()
-      : await getAppInstallOfferRepositoryIds(sql, session.user.id);
     const standing = await findLiveModeratorStanding(sql, session.user.id);
     const moderatorFloorConfigured =
       normalizeModeratorGitHubUserIds(readEnv("MODERATOR_GITHUB_USER_IDS")).size > 0;
@@ -327,8 +307,6 @@ export default async function DashboardPage() {
         memberName={session.user.name}
         isModerator={isModeratorSession(session)}
         dashboard={dashboard}
-        appInstallUrl={appInstallUrl}
-        appInstallOfferRepositoryIds={appInstallOfferRepositoryIds}
         isLastLiveModerator={isLastLiveModeratorStanding(standing)}
         moderatorFloorConfigured={moderatorFloorConfigured}
       />
