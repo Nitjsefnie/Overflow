@@ -33,8 +33,8 @@ concurrency:
   # shares a group: GitHub keeps one PENDING run per group and cancels the
   # superseded one even with cancel-in-progress false, and a cancelled
   # conclusion on a merged SHA makes the deploy gate refuse immediately
-  # (issue 474). There is no pull-request leg in this file to bound — the one
-  # repository-level group is actionlint-pr-repo-wide, in the sibling.
+  # (issue 474). The pull-request leg runs in pr-gates.yml, with a group
+  # per pull request: pr-gates-${{ github.event.pull_request.number }}.
   #
   # cancel-in-progress is false so no in-flight run is destroyed; on a
   # per-SHA group the run it could destroy is this SHA's own earlier attempt,
