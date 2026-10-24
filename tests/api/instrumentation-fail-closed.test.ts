@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 /**
  * `register()` is Next.js's instrumentation hook: whatever it throws at server
  * start, Next catches and retries per request, so a misconfigured registration
- * App key (an unreadable key file throws at wiring time) used to sit the unit
+ * App key (the wiring-time reader throws) used to sit the unit
  * `active` serving 500s on every route, forever, seen by nobody (issue 846).
  * What this pins is that any throw from the Node wiring is fatal at the
  * boundary — the process exits so systemd restarts it and the start limit

@@ -10,12 +10,9 @@ import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-director
 
 /**
  * Issue 1362: GitHub reconciliation authenticates with the repository sponsor's
- * stored OAuth token only. Both production wirings — the server callback
- * `registerNodejs` builds and `scripts/reconcile.ts`'s production dependencies —
- * run against an environment that still carries every reconciliation App
- * variable (production keeps them set but unread): a fold must make no request
- * to an installation or access-token endpoint and read with the sponsor's
- * token.
+ * stored OAuth token only. Both production wirings run with every App variable
+ * still set (production keeps them but reads none): a fold must reach no
+ * installation or access-token endpoint and read with the sponsor's token.
  */
 
 const fixtureDirectories = createOwnedTempDirectoryRegistry(join(tmpdir(), "reconciliation-oauth-only-"));
@@ -118,8 +115,8 @@ for (const wiring of ["worker", "cli"] as const) {
     it("makes no installation or access-token request and reads with the sponsor's OAuth token", async () => {
       await reconcile();
 
-      // The recorder is live: the fold's one read is on it, so its silence on
-      // the App endpoints is a measurement and not a dead oracle.
+      // The fold's one read is on the recorder, so its silence on the App
+      // endpoints is a measurement and not a dead oracle.
       expect(requests.map(({ path }) => path)).toEqual(["/repositories/4242"]);
       expect(requests[0]).toMatchObject({ method: "GET", authorization: `Bearer ${sponsorToken}` });
       expect(oauth).toHaveBeenCalledExactlyOnceWith("sponsor-1");

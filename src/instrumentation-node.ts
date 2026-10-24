@@ -38,9 +38,8 @@ export async function registerNodejs(): Promise<void> {
     return;
   }
 
-  // A misconfigured registration App key still fails startup: the wiring-time
-  // reader throws, though its result is unused. The reconciliation App
-  // variables production keeps set in its environment are read never.
+  // A misconfigured registration App key fails startup at wiring; the
+  // reconciliation App variables production keeps set are read never.
   readGitHubRegistrationAppAuthConfig(process.env);
 
   const { PostgresFoldStore } = await import("@/lib/fold/postgres-store");
