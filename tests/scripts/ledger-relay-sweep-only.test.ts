@@ -309,4 +309,51 @@ describe("sweep-only relay runs (issue 1116)", () => {
     expect(delay.delays).toEqual([]);
     expect(fetchStub.requests.map((request) => request.url)).toEqual([OWN_JOB_URL, TOKEN_URL, SWEEP_RUNS_URL]);
   });
+
+  it("keeps a triggered start red when its orphan sweep is rate-limited past the deadline (issue 1355)", async () => {
+    // The mirror's complement: a green primary followed by a rate-limited
+    // sweep must stay red — only a sweep-ONLY start defers (the gate reads
+    // sweepOnlyStart). The runs listing URL is shared by the publication's
+    // pre-write producer listing and the sweep, so the first listing succeeds
+    // and the sweep's own listing is the rate-limited one.
+    const resetSec = Math.floor(Date.now() / 1000) + 3600;
+    const rateLimited = () => new Response("API rate limit exceeded for installation ID 166057493", {
+      status: 403, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(resetSec) },
+    });
+    const fetchStub = makeFetch([
+      token(),
+      { status: 200, body: { jobs: [{ name: "verify", run_attempt: 1, status: "completed", conclusion: "success" }] } },
+      sweepListing([sweepRun(9001, { event: "push", head_branch: "main" })]),
+      checkRunsListing([]),
+      { status: 201, body: { id: 1 } },
+    ]);
+    let listings = 0;
+    const fn = (async (url: unknown, init?: RequestInit) => {
+      if (String(url) === SWEEP_RUNS_URL && ++listings > 1) return rateLimited();
+      return fetchStub.fn(url, init);
+    }) as unknown as typeof fetch;
+    const delay = makeDelay();
+    const error = await caughtError(runRelay({
+      env: sweepOnlyEnv({
+        OVERFLOW_LEDGER_SWEEP_ONLY: "false",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_ID: RUN_ID,
+        OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD_SHA,
+        OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: PATH_CI,
+        OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "success",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/Nitjsefnie/Overflow/actions/runs/${RUN_ID}`,
+        OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "push",
+        OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
+      }),
+      fetchFn: fn,
+      delayFn: delay.fn,
+      readPinMap: async () => PIN_MAP,
+    }));
+
+    expect(error, "a triggered start must not defer on a rate-limited sweep").toBeInstanceOf(Error);
+    expect(error?.message).toContain("the repository's workflow-run listing for the orphan sweep failed: " +
+      "GitHub rate limit exhausted");
+    // The primary went green first: a defer here would hide a finished mirror.
+    expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(1);
+    expect(delay.delays).toEqual([]);
+  });
 });
