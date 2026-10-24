@@ -330,7 +330,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
     let listings = 0;
     const fn = (async (url: unknown, init?: RequestInit) => {
       if (String(url) === SWEEP_RUNS_URL && ++listings > 1) return rateLimited();
-      return fetchStub.fn(url, init);
+      return fetchStub.fn(url as string, init);
     }) as unknown as typeof fetch;
     const delay = makeDelay();
     const error = await caughtError(runRelay({
