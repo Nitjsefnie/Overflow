@@ -32,6 +32,8 @@ type Workflow = {
     if?: string;
     "runs-on"?: string;
     "timeout-minutes"?: number;
+    needs?: string | string[];
+    outputs?: Record<string, string>;
     permissions?: Record<string, string>;
     services?: Record<string, { image?: string; options?: string }>;
     env?: Record<string, string>;
@@ -519,6 +521,47 @@ fi
     }));
   });
 
+  it("the two CI postgres services read one Dockerfile", async () => {
+    const ci = await readWorkflow("ci.yml");
+    const prSuite = await readWorkflow("pr-suite.yml");
+    const image = "${{ needs.postgres-image.outputs.image }}";
+    expect(
+      ci.jobs.verify!.services?.postgres?.image,
+      "ci.yml's verify service image must be resolved from the postgres-image job's output",
+    ).toBe(image);
+    expect(
+      prSuite.jobs.suite!.services?.postgres?.image,
+      "pr-suite.yml's suite service image must be resolved from the postgres-image job's output",
+    ).toBe(image);
+    for (const [file, workflow, consumer] of [
+      ["ci.yml", ci, ci.jobs.verify!],
+      ["pr-suite.yml", prSuite, prSuite.jobs.suite!],
+    ] as const) {
+      const producer = workflow.jobs["postgres-image"];
+      expect(producer, `${file} must carry the postgres-image job`).toBeDefined();
+      expect(
+        producer!.steps.flatMap((step) => step.run ?? []).join("\n"),
+        `${file}'s postgres-image job must read the image reference from .github/Dockerfile`,
+      ).toContain(".github/Dockerfile");
+      expect(
+        JSON.stringify(consumer.needs ?? null),
+        `${file}'s consuming job must declare postgres-image in needs`,
+      ).toContain("postgres-image");
+    }
+    // The digest-literal images are gone from both sources: the reference is
+    // resolved at run time from the Dockerfile the postgres-image job reads.
+    // The Dockerfile's own pin — which tag and which digest — is asserted by
+    // no test here (issue 1334; #1328 settled): which pin is right is the
+    // Dependabot /.github/ docker lane's judgment, and this file reads the
+    // path, never the pin's value.
+    for (const file of ["ci.yml", "pr-suite.yml"]) {
+      const source = await readFile(resolve(".github/workflows", file), "utf8");
+      expect(source, `${file} must not carry a literal postgres service image`).not.toMatch(
+        /image:\s*postgres/,
+      );
+    }
+  });
+
   it("parses a catalogue-style workflow gate with explicit least privilege", async () => {
     const workflow = await readWorkflow("pr-gates.yml");
     // pull_request_target executes main's definition and main's tools; the
@@ -963,7 +1006,7 @@ exit 1
     expect(npm!.ignore).toEqual([{ "dependency-name": "postgres" }]);
   });
 
-  it("adds the github-actions, docker, and pip ecosystems to the weekly dependabot schedule", async () => {
+  it("adds the github-actions, docker, docker-compose, and CI Dockerfile lanes to the weekly dependabot schedule", async () => {
     const config = parse(await readFile(resolve(".github/dependabot.yml"), "utf8")) as {
       updates: Array<{
         "package-ecosystem": string;
@@ -987,6 +1030,8 @@ exit 1
       "npm",
       "github-actions",
       "docker",
+      "docker",
+      "docker-compose",
       "pip",
     ]);
     // One slot per ecosystem, not one shared literal: a shared `{ interval:
@@ -1019,9 +1064,43 @@ exit 1
     }
     // Only the Docker Node major is declined until it reaches LTS; keep that
     // exact scope so the ignore cannot drift to another update type.
-    const docker = config.updates.find((u) => u["package-ecosystem"] === "docker")!;
+    const docker = config.updates.find((u) => u["package-ecosystem"] === "docker" && u.directory === "/")!;
     expect(docker.ignore).toEqual([{
       "dependency-name": "node",
+      "update-types": ["version-update:semver-major"],
+    }]);
+    // The CI service image lane (issue 1334): it covers .github/Dockerfile,
+    // so `find` by ecosystem "docker" now returns the root entry first and
+    // this lane is found by its directory instead.
+    const githubDocker = config.updates.find((u) =>
+      u["package-ecosystem"] === "docker" && u.directory === "/.github/")!;
+    expect(githubDocker.directory).toBe("/.github/");
+    expect(githubDocker.schedule).toEqual({
+      interval: "weekly",
+      day: "sunday",
+      time: "05:53",
+      timezone: "Etc/UTC",
+    });
+    expect(githubDocker["open-pull-requests-limit"]).toBe(5);
+    // The service image stays within major 17: the exact scope, so the ignore
+    // cannot drift to another update type.
+    expect(githubDocker.ignore).toEqual([{
+      "dependency-name": "postgres",
+      "update-types": ["version-update:semver-major"],
+    }]);
+    // The compose image lane (issue 1335): it covers docker-compose.yml, the
+    // file the compose database service and POSTGRES_IMAGE read.
+    const compose = config.updates.find((u) => u["package-ecosystem"] === "docker-compose")!;
+    expect(compose.directory).toBe("/");
+    expect(compose.schedule).toEqual({
+      interval: "weekly",
+      day: "tuesday",
+      time: "05:57",
+      timezone: "Etc/UTC",
+    });
+    expect(compose["open-pull-requests-limit"]).toBe(5);
+    expect(compose.ignore).toEqual([{
+      "dependency-name": "postgres",
       "update-types": ["version-update:semver-major"],
     }]);
     // The two Nitjsefnie-Actions workflows are SHA-pinned by maintainer
@@ -1079,6 +1158,7 @@ exit 1
     const config = parse(await readFile(resolve(".github/dependabot.yml"), "utf8")) as {
       updates: Array<{
         "package-ecosystem": string;
+        directory: string;
         schedule: Schedule;
         groups?: Record<
           string,
@@ -1214,7 +1294,7 @@ exit 1
       }
     }
 
-    // All four lanes carry an explicit weekday, an explicit clock and a
+    // Every lane carries an explicit weekday, an explicit clock and a
     // timezone. No lane's day may be Monday — the default an unset `day`
     // resolves to — nor any weekday a weekday-pinned workflow in this
     // repository already fires on: code-scanning Wednesday, scorecard Saturday.
@@ -1222,15 +1302,18 @@ exit 1
     // weekday-occupation model.
     // The explicit days spread weekly lanes away from weekly workflow slots;
     // the property is asserted against the crons read above, not transcribed.
-    for (const ecosystem of ["npm", "github-actions", "docker", "pip"]) {
-      const update = config.updates.find((u) => u["package-ecosystem"] === ecosystem)!;
+    // Iterating the whole updates list is what keeps BOTH docker lanes and the
+    // docker-compose lane under the same rules — a `find` by ecosystem would
+    // cover only the root docker entry now that two share one ecosystem.
+    for (const update of config.updates) {
+      const label = `${update["package-ecosystem"]} at ${update.directory}`;
       const { schedule } = update;
-      expect(schedule.interval, ecosystem).toBe("weekly");
-      expect(schedule.timezone, ecosystem).toBe("Etc/UTC");
-      expect(schedule.time, ecosystem).toMatch(/^\d{2}:\d{2}$/);
-      expect(schedule.day, ecosystem).toBeDefined();
-      expect(schedule.day, ecosystem).not.toBe("monday");
-      expect(cronDays.has(schedule.day ?? ""), `${ecosystem} runs on ${schedule.day}, a cron day`)
+      expect(schedule.interval, label).toBe("weekly");
+      expect(schedule.timezone, label).toBe("Etc/UTC");
+      expect(schedule.time, label).toMatch(/^\d{2}:\d{2}$/);
+      expect(schedule.day, label).toBeDefined();
+      expect(schedule.day, label).not.toBe("monday");
+      expect(cronDays.has(schedule.day ?? ""), `${label} runs on ${schedule.day}, a cron day`)
         .toBe(false);
     }
   });
@@ -1340,6 +1423,8 @@ exit 1
     expect(checkIgnore(".github/workflows/secret-scan.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/pr-suite.yml")).toBe(1);
     expect(checkIgnore(".github/dependabot.yml")).toBe(1);
+    // The CI service image both workflows resolve at run time (issue 1334).
+    expect(checkIgnore(".github/Dockerfile")).toBe(1);
     expect(checkIgnore(".github/workflows/unshipped.yaml")).toBe(0);
     expect(checkIgnore(".github/junk.txt")).toBe(0);
   });

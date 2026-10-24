@@ -17,8 +17,9 @@ a fresh production-only frozen install (a prune in place would leave the dev
 packages behind in pnpm's virtual store), and `runtime` carries the built
 output, the
 migrations, the production-only dependency tree, and the code the start
-command needs onto a clean base. The `deps` and `runtime` stages pin
-`node:24.21.0-bookworm-slim` by digest, and the runtime stage labels every
+command needs onto a clean base. The `deps` and `runtime` stages build from
+the same digest-pinned `node` base, named on the `FROM` lines in
+`Dockerfile`, and the runtime stage labels every
 image with the full source revision it was built from — an image without
 that label cannot be built (issue 461) — declares a `HEALTHCHECK` against
 `/api/readiness`, the endpoint that answers 200 only when the database is
@@ -70,12 +71,19 @@ build it with the script first. To build under another tag, pass it to
 `scripts/container-build.sh [tag]` and point compose at that image with an
 override file.
 
-The image builds from digest-pinned bases —
-`node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6` for the application image and
-`postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73` for the database — so the same source always resolves the
+The image builds from digest-pinned bases — the `FROM` lines in `Dockerfile`
+name both, for the application image and for the database — so the same
+source always resolves the
 same base bytes. A bare `docker build` without `--build-arg SOURCE_SHA=...`
 fails loudly in the Dockerfile's guard instead of producing an unlabelled
 image.
+
+Moving the database image within PostgreSQL major 17 needs nothing from the
+existing `overflow-postgres-data` volume: PostgreSQL guarantees on-disk
+compatibility within a major, so a `17.<minor>` bump starts the volume as it
+is. A PostgreSQL major bump is the one that needs `pg_upgrade`, and both
+dependabot lanes' `semver-major` ignore for `postgres` is what keeps the
+image inside 17.
 
 The app service needs a `.env` file beside `docker-compose.yml` with the auth
 and webhook variables from [.env.example](../.env.example): `AUTH_SECRET`,
@@ -275,7 +283,7 @@ Compose file does not mount it. Private `.env` files stay out of the build
 context because the script exports only committed files with `git archive`.
 Keep key files outside the tracked source and build context too.
 
-**The image builds in-image on `node:24.21.0-bookworm-slim`.** The same base
+**The image builds in-image on the `node` base the Dockerfile pins.** The same base
 that compiles the bundle serves it — both `FROM` lines pinned by digest — and
 the image's Node base can receive non-major updates within Node 24, while `engines` in
 `package.json` pins the Node version CI and the host deployment use. Copying the
@@ -337,13 +345,17 @@ immutable identity — exists only after a maintainer publishes one; until
 then the image ID is the identity rollback selects. **Signatures and
 attestations**: nothing here signs an image or attaches build attestations.
 **Automated digest bumps**: these pins go stale the moment a base image is
-rebuilt upstream. Docker Dependabot scans only the root Dockerfile and proposes
-tag-and-digest updates to its `FROM` lines; Node majors remain ignored pending
+rebuilt upstream. Docker Dependabot proposes tag-and-digest updates to the
+root Dockerfile's `FROM` lines, to `.github/Dockerfile` (the CI service
+image, the `/.github/` docker lane) and to `docker-compose.yml` (the
+`docker-compose` lane); Node majors remain ignored pending
 review on/after 2026-10-28. Both build paths derive the base provenance labels
 from those `FROM` references automatically, and the tests derive their
 expectations from the runtime `FROM` line; no manual label or test constant
-update is needed. The compose and CI service PostgreSQL digests have no
-proposal lane and remain hand edits.
+update is needed. The compose database image now rides the docker-compose
+lane, and the CI service image the `/.github/` docker lane: each digest moves
+only through such a pull request, and pr-suite's database suites run on the
+new image before it lands.
 
 ## The default path
 

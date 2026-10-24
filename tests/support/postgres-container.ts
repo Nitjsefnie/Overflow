@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync, writeSync } from "node:fs";
 import { createServer } from "node:net";
 import { inject } from "vitest";
+import { parse } from "yaml";
 import { GenericContainer, Wait, getContainerRuntimeClient, type StartedTestContainer, type StoppedTestContainer, type WaitStrategy } from "testcontainers";
 import postgres from "postgres";
 
@@ -271,10 +272,14 @@ export function publishPostgresOnLoopback(container: GenericContainer, hostPort:
 }
 
 /**
- * Pinned by digest (issue 461) so every DB suite runs the same postgres bytes.
- * The tag stays for readability; the digest is what Docker actually pulls.
+ * Pinned by digest (issue 461) so every DB suite runs the same postgres bytes;
+ * read from docker-compose.yml (issue 1335): the one file that writes it.
  */
-export const POSTGRES_IMAGE = "postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73";
+export const POSTGRES_IMAGE = (
+  parse(readFileSync(new URL("../../docker-compose.yml", import.meta.url), "utf8")) as {
+    services: { postgres: { image: string } };
+  }
+).services.postgres.image;
 
 /**
  * The official postgres entrypoint runs initialisation against a temporary server bound to a Unix

@@ -380,7 +380,7 @@ describe("the pull request suite workflow", () => {
       expect(required).not.toContain(id);
       expect(required).not.toContain(job.name ?? id);
     }
-    expect(Object.keys(workflow.jobs)).toEqual(["suite"]);
+    expect(Object.keys(workflow.jobs)).toEqual(["postgres-image", "suite"]);
   });
 
   it("is superseded only by the same pull request's newer push", () => {
@@ -756,11 +756,12 @@ describe("the pull request suite workflow", () => {
   // evidence of coverage at the inner one: it shows the key is policed SOMEWHERE,
   // and the somewhere is rarely where the next reader looks.
   //
-  // `needs` is banned for the same reason and is not hypothetical: a
-  // `needs:` naming a job that does not exist is a third job-scope gating key,
-  // and it survives the sweep. Its liveness needs a real Actions run to establish,
-  // which this file does not have — so it is closed by assertion rather than
-  // left as an open question.
+  // `needs` was banned by the same rule and is allowed since issue 1334: the
+  // postgres-image job's output feeds the service image, and the reason it is
+  // safe is woven into the assertion's failure message below — `needs` is an
+  // ordering key, the suite still runs unconditionally (no `if`), and the
+  // nonexistent-job hazard the ban guarded against is closed by the jobs
+  // key-set pin plus actionlint's needs-reference validation.
   it("carries no job-level suppression on the suite job", () => {
     const jobInert = new Set([
       "name",
@@ -769,12 +770,17 @@ describe("the pull request suite workflow", () => {
       "env",
       "services",
       "steps",
+      // Ordering key, not a suppression — the failure message carries the reason.
+      "needs",
     ]);
     expect(
       Object.keys(suite).filter((key) => !jobInert.has(key)),
       "the suite job carries a key that can suppress or skip the whole job — a " +
-        "`defaults.run.shell` reinterprets how every step's run block executes, a `needs` " +
-        "conditions the job at all, `if`/`continue-on-error` skip or excuse it. If the key " +
+        "`defaults.run.shell` reinterprets how every step's run block executes, and " +
+        "`if`/`continue-on-error` skip or excuse it. `needs` is an ordering key, not a " +
+        "suppression: the suite still runs unconditionally (the `if` assertion below holds " +
+        "that), and the nonexistent-job hazard the original ban guarded against is closed by " +
+        "the jobs key-set pin plus actionlint's needs-reference validation. If the key " +
         "is inert, allow-list it here with its reason; if it is not, the hash binding no " +
         "longer gates anything.",
     ).toEqual([]);

@@ -476,7 +476,7 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   // match.
   "actionlint.yml": ["actionlint"],
   "ci-pr.yml": ["verify"],
-  "ci.yml": ["calibrate", "push-recalibration", "shellcheck", "verify"],
+  "ci.yml": ["calibrate", "postgres-image", "push-recalibration", "shellcheck", "verify"],
   "claim.yml": ["claim"],
   "code-scanning.yml": ["analyze"],
   "comment-share.yml": ["comment-share"],
@@ -486,7 +486,7 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   "ledger-relay.yml": ["relay-required-checks"],
   "pr-gate.yml": ["gate"],
   "pr-gates.yml": ["actionlint", "ratchet-guard", "secret-scan", "dependency-audit"],
-  "pr-suite.yml": ["suite"],
+  "pr-suite.yml": ["postgres-image", "suite"],
   "ratchet-guard.yml": ["ratchet-guard"],
   "ratchet-push.yml": ["push"],
   "scorecard.yml": ["analysis"],

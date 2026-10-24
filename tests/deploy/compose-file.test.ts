@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { POSTGRES_IMAGE } from "../support/postgres-container";
@@ -38,7 +39,12 @@ describe("docker-compose.yml", () => {
 
   it("leaves the postgres service unchanged", () => {
     const postgres = compose.services.postgres;
-    expect(postgres.image).toBe("postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73");
+    // The same-value check (issue 1335): the helper reads its image from this
+    // file, so compose and the DB suites start one written pin. It catches
+    // every stale divergence; a re-literalization of POSTGRES_IMAGE to the
+    // compose image's CURRENT value is the one shape it cannot see, and the
+    // no-literal scan below is what holds that side.
+    expect(postgres.image).toBe(POSTGRES_IMAGE);
     expect(postgres.restart).toBe("unless-stopped");
     expect(postgres.healthcheck).toBeDefined();
     expect(postgres.ports).toEqual(["${POSTGRES_HOST_BIND:-127.0.0.1}:${POSTGRES_HOST_PORT:-5432}:5432"]);
@@ -94,14 +100,18 @@ describe("docker-compose.yml", () => {
     expect(compose.volumes).toHaveProperty("overflow-postgres-data");
   });
 
-  it("pins the DB suites' testcontainers postgres image to the same verified digest as compose", () => {
-    // Issue 461: every postgres in the repository resolves the same reviewed
-    // bytes. One digest literal here pins the compose image above and the
-    // testcontainers constant together — they are a shared fact, and a pin
-    // that drifts from the other names a different image.
-    expect(POSTGRES_IMAGE).toBe(
-      "postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
-    );
+  it("holds no postgres digest literal beside the one compose writes", () => {
+    // Issue 1335: the image is written once, in docker-compose.yml. The
+    // equality above cannot see a re-literalization of POSTGRES_IMAGE to the
+    // compose image's CURRENT value — same value, same green — so this scan
+    // is what holds that shape: both files stay literal-free, and a future
+    // digest bump touches only docker-compose.yml.
+    for (const url of [
+      import.meta.url,
+      new URL("../support/postgres-container.ts", import.meta.url).href,
+    ]) {
+      expect(readFileSync(fileURLToPath(url), "utf8")).not.toMatch(/sha256:[0-9a-f]{64}/);
+    }
   });
 
   it("defines no volume beyond overflow-postgres-data", () => {
