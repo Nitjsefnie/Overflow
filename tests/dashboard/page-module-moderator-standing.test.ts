@@ -19,9 +19,7 @@ import type { SqlClient } from "@/lib/db/types";
  * the session gate and the ledger read — plus the SQL client seam, which the
  * standing read reaches with a one-row stub. findLiveModeratorStanding and
  * isLastLiveModeratorStanding run FOR REAL against that stub, so the page's
- * live-moderator predicate is driven, not assumed. The getDashboard boundary
- * is also the error path's drive: a rejected read degrades to the
- * ledger-unavailable error state, never a half-loaded dashboard.
+ * live-moderator predicate is driven, not assumed.
  */
 
 // Rebind cached consumers to this file's mocks when workers are shared.
@@ -157,8 +155,6 @@ describe("the dashboard page drives the account controls' moderator-standing pro
 
     await renderDashboardPage();
 
-    // The error section and its title stand, and the happy-path repository
-    // grid never appears beside them — a failed read loads no half-ledger.
     expect(ledgerErrorSection()).toBeVisible();
     expect(document.querySelector("#registered-repositories-heading")).toBeNull();
   });
