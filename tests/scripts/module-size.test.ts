@@ -298,6 +298,10 @@ describe("module size families and exclusions", () => {
     ["LICENSE", "documentation"],
     [".github/workflows/ci.yml", "repository metadata"],
     [".github/required-checks.json", "repository metadata"],
+    // The CI service image both workflow jobs resolve at run time (issue 1334):
+    // declarative image config, not program code, and the same admission the
+    // two hashed requirements files hold.
+    [".github/Dockerfile", "repository metadata"],
     [".github/requirements-zizmor.txt", "repository metadata"],
     [".github/requirements-pyyaml.txt", "repository metadata"],
     [".gitignore", "repository metadata"],
