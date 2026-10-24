@@ -515,4 +515,56 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
     expect(w.state.delays).toEqual([]);
     expect(w.state.posts).toBe(0);
   });
+
+  it("refuses to wait a reset that fits only without the five-second margin", async () => {
+    // reset 58 s + margin 5 s = 63 s > 60 s deadline: the wait would end with
+    // the retried request no time, so it must not start.
+    const { deps, state } = rateLimitDeps([rateLimited(58)]);
+
+    const error = await caught(apiCall(deps, theCall, what));
+
+    expect(error).toBeInstanceOf(RateLimitExceededError);
+    expect(state.delays).toEqual([]);
+    expect(state.requests).toEqual([10_000]);
+  });
+
+  it("keeps a single-attempt caller immediate on a fitting reset", async () => {
+    const { deps, state } = rateLimitDeps([rateLimited(14)]);
+
+    const error = await caught(apiCall(deps, theCall, what, false));
+
+    expect(error).toBeInstanceOf(RateLimitExceededError);
+    expect(state.delays).toEqual([]);
+    expect(state.requests).toEqual([10_000]);
+  });
+
+  it("does not classify a 403 whose x-ratelimit-remaining is non-zero even with a parsable reset", async () => {
+    const { deps, state } = rateLimitDeps([
+      new Response("This workflow is already running", {
+        status: 403, headers: { "x-ratelimit-remaining": "5", "x-ratelimit-reset": "14" },
+      }),
+    ]);
+
+    const error = await caught(apiCall(deps, theCall, what));
+
+    expect(error).not.toBeInstanceOf(RateLimitExceededError);
+    expect(error.message).toContain("HTTP 403");
+    expect(state.delays).toEqual([]);
+    expect(state.requests).toEqual([10_000]);
+  });
+
+  it("classifies a 403 whose only marker is the rate-limit body, reading the reset from x-ratelimit-reset", async () => {
+    // remaining is present but non-zero: the body match is the working marker.
+    const { deps, state } = rateLimitDeps([
+      new Response("API rate limit exceeded for installation ID 166057493", {
+        status: 403, headers: { "x-ratelimit-remaining": "1", "x-ratelimit-reset": "14" },
+      }),
+      new Response(JSON.stringify({ jobs: [] })),
+    ]);
+
+    await expect(apiCall(deps, theCall, what)).resolves.toEqual({ jobs: [] });
+
+    expect(state.delays).toEqual([4_000]);
+    expect(state.requests).toEqual([10_000, 14_000]);
+  });
 });
