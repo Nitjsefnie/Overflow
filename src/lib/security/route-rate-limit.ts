@@ -56,10 +56,9 @@ export interface RouteRateLimits {
 
 /**
  * Reads one class's bound from the environment. A value that is present but
- * not a positive finite number — blank, non-numeric, zero, negative, or an
- * overflow to Infinity — falls back to the documented default: the limiter's
- * math must never see 0 or less (capacity 0 declines forever; refill 0
- * reports an infinite Retry-After).
+ * not finite and at least one falls back to the documented default. A bucket
+ * below one can never hold the token each admission consumes; it would refuse
+ * forever while advertising a finite Retry-After.
  */
 export function resolveRouteRateLimit(
   env: Record<string, string | undefined>,
@@ -68,7 +67,7 @@ export function resolveRouteRateLimit(
   const raw = env[spec.envName];
   if (raw !== undefined) {
     const parsed = Number(raw);
-    if (Number.isFinite(parsed) && parsed > 0) {
+    if (Number.isFinite(parsed) && parsed >= 1) {
       return { capacity: parsed, refillPerMinute: parsed / 60 };
     }
   }
