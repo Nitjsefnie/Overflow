@@ -27,8 +27,6 @@ describe("member dashboard", () => {
   it("shows independently calculated ledger totals and reserved headroom", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -55,8 +53,6 @@ describe("member dashboard", () => {
   it("makes each recent settlement proof discoverable from the ledger", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -109,8 +105,6 @@ describe("member dashboard", () => {
   it("reads each settlement proof's credit count with the plural its count takes", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -166,8 +160,6 @@ describe("member dashboard", () => {
   it("does not present an unclaimed settlement's credits as moved", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -211,8 +203,6 @@ describe("member dashboard", () => {
   it("shows the dashboard operational queues and renders external text as text", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -272,8 +262,6 @@ describe("member dashboard", () => {
   it("announces an open audit in its own section whatever the enforcement state and notices say", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -312,8 +300,6 @@ describe("member dashboard", () => {
   it("announces the open audit with no enforcement state present and notices standing", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -353,8 +339,6 @@ describe("member dashboard", () => {
   it("renders no audit section when no audit is open on the account", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -378,8 +362,6 @@ describe("member dashboard", () => {
   it("reads an ambiguous claim assignee as a phrase, never the reserved sentinel login", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -416,8 +398,6 @@ describe("member dashboard", () => {
   it("prints a perception catalog's name once in the claim row and still prefixes a numeric label", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -473,8 +453,6 @@ describe("member dashboard", () => {
   it("names why each unavailable repository went dark and says nothing extra for an available one", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -511,8 +489,6 @@ describe("member dashboard", () => {
   it("keeps an unrecognized unavailability reason from reaching the sponsor as a raw value", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -542,8 +518,6 @@ describe("member dashboard", () => {
     const failedAt = new Date("2026-09-04T11:00:00.000Z");
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -600,8 +574,6 @@ describe("member dashboard", () => {
   it("shows both the unavailability and the reconciliation clause on one repository's line", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -638,8 +610,6 @@ describe("member dashboard", () => {
   it("keeps a failing repository readable when the queue holds no time for the failure", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -669,8 +639,6 @@ describe("member dashboard", () => {
     const failedAt = new Date("2026-09-04T11:00:00.000Z");
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -728,8 +696,6 @@ describe("member dashboard", () => {
   it("lays every dashboard list section out as labelled grids of terms above values", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -813,8 +779,6 @@ describe("member dashboard", () => {
   it("offers an unregister control on every registered repository's row, inactive ones included", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -851,8 +815,6 @@ describe("member dashboard", () => {
   it("shows repository visibility as display text, never the stored form", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -882,8 +844,6 @@ describe("member dashboard", () => {
   it("renders the Account audit section beside the three list grids when an audit is open", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -926,8 +886,6 @@ describe("member dashboard", () => {
   it("keeps the three list sections' empty states rendering without any list item", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -1076,8 +1034,6 @@ describe("member dashboard", () => {
   it("places the account controls after the forge identities panel", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={{
@@ -1121,8 +1077,6 @@ describe("member dashboard", () => {
     try {
       render(
         <DashboardContent
-          appInstallUrl={null}
-          appInstallOfferRepositoryIds={new Set()}
           memberName="Ada Lovelace"
           isModerator={false}
           dashboard={{
@@ -1160,8 +1114,6 @@ describe("member dashboard", () => {
   it("passes the last-live-moderator booleans through to the account controls' warning", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         isLastLiveModerator
@@ -1179,8 +1131,6 @@ describe("member dashboard", () => {
   it("shows no moderator warning on the dashboard for an ordinary account", () => {
     render(
       <DashboardContent
-        appInstallUrl={null}
-        appInstallOfferRepositoryIds={new Set()}
         memberName="Ada Lovelace"
         isModerator={false}
         dashboard={emptyDashboard()}
