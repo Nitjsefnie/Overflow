@@ -4,15 +4,12 @@ import { describe, expect, it } from "vitest";
 import { relativeLinks, unresolvedLinks } from "../support/markdown-links";
 
 /**
- * Issue 1032 gave the Overflow Ledger App's private-key rotation a runbook:
- * section 14 of the deploy guide carries the CI-secret-only procedure. The
- * reconciliation App that once shared the section is retired (issue 1362):
- * the fold reconciles every repository with the sponsor's OAuth token, the
- * host-only procedure is gone, and incident-response's rotation pointer with
- * it.
- *
- * These assertions pin reader-dependent structure: the section has a body,
- * its links resolve, and the CI procedure's command blocks stay exact.
+ * Section 14 of the deploy guide carries the Overflow Ledger App's
+ * CI-secret-only key rotation; the reconciliation App that once shared the
+ * section is retired, so the host-only procedure and incident-response's
+ * rotation pointer are gone. These assertions pin reader-dependent
+ * structure: the section has a body, its links resolve, and the CI
+ * procedure's command blocks stay exact.
  */
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
