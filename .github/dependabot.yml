@@ -55,13 +55,18 @@ updates:
   # a group cannot quietly stop covering one. A group without applies-to covers
   # version updates only and security updates are enabled here, so the second
   # group keeps a single-action advisory from opening a single-package pull
-  # request. All four lanes carry an explicit day, off the default Monday. The
+  # request. All six lanes carry an explicit day, off the default Monday. The
   # weekday-pinned workflow crons are Wednesday 05:43 (code-scanning) and
   # Saturday 03:23 (scorecard). secret-scan runs daily at 04:41 and
   # dependency-audit daily at 06:37; both daily minutes differ from every
-  # Dependabot lane minute. npm runs Tuesday 03:17, pip Thursday 05:07, this
-  # lane Friday 04:23 and docker Sunday 05:31, so no lane shares a runner
-  # minute with any scheduled workflow. Thursday has no weekday-pinned cron.
+  # Dependabot lane minute. npm runs Tuesday 03:17, docker-compose Tuesday
+  # 05:57, pip Thursday 05:07, this lane Friday 04:23, docker Sunday 05:31 and
+  # the CI Dockerfile lane Sunday 05:53, so no lane shares a runner minute with
+  # any scheduled workflow. Thursday has no weekday-pinned cron. Every weekday
+  # is otherwise occupied — four by lanes (Tuesday, Thursday, Friday, Sunday),
+  # two by the weekday-pinned crons (Wednesday, Saturday) — and Monday is the
+  # dependabot default, so each of the two new lanes shares a day with an
+  # existing lane at a distinct minute rather than taking a free one.
   # That weekly grouped pull request lands red on arrival by design:
   # tests/api/ci-workflows.test.ts pins those action SHAs, so the handler
   # completes the second edit (the test pins) before merging — CONTRIBUTING.md's
@@ -83,14 +88,17 @@ updates:
         patterns:
           - "*"
 
-  # Matches the root Dockerfile (the repository's only one). Its base image is
+  # Matches the root Dockerfile. Its base image is
   # digest-pinned, so bumps arrive as tag+digest updates for that one image.
   # That digest is a shared literal across Dockerfile's two FROM lines, the
   # provenance LABEL's base.digest (issue 461) and a constant in
   # tests/deploy/container-image.test.ts, so a FROM-only bump lands red with
   # the rest stale: the handler makes the coordinated edit (all FROM lines,
   # LABEL, test constant) or the lane becomes an `ignore` entry by maintainer
-  # decision.
+  # decision. Two sibling lanes cover the other images: the /.github/ docker
+  # entry below covers .github/Dockerfile (the CI service image), and the
+  # docker-compose entry covers docker-compose.yml — a separate ecosystem
+  # entry, not this one.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
@@ -108,6 +116,48 @@ updates:
       # (both Dockerfile FROM lines, the provenance LABEL's base digest, the
       # container-image test constant).
       - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+
+  # Covers .github/Dockerfile, the CI service image both CI workflows read at
+  # run time: ci.yml's verify and pr-suite.yml's suite start it through their
+  # postgres-image job's output, so a bump here is the pull request that runs
+  # pr-suite's database on the new image before it lands, and the digest
+  # changes only through such a pull request. Bumps arrive as tag+digest
+  # updates within major 17.
+  - package-ecosystem: "docker"
+    directory: "/.github/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "05:53"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    ignore:
+      # The service image stays within major 17: a major bump changes runtime
+      # behavior the maintainers take deliberately, and the digest moves within
+      # the major either way.
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
+
+  # Covers docker-compose.yml, the compose database image both the optional
+  # compose route and every database test suite start (the suites read the
+  # same reference through POSTGRES_IMAGE), so a bump here is the pull request
+  # that runs pr-suite's database suites on the new image before it lands, and
+  # the digest changes only through such a pull request. Bumps arrive as
+  # tag+digest updates within major 17.
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "05:57"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    ignore:
+      # The image stays within major 17: a major bump changes runtime behavior
+      # the maintainers take deliberately, and the digest moves within the
+      # major either way.
+      - dependency-name: "postgres"
         update-types: ["version-update:semver-major"]
 
   # This lane covers .github/requirements-zizmor.txt, the hash-pinned zizmor
@@ -170,9 +220,9 @@ updates:
   # regime as the two lanes above, with one file to regenerate instead of a
   # workflow and its test constant.
   # No groups or ignore entries: one pinned package gives a group nothing to
-  # collect, and zizmor bumps are wanted. Thursday 05:07 Etc/UTC is the fourth
-  # lane slot, off Monday and clear of the scheduled workflow times; no
-  # weekday-pinned workflow cron runs Thursday.
+  # collect, and zizmor bumps are wanted. Thursday 05:07 Etc/UTC is off Monday
+  # and clear of the scheduled workflow times; no weekday-pinned workflow cron
+  # runs Thursday.
   - package-ecosystem: "pip"
     directory: "/.github/"
     schedule:

@@ -39,13 +39,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Issue 1334: the same reference resolution ci.yml's postgres-image job
+  # does — the PostgreSQL service image is read at run time from the
+  # digest-pinned .github/Dockerfile, so a Dependabot bump of that file is
+  # exercised by this suite's own database before it lands.
+  postgres-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      # The job reads one file from the pull request's merge commit; the
+      # default depth carries it. No fetch-depth input on purpose.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the PostgreSQL service image reference
+        id: image
+        run: |
+          image="$(awk 'tolower($1)=="from"{print $2; exit}' .github/Dockerfile)"
+          if [ -z "${image}" ]; then
+            echo "::error::no FROM line in .github/Dockerfile" >&2
+            exit 1
+          fi
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+
   suite:
+    needs: postgres-image
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
     services:
       postgres:
-        image: postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        # The reference is read at run time from the digest-pinned .github/Dockerfile by
+        # the postgres-image job; zizmor cannot resolve a needs expression to a digest,
+        # so this line carries the audit's suppression directive.
+        image: ${{ needs.postgres-image.outputs.image }}  # zizmor: ignore[unpinned-images]
         env:
           POSTGRES_USER: overflow
           POSTGRES_PASSWORD: overflow
