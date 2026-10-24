@@ -49,8 +49,8 @@ concurrency:
   # push its own group. Dispatch keys on the SHA it was handed, so a dispatch
   # never contends with the push that landed the same commit.
   #
-  # There is no pull-request leg in this file to bound: the one
-  # repository-level group is ratchet-guard-pr-repo-wide, in the sibling.
+  # The pull-request leg runs in pr-gates.yml, with a group per pull request:
+  # pr-gates-${{ github.event.pull_request.number }}.
   #
   # cancel-in-progress is false so no in-flight run is destroyed; on a per-SHA
   # group the run it could destroy is this SHA's own earlier attempt.
