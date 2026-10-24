@@ -514,6 +514,36 @@ describe("member dashboard", () => {
     expect(screen.queryByText(/ARCHIVED_UPSTREAM/)).not.toBeInTheDocument();
   });
 
+  it("renders no GitHub App offer row on a registered repository's facts grid", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [],
+          registeredRepositories: [registered("repo-offer", "co-op/beacon")],
+          enforcementNotices: [],
+          openAudit: null,
+        }}
+      />,
+    );
+
+    // The install offer left with the OAuth-only fold and stays gone. The
+    // repository's own Repository cell stands first, so the two absence
+    // queries read a rendered grid rather than a failed page.
+    expect(cellValue("registered-repositories-heading", "co-op/beacon", "Repository")).toBe(
+      "co-op/beacon",
+    );
+    expect(screen.queryByRole("link", { name: "Install the GitHub App" })).not.toBeInTheDocument();
+    expect(screen.queryByText("GitHub App")).not.toBeInTheDocument();
+  });
+
   it("tells the sponsor which repositories the queue is behind on and stays silent about the rest", () => {
     const failedAt = new Date("2026-09-04T11:00:00.000Z");
     render(

@@ -19,7 +19,9 @@ import type { SqlClient } from "@/lib/db/types";
  * the session gate and the ledger read — plus the SQL client seam, which the
  * standing read reaches with a one-row stub. findLiveModeratorStanding and
  * isLastLiveModeratorStanding run FOR REAL against that stub, so the page's
- * live-moderator predicate is driven, not assumed.
+ * live-moderator predicate is driven, not assumed. The getDashboard boundary
+ * is also the error path's drive: a rejected read degrades to the
+ * ledger-unavailable error state, never a half-loaded dashboard.
  */
 
 // Rebind cached consumers to this file's mocks when workers are shared.
@@ -61,6 +63,12 @@ async function renderDashboardPage(): Promise<void> {
 function accountControls(): HTMLElement {
   const section = document.querySelector('section[aria-labelledby="account-controls-heading"]');
   if (section === null) throw new Error("the dashboard rendered no account-controls section");
+  return section as HTMLElement;
+}
+
+function ledgerErrorSection(): HTMLElement {
+  const section = document.querySelector('section[aria-labelledby="dashboard-error-title"]');
+  if (section === null) throw new Error("the dashboard rendered no ledger-unavailable error section");
   return section as HTMLElement;
 }
 
@@ -142,5 +150,16 @@ describe("the dashboard page drives the account controls' moderator-standing pro
     expect(getSql).toHaveBeenCalledTimes(1);
     expect(within(accountControls()).getByRole("button", { name: "Delete account" })).toBeVisible();
     expect(within(accountControls()).queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("degrades a failed ledger read to the ledger-unavailable error state", async () => {
+    getDashboard.mockRejectedValueOnce(new Error("ledger read failed"));
+
+    await renderDashboardPage();
+
+    // The error section and its title stand, and the happy-path repository
+    // grid never appears beside them — a failed read loads no half-ledger.
+    expect(ledgerErrorSection()).toBeVisible();
+    expect(document.querySelector("#registered-repositories-heading")).toBeNull();
   });
 });
