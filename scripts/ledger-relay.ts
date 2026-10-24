@@ -49,7 +49,7 @@ import {
   type SweepOutcome,
 } from "./ledger-relay-sweep.ts";
 import { API_ROOT, API_HEADERS, RUN_DEADLINE_MS, apiCall, sweepApi, assertRunDeadline,
-  type RelayHttpOptions } from "./ledger-relay-http.ts";
+  RateLimitExceededError, type RelayHttpOptions } from "./ledger-relay-http.ts";
 import { publishProducerContexts } from "./ledger-relay-publication.ts";
 import { readEffectiveDeadline } from "./ledger-relay-job-budget.ts";
 import { type CheckRunSuppression, type SweepCandidate } from "./ledger-relay-producers.ts";
@@ -94,6 +94,7 @@ export type { ContextDecision, HealPullRequest, PinMap, RelayJob, RerunRun, Reru
 import {
   assertShape,
   DIGITS,
+  namesSweepOnlyStart,
   parseTrigger,
   type TriggeringRun,
 } from "./ledger-relay-trigger.ts";
@@ -158,6 +159,13 @@ export interface RelayResult {
    * output. Undefined on every other path.
    */
   sweepOnly?: boolean;
+  /**
+   * Issue 1355: a sweep-only start whose orphan sweep hit an exhausted rate
+   * limit past the deadline deferred to the next scheduled sweep. The message
+   * is the rate-limit error's own — it names the rate-limited surface, the
+   * reset instant and the run deadline. Undefined on every other path.
+   */
+  sweepDeferred?: string;
 }
 
 /**
@@ -204,7 +212,9 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
   let triggerRunId = "";
   let attestationRun: SweepCandidate | undefined;
   let triggerJobs: Record<string, unknown> | undefined;
-  let result: RelayResult = { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
+  const sweepOnlyStart = namesSweepOnlyStart(env);
+  let result: RelayResult = { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP,
+    sweepOnly: sweepOnlyStart };
   let primaryError: unknown;
   let failed = false;
   try {
@@ -292,6 +302,15 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
       ];
       assertRunDeadline(deps, "completion of the relay run");
     } catch (sweepError) {
+      // Issue 1355: a sweep-only start is exit-0 when its sweep is rate-limited
+      // past the deadline — the next scheduled sweep re-posts the missing
+      // context (issue 885's orphan sweep posts the newest eligible producers
+      // of later starts). Triggered starts keep failing red; that visibility is
+      // the design.
+      if (!failed && sweepOnlyStart && sweepError instanceof RateLimitExceededError) {
+        result.sweepDeferred = sweepError.message;
+        return result;
+      }
       if (!failed) throw sweepError;
       const message = (error: unknown) => error instanceof Error ? error.message : String(error);
       throw new AggregateError([primaryError, sweepError],
@@ -504,8 +523,12 @@ export function renderRelayResult(result: RelayResult): string[] {
   ];
   if (result.sweepOnly === true) {
     // Issue 1116: the sweep's summary is the whole output; there is no
-    // triggering run to name and no mirror to report.
-    return [...suppressed, ...renderSweepLines(result.sweep)];
+    // triggering run to name and no mirror to report. The defer line (issue
+    // 1355) is the only signal that a rate-limited sweep was deferred, and it
+    // can only be set on this branch: every error path throws past rendering.
+    const deferred = result.sweepDeferred === undefined ? [] :
+      [`[ledger-relay] orphan-sweep: deferred to the next scheduled sweep: ${result.sweepDeferred}`];
+    return [...suppressed, ...deferred, ...renderSweepLines(result.sweep)];
   }
   if (result.refusedDeadHead !== undefined) {
     return [

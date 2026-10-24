@@ -36,7 +36,7 @@ const SWEEP_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/actions
 const CHECK_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/check-runs";
 const JOBS_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs/${RUN_ID}/jobs?filter=latest&per_page=100`;
 
-type Outcome = { status: number; body: unknown };
+type Outcome = { status: number; body: unknown; headers?: Record<string, string> };
 
 interface Recorded {
   url: string;
@@ -63,7 +63,7 @@ function makeFetch(outcomes: Outcome[]) {
     }
     return new Response(JSON.stringify(outcome.body), {
       status: outcome.status,
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...outcome.headers },
     });
   }) as unknown as typeof fetch;
   return { requests, fn };
@@ -276,5 +276,37 @@ describe("sweep-only relay runs (issue 1116)", () => {
     expect(error?.message).toContain("the repository's workflow-run listing for the orphan sweep");
     // The bounded retry ran and the failure still propagated.
     expect(delay.delays).toEqual([1000, 2000]);
+  });
+
+  it("defers a rate-limited orphan sweep to the next scheduled sweep and exits 0 (issue 1355)", async () => {
+    // A primary installation limit's reset is an hour out — past any deadline
+    // this run holds — so the defer is immediate and no wait is started.
+    const resetSec = Math.floor(Date.now() / 1000) + 3600;
+    const fetchStub = makeFetch([
+      token(),
+      {
+        status: 403,
+        body: "API rate limit exceeded for installation ID 166057493",
+        headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(resetSec) },
+      },
+    ]);
+    const delay = makeDelay();
+    const result = await runRelay({
+      env: sweepOnlyEnv(),
+      fetchFn: fetchStub.fn,
+      delayFn: delay.fn,
+      readPinMap: async () => PIN_MAP,
+    });
+
+    expect(result.sweepOnly).toBe(true);
+    expect(result.sweepDeferred).toContain("rate limit exhausted");
+    expect(result.sweepDeferred).toContain(new Date(resetSec * 1000).toISOString());
+    expect(result.sweepDeferred).toMatch(/run deadline is /);
+    expect(renderRelayResult(result)).toEqual([
+      `[ledger-relay] orphan-sweep: deferred to the next scheduled sweep: ${result.sweepDeferred}`,
+    ]);
+    // No wait was started: the reset is past the deadline, so the defer is immediate.
+    expect(delay.delays).toEqual([]);
+    expect(fetchStub.requests.map((request) => request.url)).toEqual([OWN_JOB_URL, TOKEN_URL, SWEEP_RUNS_URL]);
   });
 });
