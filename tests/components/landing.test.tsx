@@ -7,7 +7,7 @@ import { useTrustedOrigin } from "../support/trusted-origin";
 
 const signIn = vi.hoisted(() => vi.fn());
 
-vi.mock("@/auth", () => ({ signIn }));
+vi.mock("@/auth", () => ({ signIn, auth: async () => null }));
 
 // Issue 700: the forms submit through the real server actions, which now open
 // with the origin guard, so the request headers must name the trusted origin
@@ -16,11 +16,38 @@ vi.mock("next/headers", async () => (await import("../support/trusted-origin")).
 
 useTrustedOrigin();
 
-import { LandingPage } from "@/app/page";
+import HomePage, { LandingPage } from "@/app/page";
 
 describe("landing page", () => {
   afterEach(() => {
     signIn.mockReset();
+    vi.unstubAllEnvs();
+  });
+
+  it.each(["https://github.com/apps/overflow-registration/installations/new", null])("explains configured registration on the landing page with URL %s", (url) => {
+    const { container } = render(<LandingPage registrationAppConfigured registrationAppInstallUrl={url} />);
+    const notes = container.querySelectorAll(".landing-action-note");
+    expect(notes[0]!.textContent).toBe("Contributing asks GitHub for nothing beyond your public profile. Registering a repository through Overflow's webhook needs webhook administration on it, granted through a separate sign-in:");
+    expect(notes[1]!.textContent).toBe('Or register without webhook administration: sign in with GitHub above, install this instance\'s registration App on the repository, and choose "GitHub App" on the registration form.');
+    const link = notes[1]!.querySelector("a");
+    if (url === null) expect(link).toBeNull();
+    else expect(link).toHaveAttribute("href", url);
+    const registration = screen.getByRole("button", { name: "Sign in to register a repository" });
+    expect(registration.compareDocumentPosition(notes[1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("reads the App display environment during each HomePage render", async () => {
+    vi.stubEnv("GITHUB_REGISTRATION_APP_ID", "");
+    vi.stubEnv("GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH", "");
+    vi.stubEnv("OVERFLOW_GITHUB_REGISTRATION_APP_SLUG", "overflow-registration");
+    const first = render(await HomePage());
+    expect(screen.queryByText(/Or register without webhook administration/)).not.toBeInTheDocument();
+    first.unmount();
+    vi.stubEnv("GITHUB_REGISTRATION_APP_ID", "1");
+    vi.stubEnv("GITHUB_REGISTRATION_APP_PRIVATE_KEY_PATH", "/missing.pem");
+    render(await HomePage());
+    expect(screen.getByRole("link", { name: "install this instance's registration App" }))
+      .toHaveAttribute("href", "https://github.com/apps/overflow-registration/installations/new");
   });
 
   // Issue 599: a contributor grants nothing beyond public identity, so the

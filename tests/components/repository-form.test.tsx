@@ -231,12 +231,40 @@ describe("points stamp stylesheet", () => {
 });
 
 describe("repository registration form", () => {
+  it("hides App registration when this instance has no registration App", async () => {
+    const { submitCalls } = stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }));
+    render(<RepositoryForm initialValues={initialValues} />);
+    expect(screen.queryByRole("combobox", { name: "GitHub registration method" })).not.toBeInTheDocument();
+    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+    await screen.findByRole("status");
+    expect(JSON.parse(String(submitCalls[0]!.init.body))).not.toHaveProperty("registrationMethod");
+  });
+
+  it.each(["https://github.com/apps/overflow-registration/installations/new", null])(
+    "explains configured App registration with install URL %s", (url) => {
+      const { container } = render(<RepositoryForm registrationAppConfigured registrationAppInstallUrl={url} />);
+      const choice = screen.getByRole("combobox", { name: "GitHub registration method" });
+      expect(choice).toHaveValue("oauth_hook");
+      fireEvent.change(choice, { target: { value: "app" } });
+      const help = container.querySelector(".field-help")!;
+      expect(help.textContent).toBe("Install this instance's registration App" +
+        (url === null ? "" : ", overflow-registration,") +
+        " on the public repositories you want to register, then come back to this page and register each one here. " +
+        "If you cannot install it on the repository's account, ask that account's owner to install it. " +
+        "Sign-in uses public identity only; no webhook-administration scope is requested." +
+        (url === null ? " Ask this instance's operator for the App's install link." : ""));
+      const link = help.querySelector("a");
+      if (url === null) expect(link).toBeNull();
+      else expect(link).toHaveAttribute("href", url);
+    },
+  );
+
   it.each([
     ["app", { ...initialValues, registrationMethod: "app" }],
     ["oauth_hook", initialValues],
   ])("submits the selected GitHub registration method %s", async (method, expected) => {
     const { submitCalls } = stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }));
-    render(<RepositoryForm initialValues={initialValues} />);
+    render(<RepositoryForm initialValues={initialValues} registrationAppConfigured />);
 
     const choice = screen.getByRole("combobox", { name: "GitHub registration method" });
     expect(choice).toHaveValue("oauth_hook");
@@ -758,7 +786,7 @@ describe("repository form forge selection", () => {
       defaultLabelsResponse,
       () => Response.json({ identities: [githubIdentity, gitlabIdentity] }),
     );
-    render(<RepositoryForm />);
+    render(<RepositoryForm registrationAppConfigured />);
     fireEvent.change(screen.getByRole("combobox", { name: "GitHub registration method" }), { target: { value: "app" } });
     fireEvent.change(screen.getByLabelText("Forge"), { target: { value: "gitlab" } });
     expect(screen.queryByRole("combobox", { name: "GitHub registration method" })).not.toBeInTheDocument();
