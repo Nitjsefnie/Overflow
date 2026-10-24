@@ -354,8 +354,11 @@ from those `FROM` references automatically, and the tests derive their
 expectations from the runtime `FROM` line; no manual label or test constant
 update is needed. The compose database image now rides the docker-compose
 lane, and the CI service image the `/.github/` docker lane: each digest moves
-only through such a pull request, and pr-suite's database suites run on the
-new image before it lands.
+only through such a pull request. The compose lane's pull request runs the
+database suites on the new image before it lands, because the suites start
+the image that file pins; the CI lane's changes the image the suite job's
+postgres service starts, which pr-suite exercises through its migration
+step before the merge.
 
 ## The default path
 

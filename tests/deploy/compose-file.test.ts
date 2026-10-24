@@ -37,7 +37,7 @@ describe("docker-compose.yml", () => {
     expect(profiles).toContain("app");
   });
 
-  it("leaves the postgres service unchanged", () => {
+  it("starts the postgres service from POSTGRES_IMAGE with its reviewed shape", () => {
     const postgres = compose.services.postgres;
     // The same-value check (issue 1335): the helper reads its image from this
     // file, so compose and the DB suites start one written pin. It catches
