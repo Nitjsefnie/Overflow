@@ -123,8 +123,8 @@ const PER_PR_REQUIRED = {
  * A shared group makes its members wait behind one running job and, at the
  * default single pending slot, cancels the older pending run even at
  * `cancel-in-progress: false`. The bound caps metered minutes, and the bounded
- * workflows queue their pending arrivals; each exception's reason says why
- * that trade does not pay for it.
+ * workflows queue their pending arrivals; each exception's reason defends the
+ * group or cancellation setting it ships.
  */
 /**
  * The closed vocabulary of cancellation premises, and the ONE place it is
