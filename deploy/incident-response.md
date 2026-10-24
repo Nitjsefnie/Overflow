@@ -560,25 +560,13 @@ deployment host and keep running. If any access remains, take the fork or clone
 first: it is the only copy of the settlement evidence that will exist, while
 the three entries that survive run on the host without it.
 
-**The Apps' own credentials are not the personal account's session.** The
-read-only reconciliation App has Metadata, Issues and Pull requests read
-access and no webhook. The reconciliation path mints a
-short-lived RS256 JWT from a PEM file on the host and exchanges it for an
-installation token; it never presents a session, a personal access token or an
-OAuth token of the maintainer's. The file is named by
-`GITHUB_APP_PRIVATE_KEY_PATH`, at the host value
-`/etc/overflow/github-reconcile-app/private-key.pem`, beside `GITHUB_APP_ID`, in
-[deploy/README.md](README.md)'s *Create the environment file* section; the
-implementation is `readGitHubAppAuthConfig` in
-[src/lib/github/app-installation-auth.ts](../src/lib/github/app-installation-auth.ts),
-imported only by the Node reconciliation wiring. The independence does not
-hold in either of the two postures [deploy/README.md](README.md) names: either
-variable unset or empty is the OAuth-only posture, and — with both set — a
-repository the App is not installed on still falls back to the sponsor's OAuth
-token, which is a personal credential. This repository has the installation,
-so neither posture is expected here; a host that does not is running on a
-personal credential for that repository whatever its variables say. The relay
-uses a separate check-publishing App and does not depend on either posture.
+**Reconciliation reads through a personal credential; the relay does not.**
+The fold reconciles every GitHub repository with its sponsor's OAuth token —
+a personal credential, held by the account this section is about, and
+presentable only while that account can grant it. It never presents the
+maintainer's session, and no App credential replaces it: the host holds no
+App key or token at all. The relay uses a separate check-publishing App and
+does not depend on the token.
 That App has no credential on the host: its workflow reads its App key from
 the repository's `overflow-ledger` environment secret and pins the App id and
 installation id in the workflow definition itself, so the check-runs that
@@ -588,9 +576,8 @@ See [OPERATING.md](../OPERATING.md#required-checks-relay) for its operations
 and [deploy/README.md](README.md) section 10 for why the required contexts are
 pinned to that App at all.
 
-**Four limits on that claim, because the honest version is the useful one.**
-Each is a stated fact. Three say what to do about it; the second separates
-the host credential from the Actions secret.
+**Three limits on that claim, because the honest version is the useful one.**
+Each is a stated fact that says what to do about it.
 
 1. **A deleted account takes the App with it.** The Overflow Ledger App belongs
    to `Nitjsefnie`, and installations under a deleted personal account are
@@ -601,12 +588,7 @@ the host credential from the Actions secret.
    having been the only producer branch protection accepts. The App's identity belongs to the account,
    and the account is gone. And the username is freed rather than reserved, so
    the App is not recoverable by re-registering either.
-2. **The host PEM and the Actions secret belong to separate Apps.** The
-   file at `GITHUB_APP_PRIVATE_KEY_PATH` is the read-only reconciliation App's
-   key. The `LEDGER_APP_KEY` secret belongs to the check-publishing App,
-   whose credential is absent from the host. Rotate each App's key separately;
-   never copy the reconciliation key into the relay's Actions secret.
-3. **The relay fires unattended today, and a gate would change that.** Read
+2. **The relay fires unattended today, and a gate would change that.** Read
    from the GitHub API, the `overflow-ledger` environment's only protection
    rule is `branch_policy` — protected branches, `can_admins_bypass` false —
    and there is no required-reviewer rule. So nothing stands between a producer
@@ -616,7 +598,7 @@ the host credential from the Actions secret.
    invite below: the maintainer's own action, not a commit, and this runbook
    deliberately does not carry the procedure. If that gate is ever added, every
    relay run waits for a human and the personal account is back inside the loop.
-4. **A deleted account takes the repository with it,** by the same platform
+3. **A deleted account takes the repository with it,** by the same platform
    behaviour and the same citation. That makes the relay's independence moot
    rather than false: the workflow can still run and still mint a token, but
    there is no repository left to post a check-run against and no branch left
@@ -677,22 +659,11 @@ action, and as of this writing it has not been done.
    omission is expected rather than a fault to chase — that is the case the
    section is written for. A non-200 or a 404 from either means that token has
    no permission, not that the setting is absent. Run both again in step 8.
-5. Record where each App's key material lives, without copying any of it into
-   the incident record. The reconciliation App's host file needs only root on the deployment host
-   and works with no repository access at all:
-
-   ```bash
-   ls -l /etc/overflow/github-reconcile-app/private-key.pem
-   ```
-
-   Record the path's presence, its owner, its group and its mode; the file has
-   to stay readable by the account the service runs as, which is why
-   `/etc/overflow` is left traversable on a reconciliation App host. The path is absent if
-   the host runs the OAuth-only posture, and that absence is itself the record.
-   The separate check-publishing App's `LEDGER_APP_KEY` secret on the `overflow-ledger`
-   environment — is observable only by an account that can read the
-   repository's settings, so record that you could not read it when you could
-   not. Never `cat` the file, never paste its contents, and never record the
+5. Record where the relay's key material lives, without copying any of it into
+   the incident record. The host holds no App credential: the check-publishing
+   App's `LEDGER_APP_KEY` secret on the `overflow-ledger` environment is
+   observable only by an account that can read the repository's settings, so
+   record that you could not read it when you could not. Never record the
    secret's value.
 6. Independent of the account and therefore still running throughout: the
    service, the webhook receivers, GitHub sign-in, the reconciliation worker
@@ -711,12 +682,6 @@ action, and as of this writing it has not been done.
    account's own recovery contacts — before treating anything as recovered.
    Then return to [Contain](#contain) for whatever containment the compromise
    case required, and record the whole of it under [Record](#record).
-9. Rotating the reconciliation App's private key has a written procedure:
-   [deploy/README.md section 14](README.md#14-rotating-github-app-private-keys)
-   covers generating the new key in the App settings, replacing the host PEM,
-   verifying reconciliation under the new key, and the rollback that is
-   possible while the old key still exists. The reconciliation App's key is
-   host-only; no CI secret is derived from it.
 
 ## Record
 

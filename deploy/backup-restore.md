@@ -627,10 +627,10 @@ fails closed before reaching the forge.
 **The host-loss path.** Restore the data as the order above gives it.
 Generate a NEW `AUTH_SECRET` — every session signed under the old one ends.
 Each sponsor signs in again, which stores a fresh OAuth token. Forge
-registrations are redone and webhook secrets are replaced. Four of the
-seven registered repositories have no Overflow Ledger App installation and
-read through their sponsor's token; for each, reconciliation and webhook
-verification stay broken until its sponsor returns:
+registrations are redone and webhook secrets are replaced. Every registered
+GitHub repository reads through its sponsor's token, so the list below covers
+all of them; for each, reconciliation and webhook verification stay broken
+until its sponsor returns:
 
 - `Nitjsefnie/ai-researcher`
 - `Nitjsefnie/claudit`

@@ -205,10 +205,7 @@ operator machine, arrange a private connection to that database.
 
 Supply the same `OVERFLOW_TOKEN_ENCRYPTION_KEY`, any configured
 `OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS`, callback URLs and other relevant deployment
-variables. When GitHub App authentication is configured, make the **same
-private-key file** readable on the operator machine and set
-`GITHUB_APP_PRIVATE_KEY_PATH` to its local path, with the same `GITHUB_APP_ID`;
-the container's mount path need not exist on that machine. Do not generate
+variables. Do not generate
 replacement keys merely to make a command start, or store credentials in the
 checkout or deployment record.
 
@@ -275,11 +272,7 @@ one database race their migrations — so scale to one app container and let the
 platform's restart policy, not replicas, absorb failures.
 
 **Configuration arrives at runtime.** Compose supplies `.env` variables through
-`env_file` and overrides `OVERFLOW_DATABASE_URL`. When GitHub App authentication is
-configured, the code also reads the private-key file named by
-`GITHUB_APP_PRIVATE_KEY_PATH`: the operator must supply a read-only mount in a
-Compose override and make it readable by the runtime user. The committed
-Compose file does not mount it. Private `.env` files stay out of the build
+`env_file` and overrides `OVERFLOW_DATABASE_URL`. Private `.env` files stay out of the build
 context because the script exports only committed files with `git archive`.
 Keep key files outside the tracked source and build context too.
 
