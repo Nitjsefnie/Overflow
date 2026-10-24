@@ -61,8 +61,8 @@ type Workflow = {
  * `cancel-in-progress` is the literal boolean `false` in all bounded workflows, for every
  * leg, not an event expression. It buys no bound (see the header), and on a
  * group shared by every pull request a `true` destroys a peer's in-flight run.
- * It does not stop GitHub cancelling the group's PENDING run; the queue does
- * (see the header).
+ * It does not stop GitHub cancelling the group's PENDING run; the queue does,
+ * up to 100 (see the header).
  */
 // Comment share serializes PR measurements; completion-driven verify is
 // explicitly classified and checked per head SHA below.
@@ -122,9 +122,9 @@ const PER_PR_REQUIRED = {
  *
  * A shared group makes its members wait behind one running job and, at the
  * default single pending slot, cancels the older pending run even at
- * `cancel-in-progress: false`. Only the metered CI workflows need the bound,
- * because it caps their minutes, and they queue their pending arrivals; for
- * these exceptions it would only add waits on unrelated work and dropped runs.
+ * `cancel-in-progress: false`. The bound caps metered minutes, and the bounded
+ * workflows queue their pending arrivals; each exception's reason says why
+ * that trade does not pay for it.
  */
 /**
  * The closed vocabulary of cancellation premises, and the ONE place it is
