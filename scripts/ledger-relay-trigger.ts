@@ -62,6 +62,11 @@ export type Trigger =
   // no run id anywhere; fail-closed on any ambiguity (see parseTrigger).
   | { kind: "sweep-only" };
 
+/** True when the env names the sweep-only start mode, without parseTrigger's ambiguity validation. */
+export function namesSweepOnlyStart(env: Record<string, string | undefined>): boolean {
+  return (env.OVERFLOW_LEDGER_SWEEP_ONLY ?? env.LEDGER_SWEEP_ONLY ?? "") === "true";
+}
+
 export function parseTrigger(env: Record<string, string | undefined>): Trigger {
   const sweepOnlyRaw = env.OVERFLOW_LEDGER_SWEEP_ONLY ?? env.LEDGER_SWEEP_ONLY ?? "";
   if (sweepOnlyRaw !== "" && sweepOnlyRaw !== "true" && sweepOnlyRaw !== "false") {
@@ -69,7 +74,7 @@ export function parseTrigger(env: Record<string, string | undefined>): Trigger {
       `LEDGER_SWEEP_ONLY must be exactly "true" or "false" (got ${JSON.stringify(sweepOnlyRaw)})`,
     );
   }
-  const sweepOnly = sweepOnlyRaw === "true";
+  const sweepOnly = namesSweepOnlyStart(env);
   const runId = env.OVERFLOW_GITHUB_WORKFLOW_RUN_ID ?? env.GITHUB_WORKFLOW_RUN_ID ?? "";
   const dispatchRunId = env.OVERFLOW_LEDGER_DISPATCH_RUN_ID ?? env.LEDGER_DISPATCH_RUN_ID ?? "";
   if (sweepOnly && (runId !== "" || dispatchRunId !== "")) {

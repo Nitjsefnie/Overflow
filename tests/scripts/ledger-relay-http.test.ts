@@ -3,6 +3,8 @@ import { appSuiteListing, appChecksUrl, appSuitesUrl, RELAY_OWN_RUN_ENV, relayJo
 import { generateKeyPairSync } from "node:crypto";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
+import { apiCall, RateLimitExceededError, RATE_LIMIT_RESET_MARGIN_MS,
+  type RelayHttpDeps } from "../../scripts/ledger-relay-http.ts";
 import { renderRelayResult, runRelay, type RelayDeps } from "../../scripts/ledger-relay.ts";
 
 const REPO = "Nitjsefnie/Overflow";
@@ -388,5 +390,129 @@ describe("ledger relay request lifetime", () => {
       `${ROOT}/actions/runs/9001/rerun`, `${ROOT}/actions/runs/9001/rerun`,
     ]);
     expect(w.state.delays).toEqual([1000]);
+  });
+});
+
+describe("ledger relay rate-limit handling (issue 1355)", () => {
+  /** A RelayHttpDeps whose clock is injected and whose fetch replays `responses`. */
+  function rateLimitDeps(responses: Response[]) {
+    const state = { now: 10_000, requests: [] as number[], delays: [] as number[] };
+    const deps: RelayHttpDeps = {
+      deadlineMs: 60_000,
+      nowFn: () => state.now,
+      delayFn: async (ms) => { state.delays.push(ms); state.now += ms; },
+      fetchFn: async () => {
+        state.requests.push(state.now);
+        const next = responses.shift();
+        if (next === undefined) throw new Error("unexpected extra request");
+        return next;
+      },
+    };
+    return { deps, state };
+  }
+
+  const rateLimited = (resetEpochSec: number, status = 403) =>
+    new Response("API rate limit exceeded for installation ID 166057493", {
+      status,
+      headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(resetEpochSec) },
+    });
+  const theCall = { url: "https://api.github.com/repos/Nitjsefnie/Overflow/x", method: "GET" as const, headers: {} };
+  const what = "the job listing of run 9001";
+  const caught = (promise: Promise<unknown>) =>
+    promise.then(() => { throw new Error("expected a rejection"); }, (error: unknown) => error) as Promise<Error>;
+
+  it("waits out a rate-limited 403 whose reset fits the deadline and retries", async () => {
+    // The reset sits 4 s past now, inside the 60 s deadline with its margin.
+    const { deps, state } = rateLimitDeps([
+      rateLimited(14),
+      new Response(JSON.stringify({ jobs: [] })),
+    ]);
+
+    await expect(apiCall(deps, theCall, what)).resolves.toEqual({ jobs: [] });
+
+    expect(state.delays).toEqual([4_000]);
+    expect(state.requests).toEqual([10_000, 14_000]);
+  });
+
+  it("throws RateLimitExceededError when a rate-limited 403's reset is past the deadline", async () => {
+    const resetMs = 10_000 + 20 * 60_000;
+    const { deps, state } = rateLimitDeps([rateLimited(resetMs / 1000)]);
+
+    const error = await caught(apiCall(deps, theCall, what));
+
+    expect(error).toBeInstanceOf(RateLimitExceededError);
+    expect((error as RateLimitExceededError).resetMs).toBe(resetMs);
+    expect(error.message).toContain("rate limit exhausted");
+    expect(error.message).toContain(new Date(resetMs).toISOString());
+    expect(error.message).toContain(new Date(60_000).toISOString());
+    expect(state.delays).toEqual([]);
+    expect(state.requests).toEqual([10_000]);
+  });
+
+  it("keeps the reset margin a positive wait window (issue 1355's fit check)", () => {
+    expect(RATE_LIMIT_RESET_MARGIN_MS).toBe(5_000);
+  });
+
+  it("keeps a 403 without rate-limit markers an immediate plain failure with no delay", async () => {
+    const { deps, state } = rateLimitDeps([
+      new Response("This workflow is already running", { status: 403 }),
+    ]);
+
+    const error = await caught(apiCall(deps, theCall, what));
+
+    expect(error.name).not.toBe("RateLimitExceededError");
+    expect(error.message).toContain("HTTP 403");
+    expect(state.delays).toEqual([]);
+    expect(state.requests).toEqual([10_000]);
+  });
+
+  it("waits the retry-after of a rate-limited 429 and retries", async () => {
+    const { deps, state } = rateLimitDeps([
+      new Response("You have exceeded a secondary rate limit", { status: 429, headers: { "retry-after": "3" } }),
+      new Response(JSON.stringify({ jobs: [] })),
+    ]);
+
+    await expect(apiCall(deps, theCall, what)).resolves.toEqual({ jobs: [] });
+
+    expect(state.delays).toEqual([3_000]);
+    expect(state.requests).toEqual([10_000, 13_000]);
+  });
+
+  it("throws RateLimitExceededError with the last reset when every attempt answers rate-limited and each wait fits", async () => {
+    // 30 s, 50 s and 55 s all fit the 60 s deadline with the 5 s margin; the
+    // three waits exhaust the three attempts, so the tail throws.
+    const { deps, state } = rateLimitDeps([rateLimited(30), rateLimited(50), rateLimited(55)]);
+
+    const error = await caught(apiCall(deps, theCall, what));
+
+    expect(error).toBeInstanceOf(RateLimitExceededError);
+    expect((error as RateLimitExceededError).resetMs).toBe(55_000);
+    expect(error.message).toContain(new Date(55_000).toISOString());
+    expect(error.message).toContain(new Date(60_000).toISOString());
+    expect(state.delays).toEqual([20_000, 20_000, 5_000]);
+    expect(state.requests).toEqual([10_000, 30_000, 50_000]);
+  });
+
+  it("keeps a triggered start red when its mirror job listing is rate-limited past the deadline", async () => {
+    const w = world();
+    const resetSec = Math.floor(Date.now() / 1000) + 3600;
+    w.state.intercept = async (url) => {
+      if (url === `${ROOT}/actions/runs/9001/jobs?filter=latest&per_page=100`) return rateLimited(resetSec);
+    };
+    const env = {
+      ...w.deps.env, OVERFLOW_LEDGER_SWEEP_ONLY: "false", OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "9001",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD, OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: ".github/workflows/ci.yml",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "success", OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "push",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main", OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
+      OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/${REPO}/actions/runs/9001`,
+    };
+
+    const error = await caught(w.run({ env }));
+
+    expect(error).toBeInstanceOf(RateLimitExceededError);
+    expect(error.message).toContain(new Date(resetSec * 1000).toISOString());
+    expect(error.message).toMatch(/run deadline is /);
+    expect(w.state.delays).toEqual([]);
+    expect(w.state.posts).toBe(0);
   });
 });
