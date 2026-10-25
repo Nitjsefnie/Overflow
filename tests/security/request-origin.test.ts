@@ -45,6 +45,10 @@ describe("reading the trusted origin from OVERFLOW_APP_URL", () => {
     expect(readTrustedOrigin({ ...environment(""), APP_URL: "https://legacy.example" })).toBeNull();
   });
 
+  it("falls back to the legacy origin when the canonical name is absent in an injected environment", () => {
+    expect(readTrustedOrigin({ ...environment(), APP_URL: "https://legacy.example/path" })).toBe("https://legacy.example");
+  });
+
   it("returns the origin of an OVERFLOW_APP_URL that is already bare", () => {
     expect(readTrustedOrigin(environment("https://overflow.example"))).toBe(
       "https://overflow.example",

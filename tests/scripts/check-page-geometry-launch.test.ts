@@ -340,6 +340,15 @@ describe("the spawned-server environment preflight (issue 471)", () => {
     expect(missingEnv({ OVERFLOW_DATABASE_URL: "" }, () => false)).toEqual(["DATABASE_URL"]);
   });
 
+  it("reports nothing missing when only the legacy DATABASE_URL is set", () => {
+    expect(missingEnv({ DATABASE_URL: "postgresql://postgres:x@127.0.0.1:5432/postgres" }, () => false)).toEqual([]);
+  });
+
+  it("keeps an empty OVERFLOW_DATABASE_URL authoritative over a set legacy DATABASE_URL", () => {
+    expect(missingEnv({ OVERFLOW_DATABASE_URL: "", DATABASE_URL: "postgresql://postgres:x@127.0.0.1:5432/postgres" }, () => false))
+      .toEqual(["DATABASE_URL"]);
+  });
+
   it("reports nothing missing when the env lacks OVERFLOW_DATABASE_URL but a repo-root .env file exists", () => {
     // Next.js loads repo-root .env files at server startup, so a developer
     // whose OVERFLOW_DATABASE_URL lives only there has a working flow that must keep
