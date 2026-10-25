@@ -242,6 +242,17 @@ export class PostgresRepositoryLookupStore {
     return rows.map((row) => row.id);
   }
 
+  /** The sweep's listing: each active repository beside the sponsor it folds under. */
+  public async listActiveRepositorySponsors(): Promise<{ repositoryId: string; sponsorId: string }[]> {
+    const rows = await this.sql<{ repositoryId: string; sponsorId: string }[]>`
+      select id as "repositoryId", sponsor_id as "sponsorId"
+      from registered_repositories
+      where active = true
+      order by id
+    `;
+    return rows;
+  }
+
   public async findUsersByGitHubUserIds(githubUserIds: readonly number[]): Promise<FoldUser[]> {
     const normalized = [...new Set(githubUserIds.filter((id) => Number.isSafeInteger(id) && id > 0))];
     if (normalized.length === 0) {

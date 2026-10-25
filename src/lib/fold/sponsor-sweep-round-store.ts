@@ -4,41 +4,53 @@ import { SWEEP_WINDOW_MS } from "@/lib/fold/sweep-request-budget";
 
 type Round = { window_start: Date; spent: number; rotation_cursor: string | null; next_enqueue_at: Date };
 
-export class PostgresSweepRoundStore {
+/**
+ * The sweep's durable round, one row per sponsor. Same window anchor, spend
+ * ceiling and rotation pacing the singleton store served, keyed so one
+ * sponsor's spent budget holds only its own folds and slots.
+ */
+export class PostgresSponsorSweepRoundStore {
   public constructor(private readonly connection?: SqlClient) {}
   private get sql(): SqlClient { return this.connection ?? getSql(); }
 
-  private async round(transaction: TransactionClient, now: Date): Promise<Round> {
-    // Anchor six-hour windows to the first sweep. A restart retains the anchor,
-    // spend and cursor; missed ticks advance whole windows rather than drifting.
-    await transaction`insert into reconciliation_sweep_round (window_start, next_enqueue_at)
-      values (${now}, ${now}) on conflict do nothing`;
-    const [row] = await transaction<Round[]>`select * from reconciliation_sweep_round for update`;
+  private async round(transaction: TransactionClient, sponsorId: string, now: Date): Promise<Round> {
+    // The sponsor's first sweep anchors its window and starts it from zero:
+    // nothing is carried from the singleton table. A restart retains the
+    // anchor, spend and cursor; missed ticks advance whole windows, not drift.
+    await transaction`insert into reconciliation_sweep_rounds (sponsor_id, window_start, next_enqueue_at)
+      values (${sponsorId}, ${now}, ${now}) on conflict do nothing`;
+    const [row] = await transaction<Round[]>`select * from reconciliation_sweep_rounds
+      where sponsor_id = ${sponsorId} for update`;
     if (now.getTime() >= row!.window_start.getTime() + SWEEP_WINDOW_MS) {
       const start = new Date(row!.window_start.getTime()
         + Math.floor((now.getTime() - row!.window_start.getTime()) / SWEEP_WINDOW_MS) * SWEEP_WINDOW_MS);
-      const [fresh] = await transaction<Round[]>`update reconciliation_sweep_round
-        set window_start = ${start}, spent = 0, next_enqueue_at = ${start} returning *`;
+      const [fresh] = await transaction<Round[]>`update reconciliation_sweep_rounds
+        set window_start = ${start}, spent = 0, next_enqueue_at = ${start}
+        where sponsor_id = ${sponsorId} returning *`;
       return fresh!;
     }
     return row!;
   }
 
-  public async spend(now: Date, limit: number): Promise<Date | null> {
+  /** Admits one fold, or returns when the sponsor's window resets. */
+  public async spend(sponsorId: string, now: Date, limit: number): Promise<Date | null> {
     return this.sql.begin(async (transaction) => {
-      const round = await this.round(transaction, now);
-      const rows = await transaction`update reconciliation_sweep_round set spent = spent + 1
-        where singleton and spent < ${limit} returning spent`;
+      const round = await this.round(transaction, sponsorId, now);
+      const rows = await transaction`update reconciliation_sweep_rounds set spent = spent + 1
+        where sponsor_id = ${sponsorId} and spent < ${limit} returning spent`;
       return rows.length === 1 ? null : new Date(round.window_start.getTime() + SWEEP_WINDOW_MS);
     }) as Promise<Date | null>;
   }
 
   public async enqueueNext(
-    repositoryIds: readonly string[], now: Date, limit: number,
+    sponsorId: string,
+    repositoryIds: readonly string[],
+    now: Date,
+    limit: number,
     enqueue: (repositoryId: string) => Promise<unknown>,
   ): Promise<string | null> {
     return this.sql.begin(async (transaction) => {
-      const round = await this.round(transaction, now);
+      const round = await this.round(transaction, sponsorId, now);
       const ids = [...new Set(repositoryIds)].sort();
       if (ids.length === 0 || round.spent >= limit || now < round.next_enqueue_at) return null;
       const next = ids.find((id) => round.rotation_cursor === null || id > round.rotation_cursor) ?? ids[0]!;
@@ -49,8 +61,8 @@ export class PostgresSweepRoundStore {
       // admission instead of replaying missed slots in a catch-up burst.
       const deadline = round.next_enqueue_at.getTime();
       const anchor = now.getTime() - deadline > interval ? now.getTime() : deadline;
-      await transaction`update reconciliation_sweep_round set rotation_cursor = ${next},
-        next_enqueue_at = ${new Date(anchor + interval)}`;
+      await transaction`update reconciliation_sweep_rounds set rotation_cursor = ${next},
+        next_enqueue_at = ${new Date(anchor + interval)} where sponsor_id = ${sponsorId}`;
       return next;
     }) as Promise<string | null>;
   }

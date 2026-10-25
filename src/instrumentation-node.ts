@@ -1,4 +1,4 @@
-import { PostgresSweepRoundStore } from "@/lib/fold/sweep-round-store";
+import { PostgresSponsorSweepRoundStore } from "@/lib/fold/sponsor-sweep-round-store";
 import { PostgresSweepPassStore } from "@/lib/fold/sweep-pass-store";
 import { readSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import {
@@ -52,11 +52,11 @@ export async function registerNodejs(): Promise<void> {
   const { GitHubGateway } = await import("@/lib/github/client");
   const { GitLabGateway } = await import("@/lib/gitlab/client");
   const store = new PostgresFoldStore();
-  const sweepRound = new PostgresSweepRoundStore();
+  const sweepRound = new PostgresSponsorSweepRoundStore();
   const sweepPasses = new PostgresSweepPassStore();
   const repositorySizes = new PostgresRepositorySizeStore();
   const sweep = {
-    spend: () => sweepRound.spend(new Date(), readSweepRequestBudget(process.env)),
+    spend: (sponsorId: string) => sweepRound.spend(sponsorId, new Date(), readSweepRequestBudget(process.env)),
     openPass: sweepPasses.open.bind(sweepPasses),
     discardPass: sweepPasses.discardByRepository.bind(sweepPasses),
   };
@@ -149,7 +149,7 @@ export async function registerNodejs(): Promise<void> {
     runSweep: async () => {
       const summary = await sweepReconciliations({
         round: sweepRound,
-        listActiveRepositoryIds: () => store.listActiveRepositoryIds(),
+        listActiveRepositorySponsors: () => store.listActiveRepositorySponsors(),
         sizeStore: repositorySizes,
         measureSize: measureRepositorySize(
           {

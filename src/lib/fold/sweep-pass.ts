@@ -26,7 +26,8 @@ export type SweepPassInput = {
   dirtySubjects: DirtyReconciliationSubject[];
 };
 export type ReconciliationSweepControl = {
-  spend(): Promise<Date | null>;
+  /** Charges the fold to its own sponsor; null admits, a date holds. */
+  spend(sponsorId: string): Promise<Date | null>;
   openPass(input: SweepPassInput): Promise<SweepPass>;
   discardPass(repositoryId: string): Promise<void>;
 };
