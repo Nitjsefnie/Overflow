@@ -1,4 +1,5 @@
 import type { PostgresSweepRoundStore } from "@/lib/fold/sweep-round-store";
+import { REPOSITORY_SIZE_REMEASURE_MS, type PostgresRepositorySizeStore } from "@/lib/fold/repository-size";
 import { readSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import { callGuarded } from "@/lib/fold/guarded-callback";
 import { errorLogToken } from "@/lib/webhooks/log-field";
@@ -8,6 +9,24 @@ export type ReconciliationSweepDependencies = {
   enqueue(repositoryId: string): Promise<unknown>;
   round?: Pick<PostgresSweepRoundStore, "enqueueNext">;
   now?: () => Date;
+  /**
+   * The stored repository size measures, the sweep-side half of the size
+   * gateway. Both size members are supplied together or not at all; absent,
+   * the sweep is exactly what it was before the measure existed — nothing is
+   * measured, and the summary carries no measure fields.
+   */
+  sizeStore?: Pick<PostgresRepositorySizeStore, "get" | "store">;
+  /**
+   * The sweep-side shape of the size gateway: one count read per repository,
+   * keyed by the registered id the sweep lists, because the credential the
+   * read rides is the repository's sponsor's and only the id resolves it.
+   * Production composes this from the forge clients' RepositorySizeGateway
+   * (measureRepositorySize). Resolves null when the measure is unavailable,
+   * and may throw; either way the previous stored size stands and the
+   * repository's failure is counted and reported like the sweep's other
+   * per-repository failures.
+   */
+  measureSize?(repositoryId: string): Promise<number | null>;
   /**
    * Reports one repository this sweep could not queue, as distinct from the
    * whole-sweep `onSweepFailure` on the schedule. A hook that fails costs
@@ -33,6 +52,13 @@ export type ReconciliationSweepSummary = {
   attempted: number;
   enqueued: number;
   failed: number;
+  /**
+   * The tick's measure outcomes, present only when the sweep carries the size
+   * members. A failed measure — the gateway answered null or threw — keeps
+   * the previous stored size, so `measureFailed` never means a size was lost.
+   */
+  measured?: number;
+  measureFailed?: number;
 };
 
 export type ReconciliationSweepSchedule = {
@@ -148,6 +174,33 @@ export async function sweepReconciliations(
       return false;
     }
   };
+
+  // The measure runs before the rotation and costs it nothing: every failure
+  // here is contained per repository, so one repository's unreachable forge
+  // leaves the rest of the tick — the other measures and every enqueue — to
+  // proceed.
+  const sizeStore = dependencies.sizeStore;
+  const measureSize = dependencies.measureSize;
+  let measured = 0;
+  let measureFailed = 0;
+  if (sizeStore !== undefined && measureSize !== undefined) {
+    const now = dependencies.now ?? (() => new Date());
+    for (const repositoryId of repositoryIds) {
+      try {
+        const stored = await sizeStore.get(repositoryId);
+        if (stored !== null && now().getTime() - stored.measuredAt.getTime() < REPOSITORY_SIZE_REMEASURE_MS) continue;
+        const count = await measureSize(repositoryId);
+        // A null measure is a failed measure: the previous stored size stands.
+        if (count === null) throw new Error("The repository size measure was unavailable.");
+        await sizeStore.store(repositoryId, count, now());
+        measured += 1;
+      } catch (error) {
+        measureFailed += 1;
+        reportRepositoryFailure(dependencies, repositoryId, error);
+      }
+    }
+  }
+
   if (dependencies.round !== undefined) {
     await dependencies.round.enqueueNext(repositoryIds, (dependencies.now ?? (() => new Date()))(),
       readSweepRequestBudget(process.env), enqueue);
@@ -155,7 +208,12 @@ export async function sweepReconciliations(
     for (const repositoryId of repositoryIds) await enqueue(repositoryId);
   }
 
-  return { attempted: enqueued + failed, enqueued, failed };
+  const summary: ReconciliationSweepSummary = { attempted: enqueued + failed, enqueued, failed };
+  if (sizeStore !== undefined && measureSize !== undefined) {
+    summary.measured = measured;
+    summary.measureFailed = measureFailed;
+  }
+  return summary;
 }
 
 /**
