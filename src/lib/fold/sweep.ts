@@ -1,5 +1,9 @@
 import type { PostgresSponsorSweepRoundStore } from "@/lib/fold/sponsor-sweep-round-store";
-import { REPOSITORY_SIZE_REMEASURE_MS, type PostgresRepositorySizeStore } from "@/lib/fold/repository-size";
+import {
+  REPOSITORY_SIZE_REMEASURE_MS,
+  readDiffOnlyBacklogThreshold,
+  type PostgresRepositorySizeStore,
+} from "@/lib/fold/repository-size";
 import { readSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import { callGuarded } from "@/lib/fold/guarded-callback";
 import { errorLogToken } from "@/lib/webhooks/log-field";
@@ -17,11 +21,12 @@ export type ReconciliationSweepDependencies = {
   now?: () => Date;
   /**
    * The stored repository size measures, the sweep-side half of the size
-   * gateway. Both size members are supplied together or not at all; absent,
-   * the sweep is exactly what it was before the measure existed — nothing is
-   * measured, and the summary carries no measure fields.
+   * gateway, with the per-sponsor backlog the diff-only decision reads. The
+   * size members are supplied together or not at all; absent, the sweep is
+   * exactly what it was before the measure existed — nothing is measured, no
+   * sponsor is excluded, and the summary carries no measure fields.
    */
-  sizeStore?: Pick<PostgresRepositorySizeStore, "get" | "store">;
+  sizeStore?: Pick<PostgresRepositorySizeStore, "get" | "store" | "getSponsorBacklog">;
   /**
    * The sweep-side shape of the size gateway: one count read per repository,
    * keyed by the registered id the sweep lists, because the credential the
@@ -207,6 +212,20 @@ export async function sweepReconciliations(
     }
   }
 
+  // A sponsor whose backlog is strictly over the diff-only threshold is
+  // offered no slot at all: its folds run incremental from their events, so a
+  // queued job keeps its reason instead of a slot upgrade turning it into a
+  // full sweep. The measure above still covers every repository — an
+  // unmeasured backlog reads as zero, so skipping an excluded sponsor's
+  // measure would quietly return it to the rotation.
+  const diffOnlySponsors = new Set<string>();
+  if (sizeStore?.getSponsorBacklog !== undefined) {
+    const threshold = readDiffOnlyBacklogThreshold(process.env);
+    for (const sponsorId of new Set(repositories.map(({ sponsorId }) => sponsorId))) {
+      if ((await sizeStore.getSponsorBacklog(sponsorId) ?? 0) > threshold) diffOnlySponsors.add(sponsorId);
+    }
+  }
+
   if (dependencies.round !== undefined) {
     // Each sponsor's repositories rotate against that sponsor's own budget,
     // so one sponsor whose budget is spent stops enqueueing while the others
@@ -220,10 +239,14 @@ export async function sweepReconciliations(
     const budget = readSweepRequestBudget(process.env);
     const sponsors = [...bySponsor.keys()].sort();
     for (const sponsorId of sponsors) {
+      if (diffOnlySponsors.has(sponsorId)) continue;
       await dependencies.round.enqueueNext(sponsorId, bySponsor.get(sponsorId)!, now(), budget, enqueue);
     }
   } else {
-    for (const { repositoryId } of repositories) await enqueue(repositoryId);
+    for (const { repositoryId, sponsorId } of repositories) {
+      if (diffOnlySponsors.has(sponsorId)) continue;
+      await enqueue(repositoryId);
+    }
   }
 
   const summary: ReconciliationSweepSummary = { attempted: enqueued + failed, enqueued, failed };
