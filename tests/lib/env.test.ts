@@ -44,4 +44,32 @@ describe("readEnv", () => {
 
     expect(readEnv("NODE_ENV")).toBe("test");
   });
+
+  it("reads the old name from an injected environment instead of process.env", () => {
+    vi.stubEnv("OVERFLOW_ENV_READER_TEST", "process-prefixed");
+    vi.stubEnv("ENV_READER_TEST", "process-legacy");
+
+    expect(readEnv("ENV_READER_TEST", { ENV_READER_TEST: "legacy" })).toBe("legacy");
+  });
+
+  it("prefers the OVERFLOW_ name in an injected environment", () => {
+    vi.stubEnv("OVERFLOW_ENV_READER_TEST", "process-prefixed");
+
+    expect(
+      readEnv("ENV_READER_TEST", { OVERFLOW_ENV_READER_TEST: "prefixed", ENV_READER_TEST: "legacy" }),
+    ).toBe("prefixed");
+  });
+
+  it("keeps an empty prefixed value in an injected environment", () => {
+    vi.stubEnv("OVERFLOW_ENV_READER_TEST", "process-prefixed");
+
+    expect(readEnv("ENV_READER_TEST", { OVERFLOW_ENV_READER_TEST: "", ENV_READER_TEST: "legacy" })).toBe("");
+  });
+
+  it("returns undefined when an injected environment sets neither name", () => {
+    vi.stubEnv("OVERFLOW_ENV_READER_TEST", "process-prefixed");
+    vi.stubEnv("ENV_READER_TEST", "process-legacy");
+
+    expect(readEnv("ENV_READER_TEST", {})).toBeUndefined();
+  });
 });

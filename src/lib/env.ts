@@ -1,3 +1,6 @@
-export function readEnv(name: string): string | undefined {
-  return process.env[`OVERFLOW_${name}`] ?? process.env[name];
+export function readEnv(
+  name: string,
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  return env[`OVERFLOW_${name}`] ?? env[name];
 }
