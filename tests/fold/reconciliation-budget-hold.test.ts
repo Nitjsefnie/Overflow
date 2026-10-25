@@ -86,13 +86,22 @@ function fixture(remaining?: number) {
   return { budgetStore, store, reconcile, onBudgetChange, fold, worker };
 }
 
-function pagedCostGateway(f: ReturnType<typeof fixture>, costs: readonly (number | null)[], finalRemaining = 4000) {
+function pagedCostGateway(
+  f: ReturnType<typeof fixture>,
+  costs: readonly (number | null)[],
+  finalRemaining = 4000,
+  requests?: Array<{ operation: string; variables: Record<string, unknown> }>,
+) {
   const materialize = vi.spyOn(f.fold.store, "materialize");
   let page = 0;
   f.fold.github = new GitHubGateway({ accessToken: "test-token", owner: "sponsor-1", budget: f.budgetStore,
-    fetch: async (input) => {
+    fetch: async (input, init) => {
       if (String(input).endsWith("/repositories/4242")) {
         return Response.json(verifiedRepositoryPayload(4242, "octo/overflow"));
+      }
+      if (requests !== undefined && String(input).endsWith("/graphql")) {
+        const body = JSON.parse(String(init?.body)) as { query: string; variables: Record<string, unknown> };
+        requests.push({ operation: /query (\w+)/.exec(body.query)![1]!, variables: body.variables });
       }
       const cost = costs[page++];
       const hasNextPage = page < costs.length;
@@ -1152,5 +1161,164 @@ describe("the sweep request budget binds only the folds that run under it", () =
       "run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", null,
     );
     expect(materialize).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ repositoryId: "repository-2" }));
+  });
+});
+
+describe("a diff-only repository's re-derivation re-derives under the sweep request budget", () => {
+  /**
+   * Item 5a of the diff-only reconciliation plan: a REDERIVATION job of a
+   * repository whose sponsor's backlog is strictly over the threshold runs as
+   * one full re-deriving pass inside the sweep request budget — charged to its
+   * sponsor, held at the limit, deferred to that sponsor's reset — while an
+   * under-threshold repository's re-derivation stays exactly what it was:
+   * never full, never charged, never held. Every leg drives the real spend
+   * path: the gateway is the real client, whose request wrappers call the
+   * budget check that spends from the wrapped sponsor's round.
+   */
+  function safeEvidence() {
+    return {
+      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, omittedOversizedFacts: 0,
+      checkpoint: now, lastFullPassAt: now, issues: [], pullRequests: [],
+    };
+  }
+
+  const sweepControl = (spend: (sponsorId: string) => Promise<Date | null>): ReconciliationSweepControl => ({
+    spend,
+    openPass: async (input) => ({
+      ...input, id: "pass-1", read: async () => undefined, write: async () => {}, complete: async () => {},
+    }),
+    discardPass: async () => {},
+  });
+
+  function rederivationJob(index: number) {
+    return {
+      id: `job-${index}`, repositoryId: "repository-1", reason: "REDERIVATION" as const,
+      attemptCount: 1, leaseToken: `lease-${index}`, rederivationRequestedAt: now, rederivationGeneration: 1,
+    };
+  }
+
+  function webhookJob(index: number) {
+    return {
+      id: `job-${index}`, repositoryId: "repository-1", reason: "WEBHOOK" as const,
+      attemptCount: 1, leaseToken: `lease-${index}`, rederivationRequestedAt: null, rederivationGeneration: 0,
+    };
+  }
+
+  /**
+   * The spend double rejects any sponsor the fold did not derive from the
+   * repository being folded, so a mutant that spends a crossed or fixed
+   * foreign id cannot pass silently.
+   */
+  function sponsorRound(f: ReturnType<typeof fixture>, atLimit: boolean) {
+    const spends: string[] = [];
+    f.fold.sweep = sweepControl(async (sponsorId) => {
+      if (sponsorId !== "sponsor-1") throw new Error(`spend was called for unknown sponsor ${sponsorId}`);
+      spends.push(sponsorId);
+      return atLimit ? resetAt : null;
+    });
+    return spends;
+  }
+
+  function queued(f: ReturnType<typeof fixture>, job: ReturnType<typeof rederivationJob | typeof webhookJob>) {
+    f.store.claimNextReconciliationJob = vi.fn<ReconciliationWorkerStore["claimNextReconciliationJob"]>()
+      .mockResolvedValueOnce(job).mockResolvedValueOnce(null);
+  }
+
+  it("re-derives a diff-only repository in one full pass charged to its sponsor", async () => {
+    const f = fixture(4000);
+    const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
+    const materialize = pagedCostGateway(f, [1], 4000, requests);
+    f.fold.store.getReconciliationEvidence = async () => safeEvidence();
+    f.fold.store.getSponsorBacklog = vi.fn(async () => 2000);
+    const spends = sponsorRound(f, false);
+    queued(f, rederivationJob(1));
+
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
+    expect(f.fold.store.beginRun).toHaveBeenCalledExactlyOnceWith("repository-1", { rederivation: true });
+    expect(materialize).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      repositoryId: "repository-1",
+      synchronization: expect.objectContaining({ full: true }),
+    }));
+    const list = requests.filter(({ operation }) => operation === "RepositoryIssues");
+    expect(list).toHaveLength(1);
+    // A full pass lists every issue: the request carries no since bound at all.
+    expect(list[0]!.variables.since).toBeUndefined();
+    // Charged through the real budget check: the crawl's two reads each spent
+    // from this repository's own sponsor's round.
+    expect(spends).toEqual(["sponsor-1", "sponsor-1"]);
+    expect(f.fold.store.holdRun).not.toHaveBeenCalled();
+    expect(f.fold.store.failRun).not.toHaveBeenCalled();
+    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1);
+  });
+
+  it.each([
+    { name: "an under-threshold sponsor's", backlog: 10 as number | undefined },
+    { name: "a backlog exactly at the threshold's", backlog: 1000 },
+    { name: "a fold store without the backlog member's", backlog: undefined },
+  ])("leaves $name re-derivation incremental and uncharged", async ({ backlog }) => {
+    const f = fixture(4000);
+    const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
+    const materialize = pagedCostGateway(f, [1], 4000, requests);
+    f.fold.store.getReconciliationEvidence = async () => safeEvidence();
+    if (backlog === undefined) {
+      delete (f.fold.store as { getSponsorBacklog?: unknown }).getSponsorBacklog;
+    } else {
+      f.fold.store.getSponsorBacklog = vi.fn(async () => backlog);
+    }
+    const spends = sponsorRound(f, false);
+    queued(f, rederivationJob(1));
+
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
+    expect(f.fold.store.beginRun).toHaveBeenCalledExactlyOnceWith("repository-1", { rederivation: false });
+    expect(materialize).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      repositoryId: "repository-1",
+      synchronization: expect.objectContaining({ full: false }),
+    }));
+    const list = requests.filter(({ operation }) => operation === "RepositoryIssues");
+    expect(list).toHaveLength(1);
+    expect(typeof list[0]!.variables.since).toBe("string");
+    expect(spends).toEqual([]);
+    expect(f.fold.store.holdRun).not.toHaveBeenCalled();
+    expect(f.fold.store.failRun).not.toHaveBeenCalled();
+  });
+
+  it("keeps a diff-only repository's webhook fold out of the budget and never full", async () => {
+    const f = fixture(4000);
+    const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
+    const materialize = pagedCostGateway(f, [1], 4000, requests);
+    // The fold's cache-miss skip arm is the witness: a WEBHOOK fold that gains
+    // allowsFull against the plan would skip nothing and crawl a full pass.
+    f.fold.store.getSponsorBacklog = vi.fn(async () => 2000);
+    const spends = sponsorRound(f, false);
+    queued(f, webhookJob(1));
+
+    // The cache-miss skip completes the job (the sweep re-offers it later);
+    // what the pin discriminates is the skipped shape below.
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
+    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 0);
+    expect(materialize).not.toHaveBeenCalled();
+    expect(requests).toEqual([]);
+    expect(spends).toEqual([]);
+    expect(f.fold.store.holdRun).not.toHaveBeenCalled();
+    expect(f.fold.store.failRun).not.toHaveBeenCalled();
+  });
+
+  it("holds a diff-only re-derivation at the sponsor's limit and defers it to the reset without a retry", async () => {
+    const f = fixture(4000);
+    const materialize = pagedCostGateway(f, [1]);
+    f.fold.store.getReconciliationEvidence = async () => safeEvidence();
+    f.fold.store.getSponsorBacklog = vi.fn(async () => 2000);
+    const spends = sponsorRound(f, true);
+    queued(f, rederivationJob(1));
+
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("BUDGET_HELD");
+    expect(spends).toEqual(["sponsor-1"]);
+    expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith(
+      "run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", null,
+    );
+    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
+    expect(f.store.retryReconciliationJob).not.toHaveBeenCalled();
+    expect(f.store.failReconciliationJob).not.toHaveBeenCalled();
+    expect(materialize).not.toHaveBeenCalled();
   });
 });
