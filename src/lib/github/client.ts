@@ -1,5 +1,11 @@
 import { readEnv } from "@/lib/env";
-import { getPullRequestNode, type GitHubGraphqlPullRequestNode } from "@/lib/github/pull-request";
+import {
+  getPullRequestNode,
+  repositoryGitHubId,
+  repositoryNameWithOwner,
+  type GitHubGraphqlPullRequestNode,
+} from "@/lib/github/pull-request";
+import { getRepositoryHistoryCount } from "@/lib/github/repository-count";
 import { hasNextLink, lastLinkPage } from "@/lib/github/link-pagination";
 import { getCommitAuthor } from "@/lib/github/commit-author";
 import { checkpointSweepRestRequest, withFreshSweepReads } from "@/lib/fold/sweep-pass";
@@ -110,6 +116,11 @@ export class GitHubGateway implements ForgeGateway {
 
   public getCommitAuthor(repository: GitHubRepositoryReference, sha: string): Promise<number | null> {
     return getCommitAuthor(this.graphql, repository, sha);
+  }
+
+  /** The sweep's size measure: both connections' totals, closed items included. */
+  public getRepositoryHistoryCount(repository: GitHubRepositoryReference): Promise<number | null> {
+    return getRepositoryHistoryCount(this.graphql, repository);
   }
 
   public async getRepositoryById(githubRepositoryId: number): Promise<GitHubRepository | null> {
@@ -1298,31 +1309,6 @@ function toGitHubPullRequest(node: GitHubGraphqlPullRequestNode): GitHubPullRequ
     repositoryGitHubId: repositoryGitHubId(node),
     repositoryNameWithOwner: repositoryNameWithOwner(node),
   };
-}
-
-/**
- * The owning repository's stable identity. Absent or unusable, the pull request
- * cannot be attributed to a repository at all, which is the same standing a null
- * `databaseId` has for the pull request itself.
- */
-function repositoryGitHubId(node: GitHubGraphqlPullRequestNode): number {
-  const databaseId = node.repository?.databaseId;
-  if (typeof databaseId !== "number" || !Number.isSafeInteger(databaseId) || databaseId <= 0) {
-    throw new Error("GitHub GraphQL response was invalid.");
-  }
-  return databaseId;
-}
-
-/**
- * A closing reference can name a pull request in another repository, so the
- * owning repository is as load-bearing as the number and must be present.
- */
-function repositoryNameWithOwner(node: GitHubGraphqlPullRequestNode): string {
-  const nameWithOwner = node.repository?.nameWithOwner;
-  if (typeof nameWithOwner !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(nameWithOwner)) {
-    throw new Error("GitHub GraphQL response was invalid.");
-  }
-  return nameWithOwner;
 }
 
 /**

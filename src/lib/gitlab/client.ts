@@ -15,6 +15,13 @@ import type {
 } from "@/lib/github/types";
 import { GitLabApiError, responseJson, responseJsonArray } from "@/lib/gitlab/api-error";
 import { CollectionWalkBound } from "@/lib/gitlab/collection-walk-bound";
+import {
+  normalizeTimestamp,
+  toGitHubIssue,
+  toGitLabMergeRequest,
+  type GitLabIssueObject,
+  type GitLabMergeRequestObject,
+} from "@/lib/gitlab/map";
 import { gitlabApiFetch } from "@/lib/security/gitlab-api-fetch";
 import { logField } from "@/lib/webhooks/log-field";
 
@@ -46,40 +53,6 @@ type GitLabProject = {
     project_access?: { access_level?: number } | null;
     group_access?: { access_level?: number } | null;
   };
-};
-
-type GitLabMergeRequestObject = {
-  id: number;
-  iid: number;
-  project_id: number;
-  title: string;
-  description: string | null;
-  state: string;
-  web_url: string;
-  author: { id: number; username: string };
-  created_at: string;
-  updated_at: string;
-  merged_at: string | null;
-  merge_commit_sha: string | null;
-  sha: string | null;
-  squash_commit_sha: string | null;
-};
-
-type GitLabIssueObject = {
-  id: number;
-  iid: number;
-  project_id: number;
-  title: string;
-  description: string | null;
-  state: string;
-  web_url: string;
-  author: { id: number; username: string };
-  labels: string[];
-  created_at: string;
-  updated_at: string;
-  closed_at: string | null;
-  assignees?: Array<{ id: number; username: string }>;
-  assignee?: { id: number; username: string } | null;
 };
 
 // Live-verified shape (docs.gitlab.com resource_label_events): the label
@@ -119,26 +92,26 @@ type GitLabHookObject = {
 };
 
 /**
- * GitLab timestamp shapes vary — millisecond precision with Z, second
- * precision with Z, and explicit offsets — and one of them round-trips
- * through Date differently than it arrived. Normalization happens exactly
- * once, here at the gateway boundary, so every field a caller reads is ISO
- * UTC.
+ * GitLab timestamp normalization lives with the response mappers (map.ts), so
+ * every mapped field reads the same normalized time.
  */
-function normalizeTimestamp(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    // The value is the instance's own text: encoded, it can neither forge a
-    // second journal line where the message is logged raw nor drive the
-    // operator's terminal.
-    throw new Error(`GitLab returned an unparsable timestamp: ${logField(value)}`);
-  }
-  return parsed.toISOString();
-}
-
 function segment(value: string): string {
   return encodeURIComponent(value);
 }
+
+/**
+ * The collection total from the X-Total pagination header. GitLab omits the
+ * header for a collection above 10,000 records (docs.gitlab.com/api/rest/,
+ * "Pagination response headers"), so absence is the known floor, not an
+ * empty answer; an unparsable header reads as the same floor, which leans
+ * toward over-threshold and loses nothing but a finer count.
+ */
+export function gitlabCollectionTotal(header: string | null): number {
+  const value = /^\d+$/.test(header ?? "") ? Number(header) : NaN;
+  return Number.isSafeInteger(value) && value >= 0 ? value : MAX_GITLAB_COLLECTION_TOTAL_FLOOR;
+}
+
+export const MAX_GITLAB_COLLECTION_TOTAL_FLOOR = 10_000;
 
 export type GitLabGatewayOptions = {
   instanceUrl: string;
@@ -184,6 +157,34 @@ export class GitLabGateway {
       throw error;
     }
     return toGitHubRepository(await responseJson<GitLabProject>(response, path));
+  }
+
+  /**
+   * The sweep's size measure for GitLab, in two reads: the project's issues
+   * statistics (exact at any size, every state) and the merge-request
+   * collection's X-Total (exact below 10,000, the floor above it — GitLab
+   * omits the header there and no merge-request statistics endpoint exists).
+   * Only a 404 answers "this project is unreachable" with null, the same
+   * reading getRepositoryById gives it; every other failure is an upstream
+   * problem and reaches the caller, which keeps the previous stored size.
+   */
+  public async getRepositoryHistoryCount(repository: GitHubRepositoryReference): Promise<number | null> {
+    const project = segment(`${repository.owner}/${repository.name}`);
+    const statisticsPath = `/projects/${project}/issues_statistics`;
+    let statistics: GitLabRestResponse;
+    try {
+      statistics = await this.request(statisticsPath);
+    } catch (error) {
+      if (error instanceof GitLabApiError && error.status === 404) return null;
+      throw error;
+    }
+    const counts = await responseJson<{ statistics?: { counts?: { all?: unknown } } }>(statistics, statisticsPath);
+    const issues = counts.statistics?.counts?.all;
+    if (typeof issues !== "number" || !Number.isSafeInteger(issues) || issues < 0) {
+      throw new Error("GitLab issues statistics total was invalid.");
+    }
+    const mergeRequests = await this.request(`/projects/${project}/merge_requests?per_page=1`);
+    return issues + gitlabCollectionTotal(mergeRequests.headers.get("x-total"));
   }
 
   public async listIssues(
@@ -719,68 +720,5 @@ function toGitHubRepository(project: GitLabProject): GitHubRepository {
     visibility: project.visibility === "public" ? "PUBLIC" : "PRIVATE",
     url: project.web_url,
     canAdminister: effectiveAccessLevel >= 40,
-  };
-}
-
-function toGitHubIssue(
-  object: GitLabIssueObject,
-  history: GitHubIssueHistoryEvent[],
-  comments: GitHubIssueComment[],
-  closingPullRequests: GitLabMergeRequest[],
-): GitHubIssue {
-  const assignee = object.assignees?.[0] ?? object.assignee ?? null;
-  return {
-    id: object.id,
-    number: object.iid,
-    title: object.title,
-    body: object.description ?? "",
-    url: object.web_url,
-    // GitLab's two states map exactly onto the ledger's two.
-    state: object.state === "opened" ? "OPEN" : "CLOSED",
-    // Contract item 16: GitLab carries no state_reason. An absent reason is
-    // exempt from neither NOT_PLANNED nor DUPLICATE, so the missing-PR gate applies.
-    stateReason: null,
-    createdAt: normalizeTimestamp(object.created_at),
-    updatedAt: normalizeTimestamp(object.updated_at),
-    closedAt: object.closed_at === null ? null : normalizeTimestamp(object.closed_at),
-    authorLogin: object.author?.username ?? null,
-    authorGitHubUserId: object.author?.id ?? null,
-    labels: object.labels ?? [],
-    claimAssigneeGitHubLogin: assignee?.username ?? null,
-    claimAssigneeGitHubUserId: assignee?.id ?? null,
-    // The reconciliation evidence: label events, human comments and closing
-    // merge requests read fresh by the caller (`issueWithEvidence`) through
-    // the same public surfaces the issue-547 webhook + initial-import path
-    // calls, so the issue-embedded shape and the standalone shape cannot
-    // drift apart.
-    history,
-    comments,
-    closingPullRequests,
-  };
-}
-
-function toGitLabMergeRequest(object: GitLabMergeRequestObject): GitLabMergeRequest {
-  return {
-    id: object.id,
-    number: object.iid,
-    title: object.title,
-    body: object.description ?? "",
-    url: object.web_url,
-    state: object.state === "merged" ? "MERGED" : object.state === "closed" ? "CLOSED" : "OPEN",
-    mergedAt: object.merged_at === null ? null : normalizeTimestamp(object.merged_at),
-    mergeCommitOid: object.merge_commit_sha,
-    finalCommitAt: null,
-    authorLogin: object.author?.username ?? null,
-    authorGitHubUserId: object.author?.id ?? null,
-    repositoryGitHubId: object.project_id,
-    repositoryNameWithOwner: object.web_url
-      .replace(/^https?:\/\//, "")
-      .split("/-")[0]!
-      .split("/api/")[0]!
-      .split("/")
-      .slice(1)
-      .join("/"),
-    sourceSha: object.sha,
-    squashCommitSha: object.squash_commit_sha,
   };
 }

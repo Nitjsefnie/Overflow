@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { MAX_WALK_ITEMS, MAX_WALK_PAGES } from "@/lib/gitlab/collection-walk-bound";
-import { GitLabGateway, GitLabApiError } from "@/lib/gitlab/client";
+import { GitLabGateway, GitLabApiError, gitlabCollectionTotal } from "@/lib/gitlab/client";
 import { logField } from "@/lib/webhooks/log-field";
 
 describe("scoped GitLab hook configuration", () => {
@@ -1492,5 +1492,74 @@ index 0123456..789abcd 100644
     expect((thrown as Error).message).toBe(`GitLab returned an unparsable timestamp: ${logField(hostile)}`);
     expect((thrown as Error).message).not.toContain("\n");
     expect((thrown as Error).message).not.toContain("\u001b");
+  });
+});
+
+describe("the GitLab repository history count", () => {
+  const repository = { owner: "gitlab-org", name: "gitlab" };
+  const json = (body: unknown, headers: HeadersInit = {}) => new Response(JSON.stringify(body), { headers });
+
+  it("sums the issues statistics total and the merge requests X-Total, both every-state counts", async () => {
+    const requests: string[] = [];
+    const client = gateway(async (input) => {
+      const request = new Request(input);
+      requests.push(request.url);
+      if (request.url.endsWith("/issues_statistics")) return json({ statistics: { counts: { all: 682, closed: 300, opened: 382 } } });
+      if (request.url.includes("/merge_requests?")) return json([], { "x-total": "674" });
+      throw new Error(`unexpected request ${request.url}`);
+    });
+    await expect(client.getRepositoryHistoryCount(repository)).resolves.toBe(1356);
+    // Two reads: the statistics endpoint and a one-row merge-request page. No
+    // issue or merge-request listing ever ran.
+    expect(requests).toHaveLength(2);
+    expect(requests.some((url) => url.endsWith("/issues_statistics"))).toBe(true);
+    expect(requests.some((url) => url.includes("/merge_requests?"))).toBe(true);
+  });
+
+  it("clamps a merge-request collection whose X-Total is absent to the 10,000 floor", async () => {
+    // GitLab omits x-total above 10,000 records (docs.gitlab.com/api/rest/,
+    // "Pagination response headers"), so absence is the known floor.
+    const client = gateway(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/issues_statistics")) return json({ statistics: { counts: { all: 50 } } });
+      if (url.includes("/merge_requests?")) return json([{}]);
+      throw new Error(`unexpected request ${url}`);
+    });
+    await expect(client.getRepositoryHistoryCount(repository)).resolves.toBe(10050);
+  });
+
+  it("clamps an unparsable X-Total the same way", async () => {
+    const client = gateway(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/issues_statistics")) return json({ statistics: { counts: { all: 0 } } });
+      if (url.includes("/merge_requests?")) return json([], { "x-total": "many" });
+      throw new Error(`unexpected request ${url}`);
+    });
+    await expect(client.getRepositoryHistoryCount(repository)).resolves.toBe(10000);
+  });
+
+  it("answers null when the project is gone", async () => {
+    const client = gateway(async () => new Response("gone", { status: 404 }));
+    await expect(client.getRepositoryHistoryCount(repository)).resolves.toBeNull();
+  });
+
+  it("rejects when the issues statistics body is not the documented shape", async () => {
+    const client = gateway(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/issues_statistics")) return json({ statistics: { counts: { all: "many" } } });
+      throw new Error(`unexpected request ${url}`);
+    });
+    await expect(client.getRepositoryHistoryCount(repository)).rejects.toThrow(/invalid/i);
+  });
+
+  it.each([
+    ["absent", null, 10000],
+    ["a plain count", "8", 8],
+    ["a large count", "9999", 9999],
+    ["unparsable text", "many", 10000],
+    ["a negative count", "-3", 10000],
+    ["a fractional count", "1.5", 10000],
+  ])("the X-Total parser reads %s as %i", (_name, header, expected) => {
+    expect(gitlabCollectionTotal(header)).toBe(expected);
   });
 });
