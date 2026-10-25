@@ -6,6 +6,8 @@ import {
 } from "@/lib/fold/repository-size";
 import { sweepReconciliations } from "@/lib/fold/sweep";
 
+const pairs = (...ids: string[]) => ids.map((id) => ({ repositoryId: id, sponsorId: "sponsor" }));
+
 /**
  * The sweep's repository size measure (issue 1360): the count read is NOT the
  * list query. At this layer the measure dependency stands in for the forge
@@ -41,7 +43,7 @@ describe("the sweep's repository size measure", () => {
       getPullRequestDiff: () => { throw new Error("the sweep listed pull requests during a count-only measure"); },
     });
     const summary = await sweepReconciliations({
-      listActiveRepositoryIds: async () => ["stale", "fresh"],
+      listActiveRepositorySponsors: async () => pairs("stale", "fresh"),
       enqueue: async () => undefined,
       now: () => at,
       sizeStore: memorySizeStore(rows),
@@ -61,7 +63,7 @@ describe("the sweep's repository size measure", () => {
     const rows = new Map<string, RepositorySizeRow>();
     const measured: string[] = [];
     const summary = await sweepReconciliations({
-      listActiveRepositoryIds: async () => ["new"],
+      listActiveRepositorySponsors: async () => pairs("new"),
       enqueue: async () => undefined,
       now: () => at,
       sizeStore: memorySizeStore(rows),
@@ -75,13 +77,35 @@ describe("the sweep's repository size measure", () => {
     expect(summary.measured).toBe(1);
   });
 
+  it("measures at exactly the six-hour boundary and skips one millisecond before it", async () => {
+    const rows = new Map<string, RepositorySizeRow>();
+    // One millisecond inside the window reads as fresh; the boundary itself is
+    // stale, so a window measured once never skips its successor's remeasure.
+    rows.set("within", { totalCount: 10, measuredAt: new Date(at.getTime() - (REPOSITORY_SIZE_REMEASURE_MS - 1)) });
+    rows.set("boundary", { totalCount: 20, measuredAt: new Date(at.getTime() - REPOSITORY_SIZE_REMEASURE_MS) });
+    const measured: string[] = [];
+    await sweepReconciliations({
+      listActiveRepositorySponsors: async () => pairs("within", "boundary"),
+      enqueue: async () => undefined,
+      now: () => at,
+      sizeStore: memorySizeStore(rows),
+      measureSize: async (repositoryId) => {
+        measured.push(repositoryId);
+        return 1356;
+      },
+    });
+    expect(measured).toEqual(["boundary"]);
+    expect(rows.get("within")?.totalCount).toBe(10);
+    expect(rows.get("boundary")?.totalCount).toBe(1356);
+  });
+
   it("fails a null measure softly: the previous size stands and the failure is counted and reported", async () => {
     const rows = new Map<string, RepositorySizeRow>();
     const staleAt = new Date(at.getTime() - 2 * REPOSITORY_SIZE_REMEASURE_MS);
     rows.set("repo", { totalCount: 500, measuredAt: staleAt });
     const reported: string[] = [];
     const summary = await sweepReconciliations({
-      listActiveRepositoryIds: async () => ["repo"],
+      listActiveRepositorySponsors: async () => pairs("repo"),
       enqueue: async () => undefined,
       now: () => at,
       sizeStore: memorySizeStore(rows),
@@ -101,7 +125,7 @@ describe("the sweep's repository size measure", () => {
     const reported: string[] = [];
     const enqueued: string[] = [];
     const summary = await sweepReconciliations({
-      listActiveRepositoryIds: async () => ["repo"],
+      listActiveRepositorySponsors: async () => pairs("repo"),
       enqueue: async (repositoryId) => { enqueued.push(repositoryId); },
       now: () => at,
       sizeStore: memorySizeStore(rows),
@@ -121,7 +145,7 @@ describe("the sweep's repository size measure", () => {
     const rows = new Map<string, RepositorySizeRow>([["broken", { totalCount: 1, measuredAt: staleAt }]]);
     const reported: string[] = [];
     const summary = await sweepReconciliations({
-      listActiveRepositoryIds: async () => ["broken"],
+      listActiveRepositorySponsors: async () => pairs("broken"),
       enqueue: async () => undefined,
       now: () => at,
       sizeStore: {
@@ -141,7 +165,7 @@ describe("the sweep's repository size measure", () => {
   it("is today's sweep when the size dependencies are absent", async () => {
     const enqueued: string[] = [];
     const summary = await sweepReconciliations({
-      listActiveRepositoryIds: async () => ["repo"],
+      listActiveRepositorySponsors: async () => pairs("repo"),
       enqueue: async (repositoryId) => { enqueued.push(repositoryId); },
       now: () => at,
     });
