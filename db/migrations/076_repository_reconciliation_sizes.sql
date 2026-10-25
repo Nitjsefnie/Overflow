@@ -1,4 +1,4 @@
--- The sweep's size measure; additive, unmeasured reads as zero.
+-- Sweep-refreshed repository sizes.
 create table repository_reconciliation_sizes (
   repository_id uuid primary key references registered_repositories(id) on delete cascade,
   total_count integer not null check (total_count >= 0),
