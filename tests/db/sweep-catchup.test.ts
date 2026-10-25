@@ -152,7 +152,7 @@ describe("reconciliation sweep catch-ups", () => {
     // The smallest repository is enqueued as a SWEEP job and claimed in flight.
     await sweepReconciliationCatchups(h.deps);
     expect(h.offered).toEqual([smallest]);
-    let jobs = await sql`select repository_id::text as repository_id, reason, state from repository_reconciliation_jobs`;
+    const jobs = await sql`select repository_id::text as repository_id, reason, state from repository_reconciliation_jobs`;
     expect(jobs).toEqual([{ repository_id: smallest, reason: "SWEEP", state: "PENDING" }]);
 
     // A restart (a new store over the same database) finds the job queued and waits.

@@ -1,6 +1,4 @@
--- Catch-up tracking for diff-only sponsors: one row per repository, created
--- pending the first time a measurement finds its sponsor over the threshold.
--- Mixed-version review: additive state, unused by older workers.
+-- Catch-up tracking for diff-only sponsors; additive, unused by older workers.
 create table reconciliation_sweep_catchups (
   repository_id uuid primary key references registered_repositories(id) on delete cascade,
   sponsor_id uuid not null references users(id) on delete cascade,
