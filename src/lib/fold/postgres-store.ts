@@ -94,6 +94,10 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return this.repositoryLookup.listActiveRepositoryIds();
   }
 
+  public async listActiveRepositorySponsors(): Promise<{ repositoryId: string; sponsorId: string }[]> {
+    return this.repositoryLookup.listActiveRepositorySponsors();
+  }
+
   public async getReconciliationCooldown(repositoryId: string): Promise<Date | null> {
     return this.reconciliationPacing.getReconciliationCooldown(repositoryId);
   }

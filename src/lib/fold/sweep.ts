@@ -1,13 +1,19 @@
-import type { PostgresSweepRoundStore } from "@/lib/fold/sweep-round-store";
+import type { PostgresSponsorSweepRoundStore } from "@/lib/fold/sponsor-sweep-round-store";
 import { REPOSITORY_SIZE_REMEASURE_MS, type PostgresRepositorySizeStore } from "@/lib/fold/repository-size";
 import { readSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import { callGuarded } from "@/lib/fold/guarded-callback";
 import { errorLogToken } from "@/lib/webhooks/log-field";
 
+/** The sweep lists each active repository beside the sponsor it folds under. */
+export type ListedRepositorySponsor = {
+  repositoryId: string;
+  sponsorId: string;
+};
+
 export type ReconciliationSweepDependencies = {
-  listActiveRepositoryIds(): Promise<string[]>;
+  listActiveRepositorySponsors(): Promise<readonly ListedRepositorySponsor[]>;
   enqueue(repositoryId: string): Promise<unknown>;
-  round?: Pick<PostgresSweepRoundStore, "enqueueNext">;
+  round?: Pick<PostgresSponsorSweepRoundStore, "enqueueNext">;
   now?: () => Date;
   /**
    * The stored repository size measures, the sweep-side half of the size
@@ -159,7 +165,7 @@ export function shouldStartReconciliationBackground(
 export async function sweepReconciliations(
   dependencies: ReconciliationSweepDependencies,
 ): Promise<ReconciliationSweepSummary> {
-  const repositoryIds = await dependencies.listActiveRepositoryIds();
+  const repositories = await dependencies.listActiveRepositorySponsors();
   let enqueued = 0;
   let failed = 0;
 
@@ -181,11 +187,11 @@ export async function sweepReconciliations(
   // proceed.
   const sizeStore = dependencies.sizeStore;
   const measureSize = dependencies.measureSize;
+  const now = dependencies.now ?? (() => new Date());
   let measured = 0;
   let measureFailed = 0;
   if (sizeStore !== undefined && measureSize !== undefined) {
-    const now = dependencies.now ?? (() => new Date());
-    for (const repositoryId of repositoryIds) {
+    for (const { repositoryId } of repositories) {
       try {
         const stored = await sizeStore.get(repositoryId);
         if (stored !== null && now().getTime() - stored.measuredAt.getTime() < REPOSITORY_SIZE_REMEASURE_MS) continue;
@@ -202,10 +208,22 @@ export async function sweepReconciliations(
   }
 
   if (dependencies.round !== undefined) {
-    await dependencies.round.enqueueNext(repositoryIds, (dependencies.now ?? (() => new Date()))(),
-      readSweepRequestBudget(process.env), enqueue);
+    // Each sponsor's repositories rotate against that sponsor's own budget,
+    // so one sponsor whose budget is spent stops enqueueing while the others
+    // continue; the groups are offered in sponsor order.
+    const bySponsor = new Map<string, string[]>();
+    for (const { repositoryId, sponsorId } of repositories) {
+      const ids = bySponsor.get(sponsorId);
+      if (ids === undefined) bySponsor.set(sponsorId, [repositoryId]);
+      else ids.push(repositoryId);
+    }
+    const budget = readSweepRequestBudget(process.env);
+    const sponsors = [...bySponsor.keys()].sort();
+    for (const sponsorId of sponsors) {
+      await dependencies.round.enqueueNext(sponsorId, bySponsor.get(sponsorId)!, now(), budget, enqueue);
+    }
   } else {
-    for (const repositoryId of repositoryIds) await enqueue(repositoryId);
+    for (const { repositoryId } of repositories) await enqueue(repositoryId);
   }
 
   const summary: ReconciliationSweepSummary = { attempted: enqueued + failed, enqueued, failed };

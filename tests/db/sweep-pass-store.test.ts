@@ -7,7 +7,7 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresSweepPassStore } from "@/lib/fold/sweep-pass-store";
 import { checkpointSweepRequest, withSweepPass, type SweepPass } from "@/lib/fold/sweep-pass";
 import { withSweepRequestBudget, SweepBudgetSpent } from "@/lib/fold/sweep-request-budget";
-import { PostgresSweepRoundStore } from "@/lib/fold/sweep-round-store";
+import { PostgresSponsorSweepRoundStore } from "@/lib/fold/sponsor-sweep-round-store";
 import { GitHubGraphqlClient, collectCursorPages } from "@/lib/github/graphql";
 import { GitHubGateway } from "@/lib/github/client";
 import { materializeRepositoryFixture } from "../support/materialized-repository";
@@ -27,7 +27,10 @@ beforeAll(async () => {
   container = started.container; process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql(); await runMigrations();
 });
-beforeEach(async () => { await sql`delete from reconciliation_sweep_round`; });
+beforeEach(async () => {
+  await sql`delete from reconciliation_sweep_round`;
+  await sql`delete from reconciliation_sweep_rounds`;
+});
 afterAll(async () => {
   await closeSql(); await container?.stop();
   if (original === undefined) delete process.env.OVERFLOW_DATABASE_URL; else process.env.OVERFLOW_DATABASE_URL = original;
@@ -228,7 +231,7 @@ describe("paused full-pass pages", () => {
     } });
     let clock = at;
     const sweep = {
-      spend: () => new PostgresSweepRoundStore(sql).spend(clock, 2),
+      spend: () => new PostgresSponsorSweepRoundStore(sql).spend(repository.sponsor.id, clock, 2),
       openPass: new PostgresSweepPassStore(sql).open.bind(new PostgresSweepPassStore(sql)),
       discardPass: (id: string) => new PostgresSweepPassStore(sql).discardByRepository(id),
     };
@@ -261,13 +264,14 @@ describe("paused full-pass pages", () => {
         ? { data: { repository: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } }
         : verifiedRepositoryPayload(repository.githubRepositoryId, repository.ownerName));
     } });
-    const rounds = new PostgresSweepRoundStore(sql);
+    const rounds = new PostgresSponsorSweepRoundStore(sql);
     const passes = new PostgresSweepPassStore(sql);
+    const sponsorId = (await f.store.getRepository(f.repositoryId))!.sponsor.id;
     const dependencies = { store: f.store, github, now: () => at, onBudgetChange: () => {},
-      sweep: { spend: () => rounds.spend(at, 3), openPass: passes.open.bind(passes), discardPass: passes.discardByRepository.bind(passes) } };
+      sweep: { spend: () => rounds.spend(sponsorId, at, 3), openPass: passes.open.bind(passes), discardPass: passes.discardByRepository.bind(passes) } };
     await reconcileRepository(dependencies, f.repositoryId, { reason: "SWEEP" });
     expect(sent).toBe(2);
-    await rounds.spend(at, 3);
+    await rounds.spend(sponsorId, at, 3);
     const issue = f.fold.issues[0]!;
     await sql`insert into repository_reconciliation_dirty_subjects (repository_id, kind, github_subject_id, subject_number)
       values (${f.repositoryId}, 'ISSUE', ${issue.githubIssueId}, ${issue.number})`;
@@ -283,7 +287,7 @@ describe("paused full-pass pages", () => {
   it("continues unread REST and GraphQL pages after budget exhaustion and a process restart", async () => {
     const f = await materializeRepositoryFixture(sql);
     const input = { repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] };
-    const rounds = new PostgresSweepRoundStore(sql);
+    const rounds = new PostgresSponsorSweepRoundStore(sql);
     const cursors: unknown[] = [];
     const graphql = new GitHubGraphqlClient({ accessToken: randomBytes(24).toString("hex"), fetch: async (_url, init) => {
       const cursor = JSON.parse(String(init?.body)).variables.cursor;
@@ -296,14 +300,15 @@ describe("paused full-pass pages", () => {
     } });
     const first = await new PostgresSweepPassStore(sql).open(input);
     const walk = () => collectCursorPages<number>((cursor) => graphql.query("query { issues { nodes } }", { cursor }));
-    await expect(withSweepRequestBudget(() => rounds.spend(at, 2), () => withSweepPass(first, async () => {
+    const sponsorId = (await f.store.getRepository(f.repositoryId))!.sponsor.id;
+    await expect(withSweepRequestBudget(() => rounds.spend(sponsorId, at, 2), () => withSweepPass(first, async () => {
       await rest.request("/repos/owner/repo/pulls/1");
       await walk();
     }))).rejects.toBeInstanceOf(SweepBudgetSpent);
     const restarted = await new PostgresSweepPassStore(sql).open({ ...input, scanStartedAt: new Date("2030-01-01T06:00:00Z") });
     expect(restarted.id).toBe(first.id);
     expect(restarted.scanStartedAt).toEqual(at);
-    await withSweepRequestBudget(() => rounds.spend(new Date("2030-01-01T06:00:00Z"), 2), () => withSweepPass(restarted, async () => {
+    await withSweepRequestBudget(() => rounds.spend(sponsorId, new Date("2030-01-01T06:00:00Z"), 2), () => withSweepPass(restarted, async () => {
       const response = await rest.request("/repos/owner/repo/pulls/1");
       expect(response.body).toBe("diff");
       expect(response.headers.get("content-type")).toBe("text/plain");

@@ -10,6 +10,8 @@ import {
 } from "@/lib/fold/sweep";
 import { captureUnhandledRejections } from "../support/unhandled-rejection-probe";
 
+const pairs = (...ids: string[]) => ids.map((id) => ({ repositoryId: id, sponsorId: "sponsor" }));
+
 // The line the scheduler prints when it could not arm the recurring tick.
 // Asserted as a whole because it is reported instead of being fatal, so the
 // residual state it names is all an operator gets.
@@ -158,7 +160,7 @@ describe("scheduled reconciliation sweep", () => {
     const enqueued: string[] = [];
     startReconciliationSweep({
       runSweep: () => sweepReconciliations({
-        listActiveRepositoryIds: async () => ["repo-a", "repo-b"],
+        listActiveRepositorySponsors: async () => pairs("repo-a", "repo-b"),
         enqueue: async (id) => { enqueued.push(id); },
       }),
       schedule: timer.schedule,
@@ -194,9 +196,9 @@ describe("scheduled reconciliation sweep", () => {
     const offered: string[] = [];
     const ticks: Date[] = [];
     const summary = await sweepReconciliations({
-      listActiveRepositoryIds: async () => ["a", "b", "c"],
+      listActiveRepositorySponsors: async () => pairs("a", "b", "c"),
       now: () => new Date("2030-01-01T00:00:00Z"),
-      round: { enqueueNext: async (ids, now, _limit, enqueue) => {
+      round: { enqueueNext: async (_sponsorId, ids, now, _limit, enqueue) => {
         expect(ids).toEqual(["a", "b", "c"]); ticks.push(now); await enqueue("b"); return "b";
       } },
       enqueue: async (id) => { offered.push(id); },
@@ -206,12 +208,46 @@ describe("scheduled reconciliation sweep", () => {
     expect(summary).toEqual({ attempted: 1, enqueued: 1, failed: 0 });
   });
 
+  it("rotates each sponsor's repositories against that sponsor's own budget", async () => {
+    const offered: string[] = [];
+    const ticks: Date[] = [];
+    const slots: Array<{ sponsorId: string; repositoryIds: readonly string[] }> = [];
+    const summary = await sweepReconciliations({
+      listActiveRepositorySponsors: async () => [
+        { repositoryId: "b1", sponsorId: "sponsor-b" },
+        { repositoryId: "a2", sponsorId: "sponsor-a" },
+        { repositoryId: "a1", sponsorId: "sponsor-a" },
+      ],
+      now: () => new Date("2030-01-01T00:00:00Z"),
+      // Sponsor A's round is spent, so its call returns null; the sweep must
+      // still offer B's repositories to B's own budget.
+      round: { enqueueNext: async (sponsorId, ids, now, _limit, enqueue) => {
+        slots.push({ sponsorId, repositoryIds: ids });
+        if (sponsorId === "sponsor-a") return null;
+        ticks.push(now);
+        await enqueue(ids[0]!);
+        return ids[0]!;
+      } },
+      enqueue: async (id) => { offered.push(id); },
+    });
+    // Groups are offered per sponsor in sponsor order, each with only its own
+    // repositories and its own slot time; A's spent budget costs B nothing.
+    // The listing order passes through per group; the round store sorts ids.
+    expect(slots).toEqual([
+      { sponsorId: "sponsor-a", repositoryIds: ["a2", "a1"] },
+      { sponsorId: "sponsor-b", repositoryIds: ["b1"] },
+    ]);
+    expect(ticks).toEqual([new Date("2030-01-01T00:00:00Z")]);
+    expect(offered).toEqual(["b1"]);
+    expect(summary).toEqual({ attempted: 1, enqueued: 1, failed: 0 });
+  });
+
   it("enqueues every active repository", async () => {
     const enqueued: string[] = [];
 
     await expect(
       sweepReconciliations({
-        listActiveRepositoryIds: async () => ["repo-a", "repo-b", "repo-c"],
+        listActiveRepositorySponsors: async () => pairs("repo-a", "repo-b", "repo-c"),
         enqueue: async (repositoryId) => {
           enqueued.push(repositoryId);
         },
@@ -229,7 +265,7 @@ describe("scheduled reconciliation sweep", () => {
 
     await expect(
       sweepReconciliations({
-        listActiveRepositoryIds: async () => ["cooling", "failed", "queued"],
+        listActiveRepositorySponsors: async () => pairs("cooling", "failed", "queued"),
         enqueue: async (repositoryId) => {
           enqueued.push(repositoryId);
         },
@@ -246,7 +282,7 @@ describe("scheduled reconciliation sweep", () => {
 
     await expect(
       sweepReconciliations({
-        listActiveRepositoryIds: async () => ["repo-a", "repo-b", "repo-c"],
+        listActiveRepositorySponsors: async () => pairs("repo-a", "repo-b", "repo-c"),
         enqueue: async (repositoryId) => {
           if (repositoryId === "repo-b") {
             throw failure;
@@ -268,7 +304,7 @@ describe("scheduled reconciliation sweep", () => {
     let peak = 0;
 
     await sweepReconciliations({
-      listActiveRepositoryIds: async () => ["repo-a", "repo-b", "repo-c"],
+      listActiveRepositorySponsors: async () => pairs("repo-a", "repo-b", "repo-c"),
       enqueue: async () => {
         inFlight += 1;
         peak = Math.max(peak, inFlight);
@@ -283,7 +319,7 @@ describe("scheduled reconciliation sweep", () => {
   it("returns an empty summary when nothing is registered", async () => {
     await expect(
       sweepReconciliations({
-        listActiveRepositoryIds: async () => [],
+        listActiveRepositorySponsors: async () => pairs(),
         enqueue: async () => {
           throw new Error("should not be enqueued");
         },
@@ -755,7 +791,7 @@ describe("scheduled reconciliation sweep", () => {
     try {
       await expect(
         sweepReconciliations({
-          listActiveRepositoryIds: async () => ["repo-a"],
+          listActiveRepositorySponsors: async () => pairs("repo-a"),
           enqueue: async () => {
             throw unqueued;
           },
@@ -795,7 +831,7 @@ describe("scheduled reconciliation sweep", () => {
     try {
       await expect(
         sweepReconciliations({
-          listActiveRepositoryIds: async () => ["repo-a", "broken", "repo-b", "repo-c"],
+          listActiveRepositorySponsors: async () => pairs("repo-a", "broken", "repo-b", "repo-c"),
           enqueue: async (repositoryId) => {
             if (repositoryId === "broken") {
               throw unqueued;
@@ -827,7 +863,7 @@ describe("scheduled reconciliation sweep", () => {
     try {
       await expect(
         sweepReconciliations({
-          listActiveRepositoryIds: async () => ["broken", "repo-b"],
+          listActiveRepositorySponsors: async () => pairs("broken", "repo-b"),
           enqueue: async (repositoryId) => {
             if (repositoryId === "broken") {
               throw new Error("Queueing the repository failed");
@@ -861,7 +897,7 @@ describe("scheduled reconciliation sweep", () => {
     // Both outcomes the summary distinguishes, so a hook that fails has every
     // counter to disturb and disturbs none of them.
     const dependencies = () => ({
-      listActiveRepositoryIds: async () => ["ready", "also-ready", "broken", "also-broken"],
+      listActiveRepositorySponsors: async () => pairs("ready", "also-ready", "broken", "also-broken"),
       enqueue: async (repositoryId: string) => {
         if (repositoryId.endsWith("broken")) {
           throw new Error("Queueing the repository failed");
@@ -891,7 +927,7 @@ describe("scheduled reconciliation sweep", () => {
     // A lazily wired reporter: the accessor throws until its collector is
     // configured, and reading the member is the first thing the sweep does.
     const dependencies = {
-      listActiveRepositoryIds: async () => ["repo-a"],
+      listActiveRepositorySponsors: async () => pairs("repo-a"),
       enqueue: async () => {
         throw unqueued;
       },
@@ -923,7 +959,7 @@ describe("scheduled reconciliation sweep", () => {
     // access used to supply for free.
     const dependencies = {
       failures: [] as Array<{ repositoryId: string; error: unknown }>,
-      listActiveRepositoryIds: async () => ["repo-a"],
+      listActiveRepositorySponsors: async () => pairs("repo-a"),
       enqueue: async () => {
         throw unqueued;
       },
@@ -949,7 +985,7 @@ describe("scheduled reconciliation sweep", () => {
     // A property, not a stored function: a getter with a side effect must see one
     // read per repository failure, not one per use of the value.
     const dependencies = {
-      listActiveRepositoryIds: async () => ["repo-a", "repo-b", "repo-c"],
+      listActiveRepositorySponsors: async () => pairs("repo-a", "repo-b", "repo-c"),
       enqueue: async (repositoryId: string) => {
         if (repositoryId !== "repo-b") {
           throw new Error("Queueing the repository failed");
@@ -976,7 +1012,7 @@ describe("scheduled reconciliation sweep", () => {
     // An untyped caller — a config object, parsed JSON, a JavaScript consumer —
     // can hand over null where the optional member expresses only undefined.
     const dependencies = {
-      listActiveRepositoryIds: async () => ["repo-a"],
+      listActiveRepositorySponsors: async () => pairs("repo-a"),
       enqueue: async () => {
         throw unqueued;
       },
@@ -1012,7 +1048,7 @@ describe("scheduled reconciliation sweep", () => {
     try {
       await expect(
         sweepReconciliations({
-          listActiveRepositoryIds: async () => ["repo-a"],
+          listActiveRepositorySponsors: async () => pairs("repo-a"),
           enqueue: async () => {
             throw unqueued;
           },
@@ -1037,7 +1073,7 @@ describe("scheduled reconciliation sweep", () => {
       throw new TypeError("The console cannot report at all");
     });
     const dependencies = () => ({
-      listActiveRepositoryIds: async () => ["broken", "repo-b", "repo-c"],
+      listActiveRepositorySponsors: async () => pairs("broken", "repo-b", "repo-c"),
       enqueue: async (repositoryId: string) => {
         if (repositoryId === "broken") {
           throw new Error("Queueing the repository failed");
@@ -1082,7 +1118,7 @@ describe("scheduled reconciliation sweep", () => {
     try {
       await expect(
         sweepReconciliations({
-          listActiveRepositoryIds: async () => ["broken", "repo-b"],
+          listActiveRepositorySponsors: async () => pairs("broken", "repo-b"),
           enqueue: async (repositoryId) => {
             if (repositoryId === "broken") {
               throw unqueued;
@@ -1881,7 +1917,7 @@ describe("fallback log encoding (issue 1042)", () => {
     const hostile = "enqueue\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[2J\u001b[31mspoofed";
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const dependencies = {
-      listActiveRepositoryIds: async () => ["repo-a"],
+      listActiveRepositorySponsors: async () => pairs("repo-a"),
       enqueue: async () => {
         throw new Error(hostile);
       },
