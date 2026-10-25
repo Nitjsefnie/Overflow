@@ -14,6 +14,7 @@
 // key is the acting credential identity, never a raw request IP or other
 // request-derived text.
 
+import { readEnv } from "@/lib/env";
 import { errorResponse } from "@/lib/http/error-response";
 import { logField } from "@/lib/webhooks/log-field";
 import type { RateLimiter } from "@/lib/webhooks/rate-limit";
@@ -64,7 +65,7 @@ export function resolveRouteRateLimit(
   env: Record<string, string | undefined>,
   spec: RouteRateClassSpec,
 ): RouteRateLimits {
-  const raw = env[`OVERFLOW_${spec.envName}`] ?? env[spec.envName];
+  const raw = readEnv(spec.envName, env);
   if (raw !== undefined) {
     const parsed = Number(raw);
     if (Number.isFinite(parsed) && parsed >= 1) {
