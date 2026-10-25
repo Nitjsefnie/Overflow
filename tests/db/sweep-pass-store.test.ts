@@ -252,7 +252,7 @@ describe("paused full-pass pages", () => {
     expect(await sql`select * from reconciliation_sweep_passes where repository_id = ${f.repositoryId}`).toHaveLength(0);
   });
 
-  it("holds a webhook's dirty work and refunds its job attempt when the shared round is spent", async () => {
+  it("completes a webhook's dirty work without spending the spent shared round, which still holds a sweep fold", async () => {
     const f = await materializeRepositoryFixture(sql);
     const repository = (await f.store.getRepository(f.repositoryId))!;
     const token = randomBytes(24).toString("hex");
@@ -272,16 +272,21 @@ describe("paused full-pass pages", () => {
     await reconcileRepository(dependencies, f.repositoryId, { reason: "SWEEP" });
     expect(sent).toBe(2);
     await rounds.spend(sponsorId, at, 3);
-    const issue = f.fold.issues[0]!;
-    await sql`insert into repository_reconciliation_dirty_subjects (repository_id, kind, github_subject_id, subject_number)
-      values (${f.repositoryId}, 'ISSUE', ${issue.githubIssueId}, ${issue.number})`;
     await f.store.enqueueReconciliationJob(f.repositoryId, "WEBHOOK");
+    // The webhook fold never runs under the sweep request budget, so the
+    // spent round neither charges nor holds it: it reads the forge and
+    // completes, and the round's spent stays where the sweep fold left it.
+    expect(await runNextReconciliationJob({ store: f.store, now: () => at, scheduleLeaseRenewal: () => () => {},
+      reconcile: (id, options) => reconcileRepository(dependencies, id, options) })).toBe("RECONCILED");
+    expect(sent).toBe(4);
+    expect(await sql`select spent from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`)
+      .toEqual([{ spent: 3 }]);
+    // The same spent round still holds a fold that runs under it.
+    await f.store.enqueueReconciliationJob(f.repositoryId, "SWEEP");
     expect(await runNextReconciliationJob({ store: f.store, now: () => at, scheduleLeaseRenewal: () => () => {},
       reconcile: (id, options) => reconcileRepository(dependencies, id, options) })).toBe("BUDGET_HELD");
-    expect(sent).toBe(2);
-    expect(await f.store.getDirtyReconciliationSubjects(f.repositoryId)).toHaveLength(1);
-    expect(await sql`select state, attempt_count, run_after from repository_reconciliation_jobs where repository_id = ${f.repositoryId}`)
-      .toEqual([{ state: "PENDING", attempt_count: 0, run_after: new Date("2030-01-01T06:00:00Z") }]);
+    expect(await sql`select spent from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`)
+      .toEqual([{ spent: 3 }]);
   });
 
   it("continues unread REST and GraphQL pages after budget exhaustion and a process restart", async () => {

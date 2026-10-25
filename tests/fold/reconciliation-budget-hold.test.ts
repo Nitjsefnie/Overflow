@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReconciliationSweepControl } from "@/lib/fold/sweep-pass";
 import { createReconciliationBudgetGate, reconciliationBudgetHoldUntil } from "@/lib/fold/reconciliation-budget";
 import { reconcileRepository, type ReconciliationDependencies, type ReconciliationStore } from "@/lib/fold/reconcile";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
@@ -1034,3 +1035,122 @@ async function assertDrainedFailure(
     logged.mockRestore();
   }
 }
+
+describe("the sweep request budget binds only the folds that run under it", () => {
+  /**
+   * Item 7 of the diff-only reconciliation plan: a fold whose reason is not
+   * SWEEP never runs inside the sweep request budget — for every repository,
+   * over or under the threshold — so its requests increment no spent, it is
+   * never held as SWEEP_REQUEST_BUDGET, and it is never deferred to a sweep
+   * window reset. The per-sponsor store's own spend path is what decides.
+   */
+  function safeEvidence() {
+    return {
+      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, omittedOversizedFacts: 0,
+      checkpoint: now, lastFullPassAt: now, issues: [], pullRequests: [],
+    };
+  }
+
+  const sweepControl = (spend: (sponsorId: string) => Promise<Date | null>): ReconciliationSweepControl => ({
+    spend,
+    openPass: async (input) => ({
+      ...input, id: "pass-1", read: async () => undefined, write: async () => {}, complete: async () => {},
+    }),
+    discardPass: async () => {},
+  });
+
+  function job(reason: "WEBHOOK" | "SWEEP", index: number) {
+    return {
+      id: `job-${index}`, repositoryId: "repository-1", reason,
+      attemptCount: 1, leaseToken: `lease-${index}`, rederivationRequestedAt: null, rederivationGeneration: 0,
+    };
+  }
+
+  it("completes a webhook fold with every sponsor's sweep budget spent, charging nothing, and still holds a sweep fold", async () => {
+    const f = fixture(4000);
+    const materialize = pagedCostGateway(f, [1]);
+    f.fold.store.getReconciliationEvidence = async () => safeEvidence();
+    const spends: string[] = [];
+    f.fold.sweep = sweepControl(async (sponsorId) => {
+      spends.push(sponsorId);
+      // Every sponsor is at its limit: a fold that runs under the budget is held.
+      return resetAt;
+    });
+    f.fold.store.beginRun = vi.fn(async () => "run-1")
+      .mockResolvedValueOnce("run-1").mockResolvedValueOnce("run-2");
+    f.store.claimNextReconciliationJob = vi.fn<ReconciliationWorkerStore["claimNextReconciliationJob"]>()
+      .mockResolvedValueOnce(job("WEBHOOK", 1)).mockResolvedValueOnce(job("SWEEP", 2)).mockResolvedValueOnce(null);
+
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
+    // The webhook fold never entered the budget: no request spent, no hold,
+    // and the crawl read incrementally.
+    expect(spends).toEqual([]);
+    expect(f.fold.store.holdRun).not.toHaveBeenCalled();
+    expect(materialize).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      repositoryId: "repository-1",
+      synchronization: expect.objectContaining({ full: false, scanStartedAt: now }),
+    }));
+
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("BUDGET_HELD");
+    expect(spends).toEqual(["sponsor-1"]);
+    expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith(
+      "run-2", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", null,
+    );
+    expect(f.store.deferReconciliationJob).toHaveBeenLastCalledWith("job-2", "lease-2", resetAt);
+  });
+
+  it("holds only the spent sponsor's sweep fold on the drain path, spending each fold's own sponsor", async () => {
+    const f = fixture(4000);
+    const repository = (await f.fold.store.getRepository("repository-1"))!;
+    f.fold.store.getRepository = async (id) => ({
+      ...repository, id,
+      githubRepositoryId: id === "repository-1" ? 4242 : 4243,
+      sponsor: { ...repository.sponsor, id: id === "repository-1" ? "sponsor-a" : "sponsor-b" },
+    });
+    const materialize = vi.spyOn(f.fold.store, "materialize");
+    f.fold.github = new GitHubGateway({ accessToken: "test-token", owner: "sponsor-1", budget: f.budgetStore,
+      fetch: async (input) => {
+        const url = String(input);
+        if (url.endsWith("/repositories/4242")) return Response.json(verifiedRepositoryPayload(4242, "octo/overflow"));
+        if (url.endsWith("/repositories/4243")) return Response.json(verifiedRepositoryPayload(4243, "octo/overflow-2"));
+        return Response.json({ data: {
+          rateLimit: { remaining: 4000, limit: 5000, cost: 1, resetAt: resetAt.toISOString() },
+          repository: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        } });
+      },
+    });
+    // The spend double rejects any sponsor the fold did not derive from the
+    // repository being folded, so a mutant that spends a crossed or fixed
+    // sponsor cannot pass silently, and each sponsor's window answers only
+    // for its own folds.
+    const spent: Record<string, number> = { "sponsor-a": 0, "sponsor-b": 0 };
+    const spendCalls: string[] = [];
+    const spend = async (sponsorId: string) => {
+      spendCalls.push(sponsorId);
+      if (!(sponsorId in spent)) throw new Error(`spend was called for unknown sponsor ${sponsorId}`);
+      // Sponsor A is at its limit; sponsor B admits and keeps spending.
+      if (sponsorId === "sponsor-a") return resetAt;
+      spent[sponsorId] += 1;
+      return null;
+    };
+    f.fold.sweep = sweepControl(spend);
+    f.fold.store.beginRun = vi.fn(async () => "run-1")
+      .mockResolvedValueOnce("run-1").mockResolvedValueOnce("run-2");
+    const claims = [
+      { ...job("SWEEP", 1), repositoryId: "repository-1" },
+      { ...job("SWEEP", 2), repositoryId: "repository-2" },
+    ];
+    f.store.claimNextReconciliationJob = vi.fn<ReconciliationWorkerStore["claimNextReconciliationJob"]>()
+      .mockResolvedValueOnce(claims[0]).mockResolvedValueOnce(claims[1]).mockResolvedValueOnce(null);
+
+    await expect(drainReconciliationJobs(f.worker, { maxJobs: 3 })).resolves.toEqual(["BUDGET_HELD", "RECONCILED"]);
+    expect(spendCalls).toEqual(["sponsor-a", "sponsor-b", "sponsor-b"]);
+    expect(spent["sponsor-b"]).toBe(2);
+    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
+    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0);
+    expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith(
+      "run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", null,
+    );
+    expect(materialize).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ repositoryId: "repository-2" }));
+  });
+});
