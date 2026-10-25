@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -370,6 +370,112 @@ describe("reconciliation sweep catch-ups", () => {
       if (originalUnprefixed === undefined) delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = originalUnprefixed;
     }
   });
+
+  it("ends an in-flight catch-up whose job was re-queued as a follow-up, and waits while the job is running or queued", async () => {
+    const sponsorId = await insertSponsor();
+    const first = await insertRepository(sponsorId);
+    const second = await insertRepository(sponsorId);
+    await storeSize(first, 3);
+    await storeSize(second, 9);
+    const h = harness();
+
+    await sweepReconciliationCatchups(h.deps);
+    expect(h.offered).toEqual([first]);
+
+    // The fold is mid-run: a lease holds its job RUNNING, so the tick waits.
+    await sql`insert into repository_reconciliation_jobs
+      (repository_id, reason, state, lease_token, lease_expires_at)
+      values (${first}, 'SWEEP', 'RUNNING', gen_random_uuid(), now() + interval '5 minutes')`;
+    await sweepReconciliationCatchups(h.deps);
+    expect(h.offered).toEqual([first]);
+
+    // The fold returned the job to the queue as a SWEEP re-run: still waiting.
+    await sql`update repository_reconciliation_jobs
+      set state = 'PENDING', lease_token = null, lease_expires_at = null
+      where repository_id = ${first}`;
+    await sweepReconciliationCatchups(h.deps);
+    expect(h.offered).toEqual([first]);
+
+    // The finished SWEEP fold re-queued the job as a follow-up (WEBHOOK): the
+    // catch-up is completed and only then does the sponsor's next one start.
+    await sql`update repository_reconciliation_jobs set reason = 'WEBHOOK'
+      where repository_id = ${first}`;
+    await sweepReconciliationCatchups(h.deps);
+    expect(h.offered).toEqual([first, second]);
+    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${first}`)
+      .toEqual([{ state: "completed" }]);
+  });
+
+  it("serializes two concurrent advances per sponsor: the second blocks on the sponsor's own row", async () => {
+    const sponsorId = await insertSponsor();
+    const [lowerId, higherId] = [randomUUID(), randomUUID()].sort();
+    const first = await insertRepository(sponsorId, lowerId);
+    const second = await insertRepository(sponsorId, higherId);
+    await storeSize(first, 6);
+    await storeSize(second, 6);
+    const store = new PostgresSweepCatchupStore(sql);
+    const enqueued: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+
+    // The first advance claims the smallest catch-up; its enqueue inserts the
+    // job on the claim's transaction and then parks on the gate, holding the
+    // transaction — and every lock it took — open.
+    const advanceA = store.advance({
+      sponsorId,
+      activeRepositoryIds: [first, second],
+      requeueRepositoryIds: [],
+      now: at,
+      enqueue: async (repositoryId, transaction) => {
+        enqueued.push(repositoryId);
+        await new PostgresReconciliationJobStore(transaction as unknown as Sql)
+          .enqueueReconciliationJob(repositoryId, "SWEEP");
+        await gate;
+      },
+    });
+    await vi.waitFor(() => expect(enqueued).toEqual([first]));
+
+    // The second advance starts while the first's transaction is open. The
+    // sponsor's row is the first thing it locks, so the wait it lands in names
+    // the serialization: the sponsor's row itself, not the claimed catch-up's.
+    const advanceB = store.advance({
+      sponsorId,
+      activeRepositoryIds: [first, second],
+      requeueRepositoryIds: [],
+      now: at,
+      enqueue: async (repositoryId) => { enqueued.push(repositoryId); },
+    });
+    let waitsOnSponsor = false;
+    try {
+      for (let poll = 0; poll < 600 && !waitsOnSponsor; poll += 1) {
+        const rows = await sql<{ query: string }[]>`
+          select activity.query as query
+          from pg_stat_activity as activity
+          join pg_locks as lock on lock.pid = activity.pid and not lock.granted
+          where activity.wait_event_type = 'Lock'
+            and activity.query like '%select from users where id = %for update%'
+            and activity.pid <> pg_backend_pid()`;
+        if (rows.length > 0) { waitsOnSponsor = true; break; }
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(waitsOnSponsor).toBe(true);
+    } finally {
+      // The first advance parks on the gate with its transaction open; release
+      // it even when the wait observation fails, or teardown hangs on the
+      // connection it holds.
+      release();
+    }
+    await advanceA;
+    await advanceB;
+    // The first catch-up is still in flight with its queued job, and the
+    // second advance waited for it instead of claiming the next repository.
+    expect(enqueued).toEqual([first]);
+    expect(await sql`select repository_id::text as repository_id, state
+      from reconciliation_sweep_catchups order by repository_id`).toEqual([
+        { repository_id: first, state: "in_flight" },
+        { repository_id: second, state: "pending" },
+      ]);
+  }, 30_000);
 
   it("pins the catch-up table shape: check constraint, timestamps and repository cascade", async () => {
     const sponsorId = await insertSponsor();
