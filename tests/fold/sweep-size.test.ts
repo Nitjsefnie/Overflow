@@ -230,6 +230,32 @@ describe("the sweep's diff-only rotation filter", () => {
     expect(slots).toEqual(["sponsor-at"]);
   });
 
+  it("resolves the documented OVERFLOW_-prefixed threshold variable through the production sweep", async () => {
+    const originalPrefixed = process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG;
+    const originalUnprefixed = process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
+    process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = "5";
+    delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
+    try {
+      const offered: string[] = [];
+      await sweepReconciliations({
+        listActiveRepositorySponsors: async () => [{ repositoryId: "r", sponsorId: "sponsor-over" }],
+        round: { enqueueNext: async (_sponsorId, _ids, _now, _limit, enqueue) => {
+          await enqueue("r");
+          return "r";
+        } },
+        enqueue: async (id) => { offered.push(id); },
+        now: () => at,
+        sizeStore: memorySizeStore(new Map(), new Map([["sponsor-over", 6]])),
+      });
+      // The prefixed knob is the documented one: a backlog of 6 is over a
+      // threshold of 5, so the sponsor is filtered from the rotation.
+      expect(offered).toEqual([]);
+    } finally {
+      if (originalPrefixed === undefined) delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = originalPrefixed;
+      if (originalUnprefixed === undefined) delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = originalUnprefixed;
+    }
+  });
+
   it("filters the unpaced sweep too, so both sweep shapes skip a diff-only sponsor", async () => {
     const enqueued: string[] = [];
     await sweepReconciliations({
