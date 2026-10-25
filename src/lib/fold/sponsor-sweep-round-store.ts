@@ -4,10 +4,7 @@ import { SWEEP_WINDOW_MS } from "@/lib/fold/sweep-request-budget";
 
 type Round = { window_start: Date; spent: number; rotation_cursor: string | null; next_enqueue_at: Date };
 
-/**
- * The sweep's durable round, one row per sponsor: the singleton store's
- * window anchor, spend ceiling and rotation pacing, keyed by sponsor.
- */
+/** The sweep's durable round, one row per sponsor. */
 export class PostgresSponsorSweepRoundStore {
   public constructor(private readonly connection?: SqlClient) {}
   private get sql(): SqlClient { return this.connection ?? getSql(); }
@@ -30,7 +27,7 @@ export class PostgresSponsorSweepRoundStore {
     return row!;
   }
 
-  /** Admits one fold, or returns when the sponsor's window resets. */
+  /** Null admits; a date holds until the sponsor's window resets. */
   public async spend(sponsorId: string, now: Date, limit: number): Promise<Date | null> {
     return this.sql.begin(async (transaction) => {
       const round = await this.round(transaction, sponsorId, now);
