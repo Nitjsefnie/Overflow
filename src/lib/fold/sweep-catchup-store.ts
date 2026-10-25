@@ -9,22 +9,12 @@ export type CatchupAdvance = {
   requeued: number;
 };
 
-/**
- * The catch-up state machine's durable half (one row per repository).
- *
- * Everything happens inside `advance`'s one transaction per sponsor tick: the
- * rows' creation for a sponsor newly over the threshold, the bounded re-queue
- * of unsafe completed rows, the in-flight end detection and the claim of the
- * next catch-up together with its job insert.
- */
+/** One durable catch-up row per repository, advanced in one transaction per sponsor tick. */
 export class PostgresSweepCatchupStore {
   public constructor(private readonly connection?: SqlClient) {}
   private get sql(): SqlClient { return this.connection ?? getSql(); }
 
-  /**
-   * The sponsor's terminal rows (completed and failed), the only states the
-   * evidence check reads: an unsafe-evidence bump sends either back to pending.
-   */
+  /** Terminal rows the evidence check may re-queue. */
   public async requeueCandidateIds(sponsorId: string): Promise<string[]> {
     const rows = await this.sql<{ repository_id: string }[]>`
       select repository_id::text as repository_id from reconciliation_sweep_catchups
@@ -40,15 +30,11 @@ export class PostgresSweepCatchupStore {
     enqueue: (repositoryId: string, transaction: TransactionClient) => Promise<unknown>;
   }): Promise<CatchupAdvance> {
     return this.sql.begin(async (transaction) => {
-      // One writer per sponsor: this row lock serializes concurrent ticks (a
-      // second process's tick waits here and then sees the first's in-flight
-      // row), which the per-sponsor one-at-a-time rule needs.
+      // One writer per sponsor: this lock serializes concurrent ticks.
       await transaction`select from users where id = ${input.sponsorId} for update`;
 
       const outcome: CatchupAdvance = { enqueued: null, completed: null, failed: null, requeued: 0 };
 
-      // Creation: the first tick over the threshold inserts every active
-      // repository that has no row yet, pending.
       if (input.activeRepositoryIds.length > 0) {
         await transaction`
           insert into reconciliation_sweep_catchups (repository_id, sponsor_id, state)
@@ -62,9 +48,7 @@ export class PostgresSweepCatchupStore {
           on conflict do nothing`;
       }
 
-      // Re-queue: bounded to terminal rows the tick found unsafe — a completed
-      // or failed catch-up rejoins the queue when the evidence format changed
-      // or the fold revision rose.
+      // Re-queue: terminal rows the tick found unsafe (evidence format or fold revision moved).
       if (input.requeueRepositoryIds.length > 0) {
         const rows = await transaction`
           update reconciliation_sweep_catchups set state = 'pending', updated_at = ${input.now}
@@ -74,11 +58,8 @@ export class PostgresSweepCatchupStore {
         outcome.requeued = rows.length;
       }
 
-      // End detection. The mapping: no job row means the fold completed (the
-      // completion deletes it) — never a claim crash, because the claim and the
-      // job insert commit together below. FAILED is failed. PENDING with a
-      // non-SWEEP reason is the follow-up a completed fold re-queued —
-      // completed. Everything else is still in flight.
+      // End detection: absent job row = completed (the claim and the job insert commit
+      // together), FAILED = failed, PENDING non-SWEEP = the completed fold's follow-up.
       const [flight] = await transaction<{ repository_id: string }[]>`
         select repository_id::text as repository_id from reconciliation_sweep_catchups
         where sponsor_id = ${input.sponsorId} and state = 'in_flight'
@@ -102,10 +83,8 @@ export class PostgresSweepCatchupStore {
         else outcome.failed = flight.repository_id;
       }
 
-      // The claim: the smallest pending catch-up of the sponsor (size asc,
-      // unmeasured counts zero; ties by repository id) is enqueued and marked
-      // in flight inside this same transaction — the enqueue failing rolls the
-      // claim back, so a crash can never leave in flight without a job row.
+      // The claim: smallest pending catch-up (size asc, ties by id), enqueued and
+      // marked in flight in this transaction — the enqueue failing rolls the claim back.
       const [next] = await transaction<{ repository_id: string }[]>`
         select c.repository_id::text as repository_id
         from reconciliation_sweep_catchups as c

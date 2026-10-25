@@ -18,11 +18,7 @@ export type ReconciliationCatchupDependencies = {
     getReconciliationEvidence(repositoryId: string): Promise<ReconciliationEvidence | null>;
     hasDerivedRowsBelowFoldRevision(repositoryId: string, revision: number): Promise<boolean>;
   };
-  /**
-   * Runs on the catch-up advance's own transaction, so the claim and the job
-   * insert commit or roll back together — a crash between them leaves the row
-   * pending with no job row, never in flight without one.
-   */
+  /** Runs on the advance's own transaction: a crash between claim and insert leaves the row pending, never in flight without one. */
   enqueue(repositoryId: string, transaction: TransactionClient): Promise<unknown>;
   now?: () => Date;
 };
@@ -35,16 +31,10 @@ export type ReconciliationCatchupSummary = {
 };
 
 /**
- * Advances every over-threshold sponsor's catch-up queue by one step.
- *
- * Runs beside the sweep rotation in the same tick. A sponsor whose backlog is
- * not strictly over the diff-only threshold is skipped entirely: its rows are
- * created, ended and consumed only while it is over the threshold, so one that
- * drops under leaves its in-flight row in place and self-heals it on the next
- * over-threshold tick.
- *
- * One sponsor's failure is contained like the sweep's per-repository failures:
- * it is reported and the other sponsors carry on.
+ * Advances each over-threshold sponsor's catch-up queue one step, beside the
+ * sweep rotation in the same tick. A sponsor not strictly over the threshold
+ * is skipped: its rows live only while it stays over and self-heal on the next
+ * over-threshold tick. One sponsor's failure is reported; the others run on.
  */
 export async function sweepReconciliationCatchups(
   dependencies: ReconciliationCatchupDependencies,
