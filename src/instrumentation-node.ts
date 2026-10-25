@@ -1,4 +1,7 @@
 import { PostgresSponsorSweepRoundStore } from "@/lib/fold/sponsor-sweep-round-store";
+import type { SqlClient } from "@/lib/db/types";
+import { sweepReconciliationCatchups } from "@/lib/fold/sweep-catchup";
+import { PostgresSweepCatchupStore } from "@/lib/fold/sweep-catchup-store";
 import { PostgresSweepPassStore } from "@/lib/fold/sweep-pass-store";
 import { readSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import {
@@ -49,12 +52,14 @@ export async function registerNodejs(): Promise<void> {
   const { pruneExpiredMaintenanceRows } = await import("@/lib/retention/prune");
   const { getSql, getCoordinationSql } = await import("@/lib/db/client");
   const { PostgresRepositorySizeStore, measureRepositorySize } = await import("@/lib/fold/repository-size");
+  const { PostgresReconciliationJobStore } = await import("@/lib/fold/reconciliation-job-store");
   const { GitHubGateway } = await import("@/lib/github/client");
   const { GitLabGateway } = await import("@/lib/gitlab/client");
   const store = new PostgresFoldStore();
   const sweepRound = new PostgresSponsorSweepRoundStore();
   const sweepPasses = new PostgresSweepPassStore();
   const repositorySizes = new PostgresRepositorySizeStore();
+  const sweepCatchups = new PostgresSweepCatchupStore();
   const sweep = {
     spend: (sponsorId: string) => sweepRound.spend(sponsorId, new Date(), readSweepRequestBudget(process.env)),
     openPass: sweepPasses.open.bind(sweepPasses),
@@ -173,6 +178,15 @@ export async function registerNodejs(): Promise<void> {
       // One line per sweep, so an operator can see the repair path running rather
       // than inferring it from the absence of complaints.
       console.info("Reconciliation sweep", summary);
+      await sweepReconciliationCatchups({
+        listActiveRepositorySponsors: () => store.listActiveRepositorySponsors(),
+        backlog: repositorySizes,
+        catchups: sweepCatchups,
+        evidence: store,
+        enqueue: (repositoryId, transaction) =>
+          new PostgresReconciliationJobStore(transaction as unknown as SqlClient)
+            .enqueueReconciliationJob(repositoryId, "SWEEP"),
+      });
       return summary;
     },
   });
