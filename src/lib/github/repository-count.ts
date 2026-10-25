@@ -2,9 +2,8 @@ import type { GitHubGraphqlClient } from "@/lib/github/graphql";
 import type { GitHubRepositoryReference } from "@/lib/github/types";
 
 /**
- * The sweep's size measure for GitHub: one count-only GraphQL read. The two
- * connections' totalCounts count every state — closed items included — and a
- * count read lists nothing, so it is never the list query the fold pays for.
+ * One count-only GraphQL read: both connections' totalCounts, every state,
+ * closed items included, and no page of nodes ever listed.
  */
 export async function getRepositoryHistoryCount(
   graphql: Pick<GitHubGraphqlClient, "query">,

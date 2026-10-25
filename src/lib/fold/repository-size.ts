@@ -3,28 +3,17 @@ import { getSql } from "@/lib/db/client";
 import type { SqlClient } from "@/lib/db/types";
 import type { GitHubRepositoryReference } from "@/lib/github/types";
 
-/**
- * The repository size measure: one forge count read per active repository,
- * refreshed by the sweep at most once per measure window, stored per
- * repository, and summed per sponsor as the diff-only backlog.
- *
- * The gateway interface is deliberately narrower than ReconciliationGateway:
- * the forge count reads add one member each and widen nothing every test fake
- * already implements.
- */
+/** The forge count reads: narrower than ReconciliationGateway, so no fake widens. */
 export type RepositorySizeGateway = {
   /**
-   * The repository's history size: its issues plus pull requests in every
-   * state, closed ones included. Resolves null when the measure is
-   * unavailable — a repository the forge cannot resolve, or a total it does
-   * not answer with — and the caller keeps the previous stored size. A
-   * transport or authentication failure throws; the caller counts it the same
-   * way.
+   * The repository's issues plus pull requests in every state, closed ones
+   * included. Null means the measure is unavailable and the caller keeps the
+   * previous stored size; a transport or authentication failure throws.
    */
   getRepositoryHistoryCount(repository: GitHubRepositoryReference): Promise<number | null>;
 };
 
-/** Forge read cost, never correctness: an unparsable threshold reads as this default. */
+/** An unparsable threshold reads as this default. */
 export const DEFAULT_DIFF_ONLY_BACKLOG = 1000;
 
 export function readDiffOnlyBacklogThreshold(environment: Partial<Record<string, string>>): number {
@@ -33,11 +22,7 @@ export function readDiffOnlyBacklogThreshold(environment: Partial<Record<string,
   return Number.isSafeInteger(value) && value > 0 ? value : DEFAULT_DIFF_ONLY_BACKLOG;
 }
 
-/**
- * The sweep refreshes each repository's measure at most once per window, the
- * same cadence the sweep itself runs at: a row measured within the window is
- * fresh and is skipped.
- */
+/** A row measured within this window is fresh and the sweep skips it. */
 export const REPOSITORY_SIZE_REMEASURE_MS = 6 * 60 * 60 * 1000;
 
 export type RepositorySizeRow = {
@@ -65,10 +50,9 @@ export class PostgresRepositorySizeStore {
   }
 
   /**
-   * The sponsor's diff-only backlog: the sum over the sponsor's ACTIVE
-   * repositories of the stored size, an unmeasured repository counting as
-   * zero. Resolves null when nothing of the sponsor's has ever been measured;
-   * the diff-only decision treats null as zero (under threshold).
+   * The sum over the sponsor's ACTIVE repositories, an unmeasured repository
+   * counting as zero. Null when nothing of the sponsor's was ever measured;
+   * the diff-only decision treats null as zero.
    */
   public async getSponsorBacklog(sponsorId: string): Promise<number | null> {
     const [row] = await this.sql<{ backlog: number | null }[]>`
@@ -95,18 +79,12 @@ export type RepositorySizeMeasureDependencies = {
 };
 
 /**
- * The count query rides the repository's own sponsor's credential, the same
- * rule every other forge read follows, so the composition resolves the
- * credential per repository before the gateway answers. The reference is the
- * registered owner/name path: the measure is advisory (a stale path fails the
- * read and keeps the previous size), and aiming it at the verified numeric
- * identity would cost every fold's identity read per measure.
- *
- * Resolves null — the measure is unavailable and the previous size stands —
- * when the repository row is gone, the GitLab instance is unwired, no linked
- * identity answers for the instance (fail-closed, as the fold's GitLab path
- * is), or the sponsor's GitHub token is gone. Forge failures propagate to the
- * caller.
+ * The count read rides the repository's own sponsor's credential, resolved
+ * per repository; the reference is the registered owner/name path, whose
+ * staleness costs a failed read and keeps the previous size. Null — measure
+ * unavailable, previous size stands — when the row is gone, the GitLab
+ * instance is unwired, no linked identity answers for it (fail-closed), or
+ * the GitHub token is gone. Forge failures propagate.
  */
 export function measureRepositorySize(
   dependencies: RepositorySizeMeasureDependencies,

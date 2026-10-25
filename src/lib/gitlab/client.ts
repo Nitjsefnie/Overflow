@@ -101,10 +101,8 @@ function segment(value: string): string {
 
 /**
  * The collection total from the X-Total pagination header. GitLab omits the
- * header for a collection above 10,000 records (docs.gitlab.com/api/rest/,
- * "Pagination response headers"), so absence is the known floor, not an
- * empty answer; an unparsable header reads as the same floor, which leans
- * toward over-threshold and loses nothing but a finer count.
+ * header above 10,000 records, so absence — and an unparsable header — is
+ * the known floor, not an empty answer.
  */
 export function gitlabCollectionTotal(header: string | null): number {
   const value = /^\d+$/.test(header ?? "") ? Number(header) : NaN;
@@ -160,13 +158,10 @@ export class GitLabGateway {
   }
 
   /**
-   * The sweep's size measure for GitLab, in two reads: the project's issues
-   * statistics (exact at any size, every state) and the merge-request
-   * collection's X-Total (exact below 10,000, the floor above it — GitLab
-   * omits the header there and no merge-request statistics endpoint exists).
-   * Only a 404 answers "this project is unreachable" with null, the same
-   * reading getRepositoryById gives it; every other failure is an upstream
-   * problem and reaches the caller, which keeps the previous stored size.
+   * Two reads: the issues statistics (exact at any size, every state) and the
+   * merge-request X-Total (absent above 10,000 records — the floor; no
+   * merge-request statistics endpoint exists). Only 404 answers null; every
+   * other failure reaches the caller, which keeps the previous stored size.
    */
   public async getRepositoryHistoryCount(repository: GitHubRepositoryReference): Promise<number | null> {
     const project = segment(`${repository.owner}/${repository.name}`);

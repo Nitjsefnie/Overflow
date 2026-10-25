@@ -7,13 +7,6 @@ import type {
 import type { GitLabMergeRequest } from "@/lib/gitlab/client";
 import { logField } from "@/lib/webhooks/log-field";
 
-/**
- * The GitLab REST response objects the response mappers read, and the mappers
- * that turn them into the pipeline's GitHub-shaped records. Split from the
- * client so the transport stays the transport; the mappers are pure and carry
- * the normalization rules each field's evidence depends on.
- */
-
 export type GitLabMergeRequestObject = {
   id: number;
   iid: number;
@@ -79,10 +72,9 @@ export function toGitHubIssue(
     title: object.title,
     body: object.description ?? "",
     url: object.web_url,
-    // GitLab's two states map exactly onto the ledger's two.
+    // GitLab's two states map onto the ledger's two; item 16: no state_reason,
+    // so an absent reason is exempt from neither NOT_PLANNED nor DUPLICATE.
     state: object.state === "opened" ? "OPEN" : "CLOSED",
-    // Contract item 16: GitLab carries no state_reason. An absent reason is
-    // exempt from neither NOT_PLANNED nor DUPLICATE, so the missing-PR gate applies.
     stateReason: null,
     createdAt: normalizeTimestamp(object.created_at),
     updatedAt: normalizeTimestamp(object.updated_at),
@@ -92,11 +84,8 @@ export function toGitHubIssue(
     labels: object.labels ?? [],
     claimAssigneeGitHubLogin: assignee?.username ?? null,
     claimAssigneeGitHubUserId: assignee?.id ?? null,
-    // The reconciliation evidence: label events, human comments and closing
-    // merge requests read fresh by the caller (`issueWithEvidence`) through
-    // the same public surfaces the issue-547 webhook + initial-import path
-    // calls, so the issue-embedded shape and the standalone shape cannot
-    // drift apart.
+    // Evidence read fresh by the caller (`issueWithEvidence`), so the
+    // issue-embedded shape and the standalone shape cannot drift apart.
     history,
     comments,
     closingPullRequests,
