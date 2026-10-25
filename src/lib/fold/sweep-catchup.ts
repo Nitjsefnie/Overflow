@@ -1,4 +1,5 @@
 import { readDiffOnlyBacklogThreshold, type PostgresRepositorySizeStore } from "@/lib/fold/repository-size";
+import { readEnv } from "@/lib/env";
 import {
   RECONCILIATION_EVIDENCE_FORMAT,
   type ReconciliationEvidence,
@@ -12,7 +13,7 @@ import { errorLogToken } from "@/lib/webhooks/log-field";
 export type ReconciliationCatchupDependencies = {
   listActiveRepositorySponsors(): Promise<readonly ListedRepositorySponsor[]>;
   backlog: Pick<PostgresRepositorySizeStore, "getSponsorBacklog">;
-  catchups: Pick<PostgresSweepCatchupStore, "completedRepositoryIds" | "advance">;
+  catchups: Pick<PostgresSweepCatchupStore, "requeueCandidateIds" | "advance">;
   evidence: {
     getReconciliationEvidence(repositoryId: string): Promise<ReconciliationEvidence | null>;
     hasDerivedRowsBelowFoldRevision(repositoryId: string, revision: number): Promise<boolean>;
@@ -49,7 +50,7 @@ export async function sweepReconciliationCatchups(
   dependencies: ReconciliationCatchupDependencies,
 ): Promise<ReconciliationCatchupSummary> {
   const repositories = await dependencies.listActiveRepositorySponsors();
-  const threshold = readDiffOnlyBacklogThreshold(process.env);
+  const threshold = readDiffOnlyBacklogThreshold({ RECONCILIATION_DIFF_ONLY_BACKLOG: readEnv("RECONCILIATION_DIFF_ONLY_BACKLOG") });
   const now = dependencies.now ?? (() => new Date());
   const bySponsor = new Map<string, string[]>();
   for (const { repositoryId, sponsorId } of repositories) {
@@ -62,9 +63,9 @@ export async function sweepReconciliationCatchups(
   for (const sponsorId of [...bySponsor.keys()].sort()) {
     if (((await dependencies.backlog.getSponsorBacklog(sponsorId)) ?? 0) <= threshold) continue;
     try {
-      // The re-queue check is bounded to the sponsor's completed rows.
+      // The re-queue check is bounded to the sponsor's terminal rows.
       const requeue: string[] = [];
-      for (const repositoryId of await dependencies.catchups.completedRepositoryIds(sponsorId)) {
+      for (const repositoryId of await dependencies.catchups.requeueCandidateIds(sponsorId)) {
         const cached = await dependencies.evidence.getReconciliationEvidence(repositoryId);
         if (cached !== null && cached.formatVersion === RECONCILIATION_EVIDENCE_FORMAT
           && !(await dependencies.evidence.hasDerivedRowsBelowFoldRevision(repositoryId, FOLD_REVISION))) {

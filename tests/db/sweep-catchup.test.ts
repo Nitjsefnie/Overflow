@@ -318,6 +318,59 @@ describe("reconciliation sweep catch-ups", () => {
       .toEqual([{ repository_id: repositoryId, state: "in_flight" }]);
   });
 
+  it("re-queues a failed catch-up when the evidence is unsafe, but rollovers alone leave it failed", async () => {
+    const sponsorId = await insertSponsor();
+    const repositoryId = await insertRepository(sponsorId);
+    await storeSize(repositoryId, 30);
+    const h = harness();
+
+    // The catch-up is claimed and then its fold fails after retries.
+    await sweepReconciliationCatchups(h.deps);
+    expect(h.offered).toEqual([repositoryId]);
+    await sql`insert into repository_reconciliation_jobs (repository_id, reason, state)
+      values (${repositoryId}, 'SWEEP', 'FAILED')`;
+    await sweepReconciliationCatchups(h.deps);
+    expect(h.offered).toEqual([repositoryId]);
+    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${repositoryId}`)
+      .toEqual([{ state: "failed" }]);
+
+    // A window rollover with safe evidence leaves the failed row alone.
+    h.now.value = new Date(at.getTime() + 6 * 60 * 60_000 + 1);
+    await sweepReconciliationCatchups(h.deps);
+    expect(h.offered).toEqual([repositoryId]);
+    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${repositoryId}`)
+      .toEqual([{ state: "failed" }]);
+
+    // An evidence-format bump sends the failed row back into the ordered queue.
+    h.evidence.value = safeEvidence({ formatVersion: RECONCILIATION_EVIDENCE_FORMAT + 1 });
+    await sweepReconciliationCatchups(h.deps);
+    expect(h.offered).toEqual([repositoryId, repositoryId]);
+    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${repositoryId}`)
+      .toEqual([{ state: "in_flight" }]);
+  });
+
+  it("resolves the documented OVERFLOW_-prefixed threshold variable through the production path", async () => {
+    const sponsorId = await insertSponsor();
+    const repositoryId = await insertRepository(sponsorId);
+    await storeSize(repositoryId, 6);
+    const originalPrefixed = process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG;
+    const originalUnprefixed = process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
+    process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = "5";
+    delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
+    try {
+      const { deps, offered } = harness();
+      await sweepReconciliationCatchups(deps);
+      // The prefixed knob is the documented one: a backlog of 6 is over a
+      // threshold of 5, so the row is created and the catch-up claimed.
+      expect(offered).toEqual([repositoryId]);
+      expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${repositoryId}`)
+        .toEqual([{ state: "in_flight" }]);
+    } finally {
+      if (originalPrefixed === undefined) delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = originalPrefixed;
+      if (originalUnprefixed === undefined) delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = originalUnprefixed;
+    }
+  });
+
   it("pins the catch-up table shape: check constraint, timestamps and repository cascade", async () => {
     const sponsorId = await insertSponsor();
     const repositoryId = await insertRepository(sponsorId);

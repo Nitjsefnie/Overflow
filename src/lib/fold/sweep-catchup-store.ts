@@ -21,11 +21,14 @@ export class PostgresSweepCatchupStore {
   public constructor(private readonly connection?: SqlClient) {}
   private get sql(): SqlClient { return this.connection ?? getSql(); }
 
-  /** Completed rows of the sponsor, the only state the evidence check reads. */
-  public async completedRepositoryIds(sponsorId: string): Promise<string[]> {
+  /**
+   * The sponsor's terminal rows (completed and failed), the only states the
+   * evidence check reads: an unsafe-evidence bump sends either back to pending.
+   */
+  public async requeueCandidateIds(sponsorId: string): Promise<string[]> {
     const rows = await this.sql<{ repository_id: string }[]>`
       select repository_id::text as repository_id from reconciliation_sweep_catchups
-      where sponsor_id = ${sponsorId} and state = 'completed'`;
+      where sponsor_id = ${sponsorId} and state in ('completed', 'failed')`;
     return rows.map((row) => row.repository_id);
   }
 
@@ -59,13 +62,13 @@ export class PostgresSweepCatchupStore {
           on conflict do nothing`;
       }
 
-      // Re-queue: bounded to completed rows the tick found unsafe. A failed row
-      // is never re-queued (the tracking brief's bound), and neither call site
-      // names one.
+      // Re-queue: bounded to terminal rows the tick found unsafe — a completed
+      // or failed catch-up rejoins the queue when the evidence format changed
+      // or the fold revision rose.
       if (input.requeueRepositoryIds.length > 0) {
         const rows = await transaction`
           update reconciliation_sweep_catchups set state = 'pending', updated_at = ${input.now}
-          where sponsor_id = ${input.sponsorId} and state = 'completed'
+          where sponsor_id = ${input.sponsorId} and state in ('completed', 'failed')
             and repository_id = any(${transaction.array([...input.requeueRepositoryIds])}::uuid[])
           returning repository_id`;
         outcome.requeued = rows.length;

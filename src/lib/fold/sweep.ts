@@ -5,6 +5,7 @@ import {
   type PostgresRepositorySizeStore,
 } from "@/lib/fold/repository-size";
 import { readSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
+import { readEnv } from "@/lib/env";
 import { callGuarded } from "@/lib/fold/guarded-callback";
 import { errorLogToken } from "@/lib/webhooks/log-field";
 
@@ -220,7 +221,7 @@ export async function sweepReconciliations(
   // measure would quietly return it to the rotation.
   const diffOnlySponsors = new Set<string>();
   if (sizeStore?.getSponsorBacklog !== undefined) {
-    const threshold = readDiffOnlyBacklogThreshold(process.env);
+    const threshold = readDiffOnlyBacklogThreshold({ RECONCILIATION_DIFF_ONLY_BACKLOG: readEnv("RECONCILIATION_DIFF_ONLY_BACKLOG") });
     for (const sponsorId of new Set(repositories.map(({ sponsorId }) => sponsorId))) {
       if ((await sizeStore.getSponsorBacklog(sponsorId) ?? 0) > threshold) diffOnlySponsors.add(sponsorId);
     }
