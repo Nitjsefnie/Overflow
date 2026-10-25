@@ -124,6 +124,7 @@ describe("resolveRouteRateLimit", () => {
       [{ [canonical]: "1", [entry.envName]: "9" }, 1],
       [{ [canonical]: "", [entry.envName]: "9" }, entry.defaultPerHour],
       [{ [canonical]: "invalid", [entry.envName]: "9" }, entry.defaultPerHour],
+      [{ [canonical]: "0.5", [entry.envName]: "9" }, entry.defaultPerHour],
       [{}, entry.defaultPerHour],
     ] as const) {
       expect(resolveRouteRateLimit(environment, entry)).toEqual({ capacity, refillPerMinute: capacity / 60 });
