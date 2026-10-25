@@ -91,6 +91,18 @@ describe("suite run PR resolution", () => {
     expect(result.lines.some((line) => line.startsWith("::error::"))).toBe(true);
   });
 
+  it("resolves when only the legacy SUITE_RUN_ID is set", async () => {
+    const env = { GITHUB_REPOSITORY: REPO, GH_TOKEN: "test-token", SUITE_RUN_ID: "123" };
+    expect((await resolveSuitePullRequest({ ...harness().deps, env })).exitCode).toBe(0);
+  });
+
+  it("keeps an empty OVERFLOW_SUITE_RUN_ID authoritative over a set legacy SUITE_RUN_ID", async () => {
+    const env = { GITHUB_REPOSITORY: REPO, GH_TOKEN: "test-token", OVERFLOW_SUITE_RUN_ID: "", SUITE_RUN_ID: "123" };
+    const result = await resolveSuitePullRequest({ ...harness().deps, env });
+    expect(result.exitCode).toBe(1);
+    expect(result.lines.join("\n")).toContain("SUITE_RUN_ID must be a positive safe integer");
+  });
+
   it("refuses a head that moved between the listing and fresh PR read", async () => {
     const moved = { ...pr(), head: { ...pr().head, sha: "c".repeat(40) } };
     const result = await resolveSuitePullRequest(harness(suite(), [pr()], moved).deps);

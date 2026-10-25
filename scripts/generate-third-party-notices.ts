@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { readEnv } from "../src/lib/env.ts";
 import { THIRD_PARTY_LICENCE_TEXTS } from "./third-party-licence-texts.ts";
 
 export interface NoticeEntry {
@@ -18,7 +19,7 @@ export type NoticeResult = { ok: true; text: string } | { ok: false; missing: st
 
 export function resolveNoticesOutputPath(env: Record<string, string | undefined> = process.env): string {
   // Keep this dist-dir convention in step with next.config.ts.
-  return join((env.OVERFLOW_NEXT_DIST_DIR ?? env.NEXT_DIST_DIR)?.trim() || ".next", "third-party-notices.txt");
+  return join(readEnv("NEXT_DIST_DIR", env)?.trim() || ".next", "third-party-notices.txt");
 }
 
 type ReadLicenceFile = (directory: string, includeNotice?: boolean) => string | undefined;

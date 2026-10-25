@@ -10,6 +10,7 @@
 import { realpathSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { readEnv } from "../src/lib/env.ts";
 import { readSuiteRuns, suiteRunsUrl, supersedingSuiteRunId } from "./pr-suite-supersession.ts";
 
 export interface ResolveDeps {
@@ -59,7 +60,7 @@ export async function resolveSuitePullRequest(deps: ResolveDeps): Promise<Resolv
     const repo = deps.env.GITHUB_REPOSITORY ?? "";
     if (!REPOSITORY.test(repo)) throw new Error("GITHUB_REPOSITORY must name OWNER/REPO");
     if (!deps.env.GH_TOKEN) throw new Error("GH_TOKEN is required");
-    const idText = deps.env.OVERFLOW_SUITE_RUN_ID ?? deps.env.SUITE_RUN_ID ?? "";
+    const idText = readEnv("SUITE_RUN_ID", deps.env) ?? "";
     if (!/^[1-9][0-9]*$/.test(idText) || !positiveId(Number(idText))) {
       throw new Error("SUITE_RUN_ID must be a positive safe integer");
     }

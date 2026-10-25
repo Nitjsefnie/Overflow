@@ -113,7 +113,7 @@ function parseLayoutCheckPortOrExit(value) {
   }
 }
 
-const PORT = parseLayoutCheckPortOrExit(process.env.OVERFLOW_LAYOUT_CHECK_PORT ?? process.env.LAYOUT_CHECK_PORT);
+const PORT = parseLayoutCheckPortOrExit(readEnv("LAYOUT_CHECK_PORT"));
 const BASE_URL = (flaggedValue("--base-url") ?? `http://127.0.0.1:${PORT}`).replace(/\/+$/, "");
 
 /**
@@ -661,7 +661,7 @@ function discoverChrome() {
     .filter(Boolean)
     .concat("/usr/bin"))];
 
-  const configuredChrome = process.env.OVERFLOW_LAYOUT_CHECK_CHROME ?? process.env.LAYOUT_CHECK_CHROME;
+  const configuredChrome = readEnv("LAYOUT_CHECK_CHROME");
   const candidates = configuredChrome ? [configuredChrome] : [];
   for (const name of ["google-chrome-stable", "google-chrome", "chromium", "chromium-browser"]) {
     for (const dir of searchDirs) candidates.push(join(dir, name));
@@ -1175,7 +1175,7 @@ async function main() {
 
     // The session fixture (issue 453) seeds before any contract runs — in
     // --base-url mode too: the database is whatever DATABASE_URL names.
-    const databaseUrl = process.env.OVERFLOW_DATABASE_URL ?? process.env.DATABASE_URL;
+    const databaseUrl = readEnv("DATABASE_URL");
     if (databaseUrl === undefined || databaseUrl === "") {
       throw new Error(
         "DATABASE_URL is not set — the geometry fixture users cannot be seeded. " +
