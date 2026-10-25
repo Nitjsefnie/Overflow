@@ -295,6 +295,29 @@ describe("server instrumentation", () => {
     await dependencies.enqueue("repository-1");
 
     expect(enqueued).toEqual([{ repositoryId: "repository-1", reason: "SWEEP" }]);
+
+    // The measure wiring rides the same dependencies: both size members are
+    // present, and the measure is the real composition — it resolves the
+    // repository's sponsor credential and reads the count from the forge — so
+    // deleting either wiring line fails here instead of leaving the sweep
+    // unmeasured.
+    const sweepDependencies = sweep.mock.calls[0]![0] as {
+      sizeStore: unknown;
+      measureSize(repositoryId: string): Promise<number | null>;
+    };
+    expect(sweepDependencies.sizeStore).toBeDefined();
+    expect(sweepDependencies.measureSize).toBeTypeOf("function");
+    const countRequests: Request[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      countRequests.push(new Request(input, init));
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/issues_statistics")) {
+        return Response.json({ statistics: { counts: { all: 682 } } });
+      }
+      return new Response(null, { status: 200, headers: { "x-total": "674" } });
+    });
+    await expect(sweepDependencies.measureSize("repository-1")).resolves.toBe(1356);
+    expect(resolveToken).toHaveBeenCalledExactlyOnceWith("sponsor-1", "https://gitlab.example.com");
   });
 
   it("marks the supplying identity with its sponsor when the worker's GitLab read returns 401", async () => {
