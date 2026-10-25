@@ -5,11 +5,7 @@ import type { GitHubRepositoryReference } from "@/lib/github/types";
 
 /** The forge count reads: narrower than ReconciliationGateway, so no fake widens. */
 export type RepositorySizeGateway = {
-  /**
-   * The repository's issues plus pull requests in every state, closed ones
-   * included. Null means the measure is unavailable and the caller keeps the
-   * previous stored size; a transport or authentication failure throws.
-   */
+  /** Every-state totals; null keeps the previous stored size; failures throw. */
   getRepositoryHistoryCount(repository: GitHubRepositoryReference): Promise<number | null>;
 };
 
@@ -49,11 +45,7 @@ export class PostgresRepositorySizeStore {
       set total_count = excluded.total_count, measured_at = excluded.measured_at`;
   }
 
-  /**
-   * The sum over the sponsor's ACTIVE repositories, an unmeasured repository
-   * counting as zero. Null when nothing of the sponsor's was ever measured;
-   * the diff-only decision treats null as zero.
-   */
+  /** Active repositories only; unmeasured counts zero; null when nothing measured. */
   public async getSponsorBacklog(sponsorId: string): Promise<number | null> {
     const [row] = await this.sql<{ backlog: number | null }[]>`
       select sum(sizes.total_count)::int as backlog
@@ -79,12 +71,8 @@ export type RepositorySizeMeasureDependencies = {
 };
 
 /**
- * The count read rides the repository's own sponsor's credential, resolved
- * per repository; the reference is the registered owner/name path, whose
- * staleness costs a failed read and keeps the previous size. Null — measure
- * unavailable, previous size stands — when the row is gone, the GitLab
- * instance is unwired, no linked identity answers for it (fail-closed), or
- * the GitHub token is gone. Forge failures propagate.
+ * Rides the repository's own sponsor's credential, aimed by the registered
+ * owner/name path. Null keeps the previous size; forge failures propagate.
  */
 export function measureRepositorySize(
   dependencies: RepositorySizeMeasureDependencies,

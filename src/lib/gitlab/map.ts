@@ -41,13 +41,7 @@ export type GitLabIssueObject = {
   assignee?: { id: number; username: string } | null;
 };
 
-/**
- * GitLab timestamp shapes vary — millisecond precision with Z, second
- * precision with Z, and explicit offsets — and one of them round-trips
- * through Date differently than it arrived. Normalization happens exactly
- * once, here at the gateway boundary, so every field a caller reads is ISO
- * UTC.
- */
+/** Normalized once at the boundary, so every field a caller reads is ISO UTC. */
 export function normalizeTimestamp(value: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
