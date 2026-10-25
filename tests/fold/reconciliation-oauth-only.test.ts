@@ -51,8 +51,7 @@ vi.mock("@/lib/fold/postgres-store", () => ({
     findRepositoryByOwnerName = lookup;
     getGitHubAccessToken = oauth;
     async listActiveRepositoryIds() { return ["repository-1"]; }
-    // The shape the sweep reads since the per-sponsor rotation; a fake without
-    // it breaks the moment sweepReconciliations runs unmocked in this suite.
+    // The shape the sweep reads; the fake survives sweepReconciliations unmocked.
     async listActiveRepositorySponsors() {
       return [{ repositoryId: "repository-1", sponsorId: "sponsor-1" }];
     }
