@@ -22,6 +22,7 @@ import {
   type GitLabIssueObject,
   type GitLabMergeRequestObject,
 } from "@/lib/gitlab/map";
+import { checkSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import { gitlabApiFetch } from "@/lib/security/gitlab-api-fetch";
 import { logField } from "@/lib/webhooks/log-field";
 
@@ -573,6 +574,7 @@ export class GitLabGateway {
   }
 
   private async request(path: string, init: RequestInit = {}): Promise<GitLabRestResponse> {
+    await checkSweepRequestBudget();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     let status: number;
