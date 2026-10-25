@@ -6,7 +6,10 @@ import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import { runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
+import { PostgresSponsorSweepRoundStore } from "@/lib/fold/sponsor-sweep-round-store";
+import { PostgresRepositorySizeStore } from "@/lib/fold/repository-size";
 import { SweepBudgetSpent } from "@/lib/fold/sweep-request-budget";
+import { sweepReconciliations } from "@/lib/fold/sweep";
 import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { verifiedRepositoryAt } from "../support/verified-repository";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -97,6 +100,33 @@ describe("consuming sweep authorization", () => {
     await f.enqueue("WEBHOOK");
     expect(await f.run()).toBe("RECONCILED"); expect(await f.run()).toBe("RECONCILED");
     expect(f.walks).toEqual([undefined, "2029-12-31T23:59:00.000Z", undefined]);
+  });
+
+  it("keeps a diff-only repository's queued webhook job incremental when its sweep slot falls due", async () => {
+    const f = await fixture();
+    // The sponsor's stored backlog is over the diff-only threshold, so this
+    // repository folds diff-only: the sweep offers it no slot, and its queued
+    // webhook job keeps its reason instead of being upgraded to the full sweep
+    // pass the old slot upgrade forced on it.
+    const sizes = new PostgresRepositorySizeStore(sql);
+    await sizes.store(f.repositoryId, 1356, at);
+    await reconcileRepository(f.dependencies, f.repositoryId);
+    await f.enqueue("WEBHOOK");
+    await sweepReconciliations({
+      listActiveRepositorySponsors: async () => [
+        { repositoryId: f.repositoryId, sponsorId: (await f.store.getRepository(f.repositoryId))!.sponsor.id },
+      ],
+      round: new PostgresSponsorSweepRoundStore(sql),
+      sizeStore: sizes,
+      enqueue: (repositoryId) => f.store.enqueueReconciliationJob(repositoryId, "SWEEP"),
+      now: () => at,
+    });
+    expect(
+      (await sql`select reason from repository_reconciliation_jobs where repository_id = ${f.repositoryId}`)[0]!.reason,
+    ).toBe("WEBHOOK");
+    expect(await f.run()).toBe("RECONCILED");
+    expect(f.walks).toEqual([undefined, "2029-12-31T23:59:00.000Z"]);
+    expect(await f.run()).toBe("IDLE");
   });
 
   it.each(["held", "failed"] as const)("retains unfinished %s sweep authority across a webhook and revival", async (mode) => {

@@ -17,12 +17,16 @@ const pairs = (...ids: string[]) => ids.map((id) => ({ repositoryId: id, sponsor
 
 const at = new Date("2030-01-01T00:00:00Z");
 
-function memorySizeStore(rows: Map<string, RepositorySizeRow>): Pick<PostgresRepositorySizeStore, "get" | "store"> {
+function memorySizeStore(
+  rows: Map<string, RepositorySizeRow>,
+  backlogs?: ReadonlyMap<string, number>,
+): Pick<PostgresRepositorySizeStore, "get" | "store" | "getSponsorBacklog"> {
   return {
     get: async (repositoryId) => rows.get(repositoryId) ?? null,
     store: async (repositoryId, totalCount, measuredAt) => {
       rows.set(repositoryId, { totalCount, measuredAt });
     },
+    getSponsorBacklog: async (sponsorId) => backlogs?.get(sponsorId) ?? null,
   };
 }
 
@@ -151,6 +155,7 @@ describe("the sweep's repository size measure", () => {
       sizeStore: {
         get: async (repositoryId) => rows.get(repositoryId) ?? null,
         store: async () => { throw new Error("sizes table unavailable"); },
+        getSponsorBacklog: async () => null,
       },
       measureSize: async () => 1356,
       onFailure: (repositoryId) => { reported.push(repositoryId); },
@@ -173,5 +178,90 @@ describe("the sweep's repository size measure", () => {
     expect("measured" in summary).toBe(false);
     expect("measureFailed" in summary).toBe(false);
     expect(summary).toEqual({ attempted: 1, enqueued: 1, failed: 0 });
+  });
+});
+
+describe("the sweep's diff-only rotation filter", () => {
+  /**
+   * Item 4 of the diff-only reconciliation plan: a sponsor whose stored backlog
+   * is strictly over the diff-only threshold gets NO sweep slot — its
+   * repositories leave the rotation so a queued webhook job keeps its reason
+   * instead of being upgraded to a full sweep. An under-threshold sponsor
+   * rotates exactly as before.
+   */
+  it("offers a sponsor over the backlog threshold no slot and still rotates an under-threshold sponsor", async () => {
+    const offered: string[] = [];
+    const slots: Array<{ sponsorId: string; repositoryIds: readonly string[] }> = [];
+    const summary = await sweepReconciliations({
+      listActiveRepositorySponsors: async () => [
+        { repositoryId: "d1", sponsorId: "sponsor-over" },
+        { repositoryId: "d2", sponsorId: "sponsor-over" },
+        { repositoryId: "u1", sponsorId: "sponsor-under" },
+      ],
+      round: { enqueueNext: async (sponsorId, ids, _now, _limit, enqueue) => {
+        slots.push({ sponsorId, repositoryIds: ids });
+        await enqueue(ids[0]!);
+        return ids[0]!;
+      } },
+      enqueue: async (id) => { offered.push(id); },
+      now: () => at,
+      sizeStore: memorySizeStore(new Map(), new Map([["sponsor-over", 1356], ["sponsor-under", 500]])),
+    });
+    // The over-threshold sponsor's whole group is filtered, so its round is
+    // never touched: the tick spends no slot on a repository it must not queue.
+    expect(slots).toEqual([{ sponsorId: "sponsor-under", repositoryIds: ["u1"] }]);
+    expect(offered).toEqual(["u1"]);
+    expect(summary).toEqual({ attempted: 1, enqueued: 1, failed: 0 });
+  });
+
+  it("keeps a sponsor at exactly the threshold in the rotation, since only a greater backlog is diff-only", async () => {
+    const slots: string[] = [];
+    await sweepReconciliations({
+      listActiveRepositorySponsors: async () => [{ repositoryId: "r", sponsorId: "sponsor-at" }],
+      round: { enqueueNext: async (sponsorId, _ids, _now, _limit, enqueue) => {
+        slots.push(sponsorId);
+        await enqueue("r");
+        return "r";
+      } },
+      enqueue: async () => undefined,
+      now: () => at,
+      sizeStore: memorySizeStore(new Map(), new Map([["sponsor-at", 1000]])),
+    });
+    expect(slots).toEqual(["sponsor-at"]);
+  });
+
+  it("filters the unpaced sweep too, so both sweep shapes skip a diff-only sponsor", async () => {
+    const enqueued: string[] = [];
+    await sweepReconciliations({
+      listActiveRepositorySponsors: async () => [
+        { repositoryId: "d", sponsorId: "sponsor-over" },
+        { repositoryId: "u", sponsorId: "sponsor-under" },
+      ],
+      enqueue: async (id) => { enqueued.push(id); },
+      now: () => at,
+      sizeStore: memorySizeStore(new Map(), new Map([["sponsor-over", 1356], ["sponsor-under", 500]])),
+    });
+    expect(enqueued).toEqual(["u"]);
+  });
+
+  it("still measures every repository, including an excluded sponsor's, so the decision reads fresh sizes", async () => {
+    const rows = new Map<string, RepositorySizeRow>();
+    const measured: string[] = [];
+    await sweepReconciliations({
+      listActiveRepositorySponsors: async () => [
+        { repositoryId: "d", sponsorId: "sponsor-over" },
+        { repositoryId: "u", sponsorId: "sponsor-under" },
+      ],
+      enqueue: async () => undefined,
+      now: () => at,
+      sizeStore: memorySizeStore(rows, new Map([["sponsor-over", 1356], ["sponsor-under", 500]])),
+      measureSize: async (repositoryId) => {
+        measured.push(repositoryId);
+        return 1356;
+      },
+    });
+    // An unmeasured backlog reads as zero, so skipping the excluded sponsor's
+    // measure would silently return it to the rotation.
+    expect(measured).toEqual(["d", "u"]);
   });
 });
