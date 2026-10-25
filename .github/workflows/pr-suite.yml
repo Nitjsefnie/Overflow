@@ -122,7 +122,7 @@ jobs:
       # workflow's own definition — the pull request's — choose the interpreter.
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.13"
+          python-version: "3.15"
 
       # Binds .github/requirements-zizmor.txt's hashes to the version on its pin
       # line, on the PULL REQUEST's own tree (issue 1094). `--require-hashes`
@@ -160,8 +160,8 @@ jobs:
       #
       # What WOULD close it is not a matrix: pip resolves cross-platform from one
       # runner, so a loop over the published filenames checks every WHEEL from
-      # here — `--only-binary=:all: --platform <tag> --python-version 3.13
-      # --implementation cp --abi cp313`, one iteration per wheel (measured:
+      # here — `--only-binary=:all: --platform <tag> --python-version 3.15
+      # --implementation cp --abi cp315`, one iteration per wheel (measured:
       # rc=0 on the correct macOS arm64 digest, rc=1 on 1.29.0's). Every wheel,
       # NOT every entry: `--only-binary=:all:` means pip never fetches the sdist,
       # so that eleventh hash needs its own `--no-binary=:all:` pass, without the
