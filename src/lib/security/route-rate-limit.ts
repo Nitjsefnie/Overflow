@@ -21,12 +21,9 @@ import type { RateLimiter } from "@/lib/webhooks/rate-limit";
 import type { RouteCredentialReference } from "@/lib/security/route-credential";
 
 /**
- * One expensive-route class: the base variable name and the documented
- * default. The operator sets `OVERFLOW_<envName>`; the unprefixed `<envName>`
- * is read only as a legacy fallback (see resolveRouteRateLimit).
- * `defaultPerHour` is the burst size; the steady refill is
- * `defaultPerHour / 60` tokens per minute, so an hour of steady refilling
- * restores exactly the burst.
+ * One expensive-route class: the base name, read as `OVERFLOW_<envName>` then
+ * legacy `<envName>`, and the default. `defaultPerHour` is the burst; refill
+ * is `defaultPerHour / 60` tokens per minute, so an hour restores the burst.
  */
 export interface RouteRateClassSpec {
   envName: string;
@@ -58,13 +55,10 @@ export interface RouteRateLimits {
 }
 
 /**
- * Reads one class's bound from the environment: `OVERFLOW_<envName>` first,
- * then the legacy `<envName>` only when the prefixed name is undefined. A
- * defined prefixed value is authoritative even when empty or invalid: it goes
- * through validation and, failing it, to the documented default, never to the
- * legacy name. A value that is not finite and at least one falls back to the
- * default. A bucket below one can never hold the token each admission
- * consumes; it would refuse forever while advertising a finite Retry-After.
+ * Reads `OVERFLOW_<envName>`, else legacy `<envName>` if that is undefined. A
+ * defined prefixed value, even empty, is authoritative: not finite or below
+ * one, it yields the default, never the legacy value. A bucket below one
+ * cannot hold an admission's token; it would refuse forever.
  */
 export function resolveRouteRateLimit(
   env: Record<string, string | undefined>,
