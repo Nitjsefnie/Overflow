@@ -14,11 +14,13 @@ import { validDifficultyScheme } from "../support/difficulty-scheme";
  * reconciliation, and that the sweep enqueues under its own reason.
  */
 
-const { enqueued, startSweep, startWorker, sweep, drain, resolveToken, markRejected, finalizeRuns, pruneRows, workSql, coordinationSql } = vi.hoisted(() => ({
+const { enqueued, jobs, startSweep, startWorker, sweep, catchups, drain, resolveToken, markRejected, finalizeRuns, pruneRows, workSql, coordinationSql } = vi.hoisted(() => ({
   enqueued: [] as { repositoryId: string; reason: string }[],
+  jobs: [] as { repositoryId: string; reason: string; sql: unknown }[],
   startSweep: vi.fn(),
   startWorker: vi.fn(),
   sweep: vi.fn(),
+  catchups: vi.fn(),
   drain: vi.fn(),
   resolveToken: vi.fn(),
   markRejected: vi.fn(),
@@ -40,6 +42,16 @@ vi.mock("@/lib/fold/sweep", async (importActual) => ({
   ...(await importActual<typeof import("@/lib/fold/sweep")>()),
   startReconciliationSweep: startSweep,
   sweepReconciliations: sweep,
+}));
+vi.mock("@/lib/fold/sweep-catchup", () => ({ sweepReconciliationCatchups: catchups }));
+vi.mock("@/lib/fold/reconciliation-job-store", async (importActual) => ({
+  ...(await importActual<typeof import("@/lib/fold/reconciliation-job-store")>()),
+  PostgresReconciliationJobStore: class {
+    constructor(public sql: unknown) {}
+    async enqueueReconciliationJob(repositoryId: string, reason: string) {
+      jobs.push({ repositoryId, reason, sql: this.sql });
+    }
+  },
 }));
 vi.mock("@/lib/db/client", () => ({ getSql: () => workSql, getCoordinationSql: () => coordinationSql }));
 // The GitLab gateway's default transport refuses a non-public instance and
@@ -91,9 +103,11 @@ beforeEach(() => {
   // consumer that captured another file's mocks or real background schedulers.
   vi.resetModules();
   enqueued.length = 0;
+  jobs.length = 0;
   startSweep.mockReset();
   startWorker.mockReset();
   sweep.mockReset();
+  catchups.mockReset();
   drain.mockReset().mockImplementation(async (dependencies: ReconciliationWorkerDependencies) => {
     await dependencies.reconcile("repository-1", { rederive: false, reason: "SWEEP" });
     return [];
@@ -295,6 +309,18 @@ describe("server instrumentation", () => {
     await dependencies.enqueue("repository-1");
 
     expect(enqueued).toEqual([{ repositoryId: "repository-1", reason: "SWEEP" }]);
+
+    // The catch-up state machine rides the same runSweep: the tick is invoked
+    // beside the rotation, and the enqueue it is handed runs on the advance's
+    // own transaction under the sweep's reason — the atomic claim the tracker
+    // depends on.
+    expect(catchups).toHaveBeenCalledTimes(1);
+    const catchupDependencies = catchups.mock.calls[0]![0] as {
+      enqueue(repositoryId: string, transaction: unknown): Promise<unknown>;
+    };
+    const markerTransaction = { marker: true };
+    await catchupDependencies.enqueue("repository-1", markerTransaction);
+    expect(jobs).toEqual([{ repositoryId: "repository-1", reason: "SWEEP", sql: markerTransaction }]);
 
     // The measure wiring rides the same dependencies: both size members are
     // present, and the measure is the real composition — it resolves the

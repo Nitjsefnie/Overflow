@@ -107,6 +107,7 @@ export const bundledMigrationNames: readonly string[] = [
   "075_closed_pr_dispute_commit_author.sql",
   "076_repository_reconciliation_sizes.sql",
   "077_reconciliation_sweep_rounds.sql",
+  "078_reconciliation_sweep_catchups.sql",
 ];
 
 /**
