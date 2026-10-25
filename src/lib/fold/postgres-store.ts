@@ -8,6 +8,7 @@ import type { DirtyReconciliationSubject, ReconciliationEvidence, Reconciliation
 import { PostgresReconciliationJobStore } from "@/lib/fold/reconciliation-job-store";
 import { PostgresReconciliationPacingStore } from "@/lib/fold/reconciliation-pacing-store";
 import { PostgresRepositoryLookupStore } from "@/lib/fold/repository-lookup-store";
+import { PostgresRepositorySizeStore } from "@/lib/fold/repository-size";
 import { PostgresFoldMaterializationStore, type RepositoryFoldRevisionCounts, type RepositoryRederivationRequest } from "@/lib/fold/fold-materialization-store";
 import { PostgresSponsorCredentialStore } from "@/lib/fold/sponsor-credential-store";
 import { RepositoryCoordinator } from "@/lib/fold/repository-coordination";
@@ -30,6 +31,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   private readonly sponsorCredentials: PostgresSponsorCredentialStore;
   private readonly reconciliationPacing: PostgresReconciliationPacingStore;
   private readonly materialization: PostgresFoldMaterializationStore;
+  private readonly repositorySizes: PostgresRepositorySizeStore;
 
   public constructor(
     private readonly sql: SqlClient = getSql(),
@@ -49,6 +51,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     this.reconciliationPacing = new PostgresReconciliationPacingStore(sql, this.coordinator);
     this.reconciliationJobs = new PostgresReconciliationJobStore(sql);
     this.webhookDeliveries = new PostgresWebhookDeliveryStore(sql);
+    this.repositorySizes = new PostgresRepositorySizeStore(sql);
     this.sponsorCredentials = new PostgresSponsorCredentialStore(sql, tokenEncryptionKey, previousTokenEncryptionKey);
   }
 
@@ -96,6 +99,10 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
 
   public async listActiveRepositorySponsors(): Promise<{ repositoryId: string; sponsorId: string }[]> {
     return this.repositoryLookup.listActiveRepositorySponsors();
+  }
+
+  public getSponsorBacklog(sponsorId: string): Promise<number | null> {
+    return this.repositorySizes.getSponsorBacklog(sponsorId);
   }
 
   public async getReconciliationCooldown(repositoryId: string): Promise<Date | null> {

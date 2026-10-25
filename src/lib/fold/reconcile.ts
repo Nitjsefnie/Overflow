@@ -1,5 +1,7 @@
 import { withSweepPass, type ReconciliationSweepControl, type SweepPass } from "@/lib/fold/sweep-pass";
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
+import { readEnv } from "@/lib/env";
+import { readDiffOnlyBacklogThreshold } from "@/lib/fold/repository-size";
 import { SweepBudgetSpent, withSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import { reconciliationBudgetHoldUntil, type ReconciliationBudgetDependencies } from "@/lib/fold/reconciliation-budget";
 import type { GitHubIssueListOptions } from "@/lib/github/client";
@@ -93,6 +95,8 @@ export type ReconciliationStore = {
     repositoryId: string,
     forgeUserIds: number[],
   ): Promise<FoldForgeIdentity[]>;
+  /** The sponsor's summed stored sizes; only a diff-only re-derivation consults it. */
+  getSponsorBacklog?(sponsorId: string): Promise<number | null>;
   assessReconciliationFairness(input: {
     repositoryId: string;
     sponsorId: string;
@@ -187,18 +191,31 @@ async function reconcileRepositoryWhileCoordinated(
   }
 
   // Only a fold that runs under the sweep request budget is wrapped in it.
-  const budgetBound = options?.reason === "SWEEP";
+  const diffOnly = options?.reason === "REDERIVATION"
+    ? await sponsorIsDiffOnly(dependencies, repository.sponsor.id)
+    : false;
+  const budgetBound = options?.reason === "SWEEP" || (options?.reason === "REDERIVATION" && diffOnly);
   return !budgetBound || dependencies.sweep === undefined
-    ? reconcileRepositoryAfterRepositoryRead(dependencies, repository, repositoryId, options)
+    ? reconcileRepositoryAfterRepositoryRead(dependencies, repository, repositoryId, options, diffOnly)
     : withSweepRequestBudget(() => dependencies.sweep!.spend(repository.sponsor.id),
-      () => reconcileRepositoryAfterRepositoryRead(dependencies, repository, repositoryId, options));
+      () => reconcileRepositoryAfterRepositoryRead(dependencies, repository, repositoryId, options, diffOnly));
+}
+
+// The same computation the sweep's rotation reads.
+async function sponsorIsDiffOnly(
+  dependencies: ReconciliationDependencies,
+  sponsorId: string,
+): Promise<boolean> {
+  const backlog = (await dependencies.store.getSponsorBacklog?.(sponsorId)) ?? 0;
+  return backlog > readDiffOnlyBacklogThreshold({ RECONCILIATION_DIFF_ONLY_BACKLOG: readEnv("RECONCILIATION_DIFF_ONLY_BACKLOG") });
 }
 
 async function reconcileRepositoryAfterRepositoryRead(
   dependencies: ReconciliationDependencies,
   repository: ReconciliationRepository,
   repositoryId: string,
-  options?: { rederive?: boolean; reason?: ReconciliationJobReason },
+  options: { rederive?: boolean; reason?: ReconciliationJobReason } | undefined,
+  diffOnly: boolean,
 ): Promise<ReconciliationSummary> {
   // One unresolvable subject must not stall the repository's fold: a deleted
   // issue or pull request can never resolve, and the retry machinery (the sweep
@@ -275,7 +292,8 @@ async function reconcileRepositoryAfterRepositoryRead(
     }
   }
 
-  const allowsFull = options?.reason === undefined || options.reason === "SWEEP";
+  const allowsFull = options?.reason === undefined || options.reason === "SWEEP"
+    || (options.reason === "REDERIVATION" && diffOnly);
   const rederive = allowsFull && (options?.rederive === true
     || await dependencies.store.hasDerivedRowsBelowFoldRevision(repositoryId, FOLD_REVISION));
   const runId = await dependencies.store.beginRun(repositoryId, { rederivation: rederive });
