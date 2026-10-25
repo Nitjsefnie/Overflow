@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
 import { GitHubGraphqlClient } from "@/lib/github/graphql";
 import { isTransientGitHubRequestError } from "@/lib/github/errors";
+import { GitLabGateway } from "@/lib/gitlab/client";
 import { checkSweepRequestBudget, readSweepRequestBudget, SweepBudgetSpent, withSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 
 afterEach(() => vi.restoreAllMocks());
@@ -35,6 +36,40 @@ describe("sweep HTTP admission", () => {
     expect(spent).toBe(3); // The shared latch rejects siblings without another spend.
     await rest.request("/repositories/3");
     expect(sent).toBe(3); // Ordinary route and CLI reads have no budget wiring.
+  });
+  it("charges a GitLab read before it sends, holds without sending when spent", async () => {
+    let spent = 0;
+    let sent = 0;
+    const resetAt = new Date("2030-01-01T06:00:00Z");
+    const gateway = new GitLabGateway({
+      instanceUrl: "https://gitlab.example.com",
+      token: randomBytes(24).toString("hex"),
+      fetch: async () => {
+        sent++;
+        return Response.json({
+          id: 5001,
+          name: "example",
+          path: "example",
+          path_with_namespace: "octo/example",
+          visibility: "public",
+          web_url: "https://gitlab.example.com/octo/example",
+          namespace: { id: 1, name: "Octo", path: "octo", kind: "group" },
+        });
+      },
+    });
+    await withSweepRequestBudget(async () => ++spent <= 1 ? null : resetAt, async () => {
+      await gateway.getRepository({ owner: "octo", name: "example" });
+      let failure: unknown;
+      try { await gateway.getRepository({ owner: "octo", name: "other" }); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(SweepBudgetSpent);
+      let heldAgain: unknown;
+      try { await gateway.getRepository({ owner: "octo", name: "third" }); } catch (error) { heldAgain = error; }
+      expect(heldAgain).toBe(failure); // The latched hold rejects siblings without another spend.
+    });
+    expect(sent).toBe(1); // The spent read was refused before its request went out.
+    expect(spent).toBe(2);
+    await gateway.getRepository({ owner: "octo", name: "example" });
+    expect(sent).toBe(2); // Ordinary route and CLI reads have no budget wiring.
   });
   it("sends an already-admitted sibling even if another request latches exhaustion", async () => {
     let release!: (reset: Date | null) => void;
