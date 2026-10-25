@@ -5,18 +5,16 @@ import { SWEEP_WINDOW_MS } from "@/lib/fold/sweep-request-budget";
 type Round = { window_start: Date; spent: number; rotation_cursor: string | null; next_enqueue_at: Date };
 
 /**
- * The sweep's durable round, one row per sponsor. Same window anchor, spend
- * ceiling and rotation pacing the singleton store served, keyed so one
- * sponsor's spent budget holds only its own folds and slots.
+ * The sweep's durable round, one row per sponsor: the singleton store's
+ * window anchor, spend ceiling and rotation pacing, keyed by sponsor.
  */
 export class PostgresSponsorSweepRoundStore {
   public constructor(private readonly connection?: SqlClient) {}
   private get sql(): SqlClient { return this.connection ?? getSql(); }
 
   private async round(transaction: TransactionClient, sponsorId: string, now: Date): Promise<Round> {
-    // The sponsor's first sweep anchors its window and starts it from zero:
-    // nothing is carried from the singleton table. A restart retains the
-    // anchor, spend and cursor; missed ticks advance whole windows, not drift.
+    // First touch anchors the sponsor's window at its first sweep, from zero;
+    // a restart keeps the anchor, spend and cursor across whole windows.
     await transaction`insert into reconciliation_sweep_rounds (sponsor_id, window_start, next_enqueue_at)
       values (${sponsorId}, ${now}, ${now}) on conflict do nothing`;
     const [row] = await transaction<Round[]>`select * from reconciliation_sweep_rounds

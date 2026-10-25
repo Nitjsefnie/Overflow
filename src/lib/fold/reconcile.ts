@@ -186,9 +186,6 @@ async function reconcileRepositoryWhileCoordinated(
     throw new Error("Repository was not found.");
   }
 
-  // The budget charge is the fold's own sponsor's, taken from the repository
-  // this same lock scope just read: the round the fold spends is the one the
-  // sweep rotates for that sponsor, and no repository is read twice for it.
   return dependencies.sweep === undefined
     ? reconcileRepositoryAfterRepositoryRead(dependencies, repository, repositoryId, options)
     : withSweepRequestBudget(() => dependencies.sweep!.spend(repository.sponsor.id),
