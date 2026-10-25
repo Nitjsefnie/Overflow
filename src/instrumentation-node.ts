@@ -48,9 +48,13 @@ export async function registerNodejs(): Promise<void> {
   const { PostgresForgeIdentityStore } = await import("@/lib/forge/postgres-identities-store");
   const { pruneExpiredMaintenanceRows } = await import("@/lib/retention/prune");
   const { getSql, getCoordinationSql } = await import("@/lib/db/client");
+  const { PostgresRepositorySizeStore, measureRepositorySize } = await import("@/lib/fold/repository-size");
+  const { GitHubGateway } = await import("@/lib/github/client");
+  const { GitLabGateway } = await import("@/lib/gitlab/client");
   const store = new PostgresFoldStore();
   const sweepRound = new PostgresSweepRoundStore();
   const sweepPasses = new PostgresSweepPassStore();
+  const repositorySizes = new PostgresRepositorySizeStore();
   const sweep = {
     spend: () => sweepRound.spend(new Date(), readSweepRequestBudget(process.env)),
     openPass: sweepPasses.open.bind(sweepPasses),
@@ -146,6 +150,21 @@ export async function registerNodejs(): Promise<void> {
       const summary = await sweepReconciliations({
         round: sweepRound,
         listActiveRepositoryIds: () => store.listActiveRepositoryIds(),
+        // The measure rides the repository's sponsor's credential, resolved
+        // per repository the same way a fold resolves it; a failed measure
+        // keeps the previous stored size.
+        sizeStore: repositorySizes,
+        measureSize: measureRepositorySize(
+          {
+            getRepository: (repositoryId) => store.getRepository(repositoryId),
+            getGitHubAccessToken: (userId) => store.getGitHubAccessToken(userId),
+            resolveForgeToken: (userId, instanceUrl) =>
+              new PostgresForgeIdentityStore(getSql()).getForgeToken(userId, instanceUrl),
+          },
+          (input) => input.provider === "gitlab"
+            ? new GitLabGateway({ instanceUrl: input.instanceUrl, token: input.token })
+            : new GitHubGateway({ accessToken: input.accessToken, owner: input.ownerId }),
+        ),
         enqueue: (repositoryId) => store.enqueueReconciliationJob(repositoryId, "SWEEP"),
         onFailure: (repositoryId, error) => {
           // Report the failure while retaining the durable slot: the next poll
