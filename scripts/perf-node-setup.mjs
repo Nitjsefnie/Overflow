@@ -16,7 +16,6 @@ for (const handler of process.rawListeners("warning")) {
 // NODE_OPTIONS reaches pnpm too. Guard only the actual migration entry point,
 // and inspect the singleton client that migrate.ts subsequently uses.
 const migrationPath = fileURLToPath(new URL("./migrate.ts", import.meta.url));
-// Loaded after the warning filter so the .ts load emits no Transform Types warning.
 const { readEnv } = await import("../src/lib/env.ts");
 const expected = readEnv("PERF_EXPECTED_DATABASE");
 if (expected !== undefined && resolve(process.argv[1] ?? "") === migrationPath) {
