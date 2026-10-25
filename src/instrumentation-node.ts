@@ -150,9 +150,7 @@ export async function registerNodejs(): Promise<void> {
       const summary = await sweepReconciliations({
         round: sweepRound,
         listActiveRepositoryIds: () => store.listActiveRepositoryIds(),
-        // The measure rides the repository's sponsor's credential, resolved
-        // per repository the same way a fold resolves it; a failed measure
-        // keeps the previous stored size.
+        // The measure rides each repository's sponsor's credential.
         sizeStore: repositorySizes,
         measureSize: measureRepositorySize(
           {
