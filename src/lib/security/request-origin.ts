@@ -16,7 +16,7 @@ const jsonMediaType = "application/json";
 const opaqueOrigin = "null";
 
 export function readTrustedOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
-  const configured = (env === process.env ? readEnv("APP_URL") : env.OVERFLOW_APP_URL ?? env.APP_URL)?.trim();
+  const configured = readEnv("APP_URL", env)?.trim();
   if (configured === undefined || configured === "") {
     return null;
   }

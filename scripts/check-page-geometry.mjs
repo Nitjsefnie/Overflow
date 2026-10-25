@@ -40,6 +40,7 @@ import { open, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { readEnv } from "../src/lib/env.ts";
 import { OwnedProcesses } from "./owned-processes.mjs";
 import { seedBoardFixtureCard, seedFixtureUsers } from "./page-geometry-fixtures.mjs";
 
@@ -197,8 +198,7 @@ export async function loadRepoEnvFile({ repoRoot: root = repoRoot, env = process
  */
 export function missingRequiredEnv(env = process.env, envFileExists = repoEnvFileExists) {
   return REQUIRED_ENV.filter((name) => {
-    const value = env[`OVERFLOW_${name}`] ?? env[name];
-    if (value !== undefined && value !== "") return false;
+    if (readEnv(name, env)) return false;
     return !envFileExists();
   });
 }
