@@ -10,6 +10,7 @@
 // mode is fail-closed on ambiguity: a value other than exactly "true" or
 // "false" throws, and sweep-only alongside any run id throws.
 
+import { readEnv } from "../src/lib/env.ts";
 import { PIN_SHAPE } from "./ledger-relay-decisions.ts";
 
 export const SHA_40 = /^[0-9a-f]{40}$/;
@@ -64,19 +65,19 @@ export type Trigger =
 
 /** True when the env names the sweep-only start mode, without parseTrigger's ambiguity validation. */
 export function namesSweepOnlyStart(env: Record<string, string | undefined>): boolean {
-  return (env.OVERFLOW_LEDGER_SWEEP_ONLY ?? env.LEDGER_SWEEP_ONLY ?? "") === "true";
+  return (readEnv("LEDGER_SWEEP_ONLY", env) ?? "") === "true";
 }
 
 export function parseTrigger(env: Record<string, string | undefined>): Trigger {
-  const sweepOnlyRaw = env.OVERFLOW_LEDGER_SWEEP_ONLY ?? env.LEDGER_SWEEP_ONLY ?? "";
+  const sweepOnlyRaw = readEnv("LEDGER_SWEEP_ONLY", env) ?? "";
   if (sweepOnlyRaw !== "" && sweepOnlyRaw !== "true" && sweepOnlyRaw !== "false") {
     throw new Error(
       `LEDGER_SWEEP_ONLY must be exactly "true" or "false" (got ${JSON.stringify(sweepOnlyRaw)})`,
     );
   }
   const sweepOnly = namesSweepOnlyStart(env);
-  const runId = env.OVERFLOW_GITHUB_WORKFLOW_RUN_ID ?? env.GITHUB_WORKFLOW_RUN_ID ?? "";
-  const dispatchRunId = env.OVERFLOW_LEDGER_DISPATCH_RUN_ID ?? env.LEDGER_DISPATCH_RUN_ID ?? "";
+  const runId = readEnv("GITHUB_WORKFLOW_RUN_ID", env) ?? "";
+  const dispatchRunId = readEnv("LEDGER_DISPATCH_RUN_ID", env) ?? "";
   if (sweepOnly && (runId !== "" || dispatchRunId !== "")) {
     throw new Error(
       "LEDGER_SWEEP_ONLY=true is a sweep-only relay: no triggering run may be named alongside it " +
@@ -85,11 +86,11 @@ export function parseTrigger(env: Record<string, string | undefined>): Trigger {
   }
   if (runId !== "") {
     assertShape(runId, DIGITS, "GITHUB_WORKFLOW_RUN_ID must be a workflow-run id");
-    const headSha = env.OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA ?? env.GITHUB_WORKFLOW_RUN_HEAD_SHA ?? "";
+    const headSha = readEnv("GITHUB_WORKFLOW_RUN_HEAD_SHA", env) ?? "";
     assertShape(headSha, SHA_40, "GITHUB_WORKFLOW_RUN_HEAD_SHA must be a 40-hex SHA");
-    const path = env.OVERFLOW_GITHUB_WORKFLOW_RUN_PATH ?? env.GITHUB_WORKFLOW_RUN_PATH ?? "";
+    const path = readEnv("GITHUB_WORKFLOW_RUN_PATH", env) ?? "";
     assertShape(path, PIN_SHAPE, "GITHUB_WORKFLOW_RUN_PATH must be a workflow path");
-    const htmlUrl = env.OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL ?? env.GITHUB_WORKFLOW_RUN_HTML_URL ?? "";
+    const htmlUrl = readEnv("GITHUB_WORKFLOW_RUN_HTML_URL", env) ?? "";
     if (htmlUrl === "") {
       throw new Error("GITHUB_WORKFLOW_RUN_HTML_URL is required for the check-run's details_url");
     }
@@ -99,11 +100,11 @@ export function parseTrigger(env: Record<string, string | undefined>): Trigger {
         runId,
         headSha,
         path,
-        conclusion: normalizedConclusion(env.OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION ?? env.GITHUB_WORKFLOW_RUN_CONCLUSION),
+        conclusion: normalizedConclusion(readEnv("GITHUB_WORKFLOW_RUN_CONCLUSION", env)),
         htmlUrl,
-        event: env.OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT ?? env.GITHUB_WORKFLOW_RUN_EVENT ?? "",
-        headBranch: env.OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH ?? env.GITHUB_WORKFLOW_RUN_HEAD_BRANCH ?? "",
-        runAttempt: normalizedAttempt(env.OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT ?? env.GITHUB_WORKFLOW_RUN_ATTEMPT),
+        event: readEnv("GITHUB_WORKFLOW_RUN_EVENT", env) ?? "",
+        headBranch: readEnv("GITHUB_WORKFLOW_RUN_HEAD_BRANCH", env) ?? "",
+        runAttempt: normalizedAttempt(readEnv("GITHUB_WORKFLOW_RUN_ATTEMPT", env)),
         runStartedAt: null,
         headRepository: "",
       },

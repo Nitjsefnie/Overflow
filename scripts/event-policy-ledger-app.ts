@@ -7,6 +7,7 @@
 // a failure with no GH_TOKEN fallback (issue 1026). The neutral check run stays
 // best-effort: its failure is a warning that never fails the job.
 
+import { readEnv } from "../src/lib/env.ts";
 import { LEDGER_APP_MINT_PERMISSIONS } from "./ledger-app-mint-permissions.ts";
 import { mintAppJwt } from "./ledger-relay.ts";
 
@@ -31,9 +32,9 @@ export type MintOutcome = { token?: string; warning?: string };
 function ledgerAppCredentials(
   env: Record<string, string | undefined>,
 ): { appId: string; installationId: string; appKey: string } | undefined {
-  const appId = (env.OVERFLOW_LEDGER_APP_ID ?? env.LEDGER_APP_ID)?.trim();
-  const installationId = (env.OVERFLOW_LEDGER_INSTALLATION_ID ?? env.LEDGER_INSTALLATION_ID)?.trim();
-  const appKey = env.OVERFLOW_LEDGER_APP_KEY ?? env.LEDGER_APP_KEY;
+  const appId = readEnv("LEDGER_APP_ID", env)?.trim();
+  const installationId = readEnv("LEDGER_INSTALLATION_ID", env)?.trim();
+  const appKey = readEnv("LEDGER_APP_KEY", env);
   if (appId === undefined || appId === "") return undefined;
   if (installationId === undefined || installationId === "") return undefined;
   if (appKey === undefined || appKey === "") return undefined;

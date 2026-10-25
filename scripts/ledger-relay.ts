@@ -42,6 +42,7 @@ import { readSuiteRuns, suiteRunsUrl, supersessionMessage } from "./pr-suite-sup
 import { createSign } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { readEnv } from "../src/lib/env.ts";
 
 import {
   renderSweepLines,
@@ -185,16 +186,16 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
   const nowFn = inputDeps.nowFn ?? Date.now;
   const deps: RunDeps = { ...inputDeps, nowFn, deadlineMs: nowFn() + RUN_DEADLINE_MS };
   const { env } = deps;
-  const appId = required(env, "OVERFLOW_LEDGER_APP_ID", "LEDGER_APP_ID");
-  const installationId = required(env, "OVERFLOW_LEDGER_INSTALLATION_ID", "LEDGER_INSTALLATION_ID");
-  const appKey = required(env, "OVERFLOW_LEDGER_APP_KEY", "LEDGER_APP_KEY");
-  const repo = required(env, "GITHUB_REPOSITORY");
+  const appId = required(readEnv("LEDGER_APP_ID", env), "LEDGER_APP_ID");
+  const installationId = required(readEnv("LEDGER_INSTALLATION_ID", env), "LEDGER_INSTALLATION_ID");
+  const appKey = required(readEnv("LEDGER_APP_KEY", env), "LEDGER_APP_KEY");
+  const repo = required(env.GITHUB_REPOSITORY, "GITHUB_REPOSITORY");
   assertShape(repo, /^[^/]+\/[^/]+$/, "GITHUB_REPOSITORY must name OWNER/REPO");
   assertShape(appId, DIGITS, "LEDGER_APP_ID must be the App's numeric id");
   assertShape(installationId, DIGITS, "LEDGER_INSTALLATION_ID must be the numeric installation id");
   const ownJob = {
-    repo, runId: required(env, "GITHUB_RUN_ID"), runAttempt: required(env, "GITHUB_RUN_ATTEMPT"),
-    workflowToken: required(env, "OVERFLOW_RELAY_RERUN_TOKEN", "RELAY_RERUN_TOKEN"),
+    repo, runId: required(env.GITHUB_RUN_ID, "GITHUB_RUN_ID"), runAttempt: required(env.GITHUB_RUN_ATTEMPT, "GITHUB_RUN_ATTEMPT"),
+    workflowToken: required(readEnv("RELAY_RERUN_TOKEN", env), "RELAY_RERUN_TOKEN"),
   };
   assertShape(ownJob.runId, DIGITS, "GITHUB_RUN_ID must be the relay run's numeric id");
   assertShape(ownJob.runAttempt, DIGITS, "GITHUB_RUN_ATTEMPT must be the relay run's numeric attempt");
@@ -289,7 +290,7 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
         // A refused trigger has no proven producer identity. Do not resolve it
         // again inside the sweep and strand unrelated eligible completions.
         skipTrigger: attestationRun === undefined,
-        rerunToken: env.OVERFLOW_RELAY_RERUN_TOKEN ?? env.RELAY_RERUN_TOKEN,
+        rerunToken: readEnv("RELAY_RERUN_TOKEN", env),
         rerun: (id, rerunToken) => apiCall<unknown>(deps, {
           url: `${API_ROOT}/repos/${repo}/actions/runs/${id}/rerun`, method: "POST",
           headers: { ...API_HEADERS, authorization: `Bearer ${rerunToken}` },
@@ -494,10 +495,9 @@ async function readRawPinMap(): Promise<unknown> {
   return JSON.parse(await readFile(".github/required-checks.json", "utf8")) as unknown;
 }
 
-function required(env: Record<string, string | undefined>, name: string, displayName = name): string {
-  const value = env[name] ?? env[name.replace(/^OVERFLOW_/, "")] ?? "";
-  if (value === "") {
-    throw new Error(`${displayName} is required`);
+function required(value: string | undefined, name: string): string {
+  if (value === undefined || value === "") {
+    throw new Error(`${name} is required`);
   }
   return value;
 }

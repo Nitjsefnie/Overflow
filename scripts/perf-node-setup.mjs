@@ -16,10 +16,11 @@ for (const handler of process.rawListeners("warning")) {
 // NODE_OPTIONS reaches pnpm too. Guard only the actual migration entry point,
 // and inspect the singleton client that migrate.ts subsequently uses.
 const migrationPath = fileURLToPath(new URL("./migrate.ts", import.meta.url));
-if ((process.env.OVERFLOW_PERF_EXPECTED_DATABASE ?? process.env.PERF_EXPECTED_DATABASE) !== undefined
-  && resolve(process.argv[1] ?? "") === migrationPath) {
+// Loaded after the warning filter so the .ts load emits no Transform Types warning.
+const { readEnv } = await import("../src/lib/env.ts");
+const expected = readEnv("PERF_EXPECTED_DATABASE");
+if (expected !== undefined && resolve(process.argv[1] ?? "") === migrationPath) {
   const { getSql, closeSql } = await import("../src/lib/db/client.ts");
-  const expected = process.env.OVERFLOW_PERF_EXPECTED_DATABASE ?? process.env.PERF_EXPECTED_DATABASE;
   try {
     const [row] = await getSql()`select current_database() as database`;
     if (row?.database !== expected) {

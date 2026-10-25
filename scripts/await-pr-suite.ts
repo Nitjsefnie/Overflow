@@ -27,6 +27,7 @@
 import { realpathSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { readEnv } from "../src/lib/env.ts";
 import { readSuiteRuns, suiteRunsUrl, supersedingSuiteRunId, supersessionMessage } from "./pr-suite-supersession.ts";
 
 /** The suite workflow's file name, which names its per-workflow run listing. */
@@ -332,15 +333,15 @@ function parseConfig(env: Record<string, string | undefined>): AwaitConfig {
   if (token === "") {
     throw new Error("GH_TOKEN is required");
   }
-  const headSha = env.OVERFLOW_HEAD_SHA ?? env.HEAD_SHA ?? "";
+  const headSha = readEnv("HEAD_SHA", env) ?? "";
   if (!SHA_40.test(headSha)) {
     throw new Error(`HEAD_SHA must be a 40-hex SHA (got ${JSON.stringify(headSha)})`);
   }
-  const runId = env.OVERFLOW_SUITE_RUN_ID ?? env.SUITE_RUN_ID;
+  const runId = readEnv("SUITE_RUN_ID", env);
   if (runId !== undefined && (!POSITIVE_INTEGER.test(runId) || !Number.isSafeInteger(Number(runId)))) {
     throw new Error("SUITE_RUN_ID must be a positive safe integer");
   }
-  const attempt = env.OVERFLOW_SUITE_RUN_ATTEMPT ?? env.SUITE_RUN_ATTEMPT;
+  const attempt = readEnv("SUITE_RUN_ATTEMPT", env);
   if (runId !== undefined && (attempt === undefined || !POSITIVE_INTEGER.test(attempt) || !Number.isSafeInteger(Number(attempt)))) {
     throw new Error("SUITE_RUN_ATTEMPT must be the triggering run's positive safe attempt number");
   }

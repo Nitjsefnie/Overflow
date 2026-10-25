@@ -234,6 +234,8 @@ describe("generator CLI", () => {
     expect(resolveOutputPath({ OVERFLOW_NEXT_DIST_DIR: "release-123" })).toBe(join("release-123", "third-party-notices.txt"));
     expect(resolveOutputPath({ OVERFLOW_NEXT_DIST_DIR: "  release-123  " })).toBe(join("release-123", "third-party-notices.txt"));
     expect(resolveOutputPath({})).toBe(join(".next", "third-party-notices.txt"));
+    expect(resolveOutputPath({ NEXT_DIST_DIR: "legacy" })).toBe(join("legacy", "third-party-notices.txt"));
+    expect(resolveOutputPath({ OVERFLOW_NEXT_DIST_DIR: "", NEXT_DIST_DIR: "legacy" })).toBe(join(".next", "third-party-notices.txt"));
   });
 
   it("runs the generator after Next builds", () => {
