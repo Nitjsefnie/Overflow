@@ -186,7 +186,13 @@ async function reconcileRepositoryWhileCoordinated(
     throw new Error("Repository was not found.");
   }
 
-  return dependencies.sweep === undefined
+  // Only a fold that runs under the sweep request budget is wrapped in it: a
+  // SWEEP fold spends from its sponsor's window and can be held, while every
+  // other reason — and an explicit pnpm reconcile, which passes no sweep
+  // control at all — completes without spending, never held for the sweep
+  // budget, and never deferred to a sweep window reset.
+  const budgetBound = options?.reason === "SWEEP";
+  return !budgetBound || dependencies.sweep === undefined
     ? reconcileRepositoryAfterRepositoryRead(dependencies, repository, repositoryId, options)
     : withSweepRequestBudget(() => dependencies.sweep!.spend(repository.sponsor.id),
       () => reconcileRepositoryAfterRepositoryRead(dependencies, repository, repositoryId, options));
