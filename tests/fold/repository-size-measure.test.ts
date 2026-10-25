@@ -98,6 +98,18 @@ describe("measuring a repository's size as its sponsor", () => {
     expect(calls).toEqual([]);
   });
 
+  it("returns null, with no gateway built, for a malformed ownerName without a separating owner", async () => {
+    // The GitHub token is supplied so the separator guard is what stops the
+    // read — a null token would mask either malformed shape with its own null.
+    for (const ownerName of ["project", "/project", "group/"]) {
+      const calls: FactoryInput[] = [];
+      const measure = measureRepositorySize(
+        dependencies({ repository: { ownerName }, gitHubToken: "token-a" }), fakeGateway(1356, calls, []));
+      await expect(measure("repository-1")).resolves.toBeNull();
+      expect(calls).toEqual([]);
+    }
+  });
+
   it("propagates a forge failure: the measure failed and the caller keeps the previous size", async () => {
     const measure = measureRepositorySize(dependencies({ gitHubToken: "token-a" }), () => {
       throw new Error("forge unreachable");
