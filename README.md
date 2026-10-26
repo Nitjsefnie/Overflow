@@ -23,6 +23,8 @@ GitHub repositories register in one of two ways. The default authorizes webhook 
 
 **Credit earned in their tracker can pay for work in yours.** Each repository chooses its labels. Its two catalogs map them to points on the shared 1–10 scale.
 
+**The economics in two sentences:** every account starts at a credit limit of 10 below zero; claim an issue, have the closing pull request merged, and its settled credits land in your account; spend those credits posting prices on your own issues. Credits are points on a shared ledger, not money.
+
 ## Why it can't be abused
 
 **More room to borrow comes from paying it back.** Every account starts with a credit limit of 10 below zero. At or below that limit, discovery keeps one open, unclaimed issue per sponsor across all its eligible repositories: lowest reserve points first, then oldest opening, with immutable forge identity breaking ties. Repository and label filters may hide that issue but never select a replacement. Claiming or closing it moves the exception to the next eligible issue. Already-claimed issues can still complete, even if they take the balance farther below the limit. Only settled credits count toward the cutoff. Claims never count.
