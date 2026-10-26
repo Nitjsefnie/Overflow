@@ -599,8 +599,9 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
 
     const error = await caught(apiCall(deps, theCall, what));
 
-    // The network failure cleared the classified reset: the tail is the plain
-    // attempts error, not the rate limit a sweep-only start would defer on.
+    // The last answer was a network error, not a rate-limited response: the
+    // loop ends on the plain attempts error, not a rate limit a sweep-only
+    // start would defer on.
     expect(error).not.toBeInstanceOf(RateLimitExceededError);
     expect(error.message).toContain("failed after 3 attempts: fetch failed");
     expect(delays).toEqual([4_000, 2_000]);
