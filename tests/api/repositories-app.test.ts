@@ -73,7 +73,7 @@ describe("repository App route wiring", () => {
     expect(response.status).toBe(201);
     expect(await response.json()).toEqual({ repository: { id: "repository-id", githubRepositoryId: 42,
       ownerName: "octo/overflow", sponsorId: "sponsor-id", visibility: "PUBLIC", githubWebhookId: null },
-    initialImportScheduled: true, claimPath: "NO_EVIDENCE_FOUND" });
+    initialImportScheduled: true, claimPath: "NO_EVIDENCE_FOUND", openingLabels: ["size/S"] });
     expect(h.save).toHaveBeenCalledWith(expect.objectContaining({ registrationMethod: "app", githubWebhookId: null, webhookCredential: null }));
     expect(h.calls.map(({ path, method }) => `${method} ${path}`)).toEqual([
       "GET /repos/octo/overflow", "GET /repos/octo/overflow/labels", "GET /repos/octo/overflow/installation",
