@@ -470,6 +470,39 @@ describe("durable sweep walk subjects", () => {
     expect(await resumed.readStaged()).toHaveLength(2);
   });
 
+  it("fulfills both concurrent stages when their FK inserts precede parent locking", async () => {
+    const { input, store } = await openWalk();
+    const bothInserted = signal();
+    let inserted = 0;
+    const connection = new Proxy(sql, { get(target, property, receiver) {
+      if (property !== "begin") return Reflect.get(target, property, receiver);
+      return (work: (transaction: TransactionSql) => Promise<unknown>) => target.begin((transaction) =>
+        work(new Proxy(transaction, { apply(target, thisArg, args) {
+          const query = Reflect.apply(target, thisArg, args);
+          if (!String(args[0]).includes("insert into reconciliation_sweep_walk_subjects")) return query;
+          return query.then(async (result: unknown) => {
+            // Both FK key-share locks exist before either parent-lock request.
+            if (++inserted === 2) bothInserted.resolve();
+            await bothInserted.promise;
+            return result;
+          });
+        } })));
+    } });
+    const first = await new PostgresSweepPassStore(connection).open(input);
+    const second = await new PostgresSweepPassStore(connection).open(input);
+    const outcomes = await Promise.allSettled([
+      first.stage({ ...subject, anchor: "issue" }),
+      second.stage({ ...subject, anchor: "pull_request", kind: "pull_request", subjectKey: 2 }),
+    ]);
+    expect(inserted).toBe(2);
+    expect(outcomes.map((outcome) => outcome.status === "fulfilled" ? { status: outcome.status }
+      : { status: outcome.status, code: outcome.reason.code })).toEqual([{ status: "fulfilled" }, { status: "fulfilled" }]);
+    const resumed = await store.open(input);
+    expect(resumed.walkAnchors()).toEqual({ issue: { updatedAt: at, key: subject.subjectKey },
+      pull_request: { updatedAt: at, key: 2 } });
+    expect(await resumed.readStaged()).toHaveLength(2);
+  });
+
   it("rolls back the staged row and anchor together when the anchor write fails", async () => {
     const { pass, store, input } = await openWalk();
     await pass.stage(subject);
