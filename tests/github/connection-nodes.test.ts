@@ -420,7 +420,7 @@ describe("GitHubGateway connection node guards", () => {
     expect(issues[0]?.history).toEqual([]);
   });
 
-  // getIssue keeps throwing so the fold  // getIssue keeps throwing so the fold's per-subject discard can classify the
+  // getIssue keeps throwing so the fold's per-subject discard can classify the
   // single dirty subject; it never returns a marked issue.
   it("keeps surfacing the typed error through getIssue", async () => {
     const gateway = gatewayAnswering(() => ({ repository: { issue: {
