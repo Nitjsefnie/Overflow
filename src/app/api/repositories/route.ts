@@ -186,8 +186,7 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
         );
       } catch (error) {
         if (error instanceof RepositoryScopeProbeFailure) throw error.cause;
-        // Domain refusals and classified forge failures keep their existing
-        // mappings below; unexpected setup failures belong to this server.
+        // Domain refusals keep their mappings below; unexpected setup failures are this server's.
         if (
           error instanceof RepositoryRegistrationError ||
           error instanceof ForgeIdentityError ||
@@ -207,21 +206,19 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
         repository: repositoryResponse(registration),
         initialImportScheduled: registration.initialImportScheduled,
         claimPath: registration.claimPath,
-        // The labels an existing issue is listed under, in submission order —
-        // issue 1385's listing rule is what the sponsor reads next.
+        // The listing rule's labels, in submission order (issue 1385).
         openingLabels: input.openingLabels.map((entry) => entry.label),
       }, { status: 201 });
     } catch (error) {
       if (error instanceof RepositoryRegistrationError) {
         return registrationErrorResponse(error);
       }
-      // The granted-scope check (issue 599) runs while the wiring resolves,
-      // ahead of the flow: a token GitHub reports as unable to administer
-      // webhooks is the caller's authorization, refused with a stable code
-      // and the remedy; a token GitHub no longer accepts is a credentials
-      // refusal; a rate limit is the same documented 429 the gateway's steps
-      // answer, with the same retry guidance; any other probe failure is
-      // upstream.
+      // The granted-scope check (issue 599) runs while the wiring resolves, ahead of
+      // the flow: a token GitHub reports as unable to administer webhooks is the
+      // caller's authorization, refused with a stable code and the remedy; a token
+      // GitHub no longer accepts is a credentials refusal; a rate limit is the same
+      // documented 429 the gateway's steps answer, with the same retry guidance; any
+      // other probe failure is upstream.
       if (error instanceof GitHubWebhookScopeError) {
         return errorResponse(403, "GITHUB_WEBHOOK_SCOPE_REQUIRED", error.message);
       }
@@ -295,8 +292,7 @@ export function createRepositoryPatchHandler(dependencies: RepositoryRouteDepend
         );
       } catch (error) {
         if (error instanceof RepositoryScopeProbeFailure) throw error.cause;
-        // Domain refusals and classified forge failures keep their existing
-        // mappings below; unexpected setup failures belong to this server.
+        // Domain refusals keep their mappings below; unexpected setup failures are this server's.
         if (
           error instanceof RepositoryRegistrationError ||
           error instanceof ForgeIdentityError ||
@@ -372,8 +368,7 @@ export function createRepositoryDeleteHandler(dependencies: RepositoryRouteDepen
         );
       } catch (error) {
         if (error instanceof RepositoryScopeProbeFailure) throw error.cause;
-        // Domain refusals and classified forge failures keep their existing
-        // mappings below; unexpected setup failures belong to this server.
+        // Domain refusals keep their mappings below; unexpected setup failures are this server's.
         if (
           error instanceof RepositoryRegistrationError ||
           error instanceof ForgeIdentityError ||
