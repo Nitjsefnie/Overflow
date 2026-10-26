@@ -1,3 +1,4 @@
+import { walkSubjectDiscardReason } from "@/lib/fold/reconciliation-walk-discard";
 import type { GitHubGateway, GitHubIssueListOptions } from "@/lib/github/client";
 import type { GitLabGateway } from "@/lib/gitlab/client";
 import type { GitHubRepositoryReference, GitHubSubject } from "@/lib/github/types";
@@ -10,7 +11,7 @@ export async function walkGitHubReconciliation(
   github: GitHubGateway, reference: GitHubRepositoryReference, input: ForgeWalkInput, options?: GitHubIssueListOptions,
 ) {
   // REST /issues PR rows name the issue identity; staged rows name the immutable PR identity.
-  const identities = new Map<number, number>();
+  const identities = new Map<number, number | null>();
   for (const row of await input.pass.readStaged()) {
     if (row.kind !== "pull_request") continue;
     const payload = row.payload as { subject?: GitHubSubject } | null;
@@ -24,12 +25,19 @@ export async function walkGitHubReconciliation(
         if (subject.kind === "issue") return subject;
         let id = identities.get(subject.number);
         if (id === undefined) {
-          const pr = await github.getPullRequest(reference, subject.number);
-          if (pr === null) return null;
-          id = pr.id;
+          const pr = await github.getPullRequest(reference, subject.number).catch((error: unknown) => {
+            if (walkSubjectDiscardReason(error, "pull_request", false, false) !== "NOT_FOUND") throw error;
+            return null;
+          });
+          id = pr?.id ?? null;
+          if (id === null) {
+            const dirty = input.pass.dirtySubjects.find((row) => row.kind === "PULL_REQUEST" && row.number === subject.number);
+            if (dirty !== undefined) await input.onDiscard?.({ kind: "pull_request",
+              subject: { id: dirty.id, number: dirty.number }, reason: "NOT_FOUND" });
+          }
           identities.set(subject.number, id);
         }
-        return { ...subject, id };
+        return id === null ? null : { ...subject, id };
       },
     },
     gateway: {
