@@ -78,7 +78,7 @@ describe("last-update reconciliation walk", () => {
 
   it("removes a subject deleted after its gather from staging and the fold document", async () => {
     const f = fixture([subject(1), subject(2)]);
-    f.onGather((id) => { if (id === 2) f.live.delete(1); });
+    f.onGather((id) => { if (id === 2) { f.live.delete(1); f.issues.delete(1); } });
     const result = await f.window(20);
     expect(result.issues.map(({ id }) => id)).toEqual([2]);
     expect((await f.pass.readStaged()).map(({ subjectKey }) => subjectKey)).toEqual([2]);
@@ -130,6 +130,7 @@ describe("last-update reconciliation walk", () => {
     const f = fixture([subject(1), subject(2)]);
     await expect(f.window(3)).rejects.toBeInstanceOf(SweepBudgetSpent);
     f.live.delete(1);
+    f.issues.delete(1);
     expect((await f.window(20)).issues.map(({ id }) => id)).toEqual([2]);
     expect((await f.window(20)).issues.map(({ id }) => id)).toEqual([2]);
     expect(f.counts.get(2)).toBe(1);

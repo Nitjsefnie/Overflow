@@ -4,7 +4,7 @@ import type { SweepPass } from "@/lib/fold/sweep-pass";
 import { checkpointSweepRequest, withSweepPass } from "@/lib/fold/sweep-pass";
 import { checkSweepRequestBudget, withSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import { walkReconciliation, type ReconciliationWalkInput, type WalkGateway, type WalkListingDriver } from "@/lib/fold/reconciliation-walk";
-import type { GitHubIssue, GitHubPullRequest } from "@/lib/github/types";
+import type { GitHubIssue, GitHubPullRequest, GitHubSubject } from "@/lib/github/types";
 
 export const instant = (key: number) => new Date(Date.UTC(2026, 9, 1, 0, 0, key));
 export const subject = (id: number, kind: WalkSubject["kind"] = "issue", time = id): WalkSubject => ({ id, number: id, kind, updatedAt: instant(time) });
@@ -47,6 +47,8 @@ export function fixture(subjects: WalkSubject[], pageSize = 100) {
   const pass = memoryPass();
   const live = new Map(subjects.map((row) => [row.id, structuredClone(row)]));
   const issues = new Map(subjects.filter((row) => row.kind === "issue").map((row) => [row.id, { ...issue(row.id), updatedAt: row.updatedAt.toISOString() }]));
+  const pullRequests = new Map(subjects.filter((row) => row.kind === "pull_request").map((row) => [row.id, { ...pullRequest(row.id), number: row.number }]));
+  const lookups: Array<GitHubSubject & { kind: WalkSubject["kind"] }> = [];
   const counts = new Map<number, number>();
   const listed: Array<{ since?: string; cursor: string | null }> = [];
   const requests: string[] = [];
@@ -65,11 +67,16 @@ export function fixture(subjects: WalkSubject[], pageSize = 100) {
     return { subjects: available.slice(start, start + pageSize), nextCursor: start + pageSize < available.length ? String(start + pageSize) : null };
   }) };
   const gateway: WalkGateway = {
-    gatherIssue: async ({ id }) => read(`issue:${id}`, () => {
+    gatherIssue: async ({ id, number }) => read(`issue:${id}`, () => {
+      lookups.push({ kind: "issue", id, number });
       counts.set(id, (counts.get(id) ?? 0) + 1);
       const result = structuredClone(issues.get(id) ?? null);
       afterGather(id);
       return result;
+    }),
+    getPullRequest: async ({ id, number }) => read(`pull_request:${id}`, () => {
+      lookups.push({ kind: "pull_request", id, number });
+      return pullRequests.get(id) ?? null;
     }),
     getPullRequestClosingIssues: async ({ id }) => read(`closing:${id}`, () => []),
     getPullRequestReviews: async ({ id }) => read(`reviews:${id}`, () => []),
@@ -81,6 +88,6 @@ export function fixture(subjects: WalkSubject[], pageSize = 100) {
     return withSweepPass(pass, () => withSweepRequestBudget(async () => spent++ < budget ? null : instant(10000),
       () => walkReconciliation({ pass, listing: driver, gateway, repository, onDiscard: async (entry) => { discarded.push(entry); } })));
   };
-  return { pass, live, issues, counts, listed, listing, gateway, repository, requests, discarded, window,
+  return { pass, live, issues, pullRequests, lookups, counts, listed, listing, gateway, repository, requests, discarded, window,
     onGather: (callback: (id: number) => void) => { afterGather = callback; }, read };
 }

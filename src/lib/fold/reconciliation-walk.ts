@@ -11,6 +11,8 @@ export type { WalkListingDriver } from "@/lib/fold/reconciliation-walk-listing";
 export type WalkGateway = {
   /** Read the complete opening evidence and closing references, including timeline witnesses and targeted rereads. */
   gatherIssue(subject: GitHubSubject): Promise<GitHubIssue | null>;
+  /** Fresh identity-checked PR read; null means definitive absence. */
+  getPullRequest(subject: GitHubSubject): Promise<GitHubSubject | null>;
   getPullRequestClosingIssues(subject: GitHubSubject): Promise<GitHubIssueReference[]>;
   getPullRequestReviews(subject: GitHubSubject): Promise<GitHubPullRequestReview[]>;
   getPullRequestDiff(subject: GitHubSubject): Promise<string>;
@@ -25,8 +27,10 @@ export type ReconciliationWalkInput = {
 };
 
 type PrEvidence = { reviews: GitHubPullRequestReview[]; rawDiff: string };
-type RefreshedPr = { refreshed: true; evidence: PrEvidence | null; missing: boolean; listed: boolean };
-type StagedPayload = GitHubIssue | PrEvidence | RefreshedPr | null;
+type StagedSubject = { subject: GitHubSubject };
+type StagedPr = StagedSubject & { evidence: PrEvidence | null };
+type RefreshedPr = StagedPr & { refreshed: true; missing: boolean; listed: boolean };
+type StagedPayload = GitHubIssue | StagedSubject | StagedPr | RefreshedPr;
 export type WalkIssue = Omit<GitHubIssue, "closingPullRequests"> & {
   closingPullRequests: Array<GitHubPullRequest & PrEvidence>;
 };
@@ -44,7 +48,8 @@ export function walkReconciliation(input: ReconciliationWalkInput): Promise<Comp
 
 async function walk({ pass, listing, gateway, repository, onDiscard }: ReconciliationWalkInput): Promise<CompletedReconciliationWalk> {
   const staged = new Map((await pass.readStaged()).map((row) => [rowKey(row.kind, row.subjectKey), row]));
-  const issues = () => [...staged.values()].flatMap((row) => row.kind === "issue" && row.payload !== null ? [row.payload as GitHubIssue] : []);
+  const issues = () => [...staged.values()].flatMap((row) => row.kind === "issue" && row.payload !== null
+    && typeof row.payload === "object" && "number" in row.payload ? [row.payload as GitHubIssue] : []);
   const referenced = (facts: GitHubIssue[]) => facts.flatMap((issue) => issue.closingPullRequests).filter((pr) =>
     (pr.state === "CLOSED" || (pr.state === "MERGED" && pr.mergedAt !== null)) && belongsToRegisteredRepository(repository, pr));
   const discard = async (error: unknown, kind: WalkSubject["kind"], subject: GitHubSubject, disputed = false, closing = false) => {
@@ -58,14 +63,19 @@ async function walk({ pass, listing, gateway, repository, onDiscard }: Reconcili
     await pass.stage({ anchor, ...row });
     staged.set(rowKey(row.kind, row.subjectKey), row);
   };
-  const gatherIssue = async (subject: GitHubSubject, anchor: string, updatedAt?: Date) => {
-    let issue: GitHubIssue | null;
-    try { issue = sanitizeForgeStrings(await gateway.gatherIssue(subject)); }
-    catch (error) { await discard(error, "issue", subject); issue = null; }
+  const stageIssue = async (subject: GitHubSubject, anchor: string, issue: GitHubIssue | null, updatedAt?: Date) => {
+    issue = sanitizeForgeStrings(issue);
     if (issue?.openingEvidenceUnreadable || issue?.closingPullRequestsUnreadable) {
       await onDiscard?.({ kind: "issue", subject, reason: "UNREADABLE_FIELD" });
     }
-    await stage(anchor, { ...subject, kind: "issue", updatedAt: updatedAt ?? new Date(issue?.updatedAt ?? pass.scanStartedAt) }, issue);
+    await stage(anchor, { ...subject, kind: "issue", updatedAt: updatedAt ?? new Date(issue?.updatedAt ?? pass.scanStartedAt) },
+      issue ?? { subject: { id: subject.id, number: subject.number } });
+  };
+  const gatherIssue = async (subject: GitHubSubject, anchor: string, updatedAt?: Date) => {
+    let issue: GitHubIssue | null;
+    try { issue = await gateway.gatherIssue(subject); }
+    catch (error) { await discard(error, "issue", subject); issue = null; }
+    await stageIssue(subject, anchor, issue, updatedAt);
   };
   const readEvidence = async (subject: GitHubSubject, disputed = false): Promise<{ evidence: PrEvidence | null; missing: boolean }> => {
     try {
@@ -89,7 +99,7 @@ async function walk({ pass, listing, gateway, repository, onDiscard }: Reconcili
     // Related reads cannot move a listing anchor past subjects its stream has not visited.
     for (const issue of affected.values()) await gatherIssue(issue, "repair");
     const { evidence } = await readEvidence(subject, repository.disputePullRequests.some((pr) => pr.id === subject.id));
-    await stage(anchor, subject, evidence);
+    await stage(anchor, subject, { subject: { id: subject.id, number: subject.number }, evidence });
   };
   await visitWalkListing(listing, pass.walkAnchors(), async (subject, anchor) => {
     const saved = pass.walkAnchors()[anchor];
@@ -107,8 +117,26 @@ async function walk({ pass, listing, gateway, repository, onDiscard }: Reconcili
   const refreshTargets = new Set([...referenced(issues().filter((issue) => listed.has(rowKey("issue", issue.id)))),
     ...repository.disputePullRequests].map(({ id }) => id));
   // References/disputes may name an unlisted PR; retain its completed refresh outcome for resume.
-  const absent = [...staged.values()].filter((row) => !listed.has(rowKey(row.kind, row.subjectKey))
+  const omitted = [...staged.values()].filter((row) => !listed.has(rowKey(row.kind, row.subjectKey))
     && !(row.kind === "pull_request" && refreshTargets.has(row.subjectKey) && isRefreshedPr(row.payload) && !row.payload.listed));
+  const absent: typeof omitted = [];
+  // The rare pagination-drift set costs one fresh, kind-aware lookup per omitted row.
+  for (const row of omitted) {
+    const subject = stagedIdentity(row.payload);
+    let fact: GitHubIssue | GitHubSubject | null;
+    try {
+      fact = row.kind === "issue" ? await gateway.gatherIssue(subject) : await gateway.getPullRequest(subject);
+    } catch (error) {
+      if (walkSubjectDiscardReason(error, row.kind, true, false) !== "NOT_FOUND") throw error;
+      fact = null;
+    }
+    if (fact === null) { absent.push(row); continue; }
+    const observed: WalkSubject = { ...subject, kind: row.kind,
+      updatedAt: row.kind === "issue" ? new Date((fact as GitHubIssue).updatedAt) : row.updatedAt };
+    if (row.kind === "issue") await stageIssue(subject, "repair", fact as GitHubIssue);
+    else await gather(observed, "repair");
+    listed.set(rowKey(row.kind, row.subjectKey), observed);
+  }
   await pass.deleteStaged(absent.map(({ kind, subjectKey }) => ({ kind, subjectKey })));
   for (const row of absent) staged.delete(rowKey(row.kind, row.subjectKey));
   for (const [key, subject] of listed) {
@@ -128,7 +156,7 @@ async function walk({ pass, listing, gateway, repository, onDiscard }: Reconcili
     if (anchor !== undefined && compareSubject(pr, anchor) <= 0 && isRefreshedPr(previous)) {
       refreshed = previous;
     } else {
-      refreshed = { refreshed: true, listed: listed.has(rowKey("pull_request", pr.id)),
+      refreshed = { subject: { id: pr.id, number: pr.number }, refreshed: true, listed: listed.has(rowKey("pull_request", pr.id)),
         ...await readEvidence(retained.get(pr.id)!, repository.disputePullRequests.some((dispute) => dispute.id === pr.id)) };
       await stage("refresh", pr, refreshed);
     }
@@ -145,6 +173,13 @@ async function walk({ pass, listing, gateway, repository, onDiscard }: Reconcili
 }
 
 function rowKey(kind: WalkSubject["kind"], id: number): string { return `${kind}:${id}`; }
+function stagedIdentity(payload: unknown): GitHubSubject {
+  const value = payload !== null && typeof payload === "object" && "subject" in payload ? payload.subject : payload;
+  if (value === null || typeof value !== "object" || !("id" in value) || !("number" in value)
+    || typeof value.id !== "number" || !Number.isSafeInteger(value.id)
+    || typeof value.number !== "number" || !Number.isSafeInteger(value.number)) throw new Error("Staged subject identity is unavailable.");
+  return { id: value.id, number: value.number };
+}
 function isRefreshedPr(payload: unknown): payload is RefreshedPr {
   return payload !== null && typeof payload === "object" && "refreshed" in payload && payload.refreshed === true;
 }
