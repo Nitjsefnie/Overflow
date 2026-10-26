@@ -150,6 +150,26 @@ describe("GitHubGateway connection node guards", () => {
     );
   });
 
+  // A dismissal event whose `review` object is null carries no dismissal data:
+  // the `?.` in `node.review?.databaseId == null` skips it without a throw and
+  // the review still maps with no dismissal attached.
+  it("skips a dismissed review whose review object is null", async () => {
+    const gateway = gatewayAnswering((operation) => operation === "PullRequestReviewDismissals"
+      ? { repository: { pullRequest: { timelineItems: page([{
+          __typename: "ReviewDismissedEvent",
+          createdAt: "2026-09-04T12:00:00.000Z",
+          previousReviewState: "CHANGES_REQUESTED",
+          review: null,
+        }]) } } }
+      : { repository: { pullRequest: { reviews: page([
+          { databaseId: 301, state: "APPROVED", submittedAt: "2026-09-04T12:00:00.000Z" },
+        ]) } } });
+
+    await expect(gateway.getPullRequestReviews(repository, 7)).resolves.toEqual([
+      { id: 301, state: "APPROVED", submittedAt: "2026-09-04T12:00:00.000Z", dismissal: null },
+    ]);
+  });
+
   it("refuses a null issues.nodes list naming the field", async () => {
     const gateway = gatewayAnswering(() => ({
       repository: { issues: { nodes: null, pageInfo: { hasNextPage: false, endCursor: null } } },
