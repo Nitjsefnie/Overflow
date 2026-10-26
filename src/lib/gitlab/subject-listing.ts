@@ -12,11 +12,9 @@ export type GitLabSubjectsPageOptions = {
 };
 type SubjectRow = { id: number; iid: number; updated_at: string };
 
-/** Reads one raw sorted page through the budget-checked request dependency.
- * The caller visits the whole page with staging-aware deduplication, re-anchors,
- * drains the timestamp slice, and continues through window-local offset pages.
- * CollectionWalkBound caps that slice/continuation shortcut; this reader applies no prefix filter.
- * This module persists no state; page is window-local and must never be persisted across windows.
+/** Reads one sorted raw page; the caller visits every row with staging-aware deduplication.
+ * CollectionWalkBound caps its timestamp slice and local offset continuation.
+ * This reader persists no state; page is window-local.
  */
 export async function listGitLabSubjectsPage(
   deps: { request(path: string): Promise<GitLabRestResponse> },
