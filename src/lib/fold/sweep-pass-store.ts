@@ -97,8 +97,9 @@ export class PostgresSweepPassStore {
               ${JSON.stringify(input.payload)}::text::jsonb)
             on conflict (pass_id, kind, subject_key) do update
               set updated_at = excluded.updated_at, payload = excluded.payload`;
+          // Concurrent staging inserts already hold FK key-share locks on this pass.
           const [pass] = await transaction<{ walk_anchors: unknown }[]>`select walk_anchors
-            from reconciliation_sweep_passes where pass_id = ${row.pass_id} for update`;
+            from reconciliation_sweep_passes where pass_id = ${row.pass_id} for no key update`;
           let next = parseWalkAnchors(pass!.walk_anchors);
           const previous = Object.hasOwn(next, input.anchor) ? next[input.anchor] : undefined;
           if (previous === undefined || input.updatedAt.getTime() > previous.updatedAt.getTime()
