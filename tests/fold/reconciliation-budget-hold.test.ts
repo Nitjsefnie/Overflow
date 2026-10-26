@@ -154,6 +154,10 @@ describe("reconciliation budget holds under the repository lock", () => {
     f.fold.sweep = {
       spend: async () => ++requests <= 2 ? null : resetAt,
       openPass: async (input) => ({ ...input, id: "pass-1", read: async () => undefined,
+        walkAnchors: () => { throw new Error("Unexpected sweep walk anchors"); },
+        stage: async () => { throw new Error("Unexpected sweep walk staging"); },
+        readStaged: async () => { throw new Error("Unexpected staged read"); },
+        deleteStaged: async () => { throw new Error("Unexpected staged deletion"); },
         write: async () => {}, complete: async () => {} }),
       discardPass: async () => {},
     };
@@ -1063,6 +1067,10 @@ describe("the sweep request budget binds only the folds that run under it", () =
   const sweepControl = (spend: (sponsorId: string) => Promise<Date | null>): ReconciliationSweepControl => ({
     spend,
     openPass: async (input) => ({
+      walkAnchors: () => { throw new Error("Unexpected sweep walk anchors"); },
+      stage: async () => { throw new Error("Unexpected sweep walk staging"); },
+      readStaged: async () => { throw new Error("Unexpected staged read"); },
+      deleteStaged: async () => { throw new Error("Unexpected staged deletion"); },
       ...input, id: "pass-1", read: async () => undefined, write: async () => {}, complete: async () => {},
     }),
     discardPass: async () => {},
@@ -1185,6 +1193,10 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
   const sweepControl = (spend: (sponsorId: string) => Promise<Date | null>): ReconciliationSweepControl => ({
     spend,
     openPass: async (input) => ({
+      walkAnchors: () => { throw new Error("Unexpected sweep walk anchors"); },
+      stage: async () => { throw new Error("Unexpected sweep walk staging"); },
+      readStaged: async () => { throw new Error("Unexpected staged read"); },
+      deleteStaged: async () => { throw new Error("Unexpected staged deletion"); },
       ...input, id: "pass-1", read: async () => undefined, write: async () => {}, complete: async () => {},
     }),
     discardPass: async () => {},

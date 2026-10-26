@@ -17,6 +17,10 @@ export type SweepPass = {
   dirtySubjects: DirtyReconciliationSubject[];
   read(key: string): Promise<unknown | undefined>;
   write(key: string, payload: unknown, cursor?: string | null): Promise<void>;
+  walkAnchors(): Readonly<Record<string, { updatedAt: Date; key: number } | undefined>>;
+  stage(input: { anchor: string; kind: "issue" | "pull_request"; subjectKey: number; updatedAt: Date; payload: unknown }): Promise<void>;
+  readStaged(): Promise<Array<{ kind: "issue" | "pull_request"; subjectKey: number; updatedAt: Date; payload: unknown }>>;
+  deleteStaged(keys: ReadonlyArray<{ kind: "issue" | "pull_request"; subjectKey: number }>): Promise<void>;
   complete(): Promise<void>;
 };
 export type SweepPassInput = {

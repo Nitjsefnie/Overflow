@@ -65,7 +65,6 @@ describe("initial PostgreSQL materialization", () => {
     const rows = await sql<{ table_name: string }[]>`
       select table_name from information_schema.tables where table_schema = 'public'
     `;
-
     for (const table of [
       "users",
       "registered_repositories",
@@ -82,6 +81,7 @@ describe("initial PostgreSQL materialization", () => {
       "moderation_events",
       "settlement_override_requests",
       "api_tokens",
+      "reconciliation_sweep_walk_subjects",
     ]) {
       expect(rows.some((row) => row.table_name === table)).toBe(true);
     }
