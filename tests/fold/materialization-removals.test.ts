@@ -394,6 +394,99 @@ describe("a reconciliation that deletes materialized rows says so", () => {
     }
   });
 
+  it("keeps an issue whose opening evidence is unreadable out of the fold without deleting its stored row", async () => {
+    const sponsorLogin = "removal-sponsor-six";
+    const contributorLogin = "removal-contributor-six";
+    const contributorGitHubUserId = 9_300_009;
+    await insertUser(contributorLogin, contributorGitHubUserId);
+    const { repositoryId, store, ownerName } = await registerRepository({
+      githubRepositoryId: 9_200_011,
+      ownerName: "example/unreadable-opening",
+      githubWebhookId: 9_200_012,
+      sponsorLogin,
+      sponsorGitHubUserId: 9_300_010,
+    });
+    const closingPullRequest = mergedPullRequest({
+      id: 9_100_009,
+      number: 41,
+      ownerName,
+      githubRepositoryId: 9_200_011,
+      authorLogin: contributorLogin,
+      authorGitHubUserId: contributorGitHubUserId,
+    });
+    const issueWithClosing: GitHubIssue = {
+      ...openIssue({ id: 9_100_010, number: 11, ownerName, ownerLogin: sponsorLogin }),
+      state: "CLOSED",
+      claimAssigneeGitHubLogin: contributorLogin,
+      closingPullRequests: [closingPullRequest],
+    };
+    let issues: GitHubIssue[] = [issueWithClosing];
+    const github = gateway(ownerName, () => issues);
+
+    await reconcile(store, github, repositoryId);
+    await expect(materializedIssueIds(repositoryId)).resolves.toEqual([9_100_010]);
+    await expect(materializedSettlementIssueIds(repositoryId)).resolves.toEqual([9_100_010]);
+
+    // The walk cannot read the issue's opening evidence: the fold prices
+    // nothing for it, and the kept-set carve-out preserves the stored row the
+    // fold's missing FoldIssue would otherwise erase.
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      issues = [{
+        ...issueWithClosing,
+        labels: [],
+        history: [],
+        comments: [],
+        closingPullRequests: [],
+        openingEvidenceUnreadable: true,
+      }];
+      const second = await reconcile(store, github, repositoryId);
+
+      await expect(materializedIssueIds(repositoryId)).resolves.toEqual([9_100_010]);
+      await expect(materializedSettlementIssueIds(repositoryId)).resolves.toEqual([]);
+      await expect(storedViolationCodes(repositoryId)).resolves.toEqual([]);
+      expect(errorLog).toHaveBeenCalledWith(
+        `Reconciliation of repository ${repositoryId} discarded unresolvable subject kind=ISSUE number=11 reason=UNREADABLE_FIELD`,
+      );
+      expect(await removalChanges(second.runId)).toEqual([
+        {
+          entity_kind: "PULL_REQUEST",
+          change_kind: "REMOVE",
+          pull_request_id: null,
+          before_state: {
+            githubPullRequestId: 9_100_009,
+            pullRequestNumber: 41,
+            title: "A merged pull request 41",
+            url: "https://github.com/example/unreadable-opening/pull/41",
+            state: "MERGED",
+            authorGitHubLogin: contributorLogin,
+            mergeCommitOid: (9_100_009).toString(16).padStart(40, "0"),
+            mergedAt: "2026-09-01T12:00:00.000Z",
+          },
+          after_state: null,
+        },
+        {
+          entity_kind: "SETTLEMENT",
+          change_kind: "REMOVE",
+          pull_request_id: null,
+          before_state: expect.objectContaining({
+            githubIssueId: 9_100_010,
+            githubPullRequestId: 9_100_009,
+          }),
+          after_state: null,
+        },
+      ]);
+
+      // When the evidence later reads, the issue prices again.
+      issues = [issueWithClosing];
+      const third = await reconcile(store, github, repositoryId);
+      await expect(materializedSettlementIssueIds(repositoryId)).resolves.toEqual([9_100_010]);
+      expect(await removalChanges(third.runId)).toEqual([]);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
   it("records no removal for a reconciliation that removes nothing", async () => {
     const { repositoryId, store, ownerName } = await registerRepository({
       githubRepositoryId: 9_200_005,
@@ -449,6 +542,14 @@ async function materializedPullRequestIds(repositoryId: string): Promise<number[
     where repository_id = ${repositoryId} order by github_pull_request_id asc
   `;
   return rows.map((row) => Number(row.github_pull_request_id));
+}
+
+async function storedViolationCodes(repositoryId: string): Promise<string[]> {
+  const rows = await sql<Array<{ violation: { code?: string } }>>`
+    select violation from repository_policy_violations
+    where repository_id = ${repositoryId} order by violation->>'code' asc
+  `;
+  return rows.map((row) => row.violation.code ?? "").sort();
 }
 
 async function materializedSettlementIssueIds(repositoryId: string): Promise<number[]> {

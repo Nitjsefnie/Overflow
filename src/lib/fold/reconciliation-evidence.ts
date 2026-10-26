@@ -124,6 +124,12 @@ export type ReconciliationSynchronization = {
   full: boolean;
   /** Fresh upstream reads still carry their body; retained cached issues do not. */
   issues: Array<GitHubIssue | NarrowedCachedIssue>;
+  /**
+   * GitHub ids of observed issues the fold excluded (opening evidence
+   * unreadable): deleteAbsentMaterialization keeps their stored rows beside
+   * its dispute carve-out instead of recording a removal.
+   */
+  keptIssueGitHubIds?: number[];
   pullRequests: ReconciliationPullRequestEvidence[];
   dirtySubjects: DirtyReconciliationSubject[];
 };

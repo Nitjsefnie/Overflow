@@ -50,6 +50,8 @@ export type GitHubIssue = {
   comments: GitHubIssueComment[];
   closingPullRequests: GitHubPullRequest[];
   closingPullRequestsUnreadable?: true;
+  /** The opening evidence (labels or timeline) could not be read this pass; never priced. */
+  openingEvidenceUnreadable?: true;
 };
 
 export type GitHubSubject = { id: number; number: number };
