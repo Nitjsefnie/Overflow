@@ -13,8 +13,9 @@ export type GitLabSubjectsPageOptions = {
 type SubjectRow = { id: number; iid: number; updated_at: string };
 
 /** Reads one raw sorted page through the budget-checked request dependency.
- * The caller owns strict-prefix filtering on full pages, re-anchoring, the
- * timestamp-slice drain, post-slice offset continuation, and skipping staged rows.
+ * The caller visits the whole page with staging-aware deduplication, re-anchors,
+ * drains the timestamp slice, and continues through window-local offset pages.
+ * CollectionWalkBound caps that slice/continuation shortcut; this reader applies no prefix filter.
  * This module persists no state; page is window-local and must never be persisted across windows.
  */
 export async function listGitLabSubjectsPage(

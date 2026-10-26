@@ -1,4 +1,5 @@
-import { expect, it } from "vitest";
+import { disappearingGitLabFixture } from "../support/reconciliation-walk-gitlab";
+import { expect, it, vi } from "vitest";
 import { GitLabGateway } from "@/lib/gitlab/client";
 import { memoryPass } from "./reconciliation-walk-fixture";
 
@@ -43,4 +44,37 @@ it("gathers GitLab issue evidence and MR evidence and binds the kind-aware absen
   expect(result.pullRequests).toEqual([{ id: 901, reviews: [], rawDiff: "gitlab diff" }]);
   expect(paths).toContain("/merge_requests/7");
   expect(paths).not.toContain("/issues/7");
+});
+
+it.each(["closing", "diff"] as const)("completes when an ordinary MR disappears during %s", async (phase) => {
+  const f = disappearingGitLabFixture(phase);
+  const pass = memoryPass();
+  const onDiscard = vi.fn(async () => {});
+  const result = await f.gateway.walkReconciliation(reference, {
+    pass, repository: { githubRepositoryId: 42, disputePullRequests: [] }, onDiscard,
+  });
+  expect(result.status).toBe("completed");
+  expect(result.issues.map(({ id }) => id)).toEqual([101]);
+  expect(result.pullRequests).toEqual([]);
+  expect(onDiscard).toHaveBeenCalledWith({ kind: "pull_request", subject: expect.objectContaining({ id: 901, number: 7 }), reason: "NOT_FOUND" });
+  expect(f.paths).toContain("/merge_requests/7");
+  expect(pass.complete).not.toHaveBeenCalled();
+});
+
+it.each(["closing", "diff"] as const)("rejects an unavailable %s endpoint while the MR remains readable", async (phase) => {
+  const f = disappearingGitLabFixture(phase, { reachable: true });
+  const onDiscard = vi.fn(async () => {});
+  await expect(f.gateway.walkReconciliation(reference, {
+    pass: memoryPass(), repository: { githubRepositoryId: 42, disputePullRequests: [] }, onDiscard,
+  })).rejects.toThrow();
+  expect(onDiscard).not.toHaveBeenCalled();
+});
+
+it.each([401, 403, 429, 503, 0])("propagates MR read failure status %s without discarding", async (status) => {
+  const f = disappearingGitLabFixture("diff", { status });
+  const onDiscard = vi.fn(async () => {});
+  await expect(f.gateway.walkReconciliation(reference, {
+    pass: memoryPass(), repository: { githubRepositoryId: 42, disputePullRequests: [] }, onDiscard,
+  })).rejects.toMatchObject({ status });
+  expect(onDiscard).not.toHaveBeenCalled();
 });

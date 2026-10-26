@@ -1,3 +1,4 @@
+import { GitLabApiError } from "@/lib/gitlab/api-error";
 import { walkSubjectDiscardReason } from "@/lib/fold/reconciliation-walk-discard";
 import type { GitHubGateway, GitHubIssueListOptions } from "@/lib/github/client";
 import type { GitLabGateway } from "@/lib/gitlab/client";
@@ -48,9 +49,22 @@ export async function walkGitHubReconciliation(
 }
 
 export function walkGitLabReconciliation(gitlab: GitLabGateway, reference: GitHubRepositoryReference, input: ForgeWalkInput) {
+  const reads = pullRequestReads(gitlab, reference);
+  const readSubject = async <T>(subject: GitHubSubject, read: () => Promise<T>): Promise<T> => {
+    try { return await read(); }
+    catch (error) {
+      if (!(error instanceof GitLabApiError) || error.status !== 404) throw error;
+      // An unsupported evidence endpoint can also answer 404; confirm the MR itself is gone.
+      if (await reads.getPullRequest(subject) === null) throw error;
+      throw new Error("GitLab merge request evidence was unavailable for a readable merge request.", { cause: error });
+    }
+  };
   return walkReconciliation({ ...input,
     listing: { kind: "timestamp", listPage: (options) => gitlab.listSubjectsPage(reference, options) },
-    gateway: { ...pullRequestReads(gitlab, reference), gatherIssue: (subject) => gitlab.getIssue(reference, subject) },
+    gateway: { ...reads, gatherIssue: (subject) => gitlab.getIssue(reference, subject),
+      getPullRequestClosingIssues: (subject) => readSubject(subject, () => reads.getPullRequestClosingIssues(subject)),
+      getPullRequestDiff: (subject) => readSubject(subject, () => reads.getPullRequestDiff(subject)),
+    },
   });
 }
 
