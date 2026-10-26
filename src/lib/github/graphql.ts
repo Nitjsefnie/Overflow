@@ -274,6 +274,9 @@ export async function collectCursorPages<TNode>(
 
   do {
     const page = await getPage(cursor);
+    if (page == null) {
+      throw new Error(`GitHub GraphQL response was invalid. ${fieldPath.replace(/\.nodes$/, "")} was null.`);
+    }
     nodes.push(...requireConnectionNodes<TNode>(fieldPath, page.nodes));
 
     if (!page.pageInfo.hasNextPage) {

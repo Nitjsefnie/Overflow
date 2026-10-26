@@ -88,6 +88,16 @@ describe("GitHubGateway connection node guards", () => {
     );
   });
 
+  it("refuses a null closingIssuesReferences connection naming the field", async () => {
+    const gateway = gatewayAnswering(() => ({ repository: { pullRequest: {
+      databaseId: 9001,
+      closingIssuesReferences: null,
+    } } }));
+    await expect(gateway.getPullRequestClosingIssues(repository, { id: 9001, number: 7 })).rejects.toThrow(
+      "GitHub GraphQL response was invalid. closingIssuesReferences was null.",
+    );
+  });
+
   it("refuses a closing issue whose nested repository is null naming the field", async () => {
     const gateway = gatewayAnswering(() => ({ repository: { pullRequest: {
       databaseId: 9001,
@@ -104,6 +114,13 @@ describe("GitHubGateway connection node guards", () => {
     } } }));
     await expect(gateway.getIssueClosingPullRequests(repository, 3)).rejects.toThrow(
       "GitHub GraphQL response was invalid. closedByPullRequestsReferences.nodes contained a null entry.",
+    );
+  });
+
+  it("refuses a null closedByPullRequestsReferences connection naming the field", async () => {
+    const gateway = gatewayAnswering(() => ({ repository: { issue: { closedByPullRequestsReferences: null } } }));
+    await expect(gateway.getIssueClosingPullRequests(repository, 3)).rejects.toThrow(
+      "GitHub GraphQL response was invalid. closedByPullRequestsReferences was null.",
     );
   });
 
@@ -145,12 +162,30 @@ describe("GitHubGateway connection node guards", () => {
     );
   });
 
+  it("refuses a null labels connection embedded in the issue page naming the field", async () => {
+    const gateway = gatewayAnswering((operation) => operation === "RepositoryIssues"
+      ? { repository: { issues: page([issueNode({ labels: null })]) } }
+      : { repository: { issue: { timelineItems: page([]) } } });
+    await expect(gateway.listIssues(repository)).rejects.toThrow(
+      "GitHub GraphQL response was invalid. labels was null.",
+    );
+  });
+
   it("refuses a null review entry naming the field", async () => {
     const gateway = gatewayAnswering((operation) => operation === "PullRequestReviewDismissals"
       ? { repository: { pullRequest: { timelineItems: page([]) } } }
       : { repository: { pullRequest: { reviews: page([null]) } } });
     await expect(gateway.getPullRequestReviews(repository, 7)).rejects.toThrow(
       "GitHub GraphQL response was invalid. reviews.nodes contained a null entry.",
+    );
+  });
+
+  it("refuses a null reviews connection naming the field", async () => {
+    const gateway = gatewayAnswering((operation) => operation === "PullRequestReviewDismissals"
+      ? { repository: { pullRequest: { timelineItems: page([]) } } }
+      : { repository: { pullRequest: { reviews: null } } });
+    await expect(gateway.getPullRequestReviews(repository, 7)).rejects.toThrow(
+      "GitHub GraphQL response was invalid. reviews was null.",
     );
   });
 
