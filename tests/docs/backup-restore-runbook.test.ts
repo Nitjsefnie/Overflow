@@ -18,14 +18,7 @@ const runbookExists = existsSync(runbookPath);
 const source = runbookExists ? readFileSync(runbookPath, "utf8") : "";
 const runbookLines = source.split("\n");
 
-/**
- * The document title and the lettered sections, literally and in order. The
- * letters are anchors other documents link by (OPERATING.md and
- * decommission.md link (d) and (e)), so the letters are load-bearing: a
- * renumbering breaks links this file's own resolution check cannot see, and a
- * rewording changes an anchor under a link that was never re-read. A new
- * section takes the next letter; this list moves with it in the same change.
- */
+/** Lettered sections are link anchors; additions keep the existing order. */
 const title = "# Backing up and restoring the Overflow database";
 const sectionHeadings = [
   "## (a) What is backed up",
