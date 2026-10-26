@@ -23,9 +23,12 @@ export type IssueClosingPullRequestsRead = {
   closingPullRequestsUnreadable?: true;
 };
 
+/** The GraphQL field path whose unreadable read marks exactly one issue. */
+export const CLOSING_PULL_REQUESTS_FIELD_PATH = "closedByPullRequestsReferences.nodes";
+
 export function readIssueClosingPullRequests(read: Promise<GitHubPullRequest[]>): Promise<IssueClosingPullRequestsRead> {
   return read.then((closingPullRequests) => ({ closingPullRequests }), (error: unknown) => {
-    if (error instanceof GitHubGraphqlInvalidResponseError && error.fieldPath === "closedByPullRequestsReferences.nodes") {
+    if (error instanceof GitHubGraphqlInvalidResponseError && error.fieldPath === CLOSING_PULL_REQUESTS_FIELD_PATH) {
       return { closingPullRequests: [], closingPullRequestsUnreadable: true };
     }
     throw error;

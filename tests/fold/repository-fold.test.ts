@@ -26,6 +26,66 @@ describe("foldRepository", () => {
     expect(foldRepository(snapshot).unwritableClosures).toEqual([]);
   });
 
+  it("prices nothing for a closed issue whose closing connection was unreadable and prices a sibling normally", () => {
+    const snapshot = outsiderFixture();
+    // The sibling keeps the healthy closing evidence the marked issue never
+    // got, so a fold that priced the marked issue from its empty connection
+    // would also have to drop the sibling's settlement to pass.
+    const healthy = snapshot.issues[0]!;
+    snapshot.issues = [
+      healthy,
+      {
+        ...healthy,
+        id: 103,
+        number: 3,
+        title: "Unreadable closure",
+        url: "https://github.com/octo/example/issues/3",
+        closingPullRequests: [],
+        closingPullRequestsUnreadable: true as const,
+        history: healthy.history.map((event) => ({ ...event, id: `${event.id}-unreadable` })),
+        comments: healthy.comments.map((comment) => ({ ...comment, id: `${comment.id}-unreadable` })),
+      },
+    ];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 103,
+      kind: "CLOSING_EVIDENCE_UNREADABLE",
+      githubPullRequestId: null,
+      reason: "The closing pull request connection could not be read, so no settlement derives from closing evidence that was never read.",
+    }]);
+    expect(result.settlements.map((settlement) => settlement.githubIssueId)).toEqual([101]);
+    expect(result.issues.find((issue) => issue.githubIssueId === 103)).toMatchObject({
+      settledLabel: null,
+      settledPoints: null,
+      settledLabelEventId: null,
+    });
+    expect(result.issues.find((issue) => issue.githubIssueId === 101)).toMatchObject({
+      settledLabel: "delivered/6",
+      settledPoints: 6,
+    });
+  });
+
+  it("folds an open issue marked unreadable without a closure", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0] = {
+      ...snapshot.issues[0]!,
+      state: "OPEN",
+      closedAt: null,
+      closingPullRequests: [],
+      closingPullRequestsUnreadable: true as const,
+    };
+
+    const result = foldRepository(snapshot);
+
+    // No selection is made for an open issue, so the marker prices nothing
+    // extra and records nothing a moderator would act on.
+    expect(result.unwritableClosures).toEqual([]);
+    expect(result.settlements).toEqual([]);
+    expect(result.issues[0]).toMatchObject({ githubIssueId: 101, state: "OPEN" });
+  });
+
   it.each(["COMPLETED", "REOPENED", null])("records a missing closing PR for a closed issue with reason %s", (stateReason) => {
     const snapshot = outsiderFixture();
     snapshot.issues[0] = { ...snapshot.issues[0]!, stateReason, closingPullRequests: [] };

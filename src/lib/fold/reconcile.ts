@@ -8,7 +8,8 @@ import type { GitHubIssueListOptions } from "@/lib/github/client";
 import { DEFAULT_GRAPHQL_BUDGET_RESERVE, type GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
 import { withTransientRequestRetry } from "@/lib/fold/reconciliation-retry";
-import { GitHubApiError, GitHubGraphqlRequestError, findGitHubRateLimitError, githubRateLimitNotBefore, isGitHubSubjectNotFoundError, MAX_ERROR_CAUSE_READS } from "@/lib/github/errors";
+import { GitHubApiError, GitHubGraphqlInvalidResponseError, GitHubGraphqlRequestError, findGitHubRateLimitError, githubRateLimitNotBefore, isGitHubSubjectNotFoundError, MAX_ERROR_CAUSE_READS } from "@/lib/github/errors";
+import { CLOSING_PULL_REQUESTS_FIELD_PATH } from "@/lib/github/drain-issue-reads";
 import { GitHubResponseTooLargeError } from "@/lib/github/response-text";
 import { GitLabApiError } from "@/lib/gitlab/client";
 import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
@@ -386,6 +387,18 @@ async function reconcileRepositoryAfterRepositoryRead(
                 timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
               })).map((issue) => [issue.id, issue]));
               const retained = new Map((full ? [] : cached!.issues).map((issue) => [issue.id, issue]));
+              // The walk reports each issue whose closing-PR connection it could
+              // not read as closingPullRequestsUnreadable instead of failing;
+              // the issue still arrives, so its disposition is the per-subject
+              // discard: journal, drop its dirty row, and let the fold price it
+              // as an unreadable closure below.
+              const dirtyIssueSubjects = new Map(dirtySubjects
+                .filter(({ kind }) => kind === "ISSUE")
+                .map((subject) => [subject.id, subject]));
+              for (const issue of changed.values()) {
+                if (issue.closingPullRequestsUnreadable !== true) continue;
+                await discardUnresolvableSubject(null, "ISSUE", issue, dirtyIssueSubjects.get(issue.id), () => "UNREADABLE_FIELD");
+              }
               if (!full) {
                 const affected = new Map<number, GitHubSubject>();
                 for (const subject of dirtySubjects) {
@@ -408,9 +421,6 @@ async function reconcileRepositoryAfterRepositoryRead(
                     }
                   }
                 }
-                const dirtyIssueSubjects = new Map(dirtySubjects
-                  .filter(({ kind }) => kind === "ISSUE")
-                  .map((subject) => [subject.id, subject]));
                 for (const subject of affected.values()) {
                   if (changed.has(subject.id)) continue;
                   let issue: GitHubIssue | null;
@@ -425,7 +435,14 @@ async function reconcileRepositoryAfterRepositoryRead(
                   if (issue !== null) changed.set(issue.id, issue);
                 }
               }
-              for (const issue of changed.values()) retained.set(issue.id, issue);
+              // A walked issue marked unreadable keeps its cached shape when one
+              // exists, so its prior closing evidence and any settlement it
+              // carried re-derive unchanged; without a cached copy it folds as
+              // the marked fresh shape and prices nothing.
+              for (const issue of changed.values()) {
+                if (issue.closingPullRequestsUnreadable === true && retained.has(issue.id)) continue;
+                retained.set(issue.id, issue);
+              }
               const githubIssues = [...retained.values()];
               const pullRequestEvidence = new Map((full ? [] : cached!.pullRequests)
                 .map(({ id, reviews, rawDiff }) => [id, { reviews, rawDiff }]));
@@ -603,7 +620,7 @@ function carriesCredentialRejection(error: unknown): boolean {
 
 // The journal reason a durable per-subject failure class names when its subject
 // joins the discard arm; null means the failure keeps whole-run retry semantics.
-type SubjectDiscardReason = "NOT_FOUND" | "DIFF_TOO_LARGE" | "RESPONSE_TOO_LARGE";
+type SubjectDiscardReason = "NOT_FOUND" | "DIFF_TOO_LARGE" | "RESPONSE_TOO_LARGE" | "UNREADABLE_FIELD";
 
 // The reviews read is GraphQL, so a pull request deleted upstream answers
 // the flattened NOT_FOUND message the subject classifier matches; the diff
@@ -640,6 +657,9 @@ function disputePullRequestDiscardReason(error: unknown): SubjectDiscardReason |
 // Anything else keeps whole-run retry semantics.
 function issueDiscardReason(error: unknown): SubjectDiscardReason | null {
   if (error instanceof GitHubResponseTooLargeError) return "RESPONSE_TOO_LARGE";
+  if (error instanceof GitHubGraphqlInvalidResponseError && error.fieldPath === CLOSING_PULL_REQUESTS_FIELD_PATH) {
+    return "UNREADABLE_FIELD";
+  }
   return isGitHubSubjectNotFoundError(error)
     || (error instanceof GitHubApiError && error.status === 404)
     || (error instanceof GitLabApiError && error.status === 404)

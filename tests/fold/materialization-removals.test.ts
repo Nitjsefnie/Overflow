@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -21,6 +21,8 @@ const withdrawnPullRequestGitHubId = 9_100_003;
 const survivingIssueGitHubId = 9_100_004;
 const retiredIssueGitHubId = 9_100_005;
 const retiredPullRequestGitHubId = 9_100_006;
+const unreadableIssueGitHubId = 9_100_007;
+const unreadablePullRequestGitHubId = 9_100_008;
 
 type ChangeRow = {
   entity_kind: string;
@@ -285,6 +287,113 @@ describe("a reconciliation that deletes materialized rows says so", () => {
     expect({ removals: second.removals, removed: second.removed }).toEqual({ removals: 3, removed: 3 });
   });
 
+  it("keeps a marked issue's row and removes its settlement while the closing connection is unreadable", async () => {
+    const sponsorLogin = "removal-sponsor-five";
+    const contributorLogin = "removal-contributor-five";
+    const contributorGitHubUserId = 9_300_007;
+    await insertUser(contributorLogin, contributorGitHubUserId);
+    const { repositoryId, store, ownerName } = await registerRepository({
+      githubRepositoryId: 9_200_009,
+      ownerName: "example/unreadable-closing",
+      githubWebhookId: 9_200_010,
+      sponsorLogin,
+      sponsorGitHubUserId: 9_300_008,
+    });
+    const closingPullRequest = mergedPullRequest({
+      id: unreadablePullRequestGitHubId,
+      number: 31,
+      ownerName,
+      githubRepositoryId: 9_200_009,
+      authorLogin: contributorLogin,
+      authorGitHubUserId: contributorGitHubUserId,
+    });
+    const issueWithClosing: GitHubIssue = {
+      ...openIssue({ id: unreadableIssueGitHubId, number: 9, ownerName, ownerLogin: sponsorLogin }),
+      state: "CLOSED",
+      claimAssigneeGitHubLogin: contributorLogin,
+      closingPullRequests: [closingPullRequest],
+    };
+    let issues: GitHubIssue[] = [issueWithClosing];
+    const github = gateway(ownerName, () => issues);
+
+    await reconcile(store, github, repositoryId);
+    await expect(materializedIssueIds(repositoryId)).resolves.toEqual([unreadableIssueGitHubId]);
+    await expect(materializedSettlementIssueIds(repositoryId)).resolves.toEqual([unreadableIssueGitHubId]);
+
+    // The walk reports the closing connection unreadable: the fold prices
+    // nothing from it, but the issue itself stays in the fold input —
+    // synchronize deletes any issue absent from it — so the stored row keeps
+    // its place while the closing pull request, the settlement it carried and
+    // the closure's pull-request reference all record what happened.
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      issues = [{ ...issueWithClosing, closingPullRequests: [], closingPullRequestsUnreadable: true }];
+      const second = await reconcile(store, github, repositoryId);
+
+      await expect(materializedIssueIds(repositoryId)).resolves.toEqual([unreadableIssueGitHubId]);
+      await expect(materializedPullRequestIds(repositoryId)).resolves.toEqual([]);
+      await expect(materializedSettlementIssueIds(repositoryId)).resolves.toEqual([]);
+      await expect(closureKinds(repositoryId)).resolves.toEqual([
+        { kind: "CLOSING_EVIDENCE_UNREADABLE", pull_request_id: null },
+      ]);
+      expect(errorLog).toHaveBeenCalledWith(
+        `Reconciliation of repository ${repositoryId} discarded unresolvable subject kind=ISSUE number=9 reason=UNREADABLE_FIELD`,
+      );
+      const removals = await removalChanges(second.runId);
+      expect(removals).toEqual([
+        {
+          entity_kind: "PULL_REQUEST",
+          change_kind: "REMOVE",
+          pull_request_id: null,
+          before_state: {
+            githubPullRequestId: unreadablePullRequestGitHubId,
+            pullRequestNumber: 31,
+            title: "A merged pull request 31",
+            url: `https://github.com/example/unreadable-closing/pull/31`,
+            state: "MERGED",
+            authorGitHubLogin: contributorLogin,
+            mergeCommitOid: unreadablePullRequestGitHubId.toString(16).padStart(40, "0"),
+            mergedAt: "2026-09-01T12:00:00.000Z",
+          },
+          after_state: null,
+        },
+        {
+          entity_kind: "SETTLEMENT",
+          change_kind: "REMOVE",
+          pull_request_id: null,
+          before_state: expect.objectContaining({
+            githubIssueId: unreadableIssueGitHubId,
+            githubPullRequestId: unreadablePullRequestGitHubId,
+          }),
+          after_state: null,
+        },
+      ]);
+      expect({ removals: second.removals, removed: second.removed }).toEqual({ removals: 2, removed: 2 });
+
+      // When the connection later reads, the settlement re-derives and the
+      // moderator-facing closure row leaves with it.
+      issues = [issueWithClosing];
+      const third = await reconcile(store, github, repositoryId);
+
+      await expect(materializedSettlementIssueIds(repositoryId)).resolves.toEqual([unreadableIssueGitHubId]);
+      await expect(closureKinds(repositoryId)).resolves.toEqual([]);
+      expect(await removalChanges(third.runId)).toEqual([{
+        entity_kind: "UNWRITABLE_CLOSURE",
+        change_kind: "REMOVE",
+        pull_request_id: null,
+        before_state: {
+          githubIssueId: unreadableIssueGitHubId,
+          kind: "CLOSING_EVIDENCE_UNREADABLE",
+          githubPullRequestId: null,
+          reason: "The closing pull request connection could not be read, so no settlement derives from closing evidence that was never read.",
+        },
+        after_state: null,
+      }]);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
   it("records no removal for a reconciliation that removes nothing", async () => {
     const { repositoryId, store, ownerName } = await registerRepository({
       githubRepositoryId: 9_200_005,
@@ -340,6 +449,24 @@ async function materializedPullRequestIds(repositoryId: string): Promise<number[
     where repository_id = ${repositoryId} order by github_pull_request_id asc
   `;
   return rows.map((row) => Number(row.github_pull_request_id));
+}
+
+async function materializedSettlementIssueIds(repositoryId: string): Promise<number[]> {
+  const rows = await sql<{ github_issue_id: number | string }[]>`
+    select issues.github_issue_id from settlements
+    join issues on issues.id = settlements.issue_id
+    where issues.repository_id = ${repositoryId} order by issues.github_issue_id asc
+  `;
+  return rows.map((row) => Number(row.github_issue_id));
+}
+
+async function closureKinds(repositoryId: string): Promise<Array<{ kind: string; pull_request_id: string | null }>> {
+  return sql<Array<{ kind: string; pull_request_id: string | null }>>`
+    select unwritable_closures.kind::text as kind, unwritable_closures.pull_request_id
+    from unwritable_closures
+    join issues on issues.id = unwritable_closures.issue_id
+    where issues.repository_id = ${repositoryId} order by issues.github_issue_id asc
+  `;
 }
 
 async function registerRepository(input: {

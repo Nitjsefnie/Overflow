@@ -7,6 +7,13 @@ import { foldLedger, type LedgerEntry } from "@/lib/domain/ledger";
 import { calculateSettlement, type SettlementDecision } from "@/lib/domain/settlement";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
 import { countReviewRoundsAsOf } from "@/lib/fold/review-rounds";
+import {
+  evidenceWindowReachable,
+  parsedInstant,
+  rejectionReachable,
+  validTimestamp,
+  type RejectionReach,
+} from "@/lib/fold/evidence-window-reach";
 import type {
   GitHubIssue,
   GitHubIssueComment,
@@ -107,6 +114,8 @@ export type RepositoryFoldIssue = {
   /** Deliberately ignored: only GraphQL closedByPullRequestsReferences is authoritative. */
   restTimeline?: unknown;
   closingPullRequests: RepositoryFoldPullRequest[];
+  /** The closing-PR connection could not be read this pass; the fold prices nothing from it. */
+  closingPullRequestsUnreadable?: true;
 };
 
 /** A closing pull request, without the body text the fold never reads (issue 681). */
@@ -222,7 +231,8 @@ export type UnwritableClosure = {
   kind:
     | "NO_CLOSING_PULL_REQUEST"
     | "SETTLEMENT_EVIDENCE_REJECTED"
-    | "CROSS_REPOSITORY_CLOSING_PULL_REQUEST";
+    | "CROSS_REPOSITORY_CLOSING_PULL_REQUEST"
+    | "CLOSING_EVIDENCE_UNREADABLE";
   githubPullRequestId: number | null;
   reason: string;
 };
@@ -339,24 +349,6 @@ type SettledDifficultyEvidence = {
   rationaleActorLogin: string;
   rationaleCommentedAt: string;
 };
-
-/**
- * What decides whether a refused settlement is still worth a moderator's time.
- *
- * Most refusals describe an evidence window that has since shut, and outside
- * that window there is nothing left to produce. One does not: a sponsor with no
- * login is a fact about the account as it stands, and no window bounds fixing
- * it. The recording site cannot tell those apart from the reason sentence
- * without reading English, so the resolver states which it produced.
- *
- * `refusedEvidenceAt` is the settled label the resolver refused for landing
- * after the window closed, when there was one. It is the whole reason a stale
- * window can still be actionable: the label exists, it is just late, which is
- * the case the settlement-override path was built for.
- */
-type RejectionReach =
-  | { kind: "UNBOUNDED" }
-  | { kind: "WINDOW"; refusedEvidenceAt: string | null };
 
 type SettledDifficultyResolution =
   | { kind: "accepted"; evidence: SettledDifficultyEvidence }
@@ -480,6 +472,19 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     });
 
     if (issue.state !== "CLOSED") {
+      continue;
+    }
+
+    // The connection was never read, so no settlement derives from unread
+    // evidence and the reason names the repair (the next read), not a claim
+    // about the closure.
+    if (issue.closingPullRequestsUnreadable === true) {
+      unwritableClosures.push({
+        githubIssueId: issue.id,
+        kind: "CLOSING_EVIDENCE_UNREADABLE",
+        githubPullRequestId: null,
+        reason: "The closing pull request connection could not be read, so no settlement derives from closing evidence that was never read.",
+      });
       continue;
     }
 
@@ -742,49 +747,6 @@ function openingRefusal(candidates: OpeningLabelEvent[], sponsor: FoldUser): Ope
     // login is refused in the same words at both windows.
     reason: labelActorRejection("opening", attributable.label, attributable.actorLogin, sponsorLogin),
   };
-}
-
-/**
- * An unwritable closure is a work item for a moderator, so it is worth
- * recording only while the evidence it asks for could still be produced. A
- * settlement evidence window shuts fifteen minutes after the merge, and an
- * issue no pull request closed has only its own close; a window that shut
- * before Overflow was registered on the repository shut before anyone here
- * could have been asked to fill it, and no label applied today reopens it.
- *
- * Reachability is decided against the registration instant only. When that
- * instant is unreadable, or the closing instant is absent or unreadable,
- * nothing has been shown about the window, so the closure is recorded: leaving
- * a real work item visible is the recoverable mistake, and silently dropping
- * one is not.
- */
-function evidenceWindowReachable(windowClosedAt: number | null, registeredAtTime: number): boolean {
-  if (windowClosedAt === null || !Number.isFinite(registeredAtTime)) {
-    return true;
-  }
-  return windowClosedAt >= registeredAtTime;
-}
-
-/**
- * A refused settlement outlives its own window when the evidence it refused
- * arrived after the repository was registered: the settled label is there, it
- * merely landed late, and pricing it is exactly what the settlement-override
- * path does. Recording it is the only way a moderator ever sees it, so the
- * late evidence is checked even once the window itself is out of reach.
- */
-function rejectionReachable(
-  reach: RejectionReach,
-  windowClosedAt: number | null,
-  registeredAtTime: number,
-): boolean {
-  if (reach.kind === "UNBOUNDED") {
-    return true;
-  }
-  if (evidenceWindowReachable(windowClosedAt, registeredAtTime)) {
-    return true;
-  }
-  const refusedEvidenceAt = parsedInstant(reach.refusedEvidenceAt);
-  return refusedEvidenceAt !== null && refusedEvidenceAt >= registeredAtTime;
 }
 
 /**
@@ -1425,11 +1387,3 @@ function findDuplicatedDatabaseId(comments: GitHubIssueComment[]): number | unde
   return duplicated[0];
 }
 
-function validTimestamp(value: string | null): value is string {
-  return value !== null && Number.isFinite(Date.parse(value));
-}
-
-/** The instant as a moment, or null when GitHub reported none we can read. */
-function parsedInstant(value: string | null): number | null {
-  return validTimestamp(value) ? Date.parse(value) : null;
-}

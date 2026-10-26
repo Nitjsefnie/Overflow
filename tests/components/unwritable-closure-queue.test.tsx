@@ -385,6 +385,26 @@ describe("unwritable closure queue", () => {
     expect(within(entries[1]).getAllByRole("link")).toHaveLength(1);
     expect(within(entries[1]).getByText("No merged GitHub GraphQL closing pull request was found.")).toHaveClass("override-reason");
   });
+
+  it("displays a closure whose closing evidence was never read", () => {
+    const reason = "The closing pull request connection could not be read, so no settlement derives from closing evidence that was never read.";
+    render(<UnwritableClosureQueue closures={[closure({
+      kind: "CLOSING_EVIDENCE_UNREADABLE",
+      reason,
+      pullRequest: null,
+      settlementId: null,
+      settlementParties: null,
+    })]} />);
+
+    const entry = screen.getByRole("listitem");
+    // The moderation page renders the closure through its reason for every
+    // kind, so the new kind displays like its siblings: the reason is the
+    // visible record and no correction path is offered where nothing settled.
+    expect(within(entry).getByText(reason)).toHaveClass("override-reason");
+    expect(within(entry).getByRole("link", { name: /Repair the tide gate/ })).toBeVisible();
+    expect(within(entry).getByText("No settlement is materialized for this closure, so there is nothing to correct.")).toHaveClass("mono-meta");
+    expect(within(entry).queryByRole("link", { name: "Open the settlement to request a correction" })).toBeNull();
+  });
 });
 
 describe("self-worked closure in the queue", () => {
