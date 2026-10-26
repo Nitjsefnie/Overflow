@@ -15,7 +15,7 @@ import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import { CollectionWalkBound } from "@/lib/github/collection-walk-bound";
 import { drainIssueReads } from "@/lib/github/drain-issue-reads";
 import { githubWebhookEvents } from "@/lib/github/webhook-schema";
-import { collectCursorPages, GitHubGraphqlClient, requireConnectionNodes, type GitHubGraphqlPage } from "@/lib/github/graphql";
+import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
 import { checkGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
 import { boundedResponseText, GitHubResponseTooLargeError, MAX_SUCCESS_BODY_BYTES } from "@/lib/github/response-text";
