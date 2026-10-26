@@ -52,6 +52,9 @@ async function visitTimestampListing(
       for (const subject of slice.subjects) await visit(subject, collection);
       if (slice.exhausted) break;
     }
+    // Re-anchoring changes page membership: its first page may already contain newer rows.
+    page = await listing.listPage({ collection, updatedAfter: boundary });
+    if (page.exhausted || (page.nextAnchor !== null && compareTimestamps(page.nextAnchor, boundary) > 0)) continue;
     // Equal timestamps can fill the inclusive lower bound's first pages. Walk past them
     // using window-local offsets; the durable resume position remains the staged timestamp.
     for (let offset = 2; ; offset += 1) {

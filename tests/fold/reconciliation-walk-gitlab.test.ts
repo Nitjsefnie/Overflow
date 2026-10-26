@@ -20,6 +20,15 @@ function gitlab(f: ReturnType<typeof fixture>, pageSize = 100) {
 }
 
 describe("timestamp reconciliation listing driver", () => {
+  it("visits the first re-anchored page when timestamps advance between pages", async () => {
+    const f = fixture(Array.from({ length: 250 }, (_, i) => subject(i + 1)));
+    const gl = gitlab(f);
+    const result = await f.window(2000, gl.listing);
+    expect(result.issues).toHaveLength(250);
+    expect([...f.counts.keys()].sort((a, b) => a - b)).toEqual(Array.from({ length: 250 }, (_, i) => i + 1));
+    expect([...f.counts.values()]).toEqual(Array(250).fill(1));
+  });
+
   it("drains a timestamp slice over multiple pages before continuing past the tie", async () => {
     const f = fixture([subject(1), ...Array.from({ length: 205 }, (_, i) => subject(i + 2, "issue", 2)), subject(207, "issue", 3)]);
     const gl = gitlab(f);
