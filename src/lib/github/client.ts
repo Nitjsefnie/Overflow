@@ -15,7 +15,7 @@ import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import { CollectionWalkBound } from "@/lib/github/collection-walk-bound";
 import { drainIssueReads } from "@/lib/github/drain-issue-reads";
 import { githubWebhookEvents } from "@/lib/github/webhook-schema";
-import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
+import { collectCursorPages, GitHubGraphqlClient, requireConnectionNodes, type GitHubGraphqlPage } from "@/lib/github/graphql";
 import { checkGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
 import { boundedResponseText, GitHubResponseTooLargeError, MAX_SUCCESS_BODY_BYTES } from "@/lib/github/response-text";
@@ -147,7 +147,7 @@ export class GitHubGateway implements ForgeGateway {
     repository: GitHubRepositoryReference,
     options?: GitHubIssueListOptions,
   ): Promise<GitHubIssue[]> {
-    const nodes = await collectCursorPages((cursor) =>
+    const nodes = await collectCursorPages("issues.nodes", (cursor) =>
       this.getIssuesPage(repository, cursor, options?.since),
     );
     const unique = new Map<number | null, GitHubGraphqlIssueNode>();
@@ -165,8 +165,7 @@ export class GitHubGateway implements ForgeGateway {
       const [labels, timeline, closingPullRequests] = await drainIssueReads([
         this.getIssueLabels(repository, node.number, node.labels),
         this.getIssueTimeline(repository, node.number, targeted ? node.timelineItems : undefined),
-        this.getIssueClosingPullRequests(repository, node.number, node.closedByPullRequestsReferences),
-      ]);
+        this.getIssueClosingPullRequests(repository, node.number, node.closedByPullRequestsReferences)]);
       // Check both fully assembled connections. A nested timeline can claim it is
       // complete while omitting events or comments, even when totalCount agrees.
       const labeled = new Set(timeline.history.flatMap((event) => event.kind === "LABELED" ? [event.label] : []));
@@ -225,7 +224,7 @@ export class GitHubGateway implements ForgeGateway {
     repository: GitHubRepositoryReference,
     subject: GitHubSubject,
   ): Promise<GitHubIssueReference[]> {
-    const nodes = await collectCursorPages(async (cursor) => {
+    const nodes = await collectCursorPages("closingIssuesReferences.nodes", async (cursor) => {
       const data = await this.graphql.query<{
         repository: { pullRequest: { databaseId: number; closingIssuesReferences: GitHubGraphqlPage<{
           databaseId: number; number: number; repository: { databaseId: number };
@@ -237,6 +236,11 @@ export class GitHubGateway implements ForgeGateway {
       }
       return pullRequest.closingIssuesReferences;
     });
+    // A null entry was refused in the walk; the nested repository is read here,
+    // so a null one names its own field instead of a bare TypeError.
+    if (nodes.some((node) => node.repository == null)) {
+      throw new Error("GitHub GraphQL response was invalid. closingIssuesReferences.nodes.repository was null.");
+    }
     return nodes.map((node) => ({ id: node.databaseId, number: node.number, repositoryGitHubId: node.repository.databaseId }));
   }
 
@@ -245,7 +249,7 @@ export class GitHubGateway implements ForgeGateway {
     issueNumber: number,
     initialPage?: GitHubGraphqlPage<GitHubGraphqlPullRequestNode>,
   ): Promise<GitHubPullRequest[]> {
-    const nodes = await collectCursorPages((cursor) =>
+    const nodes = await collectCursorPages("closedByPullRequestsReferences.nodes", (cursor) =>
       cursor === null && initialPage !== undefined
         ? Promise.resolve(initialPage)
         : this.getClosingPullRequestsPage(repository, issueNumber, cursor),
@@ -258,9 +262,9 @@ export class GitHubGateway implements ForgeGateway {
     pullRequestNumber: number,
   ): Promise<GitHubPullRequestReview[]> {
     // Keep one HTTP request per reconciliation worker, including continuation pages.
-    const reviewNodes = await collectCursorPages((cursor) =>
+    const reviewNodes = await collectCursorPages("reviews.nodes", (cursor) =>
       this.getPullRequestReviewsPage(repository, pullRequestNumber, cursor));
-    const dismissalNodes = await collectCursorPages((cursor) =>
+    const dismissalNodes = await collectCursorPages("timelineItems.nodes", (cursor) =>
       this.getPullRequestReviewDismissalsPage(repository, pullRequestNumber, cursor));
     const dismissals = new Map<number, GitHubPullRequestReviewDismissal>();
     for (const node of dismissalNodes) {
@@ -419,8 +423,7 @@ export class GitHubGateway implements ForgeGateway {
   ): Promise<string> {
     const response = await this.request(
       `/repos/${segment(repository.owner)}/${segment(repository.name)}/pulls/${pullRequestNumber}`,
-      { headers: { Accept: "application/vnd.github.v3.diff" } },
-    );
+      { headers: { Accept: "application/vnd.github.v3.diff" } });
     return response.body;
   }
 
@@ -536,10 +539,8 @@ export class GitHubGateway implements ForgeGateway {
     }>(issuesQuery, { owner: repository.owner, name: repository.name, cursor, since });
     if (readEnv("DEBUG_GITHUB_COST") && data.rateLimit != null) {
       console.info("GitHub RepositoryIssues cost", {
-        repository: `${repository.owner}/${repository.name}`,
-        cursor,
-        cost: data.rateLimit.cost,
-        remaining: data.rateLimit.remaining,
+        repository: `${repository.owner}/${repository.name}`, cursor,
+        cost: data.rateLimit.cost, remaining: data.rateLimit.remaining,
       });
     }
     const page = data.repository?.issues;
@@ -579,8 +580,7 @@ export class GitHubGateway implements ForgeGateway {
     initialPage: GitHubGraphqlLabelConnection,
   ): Promise<string[]> {
     return this.collectLabels(initialPage, (cursor) =>
-      this.getIssueLabelsPage(repository, issueNumber, cursor),
-    );
+      this.getIssueLabelsPage(repository, issueNumber, cursor));
   }
 
   private async getIssueLabelsPage(
@@ -770,7 +770,7 @@ export class GitHubGateway implements ForgeGateway {
     issueNumber: number,
     initialPage?: GitHubGraphqlIssueTimelineConnection,
   ): Promise<{ history: GitHubIssueHistoryEvent[]; comments: GitHubIssueComment[] }> {
-    const nodes = await collectCursorPages((cursor) =>
+    const nodes = await collectCursorPages("timelineItems.nodes", (cursor) =>
       cursor === null && initialPage !== undefined
         ? Promise.resolve(initialPage)
         : this.getIssueTimelinePage(repository, issueNumber, cursor),
@@ -817,7 +817,7 @@ export class GitHubGateway implements ForgeGateway {
     initialPage: GitHubGraphqlLabelConnection,
     getNextPage: (cursor: string) => Promise<GitHubGraphqlLabelConnection>,
   ): Promise<string[]> {
-    const labels = await collectCursorPages((cursor) =>
+    const labels = await collectCursorPages("labels.nodes", (cursor) =>
       cursor === null ? Promise.resolve(initialPage) : getNextPage(cursor),
     );
     return labels.map((label) => label.name);

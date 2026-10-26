@@ -254,7 +254,25 @@ export class GitHubGraphqlClient {
   }
 }
 
+/**
+ * A connection's `nodes` list may legally carry null entries (the schema is
+ * `[Issue]`, not `[Issue!]`) or arrive not a list at all, while every caller
+ * reads node fields unchecked. Refuse both here naming the field, so a failed
+ * read says where it failed instead of surfacing a bare TypeError about a
+ * property of null (issue 1408).
+ */
+export function requireConnectionNodes<TNode>(fieldPath: string, nodes: unknown): TNode[] {
+  if (!Array.isArray(nodes)) {
+    throw new Error(`GitHub GraphQL response was invalid. ${fieldPath} was not a list.`);
+  }
+  if (nodes.some((node) => node === null || node === undefined)) {
+    throw new Error(`GitHub GraphQL response was invalid. ${fieldPath} contained a null entry.`);
+  }
+  return nodes as TNode[];
+}
+
 export async function collectCursorPages<TNode>(
+  fieldPath: string,
   getPage: (cursor: string | null) => Promise<GitHubGraphqlPage<TNode>>,
 ): Promise<TNode[]> {
   const nodes: TNode[] = [];
@@ -262,7 +280,7 @@ export async function collectCursorPages<TNode>(
 
   do {
     const page = await getPage(cursor);
-    nodes.push(...page.nodes);
+    nodes.push(...requireConnectionNodes<TNode>(fieldPath, page.nodes));
 
     if (!page.pageInfo.hasNextPage) {
       return nodes;
