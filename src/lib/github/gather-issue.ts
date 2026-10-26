@@ -66,4 +66,3 @@ function timelineMatchesEvidence(
     && [...expectedIds].every((id) => uniqueIds.has(id))
     && (timeline.history.length === 0 || timeline.history.some(({ id }) => expectedIds.has(id)));
 }
-
