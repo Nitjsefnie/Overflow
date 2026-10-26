@@ -304,7 +304,7 @@ describe("paused full-pass pages", () => {
       restReads++; return new Response("diff", { headers: { "content-type": "text/plain" } });
     } });
     const first = await new PostgresSweepPassStore(sql).open(input);
-    const walk = () => collectCursorPages<number>((cursor) => graphql.query("query { issues { nodes } }", { cursor }));
+    const walk = () => collectCursorPages<number>("issues.nodes", (cursor) => graphql.query("query { issues { nodes } }", { cursor }));
     const sponsorId = (await f.store.getRepository(f.repositoryId))!.sponsor.id;
     await expect(withSweepRequestBudget(() => rounds.spend(sponsorId, at, 2), () => withSweepPass(first, async () => {
       await rest.request("/repos/owner/repo/pulls/1");

@@ -14,9 +14,9 @@ describe("fold GraphQL cost", () => {
       },
     });
     const result = await withGraphqlFoldCost(async (readCost) => {
-      await collectCursorPages(async (cursor) => {
+      await collectCursorPages("issues.nodes", async (cursor) => {
         await client.query("query cost", { cost: cursor === null ? 2 : 3 });
-        return { nodes: [cursor], pageInfo: { hasNextPage: cursor === null, endCursor: "second" } };
+        return { nodes: [cursor ?? 1], pageInfo: { hasNextPage: cursor === null, endCursor: "second" } };
       });
       await Promise.all([client.query("query cost", { cost: 5 }), client.query("query cost", { cost: 7 })]);
       expect(readCost()).toEqual({ observedCost: 17, observedResponses: 4, unmeasuredResponses: 0 });
