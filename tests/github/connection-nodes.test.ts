@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
+import { requireConnectionNodes } from "@/lib/github/graphql";
 import { errorLogToken } from "@/lib/webhooks/log-field";
 
 /**
@@ -52,7 +53,7 @@ function issueNode(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function closingPullRequestNode() {
+function closingPullRequestNode(overrides: Record<string, unknown> = {}) {
   return {
     databaseId: 201,
     number: 11,
@@ -65,6 +66,7 @@ function closingPullRequestNode() {
     commits: { nodes: [{ commit: { committedDate: "2026-09-04T10:00:00.000Z" } }] },
     author: { login: "contributor", databaseId: 7002 },
     repository: { databaseId: 6001, nameWithOwner: "octo/overflow" },
+    ...overrides,
   };
 }
 
@@ -112,6 +114,17 @@ describe("GitHubGateway connection node guards", () => {
     await expect(gateway.listIssues(repository)).rejects.toThrow(
       "GitHub GraphQL response was invalid. closedByPullRequestsReferences.nodes contained a null entry.",
     );
+  });
+
+  // A null element in a closing pull request's commits connection is no final
+  // commit: the `?.` after `.at(-1)` resolves finalCommitAt to null, no throw.
+  it("resolves a closing pull request whose final commit node is null with no finalCommitAt", async () => {
+    const gateway = gatewayAnswering(() => ({ repository: { issue: {
+      closedByPullRequestsReferences: page([closingPullRequestNode({ commits: { nodes: [null] } })]),
+    } } }));
+    await expect(gateway.getIssueClosingPullRequests(repository, 3)).resolves.toEqual([
+      expect.objectContaining({ id: 201, finalCommitAt: null }),
+    ]);
   });
 
   it("refuses a null timeline entry naming the field", async () => {
@@ -198,5 +211,16 @@ describe("GitHubGateway connection node guards", () => {
     expect(issues[0]?.closingPullRequests).toEqual([
       expect.objectContaining({ id: 201, repositoryNameWithOwner: "octo/overflow" }),
     ]);
+  });
+
+  // The guard's own limbs, driven directly: a non-list `nodes`, a null entry
+  // and an undefined entry each refuse with the field named.
+  it("names the field for a non-list nodes and for null and undefined entries", () => {
+    expect(() => requireConnectionNodes("issues.nodes", null))
+      .toThrow("GitHub GraphQL response was invalid. issues.nodes was not a list.");
+    expect(() => requireConnectionNodes("issues.nodes", [null]))
+      .toThrow("GitHub GraphQL response was invalid. issues.nodes contained a null entry.");
+    expect(() => requireConnectionNodes("issues.nodes", [undefined]))
+      .toThrow("GitHub GraphQL response was invalid. issues.nodes contained a null entry.");
   });
 });
