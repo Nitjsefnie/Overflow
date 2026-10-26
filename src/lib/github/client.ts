@@ -1,3 +1,5 @@
+import { walkGitHubReconciliation, type ForgeWalkInput } from "@/lib/fold/reconciliation-walk-adapters";
+import { gatherIssueEvidence, type IssueTimelineWitness } from "@/lib/github/gather-issue";
 import { readEnv } from "@/lib/env";
 import {
   getPullRequestNode,
@@ -8,12 +10,12 @@ import {
 import { getRepositoryHistoryCount } from "@/lib/github/repository-count";
 import { hasNextLink, lastLinkPage } from "@/lib/github/link-pagination";
 import { getCommitAuthor } from "@/lib/github/commit-author";
-import { checkpointSweepRestRequest, withFreshSweepReads } from "@/lib/fold/sweep-pass";
+import { checkpointSweepRestRequest } from "@/lib/fold/sweep-pass";
 import { z } from "zod";
 import { checkSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import { CollectionWalkBound } from "@/lib/github/collection-walk-bound";
-import { drainIssueReads, readIssueClosingPullRequests, readIssueOpeningEvidence, type IssueClosingPullRequestsRead } from "@/lib/github/drain-issue-reads";
+import { drainIssueReads, type IssueClosingPullRequestsRead } from "@/lib/github/drain-issue-reads";
 import { githubWebhookEvents } from "@/lib/github/webhook-schema";
 import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
 import { checkGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
@@ -108,6 +110,10 @@ export class GitHubGateway implements ForgeGateway {
     });
   }
 
+  public walkReconciliation(reference: GitHubRepositoryReference, input: ForgeWalkInput, options?: GitHubIssueListOptions) {
+    return walkGitHubReconciliation(this, reference, input, options);
+  }
+
   public async getRepository(repository: GitHubRepositoryReference): Promise<GitHubRepository> {
     const response = await this.request(`/repos/${segment(repository.owner)}/${segment(repository.name)}`);
 
@@ -162,41 +168,40 @@ export class GitHubGateway implements ForgeGateway {
     const manifest = targeted ? await this.getIssueTimelineManifest(repository, [...unique.values()]) : null;
     const issues: GitHubIssue[] = [];
     for (const node of unique.values()) {
-      const [opening, closing] = await drainIssueReads([
-        readIssueOpeningEvidence(
-          this.getIssueLabels(repository, node.number, node.labels),
-          this.getIssueTimeline(repository, node.number, targeted ? node.timelineItems : undefined)),
-        readIssueClosingPullRequests(this.getIssueClosingPullRequests(repository, node.number, node.closedByPullRequestsReferences))]);
-      const { labels, timeline, openingEvidenceUnreadable } = opening;
-      // Check both fully assembled connections. A nested timeline can claim it is
-      // complete while omitting events or comments, even when totalCount agrees.
-      const labeled = new Set(timeline.history.flatMap((event) => event.kind === "LABELED" ? [event.label] : []));
-      const expectedCount = counts?.get(node.number);
-      const expectedIds = manifest?.get(node.number);
-      const criticalLabels = labels.filter((label) => options?.timelineCriticalLabels?.has(label));
-      const hasMissingCriticalLabel = (value: typeof timeline) => criticalLabels.some((label) =>
-        !value.history.some((event) => event.kind === "LABELED" && event.label === label),
-      );
-      const matchesEvidence = (value: typeof timeline) => timelineMatchesEvidence(value, expectedCount, expectedIds);
-      const suspect = !openingEvidenceUnreadable && targeted && (!matchesEvidence(timeline) || (node.timelineItems !== undefined && labels.some((label) =>
-        options?.timelineCriticalLabels?.has(label)
-        || (options?.timelineWatchedLabels?.has(label) && !labeled.has(label)),
-      )));
-      const authoritativeTimeline = suspect ? await withFreshSweepReads(() => this.getIssueTimeline(repository, node.number)) : timeline;
-      if (!openingEvidenceUnreadable && targeted && (!matchesEvidence(authoritativeTimeline) || hasMissingCriticalLabel(authoritativeTimeline))) {
-        // A rewrite can make scan-time witnesses stale; re-take them after the reread,
-        // which replaces the earlier one; persistent disagreement or a missing standing critical label still refuses.
-        const [freshCounts, freshManifest] = await withFreshSweepReads(() => drainIssueReads([
-          this.getIssueTimelineCounts(repository, [node]),
-          this.getPerIssueTimelineManifest(repository, [node]),
-        ]));
-        if (!timelineMatchesEvidence(authoritativeTimeline, freshCounts.get(node.number), freshManifest.get(node.number)) || hasMissingCriticalLabel(authoritativeTimeline)) {
-          throw new Error(`GitHub issue ${node.number} timeline completeness could not be verified.`);
-        }
-      }
-      issues.push({ ...toGitHubIssue(node, labels, authoritativeTimeline, closing), ...(openingEvidenceUnreadable && { openingEvidenceUnreadable: true }) });
+      issues.push(await this.gatherIssueNode(repository, node, options, {
+        count: counts?.get(node.number), ids: manifest?.get(node.number),
+      }));
     }
     return issues;
+  }
+
+  public async gatherIssue(repository: GitHubRepositoryReference, subject: GitHubSubject, options?: GitHubIssueListOptions): Promise<GitHubIssue | null> {
+    const data = await this.graphql.query<{ repository: { issue: GitHubGraphqlIssueNode | null } | null }>(
+      issueQuery, { owner: repository.owner, name: repository.name, issueNumber: subject.number });
+    const node = data.repository?.issue;
+    if (node === null) return null;
+    if (node === undefined || node.databaseId !== subject.id) throw new Error("GitHub issue identity did not match the dirty subject.");
+    return this.gatherIssueNode(repository, node, options);
+  }
+
+  private async gatherIssueNode(repository: GitHubRepositoryReference, node: GitHubGraphqlIssueNode,
+    options?: GitHubIssueListOptions, witness?: IssueTimelineWitness): Promise<GitHubIssue> {
+    const targeted = options?.timelineCriticalLabels !== undefined || options?.timelineWatchedLabels !== undefined;
+    const readWitness = async (): Promise<[number | undefined, Set<string> | undefined]> => {
+      const [counts, ids] = await drainIssueReads([
+        this.getIssueTimelineCounts(repository, [node]), this.getPerIssueTimelineManifest(repository, [node]),
+      ]);
+      return [counts.get(node.number), ids.get(node.number)];
+    };
+    const [count, ids] = witness === undefined && targeted ? await readWitness() : [witness?.count, witness?.ids];
+    const evidence = await gatherIssueEvidence(node.number, node.timelineItems !== undefined, {
+      labels: () => this.getIssueLabels(repository, node.number, node.labels),
+      timeline: (initial) => this.getIssueTimeline(repository, node.number, initial && targeted ? node.timelineItems : undefined),
+      closing: () => this.getIssueClosingPullRequests(repository, node.number, node.closedByPullRequestsReferences),
+      witness: readWitness,
+    }, options, { count, ids });
+    return { ...toGitHubIssue(node, evidence.labels, evidence, evidence),
+      ...(evidence.openingEvidenceUnreadable && { openingEvidenceUnreadable: true }) };
   }
 
   public async getIssue(repository: GitHubRepositoryReference, subject: GitHubSubject): Promise<GitHubIssue | null> {
@@ -1422,22 +1427,6 @@ async function responseJson<T>(response: GitHubRestResponse): Promise<T> {
   } catch {
     throw new Error("GitHub API response was invalid.");
   }
-}
-
-/** Unique ids match the exact count and contain the REST lower bound.
- * Positive counts need a witness; history also needs an event witness. */
-function timelineMatchesEvidence(
-  timeline: { history: Array<{ id: string }>; comments: Array<{ id: string }> },
-  expectedCount: number | undefined,
-  expectedIds: Set<string> | undefined,
-): boolean {
-  const ids = [...timeline.history, ...timeline.comments].map(({ id }) => id);
-  const uniqueIds = new Set(ids);
-
-  return ids.length === expectedCount && uniqueIds.size === expectedCount
-    && expectedIds !== undefined && (expectedCount === 0 || expectedIds.size > 0)
-    && [...expectedIds].every((id) => uniqueIds.has(id))
-    && (timeline.history.length === 0 || timeline.history.some(({ id }) => expectedIds.has(id)));
 }
 
 /**

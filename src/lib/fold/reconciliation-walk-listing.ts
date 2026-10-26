@@ -4,6 +4,7 @@ import { CollectionWalkBound } from "@/lib/gitlab/collection-walk-bound";
 
 export type WalkListingDriver = {
   kind: "cursor";
+  normalizeSubject?(subject: WalkSubject): Promise<WalkSubject | null>;
   listPage(options: { since?: string; cursor: string | null }): Promise<{ subjects: WalkSubject[]; nextCursor: string | null }>;
 } | {
   kind: "timestamp";
@@ -25,7 +26,10 @@ export async function visitWalkListing(listing: WalkListingDriver, anchors: Retu
   const seen = new Set<string>();
   do {
     const page = await listing.listPage({ ...(since === undefined ? {} : { since }), cursor });
-    for (const subject of page.subjects) await visit(subject, "subjects");
+    for (const row of page.subjects) {
+      const subject = listing.normalizeSubject === undefined ? row : await listing.normalizeSubject(row);
+      if (subject !== null) await visit(subject, "subjects");
+    }
     cursor = page.nextCursor;
     if (cursor !== null && seen.has(cursor)) throw new Error("Subject listing repeated a cursor.");
     if (cursor !== null) seen.add(cursor);

@@ -1,3 +1,4 @@
+import { memoryPass } from "../fold/reconciliation-walk-fixture";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { ForgeCredentialRejectedError } from "@/lib/forge/gateway";
 import { sponsorGateway } from "@/lib/fold/reconcile-as-sponsor";
@@ -78,6 +79,16 @@ describe("sponsor gateway marks a rejected GitLab credential", () => {
   }
 
   const DIFF_REQUEST = [{ owner: "g", name: "p" }, 7] as const;
+
+  it.each([401, 403])("marks a rejected credential inside a budget-bound walk (%s)", async (status) => {
+    stubTransport(async () => new Response("denied", { status }));
+    const mark = vi.fn(async () => {});
+    const gateway = gatewayFor(repositoryRow(), mark);
+    await expect(gateway.walkReconciliation!({ owner: "g", name: "p" }, {
+      pass: memoryPass(), repository: { githubRepositoryId: 1, disputePullRequests: [] },
+    })).rejects.toBeInstanceOf(ForgeCredentialRejectedError);
+    expect(mark).toHaveBeenCalledExactlyOnceWith("identity-1");
+  });
 
   it("marks the identity and rethrows the typed error on a 401 read", async () => {
     // The planted body stands in for upstream error text; the typed error's

@@ -1,3 +1,4 @@
+import { memoryPass } from "./reconciliation-walk-fixture";
 import { describe, expect, it, vi } from "vitest";
 import type { ReconciliationGateway } from "@/lib/fold/reconcile";
 import { withTransientRequestRetry, transientRetryDelayMs } from "@/lib/fold/reconciliation-retry";
@@ -104,6 +105,7 @@ describe("withTransientRequestRetry", () => {
   });
 
   it.each([
+    ["walkReconciliation", [reference, { pass: memoryPass(), repository: { githubRepositoryId: 42, disputePullRequests: [] } }]],
     ["getRepositoryById", [1]],
     ["listIssues", [reference, { since: "2030-01-01T00:00:00Z" }]],
     ["getIssue", [reference, { id: 101, number: 1 }]],
@@ -114,7 +116,7 @@ describe("withTransientRequestRetry", () => {
     const delays: number[] = [];
     const gateway = retryGateway();
     const calls: unknown[][] = [];
-    const expectedResult = await Reflect.apply(gateway[method], gateway, [...args]);
+    const expectedResult = await Reflect.apply(gateway[method]!, gateway, [...args]);
     Reflect.set(gateway, method, async function (this: ReconciliationGateway, ...received: unknown[]) {
       expect(this).toBe(gateway);
       calls.push(received);
@@ -124,7 +126,7 @@ describe("withTransientRequestRetry", () => {
     const wrapped = withTransientRequestRetry(gateway, { delay: async (ms) => { delays.push(ms); } });
 
     for (let call = 0; call < 2; call++) {
-      expect(await Reflect.apply(wrapped[method], wrapped, [...args])).toBe(expectedResult);
+      expect(await Reflect.apply(wrapped[method]!, wrapped, [...args])).toBe(expectedResult);
     }
     expect(calls).toEqual([args, args, args, args]);
     expect(delays).toEqual([250, 250]);
@@ -154,6 +156,7 @@ const reference = { owner: "octo", name: "example" };
 
 function retryGateway(): ReconciliationGateway {
   return {
+    walkReconciliation: async () => ({ status: "completed", issues: [], pullRequests: [], missingDisputePrIds: new Set<number>() }),
     getRepositoryById: async () => null,
     listIssues: async () => [],
     getIssue: async () => null,

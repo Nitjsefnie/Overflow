@@ -1,3 +1,4 @@
+import { memoryPass } from "./reconciliation-walk-fixture";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReconciliationSweepControl } from "@/lib/fold/sweep-pass";
@@ -99,6 +100,10 @@ function pagedCostGateway(
       if (String(input).endsWith("/repositories/4242")) {
         return Response.json(verifiedRepositoryPayload(4242, "octo/overflow"));
       }
+      if (new URL(String(input)).pathname.endsWith("/issues")) {
+        requests?.push({ operation: "WalkSubjects", variables: Object.fromEntries(new URL(String(input)).searchParams) });
+        return Response.json([]);
+      }
       if (requests !== undefined && String(input).endsWith("/graphql")) {
         const body = JSON.parse(String(init?.body)) as { query: string; variables: Record<string, unknown> };
         requests.push({ operation: /query (\w+)/.exec(body.query)![1]!, variables: body.variables });
@@ -153,19 +158,12 @@ describe("reconciliation budget holds under the repository lock", () => {
     let requests = 0;
     f.fold.sweep = {
       spend: async () => ++requests <= 2 ? null : resetAt,
-      openPass: async (input) => ({ ...input, id: "pass-1", read: async () => undefined,
-        walkAnchors: () => { throw new Error("Unexpected sweep walk anchors"); },
-        stage: async () => { throw new Error("Unexpected sweep walk staging"); },
-        readStaged: async () => { throw new Error("Unexpected staged read"); },
-        deleteStaged: async () => { throw new Error("Unexpected staged deletion"); },
-        write: async () => {}, complete: async () => {} }),
+      openPass: async (input) => ({ ...memoryPass(), ...input }),
       discardPass: async () => {},
     };
     await expect(runNextReconciliationJob(f.worker)).resolves.toBe("BUDGET_HELD");
     expect(f.fold.store.beginRun).toHaveBeenCalledExactlyOnceWith("repository-1", { rederivation: false });
-    expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", {
-      sponsorId: "sponsor-1", observedCost: 2, observedResponses: 1, unmeasuredResponses: 0,
-    });
+    expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", null);
     expect(f.fold.store.failRun).not.toHaveBeenCalled();
     expect(materialize).not.toHaveBeenCalled();
     expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
@@ -1066,13 +1064,7 @@ describe("the sweep request budget binds only the folds that run under it", () =
 
   const sweepControl = (spend: (sponsorId: string) => Promise<Date | null>): ReconciliationSweepControl => ({
     spend,
-    openPass: async (input) => ({
-      walkAnchors: () => { throw new Error("Unexpected sweep walk anchors"); },
-      stage: async () => { throw new Error("Unexpected sweep walk staging"); },
-      readStaged: async () => { throw new Error("Unexpected staged read"); },
-      deleteStaged: async () => { throw new Error("Unexpected staged deletion"); },
-      ...input, id: "pass-1", read: async () => undefined, write: async () => {}, complete: async () => {},
-    }),
+    openPass: async (input) => ({ ...memoryPass(), ...input }),
     discardPass: async () => {},
   });
 
@@ -1130,6 +1122,7 @@ describe("the sweep request budget binds only the folds that run under it", () =
         const url = String(input);
         if (url.endsWith("/repositories/4242")) return Response.json(verifiedRepositoryPayload(4242, "octo/overflow"));
         if (url.endsWith("/repositories/4243")) return Response.json(verifiedRepositoryPayload(4243, "octo/overflow-2"));
+        if (new URL(url).pathname.endsWith("/issues")) return Response.json([]);
         return Response.json({ data: {
           rateLimit: { remaining: 4000, limit: 5000, cost: 1, resetAt: resetAt.toISOString() },
           repository: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
@@ -1161,8 +1154,8 @@ describe("the sweep request budget binds only the folds that run under it", () =
       .mockResolvedValueOnce(claims[0]).mockResolvedValueOnce(claims[1]).mockResolvedValueOnce(null);
 
     await expect(drainReconciliationJobs(f.worker, { maxJobs: 3 })).resolves.toEqual(["BUDGET_HELD", "RECONCILED"]);
-    expect(spendCalls).toEqual(["sponsor-a", "sponsor-b", "sponsor-b"]);
-    expect(spent["sponsor-b"]).toBe(2);
+    expect(spendCalls).toEqual(["sponsor-a", "sponsor-b", "sponsor-b", "sponsor-b"]);
+    expect(spent["sponsor-b"]).toBe(3);
     expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
     expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0);
     expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith(
@@ -1192,13 +1185,7 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
 
   const sweepControl = (spend: (sponsorId: string) => Promise<Date | null>): ReconciliationSweepControl => ({
     spend,
-    openPass: async (input) => ({
-      walkAnchors: () => { throw new Error("Unexpected sweep walk anchors"); },
-      stage: async () => { throw new Error("Unexpected sweep walk staging"); },
-      readStaged: async () => { throw new Error("Unexpected staged read"); },
-      deleteStaged: async () => { throw new Error("Unexpected staged deletion"); },
-      ...input, id: "pass-1", read: async () => undefined, write: async () => {}, complete: async () => {},
-    }),
+    openPass: async (input) => ({ ...memoryPass(), ...input }),
     discardPass: async () => {},
   });
 
@@ -1251,13 +1238,13 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
       repositoryId: "repository-1",
       synchronization: expect.objectContaining({ full: true }),
     }));
-    const list = requests.filter(({ operation }) => operation === "RepositoryIssues");
-    expect(list).toHaveLength(1);
+    const list = requests.filter(({ operation }) => operation === "WalkSubjects");
+    expect(list).toHaveLength(2);
     // A full pass lists every issue: the request carries no since bound at all.
-    expect(list[0]!.variables.since).toBeUndefined();
-    // Charged through the real budget check: the crawl's two reads each spent
+    expect(list.every(({ variables }) => variables.since === undefined)).toBe(true);
+    // Charged through the real budget check: the verification and two listings each spent
     // from this repository's own sponsor's round.
-    expect(spends).toEqual(["sponsor-1", "sponsor-1"]);
+    expect(spends).toEqual(["sponsor-1", "sponsor-1", "sponsor-1"]);
     expect(f.fold.store.holdRun).not.toHaveBeenCalled();
     expect(f.fold.store.failRun).not.toHaveBeenCalled();
     expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1);
@@ -1285,7 +1272,7 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
         repositoryId: "repository-1",
         synchronization: expect.objectContaining({ full: true }),
       }));
-      expect(spends).toEqual(["sponsor-1", "sponsor-1"]);
+      expect(spends).toEqual(["sponsor-1", "sponsor-1", "sponsor-1"]);
       expect(f.fold.store.holdRun).not.toHaveBeenCalled();
       expect(f.fold.store.failRun).not.toHaveBeenCalled();
       expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1);

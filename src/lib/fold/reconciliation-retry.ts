@@ -27,6 +27,7 @@ export function withTransientRequestRetry(
     }
   };
   return {
+    walkReconciliation: (...args) => retry(() => gateway.walkReconciliation!(...args)),
     getRepositoryById: (...args) => retry(() => gateway.getRepositoryById(...args)),
     listIssues: (...args) => retry(() => gateway.listIssues(...args)),
     getIssue: (...args) => retry(() => gateway.getIssue(...args)),
