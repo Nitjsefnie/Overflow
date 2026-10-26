@@ -1,5 +1,4 @@
--- Mixed-version review: additive walk state, unused by older workers. The
--- nullable anchors preserve older pass inserts; pass deletion cascades subjects.
+-- Mixed-version review: additive state; older workers ignore nullable anchors.
 alter table reconciliation_sweep_passes add column walk_anchors jsonb;
 
 create table reconciliation_sweep_walk_subjects (
