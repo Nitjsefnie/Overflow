@@ -287,8 +287,8 @@ describe("repository registration form", () => {
     ["NOT_CHECKED", "warning", " Overflow could not read this repository's workflows, so it does not know whether comment-based claiming is set up. Check the workflows yourself for one triggered by issue_comment that assigns the comment author."],
   ])("claimPath: %s", (claimPath, kind, claimMessage) => {
     it.each([
-      [true, "co-op/harbour is registered. Its existing issues are being imported and will appear shortly."],
-      [false, "co-op/harbour is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep."],
+      [true, "co-op/harbour is registered. Its existing issues are being imported; an issue is listed once it carries one of the opening labels: moonlit ridge, granite path."],
+      [false, "co-op/harbour is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep; an issue is listed once it carries one of the opening labels: moonlit ridge, granite path."],
       [undefined, "co-op/harbour is registered."],
     ])("composes the complete message with initialImportScheduled: %s", async (initialImportScheduled, importMessage) => {
       stubFormApi(() => Response.json({
@@ -322,7 +322,7 @@ describe("repository registration form", () => {
     const feedback = await screen.findByRole("status");
     expect(feedback).toHaveClass("feedback", "success");
     expect(feedback.textContent).toBe(
-      "co-op/harbour is registered. Its existing issues are being imported and will appear shortly.",
+      "co-op/harbour is registered. Its existing issues are being imported; an issue is listed once it carries one of the opening labels: moonlit ridge, granite path.",
     );
   });
 
@@ -396,6 +396,15 @@ describe("repository registration form", () => {
     await selectLoadedOption("Actual label for 7 points", "shelf");
     expect(screen.getByLabelText("Actual label for 7 points")).toHaveValue("shelf");
     expect(openingLabel).toHaveValue("moonlit ridge");
+  });
+
+  it("says in the opening-catalog help when an existing issue gets listed", () => {
+    render(<RepositoryForm initialValues={initialValues} />);
+
+    const fieldset = screen.getByRole("group", { name: "Opening catalog" });
+    expect(fieldset.querySelector(".field-help")?.textContent).toBe(
+      "Set any labels and their comparison and reservation points. An existing issue is listed once it carries one of these labels.",
+    );
   });
 
   it("reads the actual catalog's point stamps with the plural each count takes", () => {
@@ -477,7 +486,7 @@ describe("repository registration form", () => {
 
     await waitFor(() => expect(submitCalls).toHaveLength(1));
     expect((await screen.findByRole("status")).textContent).toBe(
-      "co-op/harbour is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep.",
+      "co-op/harbour is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep; an issue is listed once it carries one of the opening labels: moonlit ridge, granite path.",
     );
   });
 
@@ -492,7 +501,7 @@ describe("repository registration form", () => {
 
     await waitFor(() => expect(submitCalls).toHaveLength(1));
     expect((await screen.findByRole("status")).textContent).toBe(
-      "co-op/harbour is registered. Its existing issues are being imported and will appear shortly.",
+      "co-op/harbour is registered. Its existing issues are being imported; an issue is listed once it carries one of the opening labels: moonlit ridge, granite path.",
     );
   });
 });
@@ -1065,7 +1074,7 @@ describe("repository form forge selection", () => {
     const feedback = await screen.findByRole("status");
     expect(feedback).toHaveClass("feedback", "warning");
     expect(feedback.textContent).toBe(
-      "group/proj is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep."
+      "group/proj is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep; an issue is listed once it carries one of the opening labels: rill, stream, brook."
         + " Overflow could not read this repository's workflows, so it does not know whether comment-based claiming is set up."
         + " Check the workflows yourself for one triggered by issue_comment that assigns the comment author.",
     );

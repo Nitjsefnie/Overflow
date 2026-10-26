@@ -160,7 +160,11 @@ export function DashboardContent({
                     </div>
                     <div>
                       <dt>Catalog</dt>
-                      <dd>{repository.openingName} / {repository.actualName}</dd>
+                      <dd>
+                        {repository.openingName} / {repository.actualName}; an existing issue is
+                        listed once it carries one of the opening labels (
+                        {repository.openingLabels.join(", ")})
+                      </dd>
                     </div>
                     {repository.unavailableReason === null ? null : (
                       <div>

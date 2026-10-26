@@ -230,6 +230,7 @@ describe("member dashboard", () => {
             active: true,
             openingName: "Offer band",
             actualName: "Delivered band",
+            openingLabels: ["shoal"],
             unavailableReason: null,
             reconciliationState: "IDLE",
             reconciliationLastFailureAt: null,
@@ -787,7 +788,7 @@ describe("member dashboard", () => {
     expect(cellValue("open-claims-heading", "co-op/harbour", "Catalog")).toBe("Offer band: shoal");
     expect(cellValue("open-claims-heading", "co-op/harbour", "Reserve")).toBe("7");
     expect(cellValue("registered-repositories-heading", "co-op/harbour", "Catalog")).toBe(
-      "Offer band / Delivered band",
+      "Offer band / Delivered band; an existing issue is listed once it carries one of the opening labels (shoal, delta)",
     );
     expect(cellValue("enforcement-notices-heading", "2026-09-02", "Recorded")).toBe("2026-09-02 00:00 UTC");
     expect(cellValue("enforcement-notices-heading", "2026-09-02", "Transition")).toBe(
@@ -1187,6 +1188,7 @@ function registered(id: string, ownerName: string): RegisteredRepositoryProjecti
     active: true,
     openingName: "Offer band",
     actualName: "Delivered band",
+    openingLabels: ["shoal", "delta"],
     unavailableReason: null,
     reconciliationState: "IDLE",
     reconciliationLastFailureAt: null,

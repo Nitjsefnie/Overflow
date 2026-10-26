@@ -207,6 +207,9 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
         repository: repositoryResponse(registration),
         initialImportScheduled: registration.initialImportScheduled,
         claimPath: registration.claimPath,
+        // The labels an existing issue is listed under, in submission order —
+        // issue 1385's listing rule is what the sponsor reads next.
+        openingLabels: input.openingLabels.map((entry) => entry.label),
       }, { status: 201 });
     } catch (error) {
       if (error instanceof RepositoryRegistrationError) {
