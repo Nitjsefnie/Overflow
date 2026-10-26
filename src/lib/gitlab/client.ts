@@ -25,6 +25,7 @@ import {
 import { checkSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import { gitlabApiFetch } from "@/lib/security/gitlab-api-fetch";
 import { logField } from "@/lib/webhooks/log-field";
+import { listGitLabSubjectsPage, type GitLabSubjectsPageOptions } from "@/lib/gitlab/subject-listing";
 
 export { GitLabApiError } from "@/lib/gitlab/api-error";
 
@@ -130,6 +131,10 @@ export class GitLabGateway {
     this.token = options.token;
     this.fetchImplementation = options.fetch ?? gitlabApiFetch;
     this.timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
+  }
+
+  public listSubjectsPage(reference: GitHubRepositoryReference, options: GitLabSubjectsPageOptions) {
+    return listGitLabSubjectsPage({ request: (path) => this.request(path) }, reference, options);
   }
 
   public async getRepository(repository: GitHubRepositoryReference): Promise<GitHubRepository> {
