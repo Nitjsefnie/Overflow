@@ -7,13 +7,6 @@ import { foldLedger, type LedgerEntry } from "@/lib/domain/ledger";
 import { calculateSettlement, type SettlementDecision } from "@/lib/domain/settlement";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
 import { countReviewRoundsAsOf } from "@/lib/fold/review-rounds";
-import {
-  evidenceWindowReachable,
-  parsedInstant,
-  rejectionReachable,
-  validTimestamp,
-  type RejectionReach,
-} from "@/lib/fold/evidence-window-reach";
 import type {
   GitHubIssue,
   GitHubIssueComment,
@@ -241,24 +234,19 @@ export type SettlementEvidenceViolationCode = "SETTLED_LABEL_UNAUTHORIZED" | "SE
 
 /**
  * What a refusal records, and why the unauthorized one says more than its code.
- *
- * This row is the only moderator-facing record — the fold emits it and
- * `recordNewPolicyViolations` writes it to `reconciliation_changes` when it
- * newly appears — so each variant has to carry what a moderator needs from it.
- * The unauthorized one is an accusation, so it answers "which label, and who
- * applied it". The unattributable one has no account to accuse: an
- * opening-catalog application WAS made, but no account was ever compared
- * against the sponsor, and what the sentence reports is that the repository's
- * own sponsor record is what needs fixing. An absence has nothing to report.
- * The three are a union on `code` rather than one shape with nullable columns:
- * a consumer that switches on the code gets the fields typed where they exist
- * and is not made to handle a case that cannot happen.
- *
- * The label and one actor login are STRUCTURED facts for tooling to group and
- * filter on, and `reason` is the PROSE a moderator reads. The sponsor's stored
- * login appears only in that prose, so it is not redundant. Only the prose can
- * carry the discriminator where an account has taken the login the sponsor's
- * record still stores, since there the structured login is the sponsor's own
+ * This row is the only moderator-facing record — the fold emits it and `recordNewPolicyViolations`
+ * writes it to `reconciliation_changes` when it newly appears — so each variant has to carry what a
+ * moderator needs from it. The unauthorized one is an accusation, so it answers "which label, and
+ * who applied it". The unattributable one has no account to accuse: an opening-catalog application
+ * WAS made, but no account was ever compared against the sponsor, and what the sentence reports is
+ * that the repository's own sponsor record is what needs fixing. An absence has nothing to report.
+ * The three are a union on `code` rather than one shape with nullable columns: a consumer that
+ * switches on the code gets the fields typed where they exist and is not made to handle a case that
+ * cannot happen.
+ * The label and one actor login are STRUCTURED facts for tooling to group and filter on, and
+ * `reason` is the PROSE a moderator reads. The sponsor's stored login appears only in that prose,
+ * so it is not redundant. Only the prose can carry the discriminator where an account has taken the
+ * login the sponsor's record still stores, since there the structured login is the sponsor's own
  * and says nothing.
  */
 type OpeningRefusal =
@@ -297,26 +285,19 @@ export type FoldResult = {
 
 /**
  * Tolerance applied to every evidence-ordering comparison in the fold.
- *
- * Both evidence windows are sequences a person performs by hand, and the order
- * things land in is routinely off by seconds or minutes. Settlement: push the
- * final commit, apply the settled label, post the rationale comment, merge —
- * the comment gets written before the label, or both are remembered just after
- * the merge.
- * Opening: label the issue, then assign it — but `gh issue create --label
- * --assignee` applies the assignee FIRST, so the opening label lands a second
- * after the assignment it was meant to precede.
- *
- * Enforced to the second, each of those discards a real record, and neither
- * window can be reopened afterwards. The grace absorbs the ordering mistake
- * without widening either window into a different rule: evidence outside it is
- * still rejected, so a settled label applied an hour after merge still proves
- * nothing about what the reviewer saw, and an opening label applied an hour
- * after the assignment still fails to show the work was priced before it was
- * spoken for.
- * The same close applies to edits: a rationale comment whose last edit is after
- * the window closed is rejected, since its current body is not evidence of what
- * the reviewer wrote before merge.
+ * Both evidence windows are sequences a person performs by hand, and the order things land in is
+ * routinely off by seconds or minutes. Settlement: push the final commit, apply the settled label,
+ * post the rationale comment, merge — the comment gets written before the label, or both are
+ * remembered just after the merge. Opening: label the issue, then assign it — but `gh issue create
+ * --label --assignee` applies the assignee FIRST, so the opening label lands a second after the
+ * assignment it was meant to precede.
+ * Enforced to the second, each of those discards a real record, and neither window can be reopened
+ * afterwards. The grace absorbs the ordering mistake without widening either window into a
+ * different rule: evidence outside it is still rejected, so a settled label applied an hour after
+ * merge still proves nothing about what the reviewer saw, and an opening label applied an hour
+ * after the assignment still fails to show the work was priced before it was spoken for. The same
+ * close applies to edits: a rationale comment whose last edit is after the window closed is
+ * rejected, since its current body is not evidence of what the reviewer wrote before merge.
  */
 const EVIDENCE_ORDERING_GRACE_MS = 15 * 60 * 1000;
 
@@ -350,6 +331,23 @@ type SettledDifficultyEvidence = {
   rationaleCommentedAt: string;
 };
 
+/**
+ * What decides whether a refused settlement is still worth a moderator's time.
+ *
+ * Most refusals describe an evidence window that has since shut, and outside
+ * that window there is nothing left to produce. One does not: a sponsor with no
+ * login is a fact about the account as it stands, and no window bounds fixing
+ * it. The recording site cannot tell those apart from the reason sentence
+ * without reading English, so the resolver states which it produced.
+ *
+ * `refusedEvidenceAt` is the settled label the resolver refused for landing
+ * after the window closed, when there was one. It is the whole reason a stale
+ * window can still be actionable: the label exists, it is just late, which is
+ * the case the settlement-override path was built for.
+ */
+type RejectionReach =
+  | { kind: "UNBOUNDED" }
+  | { kind: "WINDOW"; refusedEvidenceAt: string | null };
 type SettledDifficultyResolution =
   | { kind: "accepted"; evidence: SettledDifficultyEvidence }
   | { kind: "rejected"; reason: string; reach: RejectionReach; violation?: SettlementEvidenceViolationCode };
@@ -686,27 +684,22 @@ function resolveOpening(
 }
 
 /**
- * Which refusal to record when no opening-catalog application inside the
- * opening window could be verified as the sponsor's.
- *
- * `OPENING_LABEL_UNAUTHORIZED` records an opening-catalog application whose
- * actor could not be verified as the sponsor, and is reported only where an
- * account could actually be compared: GitHub named a numeric actor id, or the
- * sponsor's stored login is there to read. Where GitHub named no id and the
- * sponsor record's login is blank, nothing was compared and nobody can be
- * accused — but the label was still applied, so the refusal is
- * `OPENING_LABEL_UNATTRIBUTABLE` rather than the absence one: its sentence
- * names the repository's own sponsor record as the thing to fix, the way the
- * settled window's missing-login reason does. `resolveSettledDifficulty`
- * declines to emit `SETTLED_LABEL_UNAUTHORIZED` on the same guard — but only on
- * that guard: it first replays the history to the labels still STANDING at the
- * merge, while an opening is decided by the applications themselves, so a label
- * applied here and removed again is still refused by name.
- *
- * Candidates arrive already bounded by the opening window, so a label applied
- * before the issue existed or after the opening deadline never reaches here as
- * a candidate: that is a timing refusal, and it reads as missing rather than
- * being absorbed into an authority or an attribution one.
+ * Which refusal to record when no opening-catalog application inside the opening window could be
+ * verified as the sponsor's.
+ * `OPENING_LABEL_UNAUTHORIZED` records an opening-catalog application whose actor could not be
+ * verified as the sponsor, and is reported only where an account could actually be compared: GitHub
+ * named a numeric actor id, or the sponsor's stored login is there to read. Where GitHub named no
+ * id and the sponsor record's login is blank, nothing was compared and nobody can be accused — but
+ * the label was still applied, so the refusal is `OPENING_LABEL_UNATTRIBUTABLE` rather than the
+ * absence one: its sentence names the repository's own sponsor record as the thing to fix, the way
+ * the settled window's missing-login reason does. `resolveSettledDifficulty` declines to emit
+ * `SETTLED_LABEL_UNAUTHORIZED` on the same guard — but only on that guard: it first replays the
+ * history to the labels still STANDING at the merge, while an opening is decided by the
+ * applications themselves, so a label applied here and removed again is still refused by name.
+ * Candidates arrive already bounded by the opening window, so a label applied before the issue
+ * existed or after the opening deadline never reaches here as a candidate: that is a timing
+ * refusal, and it reads as missing rather than being absorbed into an authority or an attribution
+ * one.
  */
 function openingRefusal(candidates: OpeningLabelEvent[], sponsor: FoldUser): OpeningRefusal {
   const sponsorLogin = normalizedNonblankLogin(sponsor.githubLogin);
@@ -747,6 +740,49 @@ function openingRefusal(candidates: OpeningLabelEvent[], sponsor: FoldUser): Ope
     // login is refused in the same words at both windows.
     reason: labelActorRejection("opening", attributable.label, attributable.actorLogin, sponsorLogin),
   };
+}
+
+/**
+ * An unwritable closure is a work item for a moderator, so it is worth
+ * recording only while the evidence it asks for could still be produced. A
+ * settlement evidence window shuts fifteen minutes after the merge, and an
+ * issue no pull request closed has only its own close; a window that shut
+ * before Overflow was registered on the repository shut before anyone here
+ * could have been asked to fill it, and no label applied today reopens it.
+ *
+ * Reachability is decided against the registration instant only. When that
+ * instant is unreadable, or the closing instant is absent or unreadable,
+ * nothing has been shown about the window, so the closure is recorded: leaving
+ * a real work item visible is the recoverable mistake, and silently dropping
+ * one is not.
+ */
+function evidenceWindowReachable(windowClosedAt: number | null, registeredAtTime: number): boolean {
+  if (windowClosedAt === null || !Number.isFinite(registeredAtTime)) {
+    return true;
+  }
+  return windowClosedAt >= registeredAtTime;
+}
+
+/**
+ * A refused settlement outlives its own window when the evidence it refused
+ * arrived after the repository was registered: the settled label is there, it
+ * merely landed late, and pricing it is exactly what the settlement-override
+ * path does. Recording it is the only way a moderator ever sees it, so the
+ * late evidence is checked even once the window itself is out of reach.
+ */
+function rejectionReachable(
+  reach: RejectionReach,
+  windowClosedAt: number | null,
+  registeredAtTime: number,
+): boolean {
+  if (reach.kind === "UNBOUNDED") {
+    return true;
+  }
+  if (evidenceWindowReachable(windowClosedAt, registeredAtTime)) {
+    return true;
+  }
+  const refusedEvidenceAt = parsedInstant(reach.refusedEvidenceAt);
+  return refusedEvidenceAt !== null && refusedEvidenceAt >= registeredAtTime;
 }
 
 /**
@@ -1223,28 +1259,23 @@ function isRepositorySponsor(actor: FoldActorIdentity, sponsor: FoldUser): boole
 }
 
 /**
- * The login a display column shows for an actor `isRepositorySponsor` has
- * already accepted as the repository sponsor.
- *
- * The identification is made by the numeric account id wherever GitHub reports
- * one, and that route never reads the login — so nothing at these call sites
- * proves the payload named a usable one. The type allows `githubUserId` beside
- * a null or whitespace-only `actorLogin`, and both spellings are destructive
- * further down: a null throws where the login is trimmed and fails the whole
- * reconciliation run, and a whitespace-only login trims to the empty string,
- * which the `length(trim(...)) > 0` checks on these columns (migrations 007 and
- * 010) refuse — failing the whole materialization transaction. Falling back
- * here keeps the proof local to the value being written, rather than resting it
- * on what the one producer in `src/lib/github/client.ts` happens to derive.
- *
- * The payload's own text is preferred and kept verbatim, because a login is
- * display text whose case GitHub preserves and this is where the rename becomes
- * visible. The sponsor's stored login is the fallback, non-blank by
- * `users.github_login`'s own check (migration 001). That check spells `trim()`
- * with one argument and so strips spaces only, while `.trim()` here strips all
- * whitespace, leaving a stored tab that the database accepts and this reads as
- * blank (issue 141) — hence the placeholder last, the same one a refusal
- * sentence already uses for an actor it cannot name.
+ * The login a display column shows for an actor `isRepositorySponsor` has already accepted as the
+ * repository sponsor.
+ * The identification is made by the numeric account id wherever GitHub reports one, and that route
+ * never reads the login — so nothing at these call sites proves the payload named a usable one. The
+ * type allows `githubUserId` beside a null or whitespace-only `actorLogin`, and both spellings are
+ * destructive further down: a null throws where the login is trimmed and fails the whole
+ * reconciliation run, and a whitespace-only login trims to the empty string, which the
+ * `length(trim(...)) > 0` checks on these columns (migrations 007 and 010) refuse — failing the
+ * whole materialization transaction. Falling back here keeps the proof local to the value being
+ * written, rather than resting it on what the one producer in `src/lib/github/client.ts` happens to
+ * derive.
+ * The payload's own text is preferred and kept verbatim, because a login is display text whose case
+ * GitHub preserves and this is where the rename becomes visible. The sponsor's stored login is the
+ * fallback, non-blank by `users.github_login`'s own check (migration 001). That check spells
+ * `trim()` with one argument and so strips spaces only, while `.trim()` here strips all whitespace,
+ * leaving a stored tab that the database accepts and this reads as blank (issue 141) — hence the
+ * placeholder last, the same one a refusal sentence already uses for an actor it cannot name.
  */
 function sponsorDisplayLogin(actorLogin: string | null, sponsor: FoldUser): string {
   return actorLogin?.trim() || sponsor.githubLogin.trim() || "unknown";
@@ -1311,37 +1342,28 @@ function compareHistoryItems(
 }
 
 /**
- * Breaks the same-instant ties `compareHistoryItems` leaves among RATIONALE
- * CANDIDATES ONLY, by GitHub's per-comment creation sequence: the numeric
- * `IssueComment.databaseId` is assigned in creation order, so among comments
- * sharing one instant the smallest id is the first-written. For content
- * imported through GitHub's migration APIs, databaseId order is import order
- * — arbitrary there, but stable, and accepted. This is the rule family issue
- * 260 settles on — an explicit deterministic rule whose basis is evidence, or
- * an undecidable refusal rather than a silently arbitrary pick
- * (`resolveSettledDifficulty` checks the selected instant's group after
- * selection and rejects a tie its ids cannot order).
- *
- * Node ids (`IssueComment.id`, `IC_…`) never key a selection: they are opaque
- * strings encoding no creation order, unlike the numeric databaseId, so
- * reordering by them would only launder arrival order again.
- *
- * An id that is not a safe integer — null, undefined from an unvalidated
- * passthrough, or any other junk — is NO sequence evidence and sorts after
- * every safe id; it cannot claim to be the earliest. The order between two
- * such ids is deliberately unspecified (the sort is stable, so it is arrival
- * order): callers must not rely on it, and a selected tie carrying two or
- * more of them is rejected as undecidable.
- *
- * `compareHistoryItems` itself is unchanged and stays the primary key, so
- * distinct-instant selection and every other consumer of it are untouched.
- *
- * Already-persisted rationale ids from a prior arrival-order run are safe to
- * move: `settled_rationale_comment_id` is deliberately overwritten by the
- * fold's ordinary issue upsert on every run (unlike the opening evidence,
- * which is immutable), so a tie row swaps its citation once on the next fold
- * and then stays stable — label, points, actor, instant and credits do not
- * change.
+ * Breaks the same-instant ties `compareHistoryItems` leaves among RATIONALE CANDIDATES ONLY, by
+ * GitHub's per-comment creation sequence: the numeric `IssueComment.databaseId` is assigned in
+ * creation order, so among comments sharing one instant the smallest id is the first-written. For
+ * content imported through GitHub's migration APIs, databaseId order is import order — arbitrary
+ * there, but stable, and accepted. This is the rule family issue 260 settles on — an explicit
+ * deterministic rule whose basis is evidence, or an undecidable refusal rather than a silently
+ * arbitrary pick (`resolveSettledDifficulty` checks the selected instant's group after selection
+ * and rejects a tie its ids cannot order).
+ * Node ids (`IssueComment.id`, `IC_…`) never key a selection: they are opaque strings encoding no
+ * creation order, unlike the numeric databaseId, so reordering by them would only launder arrival
+ * order again.
+ * An id that is not a safe integer — null, undefined from an unvalidated passthrough, or any other
+ * junk — is NO sequence evidence and sorts after every safe id; it cannot claim to be the earliest.
+ * The order between two such ids is deliberately unspecified (the sort is stable, so it is arrival
+ * order): callers must not rely on it, and a selected tie carrying two or more of them is rejected
+ * as undecidable.
+ * `compareHistoryItems` itself is unchanged and stays the primary key, so distinct-instant
+ * selection and every other consumer of it are untouched.
+ * Already-persisted rationale ids from a prior arrival-order run are safe to move:
+ * `settled_rationale_comment_id` is deliberately overwritten by the fold's ordinary issue upsert on
+ * every run (unlike the opening evidence, which is immutable), so a tie row swaps its citation once
+ * on the next fold and then stays stable — label, points, actor, instant and credits do not change.
  */
 function compareRationaleSequence(
   left: Pick<GitHubIssueComment, "createdAt" | "databaseId">,
@@ -1387,3 +1409,12 @@ function findDuplicatedDatabaseId(comments: GitHubIssueComment[]): number | unde
   return duplicated[0];
 }
 
+
+function validTimestamp(value: string | null): value is string {
+  return value !== null && Number.isFinite(Date.parse(value));
+}
+
+/** The instant as a moment, or null when GitHub reported none we can read. */
+function parsedInstant(value: string | null): number | null {
+  return validTimestamp(value) ? Date.parse(value) : null;
+}
