@@ -80,6 +80,10 @@ function fakePass(pages: Map<string, unknown>) {
   const pass: SweepPass = {
     id: "paused-pass", scanStartedAt: new Date("2026-09-05T08:00:00Z"), dirtySubjects: [],
     read, write, complete: async () => {},
+    walkAnchors: () => { throw new Error("Unmodelled walk anchors"); },
+    stage: async () => { throw new Error("Unmodelled walk staging"); },
+    readStaged: async () => { throw new Error("Unmodelled staged read"); },
+    deleteStaged: async () => { throw new Error("Unmodelled staged deletion"); },
   };
   return { pass, read, write };
 }

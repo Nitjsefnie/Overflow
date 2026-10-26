@@ -6,7 +6,18 @@ import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import type { DirtyReconciliationSubject } from "@/lib/fold/reconciliation-evidence";
 import { readSweepPassPageCeiling, type SweepPass, type SweepPassInput } from "@/lib/fold/sweep-pass";
 
-type PassRow = { pass_id: string; scan_started_at: Date; dirty_subjects: DirtyReconciliationSubject[] };
+type PassRow = { pass_id: string; scan_started_at: Date; dirty_subjects: DirtyReconciliationSubject[]; walk_anchors: unknown };
+type WalkAnchors = Record<string, { updatedAt: Date; key: number }>;
+
+function parseWalkAnchors(value: unknown): WalkAnchors {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([name, point]) => {
+    if (point === null || typeof point !== "object" || typeof point.updated_at !== "string"
+      || !Number.isSafeInteger(point.key)) return [];
+    const updatedAt = new Date(point.updated_at);
+    return Number.isFinite(updatedAt.getTime()) ? [[name, { updatedAt, key: point.key }]] : [];
+  }));
+}
 export class PostgresSweepPassStore {
   public constructor(
     private readonly connection?: SqlClient,
@@ -41,7 +52,7 @@ export class PostgresSweepPassStore {
         (repository_id, pass_id, scan_started_at, evidence_version, dirty_subjects)
         values (${input.repositoryId}, ${randomUUID()}, ${input.scanStartedAt}, ${input.evidenceVersion}, ${transaction.json(input.dirtySubjects)})
         on conflict (repository_id) do nothing`;
-      const [row] = await transaction<PassRow[]>`select pass_id, scan_started_at, dirty_subjects
+      const [row] = await transaction<PassRow[]>`select pass_id, scan_started_at, dirty_subjects, walk_anchors
         from reconciliation_sweep_passes where repository_id = ${input.repositoryId}`;
       const [pages] = await transaction<{ count: number }[]>`select count(*)::int as count
         from reconciliation_sweep_pages where pass_id = ${row!.pass_id}`;
@@ -52,6 +63,7 @@ export class PostgresSweepPassStore {
       }
       return row!;
     }) as unknown as PassRow;
+    let anchors = parseWalkAnchors(row.walk_anchors);
     return {
       id: row.pass_id, scanStartedAt: row.scan_started_at, dirtySubjects: row.dirty_subjects,
       read: async (key) => {
@@ -75,6 +87,44 @@ export class PostgresSweepPassStore {
         });
         writes = write.catch(() => {});
         return write;
+      },
+      walkAnchors: () => anchors,
+      stage: async (input) => {
+        const committed = await this.sql.begin(async (transaction) => {
+          // Text binding preserves JSON null and avoids a second client-side JSON encoding.
+          await transaction`insert into reconciliation_sweep_walk_subjects (pass_id, kind, subject_key, updated_at, payload)
+            values (${row.pass_id}, ${input.kind}, ${input.subjectKey}, ${input.updatedAt},
+              ${JSON.stringify(input.payload)}::text::jsonb)
+            on conflict (pass_id, kind, subject_key) do update
+              set updated_at = excluded.updated_at, payload = excluded.payload`;
+          const [pass] = await transaction<{ walk_anchors: unknown }[]>`select walk_anchors
+            from reconciliation_sweep_passes where pass_id = ${row.pass_id} for update`;
+          let next = parseWalkAnchors(pass!.walk_anchors);
+          const previous = Object.hasOwn(next, input.anchor) ? next[input.anchor] : undefined;
+          if (previous === undefined || input.updatedAt.getTime() > previous.updatedAt.getTime()
+            || (input.updatedAt.getTime() === previous.updatedAt.getTime() && input.subjectKey > previous.key)) {
+            next = { ...next, [input.anchor]: { updatedAt: input.updatedAt, key: input.subjectKey } };
+            const stored = Object.fromEntries(Object.entries(next).map(([name, point]) =>
+              [name, { updated_at: point.updatedAt.toISOString(), key: point.key }]));
+            await transaction`update reconciliation_sweep_passes set walk_anchors = ${transaction.json(stored)}
+              where pass_id = ${row.pass_id}`;
+          }
+          return next;
+        });
+        anchors = committed as unknown as WalkAnchors;
+      },
+      readStaged: async () => {
+        const subjects = await this.sql<{ kind: "issue" | "pull_request"; subject_key: number | string; updated_at: Date; payload: unknown }[]>`
+          select kind, subject_key, updated_at, payload from reconciliation_sweep_walk_subjects
+          where pass_id = ${row.pass_id} order by kind, subject_key`;
+        return subjects.map((subject) => ({ kind: subject.kind, subjectKey: Number(subject.subject_key),
+          updatedAt: subject.updated_at, payload: subject.payload }));
+      },
+      deleteStaged: async (keys) => {
+        if (keys.length === 0) return;
+        await this.sql`delete from reconciliation_sweep_walk_subjects where pass_id = ${row.pass_id}
+          and (kind, subject_key) in (select kind, "subjectKey" from
+            jsonb_to_recordset(${this.sql.json([...keys])}) as requested(kind text, "subjectKey" bigint))`;
       },
       complete: async () => { await this.sql`delete from reconciliation_sweep_passes where pass_id = ${row.pass_id}`; },
     };

@@ -61,6 +61,10 @@ describe("reconcileRepository", () => {
     dependencies.sweep = {
       spend: async () => null, discardPass: async () => {},
       openPass: async (input) => ({ id: "pass", scanStartedAt: input.scanStartedAt, dirtySubjects: input.dirtySubjects,
+        walkAnchors: () => { throw new Error("Unexpected sweep walk anchors"); },
+        stage: async () => { throw new Error("Unexpected sweep walk staging"); },
+        readStaged: async () => { throw new Error("Unexpected staged read"); },
+        deleteStaged: async () => { throw new Error("Unexpected staged deletion"); },
         read: async () => undefined, write: async () => {}, complete }),
     };
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});

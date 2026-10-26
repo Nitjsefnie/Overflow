@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
@@ -349,6 +349,195 @@ describe("paused full-pass pages", () => {
     expect(fresh.id).not.toBe(first.id);
     await first.complete();
     expect((await sql`select pass_id from reconciliation_sweep_passes where repository_id = ${f.repositoryId}`)[0]!.pass_id).toBe(fresh.id);
+  });
+});
+
+describe("durable sweep walk subjects", () => {
+  async function openWalk() {
+    const f = await materializeRepositoryFixture(sql);
+    const input = { repositoryId: f.repositoryId, evidenceVersion: "walk-v1", scanStartedAt: at, dirtySubjects: [] };
+    const store = new PostgresSweepPassStore(sql);
+    return { ...f, input, store, pass: await store.open(input) };
+  }
+  const later = new Date("2030-01-02T00:00:00Z");
+  const subject = { anchor: "all", kind: "issue" as const, subjectKey: 4_000_000_001, updatedAt: at,
+    payload: { title: "staged", nested: { labels: ["M", null], active: true } } };
+
+  it("advances named anchors by timestamp then numeric key without rewinding either stream", async () => {
+    const { pass } = await openWalk();
+    expect(pass.walkAnchors()).toEqual({});
+    await pass.stage({ ...subject, anchor: "issue", subjectKey: 9 });
+    await pass.stage({ ...subject, anchor: "pull_request", kind: "pull_request", subjectKey: 30, updatedAt: later });
+    await pass.stage({ ...subject, anchor: "issue", subjectKey: 10 });
+    await pass.stage({ ...subject, anchor: "issue", subjectKey: 8 });
+    await pass.stage({ ...subject, anchor: "issue", subjectKey: 100, updatedAt: new Date("2029-12-31T00:00:00Z") });
+    expect(pass.walkAnchors()).toEqual({ issue: { updatedAt: at, key: 10 }, pull_request: { updatedAt: later, key: 30 } });
+    await pass.stage({ ...subject, anchor: "issue", subjectKey: 1, updatedAt: later });
+    expect(pass.walkAnchors()).toEqual({ issue: { updatedAt: later, key: 1 }, pull_request: { updatedAt: later, key: 30 } });
+    expect(await sql`select walk_anchors from reconciliation_sweep_passes where pass_id = ${pass.id}`)
+      .toEqual([{ walk_anchors: { issue: { updated_at: later.toISOString(), key: 1 },
+        pull_request: { updated_at: later.toISOString(), key: 30 } } }]);
+  });
+
+  it.each(["constructor", "__proto__"])("treats %s as an ordinary anchor name", async (anchor) => {
+    const { pass, store, input } = await openWalk();
+    await pass.stage({ ...subject, anchor });
+    expect(pass.walkAnchors()).toEqual({ [anchor]: { updatedAt: at, key: subject.subjectKey } });
+    expect((await store.open(input)).walkAnchors()).toEqual(pass.walkAnchors());
+  });
+
+  it("round-trips jsonb payloads and bigint keys and replaces a re-staged subject", async () => {
+    const { pass } = await openWalk();
+    await pass.stage(subject);
+    expect(await pass.readStaged()).toEqual([{ kind: "issue", subjectKey: 4_000_000_001, updatedAt: at, payload: subject.payload }]);
+    await pass.stage({ ...subject, updatedAt: later, payload: ["replacement", { count: 2 }] });
+    await pass.stage({ ...subject, kind: "pull_request", payload: null });
+    expect(await pass.readStaged()).toEqual(expect.arrayContaining([
+      { kind: "issue", subjectKey: 4_000_000_001, updatedAt: later, payload: ["replacement", { count: 2 }] },
+      { kind: "pull_request", subjectKey: 4_000_000_001, updatedAt: at, payload: null },
+    ]));
+    expect(await pass.readStaged()).toHaveLength(2);
+    await pass.stage({ ...subject, payload: { regathered: true } });
+    expect(pass.walkAnchors()).toEqual({ all: { updatedAt: later, key: 4_000_000_001 } });
+    expect(await pass.readStaged()).toContainEqual({ kind: "issue", subjectKey: 4_000_000_001, updatedAt: at, payload: { regathered: true } });
+  });
+
+  it("reopens a held pass with anchors and staged evidence at the same evidence version", async () => {
+    const { pass, input } = await openWalk();
+    await pass.stage(subject);
+    const resumed = await new PostgresSweepPassStore(sql).open({ ...input, scanStartedAt: later });
+    expect(resumed.id).toBe(pass.id);
+    expect(resumed.scanStartedAt).toEqual(at);
+    expect(resumed.walkAnchors()).toEqual({ all: { updatedAt: at, key: 4_000_000_001 } });
+    expect(await resumed.readStaged()).toEqual(await pass.readStaged());
+  });
+
+  it("loads persisted anchors defensively, including null and independently encoded ISO dates", async () => {
+    const { pass, input, store } = await openWalk();
+    expect(pass.walkAnchors()).toEqual({});
+    await sql`update reconciliation_sweep_passes set walk_anchors = ${sql.json({
+      all: { updated_at: "2030-01-01T01:00:00+01:00", key: 42 }, invalid: null,
+      badDate: { updated_at: "invalid", key: 1 }, badKey: { updated_at: at.toISOString(), key: "3" },
+    })} where pass_id = ${pass.id}`;
+    expect((await store.open(input)).walkAnchors()).toEqual({ all: { updatedAt: at, key: 42 } });
+  });
+
+  it("uses the locked persisted anchors when a second handle stages from stale state", async () => {
+    const { pass, input, store } = await openWalk();
+    const second = await store.open(input);
+    await pass.stage({ ...subject, anchor: "issue", updatedAt: later });
+    await second.stage({ ...subject, anchor: "pull_request", kind: "pull_request" });
+    await second.stage({ ...subject, anchor: "issue" });
+    expect(second.walkAnchors()).toEqual({ issue: { updatedAt: later, key: subject.subjectKey },
+      pull_request: { updatedAt: at, key: subject.subjectKey } });
+    expect((await store.open(input)).walkAnchors()).toEqual(second.walkAnchors());
+  });
+
+  it("serializes concurrent anchor read-modify-writes without losing either stream", async () => {
+    const f = await materializeRepositoryFixture(sql);
+    const input = { repositoryId: f.repositoryId, evidenceVersion: "walk-v1", scanStartedAt: at, dirtySubjects: [] };
+    const entered = signal(); const release = signal();
+    const connection = new Proxy(sql, { get(target, property, receiver) {
+      if (property !== "begin") return Reflect.get(target, property, receiver);
+      return (work: (transaction: TransactionSql) => Promise<unknown>) => target.begin((transaction) =>
+        work(new Proxy(transaction, { apply(target, thisArg, args) {
+          const query = Reflect.apply(target, thisArg, args);
+          if (!String(args[0]).includes("select walk_anchors")) return query;
+          return query.then(async (result: unknown) => { entered.resolve(); await release.promise; return result; });
+        } })));
+    } });
+    const first = await new PostgresSweepPassStore(connection).open(input);
+    const second = await new PostgresSweepPassStore(sql).open(input);
+    const stagedFirst = first.stage({ ...subject, anchor: "issue" });
+    await entered.promise;
+    let finished = false;
+    const stagedSecond = second.stage({ ...subject, anchor: "pull_request", kind: "pull_request" })
+      .finally(() => { finished = true; });
+    try {
+      // Observe the second transaction waiting (or finishing on the unlocked mutant)
+      // before releasing the first reader; no wall-clock ordering assumption.
+      await vi.waitFor(async () => {
+        const [waiting] = await sql<{ count: number }[]>`select count(*)::int as count
+          from pg_stat_activity a join pg_locks l on l.pid = a.pid and not l.granted
+          where a.datname = current_database() and a.wait_event_type = 'Lock'
+            and a.pid <> pg_backend_pid()`;
+        expect(finished || waiting.count > 0).toBe(true);
+      });
+    } finally { release.resolve(); await Promise.all([stagedFirst, stagedSecond]); }
+    const resumed = await new PostgresSweepPassStore(sql).open(input);
+    expect(resumed.walkAnchors()).toEqual({ issue: { updatedAt: at, key: subject.subjectKey },
+      pull_request: { updatedAt: at, key: subject.subjectKey } });
+    expect(await resumed.readStaged()).toHaveLength(2);
+  });
+
+  it("rolls back the staged row and anchor together when the anchor write fails", async () => {
+    const { pass, store, input } = await openWalk();
+    await pass.stage(subject);
+    await expect(pass.stage({ ...subject, anchor: "invalid\u0000anchor", updatedAt: later, payload: "uncommitted" })).rejects.toThrow();
+    expect(pass.walkAnchors()).toEqual({ all: { updatedAt: at, key: subject.subjectKey } });
+    expect((await store.open(input)).walkAnchors()).toEqual(pass.walkAnchors());
+    expect(await pass.readStaged()).toEqual([{ kind: "issue", subjectKey: subject.subjectKey, updatedAt: at, payload: subject.payload }]);
+  });
+
+  it("publishes in-memory anchors only after the staging transaction commits", async () => {
+    const f = await materializeRepositoryFixture(sql);
+    const entered = signal(); const release = signal();
+    let hold = false;
+    const connection = new Proxy(sql, { get(target, property, receiver) {
+      if (property !== "begin") return Reflect.get(target, property, receiver);
+      return (work: (transaction: TransactionSql) => Promise<unknown>) => target.begin(async (transaction) => {
+        const result = await work(transaction);
+        if (hold) { entered.resolve(); await release.promise; }
+        return result;
+      });
+    } });
+    const pass = await new PostgresSweepPassStore(connection).open({ repositoryId: f.repositoryId,
+      evidenceVersion: "walk-v1", scanStartedAt: at, dirtySubjects: [] });
+    hold = true;
+    const staged = pass.stage(subject);
+    try {
+      await entered.promise;
+      expect(pass.walkAnchors()).toEqual({});
+      expect(await pass.readStaged()).toEqual([]);
+    } finally { release.resolve(); await staged; }
+    expect(pass.walkAnchors()).toEqual({ all: { updatedAt: at, key: subject.subjectKey } });
+    expect(await pass.readStaged()).toHaveLength(1);
+  });
+
+  it("deletes exactly the named kind and key within the current pass", async () => {
+    const { pass } = await openWalk();
+    const other = (await openWalk()).pass;
+    await pass.stage(subject);
+    await pass.stage({ ...subject, kind: "pull_request" });
+    await pass.stage({ ...subject, subjectKey: 2 });
+    await other.stage(subject);
+    await pass.deleteStaged([]);
+    expect(await pass.readStaged()).toHaveLength(3);
+    await pass.deleteStaged([{ kind: "issue", subjectKey: subject.subjectKey }, { kind: "pull_request", subjectKey: 2 }]);
+    expect(await pass.readStaged()).toEqual(expect.arrayContaining([
+      { kind: "issue", subjectKey: 2, updatedAt: at, payload: subject.payload },
+      { kind: "pull_request", subjectKey: subject.subjectKey, updatedAt: at, payload: subject.payload },
+    ]));
+    expect(await pass.readStaged()).toHaveLength(2);
+    expect(await other.readStaged()).toHaveLength(1);
+    expect(pass.walkAnchors()).toEqual({ all: { updatedAt: at, key: subject.subjectKey } });
+  });
+
+  it.each(["complete", "discardByRepository", "new evidence version"])("cascades staged evidence on %s and preserves other passes", async (action) => {
+    const { pass, input, store } = await openWalk();
+    const other = (await openWalk()).pass;
+    await pass.stage(subject); await other.stage(subject);
+    expect(await pass.readStaged()).toHaveLength(1);
+    if (action === "complete") await pass.complete();
+    else if (action === "discardByRepository") await store.discardByRepository(input.repositoryId);
+    else {
+      const fresh = await store.open({ ...input, evidenceVersion: "walk-v2" });
+      expect(fresh.id).not.toBe(pass.id);
+      expect(fresh.walkAnchors()).toEqual({});
+      expect(await fresh.readStaged()).toEqual([]);
+    }
+    expect(await sql`select * from reconciliation_sweep_walk_subjects where pass_id = ${pass.id}`).toEqual([]);
+    expect(await other.readStaged()).toHaveLength(1);
   });
 });
 
