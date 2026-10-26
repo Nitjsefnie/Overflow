@@ -12,10 +12,10 @@ export const API_HEADERS = {
 export const BACKOFF_MS = [1_000, 2_000];
 export const REQUEST_TIMEOUT_MS = 30_000;
 export const RUN_DEADLINE_MS = 10 * 60_000;
-/** Kept between a rate limit's reset and the run deadline before waiting it out (issue 1355). */
+/** The margin between a rate limit's reset and the run deadline (issue 1355). */
 export const RATE_LIMIT_RESET_MARGIN_MS = 5_000;
 
-/** A response GitHub answered with an exhausted rate limit; a sweep-only relay defers on it (issue 1355). */
+/** An exhausted-rate-limit response; a sweep-only relay defers on it (issue 1355). */
 export class RateLimitExceededError extends Error {
   readonly resetMs: number;
 
@@ -54,8 +54,9 @@ interface ApiRequest {
 
 /**
  * Three attempts, 1s then 2s backoff; other 4xx responses fail immediately. A
- * rate-limited 403 or 429 (issue 1355) waits out its named reset inside the run
- * deadline, or throws RateLimitExceededError.
+ * rate-limited 403 or 429 (issue 1355) waits out its named reset only while
+ * another attempt remains and the reset plus margin fits the deadline, and
+ * otherwise throws RateLimitExceededError at once (issue 1363).
  */
 export async function apiCall<T>(
   deps: RelayHttpDeps, request: ApiRequest, what: string, retryTransient = true,
@@ -81,7 +82,7 @@ export async function apiCall<T>(
         ...(request.body === undefined ? {} : { body: request.body }),
         signal: AbortSignal.timeout(deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS),
       });
-      // The same signal also bounds consumption of the response body.
+      // The same signal bounds reading the response body.
       text = await response.text();
     } catch (error) {
       lastMessage = error instanceof Error ? error.message : String(error);
@@ -120,7 +121,7 @@ export async function apiCall<T>(
   throw new Error(`${what} failed after ${retryCount + 1} attempts: ${lastMessage}`);
 }
 
-/** The reset instant a rate-limited 403/429 names (issue 1355), or undefined when none: the existing behaviour stands. */
+/** The reset a rate-limited 403/429 names (issue 1355), or undefined when none. */
 function rateLimitResetMs(response: Response, text: string, nowMs: number): number | undefined {
   if (response.status !== 403 && response.status !== 429) return undefined;
   const rateLimited = response.headers.get("x-ratelimit-remaining") === "0" ||
