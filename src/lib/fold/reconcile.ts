@@ -387,11 +387,8 @@ async function reconcileRepositoryAfterRepositoryRead(
                 timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
               })).map((issue) => [issue.id, issue]));
               const retained = new Map((full ? [] : cached!.issues).map((issue) => [issue.id, issue]));
-              // The walk reports each issue whose closing-PR connection or
-              // opening evidence it could not read as a marker instead of
-              // failing; the issue still arrives, so its disposition is the
-              // per-subject discard: journal, drop its dirty row, and let the
-              // fold price it as an unreadable closure or exclude it below.
+              // Either marker: the per-subject discard — journal, drop its
+              // dirty row; the fold prices or excludes the issue below.
               const dirtyIssueSubjects = new Map(dirtySubjects
                 .filter(({ kind }) => kind === "ISSUE")
                 .map((subject) => [subject.id, subject]));
@@ -435,10 +432,9 @@ async function reconcileRepositoryAfterRepositoryRead(
                   if (issue !== null) changed.set(issue.id, issue);
                 }
               }
-              // A walked issue carrying either marker keeps its cached shape
-              // when one exists, so its prior evidence and any settlement it
-              // carried re-derive unchanged; without a cached copy it folds as
-              // the marked fresh shape and prices nothing.
+              // A marked issue folds its cached shape when one exists, so its
+              // prior evidence re-derives; without one, the marked fresh shape
+              // folds and prices nothing.
               for (const issue of changed.values()) {
                 const marked = issue.closingPullRequestsUnreadable === true || issue.openingEvidenceUnreadable === true;
                 if (marked && retained.has(issue.id)) continue;
@@ -508,10 +504,8 @@ async function reconcileRepositoryAfterRepositoryRead(
             },
             users,
             forgeIdentities,
-            // An issue whose opening evidence was unreadable is never priced:
-            // excluded here, so the fold produces no row, no false OPENING_*
-            // violation and no settlement for it, while its stored row survives
-            // through synchronization's kept set.
+            // Opening-unreadable issues are never priced: excluded here (no
+            // row, no false OPENING_* violation), kept via synchronization.
             issues: githubIssues.filter((issue) => issue.openingEvidenceUnreadable !== true).map((issue) => ({
               ...issue,
               claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin,
