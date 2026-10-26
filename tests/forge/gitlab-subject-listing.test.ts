@@ -32,6 +32,47 @@ function timestampSlice() {
 }
 
 describe("GitLab subject pages", () => {
+  it.each([
+    ["2026-10-26T09:00:00.123Z", "2026-10-26T09:00:00.123000Z"],
+    ["2026-10-26T09:00:00Z", "2026-10-26T09:00:00.000000Z"],
+    ["2026-10-26T11:00:00.123+02:00", "2026-10-26T09:00:00.123000Z"],
+  ])("orders equal instants by ID across timestamp spellings %s and %s", async (first, second) => {
+    for (const [lowerIdTime, higherIdTime] of [[first, second], [second, first]]) {
+      const rows = [row(1, lowerIdTime), row(2, higherIdTime)];
+      for (const input of [rows, [...rows].reverse()]) {
+        const client = gateway(async () => Response.json(input));
+        const result = await client.listSubjectsPage(repository, { collection: "issue", updatedAfter: null });
+        expect(result.subjects.map((subject) => subject.id)).toEqual([1, 2]);
+        expect(result.nextAnchor).toBe(higherIdTime);
+      }
+    }
+  });
+
+  it("orders mixed-precision instants chronologically instead of by spelling", async () => {
+    const client = gateway(async () => Response.json([
+      row(1, "2026-10-26T09:00:00.123Z"), row(2, "2026-10-26T09:00:00.123900Z"),
+    ]));
+    const result = await client.listSubjectsPage(repository, { collection: "issue", updatedAfter: null });
+    expect(result.subjects.map((subject) => subject.id)).toEqual([1, 2]);
+  });
+
+  it("orders distinct microseconds before IDs within a mixed-precision millisecond", async () => {
+    const client = gateway(async () => Response.json([
+      row(1, "2026-10-26T09:00:00.123900Z"), row(3, "2026-10-26T09:00:00.123Z"), row(2, "2026-10-26T09:00:00.123100Z"),
+    ]));
+    const result = await client.listSubjectsPage(repository, { collection: "issue", updatedAfter: null });
+    expect(result.subjects.filter((subject) => subject.id <= 2).map((subject) => subject.id)).toEqual([2, 1]);
+    expect(result.subjects.map((subject) => subject.id)).toEqual([3, 2, 1]);
+  });
+
+  it("returns the latest instant's original spelling as the terminal anchor", async () => {
+    const client = gateway(async () => Response.json([
+      row(1, "2026-10-26T09:00:00.123900Z"), row(9, "2026-10-26T09:00:00.123Z"), row(2, "2026-10-26T09:00:00.123100Z"),
+    ]));
+    const result = await client.listSubjectsPage(repository, { collection: "issue", updatedAfter: null });
+    expect(result.nextAnchor).toBe("2026-10-26T09:00:00.123900Z");
+  });
+
   it.each(["issue", "pull_request"] as const)("returns the final timestamp group on a one-row short %s page", async (collection) => {
     const client = gateway(async () => Response.json([row(501, boundary)]));
     expect(await client.listSubjectsPage(repository, { collection, updatedAfter: null })).toEqual({
