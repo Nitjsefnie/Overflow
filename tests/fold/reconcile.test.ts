@@ -56,7 +56,7 @@ describe("reconcileRepository", () => {
   });
 
   it("discards a failed full-pass snapshot so the next sweep can refetch corrected upstream data", async () => {
-    const dependencies = reconciliationDependencies({ github: { listIssues: async () => { throw new Error("invalid upstream page"); } } });
+    const dependencies = reconciliationDependencies({ github: { walkReconciliation: async () => { throw new Error("invalid upstream page"); } } });
     const complete = vi.fn(async () => {});
     dependencies.sweep = {
       spend: async () => null, discardPass: async () => {},

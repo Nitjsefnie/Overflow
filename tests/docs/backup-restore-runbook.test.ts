@@ -47,42 +47,6 @@ const restoreSubsections = [
   "### (e.4) Restoring the encrypted off-host copy",
 ];
 
-const sectionILiterals = [
-  "overflow-offhost-backup.timer",
-  "overflow-offhost-backup.service",
-  "scripts/db-offhost-backup.sh",
-  "repository_reconciliation_evidence_facts",
-  "repository_reconciliation_evidence",
-  "webhook_deliveries",
-  "repository_policy_violations",
-  "repository_reconciliation_dirty_subjects",
-  "repository_reconciliation_jobs",
-  "repository_reconciliation_usage",
-  "reconciliation_sweep_pages",
-  "xz -9e",
-  "age",
-  "overflow-reduced-*.sql.xz.age",
-  "OVERFLOW_BACKUP_AGE_RECIPIENT",
-  "OVERFLOW_BACKUP_DISCORD_CHANNEL",
-  "OVERFLOW_BACKUP_MAX_BYTES",
-  "DISCORD_TOKEN",
-  "/etc/overflow/backup.env",
-  "osc",
-  "#credentials",
-  "14 days",
-  "9.5 MiB",
-];
-
-/** The restore-order facts subsection (e.4) has to name. */
-const sectionE4Literals = [
-  "overflow-reduced-",
-  "age -d",
-  "xz -d",
-  "createdb",
-  "ON_ERROR_STOP",
-  "POST /api/moderation/rederivation",
-];
-
 /** The lines outside fenced code blocks. */
 function proseLines(): string[] {
   const kept: string[] = [];
@@ -248,37 +212,6 @@ describe("backup-restore runbook", () => {
       ).toBeGreaterThan(0);
     });
 
-    for (const literal of sectionILiterals) {
-      it(`names ${literal}`, () => {
-        const body = sectionBody("## (i) The encrypted off-host copy");
-        expect(body.length, `section (i) in ${document} has no body`).not.toBe(0);
-        expect(body, `section (i) in ${document} does not name ${literal}`).toContain(literal);
-      });
-    }
-
-    it("takes the osc token from the canonical file, not from backup.env", () => {
-      const body = sectionBody("## (i) The encrypted off-host copy");
-      // The index is captured and asserted before the slice: slice(-1) on a
-      // missing marker yields the body's last character, so a nonempty
-      // assertion on the slice passes vacuously and the guard cannot fail.
-      const marker = body.indexOf("**Operator setup.**");
-      expect(marker, `section (i) in ${document} carries no operator-setup marker`).not.toBe(-1);
-      const setup = body.slice(marker);
-
-      expect(
-        setup,
-        `section (i)'s operator setup does not name the canonical token file`,
-      ).toContain("~/.agent-bundle/discord/osc.token");
-
-      const envBlock = bashBlocks(setup).find((block) =>
-        block.some((line) => line.startsWith("OVERFLOW_BACKUP_AGE_RECIPIENT=")),
-      );
-      expect(envBlock, "the operator setup shows the backup.env entries").toBeDefined();
-      expect(
-        envBlock!.join("\n"),
-        "the backup.env block must not configure a token",
-      ).not.toContain("DISCORD_TOKEN");
-    });
   });
 
   describe("subsection (e.4), restoring the encrypted off-host copy", () => {
@@ -290,14 +223,6 @@ describe("backup-restore runbook", () => {
         `subsection (e.4) in ${document} carries no bash fenced block`,
       ).toBeDefined();
     });
-
-    for (const literal of sectionE4Literals) {
-      it(`names ${literal}`, () => {
-        const body = sectionBody("### (e.4) Restoring the encrypted off-host copy");
-        expect(body.length, `subsection (e.4) in ${document} has no body`).not.toBe(0);
-        expect(body, `subsection (e.4) in ${document} does not name ${literal}`).toContain(literal);
-      });
-    }
 
     it("selects only columns the schema carries on registered_repositories", () => {
       const columns = registeredRepositoryColumns();

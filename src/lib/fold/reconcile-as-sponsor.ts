@@ -148,6 +148,7 @@ export function sponsorGateway(
   };
 
   return {
+    walkReconciliation: async (...args) => (await gateway()).walkReconciliation!(...args),
     getRepositoryById: async (githubRepositoryId) => (await gateway()).getRepositoryById(githubRepositoryId),
     listIssues: async (repository, options) => (await gateway()).listIssues(repository, options),
     getIssue: async (repository, subject) => (await gateway()).getIssue(repository, subject),
@@ -200,6 +201,7 @@ function guardGitLabCredential(
     }
   };
   return {
+    walkReconciliation: (...args) => guarded(() => gateway.walkReconciliation!(...args)),
     getRepositoryById: (githubRepositoryId) => guarded(() => gateway.getRepositoryById(githubRepositoryId)),
     listIssues: (repository, options) => guarded(() => gateway.listIssues(repository, options)),
     getIssue: (repository, subject) => guarded(() => gateway.getIssue(repository, subject)),

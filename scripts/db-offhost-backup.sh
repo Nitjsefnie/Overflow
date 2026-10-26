@@ -6,7 +6,7 @@
 # unchanged; this job adds a second, smaller copy that leaves the host:
 #
 # 1. pg_dump --format=plain of every table's schema, with data excluded for
-#    exactly 8 bulky or sensitive tables, compressed with xz -9e and encrypted
+#    exactly 9 bulky or sensitive tables, compressed with xz -9e and encrypted
 #    with age to a public key. Only the public key is on the host.
 # 2. A size guard: an encrypted file at or over OVERFLOW_BACKUP_MAX_BYTES is
 #    never posted and never split; the run fails so the unit's OnFailure
@@ -178,7 +178,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 # The reduced set: every table's schema, with data excluded for exactly these
-# 8 tables. One pg_dump invocation, repeated --exclude-table-data flags, in
+# 9 tables. One pg_dump invocation, repeated --exclude-table-data flags, in
 # the contract's order.
 $pg_dump_cmd --format=plain \
     --exclude-table-data=repository_reconciliation_evidence_facts \
@@ -189,6 +189,7 @@ $pg_dump_cmd --format=plain \
     --exclude-table-data=repository_reconciliation_jobs \
     --exclude-table-data=repository_reconciliation_usage \
     --exclude-table-data=reconciliation_sweep_pages \
+    --exclude-table-data=reconciliation_sweep_walk_subjects \
     "$database_url" > "$plain"
 
 if [ ! -s "$plain" ]; then

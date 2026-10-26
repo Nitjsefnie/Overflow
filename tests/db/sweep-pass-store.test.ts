@@ -219,34 +219,51 @@ describe("paused full-pass pages", () => {
     const token = randomBytes(24).toString("hex");
     f.store.getGitHubAccessToken = async () => token;
     const requests: string[] = [];
-    const github = new GitHubGateway({ accessToken: token, fetch: async (url, init) => {
-      if (!String(url).endsWith("/graphql")) {
+    const page = (nodes: unknown[]) => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
+    const subjects = f.fold.issues.slice(0, 2).map(({ githubIssueId: id, number }) => ({ id, number, updated_at: at.toISOString() }));
+    const github = new GitHubGateway({ accessToken: token, fetch: async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.startsWith("/repositories/")) {
         requests.push("verify");
         return Response.json(verifiedRepositoryPayload(repository.githubRepositoryId, repository.ownerName));
       }
-      const cursor = JSON.parse(String(init?.body)).variables.cursor;
-      requests.push(cursor ?? "first-page");
-      return Response.json({ data: { repository: { issues: { nodes: [],
-        pageInfo: { hasNextPage: cursor === null, endCursor: cursor === null ? "next-page" : null } } } } });
+      if (url.pathname.endsWith("/issues")) { requests.push("listing"); return Response.json(subjects); }
+      if (/\/issues\/\d+\/(events|comments)$/.test(url.pathname)) return Response.json([]);
+      const { query, variables } = JSON.parse(String(init?.body));
+      if (query.includes("query RepositoryIssue(")) {
+        requests.push(`issue-${variables.issueNumber}`);
+        const subject = subjects.find(({ number }) => number === variables.issueNumber)!;
+        return Response.json({ data: { repository: { issue: {
+          databaseId: subject.id, number: subject.number, title: "Walked", body: "", url: "https://example.test/issue",
+          state: "OPEN", stateReason: null, createdAt: at.toISOString(), updatedAt: at.toISOString(), closedAt: null,
+          author: null, labels: page([]), assignees: { nodes: [] }, timelineItems: page([]), closedByPullRequestsReferences: page([]),
+        } } } });
+      }
+      if (query.includes("query IssueTimelineCounts(")) return Response.json({ data: { repository: Object.fromEntries(
+        subjects.filter(({ number }) => variables[`number${number}`] !== undefined)
+          .map(({ id, number }) => [`i${number}`, { databaseId: id, timelineItems: { totalCount: 0 } }]),
+      ) } });
+      throw new Error("Unexpected forge request");
     } });
     let clock = at;
     const sweep = {
-      spend: () => new PostgresSponsorSweepRoundStore(sql).spend(repository.sponsor.id, clock, 2),
+      spend: () => new PostgresSponsorSweepRoundStore(sql).spend(repository.sponsor.id, clock, 9),
       openPass: new PostgresSweepPassStore(sql).open.bind(new PostgresSweepPassStore(sql)),
       discardPass: (id: string) => new PostgresSweepPassStore(sql).discardByRepository(id),
     };
     const first = await reconcileRepository({ store: f.store, github, sweep, now: () => clock, onBudgetChange: () => {} }, f.repositoryId, { reason: "SWEEP" });
     expect(first).toMatchObject({ skipped: true, sweepHeldUntil: new Date("2030-01-01T06:00:00Z") });
     expect(await f.store.getReconciliationEvidence(f.repositoryId)).toBeNull();
-    expect(await sql`select walk_cursor from reconciliation_sweep_passes where repository_id = ${f.repositoryId}`)
-      .toEqual([{ walk_cursor: "next-page" }]);
+    expect(await sql`select subject_key from reconciliation_sweep_walk_subjects where pass_id =
+      (select pass_id from reconciliation_sweep_passes where repository_id = ${f.repositoryId})`)
+      .toEqual([{ subject_key: String(subjects[0]!.id) }]);
     const subject = f.fold.issues[0]!;
     await sql`insert into repository_reconciliation_dirty_subjects (repository_id, kind, github_subject_id, subject_number)
       values (${f.repositoryId}, 'ISSUE', ${subject.githubIssueId}, ${subject.number})`;
     clock = new Date("2030-01-01T06:00:00Z");
     const resumed = await reconcileRepository({ store: f.store, github, sweep, now: () => clock, onBudgetChange: () => {} }, f.repositoryId, { reason: "SWEEP" });
     expect(resumed.skipped).toBe(false);
-    expect(requests).toEqual(["verify", "first-page", "verify", "next-page"]);
+    expect(requests).toEqual(["verify", "listing", "issue-1", "issue-2", "verify", "listing", "issue-2", "listing"]);
     expect((await f.store.getReconciliationEvidence(f.repositoryId))?.checkpoint).toEqual(at);
     expect(await f.store.getDirtyReconciliationSubjects(f.repositoryId)).toHaveLength(1);
     expect(await sql`select * from reconciliation_sweep_passes where repository_id = ${f.repositoryId}`).toHaveLength(0);
@@ -262,6 +279,7 @@ describe("paused full-pass pages", () => {
       sent++;
       return Response.json(String(url).endsWith("/graphql")
         ? { data: { repository: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } }
+        : new URL(String(url)).pathname.endsWith("/issues") ? []
         : verifiedRepositoryPayload(repository.githubRepositoryId, repository.ownerName));
     } });
     const rounds = new PostgresSponsorSweepRoundStore(sql);
@@ -270,7 +288,7 @@ describe("paused full-pass pages", () => {
     const dependencies = { store: f.store, github, now: () => at, onBudgetChange: () => {},
       sweep: { spend: () => rounds.spend(sponsorId, at, 3), openPass: passes.open.bind(passes), discardPass: passes.discardByRepository.bind(passes) } };
     await reconcileRepository(dependencies, f.repositoryId, { reason: "SWEEP" });
-    expect(sent).toBe(2);
+    expect(sent).toBe(3);
     await rounds.spend(sponsorId, at, 3);
     await f.store.enqueueReconciliationJob(f.repositoryId, "WEBHOOK");
     // The webhook fold never runs under the sweep request budget, so the
@@ -278,7 +296,7 @@ describe("paused full-pass pages", () => {
     // completes, and the round's spent stays where the sweep fold left it.
     expect(await runNextReconciliationJob({ store: f.store, now: () => at, scheduleLeaseRenewal: () => () => {},
       reconcile: (id, options) => reconcileRepository(dependencies, id, options) })).toBe("RECONCILED");
-    expect(sent).toBe(4);
+    expect(sent).toBe(5);
     expect(await sql`select spent from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`)
       .toEqual([{ spent: 3 }]);
     // The same spent round still holds a fold that runs under it.
@@ -594,6 +612,10 @@ async function pausedFixture() {
   const passes = new PostgresSweepPassStore(sql);
   const state = { pass: null as SweepPass | null, opens: 0 };
   const github: ReconciliationGateway = {
+    walkReconciliation: async (reference) => {
+      await github.listIssues(reference);
+      throw new Error("The paused fixture must hold or reject");
+    },
     getRepositoryById: verifiedRepositoryAt(repository.ownerName),
     listIssues: async () => {
       await state.pass!.write("first", { text: "paused page" }, "next-page");

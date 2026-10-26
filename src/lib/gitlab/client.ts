@@ -1,3 +1,4 @@
+import { walkGitLabReconciliation, type ForgeWalkInput } from "@/lib/fold/reconciliation-walk-adapters";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import type { GitHubIssueListOptions } from "@/lib/github/client";
 import type {
@@ -135,6 +136,10 @@ export class GitLabGateway {
 
   public listSubjectsPage(reference: GitHubRepositoryReference, options: GitLabSubjectsPageOptions) {
     return listGitLabSubjectsPage({ request: (path) => this.request(path) }, reference, options);
+  }
+
+  public walkReconciliation(reference: GitHubRepositoryReference, input: ForgeWalkInput) {
+    return walkGitLabReconciliation(this, reference, input);
   }
 
   public async getRepository(repository: GitHubRepositoryReference): Promise<GitHubRepository> {

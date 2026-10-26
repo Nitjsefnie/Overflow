@@ -4,7 +4,7 @@ import { readEnv } from "@/lib/env";
 import { readDiffOnlyBacklogThreshold } from "@/lib/fold/repository-size";
 import { SweepBudgetSpent, withSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import { reconciliationBudgetHoldUntil, type ReconciliationBudgetDependencies } from "@/lib/fold/reconciliation-budget";
-import type { GitHubIssueListOptions } from "@/lib/github/client";
+import type { GitHubGateway, GitHubIssueListOptions } from "@/lib/github/client";
 import { DEFAULT_GRAPHQL_BUDGET_RESERVE, type GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
 import { withTransientRequestRetry } from "@/lib/fold/reconciliation-retry";
@@ -61,6 +61,7 @@ export type ReconciliationRepository = RepositoryFoldSnapshot["repository"] & {
 export type RepositoryUnavailableReason = "NOT_FOUND" | "NOT_PUBLIC" | "IDENTITY_MISMATCH";
 
 export type ReconciliationGateway = {
+  walkReconciliation?: GitHubGateway["walkReconciliation"];
   getRepositoryById(githubRepositoryId: number): Promise<GitHubRepository | null>;
   listIssues(repository: GitHubRepositoryReference, options?: GitHubIssueListOptions): Promise<GitHubIssue[]>;
   getIssue(repository: GitHubRepositoryReference, subject: GitHubSubject): Promise<GitHubIssue | null>;
@@ -172,6 +173,7 @@ export async function reconcileRepository(
 
 function sanitizeReconciliationGateway(current: () => ReconciliationGateway): ReconciliationGateway {
   return {
+    walkReconciliation: async (...args) => sanitizeForgeStrings(await current().walkReconciliation!(...args)),
     getRepositoryById: async (...args) => sanitizeForgeStrings(await current().getRepositoryById(...args)),
     listIssues: async (...args) => sanitizeForgeStrings(await current().listIssues(...args)),
     getIssue: async (...args) => sanitizeForgeStrings(await current().getIssue(...args)),
@@ -342,7 +344,7 @@ async function reconcileRepositoryAfterRepositoryRead(
 
         pass = full && dependencies.sweep !== undefined
           ? await dependencies.sweep.openPass({ repositoryId,
-            evidenceVersion: JSON.stringify([cached?.version ?? null, FOLD_REVISION, repository.difficultyScheme]),
+            evidenceVersion: JSON.stringify([cached?.version ?? null, cached?.formatVersion ?? null, RECONCILIATION_EVIDENCE_FORMAT, FOLD_REVISION, repository.difficultyScheme]),
             scanStartedAt, dirtySubjects }) : undefined;
         if (pass !== undefined) {
           scanStartedAt = pass.scanStartedAt;
@@ -381,6 +383,21 @@ async function reconcileRepositoryAfterRepositoryRead(
           const { githubIssues, pullRequestEvidence } = await withGraphqlRequestBudget(
             () => reconciliationBudgetHoldUntil(dependencies, repository.sponsor.id, now),
             async () => {
+              if (pass !== undefined) {
+                const walked = await dependencies.github.walkReconciliation!(reference, {
+                  pass, repository,
+                  onDiscard: async ({ kind, subject, reason }) => {
+                    const dirtyKind = kind === "issue" ? "ISSUE" : "PULL_REQUEST";
+                    const dirty = pass!.dirtySubjects.find((row) => row.kind === dirtyKind && row.id === subject.id);
+                    await discardUnresolvableSubject(null, dirtyKind, subject, dirty, () => reason);
+                  },
+                }, {
+                  timelineCriticalLabels: new Set(repository.difficultyScheme.actualLabels.map(({ label }) => label)),
+                  timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
+                });
+                return { githubIssues: walked.issues,
+                  pullRequestEvidence: new Map(walked.pullRequests.map(({ id, reviews, rawDiff }) => [id, { reviews, rawDiff }])) };
+              }
               const changed = new Map((await dependencies.github.listIssues(reference, {
                 ...(full ? {} : { since: new Date(cached!.checkpoint.getTime() - reconciliationOverlapMs).toISOString() }),
                 timelineCriticalLabels: new Set(repository.difficultyScheme.actualLabels.map(({ label }) => label)),
@@ -515,8 +532,10 @@ async function reconcileRepositoryAfterRepositoryRead(
           };
           const fold = foldRepository(snapshot);
           const cost: ReconciliationCostCharge = { ...readCost(), sponsorId: repository.sponsor.id, completedAt: now() };
+          const expectedVersion = pass === undefined ? cached?.version ?? null
+            : (await dependencies.store.getReconciliationEvidence(repositoryId))?.version ?? null;
           const deltas = await dependencies.store.materialize({ repositoryId, runId, fold, cost, synchronization: {
-            expectedVersion: cached?.version ?? null, scanStartedAt, full, issues: githubIssues,
+            expectedVersion, scanStartedAt, full, issues: githubIssues,
             keptIssueGitHubIds: githubIssues.filter((issue) => issue.openingEvidenceUnreadable === true).map((issue) => issue.id),
             pullRequests: [...pullRequestEvidence].map(([id, evidence]) => ({ id, ...evidence })), dirtySubjects,
           } });

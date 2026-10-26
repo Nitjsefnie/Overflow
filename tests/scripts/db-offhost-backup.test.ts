@@ -403,7 +403,7 @@ describe("db-offhost-backup.sh environment validation", () => {
 });
 
 describe("db-offhost-backup.sh reduced dump", () => {
-  /** The 8 tables the reduced set excludes data for, in the contract's order. */
+  /** The 9 tables the reduced set excludes data for, in the contract's order. */
   const excludedTables = [
     "repository_reconciliation_evidence_facts",
     "repository_reconciliation_evidence",
@@ -413,9 +413,10 @@ describe("db-offhost-backup.sh reduced dump", () => {
     "repository_reconciliation_jobs",
     "repository_reconciliation_usage",
     "reconciliation_sweep_pages",
+    "reconciliation_sweep_walk_subjects",
   ];
 
-  it("dumps plain format with exactly the 8 excluded tables and the database url", () => {
+  it("dumps plain format with exactly the 9 excluded tables and the database url", () => {
     const run = runBackup();
 
     expect(run.status).toBe(0);
