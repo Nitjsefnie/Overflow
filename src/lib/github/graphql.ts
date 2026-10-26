@@ -1,6 +1,6 @@
 import { checkpointSweepRequest } from "@/lib/fold/sweep-pass";
 import { checkSweepRequestBudget, SweepBudgetSpent } from "@/lib/fold/sweep-request-budget";
-import { classifyGitHubGraphqlRateLimit, classifyGitHubRateLimit, GitHubApiError, GitHubGraphqlRequestError } from "@/lib/github/errors";
+import { classifyGitHubGraphqlRateLimit, classifyGitHubRateLimit, GitHubApiError, GitHubGraphqlInvalidResponseError, GitHubGraphqlRequestError } from "@/lib/github/errors";
 import { gitHubGraphqlBudget, readGraphqlBudgetPayload, type GitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
 import { checkGraphqlRequestBudget, GraphqlBudgetHeld } from "@/lib/github/graphql-request-budget";
 import { recordGraphqlResponseCost } from "@/lib/github/graphql-cost";
@@ -257,10 +257,10 @@ export class GitHubGraphqlClient {
 // Null entries and non-list `nodes` ride nowhere: the error names the field (issue 1408).
 export function requireConnectionNodes<TNode>(fieldPath: string, nodes: unknown): TNode[] {
   if (!Array.isArray(nodes)) {
-    throw new Error(`GitHub GraphQL response was invalid. ${fieldPath} was not a list.`);
+    throw new GitHubGraphqlInvalidResponseError(`GitHub GraphQL response was invalid. ${fieldPath} was not a list.`, fieldPath);
   }
   if (nodes.some((node) => node === null || node === undefined)) {
-    throw new Error(`GitHub GraphQL response was invalid. ${fieldPath} contained a null entry.`);
+    throw new GitHubGraphqlInvalidResponseError(`GitHub GraphQL response was invalid. ${fieldPath} contained a null entry.`, fieldPath);
   }
   return nodes as TNode[];
 }

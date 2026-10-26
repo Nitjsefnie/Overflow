@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
+import { GitHubGraphqlInvalidResponseError } from "@/lib/github/errors";
 import { requireConnectionNodes } from "@/lib/github/graphql";
 import { errorLogToken } from "@/lib/webhooks/log-field";
 
@@ -124,12 +125,49 @@ describe("GitHubGateway connection node guards", () => {
     );
   });
 
-  it("refuses a null closing pull request nested in the issue page naming the field", async () => {
+  // A null entry in one issue's closing-PR connection costs that ONE issue, not
+  // the walk: the issue comes back marked and empty-handed while a sibling in
+  // the same walk is fully read.
+  it("marks one issue unreadable when its closing-PR page holds a null entry", async () => {
     const gateway = gatewayAnswering((operation) => operation === "RepositoryIssues"
-      ? { repository: { issues: page([issueNode({ closedByPullRequestsReferences: page([null]) })]) } }
+      ? { repository: { issues: page([
+          issueNode({
+            databaseId: 501,
+            number: 3,
+            labels: page([{ name: "bug" }]),
+            closedByPullRequestsReferences: page([null]),
+          }),
+          issueNode({
+            databaseId: 502,
+            number: 4,
+            closedByPullRequestsReferences: page([closingPullRequestNode()]),
+          }),
+        ]) } }
+      : { repository: { issue: { timelineItems: page([]) } } });
+
+    const issues = await gateway.listIssues(repository);
+    expect(issues).toHaveLength(2);
+    const marked = issues.find((issue) => issue.number === 3)!;
+    expect(marked.closingPullRequestsUnreadable).toBe(true);
+    expect(marked.closingPullRequests).toEqual([]);
+    // Only the closing-PRs leg failed: the issue's own labels survive the drain.
+    expect(marked.labels).toEqual(["bug"]);
+    const sibling = issues.find((issue) => issue.number === 4)!;
+    expect(sibling.closingPullRequestsUnreadable).toBeUndefined();
+    expect(sibling.closingPullRequests).toEqual([
+      expect.objectContaining({ id: 201, repositoryNameWithOwner: "octo/overflow" }),
+    ]);
+  });
+
+  // A null CONNECTION (not an entry) is the whole issue object answering
+  // unreadable, not one closing reference: the plain invalid-response error is
+  // not per-subject, so the walk still refuses.
+  it("still refuses the walk when the closing-PRs connection itself is null", async () => {
+    const gateway = gatewayAnswering((operation) => operation === "RepositoryIssues"
+      ? { repository: { issues: page([issueNode({ closedByPullRequestsReferences: null })]) } }
       : { repository: { issue: { timelineItems: page([]) } } });
     await expect(gateway.listIssues(repository)).rejects.toThrow(
-      "GitHub GraphQL response was invalid. closedByPullRequestsReferences.nodes contained a null entry.",
+      "GitHub GraphQL response was invalid. closedByPullRequestsReferences was null.",
     );
   });
 
@@ -257,5 +295,52 @@ describe("GitHubGateway connection node guards", () => {
       .toThrow("GitHub GraphQL response was invalid. issues.nodes contained a null entry.");
     expect(() => requireConnectionNodes("issues.nodes", [undefined]))
       .toThrow("GitHub GraphQL response was invalid. issues.nodes contained a null entry.");
+  });
+
+  // Both guard limbs throw the typed error carrying the exact field path, so a
+  // caller can compare it to grant one subject's unreadable connection
+  // per-issue granularity (listIssues does; every other path keeps walking
+  // semantics). The messages stay byte-identical to the plain-Error era.
+  it("throws the typed invalid-response error carrying the field path from both guard limbs", () => {
+    expect(() => requireConnectionNodes("closedByPullRequestsReferences.nodes", null))
+      .toThrow(GitHubGraphqlInvalidResponseError);
+    expect(() => requireConnectionNodes("closedByPullRequestsReferences.nodes", [null]))
+      .toThrow(GitHubGraphqlInvalidResponseError);
+
+    let error: unknown;
+    try {
+      requireConnectionNodes("closedByPullRequestsReferences.nodes", [null]);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(GitHubGraphqlInvalidResponseError);
+    expect((error as GitHubGraphqlInvalidResponseError).fieldPath).toBe("closedByPullRequestsReferences.nodes");
+    expect((error as GitHubGraphqlInvalidResponseError).message)
+      .toBe("GitHub GraphQL response was invalid. closedByPullRequestsReferences.nodes contained a null entry.");
+  });
+
+  // A full walk surfaces the same typed error: the field path survives the
+  // collectCursorPages walk unchanged.
+  it("surfaces the typed error with its field path from a full closing-PRs walk", async () => {
+    const gateway = gatewayAnswering(() => ({ repository: { issue: {
+      closedByPullRequestsReferences: page([null]),
+    } } }));
+    const error = await gateway.getIssueClosingPullRequests(repository, 3).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(GitHubGraphqlInvalidResponseError);
+    expect((error as GitHubGraphqlInvalidResponseError).fieldPath).toBe("closedByPullRequestsReferences.nodes");
+    expect((error as Error).message)
+      .toBe("GitHub GraphQL response was invalid. closedByPullRequestsReferences.nodes contained a null entry.");
+  });
+
+  // getIssue keeps throwing so the fold's per-subject discard can classify the
+  // single dirty subject; it never returns a marked issue.
+  it("keeps surfacing the typed error through getIssue", async () => {
+    const gateway = gatewayAnswering(() => ({ repository: { issue: {
+      ...issueNode(),
+      closedByPullRequestsReferences: page([null]),
+    } } }));
+    const error = await gateway.getIssue(repository, { id: 501, number: 3 }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(GitHubGraphqlInvalidResponseError);
+    expect((error as GitHubGraphqlInvalidResponseError).fieldPath).toBe("closedByPullRequestsReferences.nodes");
   });
 });

@@ -17,7 +17,7 @@ import { drainIssueReads } from "@/lib/github/drain-issue-reads";
 import { githubWebhookEvents } from "@/lib/github/webhook-schema";
 import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
 import { checkGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
-import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
+import { classifyGitHubRateLimit, GitHubApiError, GitHubGraphqlInvalidResponseError } from "@/lib/github/errors";
 import { boundedResponseText, GitHubResponseTooLargeError, MAX_SUCCESS_BODY_BYTES } from "@/lib/github/response-text";
 import type { ForgeGateway } from "@/lib/forge/gateway";
 import type { GitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
@@ -162,10 +162,23 @@ export class GitHubGateway implements ForgeGateway {
     const manifest = targeted ? await this.getIssueTimelineManifest(repository, [...unique.values()]) : null;
     const issues: GitHubIssue[] = [];
     for (const node of unique.values()) {
+      let closingPullRequestsUnreadable: true | undefined;
       const [labels, timeline, closingPullRequests] = await drainIssueReads([
         this.getIssueLabels(repository, node.number, node.labels),
         this.getIssueTimeline(repository, node.number, targeted ? node.timelineItems : undefined),
-        this.getIssueClosingPullRequests(repository, node.number, node.closedByPullRequestsReferences)]);
+        // A null entry in one issue's closing-PR connection is that ONE issue's
+        // unreadable read, not the walk's: mark it and answer an empty list, so
+        // the fold can discard this issue while the rest of the repository
+        // reconciles. Exact `fieldPath` match; every other rejection — the
+        // labels and timeline legs, and this leg's plain invalid-response
+        // throws — keeps whole-walk semantics.
+        this.getIssueClosingPullRequests(repository, node.number, node.closedByPullRequestsReferences).catch((error: unknown): GitHubPullRequest[] => {
+          if (error instanceof GitHubGraphqlInvalidResponseError && error.fieldPath === "closedByPullRequestsReferences.nodes") {
+            closingPullRequestsUnreadable = true;
+            return [];
+          }
+          throw error;
+        })]);
       // Check both fully assembled connections. A nested timeline can claim it is
       // complete while omitting events or comments, even when totalCount agrees.
       const labeled = new Set(timeline.history.flatMap((event) => event.kind === "LABELED" ? [event.label] : []));
@@ -193,7 +206,7 @@ export class GitHubGateway implements ForgeGateway {
           throw new Error(`GitHub issue ${node.number} timeline completeness could not be verified.`);
         }
       }
-      issues.push(toGitHubIssue(node, labels, authoritativeTimeline, closingPullRequests));
+      issues.push(toGitHubIssue(node, labels, authoritativeTimeline, closingPullRequests, closingPullRequestsUnreadable));
     }
     return issues;
   }
@@ -1231,6 +1244,7 @@ function toGitHubIssue(
   labels: string[],
   timeline: { history: GitHubIssueHistoryEvent[]; comments: GitHubIssueComment[] },
   closingPullRequests: GitHubPullRequest[],
+  closingPullRequestsUnreadable?: true,
 ): GitHubIssue {
   if (node.databaseId === null) {
     throw new Error("GitHub GraphQL response was invalid.");
@@ -1255,6 +1269,7 @@ function toGitHubIssue(
     history: timeline.history,
     comments: timeline.comments,
     closingPullRequests,
+    ...(closingPullRequestsUnreadable ? { closingPullRequestsUnreadable } : {}),
   };
 }
 
