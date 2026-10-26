@@ -5,6 +5,7 @@ import {
   type RepositoryCalibrationEntry,
 } from "@/lib/calibration/statistics";
 import { getSql } from "@/lib/db/client";
+import type { UnwritableClosure } from "@/lib/fold/repository-fold";
 import type { ReconciliationJobState } from "@/lib/fold/reconciliation-jobs";
 
 /** A deliberately small SQL boundary that keeps dashboard projections easy to exercise without a database; `unsafe` is the unnamed-statement escape hatch the board read serves through (issue 838). */
@@ -199,10 +200,8 @@ export type OpenAuditProjection = {
 
 export type UnwritableClosureProjection = {
   id: string;
-  kind:
-    | "NO_CLOSING_PULL_REQUEST"
-    | "SETTLEMENT_EVIDENCE_REJECTED"
-    | "CROSS_REPOSITORY_CLOSING_PULL_REQUEST";
+  // The fold's kind set is the one declaration; this projection restates no kind.
+  kind: UnwritableClosure["kind"];
   reason: string;
   recordedAt: string;
   repositoryName: string;
