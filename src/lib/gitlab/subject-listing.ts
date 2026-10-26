@@ -44,6 +44,11 @@ export async function listGitLabSubjectsPage(
 }
 
 function compareRows(left: SubjectRow, right: SubjectRow): number {
-  return Date.parse(left.updated_at) - Date.parse(right.updated_at)
-    || left.updated_at.localeCompare(right.updated_at) || left.id - right.id;
+  const milliseconds = Date.parse(left.updated_at) - Date.parse(right.updated_at);
+  if (milliseconds !== 0) return milliseconds;
+  // Date.parse drops sub-millisecond digits; compare fractions at a common precision.
+  const leftFraction = /\.(\d+)/.exec(left.updated_at)?.[1] ?? "";
+  const rightFraction = /\.(\d+)/.exec(right.updated_at)?.[1] ?? "";
+  const precision = Math.max(leftFraction.length, rightFraction.length);
+  return leftFraction.padEnd(precision, "0").localeCompare(rightFraction.padEnd(precision, "0")) || left.id - right.id;
 }
