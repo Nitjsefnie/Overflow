@@ -387,8 +387,7 @@ async function reconcileRepositoryAfterRepositoryRead(
                 timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
               })).map((issue) => [issue.id, issue]));
               const retained = new Map((full ? [] : cached!.issues).map((issue) => [issue.id, issue]));
-              // Either marker: the per-subject discard — journal, drop its
-              // dirty row; the fold prices or excludes the issue below.
+              // Either marker: the per-subject discard a getIssue rejection takes.
               const dirtyIssueSubjects = new Map(dirtySubjects
                 .filter(({ kind }) => kind === "ISSUE")
                 .map((subject) => [subject.id, subject]));
@@ -432,9 +431,7 @@ async function reconcileRepositoryAfterRepositoryRead(
                   if (issue !== null) changed.set(issue.id, issue);
                 }
               }
-              // A marked issue folds its cached shape when one exists, so its
-              // prior evidence re-derives; without one, the marked fresh shape
-              // folds and prices nothing.
+              // A marked issue folds its cached shape when one exists.
               for (const issue of changed.values()) {
                 const marked = issue.closingPullRequestsUnreadable === true || issue.openingEvidenceUnreadable === true;
                 if (marked && retained.has(issue.id)) continue;
@@ -504,8 +501,7 @@ async function reconcileRepositoryAfterRepositoryRead(
             },
             users,
             forgeIdentities,
-            // Opening-unreadable issues are never priced: excluded here (no
-            // row, no false OPENING_* violation), kept via synchronization.
+            // Opening-unreadable issues are never priced; their rows stay.
             issues: githubIssues.filter((issue) => issue.openingEvidenceUnreadable !== true).map((issue) => ({
               ...issue,
               claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin,
