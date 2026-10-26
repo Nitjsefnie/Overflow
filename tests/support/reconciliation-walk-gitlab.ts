@@ -2,7 +2,7 @@ import { GitLabGateway } from "@/lib/gitlab/client";
 
 export function disappearingGitLabFixture(
   phase: "closing" | "diff",
-  options: { repositoryId?: number; name?: string; status?: number; reachable?: boolean } = {},
+  options: { repositoryId?: number; name?: string; status?: number; reachable?: boolean; merged?: boolean } = {},
 ) {
   const name = options.name ?? "project";
   const at = "2030-01-01T00:00:00Z";
@@ -10,8 +10,8 @@ export function disappearingGitLabFixture(
     description: "Opening", state: "opened", web_url: `https://gitlab.test/group/${name}/-/issues/1`,
     author: { id: 12, username: "sponsor" }, labels: [], created_at: at, updated_at: at, closed_at: null };
   const pr = { id: 901, iid: 7, project_id: options.repositoryId ?? 42, title: "MR", description: "",
-    state: "opened", web_url: `https://gitlab.test/group/${name}/-/merge_requests/7`,
-    author: { id: 13, username: "contributor" }, created_at: at, updated_at: at, merged_at: null,
+    state: options.merged ? "merged" : "opened", web_url: `https://gitlab.test/group/${name}/-/merge_requests/7`,
+    author: { id: 13, username: "contributor" }, created_at: at, updated_at: at, merged_at: options.merged ? at : null,
     merge_commit_sha: null, sha: null, squash_commit_sha: null };
   let listings = 0;
   const paths: string[] = [];
@@ -29,6 +29,7 @@ export function disappearingGitLabFixture(
     if (path === "/merge_requests/7/closes_issues") return phase === "closing" ? unavailable() : Response.json([]);
     if (path === "/merge_requests/7/raw_diffs") return unavailable();
     if (path === "/merge_requests/7") return options.reachable ? Response.json(pr) : new Response("Gone", { status: 404 });
+    if (path === "/merge_requests/7/commits") return new Response("Commits unavailable", { status: 404 });
     throw new Error(`Unexpected GitLab request ${path}`);
   } });
   return { gateway, paths };

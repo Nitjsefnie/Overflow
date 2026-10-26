@@ -402,7 +402,13 @@ export class GitLabGateway {
     const commits = await this.listAllPages<{ committed_at: string | null; committed_date: string }>(
       `/projects/${segment(`${repository.owner}/${repository.name}`)}/merge_requests/${mergeRequestIid}/commits`,
       "offset",
-    );
+    ).catch((error: unknown) => {
+      // A missing commits endpoint does not prove the MR itself is absent.
+      if (error instanceof GitLabApiError && error.status === 404) {
+        throw new Error("GitLab merge request commits were unavailable for a readable merge request.", { cause: error });
+      }
+      throw error;
+    });
     // Normalize every timestamp first (unparsable input throws here); raw
     // committer offsets make lexical order differ from chronological order.
     const timestamps = commits
