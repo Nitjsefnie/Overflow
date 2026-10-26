@@ -8,6 +8,7 @@ import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import type { GitHubIssue, GitHubPullRequest } from "@/lib/github/types";
 import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
+import { scrubSuppressedForgeData } from "@/lib/fold/data-subject-suppression";
 import { verifiedRepositoryAt } from "../support/verified-repository";
 
 let container: StartedTestContainer | undefined;
@@ -505,6 +506,35 @@ describe("a reconciliation that deletes materialized rows says so", () => {
     await expect(removalChanges(second.runId)).resolves.toEqual([]);
     expect(second.removals).toBe(0);
     expect(second.removed).toBe(0);
+  });
+
+  it("forwards keptIssueGitHubIds through the scrubber untouched", async () => {
+    const { repositoryId } = await registerRepository({
+      githubRepositoryId: 9_200_013,
+      ownerName: "example/scrub-forwarding",
+      githubWebhookId: 9_200_014,
+      sponsorLogin: "removal-sponsor-seven",
+      sponsorGitHubUserId: 9_300_011,
+    });
+    await sql`
+      insert into data_subject_suppressions (provider, instance_url, forge_id, logins)
+      values (${"github"}, ${"https://github.com"}, ${9_400_001}, ${sql.array(["suppressed-login"])})
+    `;
+    const publication = {
+      fold: {
+        issues: [], pullRequests: [], settlements: [], selfWorkCalibrations: [],
+        unwritableClosures: [], policyViolations: [], ledgerEntries: [],
+      },
+      synchronization: {
+        expectedVersion: null, scanStartedAt: new Date(), full: true, issues: [], pullRequests: [], dirtySubjects: [],
+        keptIssueGitHubIds: [9_100_010],
+      },
+    };
+
+    // One suppressed person is live, so the scrubber performs its walk; the
+    // kept set rides through it untouched.
+    const scrubbed = await scrubSuppressedForgeData(sql as unknown as Parameters<typeof scrubSuppressedForgeData>[0], repositoryId, publication);
+    expect(scrubbed.synchronization?.keptIssueGitHubIds).toEqual([9_100_010]);
   });
 });
 
