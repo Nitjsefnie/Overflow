@@ -20,6 +20,7 @@ const projection: DashboardProjection = {
       active: true,
       openingName: "Opening",
       actualName: "Actual",
+      openingLabels: ["size/S"],
       unavailableReason: null,
       reconciliationState: "FAILED",
       reconciliationLastFailureAt: new Date("2026-09-01T12:34:56.789Z"),

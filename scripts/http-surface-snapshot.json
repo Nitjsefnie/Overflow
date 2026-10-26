@@ -1,6 +1,6 @@
 {
   "snapshotFormat": 2,
-  "httpServerVersion": "1.6.0",
+  "httpServerVersion": "1.7.0",
   "errorEnvelope": {
     "error": {
       "code": "string",
@@ -23,6 +23,7 @@
     "POST /api/repositories": {
       "claimPath": "string",
       "initialImportScheduled": "boolean",
+      "openingLabels": "string",
       "repository": {
         "githubRepositoryId": "number",
         "githubWebhookId": "number",
@@ -303,6 +304,7 @@
         "active": "boolean",
         "actualName": "string",
         "id": "string",
+        "openingLabels": "string",
         "openingName": "string",
         "ownerName": "string",
         "reconciliationLastFailureAt": "string",

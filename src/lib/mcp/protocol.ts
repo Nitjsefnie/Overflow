@@ -7,7 +7,7 @@
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 export const MCP_SERVER_NAME = "overflow";
-export const MCP_SERVER_VERSION = "1.6.0";
+export const MCP_SERVER_VERSION = "1.7.0";
 
 export interface ToolCallResult {
   content: { type: "text"; text: string }[];

@@ -496,6 +496,7 @@ describe("dashboard projections", () => {
           active: true,
           opening_name: "Offer band",
           actual_name: "Delivered band",
+          opening_labels: [{ label: "shoal", comparisonPoints: 3, reservePoints: 4 }],
           unavailable_reason: null,
           reconciliation_state: null,
           reconciliation_last_failure_at: null,
@@ -555,6 +556,7 @@ describe("dashboard projections", () => {
           active: true,
           opening_name: "Offer band",
           actual_name: "Delivered band",
+          opening_labels: [{ label: "shoal", comparisonPoints: 3, reservePoints: 4 }],
           unavailable_reason: "NOT_PUBLIC",
           reconciliation_state: null,
           reconciliation_last_failure_at: null,
@@ -566,6 +568,7 @@ describe("dashboard projections", () => {
           active: true,
           opening_name: "Offer band",
           actual_name: "Delivered band",
+          opening_labels: [{ label: "shoal", comparisonPoints: 3, reservePoints: 4 }],
           unavailable_reason: null,
           reconciliation_state: null,
           reconciliation_last_failure_at: null,
@@ -597,6 +600,7 @@ describe("dashboard projections", () => {
           active: true,
           opening_name: "Offer band",
           actual_name: "Delivered band",
+          opening_labels: [{ label: "shoal", comparisonPoints: 3, reservePoints: 4 }],
         },
       ],
       [],
@@ -621,6 +625,7 @@ describe("dashboard projections", () => {
           active: true,
           opening_name: "Offer band",
           actual_name: "Delivered band",
+          opening_labels: [{ label: "shoal", comparisonPoints: 3, reservePoints: 4 }],
           unavailable_reason: null,
           reconciliation_state: "SUCCEEDED",
           reconciliation_last_failure_at: null,
@@ -642,6 +647,70 @@ describe("dashboard projections", () => {
 
     expect(dashboard.registeredRepositories[0]?.reconciliationLastFailureAt).toEqual(
       new Date("2026-09-04T11:00:00.000Z"),
+    );
+  });
+
+  it("projects each registered repository's opening label names in stored order", async () => {
+    const { sql } = sqlHarness([
+      [{ settled_balance: 0, earned_total: 0, given_total: 0, reserved_points: 0 }],
+      [],
+      [],
+      [
+        {
+          id: "repo-1",
+          owner_name: "co-op/harbour",
+          visibility: "PUBLIC",
+          active: true,
+          opening_name: "Offer band",
+          actual_name: "Delivered band",
+          opening_labels: [
+            { label: "moonlit ridge", comparisonPoints: 3, reservePoints: 4 },
+            { label: "granite path", comparisonPoints: 6, reservePoints: 8 },
+          ],
+          unavailable_reason: null,
+          reconciliation_state: null,
+          reconciliation_last_failure_at: null,
+        },
+      ],
+      [],
+      [],
+    ]);
+
+    const dashboard = await getDashboard("member-1", { sql });
+
+    expect(dashboard.registeredRepositories).toEqual([
+      expect.objectContaining({
+        id: "repo-1",
+        openingLabels: ["moonlit ridge", "granite path"],
+      }),
+    ]);
+  });
+
+  it("refuses a registered repository whose opening labels are not a list of label entries", async () => {
+    const { sql } = sqlHarness([
+      [{ settled_balance: 0, earned_total: 0, given_total: 0, reserved_points: 0 }],
+      [],
+      [],
+      [
+        {
+          id: "repo-1",
+          owner_name: "co-op/harbour",
+          visibility: "PUBLIC",
+          active: true,
+          opening_name: "Offer band",
+          actual_name: "Delivered band",
+          opening_labels: "moonlit ridge",
+          unavailable_reason: null,
+          reconciliation_state: null,
+          reconciliation_last_failure_at: null,
+        },
+      ],
+      [],
+      [],
+    ]);
+
+    await expect(getDashboard("member-1", { sql })).rejects.toThrow(
+      "Repository opening labels was not a list of label entries.",
     );
   });
 
@@ -1759,7 +1828,7 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
       truncate users, registered_repositories, issues, balances;
       insert into users values ('sponsor', 'grace', 901, 'ACTIVE'), ('member', 'ada', 902, 'ACTIVE');
       insert into registered_repositories (id, owner_name, sponsor_id, active, visibility, difficulty_scheme) values
-        ('repo', 'co-op/harbour', 'sponsor', true, 'PUBLIC', '{"openingName":"Promise band","actualName":"Delivered band"}');
+        ('repo', 'co-op/harbour', 'sponsor', true, 'PUBLIC', '{"openingName":"Promise band","actualName":"Delivered band","openingLabels":[{"label":"shoal","comparisonPoints":3,"reservePoints":4}]}');
       insert into issues values
         ('open', 'repo', 1, 'Open work', 'https://github.com/co-op/harbour/issues/1', 'OPEN', 'delta', 3, 5, null, null, '2026-09-01T00:00:00Z'),
         ('claimed', 'repo', 2, 'Outsider work', 'https://github.com/co-op/harbour/issues/2', 'OPEN', 'delta', 3, 6, 'outsider', 202, '2026-09-01T00:00:00Z'),
@@ -1810,7 +1879,7 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
     await sql.unsafe(`
       insert into registered_repositories (id, github_repository_id, owner_name, sponsor_id, active, visibility, unavailable_reason, difficulty_scheme)
       values ('repo-unavailable', 921001, 'co-op/private-harbour', 'sponsor', true, 'PRIVATE', 'NOT_PUBLIC',
-        '{"openingName":"Promise band","actualName":"Delivered band"}')
+        '{"openingName":"Promise band","actualName":"Delivered band","openingLabels":[{"label":"shoal","comparisonPoints":3,"reservePoints":4}]}')
     `);
     await sql.unsafe(`
       insert into issues (id, repository_id, issue_number, title, url, state, opening_label,
@@ -1840,9 +1909,9 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
       insert into registered_repositories (id, github_repository_id, owner_name, sponsor_id, active, visibility, unavailable_reason, difficulty_scheme)
       values
         ('repo-repayment-available', 921002, 'co-op/open-bay', 'exhausted', true, 'PUBLIC', null,
-          '{"openingName":"Promise band","actualName":"Delivered band"}'),
+          '{"openingName":"Promise band","actualName":"Delivered band","openingLabels":[{"label":"shoal","comparisonPoints":3,"reservePoints":4}]}'),
         ('repo-repayment-unavailable', 921003, 'co-op/closed-bay', 'exhausted', true, 'PRIVATE', 'NOT_PUBLIC',
-          '{"openingName":"Promise band","actualName":"Delivered band"}')
+          '{"openingName":"Promise band","actualName":"Delivered band","openingLabels":[{"label":"shoal","comparisonPoints":3,"reservePoints":4}]}')
     `);
     await sql.unsafe(`
       insert into issues (id, repository_id, issue_number, title, url, state, opening_label,
@@ -1884,6 +1953,7 @@ function failingRepositoryResponses(lastFailureAt: unknown): unknown[][] {
         active: true,
         opening_name: "Offer band",
         actual_name: "Delivered band",
+        opening_labels: [{ label: "shoal", comparisonPoints: 3, reservePoints: 4 }],
         unavailable_reason: null,
         reconciliation_state: "FAILED",
         reconciliation_last_failure_at: lastFailureAt,

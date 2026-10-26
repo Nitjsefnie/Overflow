@@ -533,7 +533,23 @@ describe("POST /api/repositories", () => {
       },
       initialImportScheduled: true,
       claimPath: "NO_EVIDENCE_FOUND",
+      openingLabels: ["size/S", "size/M", "size/L"],
     });
+  });
+
+  it("carries the submitted opening label names in the 201 response, in submission order", async () => {
+    const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(),
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(body.openingLabels).toEqual(["size/S", "size/M", "size/L"]);
   });
 
   it.each(["EVIDENCE_FOUND", "NOT_CHECKED"] as const)(
@@ -570,6 +586,7 @@ describe("POST /api/repositories", () => {
         },
         initialImportScheduled: true,
         claimPath,
+        openingLabels: ["size/S", "size/M", "size/L"],
       });
     },
   );
@@ -851,6 +868,7 @@ describe("Overflow token registration", () => {
       },
       initialImportScheduled: true,
       claimPath: "NO_EVIDENCE_FOUND",
+      openingLabels: ["size/S", "size/M", "size/L"],
     });
     expect(JSON.stringify(body)).not.toContain(credential);
   });

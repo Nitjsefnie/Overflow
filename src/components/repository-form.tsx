@@ -40,11 +40,9 @@ type ForgeIdentityOption = {
 
 type RepositoryFormProps = RegistrationAppDisplayProps & {
   initialValues?: RepositoryFormValues;
-  /**
-   * `registration` registers a new repository (POST); `catalog-change` submits
-   * a replacement catalog for one registered repository (PATCH). Both edit
-   * the same catalog fields; settled work keeps its price.
-   */
+  /** `registration` registers a new repository (POST); `catalog-change` submits a
+   * replacement catalog for one registered repository (PATCH), both editing the same
+   * catalog fields; settled work keeps its price. */
   variant?: "registration" | "catalog-change";
   /** Webhook-administration sign-in, offered at the OAuth gate or scope refusal. */
   reauthorizeAction?: () => Promise<void>;
@@ -72,9 +70,8 @@ const defaultValues: RepositoryFormValues = {
   })),
 };
 
-// One labels read per settled reference: the quiet period the repository
-// reference must stay unchanged before the form reads its labels, so typing a
-// reference does not fire one request per keystroke.
+// One labels read per settled reference: the quiet period the repository reference must stay
+// unchanged before the form reads its labels, so typing does not fire one request per keystroke.
 const labelsFetchDebounceMs = 300;
 
 // The project reference the GitLab path accepts, mirrored from the
@@ -143,10 +140,9 @@ export function RepositoryForm({
   const lastReferenceKey = useRef<string | null | undefined>(undefined);
 
   /**
-   * The reference the labels read is about, whichever forge it names: one
-   * settled key and one URL for the effect below. Changing the forge changes
-   * the vocabulary too, so a switch clears the catalog selections exactly as
-   * an edited reference does.
+   * The reference the labels read is about, whichever forge it names: one settled
+   * key and one URL for the effect below. A forge switch changes the vocabulary too,
+   * so it clears the catalog selections exactly as an edited reference does.
    */
   const labelsRequest = useMemo<{ key: string; url: string } | null>(() => {
     if (provider === "gitlab") {
@@ -340,7 +336,8 @@ export function RepositoryForm({
       }
       setFeedback({
         kind: responseBody?.claimPath === "NO_EVIDENCE_FOUND" || responseBody?.claimPath === "NOT_CHECKED" ? "warning" : "success",
-        message: registrationMessage(ownerName, responseBody?.initialImportScheduled, responseBody?.claimPath),
+        message: registrationMessage(ownerName, responseBody?.initialImportScheduled, responseBody?.claimPath,
+          values.openingLabels.map((label) => label.label)),
       });
     } catch {
       setFeedback({
@@ -495,7 +492,7 @@ export function RepositoryForm({
 
           <fieldset className="catalog-fieldset">
             <legend>Opening catalog</legend>
-            <p className="field-help">Set any labels and their comparison and reservation points.</p>
+            <p className="field-help">Set any labels and their comparison and reservation points. An existing issue is listed once it carries one of these labels.</p>
             <div className="catalog-rows">
               {values.openingLabels.map((openingLabel, index) => (
                 <div className="catalog-row" key={openingLabel.rowId}>
@@ -619,12 +616,9 @@ type RegistrationResponse = {
   error?: { code?: string; message?: string };
 };
 
-// Registration only queues the import of the issues that already exist in the
-// repository, so `true` promises that the import is coming and not that it has
-// happened, and `false` means the queueing itself failed: nothing is waiting to run,
-// and only the periodic repair sweep will pick the repository up. Either way the
-// registration stands, so the sponsor is told which happened rather than being left
-// to wonder why an empty issue list is empty.
+// Registration queues the existing issues' import: `true` promises it is coming,
+// not done; `false` means the queueing itself failed and only the repair sweep
+// will pick the repository up. Either way the registration stands and the sponsor is told which.
 /**
  * The one success sentence for a catalog change. A change that stored a new
  * version says which one; a submission that repeated the current catalog says
@@ -644,12 +638,17 @@ function registrationMessage(
   ownerName: string,
   initialImportScheduled: boolean | undefined,
   claimPath: RegistrationResponse["claimPath"],
+  openingLabelNames: string[],
 ): string {
+  // An issue is listed on the board only once it carries one of the labels the
+  // catalog just registered, so both import branches say that instead of
+  // promising an appearance the import cannot deliver.
+  const listedRule = `an issue is listed once it carries one of the opening labels: ${openingLabelNames.join(", ")}.`;
   let message = `${ownerName} is registered.`;
   if (initialImportScheduled === true) {
-    message = `${ownerName} is registered. Its existing issues are being imported and will appear shortly.`;
+    message = `${ownerName} is registered. Its existing issues are being imported; ${listedRule}`;
   } else if (initialImportScheduled === false) {
-    message = `${ownerName} is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep.`;
+    message = `${ownerName} is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep; ${listedRule}`;
   }
 
   if (claimPath === "NO_EVIDENCE_FOUND") {
@@ -755,9 +754,9 @@ function removeOpeningLabel(
 }
 
 /**
- * The single repository a submission or a labels read is about, or null. The
- * same rules the server's parseGitHubRepository applies, so the labels the
- * form reads are read from exactly the repository a registration would verify.
+ * The single repository a submission or a labels read is about, or null, by the
+ * same rules the server's parseGitHubRepository applies, so the labels the form
+ * reads are read from exactly the repository a registration would verify.
  */
 function parseSingleRepository(value: string): { owner: string; name: string } | null {
   const submitted = value.trim();

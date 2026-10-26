@@ -46,6 +46,8 @@ export type RegisteredRepositoryProjection = {
   active: boolean;
   openingName: string;
   actualName: string;
+  /** The repository's opening label names in stored order — the listing rule's labels. */
+  openingLabels: string[];
   unavailableReason: string | null;
   /** `IDLE` is the no-row case: a job deletes its own row on success, so nothing outstanding is nothing to say. */
   reconciliationState: "IDLE" | ReconciliationJobState;
@@ -62,9 +64,8 @@ export type EnforcementNoticeProjection = {
 
 /**
  * The member's own notice that a calibration audit is open on their account: its
- * identity and the day it opened. The audit's rationale, cohort definition and
- * statistics stay moderator-facing, so the notice exists independently of
- * anything a moderator typed.
+ * identity and the day it opened. The rationale, cohort definition and statistics
+ * stay moderator-facing, so the notice exists independently of anything a moderator typed.
  */
 export type MemberOpenAuditProjection = {
   id: string;
@@ -139,12 +140,11 @@ export type SettlementProofProjection = {
 };
 
 /**
- * The evidence behind a closure the fold calibrated instead of settling.
- *
- * A sponsor who closes their own issue is both parties, so no credits move and
- * there is no settlement row to point at. The comparison the account is judged
- * on is recorded here instead, and the actual figure is absent whenever the
- * closure's settled evidence was rejected.
+ * The evidence behind a closure the fold calibrated instead of settling. A sponsor
+ * who closes their own issue is both parties, so no credits move and there is no
+ * settlement row to point at. The comparison the account is judged on is recorded
+ * here instead, and the actual figure is absent whenever the closure's settled
+ * evidence was rejected.
  */
 export type SelfWorkCalibrationProofProjection = {
   id: string;
@@ -263,11 +263,10 @@ export type ModerationRepositoryProjection = {
 
 /**
  * A scope that runs a whole projection's reads against one database snapshot.
- *
- * `getDashboard` hands its callback every read the projection makes, so a
- * commit landing mid-projection cannot show the callback two different
- * committed states (issue 443). Tests supply their own to observe or replace
- * the transaction boundary without a database.
+ * `getDashboard` hands its callback every read the projection makes, so a commit
+ * landing mid-projection cannot show the callback two different committed states
+ * (issue 443). Tests supply their own to observe or replace the transaction boundary
+ * without a database.
  */
 export type DashboardBegin = <T>(run: (sql: DashboardSql) => Promise<T>) => Promise<T>;
 
@@ -303,6 +302,7 @@ type RegisteredRepositoryRow = {
   active: boolean;
   opening_name: string;
   actual_name: string;
+  opening_labels: unknown;
   unavailable_reason: string | null;
   reconciliation_state: string | null;
   reconciliation_last_failure_at: Date | string | null;
@@ -499,14 +499,12 @@ type ModerationRepositoryRow = {
 /**
  * The member dashboard: one projection, one database snapshot.
  *
- * Loads materialized ledger and reservation values; overcommitment remains
- * visible as negative headroom.
- *
- * The six reads below all describe the same committed instant. Each is its own
- * autocommit statement, so without a shared snapshot a commit landing after the
- * first read splits the projection across two states of the ledger — a balance
- * from before it beside a settlement history from after it (issue 443). The
- * snapshot scope closes that tear.
+ * Loads materialized ledger and reservation values; overcommitment remains visible as
+ * negative headroom. The six reads below all describe the same committed instant. Each
+ * is its own autocommit statement, so without a shared snapshot a commit landing after
+ * the first read splits the projection across two states of the ledger — a balance from
+ * before it beside a settlement history from after it (issue 443). The snapshot scope
+ * closes that tear.
  */
 export async function getDashboard(
   accountId: string,
@@ -609,6 +607,7 @@ async function readDashboardProjection(
       repositories.active,
       repositories.difficulty_scheme ->> 'openingName' as opening_name,
       repositories.difficulty_scheme ->> 'actualName' as actual_name,
+      repositories.difficulty_scheme -> 'openingLabels' as opening_labels,
       repositories.unavailable_reason,
       jobs.state::text as reconciliation_state,
       jobs.last_failure_at as reconciliation_last_failure_at
@@ -626,10 +625,10 @@ async function readDashboardProjection(
   `;
   // At most one OPEN audit can exist per account — the partial unique index
   // calibration_audits_one_open_account (migration 006) covers (account_id) where
-  // state = 'OPEN' — so this read cannot multiply rows and needs no precedence
-  // ordering to pick one. The notice is the audit's identity and opening time
-  // alone: nothing here consults the enforcement state or a moderator's text, so
-  // the member's dashboard shows it whatever the account's state happens to be.
+  // state = 'OPEN' — so this read cannot multiply rows and needs no precedence ordering
+  // to pick one. The notice is the audit's identity and opening time alone: nothing here
+  // consults the enforcement state or a moderator's text, so the member's dashboard shows
+  // it whatever the account's state happens to be.
   const [openAuditRow] = await sql<MemberOpenAuditRow[]>`
     select id, opened_at
     from calibration_audits
@@ -664,6 +663,7 @@ async function readDashboardProjection(
       active: repository.active,
       openingName: readText(repository.opening_name, "Repository opening catalog name"),
       actualName: readText(repository.actual_name, "Repository actual catalog name"),
+      openingLabels: readOpeningLabelNames(repository.opening_labels, "Repository opening labels"),
       unavailableReason: repository.unavailable_reason === null
         ? null
         : readText(repository.unavailable_reason, "Repository unavailability reason"),
@@ -843,12 +843,10 @@ export async function getSettlementProof(
 /**
  * The proof a sponsor can read for their own closure, withheld from every other
  * account: the calibration is the only record of work they were priced on, and
- * `user_id` is what makes it theirs.
- *
- * The actual label is read back from the issue rather than the calibration,
- * because the fold derives one settled difficulty per closure and writes the
- * label on the issue and the points on the calibration. Both are absent
- * together on a closure whose settled evidence was rejected.
+ * `user_id` is what makes it theirs. The actual label is read back from the issue
+ * rather than the calibration, because the fold derives one settled difficulty per
+ * closure and writes the label on the issue and the points on the calibration.
+ * Both are absent together on a closure whose settled evidence was rejected.
  */
 export async function getSelfWorkCalibrationProof(
   accountId: string,
@@ -920,9 +918,8 @@ export async function getSelfWorkCalibrationProof(
 }
 
 /**
- * Every closure this account was calibrated on, newest merge first, including
- * the ones with no actual figure: a calibration that recorded nothing is the
- * one a sponsor most needs to find.
+ * Every closure this account was calibrated on, newest merge first, including the ones
+ * with no actual figure: a calibration that recorded nothing is the one a sponsor most needs to find.
  */
 export async function listSelfWorkCalibrations(
   accountId: string,
@@ -958,16 +955,14 @@ export async function listSelfWorkCalibrations(
 }
 
 /**
- * The one cohort selection both calibration projections derive from: the
- * account's own calibrated closures, and the outsider settlements the account
- * owes on. One selection per request — the projections are pure derivations
- * of this result (getCalibrationComparison pools the pairs,
- * getCalibrationComparisonByRepository groups them per repository), so a
- * caller cannot project without loading, and a reconciliation commit landing
- * between two independent selections can no longer make the breakdown stop
- * being a partition of the pooled comparison (issue 435).
- * `repository_name` is carried for the grouping reader; the pooled one ignores
- * it.
+ * The one cohort selection both calibration projections derive from: the account's
+ * own calibrated closures, and the outsider settlements the account owes on. One
+ * selection per request — the projections are pure derivations of this result
+ * (getCalibrationComparison pools the pairs, getCalibrationComparisonByRepository
+ * groups them per repository), so a caller cannot project without loading, and a
+ * reconciliation commit landing between two independent selections can no longer
+ * make the breakdown stop being a partition of the pooled comparison (issue 435).
+ * `repository_name` is carried for the grouping reader; the pooled one ignores it.
  */
 export type CalibrationCohorts = {
   selfWorkRows: RepositoryCalibrationRow[];
@@ -975,15 +970,13 @@ export type CalibrationCohorts = {
 };
 
 /**
- * The one cohort read per request: load the account's two cohorts once and
- * hand the result to both projections. Neither projection selects.
- *
- * Both selections run inside one repeatable-read transaction (the snapshot
- * scope), so a reconciliation commit landing between them cannot split the
- * cohort pair across two committed states — at READ COMMITTED each statement
- * takes its own snapshot, and the self-work selection then answers from before
- * the commit while the outsider selection answers from after it. The
- * projections are pure derivations of the pair, so the breakdown stays a
+ * The one cohort read per request: load the account's two cohorts once and hand the
+ * result to both projections. Neither projection selects. Both selections run inside
+ * one repeatable-read transaction (the snapshot scope), so a reconciliation commit
+ * landing between them cannot split the cohort pair across two committed states — at
+ * READ COMMITTED each statement takes its own snapshot, and the self-work selection
+ * then answers from before the commit while the outsider selection answers from after
+ * it. The projections are pure derivations of the pair, so the breakdown stays a
  * partition of the pooled comparison (issue 499).
  */
 export async function loadCalibrationCohorts(
@@ -1044,9 +1037,9 @@ async function readCalibrationCohorts(
 }
 
 /**
- * The pooled calibration comparison over one loaded cohort pair. A pure
- * derivation: the selection ran once in loadCalibrationCohorts, so this and
- * the per-repository breakdown read the same rows by construction.
+ * The pooled calibration comparison over one loaded cohort pair. A pure derivation:
+ * the selection ran once in loadCalibrationCohorts, so this and the per-repository
+ * breakdown read the same rows by construction.
  */
 export function getCalibrationComparison(cohorts: CalibrationCohorts): CalibrationComparison {
   return compareCalibration(
@@ -1056,20 +1049,16 @@ export function getCalibrationComparison(cohorts: CalibrationCohorts): Calibrati
 }
 
 /**
- * The same comparison as getCalibrationComparison, split one entry per
- * repository, derived from the same one loaded cohort pair: neither
- * projection reads, so the breakdown cannot straddle a commit the pooled
- * figure did not see.
- *
- * The registered repositories do not offer the same opening scale — a uniform
- * 1..10 in one, five rungs in another — so the pooled figure above averages two
- * different measurements into one mean. Each entry compares a repository's own
- * two cohorts, so a member reads each scale on its own terms.
- *
- * A repository appears whenever either cohort has a pair in it, including the
- * one whose other cohort is empty: dropping that repository would hide the
- * cohort the member has, and compareCalibration already declines to report a
- * difference there.
+ * The same comparison as getCalibrationComparison, split one entry per repository,
+ * derived from the same one loaded cohort pair: neither projection reads, so the
+ * breakdown cannot straddle a commit the pooled figure did not see. The registered
+ * repositories do not offer the same opening scale — a uniform 1..10 in one, five
+ * rungs in another — so the pooled figure above averages two different measurements
+ * into one mean. Each entry compares a repository's own two cohorts, so a member
+ * reads each scale on its own terms. A repository appears whenever either cohort has
+ * a pair in it, including the one whose other cohort is empty: dropping that
+ * repository would hide the cohort the member has, and compareCalibration already
+ * declines to report a difference there.
  */
 export function getCalibrationComparisonByRepository(
   cohorts: CalibrationCohorts,
@@ -1452,7 +1441,6 @@ export function readText(value: unknown, label: string): string {
 
 /**
  * A column that is legitimately absent, still checked when it is present.
- *
  * Null is the answer on the closure this product has to render — a settled
  * label the fold refused to write — so it passes through, but anything else
  * non-textual is a projection reading the wrong column and says so.
@@ -1462,9 +1450,20 @@ function readNullableText(value: unknown, label: string): string | null {
 }
 
 /**
- * Keyed by the shared union, so the compiler is what notices a state added to
- * `ReconciliationJobState`: a missing key fails this build, where a hand-kept list would instead
- * throw on the dashboard of every sponsor who owns a repository in that state.
+ * The opening label names one stored difficulty scheme carries, in stored order:
+ * the scheme's `openingLabels` entries each hold one name beside their points.
+ */
+function readOpeningLabelNames(value: unknown, label: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} was not a list of label entries.`);
+  }
+  return value.map((entry) => readText((entry as { label?: unknown } | null)?.label, label));
+}
+
+/**
+ * Keyed by the shared union, so the compiler is what notices a state added to `ReconciliationJobState`:
+ * a missing key fails this build, where a hand-kept list would instead throw on the dashboard of
+ * every sponsor who owns a repository in that state.
  */
 const reconciliationJobStates: { [State in ReconciliationJobState]: State } = {
   PENDING: "PENDING",
@@ -1474,7 +1473,6 @@ const reconciliationJobStates: { [State in ReconciliationJobState]: State } = {
 
 /**
  * The queue's state for one repository, where no row at all is the settled answer.
- *
  * A job deletes its own row when it succeeds, so a missing row means the repository agrees with
  * GitHub rather than that its state is unknown. A state the queue cannot hold is a projection
  * reading the wrong column, and saying so beats rendering it to a sponsor as if it meant something.

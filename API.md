@@ -27,6 +27,9 @@ the security reason and the change.
 
 **Version history:**
 
+- 1.7.0: The registration response adds `openingLabels`, the repository's
+  opening label names; an existing issue is listed once it carries one of
+  them.
 - 1.5.0: Closed-PR dispute responses add `landedCommitAuthorId`; account
   exports include disputes that name the account as the landing commit author.
 - 1.4.0: `POST /api/account/export` adds closed-PR dispute requests and their
@@ -361,17 +364,23 @@ Success is HTTP `201`. The example below shows an OAuth-hook registration
     "githubWebhookId": 987654321
   },
   "initialImportScheduled": true,
-  "claimPath": "NOT_CHECKED"
+  "claimPath": "NOT_CHECKED",
+  "openingLabels": ["offered: small", "offered: medium", "offered: large"]
 }
 ```
 
+`openingLabels` is the array of the repository's opening label names as
+registered. An existing issue is listed on the board once it carries one of
+these; an issue that carries none is never listed, however long the wait.
+
 `initialImportScheduled` reports whether the import of the work that already
 exists in the repository was queued, not whether it has finished: the import
-runs after the response, and the issues appear once it does. If it is `false`,
-the repository is still registered but nothing is queued; the periodic repair
-sweep brings its existing work in later, or arrange a
-[reconciliation](OPERATING.md#reconciliation) yourself. Registering the repository again is
-never the remedy.
+runs after the response, and an existing issue is listed on the board once it
+carries one of the repository's opening labels — an issue that carries none is
+never listed, however long the wait. If it is `false`, the repository is still
+registered but nothing is queued; the periodic repair sweep brings its existing
+work in later, or arrange a [reconciliation](OPERATING.md#reconciliation)
+yourself. Registering the repository again is never the remedy.
 
 Errors have `{ "error": { "code": "...", "message": "..." } }`. Match the HTTP
 status and code, then use the message to distinguish causes. App registration

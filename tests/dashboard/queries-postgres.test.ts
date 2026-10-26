@@ -192,6 +192,20 @@ describe("audit targeting against PostgreSQL", () => {
     expect(repositories.map((repository) => repository.id)).not.toContain(seeded.inactiveRepositoryId);
   });
 
+  it("carries each registered repository's opening label names into the member dashboard", async () => {
+    const sponsorId = await insertUser("henry");
+    await insertRepository({ ownerName: "example/marker", sponsorId, active: false });
+
+    const dashboard = await getDashboard(sponsorId);
+
+    expect(dashboard.registeredRepositories.map((repository) => ({
+      ownerName: repository.ownerName,
+      openingLabels: repository.openingLabels,
+    }))).toEqual([
+      { ownerName: "example/marker", openingLabels: ["size/M"] },
+    ]);
+  });
+
   it("carries each registered repository's own unavailability into the member dashboard", async () => {
     const sponsorId = await insertUser("frank");
     // Registered inactive so the moderation repository listing above keeps its exact answer.

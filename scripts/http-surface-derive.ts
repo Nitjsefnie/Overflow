@@ -374,6 +374,7 @@ async function deriveGetDashboard(): Promise<DerivedAnswer> {
           active: true,
           openingName: "Opening",
           actualName: "Actual",
+          openingLabels: ["opening:medium"],
           unavailableReason: null,
           reconciliationState: "IDLE" as const,
           reconciliationLastFailureAt: new Date(derivationNowMs),
