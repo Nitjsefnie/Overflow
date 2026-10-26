@@ -1,3 +1,5 @@
+import { disappearingGitLabFixture } from "../support/reconciliation-walk-gitlab";
+import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { GitHubApiError } from "@/lib/github/errors";
 import { sponsorGateway } from "@/lib/fold/reconcile-as-sponsor";
 import { execFileSync } from "node:child_process";
@@ -14,7 +16,7 @@ import { RECONCILIATION_EVIDENCE_FORMAT } from "@/lib/fold/reconciliation-eviden
 import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { verifiedRepositoryAt } from "../support/verified-repository";
 import { startPostgresContainer } from "../support/postgres-container";
-import { issue } from "./reconciliation-walk-fixture";
+import { issue, pullRequest } from "./reconciliation-walk-fixture";
 
 let sql: Sql;
 let container: StartedTestContainer;
@@ -32,20 +34,21 @@ afterAll(async () => {
   if (original === undefined) delete process.env.OVERFLOW_DATABASE_URL; else process.env.OVERFLOW_DATABASE_URL = original;
 });
 
-async function fixture() {
+async function fixture(factByteLimit?: number) {
   const f = await materializeRepositoryFixture(sql);
+  if (factByteLimit !== undefined) f.store = new PostgresFoldStore(sql, undefined, undefined, undefined, { reconciliationFactByteLimit: factByteLimit });
   const repository = (await f.store.getRepository(f.repositoryId))!;
   f.store.getGitHubAccessToken = async () => randomBytes(16).toString("hex");
   const facts = [issue(f.fold.issues[0]!.githubIssueId), issue(f.fold.issues[1]!.githubIssueId)];
   for (const fact of facts) fact.updatedAt = at.toISOString();
   const passes = new PostgresSweepPassStore(sql, 1);
-  const state = { limit: Infinity, spent: 0, clock: at, bumpVersion: false, prFailure: null as Error | null };
+  const state = { limit: Infinity, spent: 0, clock: at, bumpVersion: false, prFailure: null as Error | null, rawDiff: "" };
   const reads: number[] = [];
   const gateway: ReconciliationGateway = {
     getRepositoryById: async (id) => { await checkSweepRequestBudget(); return verifiedRepositoryAt(repository.ownerName)(id); },
     listIssues: vi.fn(async () => structuredClone(facts)),
     getIssue: async (subject) => { void subject; throw new Error("Incremental issue read was unexpected"); },
-    getPullRequestClosingIssues: async () => [], getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
+    getPullRequestClosingIssues: async () => [], getPullRequestReviews: async () => [], getPullRequestDiff: async () => state.rawDiff,
     walkReconciliation: vi.fn(async (_reference, input) => walkReconciliation({ ...input,
       listing: { kind: "cursor", listPage: async () => {
         await checkSweepRequestBudget();
@@ -62,7 +65,7 @@ async function fixture() {
         },
         getPullRequest: async () => null, getPullRequestClosingIssues: async () => [],
         getPullRequestReviews: async () => { if (state.prFailure !== null) throw state.prFailure; return []; },
-        getPullRequestDiff: async () => "",
+        getPullRequestDiff: async () => state.rawDiff,
       },
     })),
   };
@@ -78,6 +81,65 @@ async function fixture() {
 }
 
 describe("a budget-bound reconciliation walk", () => {
+  it("publishes the legacy fact shape when separate PR facts fit but their sum exceeds the limit", async () => {
+    const limit = 5000;
+    const f = await fixture(limit);
+    f.state.rawDiff = "d".repeat(3000);
+    const prs = [pullRequest(901, f.repository.githubRepositoryId), pullRequest(902, f.repository.githubRepositoryId)];
+    f.facts[0]!.body = "Fresh issue body reaches the publisher before narrowing";
+    f.facts[0]!.closingPullRequests = prs;
+    f.facts[1]!.closingPullRequests = [prs[0]!];
+    const storedFacts = () => sql<{ kind: string; subject_key: string; payload: Record<string, unknown> }[]>`
+      select kind, subject_key, payload from repository_reconciliation_evidence_facts
+      where repository_id = ${f.repositoryId} order by kind, subject_key`;
+    await reconcileRepository({ store: f.store, github: f.gateway, now: () => at, onBudgetChange: () => {} }, f.repositoryId);
+    const legacy = await storedFacts();
+    const prBytes = legacy.filter(({ kind }) => kind === "pull_request").map(({ payload }) => Buffer.byteLength(JSON.stringify(payload)));
+    expect(prBytes).toHaveLength(2);
+    expect(prBytes.every((bytes) => bytes < limit)).toBe(true);
+    expect(prBytes.reduce((sum, bytes) => sum + bytes, 0)).toBeGreaterThan(limit);
+    expect((await f.store.getReconciliationEvidence(f.repositoryId))?.omittedOversizedFacts).toBe(0);
+
+    await f.run("SWEEP");
+    const walked = await storedFacts();
+    const cache = await f.store.getReconciliationEvidence(f.repositoryId);
+    const published = f.materialize.mock.calls[1]![0].synchronization!;
+    const next = await f.run("WEBHOOK");
+    expect(cache?.omittedOversizedFacts).toBe(0);
+    expect(walked).toEqual(legacy);
+    expect(published.issues).toEqual(f.facts);
+    expect(published.issues[0]).toMatchObject({ body: "Fresh issue body reaches the publisher before narrowing" });
+    expect(published.pullRequests).toEqual(prs.map(({ id }) => ({ id, reviews: [], rawDiff: f.state.rawDiff })));
+    expect(next).toMatchObject({ skipped: false });
+    expect(f.materialize.mock.calls[2]?.[0].synchronization?.full).toBe(false);
+  });
+
+  it.each(["closing", "diff"] as const)("retains a held pass's staged issue when an ordinary GitLab MR disappears during %s", async (phase) => {
+    const f = await fixture();
+    const name = `project-${f.repository.githubRepositoryId}`;
+    const gl = disappearingGitLabFixture(phase, { repositoryId: f.repository.githubRepositoryId, name });
+    f.store.getRepository = async () => ({ ...f.repository, provider: "gitlab", instanceUrl: "https://gitlab.test" });
+    f.gateway.walkReconciliation = (reference, input) => gl.gateway.walkReconciliation(reference, input);
+    // The adapter transport fixture uses the freshly verified path below.
+    f.gateway.getRepositoryById = async (id) => { await checkSweepRequestBudget(); return verifiedRepositoryAt(`group/${name}`)(id); };
+    await sql`insert into repository_reconciliation_dirty_subjects (repository_id, kind, github_subject_id, subject_number)
+      values (${f.repositoryId}, 'PULL_REQUEST', 901, 7)`;
+    const opened: string[] = [];
+    f.sweep.openPass = async (input) => { const pass = await f.passes.open(input); opened.push(pass.id); return pass; };
+    f.state.limit = 6;
+    expect(await f.run("SWEEP")).toMatchObject({ skipped: true, sweepHeldUntil: new Date(+at + 60_000) });
+    expect(await sql`select subject_key from reconciliation_sweep_walk_subjects where pass_id = ${opened[0]!}`).toEqual([{ subject_key: "101" }]);
+    expect(f.materialize).not.toHaveBeenCalled();
+    f.state.limit = Infinity;
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try { expect((await f.run("SWEEP")).skipped).toBe(false); } finally { log.mockRestore(); }
+    expect(opened).toEqual([opened[0], opened[0]]);
+    expect(gl.paths.filter((path) => path === "/issues/1")).toHaveLength(1);
+    expect((await f.store.getReconciliationEvidence(f.repositoryId))?.issues.map(({ id }) => id)).toEqual([101]);
+    expect(await f.store.getDirtyReconciliationSubjects(f.repositoryId)).toEqual([]);
+    expect(f.materialize).toHaveBeenCalledOnce();
+  });
+
   it("holds without materializing, then resumes to completion with the original checkpoint and dirty snapshot", async () => {
     const f = await fixture();
     const before = await sql`select id from issues where repository_id = ${f.repositoryId} order by id`;

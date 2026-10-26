@@ -199,9 +199,9 @@ async function reconcileRepositoryWhileCoordinated(
     : false;
   const budgetBound = options?.reason === "SWEEP" || (options?.reason === "REDERIVATION" && diffOnly);
   return !budgetBound || dependencies.sweep === undefined
-    ? reconcileRepositoryAfterRepositoryRead(dependencies, repository, repositoryId, options, diffOnly)
+    ? reconcileRepositoryAfterRepositoryRead(dependencies, repository, repositoryId, options, budgetBound)
     : withSweepRequestBudget(() => dependencies.sweep!.spend(repository.sponsor.id),
-      () => reconcileRepositoryAfterRepositoryRead(dependencies, repository, repositoryId, options, diffOnly));
+      () => reconcileRepositoryAfterRepositoryRead(dependencies, repository, repositoryId, options, budgetBound));
 }
 
 // The same computation the sweep's rotation reads.
@@ -218,7 +218,7 @@ async function reconcileRepositoryAfterRepositoryRead(
   repository: ReconciliationRepository,
   repositoryId: string,
   options: { rederive?: boolean; reason?: ReconciliationJobReason } | undefined,
-  diffOnly: boolean,
+  budgetBound: boolean,
 ): Promise<ReconciliationSummary> {
   // One unresolvable subject must not stall the repository's fold: a deleted
   // issue or pull request can never resolve, and the retry machinery (the sweep
@@ -296,7 +296,7 @@ async function reconcileRepositoryAfterRepositoryRead(
   }
 
   const allowsFull = options?.reason === undefined || options.reason === "SWEEP"
-    || (options.reason === "REDERIVATION" && diffOnly);
+    || (options.reason === "REDERIVATION" && budgetBound);
   const rederive = allowsFull && (options?.rederive === true
     || await dependencies.store.hasDerivedRowsBelowFoldRevision(repositoryId, FOLD_REVISION));
   const runId = await dependencies.store.beginRun(repositoryId, { rederivation: rederive });
@@ -342,7 +342,7 @@ async function reconcileRepositoryAfterRepositoryRead(
         const full = allowsFull && (options?.reason === "SWEEP" || unsafeCache || rederive
           || scanStartedAt.getTime() - cached!.lastFullPassAt.getTime() >= reconciliationFullRepairMs);
 
-        pass = full && dependencies.sweep !== undefined
+        pass = full && budgetBound && dependencies.sweep !== undefined
           ? await dependencies.sweep.openPass({ repositoryId,
             evidenceVersion: JSON.stringify([cached?.version ?? null, cached?.formatVersion ?? null, RECONCILIATION_EVIDENCE_FORMAT, FOLD_REVISION, repository.difficultyScheme]),
             scanStartedAt, dirtySubjects }) : undefined;
@@ -395,7 +395,12 @@ async function reconcileRepositoryAfterRepositoryRead(
                   timelineCriticalLabels: new Set(repository.difficultyScheme.actualLabels.map(({ label }) => label)),
                   timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
                 });
-                return { githubIssues: walked.issues,
+                return { githubIssues: walked.issues.map((issue) => ({ ...issue,
+                  closingPullRequests: issue.closingPullRequests.map(({ reviews, rawDiff, ...pr }) => {
+                    void reviews; void rawDiff;
+                    return pr;
+                  }),
+                })),
                   pullRequestEvidence: new Map(walked.pullRequests.map(({ id, reviews, rawDiff }) => [id, { reviews, rawDiff }])) };
               }
               const changed = new Map((await dependencies.github.listIssues(reference, {

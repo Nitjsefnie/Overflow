@@ -44,11 +44,12 @@ async function visitTimestampListing(
 ): Promise<void> {
   let page = await listing.listPage({ collection, updatedAfter });
   for (;;) {
-    // The raw page is sorted. Commit its strict prefix before touching the boundary slice.
+    // Visit the whole sorted page, including its terminal group; the walk skips staged subjects at or behind its resume point.
     for (const subject of page.subjects) await visit(subject, collection);
     if (page.exhausted) return;
     const boundary = page.nextAnchor;
     if (boundary === null) throw new Error("A full subject page has no timestamp anchor.");
+    // shortcut: CollectionWalkBound caps window-local offset pages, revisit if valid timestamp ties exhaust it.
     const bound = new CollectionWalkBound<WalkSubject>(`${collection} timestamp slice`);
     for (let offset = 1; ; offset += 1) {
       const slice = await listing.listPage({ collection, updatedAfter: boundary, updatedBefore: boundary, page: offset });

@@ -55,7 +55,19 @@ describe("timestamp reconciliation listing driver", () => {
     expect(gl.calls[1]).toEqual({ collection: "issue", updatedAfter: instant(1).toISOString() });
   });
 
-  it("stages the strict prefix before moving the timestamp bound", async () => {
+  it("resumes a hold inside a 205-subject timestamp slice with one gather per subject", async () => {
+    const f = fixture(Array.from({ length: 205 }, (_, i) => subject(i + 1, "issue", 1)));
+    const gl = gitlab(f);
+    await expect(f.window(115, gl.listing)).rejects.toBeInstanceOf(SweepBudgetSpent);
+    const staged = await f.pass.readStaged();
+    expect(staged.length).toBeGreaterThan(100);
+    expect(staged.length).toBeLessThan(200);
+    const result = await f.window(500, gl.listing);
+    expect(result.issues).toHaveLength(205);
+    expect([...f.counts.values()]).toEqual(Array(205).fill(1));
+  });
+
+  it("stages each raw page before moving the timestamp bound", async () => {
     const f = fixture([subject(1), subject(2), subject(3)]);
     const gl = gitlab(f, 2);
     const original = f.pass.stage;
