@@ -1251,6 +1251,38 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
     expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1);
   });
 
+  it("resolves the documented OVERFLOW_-prefixed threshold variable through the fold's diff-only read", async () => {
+    const f = fixture(4000);
+    const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
+    const materialize = pagedCostGateway(f, [1], 4000, requests);
+    f.fold.store.getReconciliationEvidence = async () => safeEvidence();
+    f.fold.store.getSponsorBacklog = vi.fn(async () => 6);
+    const spends = sponsorRound(f, false);
+    queued(f, rederivationJob(1));
+    const originalPrefixed = process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG;
+    const originalUnprefixed = process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
+    process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = "5";
+    delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
+    try {
+      await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
+      // The prefixed knob is the documented one: a backlog of 6 is over a
+      // threshold of 5 but under the 1000 default, so this re-derivation is
+      // full and charged only while the fold's read resolves the prefix.
+      expect(f.fold.store.beginRun).toHaveBeenCalledExactlyOnceWith("repository-1", { rederivation: true });
+      expect(materialize).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        repositoryId: "repository-1",
+        synchronization: expect.objectContaining({ full: true }),
+      }));
+      expect(spends).toEqual(["sponsor-1", "sponsor-1"]);
+      expect(f.fold.store.holdRun).not.toHaveBeenCalled();
+      expect(f.fold.store.failRun).not.toHaveBeenCalled();
+      expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1);
+    } finally {
+      if (originalPrefixed === undefined) delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = originalPrefixed;
+      if (originalUnprefixed === undefined) delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = originalUnprefixed;
+    }
+  });
+
   it.each([
     { name: "an under-threshold sponsor's", backlog: 10 as number | undefined },
     { name: "a backlog exactly at the threshold's", backlog: 1000 },

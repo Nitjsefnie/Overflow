@@ -21,8 +21,9 @@ import { validDifficultyScheme } from "../support/difficulty-scheme";
 let sql: Sql;
 let container: StartedTestContainer;
 const original = process.env.OVERFLOW_DATABASE_URL;
-// The threshold parser reads the unprefixed name (repository-size.ts), which is
-// what sweepReconciliations feeds it; the tick reads process.env the same way.
+// Every read site resolves the prefixed name first and falls back to the bare
+// name (repository-size.ts via readEnv): the sweep's rotation filter, this
+// catch-up tick, and the fold's own diff-only computation all read it so.
 const originalThreshold = process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
 const at = new Date("2030-01-01T00:00:00Z");
 let externalId = 9_000_000;
