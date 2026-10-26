@@ -49,6 +49,7 @@ export type GitHubIssue = {
   history: GitHubIssueHistoryEvent[];
   comments: GitHubIssueComment[];
   closingPullRequests: GitHubPullRequest[];
+  closingPullRequestsUnreadable?: true;
 };
 
 export type GitHubSubject = { id: number; number: number };
