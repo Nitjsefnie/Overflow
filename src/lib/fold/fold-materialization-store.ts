@@ -632,6 +632,10 @@ async function deleteAbsentMaterialization(
         limit 1
       `;
       if (dispute !== undefined) continue;
+      // An observed issue the fold excluded (opening evidence unreadable)
+      // keeps its stored row: the fold priced nothing, so there is no FoldIssue
+      // to hold it, and the unreadable read is not an upstream deletion.
+      if (synchronization?.keptIssueGitHubIds?.includes(toSafeInteger(issue.github_issue_id))) continue;
       await recordChange(sql, runId, null, "ISSUE", "REMOVE", removedIssueState(issue), null);
       await sql`delete from issues where id = ${issue.id}`;
       removals += 1;

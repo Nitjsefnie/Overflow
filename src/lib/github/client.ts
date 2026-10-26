@@ -13,7 +13,7 @@ import { z } from "zod";
 import { checkSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import { CollectionWalkBound } from "@/lib/github/collection-walk-bound";
-import { drainIssueReads, readIssueClosingPullRequests, type IssueClosingPullRequestsRead } from "@/lib/github/drain-issue-reads";
+import { drainIssueReads, readIssueClosingPullRequests, readIssueOpeningEvidence, type IssueClosingPullRequestsRead } from "@/lib/github/drain-issue-reads";
 import { githubWebhookEvents } from "@/lib/github/webhook-schema";
 import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
 import { checkGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
@@ -162,10 +162,12 @@ export class GitHubGateway implements ForgeGateway {
     const manifest = targeted ? await this.getIssueTimelineManifest(repository, [...unique.values()]) : null;
     const issues: GitHubIssue[] = [];
     for (const node of unique.values()) {
-      const [labels, timeline, closing] = await drainIssueReads([
-        this.getIssueLabels(repository, node.number, node.labels),
-        this.getIssueTimeline(repository, node.number, targeted ? node.timelineItems : undefined),
+      const [opening, closing] = await drainIssueReads([
+        readIssueOpeningEvidence(
+          this.getIssueLabels(repository, node.number, node.labels),
+          this.getIssueTimeline(repository, node.number, targeted ? node.timelineItems : undefined)),
         readIssueClosingPullRequests(this.getIssueClosingPullRequests(repository, node.number, node.closedByPullRequestsReferences))]);
+      const { labels, timeline, openingEvidenceUnreadable } = opening;
       // Check both fully assembled connections. A nested timeline can claim it is
       // complete while omitting events or comments, even when totalCount agrees.
       const labeled = new Set(timeline.history.flatMap((event) => event.kind === "LABELED" ? [event.label] : []));
@@ -176,12 +178,12 @@ export class GitHubGateway implements ForgeGateway {
         !value.history.some((event) => event.kind === "LABELED" && event.label === label),
       );
       const matchesEvidence = (value: typeof timeline) => timelineMatchesEvidence(value, expectedCount, expectedIds);
-      const suspect = targeted && (!matchesEvidence(timeline) || (node.timelineItems !== undefined && labels.some((label) =>
+      const suspect = !openingEvidenceUnreadable && targeted && (!matchesEvidence(timeline) || (node.timelineItems !== undefined && labels.some((label) =>
         options?.timelineCriticalLabels?.has(label)
         || (options?.timelineWatchedLabels?.has(label) && !labeled.has(label)),
       )));
       const authoritativeTimeline = suspect ? await withFreshSweepReads(() => this.getIssueTimeline(repository, node.number)) : timeline;
-      if (targeted && (!matchesEvidence(authoritativeTimeline) || hasMissingCriticalLabel(authoritativeTimeline))) {
+      if (!openingEvidenceUnreadable && targeted && (!matchesEvidence(authoritativeTimeline) || hasMissingCriticalLabel(authoritativeTimeline))) {
         // A rewrite can make scan-time witnesses stale; re-take them after the reread,
         // which replaces the earlier one; persistent disagreement or a missing standing critical label still refuses.
         const [freshCounts, freshManifest] = await withFreshSweepReads(() => drainIssueReads([
@@ -192,7 +194,7 @@ export class GitHubGateway implements ForgeGateway {
           throw new Error(`GitHub issue ${node.number} timeline completeness could not be verified.`);
         }
       }
-      issues.push(toGitHubIssue(node, labels, authoritativeTimeline, closing));
+      issues.push({ ...toGitHubIssue(node, labels, authoritativeTimeline, closing), ...(openingEvidenceUnreadable && { openingEvidenceUnreadable: true }) });
     }
     return issues;
   }
@@ -361,9 +363,8 @@ export class GitHubGateway implements ForgeGateway {
       const missing = githubWebhookEvents.filter((event) => !subscribesTo(before.events, event));
       if (missing.length === 0) return;
 
-      // GitHub's PATCH adds events without replacing concurrent subscriptions.
-      // Its update contract requires retaining the original secret explicitly;
-      // GET only returns a mask. Preserve the other settings read from this hook.
+      // GitHub's PATCH adds events without replacing concurrent subscriptions; its update
+      // contract retains the original secret explicitly and GET returns only a mask.
       const after = parseWebhook(await this.request(path, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -434,10 +435,9 @@ export class GitHubGateway implements ForgeGateway {
   public async listWorkflowFiles(
     repository: GitHubRepositoryReference,
   ): Promise<ClaimPathEvidence[]> {
-    // Like request(), this path keeps one abort signal alive through headers
-    // and bodies. Its deadline spans the entire workflow listing and file reads,
-    // while request() gives each REST request its own deadline.
-    // One ten-second budget covers all reads, honoring a shorter configured timeout.
+    // Like request(), this path keeps one abort signal alive through headers and bodies; its
+    // deadline spans the entire listing and file reads, where request() gives each REST request
+    // its own deadline; one ten-second budget covers all reads, honoring a shorter timeout.
     const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_resolve, reject) => {

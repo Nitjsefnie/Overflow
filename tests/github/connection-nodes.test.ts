@@ -182,22 +182,79 @@ describe("GitHubGateway connection node guards", () => {
     ]);
   });
 
-  it("refuses a null timeline entry naming the field", async () => {
-    const gateway = gatewayAnswering((operation) => operation === "RepositoryIssues"
-      ? { repository: { issues: page([issueNode()]) } }
-      : { repository: { issue: { timelineItems: page([null]) } } });
-    await expect(gateway.listIssues(repository)).rejects.toThrow(
-      "GitHub GraphQL response was invalid. timelineItems.nodes contained a null entry.",
-    );
+  // A null entry in one issue's opening-evidence connections costs that ONE
+  // issue, not the walk: the issue comes back marked with an empty opening
+  // shape while a sibling in the same walk is fully read.
+  it("marks one issue unreadable when its timeline page holds a null entry", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as { query: string; variables: { issueNumber?: number } };
+        const operation = /query (\w+)/.exec(request.query)![1]!;
+        if (operation === "RepositoryIssues") {
+          return Response.json({ data: { repository: { issues: page([
+            issueNode({ databaseId: 501, number: 3, labels: page([{ name: "bug" }]) }),
+            issueNode({ databaseId: 502, number: 4 }),
+          ]) } } });
+        }
+        return Response.json({ data: { repository: { issue: {
+          timelineItems: page(request.variables.issueNumber === 3 ? [null] : []),
+        } } } });
+      },
+    });
+
+    const issues = await gateway.listIssues(repository);
+    expect(issues).toHaveLength(2);
+    const marked = issues.find((issue) => issue.number === 3)!;
+    expect(marked.openingEvidenceUnreadable).toBe(true);
+    // The marked shape is uniformly empty — never folded, so no partial read
+    // can pass for evidence — even where one leg answered.
+    expect(marked.labels).toEqual([]);
+    expect(marked.history).toEqual([]);
+    expect(marked.comments).toEqual([]);
+    expect(marked.closingPullRequestsUnreadable).toBeUndefined();
+    const sibling = issues.find((issue) => issue.number === 4)!;
+    expect(sibling.openingEvidenceUnreadable).toBeUndefined();
+    expect(sibling.labels).toEqual([]);
   });
 
-  it("refuses a null label entry nested in the issue page naming the field", async () => {
+  it("marks one issue unreadable when its labels page holds a null entry", async () => {
     const gateway = gatewayAnswering((operation) => operation === "RepositoryIssues"
-      ? { repository: { issues: page([issueNode({ labels: page([null]) })]) } }
+      ? { repository: { issues: page([issueNode({
+          labels: page([null]),
+          timelineItems: page([{
+            __typename: "LabeledEvent",
+            id: "label-1",
+            actor: { login: "sponsor" },
+            label: { name: "M" },
+            createdAt: "2026-09-01T09:00:00.000Z",
+          }]),
+        })]) } }
       : { repository: { issue: { timelineItems: page([]) } } });
-    await expect(gateway.listIssues(repository)).rejects.toThrow(
-      "GitHub GraphQL response was invalid. labels.nodes contained a null entry.",
-    );
+
+    const issues = await gateway.listIssues(repository);
+    const marked = issues[0]!;
+    expect(marked.openingEvidenceUnreadable).toBe(true);
+    expect(marked.labels).toEqual([]);
+    expect(marked.history).toEqual([]);
+    expect(marked.comments).toEqual([]);
+  });
+
+  // The two markers are independent legs: one issue can carry both.
+  it("marks both legs when one issue's labels page and closing-PRs page each hold a null entry", async () => {
+    const gateway = gatewayAnswering((operation) => operation === "RepositoryIssues"
+      ? { repository: { issues: page([issueNode({
+          labels: page([null]),
+          closedByPullRequestsReferences: page([null]),
+        })]) } }
+      : { repository: { issue: { timelineItems: page([]) } } });
+
+    const issues = await gateway.listIssues(repository);
+    const marked = issues[0]!;
+    expect(marked.openingEvidenceUnreadable).toBe(true);
+    expect(marked.closingPullRequestsUnreadable).toBe(true);
+    expect(marked.closingPullRequests).toEqual([]);
+    expect(marked.labels).toEqual([]);
   });
 
   it("refuses a null labels connection embedded in the issue page naming the field", async () => {
@@ -332,7 +389,38 @@ describe("GitHubGateway connection node guards", () => {
       .toBe("GitHub GraphQL response was invalid. closedByPullRequestsReferences.nodes contained a null entry.");
   });
 
-  // getIssue keeps throwing so the fold's per-subject discard can classify the
+  // In a targeted walk the completeness reread would read the broken
+  // connection AGAIN and refuse the walk, so a marked issue skips it.
+  it("marks an issue unreadable instead of rereading its timeline in a targeted walk", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path.endsWith("/issues/events") || path.endsWith("/issues/comments")) return Response.json([]);
+        const request = JSON.parse(String(init?.body)) as { query: string; variables: { issueNumber?: number } };
+        const operation = /query (\w+)/.exec(request.query)![1]!;
+        if (operation === "RepositoryIssues") {
+          return Response.json({ data: { repository: { issues: page([
+            issueNode({ databaseId: 501, number: 3, timelineItems: page([null]) }),
+          ]) } } });
+        }
+        if (operation === "IssueTimelineCounts") {
+          return Response.json({ data: { repository: { i3: { databaseId: 501, timelineItems: { totalCount: 1 } } } } });
+        }
+        return Response.json({ data: { repository: { issue: { timelineItems: page([null]) } } } });
+      },
+    });
+
+    const issues = await gateway.listIssues(repository, {
+      timelineCriticalLabels: new Set(["M"]),
+      timelineWatchedLabels: new Set([]),
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.openingEvidenceUnreadable).toBe(true);
+    expect(issues[0]?.history).toEqual([]);
+  });
+
+  // getIssue keeps throwing so the fold  // getIssue keeps throwing so the fold's per-subject discard can classify the
   // single dirty subject; it never returns a marked issue.
   it("keeps surfacing the typed error through getIssue", async () => {
     const gateway = gatewayAnswering(() => ({ repository: { issue: {

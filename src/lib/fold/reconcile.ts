@@ -9,7 +9,7 @@ import { DEFAULT_GRAPHQL_BUDGET_RESERVE, type GitHubGraphqlBudgetAssessment } fr
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
 import { withTransientRequestRetry } from "@/lib/fold/reconciliation-retry";
 import { GitHubApiError, GitHubGraphqlInvalidResponseError, GitHubGraphqlRequestError, findGitHubRateLimitError, githubRateLimitNotBefore, isGitHubSubjectNotFoundError, MAX_ERROR_CAUSE_READS } from "@/lib/github/errors";
-import { CLOSING_PULL_REQUESTS_FIELD_PATH } from "@/lib/github/drain-issue-reads";
+import { isIssueOwnFieldPath } from "@/lib/github/drain-issue-reads";
 import { GitHubResponseTooLargeError } from "@/lib/github/response-text";
 import { GitLabApiError } from "@/lib/gitlab/client";
 import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
@@ -387,16 +387,16 @@ async function reconcileRepositoryAfterRepositoryRead(
                 timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
               })).map((issue) => [issue.id, issue]));
               const retained = new Map((full ? [] : cached!.issues).map((issue) => [issue.id, issue]));
-              // The walk reports each issue whose closing-PR connection it could
-              // not read as closingPullRequestsUnreadable instead of failing;
-              // the issue still arrives, so its disposition is the per-subject
-              // discard: journal, drop its dirty row, and let the fold price it
-              // as an unreadable closure below.
+              // The walk reports each issue whose closing-PR connection or
+              // opening evidence it could not read as a marker instead of
+              // failing; the issue still arrives, so its disposition is the
+              // per-subject discard: journal, drop its dirty row, and let the
+              // fold price it as an unreadable closure or exclude it below.
               const dirtyIssueSubjects = new Map(dirtySubjects
                 .filter(({ kind }) => kind === "ISSUE")
                 .map((subject) => [subject.id, subject]));
               for (const issue of changed.values()) {
-                if (issue.closingPullRequestsUnreadable !== true) continue;
+                if (issue.closingPullRequestsUnreadable !== true && issue.openingEvidenceUnreadable !== true) continue;
                 await discardUnresolvableSubject(null, "ISSUE", issue, dirtyIssueSubjects.get(issue.id), () => "UNREADABLE_FIELD");
               }
               if (!full) {
@@ -435,12 +435,13 @@ async function reconcileRepositoryAfterRepositoryRead(
                   if (issue !== null) changed.set(issue.id, issue);
                 }
               }
-              // A walked issue marked unreadable keeps its cached shape when one
-              // exists, so its prior closing evidence and any settlement it
+              // A walked issue carrying either marker keeps its cached shape
+              // when one exists, so its prior evidence and any settlement it
               // carried re-derive unchanged; without a cached copy it folds as
               // the marked fresh shape and prices nothing.
               for (const issue of changed.values()) {
-                if (issue.closingPullRequestsUnreadable === true && retained.has(issue.id)) continue;
+                const marked = issue.closingPullRequestsUnreadable === true || issue.openingEvidenceUnreadable === true;
+                if (marked && retained.has(issue.id)) continue;
                 retained.set(issue.id, issue);
               }
               const githubIssues = [...retained.values()];
@@ -507,7 +508,11 @@ async function reconcileRepositoryAfterRepositoryRead(
             },
             users,
             forgeIdentities,
-            issues: githubIssues.map((issue) => ({
+            // An issue whose opening evidence was unreadable is never priced:
+            // excluded here, so the fold produces no row, no false OPENING_*
+            // violation and no settlement for it, while its stored row survives
+            // through synchronization's kept set.
+            issues: githubIssues.filter((issue) => issue.openingEvidenceUnreadable !== true).map((issue) => ({
               ...issue,
               claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin,
               claimAssigneeGitHubUserId: issue.claimAssigneeGitHubUserId,
@@ -522,6 +527,7 @@ async function reconcileRepositoryAfterRepositoryRead(
           const cost: ReconciliationCostCharge = { ...readCost(), sponsorId: repository.sponsor.id, completedAt: now() };
           const deltas = await dependencies.store.materialize({ repositoryId, runId, fold, cost, synchronization: {
             expectedVersion: cached?.version ?? null, scanStartedAt, full, issues: githubIssues,
+            keptIssueGitHubIds: githubIssues.filter((issue) => issue.openingEvidenceUnreadable === true).map((issue) => issue.id),
             pullRequests: [...pullRequestEvidence].map(([id, evidence]) => ({ id, ...evidence })), dirtySubjects,
           } });
 
@@ -657,7 +663,7 @@ function disputePullRequestDiscardReason(error: unknown): SubjectDiscardReason |
 // Anything else keeps whole-run retry semantics.
 function issueDiscardReason(error: unknown): SubjectDiscardReason | null {
   if (error instanceof GitHubResponseTooLargeError) return "RESPONSE_TOO_LARGE";
-  if (error instanceof GitHubGraphqlInvalidResponseError && error.fieldPath === CLOSING_PULL_REQUESTS_FIELD_PATH) {
+  if (error instanceof GitHubGraphqlInvalidResponseError && isIssueOwnFieldPath(error.fieldPath)) {
     return "UNREADABLE_FIELD";
   }
   return isGitHubSubjectNotFoundError(error)
