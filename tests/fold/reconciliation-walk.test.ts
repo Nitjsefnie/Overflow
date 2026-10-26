@@ -35,6 +35,17 @@ describe("last-update reconciliation walk", () => {
     expect(f.counts.get(1)).toBe(2);
   });
 
+  it("gathers unstaged ties behind the resume anchor before attempting completion", async () => {
+    const f = fixture([subject(3, "issue", 1), subject(1, "issue", 1), subject(2, "issue", 1)]);
+    f.listing.listPage = async () => f.read("ties", () => ({ subjects: [f.live.get(3)!, f.live.get(1)!, f.live.get(2)!], nextCursor: null }));
+    await expect(f.window(2)).rejects.toBeInstanceOf(SweepBudgetSpent);
+    expect(f.pass.walkAnchors().subjects).toEqual({ updatedAt: instant(1), key: 3 });
+    await expect(f.window(2)).rejects.toBeInstanceOf(SweepBudgetSpent);
+    expect((await f.pass.readStaged()).map(({ subjectKey }) => subjectKey)).toEqual([3, 1]);
+    expect(f.counts.get(3)).toBe(1);
+    expect(f.counts.get(1)).toBe(1);
+  });
+
   it("gathering a newly closed PR refreshes the issue it closes", async () => {
     const f = fixture([subject(1), subject(2, "pull_request")]);
     f.gateway.getPullRequestClosingIssues = (pr) => f.read(`closing:${pr.id}`, () => {

@@ -76,10 +76,23 @@ describe("timestamp reconciliation listing driver", () => {
     let reads = 0;
     const listing: WalkListingDriver = { kind: "timestamp", listPage: async () => {
       reads += 1;
+      if (reads > 2100) throw new Error("Fake forge refused an unbounded slice");
       return { subjects: [subject(1)], nextAnchor: instant(1).toISOString(), exhausted: false };
     } };
     await expect(f.window(10000, listing)).rejects.toThrow(/collection-walk bound/);
     expect(reads).toBeGreaterThan(1);
     expect(reads).toBeLessThan(2100);
+  });
+
+  it("keeps an issue and a PR with the same numeric id as separate staged subjects", async () => {
+    const f = fixture([subject(7)]);
+    f.repository.disputePullRequests = [{ id: 7, number: 7 }];
+    const listing: WalkListingDriver = { kind: "timestamp", listPage: (options) => f.read(`collision:${options.collection}`, () => ({
+      subjects: [subject(7, options.collection)], nextAnchor: instant(7).toISOString(), exhausted: true,
+    })) };
+    const result = await f.window(30, listing);
+    expect(result.issues.map(({ id }) => id)).toEqual([7]);
+    expect(result.pullRequests.map(({ id }) => id)).toEqual([7]);
+    expect((await f.pass.readStaged()).map(({ kind, subjectKey }) => [kind, subjectKey])).toEqual([["issue", 7], ["pull_request", 7]]);
   });
 });
