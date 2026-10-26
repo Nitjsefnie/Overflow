@@ -1,6 +1,6 @@
 import { disappearingGitLabFixture } from "../support/reconciliation-walk-gitlab";
 import { expect, it, vi } from "vitest";
-import { GitLabGateway } from "@/lib/gitlab/client";
+import { GitLabApiError, GitLabGateway } from "@/lib/gitlab/client";
 import { memoryPass } from "./reconciliation-walk-fixture";
 
 const at = "2026-10-01T00:00:00Z";
@@ -46,16 +46,19 @@ it("gathers GitLab issue evidence and MR evidence and binds the kind-aware absen
   expect(paths).not.toContain("/issues/7");
 });
 
-it.each(["closing", "diff"] as const)("completes when an ordinary MR disappears during %s", async (phase) => {
+const absenceCases = (["closing", "diff"] as const).flatMap((phase) => [false, true].map((disputed) => ({ phase, disputed })));
+
+it.each(absenceCases)("completes when an MR disappears during $phase, disputed=$disputed", async ({ phase, disputed }) => {
   const f = disappearingGitLabFixture(phase);
   const pass = memoryPass();
   const onDiscard = vi.fn(async () => {});
   const result = await f.gateway.walkReconciliation(reference, {
-    pass, repository: { githubRepositoryId: 42, disputePullRequests: [] }, onDiscard,
+    pass, repository: { githubRepositoryId: 42, disputePullRequests: disputed ? [{ id: 901, number: 7 }] : [] }, onDiscard,
   });
   expect(result.status).toBe("completed");
   expect(result.issues.map(({ id }) => id)).toEqual([101]);
   expect(result.pullRequests).toEqual([]);
+  expect(result.missingDisputePrIds).toEqual(new Set(disputed ? [901] : []));
   expect(onDiscard).toHaveBeenCalledWith({ kind: "pull_request", subject: expect.objectContaining({ id: 901, number: 7 }), reason: "NOT_FOUND" });
   expect(f.paths).toContain("/merge_requests/7");
   expect(pass.complete).not.toHaveBeenCalled();
@@ -70,11 +73,30 @@ it.each(["closing", "diff"] as const)("rejects an unavailable %s endpoint while 
   expect(onDiscard).not.toHaveBeenCalled();
 });
 
-it.each([401, 403, 429, 503, 0])("propagates MR read failure status %s without discarding", async (status) => {
-  const f = disappearingGitLabFixture("diff", { status });
+it.each(absenceCases.flatMap((entry) => [401, 403, 429, 503, 0].map((status) => ({ ...entry, status }))))(
+  "propagates MR read failure status $status during $phase, disputed=$disputed without discarding", async ({ phase, disputed, status }) => {
+    const f = disappearingGitLabFixture(phase, { status });
+    const onDiscard = vi.fn(async () => {});
+    await expect(f.gateway.walkReconciliation(reference, {
+      pass: memoryPass(), repository: { githubRepositoryId: 42, disputePullRequests: disputed ? [{ id: 901, number: 7 }] : [] }, onDiscard,
+    })).rejects.toMatchObject({ status });
+    expect(onDiscard).not.toHaveBeenCalled();
+  },
+);
+
+it.each(absenceCases)("rejects a readable merged MR's commits 404 during $phase, disputed=$disputed without discarding", async ({ phase, disputed }) => {
+  const f = disappearingGitLabFixture(phase, { reachable: true, merged: true });
+  const pass = memoryPass();
   const onDiscard = vi.fn(async () => {});
-  await expect(f.gateway.walkReconciliation(reference, {
-    pass: memoryPass(), repository: { githubRepositoryId: 42, disputePullRequests: [] }, onDiscard,
-  })).rejects.toMatchObject({ status });
+  const failure = await f.gateway.walkReconciliation(reference, {
+    pass, repository: { githubRepositoryId: 42, disputePullRequests: disputed ? [{ id: 901, number: 7 }] : [] }, onDiscard,
+  }).then(() => null, (error: unknown) => error);
+  expect(failure).toBeInstanceOf(Error);
+  expect(failure).not.toBeInstanceOf(GitLabApiError);
+  expect((failure as Error).cause).toBeInstanceOf(GitLabApiError);
+  expect((failure as Error).cause).toMatchObject({ status: 404 });
   expect(onDiscard).not.toHaveBeenCalled();
+  expect(pass.complete).not.toHaveBeenCalled();
+  expect(f.paths).toContain("/merge_requests/7");
+  expect(f.paths).toContain("/merge_requests/7/commits");
 });
