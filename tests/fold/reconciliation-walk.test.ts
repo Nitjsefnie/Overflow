@@ -46,6 +46,23 @@ describe("last-update reconciliation walk", () => {
     expect(f.counts.get(1)).toBe(1);
   });
 
+  it("keeps the newest absence witness when a subject repeats on a later page", async () => {
+    const f = fixture([subject(1, "issue", 6)]);
+    let calls = 0;
+    f.listing.listPage = async () => f.read("repeated-witness", () => {
+      calls += 1;
+      if (calls === 1) return { subjects: [subject(1, "issue", 6)], nextCursor: null };
+      if (calls === 2) {
+        Object.assign(f.issues.get(1)!, { title: "Newest witnessed fact", updatedAt: instant(10).toISOString() });
+        return { subjects: [subject(1, "issue", 10)], nextCursor: "older-repeat" };
+      }
+      return { subjects: [subject(1, "issue", 5)], nextCursor: null };
+    });
+    const result = await f.window(20);
+    expect(result.issues[0]?.title).toBe("Newest witnessed fact");
+    expect(f.counts.get(1)).toBe(2);
+  });
+
   it("gathering a newly closed PR refreshes the issue it closes", async () => {
     const f = fixture([subject(1), subject(2, "pull_request")]);
     f.gateway.getPullRequestClosingIssues = (pr) => f.read(`closing:${pr.id}`, () => {

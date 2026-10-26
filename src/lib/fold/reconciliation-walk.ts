@@ -96,7 +96,10 @@ async function walk({ pass, listing, gateway, repository, onDiscard }: Reconcili
 
   // Completion witnesses are collected afresh on every attempt; a hold cannot publish a partial absence set.
   const listed = new Map<string, WalkSubject>();
-  await visitWalkListing(listing, {}, async (subject) => { listed.set(rowKey(subject.kind, subject.id), subject); });
+  await visitWalkListing(listing, {}, async (subject) => {
+    const key = rowKey(subject.kind, subject.id), previous = listed.get(key);
+    if (previous === undefined || previous.updatedAt <= subject.updatedAt) listed.set(key, subject);
+  });
   const absent = [...staged.values()].filter((row) => !listed.has(rowKey(row.kind, row.subjectKey)));
   await pass.deleteStaged(absent.map(({ kind, subjectKey }) => ({ kind, subjectKey })));
   for (const row of absent) staged.delete(rowKey(row.kind, row.subjectKey));
