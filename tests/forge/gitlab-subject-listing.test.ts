@@ -70,14 +70,16 @@ describe("GitLab subject pages", () => {
   it("drains only a full single-timestamp slice by offset pages and keeps its anchor", async () => {
     const requests: URL[] = [];
     const tied = Array.from({ length: 205 }, (_, index) => row(100 + index, boundary));
+    const rows = [...tied, row(900, later)];
     const client = gateway(async (input) => {
       const url = new URL(String(input));
       requests.push(url);
       if (requests.length > 4) throw new Error("Unexpected request");
+      const after = url.searchParams.get("updated_after");
       const before = url.searchParams.get("updated_before");
       const page = Number(url.searchParams.get("page"));
-      if (before === null) return Response.json(tied.slice(0, 100).reverse());
-      return Response.json(tied.slice((page - 1) * 100, page * 100).reverse());
+      const filtered = rows.filter((item) => (after === null || item.updated_at >= after) && (before === null || item.updated_at <= before));
+      return Response.json(filtered.slice((page - 1) * 100, page * 100).reverse());
     });
     const result = await client.listSubjectsPage(repository, { collection: "pull_request", updatedAfter: older });
     expect(result.subjects).toHaveLength(205);
