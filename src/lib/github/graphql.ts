@@ -254,13 +254,7 @@ export class GitHubGraphqlClient {
   }
 }
 
-/**
- * A connection's `nodes` list may legally carry null entries (the schema is
- * `[Issue]`, not `[Issue!]`) or arrive not a list at all, while every caller
- * reads node fields unchecked. Refuse both here naming the field, so a failed
- * read says where it failed instead of surfacing a bare TypeError about a
- * property of null (issue 1408).
- */
+// Null entries and non-list `nodes` ride nowhere: the error names the field (issue 1408).
 export function requireConnectionNodes<TNode>(fieldPath: string, nodes: unknown): TNode[] {
   if (!Array.isArray(nodes)) {
     throw new Error(`GitHub GraphQL response was invalid. ${fieldPath} was not a list.`);
