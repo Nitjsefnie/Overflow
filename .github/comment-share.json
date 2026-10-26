@@ -896,8 +896,8 @@
     4636
   ],
   "src/lib/gitlab/client.ts": [
-    6836,
-    26121
+    6598,
+    25527
   ],
   "src/lib/gitlab/collection-walk-bound.ts": [
     2631,
