@@ -5,13 +5,11 @@ import { isParticipationEligibleAt } from "@/lib/fold/moderation-history";
 import { difficultySchemeInForceAt, type DifficultyScheme, type DifficultySchemeVersion } from "@/lib/domain/difficulty-scheme";
 import { foldLedger, type LedgerEntry } from "@/lib/domain/ledger";
 import { calculateSettlement, type SettlementDecision } from "@/lib/domain/settlement";
+import { asksOutsideRepository } from "@/lib/fold/outside-repository-mark";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
 import { countReviewRoundsAsOf } from "@/lib/fold/review-rounds";
 import type {
-  GitHubIssue,
-  GitHubIssueComment,
-  GitHubIssueHistoryEvent,
-  GitHubPullRequestReview,
+  GitHubIssue, GitHubIssueComment, GitHubIssueHistoryEvent, GitHubPullRequestReview,
 } from "@/lib/github/types";
 export { countReviewRoundsAsOf } from "@/lib/fold/review-rounds";
 
@@ -155,6 +153,7 @@ export type FoldIssue = {
   settledRationaleCommentId: string | null;
   settledRationaleActorLogin: string | null;
   settledRationaleCommentedAt: string | null;
+  asksOutsideRepository: boolean;
 };
 
 export type FoldPullRequest = {
@@ -467,6 +466,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
       settledRationaleCommentId: settledDifficulty?.rationaleCommentId ?? null,
       settledRationaleActorLogin: settledDifficulty?.rationaleActorLogin ?? null,
       settledRationaleCommentedAt: settledDifficulty?.rationaleCommentedAt ?? null,
+      asksOutsideRepository: asksOutsideRepository(issue.labels),
     });
 
     if (issue.state !== "CLOSED") {
