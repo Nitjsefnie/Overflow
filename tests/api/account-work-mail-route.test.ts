@@ -211,12 +211,12 @@ describe("POST /api/account/work-mail", () => {
     expect(dependencies.createTransport).not.toHaveBeenCalled();
   });
 
-  it("answers the account cap with 429 and the store's Retry-After", async () => {
+  it.each([3600, 17])("answers the account cap with 429 and the store's Retry-After (%i)", async (seconds) => {
     const { dependencies, store } = setup();
-    store.requestConfirmation.mockResolvedValueOnce({ kind: "account-limited", retryAfterSeconds: 3600 });
+    store.requestConfirmation.mockResolvedValueOnce({ kind: "account-limited", retryAfterSeconds: seconds });
     const response = await post(dependencies);
     expect(response.status).toBe(429);
-    expect(response.headers.get("retry-after")).toBe("3600");
+    expect(response.headers.get("retry-after")).toBe(String(seconds));
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe("RATE_LIMITED");
     expect(dependencies.createTransport).not.toHaveBeenCalled();
   });
@@ -300,10 +300,12 @@ describe("POST /api/account/work-mail/confirm", () => {
     expect(store.confirm).toHaveBeenCalledExactlyOnceWith("internal-id", issuedToken);
   });
 
-  it("answers 404 before any dependency when the feature is off", async () => {
-    const { dependencies } = setup(disabled);
-    expect((await confirm(dependencies)).status).toBe(404);
-    expectOnlyTheSwitchRead(dependencies);
+  it("answers 404 before any dependency when the feature is off, whatever the request", async () => {
+    for (const request of [confirmRequests.json({ token: issuedToken }), confirmRequests.foreignText({})]) {
+      const { dependencies } = setup(disabled);
+      expect((await confirm(dependencies, request)).status).toBe(404);
+      expectOnlyTheSwitchRead(dependencies);
+    }
   });
 
   it("gives one answer to every failed confirmation", async () => {
@@ -332,6 +334,15 @@ describe("POST /api/account/work-mail/confirm", () => {
     expect((await confirm(dependencies, confirmRequests.foreignJson({ token: issuedToken }))).status).toBe(403);
     dependencies.getSession.mockResolvedValueOnce(null);
     expect((await confirm(dependencies)).status).toBe(401);
+  });
+
+  it("refuses a caller whose account is gone before the store", async () => {
+    const { dependencies, store } = setup();
+    dependencies.findIdentity.mockResolvedValueOnce(null);
+    const response = await confirm(dependencies);
+    expect(response.status).toBe(403);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
+    expect(store.confirm).not.toHaveBeenCalled();
   });
 });
 
