@@ -26,7 +26,8 @@ export function addressDigestInput(address: string): string {
   return address.toLowerCase();
 }
 
-const REFUSED_HOSTS = new Set(["localhost", "::1", "smtp.gmail.com", "smtp.googlemail.com"]);
+// The unspecified addresses dial the local host on Linux, like loopback.
+const REFUSED_HOSTS = new Set(["localhost", "::1", "0.0.0.0", "::", "::ffff:0:0", "smtp.gmail.com", "smtp.googlemail.com"]);
 
 function refusedHost(host: string): boolean {
   return REFUSED_HOSTS.has(host) || host.endsWith(".localhost") || /^127\./.test(host)
@@ -41,7 +42,8 @@ function parseSmtpUrl(raw: string): SmtpSettings | null {
     const username = decodeURIComponent(url.username);
     const password = decodeURIComponent(url.password);
     if (url.protocol !== "smtps:" || username === "" || password === "" || refusedHost(host)) return null;
-    return { host, port: url.port === "" ? 465 : Number(url.port), username, password };
+    const port = url.port === "" ? 465 : Number(url.port);
+    return port === 0 ? null : { host, port, username, password };
   } catch {
     return null;
   }

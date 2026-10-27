@@ -173,6 +173,13 @@ describe("readContributorMailConfig", () => {
     ["mixed-case smtp.gmail.com", "smtps://mailer:pw@SMTP.Gmail.COM"],
     ["smtp.gmail.com with a trailing dot", "smtps://mailer:pw@smtp.gmail.com."],
     ["smtp.googlemail.com", "smtps://mailer:pw@smtp.googlemail.com:465"],
+    ["the unspecified IPv4 address", "smtps://mailer:pw@0.0.0.0"],
+    ["integer 0", "smtps://mailer:pw@0"],
+    ["hexadecimal 0", "smtps://mailer:pw@0x0"],
+    ["the unspecified IPv6 address", "smtps://mailer:pw@[::]"],
+    ["uncompressed ::", "smtps://mailer:pw@[0:0:0:0:0:0:0:0]"],
+    ["IPv4-mapped 0.0.0.0", "smtps://mailer:pw@[::ffff:0.0.0.0]"],
+    ["port 0", "smtps://mailer:pw@mail.example.net:0"],
   ])("is off and names only the SMTP variable for %s", (_name, value) => {
     const env = validEnv({ [SMTP_URL]: value.replace(":pw@", `:${password}@`) });
     const config = readContributorMailConfig(env);
@@ -186,6 +193,9 @@ describe("readContributorMailConfig", () => {
     ["a name containing smtp.gmail.com", "smtp.gmail.com.example.net"],
     ["a non-loopback IPv6 address", "[2001:db8::1]"],
     ["an IPv4-mapped address outside 127/8", "[::ffff:128.0.0.1]"],
+    ["an IPv4 address next to 0.0.0.0", "0.0.0.1"],
+    ["an IPv6 address next to ::", "[::2]"],
+    ["port 1", "mail.example.net:1"],
   ])("accepts %s as the SMTP host", (_name, host) => {
     expect(readContributorMailConfig(validEnv({ [SMTP_URL]: smtpUrl(host) })).enabled).toBe(true);
   });
