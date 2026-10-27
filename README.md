@@ -12,7 +12,7 @@ Go to <https://overflow.nitjsefni.eu> and sign in with GitHub. Register a reposi
 
 GitHub repositories register in one of two ways. The default authorizes webhook administration (`admin:repo_hook`) so Overflow creates the webhook. Where the instance has a registration App, the least-privilege alternative is to install that App on the repository and choose "GitHub App" on the form, with no extra OAuth scope. See [API.md](API.md#programmatic-repository-registration) for the API form.
 
-**Say what finishes an issue.** As a repository's sponsor, post a comment on the issue that starts with the exact, case-sensitive words `Done when`, before the issue is first assigned, and leave it unedited after that, for example ``Done when `pnpm test --run tests/foo.test.ts` passes and `pnpm lint` is clean.`` The board and `GET /api/issues` show contributors the earliest such comment, without its HTML comments and up to 2 KiB.
+**Say what finishes an issue.** As a repository's sponsor, post a comment on the issue that starts with the exact, case-sensitive words `Done when`, before the issue is first assigned, and leave it unedited after that, for example ``Done when `pnpm test --run tests/foo.test.ts` passes and `pnpm lint` is clean.`` The board and `GET /api/issues` show contributors the earliest such comment, without its HTML comments and up to 2 KiB. GitLab records no assignment history, so on a GitLab project the earliest sponsor comment starting `Done when` counts whenever it was posted or edited.
 
 **You don't need a repository to start earning.** Take an issue in one that's already registered. This repository is on that ledger too. You can watch the exchange happen in its own tracker.
 
