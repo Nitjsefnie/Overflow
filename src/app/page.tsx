@@ -5,16 +5,20 @@ import { signInAsContributor, signInForRepositoryRegistration } from "@/lib/auth
 import { registrationAppConfigured, registrationAppInstallUrl } from "@/lib/github/registration-app-display";
 import type { RegistrationAppDisplayProps } from "@/components/registration-app-guidance";
 import { readEnv } from "@/lib/env";
+import { STARTING_CREDIT_LIMIT } from "@/lib/domain/credit-limit";
+import { OVERFLOW_OPENING_CATALOG } from "@/app/landing-examples";
 
 export function LandingPage({ registrationAppConfigured = false, registrationAppInstallUrl = null }: RegistrationAppDisplayProps) {
   return (
     <main className="landing-page" id="main-content">
       <section className="landing-hero" aria-labelledby="landing-title">
         <p className="eyebrow">A cooperative ledger for open-source work</p>
-        <h1 id="landing-title">Cooperative credit for open-source work.</h1>
+        <h1 id="landing-title">Cooperative points for open-source work.</h1>
         <p className="landing-lede">
-          Overflow records completed contributions, visible proof, and the credit that moves between maintainers
-          and contributors.
+          Overflow records completed work, its proof, and points.
+        </p>
+        <p className="landing-trade">
+          You start at 0, can go {STARTING_CREDIT_LIMIT} points below zero, take an issue, earn points when your pull request merges, and spend them on issues you post.
         </p>
         <form action={signInAsContributor}>
           <button className="action-button" type="submit">
@@ -46,6 +50,20 @@ export function LandingPage({ registrationAppConfigured = false, registrationApp
         <Link className="text-link" href="/rules">
           Rules
         </Link>
+      </section>
+      <section aria-labelledby="landing-examples-title">
+        <h2 id="landing-examples-title">Examples of issue sizes</h2>
+        <p>These examples use Overflow&apos;s own opening catalog; each repository chooses its own.</p>
+        <p>While an issue is assigned to an outside contributor, its listed points are reserved from the sponsor&apos;s balance; on merge, the contributor earns the settled points minus one per distinct changes-requested review round, with a minimum of zero.</p>
+        <div className="landing-principles">
+          {OVERFLOW_OPENING_CATALOG.map((entry) => (
+            <article key={entry.label}>
+              <h3>{entry.label}</h3>
+              <p><strong>{entry.reservePoints}</strong> {entry.reservePoints === 1 ? "point" : "points"}</p>
+              <p>{entry.example}</p>
+            </article>
+          ))}
+        </div>
       </section>
       <section className="landing-principles" aria-label="How Overflow works">
         <article>
