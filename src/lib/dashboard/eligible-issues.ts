@@ -114,10 +114,12 @@ type EligibleIssueRow = {
  * nested-loop joins for the mis-estimate. An unnamed statement is re-planned
  * with the actual parameter values on every execution, so the collapse never
  * happens. Request values still bind as parameters; only the shared starting
- * limit is interpolated. Future edits must keep the CTE-block formatting: the
- * migration-056 plan pins' `cteBlock()` parser matches `^\s*CTE <name>$`
- * headers and reads the deeper-indented lines under each, so a reflow that
- * moves a `CTE <name>` header onto a shared line breaks those pins.
+ * limit is interpolated; migration 073's account_credit_limits view repeats
+ * it, so a change needs a new migration. Future edits must keep the CTE-block
+ * formatting: the migration-056 plan pins' `cteBlock()` parser matches
+ * `^\s*CTE <name>$` headers and reads the deeper-indented lines under each, so
+ * a reflow that moves a `CTE <name>` header onto a shared line breaks those
+ * pins.
  */
 const BOARD_QUERY = `
     with candidate_sponsors as materialized (

@@ -16,9 +16,8 @@ vi.mock("next/headers", async () => (await import("../support/trusted-origin")).
 
 useTrustedOrigin();
 
-import HomePage, { LandingPage } from "@/app/page";
-import { OVERFLOW_OPENING_CATALOG } from "@/app/landing-examples";
-import { STARTING_CREDIT_LIMIT } from "@/lib/domain/credit-limit";
+import HomePage, { LandingPage, metadata } from "@/app/page";
+import { OVERFLOW_OPENING_CATALOG } from "@/lib/opening-catalog-examples";
 
 describe("landing page", () => {
   afterEach(() => {
@@ -136,23 +135,41 @@ describe("landing page", () => {
     expect(screen.queryByText(/churn/i)).not.toBeInTheDocument();
   });
 
-  it("uses points vocabulary in every landing-page configuration", () => {
-    const plain = render(<LandingPage />);
-    const plainText = plain.container.textContent;
-    plain.unmount();
-    const configured = render(<LandingPage registrationAppConfigured registrationAppInstallUrl="https://github.com/apps/overflow-registration/installations/new" />);
+  it("uses points vocabulary in every landing-page configuration and its title", () => {
+    const texts = [{}, { registrationAppConfigured: true, registrationAppInstallUrl: "https://github.com/apps/overflow-registration/installations/new" }].map((props) => {
+      const view = render(<LandingPage {...props} />);
+      // The absence check below means nothing over an empty render.
+      expect(within(view.container).getByRole("heading", { level: 1 })).toBeVisible();
+      const examples = view.container.querySelector('section[aria-labelledby="landing-examples-title"]');
+      expect(examples?.querySelectorAll("article")).toHaveLength(OVERFLOW_OPENING_CATALOG.length);
+      const text = view.container.textContent;
+      view.unmount();
+      return text;
+    });
+    expect(metadata.title).toMatch(/\S/);
 
-    expect([plainText, configured.container.textContent].join(" ")).not.toMatch(/credit|price|pay/i);
+    expect([...texts, metadata.title].join(" ")).not.toMatch(/credit|price|pay/i);
   });
 
-  it("shows the shared starting limit between the lede and the sign-in action", () => {
-    const { container } = render(<LandingPage />);
-    const hero = container.querySelector(".landing-hero")!;
-    const trade = hero.querySelector(".landing-trade");
-    expect(trade).not.toBeNull();
-    expect(trade).toHaveTextContent(String(STARTING_CREDIT_LIMIT));
-    expect(hero.querySelector(".landing-lede")!.compareDocumentPosition(trade!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(trade!.compareDocumentPosition(hero.querySelector("form button")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  // A sentinel the page cannot hold by accident stands in for the shared limit,
+  // so a typed-in copy of today's value fails.
+  it("shows the shared starting limit between the lede and the sign-in action", async () => {
+    const sentinelLimit = 37;
+    vi.resetModules();
+    vi.doMock("@/lib/domain/credit-limit", () => ({ STARTING_CREDIT_LIMIT: sentinelLimit }));
+    try {
+      const { LandingPage: SentinelLandingPage } = await import("@/app/page");
+      const { container } = render(<SentinelLandingPage />);
+      const hero = container.querySelector(".landing-hero")!;
+      const trade = hero.querySelector(".landing-trade");
+      expect(trade).not.toBeNull();
+      expect(trade).toHaveTextContent(String(sentinelLimit));
+      expect(hero.querySelector(".landing-lede")!.compareDocumentPosition(trade!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(trade!.compareDocumentPosition(hero.querySelector("form button")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    } finally {
+      vi.doUnmock("@/lib/domain/credit-limit");
+      vi.resetModules();
+    }
   });
 
   it("renders one worked example with the label and points for every catalog entry", () => {
