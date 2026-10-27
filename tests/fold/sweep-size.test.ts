@@ -544,6 +544,11 @@ describe("a repository the forge no longer returns", () => {
     ["GitLab", "group/-project", "gitlab", "https://gitlab.test"],
     ["GitLab", "group/bad+name", "gitlab", "https://gitlab.test"],
     ["GitLab", "group/project\n", "gitlab", "https://gitlab.test"],
+    ["GitLab", "group./project", "gitlab", "https://gitlab.test"],
+    ["GitLab", "group/project.git", "gitlab", "https://gitlab.test"],
+    ["GitLab", "group/project.atom", "gitlab", "https://gitlab.test"],
+    ["GitLab", "group/sub.git/project", "gitlab", "https://gitlab.test"],
+    ["GitLab", "group/sub.atom/project", "gitlab", "https://gitlab.test"],
   ])("reports the measure's own failure, with no by-id lookup, for the malformed %s path %s", async (_forge, ownerName, provider, instanceUrl) => {
     const lines = consoleLines();
     const failure = notFoundByName();

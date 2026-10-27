@@ -185,6 +185,11 @@ describe("finding a repository gone as its sponsor", () => {
     ["gitlab", "group/-project", ".group/_sub/project"],
     ["gitlab", "group/bad+name", "group/my_project"],
     ["gitlab", "group/project\n", "a/x"],
+    ["gitlab", "group./project", "group/project."],
+    ["gitlab", "group/project.git", "group/project.gitlab"],
+    ["gitlab", "group/project.atom", "group/project.atomic"],
+    ["gitlab", "group/sub.git/project", "group/sub.gitlab/project"],
+    ["gitlab", "group/sub.atom/project", "group/sub.atomic/project"],
   ])("rejects malformed %s path %s while accepting %s", async (provider, malformed, valid) => {
     const repository = { provider, instanceUrl: "https://gitlab.test" };
     const credentials = { gitHubToken: "token-a", forgeToken: { token: "pat", identityId: "identity-1" } };
