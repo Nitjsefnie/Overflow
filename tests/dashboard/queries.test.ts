@@ -959,6 +959,7 @@ describe("dashboard projections", () => {
           opening_label: "delta",
           opening_comparison_points: 6,
           opening_reserve_points: 9,
+          asks_outside_repository: false,
           created_at: "2026-09-01T00:00:00.000Z",
         },
         {
@@ -971,6 +972,7 @@ describe("dashboard projections", () => {
           opening_label: "delta",
           opening_comparison_points: 6,
           opening_reserve_points: 9,
+          asks_outside_repository: false,
           created_at: "2026-09-02T00:00:00.000Z",
         },
         {
@@ -983,6 +985,7 @@ describe("dashboard projections", () => {
           opening_label: "stream",
           opening_comparison_points: 2,
           opening_reserve_points: 4,
+          asks_outside_repository: false,
           created_at: "2026-08-30T00:00:00.000Z",
         },
       ],
@@ -1068,6 +1071,7 @@ describe("dashboard projections", () => {
           opening_label: "shoal",
           opening_comparison_points: 4,
           opening_reserve_points: 6,
+          asks_outside_repository: false,
           claim_assignee_github_login: "contributor",
           available_headroom: -3,
           created_at: "2026-09-01T00:00:00.000Z",
@@ -1629,6 +1633,7 @@ describe("ambiguous claim assignee sentinel", () => {
           opening_label: "delta",
           opening_comparison_points: 3,
           opening_reserve_points: 6,
+          asks_outside_repository: false,
           claim_assignee_github_login: AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN,
           available_headroom: -3,
           created_at: "2026-09-01T00:00:00.000Z",
@@ -1697,6 +1702,7 @@ describe("ambiguous claim assignee sentinel", () => {
           opening_label: "delta",
           opening_comparison_points: 3,
           opening_reserve_points: 6,
+          asks_outside_repository: false,
           claim_assignee_github_login: AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN,
           available_headroom: -3,
           created_at: "2026-09-01T00:00:00.000Z",
@@ -1756,7 +1762,8 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
         opening_reserve_points integer,
         claim_assignee_github_login text,
         claim_assignee_github_user_id bigint,
-        created_at timestamptz
+        created_at timestamptz,
+        asks_outside_repository boolean not null default false
       );
       create table balances (account_id text, balance integer);
       create table account_credit_limits (account_id text, repaid_debt numeric, credit_limit numeric);

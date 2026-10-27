@@ -88,6 +88,11 @@ describe("eligible issues query shape against PostgreSQL", () => {
       ["borealis open two", 0],
     ]);
 
+    // The outside-repository mark rides on every row as a plain boolean, true
+    // only where the issue row carries it.
+    expect(allBoard.filter((row) => row.asksOutsideRepository).map((row) => row.title)).toEqual(["borealis open seven"]);
+    expect(allBoard.map((row) => typeof row.asksOutsideRepository)).toEqual(Array(allBoard.length).fill("boolean"));
+
     const openBoard = await listEligibleIssues(seeded.viewerId);
     // Cascade's +20 settled balance leads despite its -10 headroom and lower
     // reserve. Aurora and Borealis tie at zero settled balance, so reserve
@@ -225,6 +230,7 @@ select
   issues.opening_comparison_points,
   issues.opening_reserve_points,
   issues.claim_assignee_github_login,
+  issues.asks_outside_repository,
   coalesce((select balances.balance from balances where balances.account_id = sponsors.id), 0) as settled_balance,
   (
     coalesce((select balances.balance from balances where balances.account_id = sponsors.id), 0)
@@ -288,6 +294,7 @@ async function originalShapeReference(
       openingLabel: String(row.opening_label),
       comparisonPoints: Number(row.opening_comparison_points),
       reservePoints: Number(row.opening_reserve_points),
+      asksOutsideRepository: row.asks_outside_repository === true,
       createdAt: timestampText(row.created_at),
     };
     if (row.sponsor_login !== undefined) {
@@ -428,7 +435,10 @@ async function seedShapeWorld(): Promise<void> {
   // reserved by nobody — only OPEN issues draw headroom — and never boards.
   const borealisOne = await insertRepository("borealis/one", borealisId);
   await insertIssue({ repositoryId: borealisOne, issueNumber: 1, title: "borealis open two", label: "S", points: 2, createdAt: "2026-06-06T00:00:00.000Z" });
-  await insertIssue({ repositoryId: borealisOne, issueNumber: 2, title: "borealis open seven", label: "M", points: 7, createdAt: "2026-06-07T00:00:00.000Z" });
+  await insertIssue({
+    repositoryId: borealisOne, issueNumber: 2, title: "borealis open seven", label: "M", points: 7,
+    createdAt: "2026-06-07T00:00:00.000Z", asksOutsideRepository: true,
+  });
   await insertIssue({
     repositoryId: borealisOne, issueNumber: 3, title: "borealis closed five", label: "M", points: 5,
     createdAt: "2026-06-08T00:00:00.000Z", assigneeLogin: "harrier", assigneeId: 930_103, state: "CLOSED",
@@ -497,19 +507,20 @@ async function insertIssue(input: {
   assigneeLogin?: string;
   assigneeId?: number | null;
   state?: "OPEN" | "CLOSED";
+  asksOutsideRepository?: boolean;
 }): Promise<void> {
   const githubIssueId = nextExternalId();
   await sql`
     insert into issues (
       github_issue_id, repository_id, issue_number, title, body, url, state,
       opening_label, opening_comparison_points, opening_reserve_points, created_at,
-      claim_assignee_github_login, claim_assignee_github_user_id
+      claim_assignee_github_login, claim_assignee_github_user_id, asks_outside_repository
     )
     values (
       ${githubIssueId}, ${input.repositoryId}, ${input.issueNumber}, ${input.title}, ${""},
       ${`https://github.com/fixture/issues/${githubIssueId}`}, ${input.state ?? "OPEN"},
       ${input.label}, ${input.points}, ${input.points}, ${input.createdAt},
-      ${input.assigneeLogin ?? null}, ${input.assigneeId ?? null}
+      ${input.assigneeLogin ?? null}, ${input.assigneeId ?? null}, ${input.asksOutsideRepository ?? false}
     )
   `;
 }

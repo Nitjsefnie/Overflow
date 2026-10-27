@@ -22,6 +22,8 @@ export type EligibleIssueProjection = {
   assigneeGitHubLogin?: string | null;
   claimState?: "OPEN" | "CLAIMED";
   availableHeadroom?: number;
+  /** The issue asks for actions outside its repository, so a contributor declines or sandboxes it; false vouches for nothing. */
+  asksOutsideRepository: boolean;
   createdAt: string;
 };
 
@@ -97,6 +99,7 @@ type EligibleIssueRow = {
   sponsor_login?: string;
   claim_assignee_github_login?: string | null;
   available_headroom?: number | string;
+  asks_outside_repository: boolean;
   created_at: string | Date;
 };
 
@@ -294,6 +297,7 @@ const BOARD_QUERY = `
       issues.opening_comparison_points,
       issues.opening_reserve_points,
       issues.claim_assignee_github_login,
+      issues.asks_outside_repository,
       coalesce(sponsor_balances.balance, 0) as settled_balance,
       (
         coalesce(sponsor_balances.balance, 0)
@@ -372,6 +376,7 @@ export async function listEligibleIssues(
       openingLabel: readText(row.opening_label, "Opening label"),
       comparisonPoints: readNumber(row.opening_comparison_points, "Opening comparison points"),
       reservePoints: readNumber(row.opening_reserve_points, "Opening reserve points"),
+      asksOutsideRepository: readBoolean(row.asks_outside_repository, "Outside-repository mark"),
       createdAt: readTimestamp(row.created_at, "Issue creation time"),
     };
     if (row.sponsor_login !== undefined) {
@@ -398,6 +403,13 @@ function readNumber(value: unknown, label: string): number {
     throw new Error(`${label} was not a number.`);
   }
   return parsed;
+}
+
+function readBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new Error(`${label} was not a boolean.`);
+  }
+  return value;
 }
 
 function readText(value: unknown, label: string): string {
