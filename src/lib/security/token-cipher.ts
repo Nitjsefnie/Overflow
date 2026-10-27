@@ -91,10 +91,7 @@ export function tokenKeySetFrom(current: string | undefined, previous: string | 
   return loadTokenKeySet({ TOKEN_ENCRYPTION_KEY: current, TOKEN_ENCRYPTION_KEY_PREVIOUS: previous });
 }
 
-/**
- * An HMAC key for one purpose, derived from one encoded token key (current or
- * previous) under a fixed label, so no purpose ever uses the cipher key itself.
- */
+// Per-label HMAC key; never the cipher key.
 export function derivePurposeKey(encodedKey: string, label: string): Buffer {
   return createHmac("sha256", decodeKey(encodedKey, currentKeyFailure)).update(label, "utf8").digest();
 }
