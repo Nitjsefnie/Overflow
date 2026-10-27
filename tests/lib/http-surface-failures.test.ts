@@ -512,7 +512,8 @@ export function GET() { return errorResponse(400, "INVALID_INPUT", "Bad."); }
       readFileSync(join(repoRoot, "scripts/http-surface-snapshot.json"), "utf8"),
     ) as { routes: Record<string, unknown> };
     const imported = new Set(
-      ["scripts/http-surface-derive.ts", "scripts/http-surface-derive-moderation.ts", "scripts/http-surface-derive-disputes.ts"].flatMap((file) =>
+      ["scripts/http-surface-derive.ts", "scripts/http-surface-derive-moderation.ts", "scripts/http-surface-derive-disputes.ts",
+        "scripts/http-surface-derive-work-mail.ts"].flatMap((file) =>
         [...readFileSync(join(repoRoot, file), "utf8").matchAll(/from "\.\.\/(src\/app\/[^"]+\/route\.ts)"/g)]
           .map((match) => match[1]!),
       ),
