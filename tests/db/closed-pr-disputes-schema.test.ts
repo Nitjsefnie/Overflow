@@ -90,7 +90,7 @@ describe("closed PR dispute schema", () => {
       // Today's materializer writes the fixture, so it gets the issue column a later migration adds; dropped
       // again before the upgrade runs, the schema is 073's exactly.
       await sql`alter table issues add column asks_outside_repository boolean not null default false`;
-      await sql`alter table issues add column done_when text`;
+      await sql`alter table issues add column done_when text, add column agent_prompt text, add column recommended_model text`;
       const affectedIssueIds: string[] = [];
       const surplusRequestIds: string[] = [];
       for (let index = 0; index < 2; index += 1) {
@@ -102,7 +102,7 @@ describe("closed PR dispute schema", () => {
         surplusRequestIds.push(surplus.id as string);
       }
       await sql`alter table issues drop column asks_outside_repository`;
-      await sql`alter table issues drop column done_when`;
+      await sql`alter table issues drop column done_when, drop column agent_prompt, drop column recommended_model`;
       await expect(runMigrations()).rejects.toThrow(
         `Closed PR dispute precondition failed: 2 issue(s) hold more than one granted dispute. Issue ids: ${affectedIssueIds.sort().join(", ")}`,
       );
