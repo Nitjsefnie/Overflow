@@ -311,6 +311,7 @@ describe("a repository the forge no longer returns", () => {
   function forge(options: {
     repository?: Snapshot;
     gitHubToken?: string | null;
+    forgeToken?: { token: string; identityId: string } | null;
     count: () => Promise<number | null>;
     byId?: () => Promise<object | null>;
   }) {
@@ -318,7 +319,7 @@ describe("a repository the forge no longer returns", () => {
     const lookup = {
       getRepository: async () => options.repository ?? github,
       getGitHubAccessToken: async () => options.gitHubToken === undefined ? "token-a" : options.gitHubToken,
-      resolveForgeToken: async () => ({ token: "pat", identityId: "identity-1" }),
+      resolveForgeToken: async () => options.forgeToken === undefined ? { token: "pat", identityId: "identity-1" } : options.forgeToken,
     };
     const createGateway = () => ({
       getRepositoryHistoryCount: async () => { requests.push("count"); return options.count(); },
@@ -528,7 +529,21 @@ describe("a repository the forge no longer returns", () => {
   it.each([
     ["GitHub", "group//project", "github", null],
     ["GitHub", "group/project/extra", "github", null],
+    ["GitHub", "group/..", "github", null],
+    ["GitHub", "group/.", "github", null],
+    ["GitHub", "bad owner/project", "github", null],
+    ["GitHub", "group/bad name", "github", null],
+    ["GitHub", "-owner/project", "github", null],
+    ["GitHub", "group/%2e%2e", "github", null],
+    ["GitHub", "group/project\n", "github", null],
     ["GitLab", "group//project", "gitlab", "https://gitlab.test"],
+    ["GitLab", "group/..", "gitlab", "https://gitlab.test"],
+    ["GitLab", "group/../project", "gitlab", "https://gitlab.test"],
+    ["GitLab", "bad group/sub/project", "gitlab", "https://gitlab.test"],
+    ["GitLab", "-group/project", "gitlab", "https://gitlab.test"],
+    ["GitLab", "group/-project", "gitlab", "https://gitlab.test"],
+    ["GitLab", "group/bad+name", "gitlab", "https://gitlab.test"],
+    ["GitLab", "group/project\n", "gitlab", "https://gitlab.test"],
   ])("reports the measure's own failure, with no by-id lookup, for the malformed %s path %s", async (_forge, ownerName, provider, instanceUrl) => {
     const lines = consoleLines();
     const failure = notFoundByName();
@@ -541,6 +556,23 @@ describe("a repository the forge no longer returns", () => {
     const { summary, reported } = await tick(subject, foundAt, at);
     expect(subject.requests).toEqual(["count"]);
     expect(reported).toEqual([{ repositoryId: "gone-repo", error: failure }]);
+    expect(lines.warn).not.toHaveBeenCalled();
+    expect(summary).toMatchObject({ measureFailed: 1, gone: 0 });
+    expect(foundAt.size).toBe(0);
+  });
+
+  it.each([
+    ["GitHub", { gitHubToken: "" }],
+    ["GitLab", { repository: { ...github, provider: "gitlab", instanceUrl: "https://gitlab.test" }, forgeToken: { token: "", identityId: "identity-1" } }],
+  ])("reports the original measure failure for an empty %s credential", async (_provider, shape) => {
+    const lines = consoleLines();
+    const failure = notFoundByName();
+    const subject = forge({ ...shape, count: async () => { throw failure; }, byId: async () => null });
+    const foundAt = new Map<string, number>();
+    const { summary, enqueued, reported } = await tick(subject, foundAt, at);
+    expect(subject.requests).toEqual(["count"]);
+    expect(reported).toEqual([{ repositoryId: "gone-repo", error: failure }]);
+    expect(enqueued).toEqual(["gone-repo"]);
     expect(lines.warn).not.toHaveBeenCalled();
     expect(summary).toMatchObject({ measureFailed: 1, gone: 0 });
     expect(foundAt.size).toBe(0);
