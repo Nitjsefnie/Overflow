@@ -1017,6 +1017,16 @@ describe("dashboard projections", () => {
     expect(captures[0]?.values?.slice(-2)).toEqual([50, 100]);
   });
 
+  it("refuses a board row whose outside-repository mark is not a boolean", async () => {
+    const { sql } = sqlHarness([[{
+      id: "issue-1", repository_name: "co-op/harbour", issue_number: 1, title: "Mark", url: "https://github.com/co-op/harbour/issues/1",
+      opening_name: "Promise band", opening_label: "delta", opening_comparison_points: 1, opening_reserve_points: 1,
+      asks_outside_repository: "true", created_at: "2026-09-01T00:00:00.000Z",
+    }]]);
+
+    await expect(listEligibleIssues("member-1", {}, { sql })).rejects.toThrow("Outside-repository mark was not a boolean.");
+  });
+
   it("caps the board page size at the documented maximum and floors fractional pages", async () => {
     const { sql, captures } = sqlHarness([[]]);
 
