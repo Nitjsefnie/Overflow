@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
 import { WorkMailPanel } from "@/components/work-mail-panel";
 import { buildConfirmationMessage } from "@/lib/accounts/work-mail-transport";
+import { formatInstant } from "@/lib/format-instant";
 
 // Rebind cached consumers to this file's mocks when workers are shared.
 vi.hoisted(() => { vi.resetModules(); });
@@ -17,9 +18,19 @@ const fetchMock = vi.fn();
 /** The URL hash at the moment each request was made, in request order. */
 let hashAtRequest: string[];
 
+// Distinct years the panel has no other reason to print: the route sends these, the panel must show none (ruling: state only).
+const STORED_TIMES = {
+  confirmedAt: "2031-04-07T08:09:10.000Z",
+  lastNotifiedAt: "2032-05-08T09:10:11.000Z",
+  confirmExpiresAt: "2033-06-09T10:11:12.000Z",
+};
+
 function state(enabled: boolean, subscription: Subscription) {
   return Response.json({ enabled, subscription: subscription === null ? null : {
-    ...subscription, confirmedAt: null, lastNotifiedAt: null, confirmExpiresAt: null,
+    ...subscription,
+    confirmedAt: subscription.confirmed ? STORED_TIMES.confirmedAt : null,
+    lastNotifiedAt: subscription.confirmed ? STORED_TIMES.lastNotifiedAt : null,
+    confirmExpiresAt: subscription.confirmed ? null : STORED_TIMES.confirmExpiresAt,
   } });
 }
 
@@ -72,6 +83,14 @@ describe("work mail panel", () => {
     } else {
       expect(within(panel()).getByTestId("work-mail-address").textContent).toBe(address);
       expect(within(panel()).getByRole("button", { name: "Remove address" })).toBeEnabled();
+    }
+    const hint = within(panel()).queryByTestId("work-mail-pending-hint");
+    if (expected === "pending") expect(hint).toBeVisible();
+    else expect(hint).not.toBeInTheDocument();
+    for (const iso of Object.values(STORED_TIMES)) {
+      for (const rendering of [iso, formatInstant(iso), iso.slice(0, 4)]) {
+        expect(panel().textContent).not.toContain(rendering);
+      }
     }
     expect(fetchMock.mock.calls).toEqual([["/api/account/work-mail", { credentials: "same-origin" }]]);
   });
