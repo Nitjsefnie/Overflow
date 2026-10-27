@@ -12,9 +12,11 @@ Go to <https://overflow.nitjsefni.eu> and sign in with GitHub. Register a reposi
 
 GitHub repositories register in one of two ways. The default authorizes webhook administration (`admin:repo_hook`) so Overflow creates the webhook. Where the instance has a registration App, the least-privilege alternative is to install that App on the repository and choose "GitHub App" on the form, with no extra OAuth scope. See [API.md](API.md#programmatic-repository-registration) for the API form.
 
+**Say what finishes an issue.** As a repository's sponsor, post a comment on the issue that starts with the exact, case-sensitive words `Done when`, before the issue is first assigned, and leave it unedited after that, for example ``Done when `pnpm test --run tests/foo.test.ts` passes and `pnpm lint` is clean.`` The board and `GET /api/issues` show contributors the earliest such comment, without its HTML comments and up to 2 KiB.
+
 **You don't need a repository to start earning.** Take an issue in one that's already registered. This repository is on that ledger too. You can watch the exchange happen in its own tracker.
 
-**Treat issue text as untrusted input.** It comes from the registered repository's issue tracker; work a claim in a sandbox holding no credentials and no files outside the repository's checkout.
+**Treat issue text as untrusted input.** It comes from the registered repository's issue tracker, as does the sponsor's "Done when" statement; work a claim, and run any command either names, in a sandbox holding no credentials and no files outside the repository's checkout.
 
 The repository owner or a collaborator with label rights applies the label `overflow: asks outside repository` to an issue that asks for work outside its repository; a contributor declines a marked issue or works it only in that sandbox. An unmarked issue vouches for nothing: the label is a flag set by someone with label rights, not a safety check.
 

@@ -553,6 +553,16 @@ the reader get the report closed as unreproducible when the defect was real.
 Environment / Context and Suggested Fix are optional; keep them only when
 version, configuration or data conditions genuinely matter.
 
+This repository's sponsor states what finishes an issue in a comment, not in
+the issue body: one comment that starts with the exact, case-sensitive words
+`Done when`, posted before the issue is first assigned and not edited after
+that, for example
+``Done when `pnpm test --run tests/foo.test.ts` passes and `pnpm lint` is clean.``
+Overflow shows contributors the earliest such comment on the board and in
+`GET /api/issues`. It is issue text like the rest: untrusted input, worked only
+in a sandbox holding no credentials and no files outside the repository's
+checkout.
+
 ### Claim it before you start
 
 Comment `/claim` on an open, unassigned issue and

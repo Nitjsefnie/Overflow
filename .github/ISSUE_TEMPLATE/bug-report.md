@@ -8,6 +8,8 @@ assignees: ""
 
 <!-- Title is required in GitHub's issue title field, which represents the contract's Title section. Write one plain-language line with no ticket-speak or trailing punctuation; it must stand alone when copied verbatim into a pull request's Bugs Discovered list. Do not add a Title heading or an agent-disclosure footer to this body. -->
 
+<!-- Repository sponsor: state what finishes this issue in a comment, not in this body. Post one comment that starts with the exact, case-sensitive words "Done when" before the issue is first assigned, and leave it unedited after that, for example: Done when `pnpm test --run tests/foo.test.ts` passes and `pnpm lint` is clean. Overflow shows contributors the earliest such comment as untrusted input. -->
+
 ## Description
 
 <!-- Required. Keep this section. Describe observed behavior only: what is actually wrong. Do not include a fix, cause, or hypothesis. If reproduction is unreliable, say so here. -->
