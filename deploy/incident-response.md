@@ -770,9 +770,12 @@ the regulation:
 
 ## Communicate with affected people
 
-Overflow stores no e-mail address or notification contact list for its
-members: GitHub sign-in keeps the numeric user ID and login, and strips
-e-mail from the session. There is no in-app incident-banner setting or
+Overflow keeps no notification contact list for its members: GitHub sign-in
+keeps the numeric user ID and login and strips e-mail from the session. The
+only addresses it stores are opt-in work-mail addresses, given with consent
+for work notification mail only (see `contributor_work_mail` in the
+[processing record](processing-record.md)), so they are not a recipient list
+for incident notices. There is no in-app incident-banner setting or
 broadcast-notification control. The hosted instance publishes the
 [public GitHub issue tracker](https://github.com/Nitjsefnie/Overflow/issues)
 and [private vulnerability reporting](https://github.com/Nitjsefnie/Overflow/security/advisories/new)
