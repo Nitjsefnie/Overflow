@@ -1023,10 +1023,6 @@
     2537,
     4459
   ],
-  "src/lib/repositories/upgrade-webhooks.ts": [
-    1120,
-    7329
-  ],
   "src/lib/retention/prune.ts": [
     1894,
     4937
