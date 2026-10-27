@@ -27,7 +27,7 @@ import {
   type ReconciliationEvidence,
   type ReconciliationSynchronization,
 } from "@/lib/fold/reconciliation-evidence";
-import { attachDoneWhen } from "@/lib/fold/done-when";
+import { attachSponsorStatements } from "@/lib/fold/done-when";
 import { foldRepository, type FoldForgeIdentity, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type {
   GitHubIssue,
@@ -537,7 +537,7 @@ async function reconcileRepositoryAfterRepositoryRead(
             })),
           };
           const fold = foldRepository(snapshot);
-          attachDoneWhen(fold, githubIssues, repository.sponsor);
+          attachSponsorStatements(fold, githubIssues, repository.sponsor);
           const cost: ReconciliationCostCharge = { ...readCost(), sponsorId: repository.sponsor.id, completedAt: now() };
           const expectedVersion = pass === undefined ? cached?.version ?? null
             : (await dependencies.store.getReconciliationEvidence(repositoryId))?.version ?? null;

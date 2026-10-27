@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  AGENT_PROMPT_PHRASE, agentPromptText, attachDoneWhen, RECOMMENDED_MODEL_PHRASE, recommendedModelText, sponsorAgentPrompt, sponsorDoneWhen, sponsorRecommendedModel,
+  AGENT_PROMPT_PHRASE, agentPromptText, attachSponsorStatements, RECOMMENDED_MODEL_PHRASE, recommendedModelText, sponsorAgentPrompt, sponsorDoneWhen, sponsorRecommendedModel,
 } from "@/lib/fold/done-when";
 import { foldRepository, type FoldIssue, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type { GitHubIssueComment, GitHubIssueHistoryEvent } from "@/lib/github/types";
@@ -174,13 +174,13 @@ describe("recommendedModelText", () => {
   });
 });
 
-describe("attachDoneWhen", () => {
+describe("attachSponsorStatements", () => {
   it("sets all three statements, and only on fold issues read fresh this pass", () => {
     const fold = { issues: [1, 2, 3, 4].map((githubIssueId) => ({ githubIssueId })) } as unknown as FoldResult;
     const statements = [comment(1, "Done when A", -60), comment(2, "Agent prompt B", -50), comment(3, "Recommended model: C", -40)];
     const cached = { id: 3, comments: statements.map((c) => ({ ...c, body: "[body removed]" })), history: [] };
 
-    attachDoneWhen(fold, [
+    attachSponsorStatements(fold, [
       { id: 1, body: "Issue body", comments: statements, history: [] },
       { id: 2, body: "", comments: [comment(1, "Thanks for filing this.", -60)], history: [] },
       cached,
@@ -220,8 +220,8 @@ describe("settlement invariance", () => {
     expect(base.ledgerEntries.length).toBeGreaterThan(0);
     expect(base.issues[0]!.claimAssigneeGitHubLogin).toBe("contributor");
     expect(base.issues[0]!.settledRationaleCommentId).toBe("comment-1");
-    attachDoneWhen(base, fresh(plain), SPONSOR);
-    attachDoneWhen(folded, fresh(advised), SPONSOR);
+    attachSponsorStatements(base, fresh(plain), SPONSOR);
+    attachSponsorStatements(folded, fresh(advised), SPONSOR);
 
     expect(base.issues[0]!.agentPrompt).toBeNull();
     expect(folded.issues[0]!.agentPrompt).toEqual({ text: "Agent prompt: run the whole suite first.", commentId: "advice-1" });

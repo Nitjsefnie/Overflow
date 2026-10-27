@@ -103,7 +103,7 @@ export const sponsorAgentPrompt = (issue: StatementSource, sponsor: FoldUser) =>
 export const sponsorRecommendedModel = (issue: StatementSource, sponsor: FoldUser) =>
   sponsorStatement(issue, sponsor, recommendedModelText);
 
-export function attachDoneWhen(
+export function attachSponsorStatements(
   fold: FoldResult,
   issues: ReadonlyArray<{ id: number; body?: string; comments: GitHubIssueComment[]; history: GitHubIssueHistoryEvent[] }>,
   sponsor: FoldUser,
