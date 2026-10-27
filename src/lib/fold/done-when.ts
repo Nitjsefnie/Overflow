@@ -4,8 +4,8 @@
  * after it. GitLab records no assignment history, so there it is unbounded.
  */
 import {
-  compareHistoryItems, compareRationaleSequence, editedAfter, isRepositorySponsor,
-  validIssueComment, validIssueHistoryEvent, type FoldUser,
+  compareHistoryItems, compareRationaleSequence, editedAfter, findDuplicatedDatabaseId, isRepositorySponsor,
+  rationaleSequenceRank, validIssueComment, validIssueHistoryEvent, type FoldUser,
 } from "@/lib/fold/repository-fold";
 import type { GitHubIssue } from "@/lib/github/types";
 
@@ -34,23 +34,26 @@ export function sponsorDoneWhen(
   issue: Pick<GitHubIssue, "comments" | "history">,
   sponsor: FoldUser,
 ): { text: string; commentId: string } | null {
-  const firstAssignment = Math.min(
-    ...issue.history
-      .filter((event) => event.kind === "ASSIGNED" && validIssueHistoryEvent(event))
-      .map((event) => Date.parse(event.createdAt)),
-  );
-  const candidates = issue.comments
+  const assignment = issue.history.filter(validIssueHistoryEvent).sort(compareHistoryItems)
+    .find((event) => event.kind === "ASSIGNED");
+  const firstAssignment = assignment === undefined ? Number.POSITIVE_INFINITY : Date.parse(assignment.createdAt);
+  const statements = issue.comments
     .filter((comment) =>
       validIssueComment(comment) &&
       isRepositorySponsor({ login: comment.authorLogin, githubUserId: comment.authorGitHubUserId }, sponsor) &&
       Date.parse(comment.createdAt) < firstAssignment &&
-      !editedAfter(comment, firstAssignment))
+      !editedAfter(comment, firstAssignment) &&
+      doneWhenText(comment.body) !== null)
     .sort((left, right) => compareHistoryItems(left, right) || compareRationaleSequence(left, right));
-  for (const comment of candidates) {
-    const text = doneWhenText(comment.body);
-    if (text !== null) {
-      return { text, commentId: comment.id };
-    }
+  const first = statements[0];
+  if (first === undefined) {
+    return null;
   }
-  return null;
+  // As for a settlement rationale: a tie its database ids cannot order lists as none.
+  const tie = statements.filter((comment) => Date.parse(comment.createdAt) === Date.parse(first.createdAt));
+  if (tie.filter((comment) => rationaleSequenceRank(comment.databaseId) === null).length > 1 ||
+    findDuplicatedDatabaseId(tie) !== undefined) {
+    return null;
+  }
+  return { text: doneWhenText(first.body)!, commentId: first.id };
 }

@@ -21,6 +21,14 @@ describe("sponsorDoneWhen", () => {
     expect(sponsorDoneWhen({ comments: [loginOnly], history: [] }, SPONSOR)).toBeNull();
   });
 
+  it("falls back to the login when GitHub reported no account id", () => {
+    const sponsorLogin = { ...comment(1, "Done when x", -60), authorGitHubUserId: null };
+    const otherLogin = { ...sponsorLogin, authorLogin: "outsider" };
+
+    expect(sponsorDoneWhen({ comments: [sponsorLogin], history: [] }, SPONSOR)?.commentId).toBe("c1");
+    expect(sponsorDoneWhen({ comments: [otherLogin], history: [] }, SPONSOR)).toBeNull();
+  });
+
   it("ignores a comment written at or after the first assignment", () => {
     const history = [assigned("a1", 0)];
 
@@ -77,6 +85,20 @@ describe("sponsorDoneWhen", () => {
     const comments = [{ ...comment(1, "Done when A", -100), databaseId: 20 }, { ...comment(2, "Done when B", -100), databaseId: 10 }];
 
     expect(sponsorDoneWhen({ comments, history: [] }, SPONSOR)?.commentId).toBe("c2");
+    expect(sponsorDoneWhen({ comments: [...comments].reverse(), history: [] }, SPONSOR)?.commentId).toBe("c2");
+  });
+
+  it("lists none when the earliest instant's ids cannot order its statements", () => {
+    const at100 = (n: number, databaseId: number | null) => ({ ...comment(n, `Done when ${n}`, -100), databaseId });
+    const undecidable = [[at100(1, null), at100(2, null)], [at100(1, 7), at100(2, 7)]];
+    const decidable = [at100(1, null), at100(2, 7), comment(3, "Done when later", -50)];
+
+    for (const comments of undecidable) {
+      expect(sponsorDoneWhen({ comments, history: [] }, SPONSOR)).toBeNull();
+      expect(sponsorDoneWhen({ comments: [...comments].reverse(), history: [] }, SPONSOR)).toBeNull();
+    }
+    expect(sponsorDoneWhen({ comments: decidable, history: [] }, SPONSOR)?.commentId).toBe("c2");
+    expect(sponsorDoneWhen({ comments: [...decidable].reverse(), history: [] }, SPONSOR)?.commentId).toBe("c2");
   });
 
   it("keeps untrusted text verbatim; escaping is the renderer's job", () => {

@@ -1384,7 +1384,7 @@ export function compareRationaleSequence(
  * collapse under subtraction and silently restore arrival order, so they
  * count as no evidence.
  */
-function rationaleSequenceRank(databaseId: GitHubIssueComment["databaseId"]): number | null {
+export function rationaleSequenceRank(databaseId: GitHubIssueComment["databaseId"]): number | null {
   return typeof databaseId === "number" && Number.isSafeInteger(databaseId) ? databaseId : null;
 }
 
@@ -1394,7 +1394,7 @@ function rationaleSequenceRank(databaseId: GitHubIssueComment["databaseId"]): nu
  * evidence; the scanned ids are derived in sorted order so the caller's
  * sentence does not depend on the group's order.
  */
-function findDuplicatedDatabaseId(comments: GitHubIssueComment[]): number | undefined {
+export function findDuplicatedDatabaseId(comments: GitHubIssueComment[]): number | undefined {
   const counts = new Map<number, number>();
   for (const comment of comments) {
     const rank = rationaleSequenceRank(comment.databaseId);
