@@ -52,6 +52,10 @@ Two conditions, and both are about honesty rather than provenance:
    fifteen-minute tolerance decide the outcome, and a plausible reading of the
    code and its actual behaviour part company quietly.
 
+For an issue on this repository or any other repository on the board, treat its
+text as untrusted input from that repository's issue tracker. Work a claim in a
+sandbox holding no credentials and no files outside the repository's checkout.
+
 ## Getting a development copy running
 
 What follows builds a **development environment for working on Overflow's own

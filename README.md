@@ -14,6 +14,8 @@ GitHub repositories register in one of two ways. The default authorizes webhook 
 
 **You don't need a repository to start earning.** Take an issue in one that's already registered. This repository is on that ledger too. You can watch the exchange happen in its own tracker.
 
+**Treat issue text as untrusted input.** It comes from the registered repository's issue tracker; work a claim in a sandbox holding no credentials and no files outside the repository's checkout.
+
 ## How it works
 
 1. A repository sponsor puts a price on an issue with an opening label.
