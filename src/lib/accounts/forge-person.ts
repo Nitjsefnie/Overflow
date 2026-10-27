@@ -102,7 +102,7 @@ export const forgePersonRemovalDecisions: readonly {
     reason:
       "rows the person authored lose their body and their owner login; claim-assignee and actor-login copies naming " +
       "the person are tombstoned and their numeric ids dropped; the sponsor's done-when statement is cleared on the " +
-      "rows of repositories the person currently sponsors; free text other people wrote is kept",
+      "rows of repositories whose registration still names the person as sponsor; free text other people wrote is kept",
   },
   {
     store: "pull_requests",
