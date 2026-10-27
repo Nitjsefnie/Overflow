@@ -28,7 +28,9 @@ the security reason and the change.
 **Version history:**
 
 - 1.10.0: `POST /api/account/export` adds `workMail`, the opt-in work-mail
-  address with its confirmation and last-notification times (`null` when none
+  address with its request (`createdAt`), confirmation-expiry
+  (`confirmExpiresAt`), confirmation (`confirmedAt`), last-notification
+  (`lastNotifiedAt`) and last-digest (`lastDigestAt`) times (`null` when none
   is stored), and `workMailConfirmations`, one row per confirmation mail sent.
   Adds the work-mail routes `/api/account/work-mail`,
   `/api/account/work-mail/confirm` and `/api/work-mail/unsubscribe`.
