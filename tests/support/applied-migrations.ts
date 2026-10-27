@@ -87,4 +87,5 @@ export const appliedMigrationNames: readonly string[] = [
   "079_closing_evidence_unreadable.sql",
   "080_reconciliation_sweep_walk.sql",
   "081_issue_outside_repository_mark.sql",
+  "082_issue_done_when.sql",
 ];

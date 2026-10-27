@@ -154,6 +154,7 @@ export type FoldIssue = {
   settledRationaleActorLogin: string | null;
   settledRationaleCommentedAt: string | null;
   asksOutsideRepository: boolean;
+  doneWhen?: { text: string; commentId: string } | null; // absent: not read fresh this pass, the stored extract stands
 };
 
 export type FoldPullRequest = {
@@ -1408,7 +1409,6 @@ function findDuplicatedDatabaseId(comments: GitHubIssueComment[]): number | unde
     .sort((left, right) => left - right);
   return duplicated[0];
 }
-
 
 function validTimestamp(value: string | null): value is string {
   return value !== null && Number.isFinite(Date.parse(value));
