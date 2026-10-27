@@ -4,7 +4,7 @@ import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
-import { PostgresWorkMailStore, reserveDailySend } from "@/lib/accounts/work-mail-store";
+import { PostgresWorkMailStore, deleteAllWorkMailData, reserveDailySend } from "@/lib/accounts/work-mail-store";
 import { startPostgresContainer } from "../support/postgres-container";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 
@@ -238,15 +238,49 @@ describe("subscription reads and deletes", () => {
     expect(await store.getSubscription(await insertUser())).toBeNull();
   });
 
-  it("deleteSubscription removes the user's subscription and confirmation history only", async () => {
+  it("deleteSubscription removes the subscription row and keeps the confirmation history", async () => {
     const { userId } = await confirmedSubscriber();
     const other = await confirmedSubscriber();
     expect(await store.deleteSubscription(userId)).toBe(true);
     expect(await subscriptionRow(userId)).toBeUndefined();
+    expect(await confirmationsOf(userId)).toHaveLength(1);
+    expect(await subscriptionRow(other.userId)).toBeDefined();
+    expect(await store.deleteSubscription(userId)).toBe(false);
+  });
+
+  it("deleteAllWorkMailData removes the user's subscription and confirmation history only", async () => {
+    const { userId } = await confirmedSubscriber();
+    const other = await confirmedSubscriber();
+    await deleteAllWorkMailData(sql, userId);
+    expect(await subscriptionRow(userId)).toBeUndefined();
     expect(await confirmationsOf(userId)).toEqual([]);
     expect(await subscriptionRow(other.userId)).toBeDefined();
     expect(await confirmationsOf(other.userId)).toHaveLength(1);
-    expect(await store.deleteSubscription(userId)).toBe(false);
+    // A user with history but no subscription row loses the history too.
+    const requester = await insertUser();
+    await store.requestConfirmation(requester, addressFor("history"), limits);
+    await store.deleteSubscription(requester);
+    await sql.begin((tx) => deleteAllWorkMailData(tx, requester));
+    expect(await confirmationsOf(requester)).toEqual([]);
+  });
+
+  it("opting out with deleteSubscription does not reset the account cap", async () => {
+    const userId = await insertUser();
+    for (let index = 0; index < 3; index += 1) {
+      expect((await store.requestConfirmation(userId, addressFor(`optout${index}`), limits)).kind).toBe("send");
+      expect(await store.deleteSubscription(userId)).toBe(true);
+    }
+    expect((await store.requestConfirmation(userId, addressFor("after"), limits)).kind).toBe("account-limited");
+  });
+
+  it("opting out with deleteSubscriptionById does not reset the address cap", async () => {
+    const address = addressFor("victim");
+    for (let index = 0; index < 3; index += 1) {
+      const userId = await insertUser();
+      expect((await store.requestConfirmation(userId, address, limits)).kind).toBe("send");
+      expect(await store.deleteSubscriptionById((await store.getSubscription(userId))!.id)).toBe(true);
+    }
+    expect(await store.requestConfirmation(await insertUser(), address, limits)).toEqual({ kind: "suppressed" });
   });
 
   it("deleteSubscriptionById removes that subscription only", async () => {

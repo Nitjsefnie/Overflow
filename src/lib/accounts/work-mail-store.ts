@@ -38,6 +38,14 @@ export async function reserveDailySend(sql: SqlClient | TransactionClient, limit
   return rows.length === 1;
 }
 
+/** Account erasure inside the caller's transaction: the subscription and the confirmation history. */
+export async function deleteAllWorkMailData(sql: SqlClient | TransactionClient, userId: string): Promise<void> {
+  await sql`
+    with history as (delete from contributor_work_mail_confirmations where user_id = ${userId})
+    delete from contributor_work_mail_subscriptions where user_id = ${userId}
+  `;
+}
+
 const ceilingRefusal = new Error("contributor mail ceiling reached");
 
 export class PostgresWorkMailStore {
@@ -108,12 +116,9 @@ export class PostgresWorkMailStore {
     };
   }
 
-  /** Removes the subscription and the account's confirmation history. */
+  // Opt-out keeps the confirmation history (digests only), so it cannot reset the caps; it ages out by the prune.
   public async deleteSubscription(userId: string): Promise<boolean> {
-    const rows = await this.sql`
-      with history as (delete from contributor_work_mail_confirmations where user_id = ${userId})
-      delete from contributor_work_mail_subscriptions where user_id = ${userId} returning id
-    `;
+    const rows = await this.sql`delete from contributor_work_mail_subscriptions where user_id = ${userId} returning id`;
     return rows.length === 1;
   }
 
