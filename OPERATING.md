@@ -319,12 +319,16 @@ including reruns after a queue failure.
 The summary counts `succeeded`, `failed`, and `gone` registrations. A GitHub or
 GitLab by-ID lookup that returns 404 with the sponsor's token reports
 `subscription: "SKIPPED"`, `queue: "NOT_ATTEMPTED"`, and `failure: "REPOSITORY_GONE"`.
-It counts only as `gone` and leaves the registration unchanged. Exit 0 requires
-`failed` to be zero; exit 1 indicates a failed step; exit 2 indicates invalid
-arguments. Lookup errors, missing tokens, missing/inaccessible hooks, lost admin
-rights, returned private repositories and mismatched IDs remain failures. Restore
-the sponsor's access or correct the reported registration problem, then rerun. `UPGRADE_FAILED` indicates
-configuration or enumeration failed before a complete summary was available.
+It counts only as `gone`, leaves the registration unchanged, and does not fail
+the run. This includes a repository the sponsor's token cannot see, such as one
+made private without that token's access. Exit 0 requires `failed` to be zero;
+exit 1 indicates a failed step; exit 2 indicates invalid arguments. Lookup
+errors, missing tokens, missing/inaccessible hooks, lost admin rights, returned
+private repositories and mismatched IDs remain failures. Restore the sponsor's
+access or correct the reported registration problem, then rerun. `UPGRADE_FAILED`
+indicates configuration or enumeration failed before a complete summary was available.
+Rerun `pnpm webhooks:upgrade` for any `REPOSITORY_GONE` line you doubt: a transient
+404 can still leave a `REVISION` record, so redeploying that SHA skips the upgrade.
 
 Retain the JSON output and real exit status with the deployment record, as the
 [ordinary deployment procedure](deploy/README.md#10-deploying-a-new-revision)
