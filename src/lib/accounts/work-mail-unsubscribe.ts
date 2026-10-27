@@ -4,6 +4,7 @@ import { derivePurposeKey, tokenKeySetFrom } from "@/lib/security/token-cipher";
 
 const UNSUBSCRIBE_KEY_LABEL = "overflow:work-mail-unsubscribe";
 const SUBSCRIPTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const SIGNATURE = /^[A-Za-z0-9_-]{43}$/;
 
 function signature(key: string, subscriptionId: string): Buffer {
   const mac = createHmac("sha256", derivePurposeKey(key, UNSUBSCRIBE_KEY_LABEL)).update(`unsubscribe:${subscriptionId}`, "utf8");
@@ -26,9 +27,9 @@ export function verifyUnsubscribeToken(
 ): string | null {
   const keys = tokenKeySetFrom(currentKey, previousKey);
   const parts = token.split(".");
-  if (parts.length !== 2 || !SUBSCRIPTION_ID.test(parts[0]!)) return null;
+  if (parts.length !== 2 || !SUBSCRIPTION_ID.test(parts[0]!) || !SIGNATURE.test(parts[1]!)) return null;
   const [subscriptionId, presented] = [parts[0]!, Buffer.from(parts[1]!, "ascii")];
-  // Compared encoded, so a lenient base64 decode admits no second spelling.
+  // Shape-checked, then compared encoded: no lenient decode or low-byte alias passes.
   const matches = [keys.current, ...(keys.previous === undefined ? [] : [keys.previous])].some((key) => {
     const expected = signature(key, subscriptionId);
     return presented.length === expected.length && timingSafeEqual(presented, expected);
