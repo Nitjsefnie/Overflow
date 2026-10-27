@@ -5,9 +5,11 @@ import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 import { createIssuesGetHandler } from "@/app/api/issues/route";
-import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
+import { DONE_WHEN_NOTICE, listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 import type { DashboardSql } from "@/lib/dashboard/queries";
 import type { EligibleIssueFilters, EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
+
+const AURORA_DONE_WHEN = "Done when the cache replays\n<strong>every</strong> tide.";
 
 /**
  * Two load-independent pins on the eligible-issues query, per the
@@ -92,6 +94,11 @@ describe("eligible issues query shape against PostgreSQL", () => {
     // only where the issue row carries it.
     expect(allBoard.filter((row) => row.asksOutsideRepository).map((row) => row.title)).toEqual(["borealis open seven"]);
     expect(allBoard.map((row) => typeof row.asksOutsideRepository)).toEqual(Array(allBoard.length).fill("boolean"));
+    // The seeded done-when statement rides on its own row only, with the fixed notice; every other row is null.
+    expect(allBoard.filter((row) => row.doneWhen !== null).map((row) => [row.title, row.doneWhen])).toEqual([
+      ["aurora open five", { text: AURORA_DONE_WHEN, notice: DONE_WHEN_NOTICE }],
+    ]);
+    expect(allBoard.filter((row) => row.doneWhen === null)).toHaveLength(allBoard.length - 1);
 
     const openBoard = await listEligibleIssues(seeded.viewerId);
     // Cascade's +20 settled balance leads despite its -10 headroom and lower
@@ -231,6 +238,7 @@ select
   issues.opening_reserve_points,
   issues.claim_assignee_github_login,
   issues.asks_outside_repository,
+  issues.done_when,
   coalesce((select balances.balance from balances where balances.account_id = sponsors.id), 0) as settled_balance,
   (
     coalesce((select balances.balance from balances where balances.account_id = sponsors.id), 0)
@@ -295,6 +303,7 @@ async function originalShapeReference(
       comparisonPoints: Number(row.opening_comparison_points),
       reservePoints: Number(row.opening_reserve_points),
       asksOutsideRepository: row.asks_outside_repository === true,
+      doneWhen: row.done_when === null ? null : { text: String(row.done_when), notice: DONE_WHEN_NOTICE },
       createdAt: timestampText(row.created_at),
     };
     if (row.sponsor_login !== undefined) {
@@ -416,7 +425,10 @@ async function seedShapeWorld(): Promise<void> {
   const auroraOne = await insertRepository("aurora/one", auroraId);
   const auroraTwo = await insertRepository("aurora/two", auroraId);
   const auroraArchive = await insertRepository("aurora/arch", auroraId, false);
-  await insertIssue({ repositoryId: auroraOne, issueNumber: 1, title: "aurora open five", label: "M", points: 5, createdAt: "2026-06-01T00:00:00.000Z" });
+  await insertIssue({
+    repositoryId: auroraOne, issueNumber: 1, title: "aurora open five", label: "M", points: 5,
+    createdAt: "2026-06-01T00:00:00.000Z", doneWhen: AURORA_DONE_WHEN,
+  });
   await insertIssue({
     repositoryId: auroraOne, issueNumber: 2, title: "aurora claimed three", label: "S", points: 3,
     createdAt: "2026-06-02T00:00:00.000Z", assigneeLogin: "raven", assigneeId: 930_101,
@@ -508,19 +520,20 @@ async function insertIssue(input: {
   assigneeId?: number | null;
   state?: "OPEN" | "CLOSED";
   asksOutsideRepository?: boolean;
+  doneWhen?: string;
 }): Promise<void> {
   const githubIssueId = nextExternalId();
   await sql`
     insert into issues (
       github_issue_id, repository_id, issue_number, title, body, url, state,
       opening_label, opening_comparison_points, opening_reserve_points, created_at,
-      claim_assignee_github_login, claim_assignee_github_user_id, asks_outside_repository
+      claim_assignee_github_login, claim_assignee_github_user_id, asks_outside_repository, done_when
     )
     values (
       ${githubIssueId}, ${input.repositoryId}, ${input.issueNumber}, ${input.title}, ${""},
       ${`https://github.com/fixture/issues/${githubIssueId}`}, ${input.state ?? "OPEN"},
       ${input.label}, ${input.points}, ${input.points}, ${input.createdAt},
-      ${input.assigneeLogin ?? null}, ${input.assigneeId ?? null}, ${input.asksOutsideRepository ?? false}
+      ${input.assigneeLogin ?? null}, ${input.assigneeId ?? null}, ${input.asksOutsideRepository ?? false}, ${input.doneWhen ?? null}
     )
   `;
 }

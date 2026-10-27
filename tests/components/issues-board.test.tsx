@@ -54,6 +54,7 @@ function issueRow(n: number): Record<string, unknown> {
     claim_assignee_github_login: null,
     available_headroom: 3,
     asks_outside_repository: false,
+    done_when: null,
     created_at: "2026-09-09T00:00:00.000Z",
   };
 }
