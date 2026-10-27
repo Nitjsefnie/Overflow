@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { Sql } from "postgres";
+import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
@@ -273,11 +273,19 @@ describe("reserveDailySend", () => {
     expect(await dailySent()).toBe(5);
   });
 
-  it("keys the counter on the UTC day", async () => {
-    await reserveDailySend(sql, 5);
-    const [row] = await sql<{ today: boolean }[]>`
-      select utc_day = (now() at time zone 'UTC')::date as today from contributor_work_mail_daily`;
-    expect(row!.today).toBe(true);
+  it("keys the counter on the UTC day whatever the session time zone", async () => {
+    // At any instant at least one of UTC+14 and UTC-12 is on another local date than UTC.
+    for (const zone of ["Pacific/Kiritimati", "Etc/GMT+12"]) {
+      const zoned = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1, connection: { TimeZone: zone } });
+      try {
+        expect(await reserveDailySend(zoned, 5)).toBe(true);
+      } finally {
+        await zoned.end();
+      }
+    }
+    const rows = await sql<{ today: boolean; sent: number }[]>`
+      select utc_day = (now() at time zone 'UTC')::date as today, sent from contributor_work_mail_daily`;
+    expect(rows).toEqual([{ today: true, sent: 2 }]);
   });
 });
 
