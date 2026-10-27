@@ -363,12 +363,10 @@ async function upsertIssues(
   // Raw fields share GitHub's clock with webhooks. A cached or in-flight fold
   // may be older; its derived evidence must still be materialized below.
   const acceptsRawView = sql`issues.github_updated_at is null or excluded.github_updated_at >= issues.github_updated_at`;
+  // A sponsor statement column. Absent means this pass held the issue from cache, with no comment bodies to read it from.
+  const statement = (read: FoldIssue["doneWhen"], stored: typeof acceptsRawView, fresh: typeof acceptsRawView) => !registered ? sql`null`
+    : read === undefined ? stored : sql`case when ${acceptsRawView} then ${fresh} else ${stored} end`;
   for (const issue of fold.issues) {
-    // Absent means this pass held the issue from cache, with no comment bodies to read it from.
-    const statement = (column: "done_when" | "agent_prompt" | "recommended_model", read: FoldIssue["doneWhen"]) =>
-      !registered ? sql`null` : read === undefined
-        ? sql`issues.${sql(column)}`
-        : sql`case when ${acceptsRawView} then excluded.${sql(column)} else issues.${sql(column)} end`;
     const [row] = await sql<IssueRow[]>`
       insert into issues (
         github_issue_id, repository_id, issue_number, title, url, state, github_updated_at,
@@ -396,9 +394,9 @@ async function upsertIssues(
           state = case when ${acceptsRawView} then excluded.state else issues.state end,
           github_updated_at = case when ${acceptsRawView} then excluded.github_updated_at else issues.github_updated_at end,
           asks_outside_repository = case when ${acceptsRawView} then excluded.asks_outside_repository else issues.asks_outside_repository end,
-          done_when = ${statement("done_when", issue.doneWhen)},
-          agent_prompt = ${statement("agent_prompt", issue.agentPrompt)},
-          recommended_model = ${statement("recommended_model", issue.recommendedModel)},
+          done_when = ${statement(issue.doneWhen, sql`issues.done_when`, sql`excluded.done_when`)},
+          agent_prompt = ${statement(issue.agentPrompt, sql`issues.agent_prompt`, sql`excluded.agent_prompt`)},
+          recommended_model = ${statement(issue.recommendedModel, sql`issues.recommended_model`, sql`excluded.recommended_model`)},
           opening_label = case
             when issues.opening_source_event_id is null then excluded.opening_label
             else issues.opening_label
