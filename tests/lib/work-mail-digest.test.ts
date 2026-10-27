@@ -15,7 +15,8 @@ vi.mock("@/lib/accounts/work-mail-transport", async (importActual) => {
   return {
     ...actual,
     buildDigestMessage: (input: Parameters<typeof actual.buildDigestMessage>[0]) => {
-      built.push({ to: input.to, count: input.count, origin: input.origin, from: input.from });
+      // The cycle's preflight probe is addressed to the sender; record only the digests.
+      if (input.to !== input.from) built.push({ to: input.to, count: input.count, origin: input.origin, from: input.from });
       return actual.buildDigestMessage(input);
     },
   };
@@ -77,7 +78,9 @@ describe("the digest cycle", () => {
     const row = due({ watermark: lastNotifiedAt, lastNotifiedAt });
     const world = fakeWorld([row], { [row.userId]: [at(-hours(1))] });
     const transport = recordingTransport();
+    const logs = (["info", "warn", "error", "log"] as const).map((level) => vi.spyOn(console, level).mockImplementation(() => undefined));
     await expect(run(world, transport)).resolves.toEqual({ due: 1, sent: 1, failed: 0, ceiling: false });
+    expect(JSON.stringify(logs.map((spy) => spy.mock.calls))).not.toContain(row.address);
     expect(world.calls).toEqual(["dbNow", "listDue"]);
     expect(world.store.claimDigestSlot).toHaveBeenCalledExactlyOnceWith(row.id, lastNotifiedAt, t0, 7);
     expect(transport.sent).toHaveLength(1);
@@ -182,13 +185,36 @@ describe("the digest cycle", () => {
 
   it("treats a message that cannot be built as a failed send for that row, not the cycle", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const rows = [due(), due(), due()];
+    const world = fakeWorld(rows, Object.fromEntries(rows.map((row) => [row.userId, [at(-hours(1))]])));
+    const transport = recordingTransport();
+    await expect(runWorkMailDigestCycle({
+      store: world.store, transport, from, dailyLimit: 7, listIssues: world.listIssues, readOrigin: () => origin,
+      mintToken: (id) => (id === rows[1]!.id ? "not a token" : `token-${id}`),
+    })).resolves.toEqual({ due: 3, sent: 2, failed: 1, ceiling: false });
+    expect(transport.sent.map((message) => message.to)).toEqual([rows[0]!.address, rows[2]!.address]);
+    expect(warn.mock.calls).toEqual([["Work mail digest was not sent."]]);
+  });
+
+  it.each([
+    ["the app origin is unset", () => vi.stubEnv("OVERFLOW_APP_URL", undefined)],
+    ["the app origin is not https", () => vi.stubEnv("OVERFLOW_APP_URL", "http://overflow.example")],
+    ["the token key is missing", () => vi.stubEnv("OVERFLOW_TOKEN_ENCRYPTION_KEY", undefined)],
+  ])("claims nothing when %s, so no slot or ceiling unit is spent", async (_label, breakIt) => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubEnv("APP_URL", undefined);
+    vi.stubEnv("TOKEN_ENCRYPTION_KEY", undefined);
+    vi.stubEnv("OVERFLOW_APP_URL", origin);
+    vi.stubEnv("OVERFLOW_TOKEN_ENCRYPTION_KEY", tokenKey);
+    breakIt();
     const rows = [due(), due()];
     const world = fakeWorld(rows, Object.fromEntries(rows.map((row) => [row.userId, [at(-hours(1))]])));
     const transport = recordingTransport();
-    await expect(run(world, transport, { readOrigin: () => null })).resolves.toEqual({ due: 2, sent: 0, failed: 2, ceiling: false });
-    expect(world.store.claimDigestSlot).toHaveBeenCalledTimes(2);
+    await expect(runWorkMailDigestCycle({ store: world.store, transport, from, dailyLimit: 7, listIssues: world.listIssues }))
+      .resolves.toEqual({ due: 2, sent: 0, failed: 0, ceiling: false });
+    expect(world.store.claimDigestSlot).not.toHaveBeenCalled();
     expect(transport.sent).toEqual([]);
-    expect(warn.mock.calls).toEqual([["Work mail digest was not sent."], ["Work mail digest was not sent."]]);
+    expect(error.mock.calls).toEqual([["Work mail digest skipped: the app origin or the token key cannot make a digest."]]);
   });
 
   it("links the configured app origin and mints the subscription's one-click opt-out by default", async () => {

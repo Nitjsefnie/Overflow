@@ -19,7 +19,8 @@ vi.mock("@/lib/accounts/work-mail-transport", async (importActual) => {
   return {
     ...actual,
     buildDigestMessage: (input: Parameters<typeof actual.buildDigestMessage>[0]) => {
-      counts.push({ to: input.to, count: input.count });
+      // The cycle's preflight probe is addressed to the sender; record only the digests.
+      if (input.to !== input.from) counts.push({ to: input.to, count: input.count });
       return actual.buildDigestMessage(input);
     },
   };
