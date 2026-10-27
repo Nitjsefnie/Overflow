@@ -25,7 +25,7 @@ GitHub repositories register in one of two ways. The default authorizes webhook 
 
 **Credit earned in their tracker can pay for work in yours.** Each repository chooses its labels. Its two catalogs map them to points on the shared 1–10 scale.
 
-**The economics in two sentences:** every account starts at a credit limit of 10 below zero; claim an issue, have the closing pull request merged, and its settled credits land in your account; you spend credits on your own issues, where someone else taking one holds its points in reserve and, when its closing pull request merges, you set its points and are debited its settled credits. Credits are points on a shared ledger, not money.
+**The economics in two sentences:** every account starts at a credit limit of 10 below zero; claim an issue, have the closing pull request merged, and its settled credits land in your account; you spend credits on your own issues, where someone else taking one holds its reserve points and, when its closing pull request merges, you set its points and are debited its settled credits. Credits are points on a shared ledger, not money.
 
 ## Why it can't be abused
 
