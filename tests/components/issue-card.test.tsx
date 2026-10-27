@@ -3,6 +3,8 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { IssueCard } from "@/components/issue-card";
+import { DONE_WHEN_NOTICE, listEligibleIssues, type EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
+import type { DashboardSql } from "@/lib/dashboard/queries";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 
 describe("eligible issue card", () => {
@@ -310,6 +312,41 @@ describe("eligible issue card", () => {
     expect(document.querySelector("strong")).toBeNull();
   });
 
+  it("renders the sponsor's done-when statement as text inside the reading column, never as markup", () => {
+    const text = "Done when <strong>pnpm test</strong> passes";
+    const { container } = render(<IssueCard issue={doneWhenIssue({ text, notice: DONE_WHEN_NOTICE })} />);
+
+    const blocks = container.querySelectorAll(".issue-card-done-when");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.parentElement?.classList.contains("issue-card-main")).toBe(true);
+    expect(blocks[0]!.querySelector("pre")?.textContent).toBe(text);
+    expect(document.querySelector("strong")).toBeNull();
+  });
+
+  it("marks an issue without a done-when statement as having none", () => {
+    const { container } = render(<IssueCard issue={doneWhenIssue(null)} />);
+
+    const blocks = container.querySelectorAll(".issue-card-done-when");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.querySelector("pre")).toBeNull();
+    expect(blocks[0]!.querySelector("p")?.textContent?.trim()).toBeTruthy();
+  });
+
+  it("labels the statement with the same notice the board projection answers", async () => {
+    const sql = { unsafe: async () => [{
+      id: "issue-7", repository_name: "co-op/harbour", issue_number: 7, title: "Statement", url: "https://github.com/co-op/harbour/issues/7",
+      opening_name: "Promise band", opening_label: "delta", opening_comparison_points: 1, opening_reserve_points: 1,
+      asks_outside_repository: false, done_when: "Done when the tide turns.", created_at: "2026-09-01T00:00:00.000Z",
+    }] } as unknown as DashboardSql;
+    const [projected] = await listEligibleIssues("member-1", {}, { sql });
+    expect(projected!.doneWhen).toEqual({ text: "Done when the tide turns.", notice: DONE_WHEN_NOTICE });
+
+    const { container } = render(<IssueCard issue={projected!} />);
+    const label = container.querySelector(".issue-card-done-when p");
+    expect(DONE_WHEN_NOTICE.trim()).not.toBe("");
+    expect(label?.textContent).toContain(DONE_WHEN_NOTICE);
+  });
+
   it("rounds a fractional headroom to the digits a reader uses", () => {
     render(
       <IssueCard
@@ -367,4 +404,21 @@ function factTerms(): string[] {
 
 function factValues(): string[] {
   return Array.from(document.querySelectorAll("dl.issue-facts dd")).map((dd) => dd.textContent);
+}
+
+function doneWhenIssue(doneWhen: EligibleIssueProjection["doneWhen"]): EligibleIssueProjection {
+  return {
+    id: "issue-21",
+    repositoryName: "co-op/harbour",
+    issueNumber: 21,
+    title: "Replay the tidal cache",
+    url: "https://github.com/co-op/harbour/issues/21",
+    openingName: "Promise band",
+    openingLabel: "delta",
+    comparisonPoints: 3,
+    reservePoints: 3,
+    asksOutsideRepository: false,
+    doneWhen,
+    createdAt: "2026-09-01T10:00:00.000Z",
+  };
 }
