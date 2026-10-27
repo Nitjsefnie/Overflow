@@ -141,6 +141,39 @@ describe("eligible issue card", () => {
     }
   });
 
+  it("shows the same non-empty warning on every marked card, carrying no issue text", () => {
+    const titles = ["Run the harbour setup script", "Pipe the mooring notes into a shell"];
+    const warnings = titles.map((title, index) => {
+      const { container, unmount } = render(
+        <IssueCard
+          issue={{
+            id: `issue-${index}`,
+            repositoryName: `co-op/harbour-${index}`,
+            issueNumber: 13 + index,
+            title,
+            url: `https://github.com/co-op/harbour-${index}/issues/${13 + index}`,
+            openingName: "Promise band",
+            openingLabel: `label-${index}`,
+            comparisonPoints: 3 + index,
+            reservePoints: 3 + index,
+            asksOutsideRepository: true,
+            createdAt: "2026-09-01T10:00:00.000Z",
+          }}
+        />,
+      );
+      const warning = container.querySelector(".issue-card-outside-repository")?.textContent?.trim();
+      unmount();
+      return warning;
+    });
+
+    // The reader depends on the warning being there and being fixed copy, not on its wording.
+    expect(warnings[0]).toBeTruthy();
+    expect(warnings[1]).toBe(warnings[0]);
+    for (const title of titles) {
+      expect(warnings[0]).not.toContain(title);
+    }
+  });
+
   it("keeps the single reading column when the optional facts are absent", () => {
     const { container } = render(
       <IssueCard
