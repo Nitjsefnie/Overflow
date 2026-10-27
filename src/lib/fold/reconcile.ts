@@ -199,6 +199,7 @@ async function reconcileRepositoryWhileCoordinated(
     ? await sponsorIsDiffOnly(dependencies, repository.sponsor.id)
     : false;
   const budgetBound = options?.reason === "SWEEP" || (options?.reason === "REDERIVATION" && diffOnly);
+  // A run spends a verify and a listing page before it stages: a share no larger walks nothing.
   return !budgetBound || dependencies.sweep === undefined
     ? reconcileRepositoryAfterRepositoryRead(dependencies, repository, repositoryId, options, budgetBound)
     : withSweepRequestBudget(() => dependencies.sweep!.spend(repository.sponsor.id, repositoryId),
