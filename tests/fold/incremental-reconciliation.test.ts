@@ -147,6 +147,35 @@ describe("incremental reconciliation", () => {
     expect(await freshPass(30)).toBeNull();
   });
 
+  it("drops a suppressed sponsor's done-when statement at publication, and no later pass restores it", async () => {
+    const f = await fixture();
+    const issue = f.issues[0]!;
+    issue.updatedAt = "2026-09-08T09:58:00Z";
+    issue.comments = [{ id: "done-when", databaseId: 90003, authorLogin: issue.authorLogin, authorGitHubUserId: issue.authorGitHubUserId,
+      body: "Done when the suite passes.", createdAt: "2026-09-01T09:00:00Z", lastEditedAt: null }];
+    const statements = () => sql`select github_issue_id, done_when from issues where repository_id = ${f.id} and done_when is not null`;
+    const pass = async (updatedAt: string | null, clock: string, since: string) => {
+      if (updatedAt !== null) issue.updatedAt = updatedAt;
+      f.clock = new Date(clock);
+      await f.run();
+      expect(f.scans.at(-1)).toBe(since);
+    };
+    await f.run();
+    expect(await statements()).toEqual([{ github_issue_id: String(issue.id), done_when: "Done when the suite passes." }]);
+    await sql`insert into data_subject_suppressions (provider, instance_url, forge_id, logins)
+      values ('github', 'https://github.com', ${issue.authorGitHubUserId}, ${sql.array([issue.authorLogin])})`;
+
+    await pass("2026-09-08T10:04:00Z", "2026-09-08T10:06:00Z", "2026-09-08T09:59:00.000Z");
+    expect(await sql`select done_when from issues where repository_id = ${f.id} and github_issue_id = ${issue.id}`)
+      .toEqual([{ done_when: null }]);
+    await pass(null, "2026-09-08T10:20:00Z", "2026-09-08T10:05:00.000Z");
+    expect(f.issueReads).toEqual([]);
+    expect(await statements()).toEqual([]);
+    await pass("2026-09-08T10:30:00Z", "2026-09-08T10:31:00Z", "2026-09-08T10:19:00.000Z");
+    expect(await sql`select done_when from issues where repository_id = ${f.id} and github_issue_id = ${issue.id}`)
+      .toEqual([{ done_when: null }]);
+  });
+
   it("charges quiet retained history only for current observations", async () => {
     const f = await fixture();
     f.issues[0]!.updatedAt = "2026-09-08T09:58:00Z";

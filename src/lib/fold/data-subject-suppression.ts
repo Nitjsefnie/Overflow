@@ -197,6 +197,10 @@ export function scrubFoldResultForPerson(
     if (identityNamesPerson(issue.settledRationaleActorLogin, source?.comments.find((comment) => comment.id === issue.settledRationaleCommentId)?.authorGitHubUserId, person)) {
       issue.settledRationaleActorLogin = DATA_SUBJECT_TOMBSTONE_LOGIN;
     }
+    const statement = source?.comments.find((comment) => comment.id === issue.doneWhen?.commentId);
+    if (issue.doneWhen && identityNamesPerson(statement?.authorLogin, statement?.authorGitHubUserId, person)) {
+      issue.doneWhen = null;
+    }
   }
   for (const pullRequest of fold.pullRequests) {
     if (identityNamesPerson(pullRequest.authorGitHubLogin, pullRequest.authorGitHubUserId, person)) {

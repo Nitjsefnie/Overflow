@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { attachDoneWhen, DONE_WHEN_MAX_BYTES, doneWhenText, sponsorDoneWhen } from "@/lib/fold/done-when";
+import { scrubFoldResultForPerson } from "@/lib/fold/data-subject-suppression";
+import type { ReconciliationSynchronization } from "@/lib/fold/reconciliation-evidence";
 import type { FoldResult, FoldUser } from "@/lib/fold/repository-fold";
 import type { WalkIssue } from "@/lib/fold/reconciliation-walk";
 import type { GitHubIssueComment, GitHubIssueHistoryEvent } from "@/lib/github/types";
@@ -132,6 +134,28 @@ describe("attachDoneWhen", () => {
     expect("doneWhen" in fold.issues[3]!).toBe(false);
     expect("doneWhen" in fold.issues[4]!).toBe(false);
     expect(fold.issues).toHaveLength(5);
+  });
+});
+
+describe("scrubFoldResultForPerson", () => {
+  const scrubbed = (doneWhen: { text: string; commentId: string } | undefined, person: { forgeId: number; logins: string[] }) => {
+    const issue = { githubIssueId: 1, ownerGitHubLogin: "reporter", claimAssigneeGitHubLogin: null, ...(doneWhen && { doneWhen }) };
+    const fold = { issues: [issue], pullRequests: [], settlements: [], selfWorkCalibrations: [], policyViolations: [] } as unknown as FoldResult;
+    const evidence = [{ id: 1, history: [], comments: [comment(1, "Done when A", -60), { ...comment(2, "Done when B", -30), authorLogin: "other", authorGitHubUserId: 3001 }] }];
+    scrubFoldResultForPerson(fold, { forgeId: person.forgeId, logins: new Set(person.logins) }, evidence as unknown as ReconciliationSynchronization["issues"]);
+    return fold.issues[0]!;
+  };
+
+  it("drops the statement when its comment's author is the suppressed person, decided by the numeric id", () => {
+    expect(scrubbed({ text: "Done when A", commentId: "c1" }, { forgeId: 4004, logins: ["sponsor"] }).doneWhen)
+      .toEqual({ text: "Done when A", commentId: "c1" });
+    expect(scrubbed({ text: "Done when A", commentId: "c1" }, { forgeId: 1001, logins: [] }).doneWhen).toBeNull();
+    expect(scrubbed({ text: "Done when B", commentId: "c2" }, { forgeId: 1001, logins: ["sponsor"] }).doneWhen)
+      .toEqual({ text: "Done when B", commentId: "c2" });
+  });
+
+  it("leaves a statement this pass did not read fresh absent", () => {
+    expect("doneWhen" in scrubbed(undefined, { forgeId: 1001, logins: ["sponsor"] })).toBe(false);
   });
 });
 
