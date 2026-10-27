@@ -1350,8 +1350,13 @@ preparation makes the build fail with the command needed to prepare this release
 The tracked config stays clean, and `set -e` stops a failed preparation or build
 before the switch.
 
-Retain the upgrade log and printed exit status with the deployment record. A
-nonzero upgrade leaves the new release serving but the deployment incomplete;
+Retain the upgrade log and printed exit status with the deployment record.
+`REPOSITORY_GONE` means the by-ID lookup answered 404 and does not fail the run.
+It also covers a repository the sponsor's token cannot see, such as one made
+private without that token's access. Rerun `pnpm webhooks:upgrade` for any
+`REPOSITORY_GONE` line you doubt: a transient 404 during deployment can still
+leave a `REVISION` record, which makes redeploying that SHA skip the upgrade.
+A nonzero upgrade leaves the new release serving but the deployment incomplete;
 inspect each sanitized `failure` code, restore sponsor credentials or hook admin
 access as needed, and rerun the `webhooks:upgrade` package script with the same
 environment.
