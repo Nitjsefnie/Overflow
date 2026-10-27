@@ -83,6 +83,23 @@ describe("webhook issue materialization", () => {
     expect(after).toEqual({ ...newer, claim_assignee_github_login: "fold-assignee", updated_at: after.updated_at });
   });
 
+  it("stores the outside-repository mark from the fold, and only a view at least as new as the stored one moves it", async () => {
+    const fixture = await materializeRepositoryFixture(sql);
+    expect(await row(fixture)).toMatchObject({ asks_outside_repository: false });
+    fixture.fold.issues[0] = { ...fixture.fold.issues[0], updatedAt: "2026-09-08T11:00:00Z", asksOutsideRepository: true };
+    await materialize(fixture);
+    expect(await row(fixture)).toMatchObject({ asks_outside_repository: true });
+    // A webhook view carries no labels: it advances GitHub time and leaves the mark alone.
+    await deliver(fixture, { updatedAt: "2026-09-08T12:00:00Z" });
+    expect(await row(fixture)).toMatchObject({ asks_outside_repository: true });
+    fixture.fold.issues[0] = { ...fixture.fold.issues[0], updatedAt: "2026-09-08T11:30:00Z", asksOutsideRepository: false };
+    await materialize(fixture);
+    expect(await row(fixture)).toMatchObject({ asks_outside_repository: true });
+    fixture.fold.issues[0] = { ...fixture.fold.issues[0], updatedAt: "2026-09-08T12:00:00Z" };
+    await materialize(fixture);
+    expect(await row(fixture)).toMatchObject({ asks_outside_repository: false });
+  });
+
   it("protects a GitHub-confirmed fold closure from an older webhook but accepts a later reopen", async () => {
     const fixture = await materializeRepositoryFixture(sql);
     await deliver(fixture);
