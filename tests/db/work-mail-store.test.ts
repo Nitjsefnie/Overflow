@@ -22,7 +22,7 @@ beforeAll(async () => {
   process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
-  store = new PostgresWorkMailStore(sql, tokenKey);
+  store = new PostgresWorkMailStore(sql, tokenKey, "");
 });
 beforeEach(async () => {
   await sql`delete from contributor_work_mail_confirmations`;
@@ -208,7 +208,7 @@ describe("requestConfirmation", () => {
       const zoned = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1, connection: { TimeZone: zone } });
       try {
         const prober = await insertUser();
-        expect(await new PostgresWorkMailStore(zoned, tokenKey).requestConfirmation(prober, address, { dailyLimit: 3 }), zone)
+        expect(await new PostgresWorkMailStore(zoned, tokenKey, "").requestConfirmation(prober, address, { dailyLimit: 3 }), zone)
           .toEqual({ kind: "ceiling" });
         expect(await subscriptionRow(prober)).toBeUndefined();
       } finally {
@@ -222,12 +222,12 @@ describe("requestConfirmation", () => {
     const newKey = randomBytes(32).toString("base64url");
     const address = addressFor("rotated");
     for (let index = 0; index < 3; index += 1) {
-      await new PostgresWorkMailStore(sql, oldKey).requestConfirmation(await insertUser(), address, limits);
+      await new PostgresWorkMailStore(sql, oldKey, "").requestConfirmation(await insertUser(), address, limits);
     }
     const rotated = new PostgresWorkMailStore(sql, newKey, oldKey);
     expect(await rotated.requestConfirmation(await insertUser(), address, limits)).toEqual({ kind: "suppressed" });
     // Control: without the previous key the old digests are unrecognisable.
-    expect((await new PostgresWorkMailStore(sql, newKey).requestConfirmation(await insertUser(), address, limits)).kind).toBe("send");
+    expect((await new PostgresWorkMailStore(sql, newKey, "").requestConfirmation(await insertUser(), address, limits)).kind).toBe("send");
   });
 
   it("serialises concurrent requests of different accounts for one address to exactly three sends", async () => {

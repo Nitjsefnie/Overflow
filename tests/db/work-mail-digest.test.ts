@@ -42,7 +42,7 @@ beforeAll(async () => {
   process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
-  store = new PostgresWorkMailStore(sql, tokenKey);
+  store = new PostgresWorkMailStore(sql, tokenKey, "");
 });
 beforeEach(async () => {
   counts.length = 0;
@@ -207,7 +207,7 @@ describe("the digest cycle over the real store and board", () => {
     const transport = recordingTransport();
     await runWorkMailDigestCycle({ store, transport, from: "work@mail.example.org", dailyLimit: 100, readOrigin: () => "https://overflow.example" });
     const header = transport.sent[0]!.content.split("\r\n").find((line) => line.startsWith("List-Unsubscribe: "))!;
-    expect(verifyUnsubscribeToken(/[?&]token=([^>]+)>$/.exec(header)![1]!, tokenKey, undefined)).toBe(row.id);
+    expect(verifyUnsubscribeToken(/[?&]token=([^>]+)>$/.exec(header)![1]!, tokenKey, "")).toBe(row.id);
     vi.unstubAllEnvs();
   });
 });

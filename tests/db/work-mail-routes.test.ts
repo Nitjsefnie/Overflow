@@ -35,12 +35,13 @@ useTrustedOrigin();
 describe("the work-mail routes over the real store", () => {
   it("confirms through the mailed link, then the digest's one-click link removes the subscription", async () => {
     vi.stubEnv("OVERFLOW_TOKEN_ENCRYPTION_KEY", tokenKey);
+    vi.stubEnv("OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS", "");
     const [user] = await sql<{ id: string }[]>`insert into users (github_user_id, github_login) values (8500001, 'routes') returning id`;
     const transport = recordingTransport();
     const dependencies: WorkMailRouteDependencies = {
       getSession: async () => ({ user: { id: user!.id } }),
       getSql: () => sql,
-      createStore: (client) => new PostgresWorkMailStore(client, tokenKey),
+      createStore: (client) => new PostgresWorkMailStore(client, tokenKey, ""),
       readConfig: () => ({ enabled: true, from: "work@mail.example.org", dailyLimit: 10,
         smtp: { host: "smtp.mail.example.org", port: 465, username: "sender", password: "pw" } }),
       createTransport: () => transport,
@@ -61,7 +62,7 @@ describe("the work-mail routes over the real store", () => {
       unsubscribeToken: mintUnsubscribeToken(row!.id) });
     const target = /^List-Unsubscribe: <(.+)>$/m.exec(digest.content.replaceAll("\r\n", "\n"))![1]!;
     const unsubscribe = createWorkMailUnsubscribePostHandler({
-      deleteSubscriptionById: (id) => new PostgresWorkMailStore(sql, tokenKey).deleteSubscriptionById(id),
+      deleteSubscriptionById: (id) => new PostgresWorkMailStore(sql, tokenKey, "").deleteSubscriptionById(id),
     });
     expect((await unsubscribe(new Request(target, { method: "POST", body: "List-Unsubscribe=One-Click",
       headers: { "content-type": "application/x-www-form-urlencoded" } }))).status).toBe(200);
