@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { StartedTestContainer } from "testcontainers";
-import type { Sql } from "postgres";
+import postgres, { type Sql } from "postgres";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import {
@@ -9,8 +9,10 @@ import {
   RECEIPT_PENDING_RETENTION_DAYS,
   RECEIPT_PROCESSED_RETENTION_DAYS,
   RUN_TERMINAL_RETENTION_DAYS,
+  WORK_MAIL_DAILY_RETENTION_DAYS,
   pruneExpiredMaintenanceRows,
 } from "@/lib/retention/prune";
+import { CONFIRMATION_CAP_WINDOW_HOURS } from "@/lib/accounts/work-mail-store";
 import { observeRetentionSql } from "../support/retention-probe";
 import { startPostgresContainer } from "../support/postgres-container";
 
@@ -47,6 +49,61 @@ describe("retention prune", () => {
     expect(RECEIPT_FAILED_RETENTION_DAYS).toBe(90);
     expect(RECEIPT_PENDING_RETENTION_DAYS).toBe(90);
     expect(RUN_TERMINAL_RETENTION_DAYS).toBe(90);
+    expect(CONFIRMATION_CAP_WINDOW_HOURS).toBe(24);
+    expect(WORK_MAIL_DAILY_RETENTION_DAYS).toBe(2);
+  });
+
+  it("prunes a pending work-mail address once its confirmation expired, never a live or confirmed one", async () => {
+    await resetMaintenanceTables();
+    const expired = await seedSubscription({ expiresInMinutes: -1 });
+    const live = await seedSubscription({ expiresInMinutes: 1 });
+    const confirmed = await seedSubscription({ confirmed: true });
+    // Confirmation clears the expiry, so this shape is never written; only the confirmed limb refuses it.
+    const confirmedWithLapsedExpiry = await seedSubscription({ confirmed: true, expiresInMinutes: -1 });
+
+    expect(await pruneExpiredMaintenanceRows(sql)).toEqual({
+      processedReceipts: 0, failedReceipts: 0, abandonedPendingReceipts: 0, expiredRuns: 0, changesOfExpiredRuns: 0,
+      expiredWorkMailAddresses: 1, expiredWorkMailConfirmations: 0, expiredWorkMailDays: 0,
+    });
+    expect(await subscriptionExists(expired)).toBe(false);
+    expect(await subscriptionExists(live)).toBe(true);
+    expect(await subscriptionExists(confirmed)).toBe(true);
+    expect(await subscriptionExists(confirmedWithLapsedExpiry)).toBe(true);
+  });
+
+  it("prunes confirmation history once it leaves the cap window, never a row the cap still counts", async () => {
+    await resetMaintenanceTables();
+    const user = await seedUser();
+    const lapsed = await seedConfirmation(user, { ageMinutes: CONFIRMATION_CAP_WINDOW_HOURS * 60 + 1 });
+    const counted = await seedConfirmation(user, { ageMinutes: CONFIRMATION_CAP_WINDOW_HOURS * 60 - 1 });
+
+    expect(await pruneExpiredMaintenanceRows(sql)).toEqual({
+      processedReceipts: 0, failedReceipts: 0, abandonedPendingReceipts: 0, expiredRuns: 0, changesOfExpiredRuns: 0,
+      expiredWorkMailAddresses: 0, expiredWorkMailConfirmations: 1, expiredWorkMailDays: 0,
+    });
+    expect(await confirmationExists(lapsed)).toBe(false);
+    expect(await confirmationExists(counted)).toBe(true);
+  });
+
+  it("keeps the daily counters of the last two UTC days whatever the session time zone", async () => {
+    // At any instant at least one of UTC+14 and UTC-12 is on another local date than UTC.
+    for (const zone of ["Pacific/Kiritimati", "Etc/GMT+12"]) {
+      await resetMaintenanceTables();
+      await sql`insert into contributor_work_mail_daily (utc_day, sent)
+        select (now() at time zone 'UTC')::date - back, 1 from generate_series(0, 4) back`;
+      const zoned = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1, connection: { TimeZone: zone } });
+      try {
+        expect(await pruneExpiredMaintenanceRows(zoned)).toEqual({
+          processedReceipts: 0, failedReceipts: 0, abandonedPendingReceipts: 0, expiredRuns: 0, changesOfExpiredRuns: 0,
+          expiredWorkMailAddresses: 0, expiredWorkMailConfirmations: 0, expiredWorkMailDays: 2,
+        });
+      } finally {
+        await zoned.end();
+      }
+      const kept = await sql<{ back: number }[]>`
+        select (now() at time zone 'UTC')::date - utc_day as back from contributor_work_mail_daily order by back`;
+      expect(kept.map((row) => row.back), zone).toEqual([0, 1, 2]);
+    }
   });
 
   it("prunes a PROCESSED receipt past its window and keeps a recent one", async () => {
@@ -66,6 +123,9 @@ describe("retention prune", () => {
       abandonedPendingReceipts: 0,
       expiredRuns: 0,
       changesOfExpiredRuns: 0,
+      expiredWorkMailAddresses: 0,
+      expiredWorkMailConfirmations: 0,
+      expiredWorkMailDays: 0,
     });
     expect(await receiptExists(prunable)).toBe(false);
     expect(await receiptExists(recent)).toBe(true);
@@ -88,6 +148,9 @@ describe("retention prune", () => {
       abandonedPendingReceipts: 0,
       expiredRuns: 0,
       changesOfExpiredRuns: 0,
+      expiredWorkMailAddresses: 0,
+      expiredWorkMailConfirmations: 0,
+      expiredWorkMailDays: 0,
     });
     expect(await receiptExists(expired)).toBe(false);
     expect(await receiptExists(recent)).toBe(true);
@@ -119,6 +182,9 @@ describe("retention prune", () => {
       abandonedPendingReceipts: 1,
       expiredRuns: 0,
       changesOfExpiredRuns: 0,
+      expiredWorkMailAddresses: 0,
+      expiredWorkMailConfirmations: 0,
+      expiredWorkMailDays: 0,
     });
     expect(await receiptExists(abandoned)).toBe(false);
     expect(await receiptExists(liveLease)).toBe(true);
@@ -156,6 +222,9 @@ describe("retention prune", () => {
       abandonedPendingReceipts: 0,
       expiredRuns: 2,
       changesOfExpiredRuns: 2,
+      expiredWorkMailAddresses: 0,
+      expiredWorkMailConfirmations: 0,
+      expiredWorkMailDays: 0,
     });
     expect(await runExists(completedExpired)).toBe(false);
     expect(await runExists(failedExpired)).toBe(false);
@@ -179,7 +248,7 @@ describe("retention prune", () => {
         return null;
       end
     $$`;
-    for (const table of ["webhook_deliveries", "reconciliation_changes", "reconciliation_runs"]) {
+    for (const table of PRUNED_TABLES) {
       await sql.unsafe(`create trigger record_prune_batch after delete on ${table}
         referencing old table as deleted_rows for each statement execute function record_prune_batch()`);
     }
@@ -203,9 +272,20 @@ describe("retention prune", () => {
       await sql`insert into reconciliation_changes (reconciliation_run_id, entity_kind, change_kind)
         select run.id, 'SETTLEMENT', 'ADD' from
           (select id from reconciliation_runs order by id limit 1) run cross join generate_series(1, 205)`;
+      const owner = await seedUser();
+      await sql`insert into users (github_user_id, github_login)
+        select 8_900_000 + n, 'prune-backlog-' || n from generate_series(1, 205) n`;
+      await sql`insert into contributor_work_mail_subscriptions (user_id, address, confirm_token_hash, confirm_expires_at)
+        select id, github_login || '@example.test', sha256(github_login::bytea), now() - interval '1 hour'
+        from users where github_login like 'prune-backlog-%'`;
+      await sql`insert into contributor_work_mail_confirmations (user_id, address_digest, sent_at)
+        select ${owner}, sha256(n::text::bytea), now() - interval '2 days' from generate_series(1, 205) n`;
+      await sql`insert into contributor_work_mail_daily (utc_day, sent)
+        select (now() at time zone 'UTC')::date - 2 - n, 1 from generate_series(1, 205) n`;
       expect(await pruneExpiredMaintenanceRows(sql)).toEqual({
         processedReceipts: 205, failedReceipts: 205, abandonedPendingReceipts: 205,
         expiredRuns: 205, changesOfExpiredRuns: 820,
+        expiredWorkMailAddresses: 205, expiredWorkMailConfirmations: 205, expiredWorkMailDays: 205,
       });
       const batches = await sql<{ table_name: string; deleted: number }[]>`select * from prune_batches`;
       expect(batches.length).toBeGreaterThan(5);
@@ -213,9 +293,10 @@ describe("retention prune", () => {
       expect(await pruneExpiredMaintenanceRows(sql)).toEqual({
         processedReceipts: 0, failedReceipts: 0, abandonedPendingReceipts: 0,
         expiredRuns: 0, changesOfExpiredRuns: 0,
+        expiredWorkMailAddresses: 0, expiredWorkMailConfirmations: 0, expiredWorkMailDays: 0,
       });
     } finally {
-      for (const table of ["webhook_deliveries", "reconciliation_changes", "reconciliation_runs"]) {
+      for (const table of PRUNED_TABLES) {
         await sql.unsafe(`drop trigger record_prune_batch on ${table}`);
       }
       await sql`drop function record_prune_batch()`;
@@ -249,6 +330,7 @@ describe("retention prune", () => {
       expect(await pruneExpiredMaintenanceRows(sql)).toEqual({
         processedReceipts: 0, failedReceipts: 0, abandonedPendingReceipts: 0,
         expiredRuns: 2, changesOfExpiredRuns: 2,
+        expiredWorkMailAddresses: 0, expiredWorkMailConfirmations: 0, expiredWorkMailDays: 0,
       });
       expect(await runExists(crossing)).toBe(false);
     } finally {
@@ -282,12 +364,14 @@ describe("retention prune", () => {
     await seedReceipt({ processingState: "FAILED", processedDaysAgo: 91 });
     await seedReceipt({ processingState: "PENDING", receivedDaysAgo: 91, leaseExpiresInHours: -1 });
     await seedChange(await seedRun({ status: "COMPLETED", completedDaysAgo: 91 }));
+    await seedEveryWorkMailArm();
     const probe = observeRetentionSql(sql);
     expect(await pruneExpiredMaintenanceRows(probe.client)).toEqual({
       processedReceipts: 1, failedReceipts: 1, abandonedPendingReceipts: 1,
       expiredRuns: 1, changesOfExpiredRuns: 1,
+      expiredWorkMailAddresses: 1, expiredWorkMailConfirmations: 1, expiredWorkMailDays: 1,
     });
-    expect(probe.deletes.filter((query) => query.deleted > 0)).toHaveLength(5);
+    expect(probe.deletes.filter((query) => query.deleted > 0)).toHaveLength(8);
     const materialised = probe.deletes.map((query) => query.returned);
     process.stdout.write(`RETENTION_RETURNED_ROWS ${JSON.stringify(materialised)}\n`);
     expect(materialised.every((count) => count === 0)).toBe(true);
@@ -300,6 +384,7 @@ describe("retention prune", () => {
     const pending = await seedReceipt({ processingState: "PENDING", receivedDaysAgo: 91, leaseExpiresInHours: -1 });
     const run = await seedRun({ status: "COMPLETED", completedDaysAgo: 91 });
     const change = await seedChange(run);
+    await seedEveryWorkMailArm();
 
     await expect(pruneExpiredMaintenanceRows(sql)).resolves.toEqual({
       processedReceipts: 1,
@@ -307,6 +392,9 @@ describe("retention prune", () => {
       abandonedPendingReceipts: 1,
       expiredRuns: 1,
       changesOfExpiredRuns: 1,
+      expiredWorkMailAddresses: 1,
+      expiredWorkMailConfirmations: 1,
+      expiredWorkMailDays: 1,
     });
     await expect(pruneExpiredMaintenanceRows(sql)).resolves.toEqual({
       processedReceipts: 0,
@@ -314,6 +402,9 @@ describe("retention prune", () => {
       abandonedPendingReceipts: 0,
       expiredRuns: 0,
       changesOfExpiredRuns: 0,
+      expiredWorkMailAddresses: 0,
+      expiredWorkMailConfirmations: 0,
+      expiredWorkMailDays: 0,
     });
     expect(await receiptExists(processed)).toBe(false);
     expect(await receiptExists(failed)).toBe(false);
@@ -323,9 +414,64 @@ describe("retention prune", () => {
   });
 });
 
+const PRUNED_TABLES = [
+  "webhook_deliveries", "reconciliation_changes", "reconciliation_runs",
+  "contributor_work_mail_subscriptions", "contributor_work_mail_confirmations", "contributor_work_mail_daily",
+];
+
 /** Each test starts from a known-empty state, so counts are its own. */
 async function resetMaintenanceTables(): Promise<void> {
-  await sql`truncate table webhook_deliveries, reconciliation_changes, reconciliation_runs`;
+  await sql.unsafe(`truncate table ${PRUNED_TABLES.join(", ")}`);
+}
+
+let userSequence = 0;
+
+async function seedUser(): Promise<string> {
+  userSequence += 1;
+  const [row] = await sql<{ id: string }[]>`
+    insert into users (github_user_id, github_login) values (${8_800_000 + userSequence}, ${`prune-${userSequence}`}) returning id`;
+  return row!.id;
+}
+
+/** A pending row carries a token hash and an expiry; a confirmed one keeps the expiry only when seeded. */
+async function seedSubscription(seed: { confirmed?: boolean; expiresInMinutes?: number }): Promise<string> {
+  const minutes = seed.expiresInMinutes;
+  const [row] = await sql<{ id: string }[]>`
+    insert into contributor_work_mail_subscriptions (user_id, address, confirm_token_hash, confirm_expires_at, confirmed_at)
+    values (${await seedUser()}, ${`prune-${userSequence}@example.test`}, ${minutes === undefined ? null : randomBytes(32)},
+            ${minutes === undefined ? null : sql`now() + (${minutes} * interval '1 minute')`},
+            ${seed.confirmed ? sql`now()` : null})
+    returning id
+  `;
+  return row!.id;
+}
+
+async function seedConfirmation(userId: string, seed: { ageMinutes: number }): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    insert into contributor_work_mail_confirmations (user_id, address_digest, sent_at)
+    values (${userId}, ${randomBytes(32)}, now() - (${seed.ageMinutes} * interval '1 minute'))
+    returning id
+  `;
+  return row!.id;
+}
+
+/** One prunable row per work-mail arm. */
+async function seedEveryWorkMailArm(): Promise<void> {
+  await seedSubscription({ expiresInMinutes: -1 });
+  await seedConfirmation(await seedUser(), { ageMinutes: CONFIRMATION_CAP_WINDOW_HOURS * 60 + 1 });
+  await sql`insert into contributor_work_mail_daily (utc_day, sent) values ((now() at time zone 'UTC')::date - 3, 1)`;
+}
+
+async function subscriptionExists(id: string): Promise<boolean> {
+  const [row] = await sql<{ exists: boolean }[]>`
+    select exists (select 1 from contributor_work_mail_subscriptions where id = ${id}) as exists`;
+  return row!.exists;
+}
+
+async function confirmationExists(id: string): Promise<boolean> {
+  const [row] = await sql<{ exists: boolean }[]>`
+    select exists (select 1 from contributor_work_mail_confirmations where id = ${id}) as exists`;
+  return row!.exists;
 }
 
 const REGISTRATION_ID = randomUUID();

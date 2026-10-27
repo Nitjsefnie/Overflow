@@ -8,6 +8,8 @@ import { derivePurposeKey, tokenKeySetFrom } from "@/lib/security/token-cipher";
 const CONFIRMATIONS_PER_ACCOUNT = 3;
 const CONFIRMATIONS_PER_ADDRESS = 3;
 const ADDRESS_DIGEST_LABEL = "overflow:work-mail-address-digest";
+/** The confirmation caps' window; the retention prune keeps history exactly this long. */
+export const CONFIRMATION_CAP_WINDOW_HOURS = 24;
 
 export type ConfirmationOutcome =
   | { kind: "send"; token: string }
@@ -27,10 +29,15 @@ export type WorkMailSubscription = {
 
 export type DueSubscription = { id: string; userId: string; address: string; watermark: Date; lastNotifiedAt: Date | null };
 
+/** The day every reader and writer of contributor_work_mail_daily keys on, whatever the session time zone. */
+export function utcToday(sql: SqlClient | TransactionClient) {
+  return sql`(now() at time zone 'UTC')::date`;
+}
+
 /** One unit of today's (UTC) contributor-mail ceiling; false when the day is spent. */
 export async function reserveDailySend(sql: SqlClient | TransactionClient, limit: number): Promise<boolean> {
   const rows = await sql`
-    insert into contributor_work_mail_daily (utc_day, sent) values ((now() at time zone 'UTC')::date, 1)
+    insert into contributor_work_mail_daily (utc_day, sent) values (${utcToday(sql)}, 1)
     on conflict (utc_day) do update set sent = contributor_work_mail_daily.sent + 1
     where contributor_work_mail_daily.sent < ${limit}
     returning sent
@@ -67,7 +74,7 @@ export async function countAllWorkMailData(
 
 async function dailyCeilingSpent(sql: TransactionClient, limit: number): Promise<boolean> {
   const [row] = await sql<{ spent: boolean }[]>`
-    select sent >= ${limit} as spent from contributor_work_mail_daily where utc_day = (now() at time zone 'UTC')::date
+    select sent >= ${limit} as spent from contributor_work_mail_daily where utc_day = ${utcToday(sql)}
   `;
   return row?.spent ?? false;
 }
@@ -93,15 +100,15 @@ export class PostgresWorkMailStore {
         select count(*) filter (where user_id = ${userId})::int as by_account,
                count(*) filter (where address_digest in (${digest}, ${previousDigest}))::int as by_address
         from contributor_work_mail_confirmations
-        where sent_at > now() - interval '24 hours'
+        where sent_at > now() - ${CONFIRMATION_CAP_WINDOW_HOURS} * interval '1 hour'
           and (user_id = ${userId} or address_digest in (${digest}, ${previousDigest}))
       `;
       if (counts!.by_account >= CONFIRMATIONS_PER_ACCOUNT) {
         // The account frees a slot when its third-newest request leaves the window.
         const [row] = await tx<{ seconds: number }[]>`
-          select greatest(1, ceil(extract(epoch from sent_at + interval '24 hours' - now())))::int as seconds
+          select greatest(1, ceil(extract(epoch from sent_at + ${CONFIRMATION_CAP_WINDOW_HOURS} * interval '1 hour' - now())))::int as seconds
           from contributor_work_mail_confirmations
-          where user_id = ${userId} and sent_at > now() - interval '24 hours'
+          where user_id = ${userId} and sent_at > now() - ${CONFIRMATION_CAP_WINDOW_HOURS} * interval '1 hour'
           order by sent_at desc offset ${CONFIRMATIONS_PER_ACCOUNT - 1} limit 1
         `;
         return { kind: "account-limited", retryAfterSeconds: row!.seconds };
