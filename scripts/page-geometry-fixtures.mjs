@@ -12,7 +12,7 @@
  *   - the board fixture (issue 1067): one visible /issues card — a registered
  *     repository, its active sponsor, and one OPEN issue titled with 256 'a'
  *     characters, the audit's long unbroken title that overflows the board at
- *     narrow viewports.
+ *     narrow viewports, and a long unbroken done-when statement.
  *
  * Both seeders are idempotent (fixed row ids, upsert), open and close their
  * own client, and never delete or demote anything else; should a real row
@@ -78,6 +78,7 @@ export async function seedFixtureUsers({ databaseUrl }) {
  * so a test pins the seeder against the audited length byte for byte.
  */
 export const BOARD_FIXTURE_ISSUE_TITLE = "a".repeat(256);
+export const BOARD_FIXTURE_DONE_WHEN = `Done when ${"b".repeat(256)}`;
 
 /**
  * The sponsor's difficulty scheme, the one validity-checked shape the
@@ -136,8 +137,9 @@ const FIXTURE_ISSUE = {
  * `databaseUrl` names — the gate's DATABASE_URL, a scratch container in CI or
  * --base-url mode alike. Every conflict-path rewrite restores the fixture
  * contract (the sponsor's ACTIVE state, the repository's active/unavailable
- * pair, the issue's title and OPEN state); every other NOT NULL column of the
- * three tables has a default or is nullable (db/migrations/001 through 059).
+ * pair, the issue's title, done-when statement and OPEN state); every other
+ * NOT NULL column of the three tables has a default or is nullable
+ * (db/migrations/001 through 059).
  * The opening rating columns are insert-only, so the opening-immutability
  * trigger's `before update of` list never fires on the upsert path. Opens its
  * own client and closes it.
@@ -171,14 +173,15 @@ export async function seedBoardFixtureCard({ databaseUrl }) {
     const [issue] = await sql`
       insert into issues
         (id, github_issue_id, repository_id, issue_number, title, body, url, state,
-         opening_label, opening_comparison_points, opening_reserve_points)
+         opening_label, opening_comparison_points, opening_reserve_points, done_when)
       values (
         ${FIXTURE_ISSUE.id}, ${FIXTURE_ISSUE.githubIssueId}, ${repository.id}, ${FIXTURE_ISSUE.issueNumber},
         ${BOARD_FIXTURE_ISSUE_TITLE}, 'page-geometry board fixture card (issue 1067)',
         'https://github.com/geometry-fixture-owner/geometry-fixture-repository/issues/1',
-        'OPEN', 'medium', 3, 3
+        'OPEN', 'medium', 3, 3, ${BOARD_FIXTURE_DONE_WHEN}
       )
-      on conflict (id) do update set title = excluded.title, state = excluded.state, updated_at = now()
+      on conflict (id) do update set title = excluded.title, state = excluded.state, done_when = excluded.done_when,
+        updated_at = now()
       returning id
     `;
 
