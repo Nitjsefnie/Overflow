@@ -608,8 +608,8 @@
     1017
   ],
   "src/auth.ts": [
-    7467,
-    14000
+    7458,
+    14019
   ],
   "src/components/account-controls-panel.tsx": [
     1405,
@@ -676,8 +676,8 @@
     1873
   ],
   "src/lib/auth/github-userinfo.ts": [
-    3591,
-    6345
+    3582,
+    6336
   ],
   "src/lib/auth/recent-sign-in.ts": [
     246,
