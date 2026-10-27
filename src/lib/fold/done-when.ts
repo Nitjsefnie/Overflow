@@ -5,9 +5,9 @@
  */
 import {
   compareHistoryItems, compareRationaleSequence, editedAfter, findDuplicatedDatabaseId, isRepositorySponsor,
-  rationaleSequenceRank, validIssueComment, validIssueHistoryEvent, type FoldUser,
+  rationaleSequenceRank, validIssueComment, validIssueHistoryEvent, type FoldResult, type FoldUser,
 } from "@/lib/fold/repository-fold";
-import type { GitHubIssue } from "@/lib/github/types";
+import type { GitHubIssue, GitHubIssueComment, GitHubIssueHistoryEvent } from "@/lib/github/types";
 
 export const DONE_WHEN_MAX_BYTES = 2048;
 const PHRASE = "Done when";
@@ -56,4 +56,18 @@ export function sponsorDoneWhen(
     return null;
   }
   return { text: doneWhenText(first.body)!, commentId: first.id };
+}
+
+export function attachDoneWhen(
+  fold: FoldResult,
+  issues: ReadonlyArray<{ id: number; body?: string; comments: GitHubIssueComment[]; history: GitHubIssueHistoryEvent[] }>,
+  sponsor: FoldUser,
+): void {
+  const fresh = new Map(issues.filter((issue) => typeof issue.body === "string").map((issue) => [issue.id, issue]));
+  for (const issue of fold.issues) {
+    const source = fresh.get(issue.githubIssueId);
+    if (source !== undefined) {
+      issue.doneWhen = sponsorDoneWhen(source, sponsor);
+    }
+  }
 }
