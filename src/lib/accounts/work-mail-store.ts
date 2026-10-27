@@ -172,7 +172,7 @@ export class PostgresWorkMailStore {
       select id, user_id, address, coalesce(last_notified_at, confirmed_at) as watermark, last_notified_at
       from contributor_work_mail_subscriptions
       where confirmed_at is not null
-        and (last_notified_at is null or last_notified_at <= now() - interval '24 hours')
+        and (last_digest_at is null or last_digest_at <= now() - interval '24 hours')
       order by watermark, id
     `;
     return rows.map((row) => ({
@@ -186,7 +186,8 @@ export class PostgresWorkMailStore {
   }
 
   /**
-   * Stamps the digest slot iff nobody else did since `prevLastNotifiedAt` was read, and spends one ceiling unit.
+   * Stamps the digest slot iff nobody else did since `prevLastNotifiedAt` was read, and spends one ceiling unit:
+   * t0 becomes the next window's watermark, and the claim's own database time starts the 24-hour floor.
    * Send to the returned address: the listed one may have been replaced and re-confirmed since.
    */
   public async claimDigestSlot(
@@ -196,7 +197,7 @@ export class PostgresWorkMailStore {
       return await this.sql.begin(async (tx) => {
         // A Date carries milliseconds and the column microseconds: compare at the precision the caller read.
         const [claimed] = await tx<{ address: string }[]>`
-          update contributor_work_mail_subscriptions set last_notified_at = ${t0}, updated_at = now()
+          update contributor_work_mail_subscriptions set last_notified_at = ${t0}, last_digest_at = now(), updated_at = now()
           where id = ${id} and confirmed_at is not null
             and date_trunc('milliseconds', last_notified_at) is not distinct from ${prevLastNotifiedAt}
           returning address

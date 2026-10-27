@@ -62,6 +62,7 @@ export type AccountExportWorkMail = {
   address: string;
   confirmedAt: string | null;
   lastNotifiedAt: string | null;
+  lastDigestAt: string | null;
   createdAt: string;
   confirmExpiresAt: string | null;
 };
@@ -330,10 +331,11 @@ async function loadWorkMail(sql: ExportClient, userId: string): Promise<AccountE
     address: string;
     confirmed_at: Date | null;
     last_notified_at: Date | null;
+    last_digest_at: Date | null;
     created_at: Date;
     confirm_expires_at: Date | null;
   }[]>`
-    select address, confirmed_at, last_notified_at, created_at, confirm_expires_at
+    select address, confirmed_at, last_notified_at, last_digest_at, created_at, confirm_expires_at
     from contributor_work_mail_subscriptions where user_id = ${userId}
   `;
   return row === undefined
@@ -342,6 +344,7 @@ async function loadWorkMail(sql: ExportClient, userId: string): Promise<AccountE
         address: row.address,
         confirmedAt: isoOrNull(row.confirmed_at),
         lastNotifiedAt: isoOrNull(row.last_notified_at),
+        lastDigestAt: isoOrNull(row.last_digest_at),
         createdAt: iso(row.created_at),
         confirmExpiresAt: isoOrNull(row.confirm_expires_at),
       };

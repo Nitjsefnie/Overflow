@@ -140,7 +140,8 @@ describe("the digest cycle over the real store and board", () => {
 
     // A day passes: everything moves 25 hours into the past together.
     await sql`update issues set created_at = created_at - interval '25 hours'`;
-    await sql`update contributor_work_mail_subscriptions set last_notified_at = last_notified_at - interval '25 hours'`;
+    await sql`update contributor_work_mail_subscriptions
+              set last_notified_at = last_notified_at - interval '25 hours', last_digest_at = last_digest_at - interval '25 hours'`;
     await expect(cycle(recorded, transport)).resolves.toMatchObject({ sent: 1 });
     expect(counts).toEqual([{ to: row.address, count: 1 }, { to: row.address, count: 1 }]);
   });

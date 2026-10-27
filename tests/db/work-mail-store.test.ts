@@ -172,12 +172,18 @@ describe("requestConfirmation", () => {
     expect(await dailySent()).toBe(1);
   });
 
-  it("re-requesting replaces the address and resets confirmation and notification", async () => {
+  it("re-requesting replaces the address and resets confirmation and the watermark, but keeps the 24-hour floor", async () => {
     const { userId } = await confirmedSubscriber();
-    await sql`update contributor_work_mail_subscriptions set last_notified_at = now() where user_id = ${userId}`;
+    await sql`update contributor_work_mail_subscriptions set last_notified_at = now(), last_digest_at = now() - interval '1 hour'
+              where user_id = ${userId}`;
+    const [before] = await sql<{ last_digest_at: Date }[]>`
+      select last_digest_at from contributor_work_mail_subscriptions where user_id = ${userId}`;
     const replacement = addressFor("replacement");
     expect((await store.requestConfirmation(userId, replacement, limits)).kind).toBe("send");
     expect(await subscriptionRow(userId)).toMatchObject({ address: replacement, confirmed_at: null, last_notified_at: null });
+    const [after] = await sql<{ last_digest_at: Date }[]>`
+      select last_digest_at from contributor_work_mail_subscriptions where user_id = ${userId}`;
+    expect(after!.last_digest_at).toEqual(before!.last_digest_at);
   });
 
   it("answers a capped address like a fresh one once the daily ceiling is spent, writing nothing", async () => {
@@ -380,8 +386,10 @@ describe("digest support", () => {
     const fresh = await confirmedSubscriber();
     const recent = await confirmedSubscriber();
     const old = await confirmedSubscriber();
-    await sql`update contributor_work_mail_subscriptions set last_notified_at = now() - interval '23 hours' where id = ${recent.id}`;
-    await sql`update contributor_work_mail_subscriptions set last_notified_at = now() - interval '25 hours' where id = ${old.id}`;
+    await sql`update contributor_work_mail_subscriptions set last_notified_at = now() - interval '23 hours',
+              last_digest_at = now() - interval '23 hours' where id = ${recent.id}`;
+    await sql`update contributor_work_mail_subscriptions set last_notified_at = now() - interval '25 hours',
+              last_digest_at = now() - interval '25 hours' where id = ${old.id}`;
     await store.requestConfirmation(await insertUser(), addressFor("unconfirmed"), limits);
     const due = await store.listDueSubscriptions();
     expect(due.map((row) => row.id).sort()).toEqual([fresh.id, old.id].sort());
@@ -424,9 +432,38 @@ describe("digest support", () => {
 
   it("claimDigestSlot matches a previous stamp written at database precision", async () => {
     const { id } = await confirmedSubscriber();
-    await sql`update contributor_work_mail_subscriptions set last_notified_at = now() - interval '25 hours' where id = ${id}`;
+    await sql`update contributor_work_mail_subscriptions set last_notified_at = now() - interval '25 hours',
+              last_digest_at = now() - interval '25 hours' where id = ${id}`;
     const [due] = await store.listDueSubscriptions();
     expect(await store.claimDigestSlot(id, due!.lastNotifiedAt, await store.dbNow(), 10)).toEqual({ address: due!.address });
+  });
+
+  it("stamps the claim at the database time, apart from the cycle start", async () => {
+    const { id } = await confirmedSubscriber();
+    const t0 = new Date((await store.dbNow()).getTime() - 10 * 60_000);
+    const before = await store.dbNow();
+    expect(await store.claimDigestSlot(id, null, t0, 10)).not.toBe(false);
+    const after = await store.dbNow();
+    const [row] = await sql<{ last_notified_at: Date; last_digest_at: Date }[]>`
+      select last_notified_at, last_digest_at from contributor_work_mail_subscriptions where id = ${id}`;
+    expect(row!.last_notified_at).toEqual(t0);
+    expect(row!.last_digest_at.getTime()).toBeGreaterThanOrEqual(before.getTime());
+    expect(row!.last_digest_at.getTime()).toBeLessThanOrEqual(after.getTime());
+  });
+
+  it("keeps a row claimed late in its cycle off the due list until 24 hours after the claim", async () => {
+    const { id } = await confirmedSubscriber();
+    // Claimed ten minutes after its cycle started.
+    expect(await store.claimDigestSlot(id, null, new Date((await store.dbNow()).getTime() - 10 * 60_000), 10)).not.toBe(false);
+    const age = (interval: string) => sql`
+      update contributor_work_mail_subscriptions
+      set last_notified_at = last_notified_at - ${interval}::interval, last_digest_at = last_digest_at - ${interval}::interval
+      where id = ${id}`;
+    // 23 h 55 min on: past 24 hours after the cycle start, short of 24 hours after the claim.
+    await age("23 hours 55 minutes");
+    expect((await store.listDueSubscriptions()).map((row) => row.id)).not.toContain(id);
+    await age("6 minutes");
+    expect((await store.listDueSubscriptions()).map((row) => row.id)).toContain(id);
   });
 
   it("lets exactly one of two concurrent claims win", async () => {
