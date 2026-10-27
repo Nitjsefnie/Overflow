@@ -247,7 +247,7 @@ describe("paused full-pass pages", () => {
     } });
     let clock = at;
     const sweep = {
-      spend: () => new PostgresSponsorSweepRoundStore(sql).spend(repository.sponsor.id, clock, 9),
+      spend: (sponsorId: string, repositoryId: string) => new PostgresSponsorSweepRoundStore(sql).spend(sponsorId, repositoryId, clock, 9),
       openPass: new PostgresSweepPassStore(sql).open.bind(new PostgresSweepPassStore(sql)),
       discardPass: (id: string) => new PostgresSweepPassStore(sql).discardByRepository(id),
     };
@@ -286,10 +286,10 @@ describe("paused full-pass pages", () => {
     const passes = new PostgresSweepPassStore(sql);
     const sponsorId = (await f.store.getRepository(f.repositoryId))!.sponsor.id;
     const dependencies = { store: f.store, github, now: () => at, onBudgetChange: () => {},
-      sweep: { spend: () => rounds.spend(sponsorId, at, 3), openPass: passes.open.bind(passes), discardPass: passes.discardByRepository.bind(passes) } };
+      sweep: { spend: () => rounds.spend(sponsorId, f.repositoryId, at, 3), openPass: passes.open.bind(passes), discardPass: passes.discardByRepository.bind(passes) } };
     await reconcileRepository(dependencies, f.repositoryId, { reason: "SWEEP" });
     expect(sent).toBe(3);
-    await rounds.spend(sponsorId, at, 3);
+    await rounds.spend(sponsorId, f.repositoryId, at, 3);
     await f.store.enqueueReconciliationJob(f.repositoryId, "WEBHOOK");
     // The webhook fold never runs under the sweep request budget, so the
     // spent round neither charges nor holds it: it reads the forge and
@@ -324,14 +324,14 @@ describe("paused full-pass pages", () => {
     const first = await new PostgresSweepPassStore(sql).open(input);
     const walk = () => collectCursorPages<number>("issues.nodes", (cursor) => graphql.query("query { issues { nodes } }", { cursor }));
     const sponsorId = (await f.store.getRepository(f.repositoryId))!.sponsor.id;
-    await expect(withSweepRequestBudget(() => rounds.spend(sponsorId, at, 2), () => withSweepPass(first, async () => {
+    await expect(withSweepRequestBudget(() => rounds.spend(sponsorId, f.repositoryId, at, 2), () => withSweepPass(first, async () => {
       await rest.request("/repos/owner/repo/pulls/1");
       await walk();
     }))).rejects.toBeInstanceOf(SweepBudgetSpent);
     const restarted = await new PostgresSweepPassStore(sql).open({ ...input, scanStartedAt: new Date("2030-01-01T06:00:00Z") });
     expect(restarted.id).toBe(first.id);
     expect(restarted.scanStartedAt).toEqual(at);
-    await withSweepRequestBudget(() => rounds.spend(sponsorId, new Date("2030-01-01T06:00:00Z"), 2), () => withSweepPass(restarted, async () => {
+    await withSweepRequestBudget(() => rounds.spend(sponsorId, f.repositoryId, new Date("2030-01-01T06:00:00Z"), 2), () => withSweepPass(restarted, async () => {
       const response = await rest.request("/repos/owner/repo/pulls/1");
       expect(response.body).toBe("diff");
       expect(response.headers.get("content-type")).toBe("text/plain");

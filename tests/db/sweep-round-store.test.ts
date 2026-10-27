@@ -7,6 +7,7 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { sweepReconciliations } from "@/lib/fold/sweep";
 import { PostgresSponsorSweepRoundStore } from "@/lib/fold/sponsor-sweep-round-store";
 import { startPostgresContainer } from "../support/postgres-container";
+import { validDifficultyScheme } from "../support/difficulty-scheme";
 
 let sql: Sql;
 let container: StartedTestContainer;
@@ -38,24 +39,35 @@ async function insertSponsor(): Promise<string> {
   return row.id;
 }
 
+// A sponsor's only active repository: its share is the whole budget.
+async function insertRepository(sponsorId: string, client: Sql = sql): Promise<string> {
+  const key = (externalId += 1);
+  const [row] = await client<{ id: string }[]>`insert into registered_repositories
+    (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme)
+    values (${key}, ${`owner/repo-${key}`}, ${sponsorId}, 'PUBLIC', ${key}, ${client.json(validDifficultyScheme())}) returning id`;
+  return row.id;
+}
+
 describe("per-sponsor durable sweep rounds", () => {
   it("holds a sponsor at its own limit while the other sponsor's sweep keeps enqueueing and folding", async () => {
     const store = new PostgresSponsorSweepRoundStore(sql);
     const sponsorA = await insertSponsor();
     const sponsorB = await insertSponsor();
+    const repositoryA = await insertRepository(sponsorA);
+    const repositoryB = await insertRepository(sponsorB);
     const offered: string[] = [];
     const offer = async (id: string) => { offered.push(id); };
 
     // Sponsor A spends its whole window: two folds admitted, then held.
-    expect(await store.spend(sponsorA, at, 2)).toBeNull();
-    expect(await store.spend(sponsorA, at, 2)).toBeNull();
-    expect(await store.spend(sponsorA, at, 2)).toEqual(next);
+    expect(await store.spend(sponsorA, repositoryA, at, 2)).toBeNull();
+    expect(await store.spend(sponsorA, repositoryA, at, 2)).toBeNull();
+    expect(await store.spend(sponsorA, repositoryA, at, 2)).toEqual(next);
 
     // A's budget is spent, so A's rotation stops; B's own budget is untouched.
     expect(await store.enqueueNext(sponsorA, ["a1", "a2"], at, 2, offer)).toBeNull();
     expect(await store.enqueueNext(sponsorB, ["b1", "b2"], at, 2, offer)).toBe("b1");
     expect(await store.enqueueNext(sponsorB, ["b1", "b2"], at, 2, offer)).toBeNull();
-    expect(await store.spend(sponsorB, at, 2)).toBeNull();
+    expect(await store.spend(sponsorB, repositoryB, at, 2)).toBeNull();
 
     // A is held for the rest of its window, including at another poll in it.
     expect(await store.enqueueNext(sponsorA, ["a1", "a2"], new Date(at.getTime() + 3_600_000), 2, offer)).toBeNull();
@@ -71,16 +83,17 @@ describe("per-sponsor durable sweep rounds", () => {
     const minute = 60_000;
     const store = new PostgresSponsorSweepRoundStore(sql, 90 * minute);
     const sponsorId = await insertSponsor();
+    const repositoryId = await insertRepository(sponsorId);
     const round = async () => (await sql<{ window_start: Date; next_enqueue_at: Date }[]>`
       select window_start, next_enqueue_at from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`)[0];
-    expect(await store.spend(sponsorId, at, 1)).toBeNull();
-    expect(await store.spend(sponsorId, at, 1)).toEqual(new Date(at.getTime() + 90 * minute));
+    expect(await store.spend(sponsorId, repositoryId, at, 1)).toBeNull();
+    expect(await store.spend(sponsorId, repositoryId, at, 1)).toEqual(new Date(at.getTime() + 90 * minute));
     // Three repositories share the window: one slot every 90 / 3 minutes.
     expect(await store.enqueueNext(sponsorId, ["a", "b", "c"], at, 2, async () => {})).toBe("a");
     expect((await round())!.next_enqueue_at).toEqual(new Date(at.getTime() + 30 * minute));
-    expect(await store.spend(sponsorId, new Date(at.getTime() + 89 * minute), 1)).toEqual(new Date(at.getTime() + 90 * minute));
+    expect(await store.spend(sponsorId, repositoryId, new Date(at.getTime() + 89 * minute), 1)).toEqual(new Date(at.getTime() + 90 * minute));
     // 200 minutes in, the round aligns to the window grid: 2 * 90 minutes.
-    expect(await store.spend(sponsorId, new Date(at.getTime() + 200 * minute), 1)).toBeNull();
+    expect(await store.spend(sponsorId, repositoryId, new Date(at.getTime() + 200 * minute), 1)).toBeNull();
     expect(await round()).toEqual({ window_start: new Date(at.getTime() + 180 * minute),
       next_enqueue_at: new Date(at.getTime() + 180 * minute) });
   });
@@ -91,8 +104,9 @@ describe("per-sponsor durable sweep rounds", () => {
       vi.stubEnv("OVERFLOW_RECONCILIATION_SWEEP_WINDOW_MINUTES", "90");
       const store = new PostgresSponsorSweepRoundStore(sql);
       const sponsorId = await insertSponsor();
-      expect(await store.spend(sponsorId, at, 1)).toBeNull();
-      expect(await store.spend(sponsorId, at, 1)).toEqual(new Date(at.getTime() + 90 * 60_000));
+      const repositoryId = await insertRepository(sponsorId);
+      expect(await store.spend(sponsorId, repositoryId, at, 1)).toBeNull();
+      expect(await store.spend(sponsorId, repositoryId, at, 1)).toEqual(new Date(at.getTime() + 90 * 60_000));
     } finally {
       vi.unstubAllEnvs();
     }
@@ -101,7 +115,8 @@ describe("per-sponsor durable sweep rounds", () => {
   it("anchors a sponsor's window at its first touch, starting from zero", async () => {
     const store = new PostgresSponsorSweepRoundStore(sql);
     const sponsorId = await insertSponsor();
-    expect(await store.spend(sponsorId, at, 3000)).toBeNull();
+    const repositoryId = await insertRepository(sponsorId);
+    expect(await store.spend(sponsorId, repositoryId, at, 3000)).toBeNull();
     const [row] = await sql<{ window_start: Date; spent: number; next_enqueue_at: Date }[]>`
       select window_start, spent, next_enqueue_at from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`;
     expect(row).toEqual({ window_start: at, spent: 1, next_enqueue_at: at });
@@ -110,6 +125,7 @@ describe("per-sponsor durable sweep rounds", () => {
   it("offers every repository of a sponsor within six hours at the production 15-second poll cadence", async () => {
     const store = new PostgresSponsorSweepRoundStore(sql);
     const sponsorId = await insertSponsor();
+    const repositoryId = await insertRepository(sponsorId);
     const ids = Array.from({ length: 100 }, (_, index) => String(index).padStart(3, "0"));
     const offered: string[] = [];
     for (let elapsed = 0; elapsed < 6 * 60 * 60_000; elapsed += 15_000) {
@@ -120,8 +136,8 @@ describe("per-sponsor durable sweep rounds", () => {
       });
       expect(summary.enqueued).toBeLessThanOrEqual(1);
       if (summary.enqueued === 1) {
-        await store.spend(sponsorId, now, 3000);
-        await store.spend(sponsorId, now, 3000);
+        await store.spend(sponsorId, repositoryId, now, 3000);
+        await store.spend(sponsorId, repositoryId, now, 3000);
       }
     }
     expect(offered).toEqual(ids);
@@ -170,26 +186,28 @@ describe("per-sponsor durable sweep rounds", () => {
   it("atomically admits exactly the ceiling under concurrent stores and survives restart", async () => {
     const store = () => new PostgresSponsorSweepRoundStore(sql);
     const sponsorId = await insertSponsor();
+    const repositoryId = await insertRepository(sponsorId);
     const stores = Array.from({ length: 16 }, store);
-    const holds = await Promise.all(Array.from({ length: 64 }, (_, index) => stores[index % 16]!.spend(sponsorId, at, 17)));
+    const holds = await Promise.all(Array.from({ length: 64 }, (_, index) => stores[index % 16]!.spend(sponsorId, repositoryId, at, 17)));
     expect(holds.filter((hold) => hold === null)).toHaveLength(17);
     expect(holds.filter((hold) => hold?.getTime() === next.getTime())).toHaveLength(47);
-    expect(await store().spend(sponsorId, at, 17)).toEqual(next);
-    expect(await store().spend(sponsorId, next, 17)).toBeNull();
+    expect(await store().spend(sponsorId, repositoryId, at, 17)).toEqual(next);
+    expect(await store().spend(sponsorId, repositoryId, next, 17)).toBeNull();
     expect(await sql`select spent from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`).toEqual([{ spent: 1 }]);
   });
 
   it("paces one repository per slot, resumes on startup, stops when spent, and rotates next window", async () => {
     let store = new PostgresSponsorSweepRoundStore(sql);
     const sponsorId = await insertSponsor();
+    const repositoryId = await insertRepository(sponsorId);
     const queued: string[] = [];
     const offer = async (id: string) => { queued.push(id); };
     expect(await store.enqueueNext(sponsorId, ["c", "a", "b"], at, 2, offer)).toBe("a");
     store = new PostgresSponsorSweepRoundStore(sql);
     expect(await store.enqueueNext(sponsorId, ["c", "a", "b"], at, 2, offer)).toBeNull();
-    await store.spend(sponsorId, at, 2);
+    await store.spend(sponsorId, repositoryId, at, 2);
     expect(await store.enqueueNext(sponsorId, ["c", "a", "b"], new Date("2030-01-01T02:00:00Z"), 2, offer)).toBe("b");
-    await store.spend(sponsorId, at, 2);
+    await store.spend(sponsorId, repositoryId, at, 2);
     expect(await store.enqueueNext(sponsorId, ["c", "a", "b"], new Date("2030-01-01T04:00:00Z"), 2, offer)).toBeNull();
     expect(await store.enqueueNext(sponsorId, ["c", "a", "b"], next, 2, offer)).toBe("c");
     expect(await store.enqueueNext(sponsorId, ["c", "a", "b"], new Date("2030-01-01T08:00:00Z"), 2, offer)).toBe("a");
@@ -239,7 +257,7 @@ describe("per-sponsor durable sweep rounds", () => {
         insert into users (github_user_id, github_login)
         values (${githubUserId}, ${`sponsor-${githubUserId}`}) returning id`;
       const store = new PostgresSponsorSweepRoundStore(upgradeSql);
-      expect(await store.spend(sponsor.id, next, 3000)).toBeNull();
+      expect(await store.spend(sponsor.id, await insertRepository(sponsor.id, upgradeSql), next, 3000)).toBeNull();
       const [row] = await upgradeSql<{ window_start: Date; spent: number; next_enqueue_at: Date }[]>`
         select window_start, spent, next_enqueue_at from reconciliation_sweep_rounds where sponsor_id = ${sponsor.id}`;
       expect(row).toEqual({ window_start: next, spent: 1, next_enqueue_at: next });

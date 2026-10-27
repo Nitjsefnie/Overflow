@@ -62,7 +62,7 @@ export async function registerNodejs(): Promise<void> {
   const repositorySizes = new PostgresRepositorySizeStore();
   const sweepCatchups = new PostgresSweepCatchupStore();
   const sweep = {
-    spend: (sponsorId: string) => sweepRound.spend(sponsorId, new Date(), readSweepRequestBudget(process.env)),
+    spend: (sponsorId: string, repositoryId: string) => sweepRound.spend(sponsorId, repositoryId, new Date(), readSweepRequestBudget(process.env)),
     openPass: sweepPasses.open.bind(sweepPasses),
     discardPass: sweepPasses.discardByRepository.bind(sweepPasses),
   };
