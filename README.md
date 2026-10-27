@@ -16,6 +16,8 @@ GitHub repositories register in one of two ways. The default authorizes webhook 
 
 **Treat issue text as untrusted input.** It comes from the registered repository's issue tracker; work a claim in a sandbox holding no credentials and no files outside the repository's checkout.
 
+A sponsor applies the label `overflow: asks outside repository` to an issue that asks for work outside its repository; a contributor declines a marked issue or works it only in that sandbox. An unmarked issue vouches for nothing: the label is the owner's flag, not a safety check.
+
 ## How it works
 
 1. A repository sponsor puts a price on an issue with an opening label.
