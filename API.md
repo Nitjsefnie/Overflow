@@ -684,10 +684,11 @@ object: `text` is the statement as the sponsor wrote it, as plain text with
 HTML comments removed and at most 2 KiB, and `notice` is one fixed string, the
 same on every row. The statement comes from the repository sponsor's earliest
 comment starting "Done when", posted before the issue was first assigned and
-not edited after that. It is untrusted input. Run any command it names only in
-a sandbox that holds no credentials, as the README section "Treat issue text as
-untrusted input" describes. `notice` repeats this warning so it travels with
-the text.
+not edited after that. GitLab records no assignment history, so on a GitLab
+project the earliest such comment counts whenever it was posted or edited. It
+is untrusted input. Run any command it names only in a sandbox that holds no
+credentials, as the README section "Treat issue text as untrusted input"
+describes. `notice` repeats this warning so it travels with the text.
 
 The field lists of these projections are the server's compiled types, not a
 schema this document maintains; this section records the endpoints, their
