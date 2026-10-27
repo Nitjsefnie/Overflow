@@ -26,8 +26,11 @@ export function addressDigestInput(address: string): string {
   return address.toLowerCase();
 }
 
-// The unspecified addresses dial the local host on Linux, like loopback.
-const REFUSED_HOSTS = new Set(["localhost", "::1", "0.0.0.0", "::", "::ffff:0:0", "smtp.gmail.com", "smtp.googlemail.com"]);
+// Unspecified addresses dial the local host on Linux; the names are stock /etc/hosts loopback aliases.
+const REFUSED_HOSTS = new Set([
+  "localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback", "::1", "0.0.0.0", "::", "::ffff:0:0",
+  "smtp.gmail.com", "smtp.googlemail.com",
+]);
 
 function refusedHost(host: string): boolean {
   return REFUSED_HOSTS.has(host) || host.endsWith(".localhost") || /^127\./.test(host)
