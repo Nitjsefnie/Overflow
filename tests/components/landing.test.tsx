@@ -148,7 +148,7 @@ describe("landing page", () => {
     });
     expect(metadata.title).toMatch(/\S/);
 
-    expect([...texts, metadata.title].join(" ")).not.toMatch(/credit|price|pay/i);
+    expect([...texts, metadata.title].join(" ")).not.toMatch(/credit|pric|pa(?:y|id)/i);
   });
 
   // A sentinel the page cannot hold by accident stands in for the shared limit,
@@ -256,7 +256,7 @@ describe("landing page", () => {
 //     unlayered declaration always beats a layered one and nothing here is
 //     layered - which stops holding the day anything is.
 //   - It cannot see an at-rule jsdom's parser drops entirely, and does not try.
-//   - It reads one stylesheet, and refuses an @import rather than pretend to
+//   - It reads both page stylesheets, and refuses an @import rather than pretend to
 //     follow it.
 type SubtreeElement = "page" | "hero" | "eyebrow" | "h1" | "lede" | "form" | "button";
 
@@ -417,7 +417,7 @@ function withLandingPageAt<T>(width: number, read: (sheet: CSSStyleSheet) => T):
   window.innerWidth = width;
   window.innerHeight = VIEWPORT_HEIGHT;
   const style = document.createElement("style");
-  style.textContent = readFileSync("src/app/globals.css", "utf8");
+  style.textContent = readFileSync("src/app/globals.css", "utf8") + "\n" + readFileSync("src/app/landing.css", "utf8");
   document.head.append(style);
   try {
     render(<LandingPage />);
@@ -621,9 +621,9 @@ describe("landing hero fold budget", () => {
 
     expect(
       imports,
-      "this guard reads src/app/globals.css and nothing else, and jsdom never fetches an @import while " +
-        "the bundler inlines it; measure the fold in a browser, then either move these rules into " +
-        "globals.css or teach this guard to follow the import",
+      "this guard reads globals.css and landing.css directly, and jsdom never fetches an @import while " +
+        "the bundler inlines it; measure the fold in a browser, then either inline the rules or " +
+        "teach this guard to follow the import",
     ).toEqual([]);
   });
 });

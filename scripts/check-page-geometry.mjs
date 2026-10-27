@@ -430,12 +430,12 @@ const PAGE_CONTRACTS = [
     renderRoot: "#main-content",
     viewports: [
       [1440, 800],
-      // Restored to the original tight pin: the primary action's bottom sits
-      // at 668.4px IDENTICALLY in both measurement environments (this box
-      // and the GitHub runner) — zero observed spread — so the issue-111 pin
-      // keeps its teeth. The ~100px policy applies only where the two
-      // environments disagree (see /dashboard's narrow rows) or headroom is
-      // otherwise thin.
+      // At 1280x700, the action ends at 690.4px on this box, leaving
+      // 9.6px above the fold. The pin remains 700px.
+      // This measurement does not establish cross-environment spread;
+      // fonts and layout may differ on the GitHub runner.
+      // Re-measure when changing the copy or threshold: either can
+      // exhaust the remaining headroom.
       [1280, 700],
       // issue 1067 @320: RED ran with scrollWidth 330px vs 320 (the hero h1's
       // clamp floor pushed .landing-hero's grid-item min-content past the
