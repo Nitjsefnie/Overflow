@@ -109,8 +109,7 @@ export function findRepositoryGone(
   };
 }
 
-// Stricter than the measure's last-slash split, which stays as it was: GitHub
-// is exactly owner/name, GitLab a namespace path of any depth.
+// Stricter than the measure's split: GitHub is owner/name, GitLab any depth.
 function isStoredPath({ ownerName, provider }: RepositorySizeMeasureRepository): boolean {
   const segments = ownerName.split("/");
   return !segments.includes("") && (provider === "gitlab" ? segments.length >= 2 : segments.length === 2);
