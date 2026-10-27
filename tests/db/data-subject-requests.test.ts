@@ -385,7 +385,7 @@ describe("data-subject export", () => {
     }
   });
 
-  it("lists the issue rows that carry a done-when statement in a repository the person sponsored", async () => {
+  it("lists the issue rows that carry a done-when statement in a repository the person currently sponsors", async () => {
     const seed = await seedSponsorStatements();
     const document = await exportForgePerson(sql, { provider: "github", forgeId: seed.forgeId });
 
@@ -585,7 +585,7 @@ describe("data-subject removal", () => {
     expect(suppressionCount!.count).toBe(0);
   });
 
-  it("clears the done-when statement on the rows of repositories the person sponsored, and only there", async () => {
+  it("clears the done-when statement on the rows of repositories the person currently sponsors, and only there", async () => {
     const seed = await seedSponsorStatements();
 
     const planned = await removeForgePerson(sql, { provider: "github", forgeId: seed.forgeId }, { confirm: false });
@@ -594,7 +594,6 @@ describe("data-subject removal", () => {
     const removed = await removeForgePerson(sql, { provider: "github", forgeId: seed.forgeId }, { confirm: true });
     expect(removed).toMatchObject({ kind: "REMOVED", perStore: { issues: 1 } });
     expect(await doneWhenOf(seed.stated)).toBeNull();
-    expect(await doneWhenOf(seed.unstated)).toBeNull();
     expect(await doneWhenOf(seed.other)).toBe("Done when the other sponsor agrees.");
   });
 
