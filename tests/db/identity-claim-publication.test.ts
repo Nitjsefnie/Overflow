@@ -400,7 +400,7 @@ async function createUnclaimedScenario(
       openingReservePoints: 5, ownerGitHubLogin: `sponsor-${sponsorGitHubId}`,
       openingSourceEventId: `opening-${githubIssueId}`, openingSourceActorLogin: `sponsor-${sponsorGitHubId}`,
       openingSourceAt: "2026-09-01T08:00:00.000Z",
-      claimAssigneeGitHubLogin: null, claimAssigneeGitHubUserId: null, ...settledEvidence,
+      claimAssigneeGitHubLogin: null, claimAssigneeGitHubUserId: null, asksOutsideRepository: false, ...settledEvidence,
     }],
     pullRequests: [{
       githubPullRequestId, number: 11, title: "Identity claim fixture", url: "https://example.test/pr",

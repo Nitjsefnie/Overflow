@@ -384,7 +384,7 @@ async function publishFold(
       claimAssigneeGitHubLogin: null, claimAssigneeGitHubUserId: null,
       settledLabel: null, settledPoints: null, settledLabelEventId: null, settledLabelActorLogin: null,
       settledLabelAppliedAt: null, settledRationaleCommentId: null, settledRationaleActorLogin: null,
-      settledRationaleCommentedAt: null,
+      settledRationaleCommentedAt: null, asksOutsideRepository: false,
     }],
     pullRequests: [],
     settlements: [],
