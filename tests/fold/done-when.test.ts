@@ -141,7 +141,10 @@ describe("scrubFoldResultForPerson", () => {
   const scrubbed = (doneWhen: { text: string; commentId: string } | undefined, person: { forgeId: number; logins: string[] }) => {
     const issue = { githubIssueId: 1, ownerGitHubLogin: "reporter", claimAssigneeGitHubLogin: null, ...(doneWhen && { doneWhen }) };
     const fold = { issues: [issue], pullRequests: [], settlements: [], selfWorkCalibrations: [], policyViolations: [] } as unknown as FoldResult;
-    const evidence = [{ id: 1, history: [], comments: [comment(1, "Done when A", -60), { ...comment(2, "Done when B", -30), authorLogin: "other", authorGitHubUserId: 3001 }] }];
+    const evidence = [{ id: 1, history: [], comments: [
+      comment(1, "Done when A", -60), { ...comment(2, "Done when B", -30), authorLogin: "other", authorGitHubUserId: 3001 },
+      { ...comment(3, "Done when C", -20), authorGitHubUserId: null }, { ...comment(4, "Done when D", -10), authorLogin: "other", authorGitHubUserId: null },
+    ] }];
     scrubFoldResultForPerson(fold, { forgeId: person.forgeId, logins: new Set(person.logins) }, evidence as unknown as ReconciliationSynchronization["issues"]);
     return fold.issues[0]!;
   };
@@ -152,6 +155,12 @@ describe("scrubFoldResultForPerson", () => {
     expect(scrubbed({ text: "Done when A", commentId: "c1" }, { forgeId: 1001, logins: [] }).doneWhen).toBeNull();
     expect(scrubbed({ text: "Done when B", commentId: "c2" }, { forgeId: 1001, logins: ["sponsor"] }).doneWhen)
       .toEqual({ text: "Done when B", commentId: "c2" });
+  });
+
+  it("falls back to the comment's login when GitHub reported no account id", () => {
+    expect(scrubbed({ text: "Done when C", commentId: "c3" }, { forgeId: 4004, logins: ["sponsor"] }).doneWhen).toBeNull();
+    expect(scrubbed({ text: "Done when D", commentId: "c4" }, { forgeId: 4004, logins: ["sponsor"] }).doneWhen)
+      .toEqual({ text: "Done when D", commentId: "c4" });
   });
 
   it("leaves a statement this pass did not read fresh absent", () => {
