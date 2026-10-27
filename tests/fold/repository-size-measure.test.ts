@@ -170,6 +170,51 @@ describe("finding a repository gone as its sponsor", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it.each([
+    ["github", "group/..", "group/.github"],
+    ["github", "group/.", "group/-renamed"],
+    ["github", "bad owner/project", "good_owner/project"],
+    ["github", "group/bad name", "group/_renamed"],
+    ["github", "-owner/project", "owner/project"],
+    ["github", "group/%2e%2e", "group/project"],
+    ["github", "group/project\n", "a/x"],
+    ["gitlab", "group/..", "group/project"],
+    ["gitlab", "group/../project", "group/sub.group/project"],
+    ["gitlab", "bad group/sub/project", "group/sub-group/project"],
+    ["gitlab", "-group/project", "_group/subgroup/project"],
+    ["gitlab", "group/-project", ".group/_sub/project"],
+    ["gitlab", "group/bad+name", "group/my_project"],
+    ["gitlab", "group/project\n", "a/x"],
+  ])("rejects malformed %s path %s while accepting %s", async (provider, malformed, valid) => {
+    const repository = { provider, instanceUrl: "https://gitlab.test" };
+    const credentials = { gitHubToken: "token-a", forgeToken: { token: "pat", identityId: "identity-1" } };
+    const controlCalls: FactoryInput[] = [];
+    const control = findRepositoryGone(
+      dependencies({ ...credentials, repository: { ...repository, ownerName: valid } }),
+      lookupGateway(async () => null, controlCalls, []),
+    );
+    await expect(control("repository-1")).resolves.toBe(true);
+    expect(controlCalls).toHaveLength(1);
+
+    const calls: FactoryInput[] = [];
+    const isGone = findRepositoryGone(
+      dependencies({ ...credentials, repository: { ...repository, ownerName: malformed } }),
+      lookupGateway(async () => null, calls, []),
+    );
+    await expect(isGone("repository-1")).resolves.toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it.each([
+    ["github", { gitHubToken: "" }],
+    ["gitlab", { repository: { provider: "gitlab", instanceUrl: "https://gitlab.test" }, forgeToken: { token: "", identityId: "identity-1" } }],
+  ])("does not look up a %s repository with an empty credential", async (_provider, overrides) => {
+    const calls: FactoryInput[] = [];
+    const isGone = findRepositoryGone(dependencies(overrides), lookupGateway(async () => null, calls, []));
+    await expect(isGone("repository-1")).resolves.toBe(false);
+    expect(calls).toEqual([]);
+  });
+
   it("is not gone, with no lookup, without a repository, a credential, an instance or a well-formed path", async () => {
     for (const overrides of [
       { repository: null, gitHubToken: "token-a" },

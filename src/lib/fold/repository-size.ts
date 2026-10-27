@@ -104,15 +104,19 @@ export function findRepositoryGone(
 ): (repositoryId: string) => Promise<boolean> {
   return async (repositoryId) => {
     const target = await resolveSponsorGateway(dependencies, repositoryId);
-    return target !== null && isStoredPath(target.repository)
-      && await createGateway(target.input).getRepositoryById(target.repository.githubRepositoryId) === null;
+    if (target === null || !isStoredPath(target.repository)) return false;
+    const token = target.input.provider === "gitlab" ? target.input.token : target.input.accessToken;
+    return token.length > 0 && await createGateway(target.input).getRepositoryById(target.repository.githubRepositoryId) === null;
   };
 }
 
 // Stricter than the measure's split: GitHub is owner/name, GitLab any depth.
 function isStoredPath({ ownerName, provider }: RepositorySizeMeasureRepository): boolean {
   const segments = ownerName.split("/");
-  return !segments.includes("") && (provider === "gitlab" ? segments.length >= 2 : segments.length === 2);
+  if (segments.some((segment) => segment === "" || segment === "." || segment === ".." || /[^A-Za-z0-9_.-]/.test(segment))) return false;
+  return provider === "gitlab"
+    ? segments.length >= 2 && segments.every((segment) => !segment.startsWith("-"))
+    : segments.length === 2 && /^[A-Za-z0-9]/.test(segments[0]!);
 }
 
 async function resolveSponsorGateway(
