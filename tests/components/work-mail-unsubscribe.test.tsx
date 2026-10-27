@@ -1,9 +1,10 @@
 /** @vitest-environment jsdom */
 
 import { randomBytes, randomUUID } from "node:crypto";
+import type { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
 import { buildDigestMessage } from "@/lib/accounts/work-mail-transport";
 
@@ -23,6 +24,21 @@ vi.hoisted(() => { vi.resetModules(); });
 afterAll(() => { vi.resetModules(); });
 
 const fetchMock = vi.fn();
+
+/**
+ * jsdom cannot change documents: `location.assign` or an `href` write leaves the URL as it was and only
+ * reports "not-implemented" on the virtual console, so a navigation is observed there, not on `location`.
+ */
+function recordJsdomErrors(): string[] {
+  const seen: string[] = [];
+  const virtualConsole = (window as unknown as { jsdom: { virtualConsole: EventEmitter } }).jsdom.virtualConsole;
+  const record = (error: Error) => seen.push(error.message);
+  virtualConsole.on("jsdomError", record);
+  onTestFinished(() => {
+    virtualConsole.off("jsdomError", record);
+  });
+  return seen;
+}
 
 function mailedToken(): { path: string; token: string } {
   const token = `${randomUUID()}.${randomBytes(32).toString("base64url")}`;
@@ -79,18 +95,25 @@ describe("work mail unsubscribe page", () => {
   it("posts the mailed token once on the click and announces the result without navigating", async () => {
     const { path, token } = mailedToken();
     window.history.replaceState(null, "", path);
-    const before = window.location.href;
+    const jsdomErrors = recordJsdomErrors();
+    let answer!: (response: Response) => void;
+    fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { answer = resolve; }));
     render(<WorkMailUnsubscribePage />);
 
+    const button = screen.getByRole("button", { name: "Unsubscribe" });
+    fireEvent.click(button);
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Unsubscribe" }));
+      answer(Response.json({ received: true }));
     });
 
     expect(fetchMock.mock.calls).toEqual([[`/api/work-mail/unsubscribe?token=${encodeURIComponent(token)}`, { method: "POST" }]]);
     expect(liveRegion()).not.toBeEmptyDOMElement();
     expect(liveRegion().querySelector(".feedback.success")).not.toBeNull();
-    expect(screen.getByRole("button", { name: "Unsubscribe" })).toBeDisabled();
-    expect(window.location.href).toBe(before);
+    expect(button).toBeDisabled();
+    expect(jsdomErrors).toEqual([]);
+    expect(window.location.pathname).toBe("/work-mail/unsubscribe");
   });
 
   it.each([

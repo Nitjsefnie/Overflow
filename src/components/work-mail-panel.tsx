@@ -153,6 +153,11 @@ export function WorkMailPanel() {
               <dd>{subscription.confirmed ? "Confirmed" : "Waiting for confirmation"}</dd>
             </div>
           </dl>
+          {subscription.confirmed ? null : (
+            <p className="field-help" data-testid="work-mail-pending-hint">
+              No work mail is sent until you open the confirmation link mailed to this address.
+            </p>
+          )}
           <button className="quiet-button" type="button" disabled={busy} onClick={() => void remove()}>
             Remove address
           </button>

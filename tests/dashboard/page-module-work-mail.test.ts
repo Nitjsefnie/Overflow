@@ -33,14 +33,14 @@ vi.mock("@/lib/dashboard/queries", () => ({ getDashboard }));
 vi.mock("@/lib/db/client", () => ({ getSql }));
 
 const SUBSCRIPTIONS = "contributor_work_mail_subscriptions";
-let subscriptionRows: object[];
+let subscriptionRows: object[] | Error;
 let subscriptionReads: unknown[][];
 
 // Answers the subscription read with the planted rows and every other read (the moderator standing) as an ordinary member.
 const sqlStub = ((strings: TemplateStringsArray, ...values: unknown[]) => {
   if (strings.join("").includes(SUBSCRIPTIONS)) {
     subscriptionReads.push(values);
-    return Promise.resolve(subscriptionRows);
+    return subscriptionRows instanceof Error ? Promise.reject(subscriptionRows) : Promise.resolve(subscriptionRows);
   }
   return Promise.resolve([{ is_live_moderator: false, other_live_moderators: 0 }]);
 }) as unknown as SqlClient;
@@ -102,12 +102,24 @@ describe("the dashboard page's work-mail mount decision", () => {
     expect(subscriptionReads).toEqual([["internal-id"]]);
   });
 
-  it("mounts the panel when the feature is configured, with no address stored", async () => {
+  it("mounts the panel when the feature is configured, without reading the stored address", async () => {
     enableWorkMail();
 
     render(await DashboardPage());
 
     expect(workMailPanel()).not.toBeNull();
+    expect(subscriptionReads).toEqual([]);
+  });
+
+  it("degrades a failed stored-address read to the ledger-unavailable state", async () => {
+    subscriptionRows = new Error("subscription read failed");
+
+    render(await DashboardPage());
+
+    expect(document.querySelector('section[aria-labelledby="dashboard-error-title"]')).not.toBeNull();
+    expect(document.querySelector("#account-controls-heading")).toBeNull();
+    expect(workMailPanel()).toBeNull();
+    expect(subscriptionReads).toEqual([["internal-id"]]);
   });
 
   it("mounts no panel when the configuration is partial", async () => {
