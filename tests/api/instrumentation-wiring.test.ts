@@ -346,6 +346,40 @@ describe("server instrumentation", () => {
     expect(resolveToken).toHaveBeenCalledExactlyOnceWith("sponsor-1", "https://gitlab.example.com");
   });
 
+  it("wires the sweep's gone check as the real by-id lookup, with one memory held across ticks", async () => {
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv("NEXT_PHASE", "");
+    vi.stubEnv("OVERFLOW_DISABLE_RECONCILIATION_SWEEP", "");
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const { register } = await import("@/instrumentation");
+    await register();
+    const schedule = startSweep.mock.calls[0]![0] as ReconciliationSweepSchedule;
+    await schedule.runSweep();
+    await schedule.runSweep();
+    type GoneWiring = { goneRepositories: { isGone(repositoryId: string): Promise<boolean>; foundAt: Map<string, number> } };
+    const [first, second] = sweep.mock.calls.map(([dependencies]) => (dependencies as GoneWiring).goneRepositories);
+    // The memory outlives a tick: a fresh map per tick would re-measure, and
+    // re-warn about, a gone repository every 15 seconds.
+    expect(first!.foundAt).toBeInstanceOf(Map);
+    expect(second!.foundAt).toBe(first!.foundAt);
+
+    // The check is the real composition: the registered id, read on the
+    // sponsor's GitLab instance with its linked identity's token, gone on 404.
+    const requests: Request[] = [];
+    let status = 404;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(new Request(input, init));
+      return status === 404 ? new Response("missing", { status })
+        : Response.json({ id: 1, path_with_namespace: "group/project", visibility: "public", namespace: { full_path: "group" }, path: "project" });
+    });
+    await expect(first!.isGone("repository-1")).resolves.toBe(true);
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual(["/api/v4/projects/1"]);
+    expect(requests[0]!.headers.get("authorization")).toBe("Bearer token-a");
+    expect(resolveToken).toHaveBeenCalledWith("sponsor-1", "https://gitlab.example.com");
+    status = 200;
+    await expect(first!.isGone("repository-1")).resolves.toBe(false);
+  });
+
   it("marks the supplying identity with its sponsor when the worker's GitLab read returns 401", async () => {
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
     vi.stubEnv("NEXT_PHASE", "");

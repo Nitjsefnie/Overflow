@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { measureRepositorySize } from "@/lib/fold/repository-size";
+import { findRepositoryGone, measureRepositorySize } from "@/lib/fold/repository-size";
 import type { GitHubRepositoryReference } from "@/lib/github/types";
 
 /**
@@ -15,7 +15,7 @@ function dependencies(overrides: {
   gitHubToken?: string | null;
   forgeToken?: { token: string; identityId: string } | null;
 }) {
-  const base = { ownerName: "group/project", provider: "github", instanceUrl: null as string | null, sponsor: { id: "sponsor-1" } };
+  const base = { ownerName: "group/project", githubRepositoryId: 41, provider: "github", instanceUrl: null as string | null, sponsor: { id: "sponsor-1" } };
   return {
     getRepository: vi.fn(async () =>
       overrides.repository === undefined ? base : overrides.repository === null ? null : { ...base, ...overrides.repository }),
@@ -115,5 +115,67 @@ describe("measuring a repository's size as its sponsor", () => {
       throw new Error("forge unreachable");
     });
     await expect(measure("repository-1")).rejects.toThrow("forge unreachable");
+  });
+});
+
+describe("finding a repository gone as its sponsor", () => {
+  function lookupGateway(answer: () => Promise<object | null>, calls: FactoryInput[], ids: number[]) {
+    return (input: FactoryInput) => {
+      calls.push(input);
+      return {
+        getRepositoryById: async (id: number) => {
+          ids.push(id);
+          return answer();
+        },
+      };
+    };
+  }
+
+  it("looks a GitHub repository up by its registered id with the sponsor's token, gone only on null", async () => {
+    for (const [answer, gone] of [[null, true], [{ id: 41 }, false]] as const) {
+      const calls: FactoryInput[] = [];
+      const ids: number[] = [];
+      const isGone = findRepositoryGone(dependencies({ gitHubToken: "token-a" }), lookupGateway(async () => answer, calls, ids));
+      await expect(isGone("repository-1")).resolves.toBe(gone);
+      expect(calls).toEqual([{ provider: "github", accessToken: "token-a", ownerId: "sponsor-1" }]);
+      expect(ids).toEqual([41]);
+    }
+  });
+
+  it("looks a GitLab project up by its registered id with the linked identity's token on its instance", async () => {
+    const calls: FactoryInput[] = [];
+    const ids: number[] = [];
+    const isGone = findRepositoryGone(
+      dependencies({
+        repository: { provider: "gitlab", instanceUrl: "https://gitlab.test", githubRepositoryId: 77 },
+        forgeToken: { token: "pat", identityId: "identity-1" },
+      }),
+      lookupGateway(async () => null, calls, ids),
+    );
+    await expect(isGone("repository-1")).resolves.toBe(true);
+    expect(calls).toEqual([{ provider: "gitlab", instanceUrl: "https://gitlab.test", token: "pat" }]);
+    expect(ids).toEqual([77]);
+  });
+
+  it("is not gone, with no lookup, without a repository, a credential, an instance or a well-formed path", async () => {
+    for (const overrides of [
+      { repository: null, gitHubToken: "token-a" },
+      { gitHubToken: null },
+      { repository: { ownerName: "project" }, gitHubToken: "token-a" },
+      { repository: { provider: "gitlab", instanceUrl: null }, forgeToken: { token: "pat", identityId: "identity-1" } },
+      { repository: { provider: "gitlab", instanceUrl: "https://gitlab.test" }, forgeToken: null },
+    ]) {
+      const calls: FactoryInput[] = [];
+      const isGone = findRepositoryGone(dependencies(overrides), lookupGateway(async () => null, calls, []));
+      await expect(isGone("repository-1")).resolves.toBe(false);
+      expect(calls).toEqual([]);
+    }
+  });
+
+  it("propagates a lookup failure rather than reading it as gone", async () => {
+    const isGone = findRepositoryGone(dependencies({ gitHubToken: "token-a" }), lookupGateway(async () => {
+      throw new Error("GitHub API request failed with status 401.");
+    }, [], []));
+    await expect(isGone("repository-1")).rejects.toThrow("status 401");
   });
 });

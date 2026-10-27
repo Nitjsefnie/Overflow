@@ -59,6 +59,7 @@ export class PostgresRepositorySizeStore {
 /** The pieces of the fold repository snapshot a measure needs. */
 export type RepositorySizeMeasureRepository = {
   ownerName: string;
+  githubRepositoryId: number;
   provider?: string | undefined;
   instanceUrl?: string | null | undefined;
   sponsor: { id: string };
@@ -70,37 +71,64 @@ export type RepositorySizeMeasureDependencies = {
   resolveForgeToken(userId: string, instanceUrl: string): Promise<{ token: string; identityId: string } | null>;
 };
 
+export type SponsorGatewayInput =
+  | { provider: "github"; accessToken: string; ownerId: string }
+  | { provider: "gitlab"; instanceUrl: string; token: string };
+
+/** Null on a 404 only. */
+export type RepositoryLookupGateway = {
+  getRepositoryById(forgeRepositoryId: number): Promise<object | null>;
+};
+
 /**
  * Rides the repository's own sponsor's credential, aimed by the registered
  * owner/name path. Null keeps the previous size; forge failures propagate.
  */
 export function measureRepositorySize(
   dependencies: RepositorySizeMeasureDependencies,
-  createGateway: (
-    input: { provider: "github"; accessToken: string; ownerId: string }
-    | { provider: "gitlab"; instanceUrl: string; token: string },
-  ) => RepositorySizeGateway,
+  createGateway: (input: SponsorGatewayInput) => RepositorySizeGateway,
 ): (repositoryId: string) => Promise<number | null> {
   return async (repositoryId) => {
-    const repository = await dependencies.getRepository(repositoryId);
-    if (repository === null) return null;
-    const separator = repository.ownerName.lastIndexOf("/");
-    if (separator <= 0 || separator === repository.ownerName.length - 1) return null;
-    const reference: GitHubRepositoryReference = {
-      owner: repository.ownerName.slice(0, separator),
-      name: repository.ownerName.slice(separator + 1),
-    };
-    if (repository.provider === "gitlab") {
-      const instanceUrl = repository.instanceUrl;
-      if (instanceUrl === null || instanceUrl === undefined) return null;
-      const credential = await dependencies.resolveForgeToken(repository.sponsor.id, instanceUrl);
-      if (credential === null) return null;
-      return createGateway({ provider: "gitlab", instanceUrl, token: credential.token })
-        .getRepositoryHistoryCount(reference);
-    }
-    const accessToken = await dependencies.getGitHubAccessToken(repository.sponsor.id);
-    if (accessToken === null) return null;
-    return createGateway({ provider: "github", accessToken, ownerId: repository.sponsor.id })
-      .getRepositoryHistoryCount(reference);
+    const target = await resolveSponsorGateway(dependencies, repositoryId);
+    return target === null ? null : createGateway(target.input).getRepositoryHistoryCount(target.reference);
   };
+}
+
+/**
+ * Gone only when the by-id lookup on the measure's credential answers 404: a
+ * rename also misses by name. No lookup, so not gone, where the measure has none.
+ */
+export function findRepositoryGone(
+  dependencies: RepositorySizeMeasureDependencies,
+  createGateway: (input: SponsorGatewayInput) => RepositoryLookupGateway,
+): (repositoryId: string) => Promise<boolean> {
+  return async (repositoryId) => {
+    const target = await resolveSponsorGateway(dependencies, repositoryId);
+    return target !== null
+      && await createGateway(target.input).getRepositoryById(target.repository.githubRepositoryId) === null;
+  };
+}
+
+async function resolveSponsorGateway(
+  dependencies: RepositorySizeMeasureDependencies,
+  repositoryId: string,
+): Promise<{ repository: RepositorySizeMeasureRepository; reference: GitHubRepositoryReference; input: SponsorGatewayInput } | null> {
+  const repository = await dependencies.getRepository(repositoryId);
+  if (repository === null) return null;
+  const separator = repository.ownerName.lastIndexOf("/");
+  if (separator <= 0 || separator === repository.ownerName.length - 1) return null;
+  const reference: GitHubRepositoryReference = {
+    owner: repository.ownerName.slice(0, separator),
+    name: repository.ownerName.slice(separator + 1),
+  };
+  if (repository.provider === "gitlab") {
+    const instanceUrl = repository.instanceUrl;
+    if (instanceUrl === null || instanceUrl === undefined) return null;
+    const credential = await dependencies.resolveForgeToken(repository.sponsor.id, instanceUrl);
+    if (credential === null) return null;
+    return { repository, reference, input: { provider: "gitlab", instanceUrl, token: credential.token } };
+  }
+  const accessToken = await dependencies.getGitHubAccessToken(repository.sponsor.id);
+  if (accessToken === null) return null;
+  return { repository, reference, input: { provider: "github", accessToken, ownerId: repository.sponsor.id } };
 }

@@ -18,6 +18,7 @@ import { DrainSummaryLogger } from "@/lib/logging/drain-summary-logger";
 import { readGitHubRegistrationAppAuthConfig } from "@/lib/github/app-installation-auth";
 import { errorLogToken } from "@/lib/webhooks/log-field";
 import { installJournalLevels } from "@/lib/logging/journal-levels";
+import type { SponsorGatewayInput } from "@/lib/fold/repository-size";
 
 /**
  * The drain site's failure key (issue 661): the whole-drain hook the schedule
@@ -51,7 +52,7 @@ export async function registerNodejs(): Promise<void> {
   const { PostgresForgeIdentityStore } = await import("@/lib/forge/postgres-identities-store");
   const { pruneExpiredMaintenanceRows } = await import("@/lib/retention/prune");
   const { getSql, getCoordinationSql } = await import("@/lib/db/client");
-  const { PostgresRepositorySizeStore, measureRepositorySize } = await import("@/lib/fold/repository-size");
+  const { PostgresRepositorySizeStore, findRepositoryGone, measureRepositorySize } = await import("@/lib/fold/repository-size");
   const { PostgresReconciliationJobStore } = await import("@/lib/fold/reconciliation-job-store");
   const { GitHubGateway } = await import("@/lib/github/client");
   const { GitLabGateway } = await import("@/lib/gitlab/client");
@@ -137,6 +138,16 @@ export async function registerNodejs(): Promise<void> {
     },
   });
 
+  const sizeLookup = {
+    getRepository: (repositoryId: string) => store.getRepository(repositoryId),
+    getGitHubAccessToken: (userId: string) => store.getGitHubAccessToken(userId),
+    resolveForgeToken,
+  };
+  const createSizeGateway = (input: SponsorGatewayInput) => input.provider === "gitlab"
+    ? new GitLabGateway({ instanceUrl: input.instanceUrl, token: input.token })
+    : new GitHubGateway({ accessToken: input.accessToken, owner: input.ownerId });
+  const goneRepositories = { isGone: findRepositoryGone(sizeLookup, createSizeGateway), foundAt: new Map<string, number>() };
+
   let nextMaintenanceAt = 0;
   startReconciliationSweep({
     intervalMs: 15_000,
@@ -156,17 +167,8 @@ export async function registerNodejs(): Promise<void> {
         round: sweepRound,
         listActiveRepositorySponsors: () => store.listActiveRepositorySponsors(),
         sizeStore: repositorySizes,
-        measureSize: measureRepositorySize(
-          {
-            getRepository: (repositoryId) => store.getRepository(repositoryId),
-            getGitHubAccessToken: (userId) => store.getGitHubAccessToken(userId),
-            resolveForgeToken: (userId, instanceUrl) =>
-              new PostgresForgeIdentityStore(getSql()).getForgeToken(userId, instanceUrl),
-          },
-          (input) => input.provider === "gitlab"
-            ? new GitLabGateway({ instanceUrl: input.instanceUrl, token: input.token })
-            : new GitHubGateway({ accessToken: input.accessToken, owner: input.ownerId }),
-        ),
+        measureSize: measureRepositorySize(sizeLookup, createSizeGateway),
+        goneRepositories,
         enqueue: (repositoryId) => store.enqueueReconciliationJob(repositoryId, "SWEEP"),
         onFailure: (repositoryId, error) => {
           // Report the failure while retaining the durable slot: the next poll

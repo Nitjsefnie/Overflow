@@ -40,6 +40,18 @@ export type ReconciliationSweepDependencies = {
    */
   measureSize?(repositoryId: string): Promise<number | null>;
   /**
+   * Tells a repository the forge no longer returns from one whose measure
+   * merely failed; consulted only after a measure fails, and read with the
+   * size members. `isGone` is true only when the by-id lookup answered 404
+   * (findRepositoryGone); a false or a throw leaves the measure's own failure
+   * reported as before. `foundAt` is the caller's process-local memory of when
+   * each was found gone: while that is within REPOSITORY_SIZE_REMEASURE_MS the
+   * measure is skipped, and a measure that succeeds forgets it. A gone
+   * repository is still offered to the queue, whose fold records it
+   * unavailable.
+   */
+  goneRepositories?: { isGone(repositoryId: string): Promise<boolean>; foundAt: Map<string, number> };
+  /**
    * Reports one repository this sweep could not queue, as distinct from the
    * whole-sweep `onSweepFailure` on the schedule. A hook that fails costs
    * neither the sweep nor the report, whichever way it fails: reading the member
@@ -71,6 +83,8 @@ export type ReconciliationSweepSummary = {
    */
   measured?: number;
   measureFailed?: number;
+  /** Repositories whose measure was skipped because the forge no longer returns them. */
+  gone?: number;
 };
 
 export type ReconciliationSweepSchedule = {
@@ -196,15 +210,29 @@ export async function sweepReconciliations(
   const now = dependencies.now ?? (() => new Date());
   let measured = 0;
   let measureFailed = 0;
+  let gone = 0;
+  const goneRepositories = dependencies.goneRepositories;
   if (sizeStore !== undefined && measureSize !== undefined) {
     for (const { repositoryId } of repositories) {
       try {
+        const foundGoneAt = goneRepositories?.foundAt.get(repositoryId);
+        if (foundGoneAt !== undefined && now().getTime() - foundGoneAt < REPOSITORY_SIZE_REMEASURE_MS) {
+          gone += 1;
+          continue;
+        }
         const stored = await sizeStore.get(repositoryId);
         if (stored !== null && now().getTime() - stored.measuredAt.getTime() < REPOSITORY_SIZE_REMEASURE_MS) continue;
-        const count = await measureSize(repositoryId);
-        // A null measure is a failed measure: the previous stored size stands.
-        if (count === null) throw new Error("The repository size measure was unavailable.");
+        const count = await measureOrFindGone(measureSize, goneRepositories, repositoryId);
+        if (count === "GONE") {
+          if (foundGoneAt === undefined) {
+            console.warn(`Reconciliation sweep: the forge no longer returns repository ${repositoryId}; its size measure is skipped`);
+          }
+          goneRepositories?.foundAt.set(repositoryId, now().getTime());
+          gone += 1;
+          continue;
+        }
         await sizeStore.store(repositoryId, count, now());
+        goneRepositories?.foundAt.delete(repositoryId);
         measured += 1;
       } catch (error) {
         measureFailed += 1;
@@ -254,8 +282,32 @@ export async function sweepReconciliations(
   if (sizeStore !== undefined && measureSize !== undefined) {
     summary.measured = measured;
     summary.measureFailed = measureFailed;
+    summary.gone = gone;
   }
   return summary;
+}
+
+/**
+ * One repository's count, or GONE when the measure failed and the forge's
+ * by-id lookup says the repository no longer exists. Any other outcome of the
+ * lookup rethrows the measure's own failure, exactly as reported before.
+ */
+async function measureOrFindGone(
+  measureSize: (repositoryId: string) => Promise<number | null>,
+  goneRepositories: ReconciliationSweepDependencies["goneRepositories"],
+  repositoryId: string,
+): Promise<number | "GONE"> {
+  let failure: unknown;
+  try {
+    const count = await measureSize(repositoryId);
+    // A null measure is a failed measure: the previous stored size stands.
+    if (count !== null) return count;
+    failure = new Error("The repository size measure was unavailable.");
+  } catch (error) {
+    failure = error;
+  }
+  if (goneRepositories !== undefined && await goneRepositories.isGone(repositoryId).catch(() => false)) return "GONE";
+  throw failure;
 }
 
 /**
