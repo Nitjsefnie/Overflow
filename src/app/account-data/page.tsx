@@ -6,6 +6,7 @@ import {
   HOSTED_SENSITIVE_URL,
   readControllerIdentity,
 } from "@/lib/controller-config";
+import { formatSweepWindow, readSweepWindowMs } from "@/lib/fold/sweep-request-budget";
 import { ACCOUNT_DATA_REVISION } from "@/lib/legal-revisions";
 import { PROCESSING_ACTIVITIES } from "@/lib/processing-activities";
 import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
@@ -17,6 +18,7 @@ function displayUrl(url: string): string {
 
 export function AccountDataNotice() {
   const identity = readControllerIdentity();
+  const sweepMinutes = readSweepWindowMs(process.env) / 60_000;
   // The hosted instance's own two GitHub routes render the established
   // sentences about them; any other configuration renders the neutral shapes.
   const githubRoutes =
@@ -274,11 +276,11 @@ export function AccountDataNotice() {
             While the repository stays registered, reconciliation re-reads it. A pass re-reads from GitHub or
             GitLab only the issues updated since the last pass and takes the rest from the cache; a full re-read
             replaces the whole cache. Each pass overwrites the stored logins and pull request fields from that
-            copy, and an issue&apos;s title whenever the forge&apos;s copy is at least as new. An
-            unattended sweep runs every six hours, and a pass does a full re-read once six hours have passed since
-            the last one, so while the repository can still be read, an edit or deletion on GitHub or GitLab
-            normally reaches Overflow&apos;s copy within twelve hours. An issue or pull request that a later pass
-            no longer records is removed.
+            copy, and an issue&apos;s title whenever the forge&apos;s copy is at least as new. An unattended sweep
+            reaches each repository once every <time dateTime={`PT${sweepMinutes}M`}>{formatSweepWindow(sweepMinutes)}</time>,
+            and a pass does a full re-read once six hours have passed since the last one, so while the repository
+            can still be read, an edit or deletion on GitHub or GitLab normally reaches Overflow&apos;s copy within
+            six hours plus one sweep window. An issue or pull request that a later pass no longer records is removed.
           </li>
           <li>
             If the repository itself is deleted, made private, or can no longer be read with its sponsor&apos;s
