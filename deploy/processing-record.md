@@ -2,10 +2,10 @@
 
 **Recorded:** 2026-10-08
 
-**Source notice:** `/account-data`, version 1.9, effective 2026-10-21
+**Source notice:** `/account-data`, version 1.16, effective 2026-10-27
 **Scope:** Processing described by the account-data notice and the current Overflow implementation. The controller is the operator of the deployment described by the notice. Controller name and contact routes are operator configuration; when the hosted deployment has no overrides, its hosted identity and route values are used. A self-hosted operator supplies its own values.
 
-This record follows the four activities in the notice's “Purposes and legal bases” section. The balancing notes record the operator's reasoning and remaining impact; they are not a specialist legal opinion.
+This record follows the five activities in the notice's “Purposes and legal bases” section. The balancing notes record the operator's reasoning and remaining impact; they are not a specialist legal opinion.
 
 ## Activity: signed_in_service
 
@@ -138,6 +138,35 @@ Legitimate interests: keeping the ledger's records accurate and its rules enforc
 ### Balancing note
 
 Accurate settlements and enforceable participation rules support the shared ledger and protect sponsors and contributors from incorrect attribution. The processing has a material effect: settlement pricing is automated, a credit-limit threshold can remove all but one repayment issue from the board, and enforcement state controls repository participation. The system records the inputs and outcomes; members can request corrections, contest sanctions, and use moderator review, reversal, or manual adjustment routes. Human review provides a route to challenge moderation outcomes, but it does not make the credit-limit board effect a human decision. Those effects and the retained pseudonymised record are counterweights that require ongoing operator review of accuracy, challenge handling, and the impact on contributors.
+
+## Activity: contributor_work_mail
+
+### Name and purpose
+
+Email a signed-in member, at an address they typed in for this purpose, when issues their own issues board lists as open to claim have newly appeared: at most one mail per 24 hours, stating the count and linking the board, with no issue text. The feature is off unless the deployment configures a dedicated sending identity, an SMTPS transport and a daily ceiling (`OVERFLOW_CONTRIBUTOR_MAIL_*`); with it off nothing is sent and no new address can be added.
+
+### Data categories
+
+- The opt-in address, when it was requested and when its confirmation link expires, a SHA-256 hash of the pending confirmation token (never exported), and when the address was confirmed, last mailed and last given a digest.
+- Confirmation history: one row per confirmation mail sent, holding the account id, an HMAC digest of the address keyed from the token-encryption key (never the address) and the send time, used only for the per-account and per-address caps of three confirmation mails per 24 hours.
+- A per-UTC-day count of all contributor mail sent, holding no account or address, used for the daily ceiling.
+- No address is read from GitHub or GitLab, and no email scope is requested.
+
+### Data subjects
+
+Signed-in members who add an address in their dashboard's work-mail panel, and the holder of an address someone typed in but never confirmed.
+
+### Recipients
+
+The member sees the address in their dashboard's work-mail panel; the deployment operator and hosting provider administer the database. The operator of the configured SMTPS server receives the address and each message for delivery; its host is rendered on the notice from configuration. Configuration refuses a loopback transport (the host's mail relay) and smtp.gmail.com, and OPERATING.md requires a sending identity separate from the failure-alert mailbox. Which provider runs that server, its region and any transfer mechanism are deployment configuration and are not documented in this record. Database copies are held in backups as described under `logs_backups_security`.
+
+### Retention
+
+The address is kept until the member removes it (dashboard or the one-click unsubscribe link) or deletes the account; account deletion and a confirmed forge-person removal delete the address and the confirmation history at once. An address never confirmed is deleted by the first retention prune after its 24-hour confirmation link expires; the prune runs every six hours, on the reconciliation sweep tick. Confirmation-history rows are deleted by the prune once older than 24 hours; removing the address keeps them until then, so a remove-and-re-add cannot reset the caps. Daily counts are kept for the two UTC days before the current one. Backups can retain prior copies for the periods described under `logs_backups_security`.
+
+### Basis
+
+Consent: the member types the address in and confirms it through a link sent to it; removing the address or using the unsubscribe link withdraws it, and no notification goes out before confirmation.
 
 ## Open specialist question
 

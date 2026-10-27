@@ -19,6 +19,7 @@ const RULES = "src/app/rules/page.tsx";
 const ACCOUNT_DATA = "src/app/account-data/page.tsx";
 const DISPUTES = "src/lib/disputes.ts";
 const SANCTIONS = "src/lib/sanctions.ts";
+const WORK_MAIL_DISCLOSURE = "src/components/work-mail-disclosure.tsx";
 const GUARD = "src/lib/legal-revisions.ts";
 const GATE_SCRIPT = "scripts/check-legal-revisions.ts";
 
@@ -974,7 +975,7 @@ describe("the gate's coverage of shared legal-text modules", () => {
     expect(
       sharedTextModules,
       "the first-class inventory must match every shared module supplying legal-page wording",
-    ).toEqual([DISPUTES, SANCTIONS]);
+    ).toEqual([DISPUTES, SANCTIONS, WORK_MAIL_DISCLOSURE]);
   });
 
   it("throws its explicit parse error for malformed shared-text inventory source", async () => {
