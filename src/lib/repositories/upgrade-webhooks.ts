@@ -9,9 +9,9 @@ export type WebhookUpgradeOutcome = {
   /** NOT_APPLICABLE: the registration carries no webhook, so there is nothing
    * to upgrade and the run is neither a success over forge work nor a
    * failure. */
-  subscription: "VERIFIED" | "FAILED" | "NOT_APPLICABLE";
+  subscription: "VERIFIED" | "FAILED" | "NOT_APPLICABLE" | "SKIPPED";
   queue: "QUEUED" | "FAILED" | "NOT_ATTEMPTED";
-  failure: "REGISTRATION_FAILED" | "CREDENTIALS_FAILED" | "REPOSITORY_FAILED" | "SUBSCRIPTION_FAILED" | "QUEUE_FAILED" | null;
+  failure: "REGISTRATION_FAILED" | "CREDENTIALS_FAILED" | "REPOSITORY_FAILED" | "REPOSITORY_GONE" | "SUBSCRIPTION_FAILED" | "QUEUE_FAILED" | null;
 };
 
 export type WebhookUpgradeDependencies = {
@@ -36,16 +36,17 @@ export type WebhookUpgradeDependencies = {
 /** Explicit administration followed by durable repair; neither belongs in the fold. */
 export async function upgradeRepositoryWebhooks(
   dependencies: WebhookUpgradeDependencies,
-): Promise<{ succeeded: number; failed: number }> {
+): Promise<{ succeeded: number; failed: number; gone: number }> {
   const repositoryIds = await dependencies.store.listActiveRepositoryIds();
-  const summary = { succeeded: 0, failed: 0 };
+  const summary = { succeeded: 0, failed: 0, gone: 0 };
   for (const repositoryId of repositoryIds) {
     const outcome = await dependencies.store.withWebhookUpgradeLock(repositoryId,
       () => upgradeRegistration(dependencies, repositoryId)).catch((): WebhookUpgradeOutcome => ({
       repositoryId, subscription: "FAILED", queue: "NOT_ATTEMPTED", failure: "REGISTRATION_FAILED",
     }));
     dependencies.report(outcome);
-    if (outcome.failure === null) summary.succeeded++;
+    if (outcome.failure === "REPOSITORY_GONE") summary.gone++;
+    else if (outcome.failure === null) summary.succeeded++;
     else summary.failed++;
   }
   return summary;
@@ -90,8 +91,11 @@ async function upgradeRegistration(
 
     outcome.failure = "REPOSITORY_FAILED";
     const repository = await github.getRepositoryById(registration.githubRepositoryId);
+    if (repository === null) {
+      return { repositoryId, subscription: "SKIPPED", queue: "NOT_ATTEMPTED", failure: "REPOSITORY_GONE" };
+    }
     if (
-      repository === null || repository.id !== registration.githubRepositoryId
+      repository.id !== registration.githubRepositoryId
       || repository.visibility !== "PUBLIC" || !repository.canAdminister
       || !isOwner(repository.owner) || !isRepositoryName(repository.name)
       || repository.fullName !== `${repository.owner}/${repository.name}`
@@ -139,8 +143,11 @@ async function upgradeGitLabRegistration(
 
   outcome.failure = "REPOSITORY_FAILED";
   const repository = await gitlab.getRepositoryById(registration.githubRepositoryId);
+  if (repository === null) {
+    return { repositoryId, subscription: "SKIPPED", queue: "NOT_ATTEMPTED", failure: "REPOSITORY_GONE" };
+  }
   if (
-    repository === null || repository.id !== registration.githubRepositoryId
+    repository.id !== registration.githubRepositoryId
     || repository.visibility !== "PUBLIC" || !repository.canAdminister
     || repository.fullName.length === 0 || !repository.fullName.includes("/")
     || repository.fullName !== `${repository.owner}/${repository.name}`
