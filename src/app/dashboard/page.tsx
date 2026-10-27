@@ -36,7 +36,6 @@ type DashboardContentProps = {
    * recovery path plainly.
    */
   moderatorFloorConfigured?: boolean;
-  /** Work mail is configured, or an address is still stored to remove. */
   workMailPanel?: boolean;
 };
 
