@@ -101,7 +101,8 @@ export const forgePersonRemovalDecisions: readonly {
     decision: "pseudonymised",
     reason:
       "rows the person authored lose their body and their owner login; claim-assignee and actor-login copies naming " +
-      "the person are tombstoned and their numeric ids dropped; free text other people wrote is kept",
+      "the person are tombstoned and their numeric ids dropped; the sponsor's done-when statement is cleared on the " +
+      "rows of repositories the person sponsored; free text other people wrote is kept",
   },
   {
     store: "pull_requests",
@@ -370,8 +371,9 @@ export async function exportForgePerson(
                or (t.claim_assignee_github_user_id is null and t.claim_assignee_github_login = any($2))
                or ${issueIdentityMatch("t", "opening", 3, 2)}
                or ${issueIdentityMatch("t", "label", 3, 2)}
-               or ${issueIdentityMatch("t", "rationale", 3, 2)})`,
-          [repositoryIds, sql.array(uniqueLogins), request.forgeId]),
+               or ${issueIdentityMatch("t", "rationale", 3, 2)}
+               or (t.done_when is not null and repositories.sponsor_id::text = any($4::text[])))`,
+          [repositoryIds, sql.array(uniqueLogins), request.forgeId, sql.array(userIds)]),
         await section("pull_requests",
           `select to_jsonb(t.*) as row from pull_requests as t
              join registered_repositories as repositories on repositories.id = t.repository_id
@@ -605,6 +607,8 @@ export async function removeForgePerson(
     const openingMatch = issueIdentityMatch("issues", "opening", 3, 2);
     const labelMatch = issueIdentityMatch("issues", "label", 3, 2);
     const rationaleMatch = issueIdentityMatch("issues", "rationale", 3, 2);
+    const sponsoredBy = (users: string) =>
+      `repository_id in (select id from registered_repositories where sponsor_id::text = any(${users}::text[]))`;
     const issuesOperations: Array<{ update: string; count: string; parameters: ParameterOrJSON<never>[] }> = [
       {
         update: `update issues set body = null, owner_github_login = $4
@@ -654,6 +658,11 @@ export async function removeForgePerson(
         );
         for (const row of rows) issueIds.add(row.id);
       }
+      if (userIds.length > 0) {
+        const rows = await tx.unsafe<{ id: string }[]>(`update issues set done_when = null where ${issuesOfProvider}
+          and done_when is not null and ${sponsoredBy("$2")} returning id`, [repositoryIds, tx.array(userIds)]);
+        for (const row of rows) issueIds.add(row.id);
+      }
       issuesCount = issueIds.size;
     } else {
       issuesCount = await countOf(`select count(*)::int as count from (
@@ -665,7 +674,9 @@ export async function removeForgePerson(
         select id from issues where ${issuesOfProvider} and (
           ${openingMatch} or ${labelMatch}
           or ${rationaleMatch})
-      ) as touched`, [repositoryIds, sql.array(uniqueLogins), request.forgeId]);
+        union
+        select id from issues where ${issuesOfProvider} and done_when is not null and ${sponsoredBy("$4")}
+      ) as touched`, [repositoryIds, sql.array(uniqueLogins), request.forgeId, tx.array(userIds)]);
     }
 
     const perStore: ForgePersonRemovalPerStore = {

@@ -419,7 +419,9 @@ the module constant `forgePersonRemovalDecisions` in
 - `issues`, `pull_requests`, `settlements` — pseudonymised: rows the person
   authored lose their stored body text, and every login and numeric-id copy
   naming them is tombstoned or dropped; the attribution keys the ledger needs
-  (`author_id`, `creditor_id`) and everyone else's rows stay untouched.
+  (`author_id`, `creditor_id`) and everyone else's rows stay untouched. The
+  sponsor's done-when statement is cleared on the issues of every repository
+  the person sponsored.
 - `repository_reconciliation_evidence_facts` — pseudonymised in place: payload
   identity fields (issue authors, comment authors, history actors and
   assignees, nested closing-PR authors) are tombstoned; titles, reviews and

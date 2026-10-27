@@ -296,6 +296,44 @@ function storeOf(document: { stores: Array<{ table: string; count: number; rows:
   return section!;
 }
 
+/**
+ * A person who sponsored a repository since unregistered, whose issue still
+ * carries their done-when statement, beside a statement-free issue of that
+ * repository and another sponsor's live repository with its own statement.
+ */
+async function seedSponsorStatements(): Promise<{ forgeId: number; stated: string; unstated: string; other: string }> {
+  const seed = nextSeedNumber();
+  const issueIds: string[] = [];
+  for (const [index, live] of [false, true].entries()) {
+    const [sponsor] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login) values (${9_700_000 + seed * 2 + index}, ${`ds-sponsor-${seed}-${index}`}) returning id
+    `;
+    const [repository] = await sql<{ id: string }[]>`
+      insert into registered_repositories (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id,
+        difficulty_scheme, active, unregistered_at)
+      values (${9_710_000 + seed * 2 + index}, ${`ds-sponsored/repo-${seed}-${index}`}, ${sponsor!.id}, 'PUBLIC',
+        ${9_720_000 + seed * 2 + index}, ${sql.json(validDifficultyScheme())}, ${live}, ${live ? null : new Date()})
+      returning id
+    `;
+    for (const [number, statement] of (live ? [[1, "Done when the other sponsor agrees."]] : [[1, "Done when the picker keeps state."], [2, null]]) as Array<[number, string | null]>) {
+      const githubIssueId = 9_730_000 + seed * 10 + index * 5 + number;
+      const [issue] = await sql<{ id: string }[]>`
+        insert into issues (github_issue_id, repository_id, issue_number, title, url, state, owner_github_login, opening_label,
+          opening_comparison_points, opening_reserve_points, opening_source_event_id, opening_source_actor_login, opening_source_at, done_when)
+        values (${githubIssueId}, ${repository!.id}, ${number}, 'Stated work item', ${`https://example.test/issues/${githubIssueId}`},
+          'OPEN', ${`reporter-${seed}`}, 'M', 5, 5, ${`opening-${githubIssueId}`}, ${`reporter-${seed}`}, '2026-09-01T08:00:00Z', ${statement})
+        returning id
+      `;
+      issueIds.push(issue!.id);
+    }
+  }
+  return { forgeId: 9_700_000 + seed * 2, stated: issueIds[0]!, unstated: issueIds[1]!, other: issueIds[2]! };
+}
+
+async function doneWhenOf(issueId: string): Promise<string | null> {
+  return (await rowJson("issues", issueId)).done_when as string | null;
+}
+
 describe("data-subject export", () => {
   it("case 1: covers every row naming the person and none of the member's rows", async () => {
     const seed = await seedHandScenario();
@@ -345,6 +383,14 @@ describe("data-subject export", () => {
       expect(serialized, `section ${section.table} carries no member settlement`)
         .not.toContain(seed.memberSettlement.id);
     }
+  });
+
+  it("lists the issue rows that carry a done-when statement in a repository the person sponsored", async () => {
+    const seed = await seedSponsorStatements();
+    const document = await exportForgePerson(sql, { provider: "github", forgeId: seed.forgeId });
+
+    expect(storeOf(document, "issues")).toMatchObject({ count: 1, rows: [await rowJson("issues", seed.stated)] });
+    expect(storeOf(document, "issues").rows[0]).toMatchObject({ done_when: "Done when the picker keeps state." });
   });
 
   it("case 2: exports empty stores for a person with no rows", async () => {
@@ -537,6 +583,19 @@ describe("data-subject removal", () => {
       where provider = 'github' and forge_id = ${seed.person.forgeId}
     `;
     expect(suppressionCount!.count).toBe(0);
+  });
+
+  it("clears the done-when statement on the rows of repositories the person sponsored, and only there", async () => {
+    const seed = await seedSponsorStatements();
+
+    const planned = await removeForgePerson(sql, { provider: "github", forgeId: seed.forgeId }, { confirm: false });
+    expect(planned).toMatchObject({ kind: "PLANNED", perStore: { issues: 1 } });
+    expect(await doneWhenOf(seed.stated)).toBe("Done when the picker keeps state.");
+    const removed = await removeForgePerson(sql, { provider: "github", forgeId: seed.forgeId }, { confirm: true });
+    expect(removed).toMatchObject({ kind: "REMOVED", perStore: { issues: 1 } });
+    expect(await doneWhenOf(seed.stated)).toBeNull();
+    expect(await doneWhenOf(seed.unstated)).toBeNull();
+    expect(await doneWhenOf(seed.other)).toBe("Done when the other sponsor agrees.");
   });
 
   it("case 6: a person with no rows is removed as a no-op that still records the suppression", async () => {
