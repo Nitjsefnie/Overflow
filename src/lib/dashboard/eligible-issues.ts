@@ -1,5 +1,6 @@
 import { getSql } from "@/lib/db/client";
 import type { DashboardSql } from "@/lib/dashboard/queries";
+import { STARTING_CREDIT_LIMIT } from "@/lib/domain/credit-limit";
 
 /**
  * The eligible-issues board: the projection its readers render, the filters
@@ -112,9 +113,8 @@ type EligibleIssueRow = {
  * against tens of thousands, and every execution after the fifth paid
  * nested-loop joins for the mis-estimate. An unnamed statement is re-planned
  * with the actual parameter values on every execution, so the collapse never
- * happens. The values still bind as parameters; nothing is interpolated into
- * this text, and the statement's text is byte-identical to the tagged
- * template it replaced. Future edits must keep the CTE-block formatting: the
+ * happens. Request values still bind as parameters; only the shared starting
+ * limit is interpolated. Future edits must keep the CTE-block formatting: the
  * migration-056 plan pins' `cteBlock()` parser matches `^\s*CTE <name>$`
  * headers and reads the deeper-indented lines under each, so a reflow that
  * moves a `CTE <name>` header onto a shared line breaks those pins.
@@ -252,7 +252,7 @@ const BOARD_QUERY = `
         from running_balances
         group by account_id
       )
-      select account_id, 10 + floor(repaid_debt / 10) as credit_limit
+      select account_id, ${STARTING_CREDIT_LIMIT} + floor(repaid_debt / 10) as credit_limit
       from repayments
     ),
     repayment_issues as materialized (
@@ -270,7 +270,7 @@ const BOARD_QUERY = `
         and issues.claim_assignee_github_login is null
         and repositories.active = true and repositories.unavailable_reason is null
         and sponsors.enforcement_state in ('ACTIVE', 'WARNED', 'UNDER_AUDIT')
-        and coalesce(sponsor_balances.balance, 0) <= -coalesce(sponsor_credit_limits.credit_limit, 10)
+        and coalesce(sponsor_balances.balance, 0) <= -coalesce(sponsor_credit_limits.credit_limit, ${STARTING_CREDIT_LIMIT})
       order by repositories.sponsor_id,
         issues.opening_reserve_points asc, issues.created_at asc,
         repositories.provider, coalesce(repositories.instance_url, ''),
@@ -311,7 +311,7 @@ const BOARD_QUERY = `
       and sponsors.enforcement_state in ('ACTIVE', 'WARNED', 'UNDER_AUDIT')
       and (
         issues.claim_assignee_github_login is not null
-        or coalesce(sponsor_balances.balance, 0) > -coalesce(sponsor_credit_limits.credit_limit, 10)
+        or coalesce(sponsor_balances.balance, 0) > -coalesce(sponsor_credit_limits.credit_limit, ${STARTING_CREDIT_LIMIT})
         or repayment_issues.id is not null
       )
       and ($3::text is null or repositories.owner_name = $4)

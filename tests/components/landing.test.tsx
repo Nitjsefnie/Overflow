@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useTrustedOrigin } from "../support/trusted-origin";
@@ -17,6 +17,8 @@ vi.mock("next/headers", async () => (await import("../support/trusted-origin")).
 useTrustedOrigin();
 
 import HomePage, { LandingPage } from "@/app/page";
+import { OVERFLOW_OPENING_CATALOG } from "@/app/landing-examples";
+import { STARTING_CREDIT_LIMIT } from "@/lib/domain/credit-limit";
 
 describe("landing page", () => {
   afterEach(() => {
@@ -56,7 +58,7 @@ describe("landing page", () => {
   it("submits contributor GitHub sign-in through a server action with no scope", async () => {
     render(<LandingPage />);
 
-    expect(screen.getByRole("heading", { name: "Cooperative credit for open-source work." })).toBeVisible();
+    expect(screen.getByRole("heading", { level: 1 })).toBeVisible();
     const signInButton = screen.getByRole("button", { name: "Sign in with GitHub" });
     expect(signInButton.closest("form")).not.toBeNull();
     expect(screen.queryByRole("link", { name: "Sign in with GitHub" })).not.toBeInTheDocument();
@@ -132,6 +134,38 @@ describe("landing page", () => {
     render(<LandingPage />);
 
     expect(screen.queryByText(/churn/i)).not.toBeInTheDocument();
+  });
+
+  it("uses points vocabulary in every landing-page configuration", () => {
+    const plain = render(<LandingPage />);
+    const plainText = plain.container.textContent;
+    plain.unmount();
+    const configured = render(<LandingPage registrationAppConfigured registrationAppInstallUrl="https://github.com/apps/overflow-registration/installations/new" />);
+
+    expect([plainText, configured.container.textContent].join(" ")).not.toMatch(/credit|price|pay/i);
+  });
+
+  it("shows the shared starting limit between the lede and the sign-in action", () => {
+    const { container } = render(<LandingPage />);
+    const hero = container.querySelector(".landing-hero")!;
+    const trade = hero.querySelector(".landing-trade");
+    expect(trade).not.toBeNull();
+    expect(trade).toHaveTextContent(String(STARTING_CREDIT_LIMIT));
+    expect(hero.querySelector(".landing-lede")!.compareDocumentPosition(trade!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(trade!.compareDocumentPosition(hero.querySelector("form button")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("renders one worked example with the label and points for every catalog entry", () => {
+    const { container } = render(<LandingPage />);
+    const section = container.querySelector('section[aria-labelledby="landing-examples-title"]');
+    expect(section).not.toBeNull();
+    expect(OVERFLOW_OPENING_CATALOG.length).toBeGreaterThan(0);
+    expect(within(section as HTMLElement).getAllByRole("article")).toHaveLength(OVERFLOW_OPENING_CATALOG.length);
+    for (const entry of OVERFLOW_OPENING_CATALOG) {
+      const heading = within(section as HTMLElement).getByRole("heading", { level: 3, name: entry.label });
+      const card = heading.closest("article")!;
+      expect(within(card).getByText(String(entry.reservePoints), { exact: true })).toBeVisible();
+    }
   });
 });
 

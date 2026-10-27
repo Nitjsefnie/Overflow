@@ -1,0 +1,1 @@
+export const STARTING_CREDIT_LIMIT = 10;
