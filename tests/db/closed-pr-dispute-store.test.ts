@@ -690,10 +690,11 @@ describe("closed PR dispute decisions", () => {
     }
   });
 
-  it.each(["self-work", "no-record", "commit", "zero-credit"])("grants without a reversal for %s landing", async (kind) => {
+  it.each(["self-work", "no-record", "commit", "zero-credit", "donated"])("grants without a reversal for %s landing", async (kind) => {
     const fixture = await decisionFixture(kind === "commit");
     if (kind === "self-work") await insertLandingSettlement(fixture, fixture.sponsorId, fixture.landingCreditorId);
     if (kind === "zero-credit") await insertLandingSettlement(fixture, fixture.landingCreditorId, fixture.sponsorId, 0);
+    if (kind === "donated") await insertDonatedLandingSettlement(fixture);
     await expect(store().decideDispute(decision(fixture)))
       .resolves.toMatchObject({ kind: "ok", value: { awardedPoints: 6 } });
     expect(await adjustmentLines(fixture.requestId))
@@ -711,10 +712,11 @@ describe("closed PR dispute decisions", () => {
     expect(await decisionEvents(fixture.requestId)).toHaveLength(1);
   });
 
-  it.each(["self-work", "no-record", "commit", "zero-credit"])("writes no adjustment for zero award with %s landing", async (kind) => {
+  it.each(["self-work", "no-record", "commit", "zero-credit", "donated"])("writes no adjustment for zero award with %s landing", async (kind) => {
     const fixture = await decisionFixture(kind === "commit");
     if (kind === "self-work") await insertLandingSettlement(fixture, fixture.sponsorId, fixture.landingCreditorId);
     if (kind === "zero-credit") await insertLandingSettlement(fixture, fixture.landingCreditorId, fixture.sponsorId, 0);
+    if (kind === "donated") await insertDonatedLandingSettlement(fixture);
     await setReviews(fixture, [review(1), review(2)]);
     await expect(store().decideDispute({ ...decision(fixture), figure: 2 }))
       .resolves.toMatchObject({ kind: "ok", value: { awardedPoints: 0, decision: "GRANTED" } });
@@ -1230,6 +1232,12 @@ async function insertLandingSettlement(
     values (${fixture.landingId}, ${fixture.issueId}, ${creditorId}, ${debtorId}, 5, 7, ${7 - credits},
       ${credits}, ${randomUUID().replaceAll("-", "").repeat(2)}, 'SETTLED') returning id`;
   return row.id;
+}
+
+// A donated landing moved no credits, so a grant has nothing of it to reverse.
+async function insertDonatedLandingSettlement(fixture: Awaited<ReturnType<typeof decisionFixture>>) {
+  const settlementId = await insertLandingSettlement(fixture, fixture.landingCreditorId);
+  await sql`update settlements set status = 'DONATED', donation_comment_id = 'donation' where id = ${settlementId}`;
 }
 
 async function decisionEvents(requestId: string) {

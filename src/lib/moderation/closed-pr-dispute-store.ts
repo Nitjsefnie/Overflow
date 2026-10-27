@@ -223,11 +223,12 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
       `;
       if (event === undefined) throw new Error("Closed PR dispute decision event returned no row.");
 
-      // The landing may settle other issues; only this issue's price is reversed.
+      // The landing may settle other issues; only this issue's price is reversed. Only a SETTLED
+      // landing moved credits: a DONATED one paid nothing, so there is nothing to reverse.
       const reversals = awardedPoints === null ? [] : await transaction<{ id: string; creditor_id: string; credits: number }[]>`
         select id, creditor_id, credits from settlements
         where pull_request_id = ${request.landed_pull_request_id} and issue_id = ${request.issue_id}
-          and creditor_id <> ${related.sponsor_id} and credits > 0
+          and creditor_id <> ${related.sponsor_id} and credits > 0 and status = 'SETTLED'
       `;
       if ((awardedPoints !== null && awardedPoints > 0) || reversals.length > 0) {
         const [adjustment] = await transaction<{ id: string }[]>`
