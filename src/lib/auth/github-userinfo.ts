@@ -126,7 +126,7 @@ export async function requestGitHubPublicIdentity({
  * identity fields — the numeric user id and the login — so the display name,
  * the e-mail address, the avatar URL, and every other field GitHub answers
  * with never reach the profile, the session cookie the sign-in mints, or
- * anywhere else. Overflow reads no email anywhere and no avatar anywhere
+ * anywhere else. Sign-in reads no email and no avatar anywhere
  * (issue 1075): the URL is dropped at this projection, before the provider's
  * default `profile()` could map it onto the session's image.
  */
