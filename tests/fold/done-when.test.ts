@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { DONE_WHEN_MAX_BYTES, doneWhenText, sponsorDoneWhen } from "@/lib/fold/done-when";
-import type { FoldUser } from "@/lib/fold/repository-fold";
+import { attachDoneWhen, DONE_WHEN_MAX_BYTES, doneWhenText, sponsorDoneWhen } from "@/lib/fold/done-when";
+import type { FoldResult, FoldUser } from "@/lib/fold/repository-fold";
+import type { WalkIssue } from "@/lib/fold/reconciliation-walk";
 import type { GitHubIssueComment, GitHubIssueHistoryEvent } from "@/lib/github/types";
 
 const SPONSOR: FoldUser = { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE" };
@@ -105,6 +106,29 @@ describe("sponsorDoneWhen", () => {
     const body = "Done when <script>alert(1)</script>";
 
     expect(sponsorDoneWhen({ comments: [comment(1, body, -60)], history: [] }, SPONSOR)?.text).toBe(body);
+  });
+});
+
+describe("attachDoneWhen", () => {
+  it("sets the statement only on fold issues read fresh this pass", () => {
+    const fold = { issues: [1, 2, 3, 4, 5].map((githubIssueId) => ({ githubIssueId })) } as unknown as FoldResult;
+    const statement = [comment(1, "Done when A", -60)];
+    const walked: Pick<WalkIssue, "id" | "body" | "comments" | "history"> = { id: 3, body: "", comments: statement, history: [] };
+    const cached = { id: 4, comments: [{ ...statement[0]!, body: "[body removed]" }], history: [] };
+    const unfolded = { id: 6, body: "", comments: statement, history: [] };
+
+    attachDoneWhen(fold, [
+      { id: 1, body: "Issue body", comments: statement, history: [] },
+      { id: 2, body: "", comments: [comment(1, "Thanks for filing this.", -60)], history: [] },
+      walked, cached, unfolded,
+    ], SPONSOR);
+
+    expect(fold.issues.map((issue) => issue.doneWhen)).toEqual([
+      { text: "Done when A", commentId: "c1" }, null, { text: "Done when A", commentId: "c1" }, undefined, undefined,
+    ]);
+    expect("doneWhen" in fold.issues[3]!).toBe(false);
+    expect("doneWhen" in fold.issues[4]!).toBe(false);
+    expect(fold.issues).toHaveLength(5);
   });
 });
 

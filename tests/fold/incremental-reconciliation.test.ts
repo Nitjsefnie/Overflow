@@ -113,6 +113,40 @@ describe("incremental reconciliation", () => {
     expect(f.diffReads.filter((number) => number === pr.number)).toHaveLength(1);
   });
 
+  it("sets the done-when statement from fresh reads only: a cached pass keeps it, a fresh one without it clears it", async () => {
+    const f = await fixture();
+    const issue = f.issues[0]!;
+    issue.updatedAt = "2026-09-08T09:58:00Z";
+    const statement = { id: "done-when", databaseId: 90002, authorLogin: issue.authorLogin,
+      authorGitHubUserId: issue.authorGitHubUserId, body: "Done when the suite passes.", createdAt: "2026-09-01T09:00:00Z", lastEditedAt: null };
+    issue.comments = [statement];
+    const doneWhen = async () => (await sql`select done_when from issues
+      where repository_id = ${f.id} and github_issue_id = ${issue.id}`)[0]!.done_when;
+    const freshPass = async (minute: number) => {
+      issue.updatedAt = `2026-09-08T10:${minute}:00Z`;
+      f.clock = new Date(`2026-09-08T10:${minute + 1}:00Z`);
+      await f.run();
+      expect(f.scans.at(-1)).toBeDefined();
+      return doneWhen();
+    };
+    await f.run();
+    expect(await doneWhen()).toBe("Done when the suite passes.");
+    f.clock = new Date("2026-09-08T10:04:00Z");
+    await f.run();
+    expect(f.scans.at(-1)).toBeDefined();
+    expect(f.issueReads).toEqual([]);
+    expect(await doneWhen()).toBe("Done when the suite passes.");
+
+    issue.comments = [];
+    expect(await freshPass(10)).toBeNull();
+    issue.comments = [statement];
+    expect(await freshPass(20)).toBe("Done when the suite passes.");
+    issue.history.push({ kind: "ASSIGNED", id: "assigned", actorLogin: issue.authorLogin, actorGitHubUserId: issue.authorGitHubUserId,
+      assigneeLogin: "contributor", createdAt: "2026-09-02T00:00:00Z" });
+    issue.comments = [{ ...statement, lastEditedAt: "2026-09-03T00:00:00Z" }];
+    expect(await freshPass(30)).toBeNull();
+  });
+
   it("charges quiet retained history only for current observations", async () => {
     const f = await fixture();
     f.issues[0]!.updatedAt = "2026-09-08T09:58:00Z";
