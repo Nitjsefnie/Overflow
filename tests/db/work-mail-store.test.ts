@@ -192,6 +192,25 @@ describe("requestConfirmation", () => {
     expect(await dailySent()).toBe(3);
   });
 
+  it("reads a spent ceiling on the UTC day whatever the session time zone", async () => {
+    const address = addressFor("zoned");
+    for (let index = 0; index < 3; index += 1) {
+      expect((await store.requestConfirmation(await insertUser(), address, { dailyLimit: 3 })).kind).toBe("send");
+    }
+    // At any instant at least one of UTC+14 and UTC-12 is on another local date than UTC.
+    for (const zone of ["Pacific/Kiritimati", "Etc/GMT+12"]) {
+      const zoned = postgres(process.env.OVERFLOW_DATABASE_URL!, { max: 1, connection: { TimeZone: zone } });
+      try {
+        const prober = await insertUser();
+        expect(await new PostgresWorkMailStore(zoned, tokenKey).requestConfirmation(prober, address, { dailyLimit: 3 }), zone)
+          .toEqual({ kind: "ceiling" });
+        expect(await subscriptionRow(prober)).toBeUndefined();
+      } finally {
+        await zoned.end();
+      }
+    }
+  });
+
   it("keeps counting an address across a key rotation while the old key is the previous key", async () => {
     const oldKey = randomBytes(32).toString("base64url");
     const newKey = randomBytes(32).toString("base64url");
