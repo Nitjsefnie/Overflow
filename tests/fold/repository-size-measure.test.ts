@@ -157,11 +157,27 @@ describe("finding a repository gone as its sponsor", () => {
     expect(ids).toEqual([77]);
   });
 
+  it("looks up a GitLab project under a nested namespace", async () => {
+    const calls: FactoryInput[] = [];
+    const isGone = findRepositoryGone(
+      dependencies({
+        repository: { ownerName: "group/subgroup/project", provider: "gitlab", instanceUrl: "https://gitlab.test" },
+        forgeToken: { token: "pat", identityId: "identity-1" },
+      }),
+      lookupGateway(async () => null, calls, []),
+    );
+    await expect(isGone("repository-1")).resolves.toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
   it("is not gone, with no lookup, without a repository, a credential, an instance or a well-formed path", async () => {
     for (const overrides of [
       { repository: null, gitHubToken: "token-a" },
       { gitHubToken: null },
       { repository: { ownerName: "project" }, gitHubToken: "token-a" },
+      { repository: { ownerName: "group//project" }, gitHubToken: "token-a" },
+      { repository: { ownerName: "group/project/extra" }, gitHubToken: "token-a" },
+      { repository: { ownerName: "group//project", provider: "gitlab", instanceUrl: "https://gitlab.test" }, forgeToken: { token: "pat", identityId: "identity-1" } },
       { repository: { provider: "gitlab", instanceUrl: null }, forgeToken: { token: "pat", identityId: "identity-1" } },
       { repository: { provider: "gitlab", instanceUrl: "https://gitlab.test" }, forgeToken: null },
     ]) {
