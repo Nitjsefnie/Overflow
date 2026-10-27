@@ -18,8 +18,8 @@ const SETTLEMENT_EVIDENCE_WINDOW_MS = 15 * 60 * 1000;
  * Scrubs the free text a repository's rows hold, in place, inside the
  * unregistration transaction (issue 681).
  *
- * The materialized issue and pull request body columns are nulled
- * unconditionally: no reader consults them, and a repository that may return
+ * Issue and pull request bodies, which no reader consults, and the issue's
+ * done-when extract are nulled unconditionally; a repository that may return
  * through re-registration keeps every identity-bearing column it had.
  *
  * The evidence cache's issue facts are re-narrowed in place only when no fold
@@ -52,7 +52,7 @@ export async function scrubRepositoryFreeText(
   transaction: TransactionClient,
   repositoryId: string,
 ): Promise<void> {
-  await transaction`update issues set body = null where repository_id = ${repositoryId}`;
+  await transaction`update issues set body = null, done_when = null where repository_id = ${repositoryId}`;
   await transaction`update pull_requests set body = null where repository_id = ${repositoryId}`;
 
   const [gate] = await transaction<{
