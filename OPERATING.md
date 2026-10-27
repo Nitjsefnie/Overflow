@@ -214,6 +214,8 @@ Never pruned: a PENDING run at any age (it can still be claimed and completed), 
 
 The pruning is safe for its consumers: receipt deduplication reads only PROCESSED receipts, and a pruned receipt's late redelivery simply reprocesses, because reconciliation is idempotent from the forge's source of truth; runs are read only while PENDING and for account export, whose mapping tolerates a shortened history; and nothing in the application reads `reconciliation_changes`.
 
+The same prune deletes contributor work mail's short-lived rows: a `contributor_work_mail_subscriptions` row whose address was never confirmed once its 24-hour confirmation link has expired, `contributor_work_mail_confirmations` rows older than the 24-hour confirmation-cap window, and `contributor_work_mail_daily` counters older than the two UTC days before today. A confirmed address is never pruned; only opt-out, account deletion or a forge-person removal deletes it.
+
 The prune runs on the reconciliation sweep tick — once at startup and then every six hours — and reports what it deleted on one info line per tick. It is disabled together with the sweep by setting `OVERFLOW_DISABLE_RECONCILIATION_SWEEP` to any non-empty value.
 
 ## Failure alerts and off-host copies
@@ -236,6 +238,23 @@ On an alert: read the failed unit's journal with `journalctl -b -u <unit>`, then
 That route is also the only one alerts take, which leaves its own failures silent: a mail path that has stopped delivering is indistinguishable from a host that has had nothing to report. When enabled, `overflow-canary.timer` runs `overflow-canary.service` daily at 03:20 UTC to close that gap. **On the documented deployment the timer has been disabled since 2026-10-01 by maintainer decision**: the daily mail was noise, and the maintainer accepted the consequence. The scheduled check does not run, so the canary no longer checks for silent mail-path failures automatically. With the installed units and host files configured, run a check by hand with `sudo systemctl start overflow-canary.service`, then read `journalctl -u overflow-canary.service --no-pager -n 20`; resume the daily check with `sudo systemctl enable --now overflow-canary.timer` and verify with `systemctl is-enabled overflow-canary.timer` and `systemctl list-timers overflow-canary.timer --no-pager`.
 
 When run, the canary mails a probe by the same route, then reads the verdict from the exim mainlog: a stopped daemon, revoked credentials, greylisting or any 5xx leaves a `defer` or `rejected` line against the message's id and never a `Completed`, and those are caught. A path that cannot deliver is reported to a Discord webhook rather than by mail, because a mail failure reported by mail is a report nobody receives; the canary also exits nonzero, so the failure is visible in `journalctl -u overflow-canary.service` either way. One report is posted per dead streak, and the first successful run clears it. **What it does not catch is a recipient address that is wrong, deleted or converted**: a `Completed` line means the smarthost accepted the message, and nothing observable from the host distinguishes that from the mailbox existing. After re-enabling the timer, treat a run of missing canary mail as a finding in its own right, at the same weight as a failed backup. [deploy/README.md section 12](deploy/README.md#12-failure-alerts) carries the install, what the verdict does and does not cover, and the two-sided verification.
+
+## Contributor work mail
+
+Members can opt in to one email a day at most, sent only when issues their own issues board lists as open to claim have newly appeared; the account-data notice's "Work notification mail" section is what they are told. The feature is off until all three `OVERFLOW_CONTRIBUTOR_MAIL_*` variables in the [environment reference](#environment-reference) are set and valid. With all three unset the service behaves as if the feature did not exist: no digest interval, no transport, no dashboard panel for a member with no stored address, and the opt-in `POST` routes answer `404`. A partial or invalid set is off too, and startup logs one warning per bad variable, naming the variable and never its value.
+
+Before enabling it:
+
+- **Use a dedicated sending identity and transport.** Contributor mail never goes from the operator's alert mailbox (`/etc/overflow/alert-recipient`) and never through the host's exim smarthost or the `smtp.gmail.com` consumer account the failure alerts use. Configuration refuses a loopback or `localhost` host and `smtp.gmail.com` / `smtp.googlemail.com`; a separate From identity is the operator's part.
+- **Transport is SMTPS with implicit TLS**: `smtps://<user>:<password>@<host>[:<port>]`, port 465 by default, with the server certificate verified. Plain `smtp:` and STARTTLS are refused. The URL carries the password: keep it in `/etc/overflow/overflow.env` only.
+- **DKIM-sign the mail with `List-Unsubscribe` and `List-Unsubscribe-Post` in `h=`.** Every digest carries both headers for one-click unsubscribe, and [RFC 8058 section 4](https://www.rfc-editor.org/rfc/rfc8058#section-4) requires a valid DKIM signature covering them; without it a receiver should not offer the one-click button. Overflow does not sign: configure the provider to sign for the From domain, with SPF and DMARC aligned.
+- **Set `OVERFLOW_CONTRIBUTOR_MAIL_DAILY_LIMIT` below the provider's daily sending limit.** It counts every contributor mail — confirmations and digests — per UTC day; once spent, confirmation requests are refused and digests stop until the next UTC day.
+
+Then restart `overflow.service` and check the journal for a warning naming a variable. The account-data notice renders the From address and the transport host from this configuration, never the username, password or URL.
+
+The digest runs hourly, mails each confirmed address at most once per 24 hours and never retries a failed send; it logs fixed lines and SMTP reply codes, never an address, token or reply text. It starts with the reconciliation background, so `OVERFLOW_DISABLE_RECONCILIATION_SWEEP` stops it too — and with it the startup warnings and the retention prune that deletes unconfirmed addresses — while the opt-in routes stay live: members can still add and confirm an address, and confirmation mails still go out, but no digest is sent until the variable is cleared and the service restarted.
+
+The one-click unsubscribe URL carries its token in the query string (`/api/work-mail/unsubscribe?token=…`): the mail client's one-click `POST` and the unsubscribe page's button both request that URL, so nginx's access log records the token, for the log's normal retention. The token's only power is deleting the one subscription it names; it signs no session and reads nothing. A token signed under the previous `OVERFLOW_TOKEN_ENCRYPTION_KEY` still verifies during a key rotation.
 
 ## Reconciliation
 
@@ -426,6 +445,10 @@ the module constant `forgePersonRemovalDecisions` in
   identity fields (issue authors, comment authors, history actors and
   assignees, nested closing-PR authors) are tombstoned; titles, reviews and
   raw diffs are kept — proof material that names no reviewer.
+- `contributor_work_mail_subscriptions`, `contributor_work_mail_confirmations`
+  — removed: a matched account's opt-in work-mail address, its pending
+  confirmation and its confirmation history are deleted, so no digest reaches
+  the address after the removal.
 - `moderation_events` — kept: the moderation audit trail is immutable by
   trigger, so its rows, states and reasons stay exactly as written; the export
   lists the notes naming the person so the request can be answered about them
@@ -493,7 +516,11 @@ naming the person only by GitHub login or id, with no foreign key to the
 account, are not exported. Encrypted tokens appear only as presence booleans
 (`hasStoredGitHubToken`, `hasStoredToken`), while the API-token hash and the
 webhook secrets are omitted entirely; API-token metadata is `createdAt` and
-`expiresAt`, never the hash. The first
+`expiresAt`, never the hash. `workMail` carries the opt-in work-mail address
+with its request, confirmation-expiry, confirmation, last-notification and
+last-digest times, never the pending confirmation token's hash;
+`workMailConfirmations` carries the confirmation history, one row per
+confirmation mail with the address digest and send time. The first
 `delete` and the first `remove-forge` are dry runs; `--confirm` performs them.
 Exit codes: `0` the command succeeded (an export, or a confirmed deletion or
 removal); `1` it failed — an unknown
@@ -511,6 +538,8 @@ dry run completed without deleting.
   attributes authorship by them — but their token is cleared, their login is
   tombstoned, and `token_failed_at` is stamped, so the dashboard asks for a
   re-link if the person signs in again.
+- The work-mail address, any pending confirmation, and the account's
+  work-mail confirmation history are deleted.
 - The account is stamped with `deleted_at`.
 
 ### What deletion keeps
@@ -618,6 +647,9 @@ Neither table covers variables read only by surrounding tooling: the shell's
 | `RECONCILIATION_SWEEP_REQUEST_BUDGET` | Optional per-sponsor bound on the GitHub requests a sweep fold may send, reset with the sponsor's sweep window and split evenly across the sponsor's active repositories, each capped at its share per window; defaults to 3000, and missing, blank, malformed, nonpositive or unsafe-integer values fall back to 3000. Read unprefixed: the `OVERFLOW_`-prefixed spelling is not read. See Reconciliation. |
 | `OVERFLOW_RECONCILIATION_SWEEP_WINDOW_MINUTES` | Optional length of each sponsor's sweep window in whole minutes, for example `90`: the sweep request budget resets, a spent sponsor is held, and the sponsor's repositories are spaced on this window, and the account-data notice states it; defaults to six hours, and missing, blank, malformed, nonpositive or unsafe-integer values fall back to six hours. A change takes effect on restart. See Reconciliation. |
 | `OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG` | Optional diff-only threshold: a sponsor is diff-only when the sum of stored issue and pull-request counts over its active repositories strictly exceeds it; defaults to 1000, and missing, blank, malformed, nonpositive or unsafe-integer values fall back to 1000. See Reconciliation. |
+| `OVERFLOW_CONTRIBUTOR_MAIL_SMTP_URL` | Optional contributor work-mail transport, `smtps://<user>:<password>@<host>[:<port>]` (implicit TLS, port 465 by default, certificate verified); user and password are required, and a loopback or `localhost` host, `smtp.gmail.com` and `smtp.googlemail.com` are refused. One of the three variables that together enable work mail; see [Contributor work mail](#contributor-work-mail) |
+| `OVERFLOW_CONTRIBUTOR_MAIL_FROM` | Optional From address for contributor work mail, a dedicated sending identity, never the alert mailbox; must pass the same address validation as a member's address. Rendered on the account-data notice when work mail is enabled |
+| `OVERFLOW_CONTRIBUTOR_MAIL_DAILY_LIMIT` | Optional positive integer ceiling on all contributor work mail per UTC day, confirmations and digests together, set below the transport's daily limit; no default. Work mail is enabled only when this and the two variables above are all valid; a partial or invalid set leaves it off and logs one startup warning per bad variable, naming the variable and never its value |
 | `OVERFLOW_DISABLE_RECONCILIATION_SWEEP` | Any non-empty value turns off the reconciliation worker and its sweep — the whole of automatic reconciliation; jobs still accumulate and nothing drains them (see Reconciliation) |
 | `OVERFLOW_SKIP_STARTUP_RECONCILIATION` | Exactly `1` skips the reconciliation sweep a restart runs at startup, as a temporary deploy override; missed deliveries stay unrecovered until the recurring sweep, a later delivery or a manual reconciliation — a sponsor over the diff-only backlog threshold is offered no sweep slot (see Reconciliation) — and any other value keeps the startup sweep on |
 | `OVERFLOW_DEBUG_GITHUB_COST` | Debug-only, do not set in production: any non-empty value makes the GitHub client log the point cost and remaining balance of an issues-page query whose response carries a rate-limit reading |
