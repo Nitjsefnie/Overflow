@@ -22,7 +22,7 @@ export type EligibleIssueProjection = {
   assigneeGitHubLogin?: string | null;
   claimState?: "OPEN" | "CLAIMED";
   availableHeadroom?: number;
-  /** The issue asks for actions outside its repository, so a contributor declines or sandboxes it; false vouches for nothing. */
+  /** Opt-in: false vouches for nothing. */
   asksOutsideRepository: boolean;
   createdAt: string;
 };
