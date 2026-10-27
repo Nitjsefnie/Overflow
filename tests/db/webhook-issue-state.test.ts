@@ -100,6 +100,50 @@ describe("webhook issue materialization", () => {
     expect(await row(fixture)).toMatchObject({ asks_outside_repository: false });
   });
 
+  it("stores the done-when statement from a fresh read, keeps it when a pass holds the issue from cache", async () => {
+    const fixture = await materializeRepositoryFixture(sql);
+    expect(await row(fixture)).toMatchObject({ done_when: null });
+    fixture.fold.issues[0] = { ...fixture.fold.issues[0], updatedAt: "2026-09-08T11:00:00Z",
+      doneWhen: { text: "Done when A", commentId: "c1" } };
+    await materialize(fixture);
+    expect(await row(fixture)).toMatchObject({ done_when: "Done when A" });
+    fixture.fold.issues[0] = { ...fixture.fold.issues[0], updatedAt: "2026-09-08T11:30:00Z" };
+    delete fixture.fold.issues[0].doneWhen;
+    await materialize(fixture);
+    expect(await row(fixture)).toMatchObject({ done_when: "Done when A", github_updated_at: new Date("2026-09-08T11:30:00Z") });
+    // A webhook view carries no comments: it advances GitHub time and leaves the statement alone.
+    await deliver(fixture, { updatedAt: "2026-09-08T12:00:00Z" });
+    expect(await row(fixture)).toMatchObject({ done_when: "Done when A" });
+    fixture.fold.issues[0] = { ...fixture.fold.issues[0], updatedAt: "2026-09-08T11:45:00Z",
+      doneWhen: { text: "Done when B", commentId: "c2" } };
+    await materialize(fixture);
+    expect(await row(fixture)).toMatchObject({ done_when: "Done when A" });
+    fixture.fold.issues[0] = { ...fixture.fold.issues[0], updatedAt: "2026-09-08T12:00:00Z", doneWhen: null };
+    await materialize(fixture);
+    expect(await row(fixture)).toMatchObject({ done_when: null });
+  });
+
+  it("inserts a fresh issue's statement and journals it nowhere, not even when the issue is removed", async () => {
+    const fixture = await materializeRepositoryFixture(sql);
+    const added = { ...fixture.fold.issues[2], githubIssueId: fixture.fold.issues[2].githubIssueId + 900_000_000, number: 99,
+      doneWhen: { text: "Done when A", commentId: "c1" } };
+    fixture.fold.issues.push(added);
+    await materialize(fixture);
+    const read = () => sql`select done_when from issues where github_issue_id = ${added.githubIssueId}`;
+    expect(await read()).toEqual([{ done_when: "Done when A" }]);
+    fixture.fold.issues.pop();
+    await materialize(fixture);
+    expect(await read()).toEqual([]);
+    const changes = await sql`
+      select changes.entity_kind, changes.change_kind, changes.before_state::text as before, changes.after_state::text as after
+      from reconciliation_changes changes join reconciliation_runs runs on runs.id = changes.reconciliation_run_id
+      where runs.repository_id = ${fixture.repositoryId}
+    `;
+    expect(changes.filter((change) => change.entity_kind === "ISSUE" && change.change_kind === "REMOVE"
+      && String(change.before).includes(String(added.githubIssueId)))).toHaveLength(1);
+    expect(changes.filter((change) => `${change.before} ${change.after}`.includes("Done when"))).toEqual([]);
+  });
+
   it("protects a GitHub-confirmed fold closure from an older webhook but accepts a later reopen", async () => {
     const fixture = await materializeRepositoryFixture(sql);
     await deliver(fixture);
