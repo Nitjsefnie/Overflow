@@ -238,6 +238,11 @@ src/app/terms/*
 !src/app/session/
 src/app/session/*
 !src/app/session/*.tsx
+!src/app/work-mail/
+src/app/work-mail/*
+!src/app/work-mail/unsubscribe/
+src/app/work-mail/unsubscribe/*
+!src/app/work-mail/unsubscribe/*.tsx
 !src/components/
 src/components/*
 !src/components/*.tsx

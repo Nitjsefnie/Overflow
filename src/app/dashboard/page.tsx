@@ -14,6 +14,9 @@ import { normalizeModeratorGitHubUserIds } from "@/lib/moderation/roles";
 import { UnregisterRepositoryControl } from "@/components/unregister-repository-control";
 import { ForgeIdentitiesPanel } from "@/components/forge-identities-panel";
 import { AccountControlsPanel } from "@/components/account-controls-panel";
+import { WorkMailPanel } from "@/components/work-mail-panel";
+import { readContributorMailConfig } from "@/lib/accounts/work-mail-config";
+import { PostgresWorkMailStore } from "@/lib/accounts/work-mail-store";
 import { confirmSignInForAccountDeletion } from "@/lib/auth/account-deletion-sign-in-action";
 
 type DashboardContentProps = {
@@ -33,6 +36,8 @@ type DashboardContentProps = {
    * recovery path plainly.
    */
   moderatorFloorConfigured?: boolean;
+  /** Work mail is configured, or an address is still stored to remove. */
+  workMailPanel?: boolean;
 };
 
 export function DashboardContent({
@@ -41,6 +46,7 @@ export function DashboardContent({
   dashboard,
   isLastLiveModerator = false,
   moderatorFloorConfigured = false,
+  workMailPanel = false,
 }: DashboardContentProps) {
   return (
     <AppShell memberName={memberName} isModerator={isModerator}>
@@ -192,6 +198,7 @@ export function DashboardContent({
         )}
       </section>
       <ForgeIdentitiesPanel />
+      {workMailPanel ? <WorkMailPanel /> : null}
       <AccountControlsPanel
         reauthenticateAction={confirmSignInForAccountDeletion}
         isLastLiveModerator={isLastLiveModerator}
@@ -306,6 +313,8 @@ export default async function DashboardPage() {
     const standing = await findLiveModeratorStanding(sql, session.user.id);
     const moderatorFloorConfigured =
       normalizeModeratorGitHubUserIds(readEnv("MODERATOR_GITHUB_USER_IDS")).size > 0;
+    const workMailPanel = readContributorMailConfig().enabled
+      || (await new PostgresWorkMailStore(sql).getSubscription(session.user.id)) !== null;
     return (
       <DashboardContent
         memberName={session.user.name}
@@ -313,6 +322,7 @@ export default async function DashboardPage() {
         dashboard={dashboard}
         isLastLiveModerator={isLastLiveModeratorStanding(standing)}
         moderatorFloorConfigured={moderatorFloorConfigured}
+        workMailPanel={workMailPanel}
       />
     );
   } catch {
