@@ -357,9 +357,13 @@ async function upsertIssues(
   // Raw fields share GitHub's clock with webhooks. A cached or in-flight fold
   // may be older; its derived evidence must still be materialized below.
   const acceptsRawView = sql`issues.github_updated_at is null or excluded.github_updated_at >= issues.github_updated_at`;
+  // The publication holds this registration row `for update`, so an unregistration either committed before
+  // this read or scrubs after this transaction; a pass that read before it must not write the statement back.
+  const [registration] = await sql<{ active: boolean }[]>`select active from registered_repositories where id = ${repositoryId}`;
+  const registered = registration?.active === true;
   for (const issue of fold.issues) {
     // Absent means this pass held the issue from cache, with no comment bodies to read it from.
-    const doneWhen = issue.doneWhen === undefined
+    const doneWhen = !registered ? sql`null` : issue.doneWhen === undefined
       ? sql`issues.done_when`
       : sql`case when ${acceptsRawView} then excluded.done_when else issues.done_when end`;
     const [row] = await sql<IssueRow[]>`
@@ -379,7 +383,7 @@ async function upsertIssues(
         ${issue.settledLabel}, ${issue.settledPoints}, ${issue.settledLabelEventId}, ${issue.settledLabelActorLogin},
         ${issue.settledLabelAppliedAt}, ${issue.settledRationaleCommentId}, ${issue.settledRationaleActorLogin},
         ${issue.settledRationaleCommentedAt}, ${issue.claimAssigneeGitHubLogin}, ${issue.claimAssigneeGitHubUserId},
-        ${issue.asksOutsideRepository}, ${issue.doneWhen?.text ?? null}
+        ${issue.asksOutsideRepository}, ${registered ? issue.doneWhen?.text ?? null : null}
       )
       on conflict (github_issue_id) do update
       set issue_number = excluded.issue_number,

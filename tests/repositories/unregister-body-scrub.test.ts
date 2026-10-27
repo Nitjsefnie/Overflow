@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
+import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
@@ -70,6 +71,32 @@ describe("scrubbing free text when a repository is unregistered", () => {
     expect(await pullRequestBodies(repository.repositoryId)).toEqual([{ body: null }]);
     expect(await rowCount("issues", repository.repositoryId)).toBe(1);
     expect(await rowCount("pull_requests", repository.repositoryId)).toBe(1);
+  });
+
+  it("keeps the done-when statement off an unregistered repository's issues when a pass that started before the unregistration publishes after it", async () => {
+    const fixture = await materializeRepositoryFixture(sql);
+    const [registration] = await sql<{ owner_name: string; sponsor_id: string }[]>`
+      select owner_name, sponsor_id from registered_repositories where id = ${fixture.repositoryId}
+    `;
+    const [fresh, cached, older] = fixture.fold.issues;
+    const inserted = { ...older!, githubIssueId: older!.githubIssueId + 900_000_000, number: 99,
+      doneWhen: { text: "Done when inserted", commentId: "c2" } };
+    fixture.fold.issues = [{ ...fresh!, updatedAt: "2026-09-08T11:00:00Z", doneWhen: { text: "Done when fresh", commentId: "c1" } },
+      cached!, { ...older!, updatedAt: "2026-08-01T00:00:00Z", doneWhen: { text: "Done when older", commentId: "c3" } }, inserted];
+    await fixture.store.withRepositoryReconciliation(fixture.repositoryId, async () => {
+      const runId = await fixture.store.beginRun(fixture.repositoryId);
+      // The pass has read its issues; the sponsor unregisters on another connection before it publishes.
+      await expect(store.unregisterRepository(registrationOf({ ownerName: registration!.owner_name, sponsorId: registration!.sponsor_id })))
+        .resolves.toMatchObject({ kind: "UNREGISTERED" });
+      // However a statement came to be stored, neither a cached pass nor a read older than the stored view keeps it.
+      await sql`update issues set done_when = 'Done when stored' where github_issue_id in ${sql([cached!.githubIssueId, older!.githubIssueId])}`;
+      await fixture.store.materialize({ repositoryId: fixture.repositoryId, runId, fold: fixture.fold });
+    });
+    expect(await sql`
+      select issues.github_issue_id::text as id, issues.done_when, repositories.active from issues
+      join registered_repositories repositories on repositories.id = issues.repository_id
+      where issues.repository_id = ${fixture.repositoryId} order by issues.github_issue_id
+    `).toEqual(fixture.fold.issues.map((issue) => ({ id: String(issue.githubIssueId), done_when: null, active: false })));
   });
 
   it("narrows the evidence cache in place: comment bodies become the placeholder, issue bodies vanish, the diff stays byte-identical", async () => {
