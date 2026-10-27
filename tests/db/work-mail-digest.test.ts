@@ -12,6 +12,7 @@ import { recordingTransport } from "../support/work-mail-recording-transport";
 
 // Rebind cached consumers to this file's mocks when workers are shared.
 vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 const { counts } = vi.hoisted(() => ({ counts: [] as { to: string; count: number }[] }));
 vi.mock("@/lib/accounts/work-mail-transport", async (importActual) => {
