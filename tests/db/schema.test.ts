@@ -278,9 +278,9 @@ describe("initial PostgreSQL materialization", () => {
         );
       }
       await expect(readIssue()).resolves.toEqual(sponsorAuthored
-        // The completed upgrade applies 032 too, which adds the assignee id
-        // column; a row read before the upgrade predates it.
-        ? before.map((row) => ({ ...row, github_updated_at: null, claim_assignee_github_user_id: null }))
+        // The completed upgrade applies 032 and 081 too, which add the assignee id and
+        // outside-repository mark columns; a row read before the upgrade predates both.
+        ? before.map((row) => ({ ...row, github_updated_at: null, claim_assignee_github_user_id: null, asks_outside_repository: false }))
         : before);
       // Each migration commits on its own, so a raised precondition rolls back only the migration
       // that raised it: 013 stays applied and a re-run resumes at 014 instead of replaying it.
