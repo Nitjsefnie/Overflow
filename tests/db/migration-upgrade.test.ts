@@ -53,12 +53,57 @@ const deployedStatusCheckBody = `
   )
 `;
 
+/**
+ * The settled status check as `087_donated_settlement_status_check.sql` restates it, copied by hand
+ * so the rendering comparisons below have a reference the migration did not produce.
+ */
+const donatedStatusCheckBody = `
+  (
+    status = 'SETTLED'
+    and creditor_id is not null
+    and settled_points is not null
+    and settled_points between 1 and 10
+    and credits = greatest(0, settled_points - review_rounds)
+    and donation_comment_id is null
+  )
+  or (
+    status = 'UNCLAIMED'
+    and creditor_id is null
+    and creditor_github_login is not null
+    and length(trim(creditor_github_login)) > 0
+    and settled_points is not null
+    and settled_points between 1 and 10
+    and credits = greatest(0, settled_points - review_rounds)
+    and donation_comment_id is null
+  )
+  or (
+    status = 'DONATED'
+    and donation_comment_id is not null
+    and (
+      creditor_id is not null
+      or (creditor_github_login is not null and length(trim(creditor_github_login)) > 0)
+    )
+    and settled_points is not null
+    and settled_points between 1 and 10
+    and credits = greatest(0, settled_points - review_rounds)
+  )
+  or (
+    status = 'UNSETTLED'
+    and settled_points is null
+    and credits = 0
+    and donation_comment_id is null
+  )
+`;
+const donatedStatusCheckMigration = "087_donated_settlement_status_check.sql";
+
 const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 let container: StartedTestContainer | undefined;
 let adminSql: Sql | undefined;
 let adminDatabaseUrl = "";
 /** `pg_get_constraintdef` of the check the pre-branch 003 installed — the independent reference. */
 let deployedStatusCheck = "";
+/** `pg_get_constraintdef` of the hand-copied 087 check, installed over a database at 086. */
+let donatedStatusCheck = "";
 let freshInstallStatusCheck = "";
 
 beforeAll(async () => {
@@ -74,6 +119,16 @@ beforeAll(async () => {
   deployedStatusCheck = await onNewDatabase("deployed_003_reference", async (sql) => {
     await runMigrations({ upTo: "003_multi_issue_settlements_and_claims.sql" });
     await installDeployedStatusCheck(sql);
+    return settlementStatusCheck(sql);
+  });
+
+  donatedStatusCheck = await onNewDatabase("donated_087_reference", async (sql) => {
+    await runMigrations({ upTo: "086_settlement_donations.sql" });
+    await sql.unsafe(`
+      alter table settlements
+      drop constraint settlements_materialized_status_check,
+      add constraint settlements_materialized_status_check check (${donatedStatusCheckBody})
+    `);
     return settlementStatusCheck(sql);
   });
 
@@ -149,12 +204,12 @@ describe("upgrading an already-deployed database", () => {
     });
   });
 
-  it("ends a fresh install on the check the original 003 installed", () => {
-    // Not a rendering comparison: deployedStatusCheck comes from applying the pre-branch 003
-    // constraint text, which nothing in this branch writes. A 015 that changes the rule — a
-    // widened points bound, a dropped limb — disagrees with it here.
-    expect(freshInstallStatusCheck).toBe(deployedStatusCheck);
+  it("ends a fresh install on the check 087 restates, every status limb enum-typed", () => {
+    // donatedStatusCheck comes from the hand copy above, not from 087's file: an 087 that changes
+    // the rule (a widened points bound, a dropped limb) disagrees with it here.
+    expect(freshInstallStatusCheck).toBe(donatedStatusCheck);
     expect(freshInstallStatusCheck).toContain("'UNCLAIMED'::settlement_status");
+    expect(freshInstallStatusCheck).toContain("'DONATED'::settlement_status");
     expect(freshInstallStatusCheck).not.toContain("(status)::text");
   });
 
@@ -165,8 +220,8 @@ describe("upgrading an already-deployed database", () => {
         await runMigrations({ upTo: boundary });
         await expect(appliedMigrationNames(sql)).resolves.toEqual(migrationNames.slice(0, applied));
 
-        if (applied >= 3) {
-          // A database deployed before this branch ran the old 003 and holds the enum-typed
+        if (applied >= 3 && boundary < donatedStatusCheckMigration) {
+          // A database deployed before 015's branch ran the old 003 and holds the enum-typed
           // check. Rebuilding it here is what makes this the population 015 exists to converge;
           // without it every boundary carries the transitional text form 015 also produces, and
           // the comparison below has nothing to disagree about.
@@ -179,7 +234,7 @@ describe("upgrading an already-deployed database", () => {
 
         await expect(appliedMigrationNames(sql)).resolves.toEqual(migrationNames);
         await expect(databaseContents(sql)).resolves.toEqual(seeded);
-        await expect(settlementStatusCheck(sql)).resolves.toBe(deployedStatusCheck);
+        await expect(settlementStatusCheck(sql)).resolves.toBe(donatedStatusCheck);
       });
     },
   );
@@ -190,6 +245,7 @@ describe("the settled status check a fresh database enforces", () => {
   // the check exists to refuse has to be refused, and the writes it exists to allow accepted.
   let sponsorId = "";
   let creditorId = "";
+  const donated = { status: "DONATED", donationCommentId: "donation" };
 
   beforeAll(async () => {
     await admin()`create database status_check_enforcement`;
@@ -260,6 +316,28 @@ describe("the settled status check a fresh database enforces", () => {
       name: "unsettled work carrying a zero settled amount",
       row: { status: "UNSETTLED", settledPoints: 0, credits: 0 },
     },
+    { name: "settled credit carrying a donation comment", row: { donationCommentId: "donation" } },
+    {
+      name: "unclaimed credit carrying a donation comment",
+      row: { status: "UNCLAIMED", creditorId: null, creditorGitHubLogin: "holder", donationCommentId: "donation" },
+    },
+    {
+      name: "unsettled work carrying a donation comment",
+      row: { status: "UNSETTLED", settledPoints: null, credits: 0, donationCommentId: "donation" },
+    },
+    { name: "donated credit with no donation comment", row: { ...donated, donationCommentId: null } },
+    { name: "donated credit with no settled amount", row: { ...donated, settledPoints: null, credits: 0 } },
+    { name: "a donated amount above the ten-point ceiling", row: { ...donated, settledPoints: 11, credits: 9 } },
+    { name: "a donated amount below the one-point floor", row: { ...donated, settledPoints: 0, credits: 0 } },
+    { name: "donated credit that is not points minus review rounds", row: { ...donated, credits: 3 } },
+    {
+      name: "donated credit naming nobody at all",
+      row: { ...donated, creditorId: null, creditorGitHubLogin: null },
+    },
+    {
+      name: "donated credit with no creditor and a blank login",
+      row: { ...donated, creditorId: null, creditorGitHubLogin: "   " },
+    },
   ])("refuses $name", async ({ row }) => {
     await expect(insertSettlementRow(getSql(), { sponsorId, creditorId, ...row }))
       .rejects.toThrow(/settlements_materialized_status_check/);
@@ -273,6 +351,12 @@ describe("the settled status check a fresh database enforces", () => {
       row: { status: "UNCLAIMED", creditorId: null, creditorGitHubLogin: "holder" },
     },
     { name: "unsettled work", row: { status: "UNSETTLED", settledPoints: null, credits: 0 } },
+    { name: "donated credit given by an account", row: donated },
+    {
+      name: "donated credit held by a login",
+      row: { ...donated, creditorId: null, creditorGitHubLogin: "holder" },
+    },
+    { name: "donated credit whose review rounds exceed its points", row: { ...donated, reviewRounds: 9, credits: 0 } },
   ])("accepts $name", async ({ row }) => {
     await expect(insertSettlementRow(getSql(), { sponsorId, creditorId, ...row }))
       .resolves.toBeUndefined();
@@ -777,6 +861,7 @@ async function insertSettlementRow(
     settledPoints?: number | null;
     reviewRounds?: number;
     credits?: number;
+    donationCommentId?: string | null;
   },
 ): Promise<void> {
   const githubIssueId = nextExternalId();
@@ -822,7 +907,8 @@ async function insertSettlementRow(
   await sql`
     insert into settlements (
       pull_request_id, issue_id, creditor_id, creditor_github_login, debtor_id,
-      opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status
+      opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status,
+      donation_comment_id
     )
     values (
       ${pullRequest.id}, ${issue.id},
@@ -830,7 +916,8 @@ async function insertSettlementRow(
       ${input.creditorGitHubLogin ?? null}, ${input.sponsorId}, 5,
       ${input.settledPoints === undefined ? 6 : input.settledPoints},
       ${input.reviewRounds ?? 2}, ${input.credits ?? 4},
-      ${proofFingerprint(githubIssueId)}, ${input.status ?? "SETTLED"}::settlement_status
+      ${proofFingerprint(githubIssueId)}, ${input.status ?? "SETTLED"}::settlement_status,
+      ${input.donationCommentId ?? null}
     )
   `;
 }
