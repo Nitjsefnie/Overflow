@@ -231,8 +231,9 @@ export async function sweepReconciliations(
           gone += 1;
           continue;
         }
-        await sizeStore.store(repositoryId, count, now());
+        // The count answered, so the repository is back even if the write fails.
         goneRepositories?.foundAt.delete(repositoryId);
+        await sizeStore.store(repositoryId, count, now());
         measured += 1;
       } catch (error) {
         measureFailed += 1;

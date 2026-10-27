@@ -104,9 +104,16 @@ export function findRepositoryGone(
 ): (repositoryId: string) => Promise<boolean> {
   return async (repositoryId) => {
     const target = await resolveSponsorGateway(dependencies, repositoryId);
-    return target !== null
+    return target !== null && isStoredPath(target.repository)
       && await createGateway(target.input).getRepositoryById(target.repository.githubRepositoryId) === null;
   };
+}
+
+// Stricter than the measure's last-slash split, which stays as it was: GitHub
+// is exactly owner/name, GitLab a namespace path of any depth.
+function isStoredPath({ ownerName, provider }: RepositorySizeMeasureRepository): boolean {
+  const segments = ownerName.split("/");
+  return !segments.includes("") && (provider === "gitlab" ? segments.length >= 2 : segments.length === 2);
 }
 
 async function resolveSponsorGateway(
