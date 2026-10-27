@@ -62,6 +62,11 @@ function keptList(section: Element): Element {
 }
 
 describe("account-data notice page", () => {
+  it("states when a contributor is asked for the webhook scope", async () => {
+    await renderAccountDataPage();
+    expect(document.body.textContent).toMatch(/A contributor who signed in without a permission is asked for that one scope\s+when they later choose to register through the webhook route\./);
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
   });
