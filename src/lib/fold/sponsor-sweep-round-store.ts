@@ -30,19 +30,11 @@ export class PostgresSponsorSweepRoundStore {
     return row!;
   }
 
-  /**
-   * Null admits; a date holds until the sponsor's window resets. A request is
-   * admitted only while the sponsor is under `limit` and the repository is
-   * under its share, `limit` split evenly over the sponsor's active
-   * repositories, so the oldest jobs cannot take a window from a sibling.
-   * Both counters move together under the sponsor row lock `round` takes.
-   * A share no larger than a run's overhead (the verify, a listing page) admits
-   * only requests that stage nothing: walk progress needs a share above it.
-   */
+  /** Null admits; a date holds until the window resets: the sponsor's budget or this repository's even share of it is spent. */
   public async spend(sponsorId: string, repositoryId: string, now: Date, limit: number): Promise<Date | null> {
     return this.sql.begin(async (transaction) => {
       const round = await this.round(transaction, sponsorId, now);
-      // shortcut: shares of repositories with no outstanding budget-bound job are not lent out, upgrade by dividing by repositories holding a SWEEP/REDERIVATION job
+      // shortcut: idle repositories' shares are not lent out, upgrade by dividing by repositories holding a budget-bound job
       const rows = await transaction`with share as (
           select ${limit}::integer / greatest(count(*)::integer, 1) as share
           from registered_repositories where sponsor_id = ${sponsorId} and active
