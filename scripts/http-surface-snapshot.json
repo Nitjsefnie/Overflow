@@ -262,6 +262,7 @@
         "confirmedAt": "string",
         "confirmExpiresAt": "null",
         "createdAt": "string",
+        "lastDigestAt": "null",
         "lastNotifiedAt": "null"
       },
       "workMailConfirmations": {
