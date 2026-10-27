@@ -385,7 +385,7 @@ describe("data-subject export", () => {
     }
   });
 
-  it("lists the issue rows that carry a done-when statement in a repository the person currently sponsors", async () => {
+  it("lists the issue rows that carry a done-when statement in a repository whose registration still names the person as sponsor", async () => {
     const seed = await seedSponsorStatements();
     const document = await exportForgePerson(sql, { provider: "github", forgeId: seed.forgeId });
 
@@ -585,7 +585,7 @@ describe("data-subject removal", () => {
     expect(suppressionCount!.count).toBe(0);
   });
 
-  it("clears the done-when statement on the rows of repositories the person currently sponsors, and only there", async () => {
+  it("clears the done-when statement on the rows of repositories whose registration still names the person as sponsor, and only there", async () => {
     const seed = await seedSponsorStatements();
 
     const planned = await removeForgePerson(sql, { provider: "github", forgeId: seed.forgeId }, { confirm: false });

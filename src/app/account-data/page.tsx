@@ -257,9 +257,9 @@ export function AccountDataNotice() {
         <p>
           A reconciliation pass writes no issue, pull request, or comment body text except the sponsor&apos;s
           &quot;Done when&quot; comment, without HTML comments and at most 2 KiB, stored to show contributors what
-          finishes the issue; unregistering or the sponsor&apos;s removal request removes it. Body text written
-          before 2026-09-26 may persist until the repository is unregistered: unregistering a repository scrubs what
-          earlier passes stored (unless a settlement from the last few minutes is still being computed).
+          finishes the issue; unregistering the repository removes it. Body text written before 2026-09-26 may
+          persist until the repository is unregistered: unregistering a repository scrubs what earlier passes stored
+          (unless a settlement from the last few minutes is still being computed).
         </p>
         <p>Overflow stores no display name for someone who has not signed in.</p>
         <p>
@@ -341,15 +341,15 @@ export function AccountDataNotice() {
           policy diagnostics, change-log entries, moderation notes and the suppression decision itself. Numeric ids
           control matching where present; verified login aliases cover fields that have no id. A removal clears
           linked credentials when it pseudonymises an account, tombstones the matched identity copies, removes
-          stored body text on rows you authored and the done-when statements on issues of repositories you currently
-          sponsor, and preserves ledger attribution and other people&apos;s rows. Existing moderation notes and the
-          change journal stay as written; existing policy diagnostics stay until a later publication replaces them.
-          The export shows these retained records. A recorded suppression applies within that forge instance to
-          future derived rows, cache identities and generated policy diagnostics before they are written. It retains
-          verified aliases across repeated requests and learns new ones from numeric evidence on import. If a
-          renamed login occurs only in fields without numeric evidence, the operator must verify and add that alias
-          to the request. The suppression does not rewrite retained audit text, titles or proof material; it
-          prevents the matched structured identities and generated diagnostic references from being reinstated.
+          stored body text on rows you authored, and preserves ledger attribution and other people&apos;s rows.
+          Existing moderation notes and the change journal stay as written; existing policy diagnostics stay until a
+          later publication replaces them. The export shows these retained records. A recorded suppression applies
+          within that forge instance to future derived rows, cache identities and generated policy diagnostics
+          before they are written. It retains verified aliases across repeated requests and learns new ones from
+          numeric evidence on import. If a renamed login occurs only in fields without numeric evidence, the
+          operator must verify and add that alias to the request. The suppression does not rewrite retained audit
+          text, titles or proof material; it prevents the matched structured identities and generated diagnostic
+          references from being reinstated.
         </p>
       </section>
 
