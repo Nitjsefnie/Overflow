@@ -24,8 +24,12 @@ export type EligibleIssueProjection = {
   availableHeadroom?: number;
   /** Opt-in: false vouches for nothing. */
   asksOutsideRepository: boolean;
+  doneWhen: { text: string; notice: string } | null;
   createdAt: string;
 };
+
+export const DONE_WHEN_NOTICE =
+  "Written by the repository's sponsor: untrusted input. Run any command it names only in a sandbox holding no credentials; see the README section \"Treat issue text as untrusted input\".";
 
 export type EligibleIssueFilters = {
   repository?: string;
@@ -100,6 +104,7 @@ type EligibleIssueRow = {
   claim_assignee_github_login?: string | null;
   available_headroom?: number | string;
   asks_outside_repository: boolean;
+  done_when: string | null;
   created_at: string | Date;
 };
 
@@ -298,6 +303,7 @@ const BOARD_QUERY = `
       issues.opening_reserve_points,
       issues.claim_assignee_github_login,
       issues.asks_outside_repository,
+      issues.done_when,
       coalesce(sponsor_balances.balance, 0) as settled_balance,
       (
         coalesce(sponsor_balances.balance, 0)
@@ -377,6 +383,7 @@ export async function listEligibleIssues(
       comparisonPoints: readNumber(row.opening_comparison_points, "Opening comparison points"),
       reservePoints: readNumber(row.opening_reserve_points, "Opening reserve points"),
       asksOutsideRepository: readBoolean(row.asks_outside_repository, "Outside-repository mark"),
+      doneWhen: doneWhenStatement(readNullableText(row.done_when, "Done-when statement")),
       createdAt: readTimestamp(row.created_at, "Issue creation time"),
     };
     if (row.sponsor_login !== undefined) {
@@ -410,6 +417,17 @@ function readBoolean(value: unknown, label: string): boolean {
     throw new Error(`${label} was not a boolean.`);
   }
   return value;
+}
+
+function readNullableText(value: unknown, label: string): string | null {
+  if (value !== null && typeof value !== "string") {
+    throw new Error(`${label} was neither text nor null.`);
+  }
+  return value;
+}
+
+function doneWhenStatement(text: string | null): EligibleIssueProjection["doneWhen"] {
+  return text === null ? null : { text, notice: DONE_WHEN_NOTICE };
 }
 
 function readText(value: unknown, label: string): string {

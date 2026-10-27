@@ -1,6 +1,6 @@
 {
   "snapshotFormat": 2,
-  "httpServerVersion": "1.8.0",
+  "httpServerVersion": "1.9.0",
   "errorEnvelope": {
     "error": {
       "code": "string",
@@ -322,6 +322,10 @@
       "claimState": "string",
       "comparisonPoints": "number",
       "createdAt": "string",
+      "doneWhen": {
+        "notice": "string",
+        "text": "string"
+      },
       "id": "string",
       "issueNumber": "number",
       "openingLabel": "string",

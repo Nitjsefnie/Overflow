@@ -11,6 +11,7 @@ import {
   type DashboardRouteDependencies,
 } from "../src/app/api/dashboard/route.ts";
 import { createIssuesGetHandler, type IssuesRouteDependencies } from "../src/app/api/issues/route.ts";
+import { DONE_WHEN_NOTICE } from "../src/lib/dashboard/eligible-issues.ts";
 import {
   createSettlementsGetHandler,
   type SettlementsRouteDependencies,
@@ -417,6 +418,7 @@ async function deriveGetIssues(): Promise<DerivedAnswer> {
         claimState: "OPEN" as const,
         availableHeadroom: 80,
         asksOutsideRepository: false,
+        doneWhen: { text: "Done when the response-shape snapshot records every route.", notice: DONE_WHEN_NOTICE },
         createdAt: "2026-01-10T09:00:00.000Z",
       },
     ],

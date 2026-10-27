@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createIssuesGetHandler } from "@/app/api/issues/route";
-import type { EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
+import { DONE_WHEN_NOTICE, type EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
 
 const memberId = "00000000-0000-4000-8000-000000000001";
 
@@ -15,6 +15,7 @@ const eligibleIssue: EligibleIssueProjection = {
   comparisonPoints: 5,
   reservePoints: 5,
   asksOutsideRepository: false,
+  doneWhen: null,
   createdAt: "2026-09-09T00:00:00.000Z",
 };
 
@@ -96,6 +97,22 @@ describe("GET /api/issues", () => {
     expect(rows.map((row) => [row.id, row.asksOutsideRepository])).toEqual([
       [markedIssue.id, true],
       [eligibleIssue.id, false],
+    ]);
+  });
+
+  it("answers each row's done-when statement as the query projected it", async () => {
+    const doneWhen = { text: "Done when the board reads every row.", notice: DONE_WHEN_NOTICE };
+    const statedIssue = { ...eligibleIssue, id: "00000000-0000-4000-8000-00000000000c", doneWhen };
+    const dependencies = issueDependencies({
+      listEligibleIssues: vi.fn().mockResolvedValue([statedIssue, eligibleIssue]),
+    });
+
+    const response = await createIssuesGetHandler(dependencies)(issuesRequest());
+
+    const rows = (await response.json()) as EligibleIssueProjection[];
+    expect(rows.map((row) => [row.id, row.doneWhen])).toEqual([
+      [statedIssue.id, doneWhen],
+      [eligibleIssue.id, null],
     ]);
   });
 

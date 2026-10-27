@@ -24,6 +24,7 @@ describe("eligible issue card", () => {
           claimState: "CLAIMED",
           availableHeadroom: -3,
           asksOutsideRepository: false,
+          doneWhen: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -54,6 +55,7 @@ describe("eligible issue card", () => {
           claimState: "CLAIMED",
           availableHeadroom: -6,
           asksOutsideRepository: false,
+          doneWhen: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -82,6 +84,7 @@ describe("eligible issue card", () => {
           claimState: "CLAIMED",
           availableHeadroom: -3,
           asksOutsideRepository: false,
+          doneWhen: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -127,6 +130,7 @@ describe("eligible issue card", () => {
           comparisonPoints: 3,
           reservePoints: 3,
           asksOutsideRepository,
+          doneWhen: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -157,6 +161,7 @@ describe("eligible issue card", () => {
             comparisonPoints: 3 + index,
             reservePoints: 3 + index,
             asksOutsideRepository: true,
+            doneWhen: null,
             createdAt: "2026-09-01T10:00:00.000Z",
           }}
         />,
@@ -188,6 +193,7 @@ describe("eligible issue card", () => {
           comparisonPoints: 1,
           reservePoints: 1,
           asksOutsideRepository: false,
+          doneWhen: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -217,6 +223,7 @@ describe("eligible issue card", () => {
           comparisonPoints: 5,
           reservePoints: 8,
           asksOutsideRepository: false,
+          doneWhen: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -243,6 +250,7 @@ describe("eligible issue card", () => {
           comparisonPoints: 5,
           reservePoints: 8,
           asksOutsideRepository: false,
+          doneWhen: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -266,6 +274,7 @@ describe("eligible issue card", () => {
           comparisonPoints: 5,
           reservePoints: 8,
           asksOutsideRepository: false,
+          doneWhen: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -291,6 +300,7 @@ describe("eligible issue card", () => {
           comparisonPoints: 1,
           reservePoints: 1,
           asksOutsideRepository: false,
+          doneWhen: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -315,6 +325,7 @@ describe("eligible issue card", () => {
           reservePoints: 8,
           availableHeadroom: -4 / 7,
           asksOutsideRepository: false,
+          doneWhen: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -339,6 +350,7 @@ describe("eligible issue card", () => {
           reservePoints: 8,
           availableHeadroom: 1234.5,
           asksOutsideRepository: false,
+          doneWhen: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
