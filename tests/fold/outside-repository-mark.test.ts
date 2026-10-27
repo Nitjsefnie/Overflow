@@ -47,6 +47,13 @@ describe("outside-repository mark", () => {
     expect(foldedMarks(snapshot)).toEqual([true]);
   });
 
+  it("does not read the reserved label spelled in another case", () => {
+    const snapshot = markFixture();
+    snapshot.issues[0]!.labels.push(OUTSIDE_REPOSITORY_MARK_LABEL.replace(/\b[a-z]/g, (letter) => letter.toUpperCase()));
+
+    expect(foldedMarks(snapshot)).toEqual([false]);
+  });
+
   it("does not read a label that only resembles the reserved one", () => {
     const snapshot = markFixture();
     snapshot.issues[0]!.labels.push(`${OUTSIDE_REPOSITORY_MARK_LABEL} (maybe)`);
