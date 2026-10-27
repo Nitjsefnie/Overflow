@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createIssuesGetHandler } from "@/app/api/issues/route";
-import { DONE_WHEN_NOTICE, type EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
+import { AGENT_PROMPT_NOTICE, DONE_WHEN_NOTICE, RECOMMENDED_MODEL_NOTICE, type EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
 
 const memberId = "00000000-0000-4000-8000-000000000001";
 
@@ -16,6 +16,8 @@ const eligibleIssue: EligibleIssueProjection = {
   reservePoints: 5,
   asksOutsideRepository: false,
   doneWhen: null,
+  agentPrompt: null,
+  recommendedModel: null,
   createdAt: "2026-09-09T00:00:00.000Z",
 };
 
@@ -114,6 +116,26 @@ describe("GET /api/issues", () => {
       [statedIssue.id, doneWhen],
       [eligibleIssue.id, null],
     ]);
+  });
+
+  it("answers each row's agent prompt and recommended model as the query projected them, null when absent", async () => {
+    const agentPrompt = { text: "Agent prompt: run the suite.", notice: AGENT_PROMPT_NOTICE };
+    const recommendedModel = { text: "Opus 5", notice: RECOMMENDED_MODEL_NOTICE };
+    const advisedIssue = { ...eligibleIssue, id: "00000000-0000-4000-8000-00000000000d", agentPrompt, recommendedModel };
+    const promptOnlyIssue = { ...eligibleIssue, id: "00000000-0000-4000-8000-00000000000e", agentPrompt };
+    const dependencies = issueDependencies({
+      listEligibleIssues: vi.fn().mockResolvedValue([advisedIssue, promptOnlyIssue, eligibleIssue]),
+    });
+
+    const response = await createIssuesGetHandler(dependencies)(issuesRequest());
+
+    const rows = (await response.json()) as Record<string, unknown>[];
+    expect(rows.map((row) => [row.id, row.agentPrompt, row.recommendedModel])).toEqual([
+      [advisedIssue.id, agentPrompt, recommendedModel],
+      [promptOnlyIssue.id, agentPrompt, null],
+      [eligibleIssue.id, null, null],
+    ]);
+    expect(rows.every((row) => "agentPrompt" in row && "recommendedModel" in row)).toBe(true);
   });
 
   it("passes the repository and opening label filters through to the query", async () => {

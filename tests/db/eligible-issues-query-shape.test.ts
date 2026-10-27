@@ -5,11 +5,13 @@ import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 import { createIssuesGetHandler } from "@/app/api/issues/route";
-import { DONE_WHEN_NOTICE, listEligibleIssues } from "@/lib/dashboard/eligible-issues";
+import { AGENT_PROMPT_NOTICE, DONE_WHEN_NOTICE, RECOMMENDED_MODEL_NOTICE, listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 import type { DashboardSql } from "@/lib/dashboard/queries";
 import type { EligibleIssueFilters, EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
 
 const AURORA_DONE_WHEN = "Done when the cache replays\n<strong>every</strong> tide.";
+const BOREALIS_AGENT_PROMPT = "Agent prompt: replay the cache\n<em>twice</em>.";
+const CASCADE_RECOMMENDED_MODEL = "Opus 5";
 
 /**
  * Two load-independent pins on the eligible-issues query, per the
@@ -99,6 +101,14 @@ describe("eligible issues query shape against PostgreSQL", () => {
       ["aurora open five", { text: AURORA_DONE_WHEN, notice: DONE_WHEN_NOTICE }],
     ]);
     expect(allBoard.filter((row) => row.doneWhen === null)).toHaveLength(allBoard.length - 1);
+    // Each advice column rides on its own row only, under its own notice, so a column read off the wrong one
+    // (or swapped with its sibling) fails here.
+    expect(allBoard.filter((row) => row.agentPrompt !== null).map((row) => [row.title, row.agentPrompt])).toEqual([
+      ["borealis open two", { text: BOREALIS_AGENT_PROMPT, notice: AGENT_PROMPT_NOTICE }],
+    ]);
+    expect(allBoard.filter((row) => row.recommendedModel !== null).map((row) => [row.title, row.recommendedModel])).toEqual([
+      ["cascade outsider ten one", { text: CASCADE_RECOMMENDED_MODEL, notice: RECOMMENDED_MODEL_NOTICE }],
+    ]);
 
     const openBoard = await listEligibleIssues(seeded.viewerId);
     // Cascade's +20 settled balance leads despite its -10 headroom and lower
@@ -239,6 +249,8 @@ select
   issues.claim_assignee_github_login,
   issues.asks_outside_repository,
   issues.done_when,
+  issues.agent_prompt,
+  issues.recommended_model,
   coalesce((select balances.balance from balances where balances.account_id = sponsors.id), 0) as settled_balance,
   (
     coalesce((select balances.balance from balances where balances.account_id = sponsors.id), 0)
@@ -304,6 +316,8 @@ async function originalShapeReference(
       reservePoints: Number(row.opening_reserve_points),
       asksOutsideRepository: row.asks_outside_repository === true,
       doneWhen: row.done_when === null ? null : { text: String(row.done_when), notice: DONE_WHEN_NOTICE },
+      agentPrompt: row.agent_prompt === null ? null : { text: String(row.agent_prompt), notice: AGENT_PROMPT_NOTICE },
+      recommendedModel: row.recommended_model === null ? null : { text: String(row.recommended_model), notice: RECOMMENDED_MODEL_NOTICE },
       createdAt: timestampText(row.created_at),
     };
     if (row.sponsor_login !== undefined) {
@@ -446,7 +460,7 @@ async function seedShapeWorld(): Promise<void> {
   // Borealis: nothing reserved at all. The closed claimed five-pointer is
   // reserved by nobody — only OPEN issues draw headroom — and never boards.
   const borealisOne = await insertRepository("borealis/one", borealisId);
-  await insertIssue({ repositoryId: borealisOne, issueNumber: 1, title: "borealis open two", label: "S", points: 2, createdAt: "2026-06-06T00:00:00.000Z" });
+  await insertIssue({ repositoryId: borealisOne, issueNumber: 1, title: "borealis open two", label: "S", points: 2, createdAt: "2026-06-06T00:00:00.000Z", agentPrompt: BOREALIS_AGENT_PROMPT });
   await insertIssue({
     repositoryId: borealisOne, issueNumber: 2, title: "borealis open seven", label: "M", points: 7,
     createdAt: "2026-06-07T00:00:00.000Z", asksOutsideRepository: true,
@@ -466,7 +480,7 @@ async function seedShapeWorld(): Promise<void> {
   });
   await insertIssue({
     repositoryId: cascadeOne, issueNumber: 2, title: "cascade outsider ten one", label: "L", points: 10,
-    createdAt: "2026-06-10T00:00:00.000Z", assigneeLogin: "merlin", assigneeId: 930_104,
+    createdAt: "2026-06-10T00:00:00.000Z", assigneeLogin: "merlin", assigneeId: 930_104, recommendedModel: CASCADE_RECOMMENDED_MODEL,
   });
   await insertIssue({
     repositoryId: cascadeOne, issueNumber: 3, title: "cascade outsider ten two", label: "L", points: 10,
@@ -521,19 +535,23 @@ async function insertIssue(input: {
   state?: "OPEN" | "CLOSED";
   asksOutsideRepository?: boolean;
   doneWhen?: string;
+  agentPrompt?: string;
+  recommendedModel?: string;
 }): Promise<void> {
   const githubIssueId = nextExternalId();
   await sql`
     insert into issues (
       github_issue_id, repository_id, issue_number, title, body, url, state,
       opening_label, opening_comparison_points, opening_reserve_points, created_at,
-      claim_assignee_github_login, claim_assignee_github_user_id, asks_outside_repository, done_when
+      claim_assignee_github_login, claim_assignee_github_user_id, asks_outside_repository, done_when,
+      agent_prompt, recommended_model
     )
     values (
       ${githubIssueId}, ${input.repositoryId}, ${input.issueNumber}, ${input.title}, ${""},
       ${`https://github.com/fixture/issues/${githubIssueId}`}, ${input.state ?? "OPEN"},
       ${input.label}, ${input.points}, ${input.points}, ${input.createdAt},
-      ${input.assigneeLogin ?? null}, ${input.assigneeId ?? null}, ${input.asksOutsideRepository ?? false}, ${input.doneWhen ?? null}
+      ${input.assigneeLogin ?? null}, ${input.assigneeId ?? null}, ${input.asksOutsideRepository ?? false}, ${input.doneWhen ?? null},
+      ${input.agentPrompt ?? null}, ${input.recommendedModel ?? null}
     )
   `;
 }

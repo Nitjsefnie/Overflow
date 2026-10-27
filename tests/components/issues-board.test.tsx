@@ -55,6 +55,8 @@ function issueRow(n: number): Record<string, unknown> {
     available_headroom: 3,
     asks_outside_repository: false,
     done_when: null,
+    agent_prompt: null,
+    recommended_model: null,
     created_at: "2026-09-09T00:00:00.000Z",
   };
 }

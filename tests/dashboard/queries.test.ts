@@ -22,7 +22,7 @@ import {
   type DashboardSql,
 } from "@/lib/dashboard/queries";
 import { listBannedAccounts } from "@/lib/moderation/banned-accounts";
-import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
+import { AGENT_PROMPT_NOTICE, RECOMMENDED_MODEL_NOTICE, listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 
 type QueryCapture = { text: string; values: unknown[] };
@@ -959,7 +959,7 @@ describe("dashboard projections", () => {
           opening_label: "delta",
           opening_comparison_points: 6,
           opening_reserve_points: 9,
-          asks_outside_repository: false, done_when: null,
+          asks_outside_repository: false, done_when: null, agent_prompt: null, recommended_model: null,
           created_at: "2026-09-01T00:00:00.000Z",
         },
         {
@@ -972,7 +972,7 @@ describe("dashboard projections", () => {
           opening_label: "delta",
           opening_comparison_points: 6,
           opening_reserve_points: 9,
-          asks_outside_repository: false, done_when: null,
+          asks_outside_repository: false, done_when: null, agent_prompt: null, recommended_model: null,
           created_at: "2026-09-02T00:00:00.000Z",
         },
         {
@@ -985,7 +985,7 @@ describe("dashboard projections", () => {
           opening_label: "stream",
           opening_comparison_points: 2,
           opening_reserve_points: 4,
-          asks_outside_repository: false, done_when: null,
+          asks_outside_repository: false, done_when: null, agent_prompt: null, recommended_model: null,
           created_at: "2026-08-30T00:00:00.000Z",
         },
       ],
@@ -1035,6 +1035,54 @@ describe("dashboard projections", () => {
     }]]);
 
     await expect(listEligibleIssues("member-1", {}, { sql })).rejects.toThrow("Done-when statement was neither text nor null.");
+  });
+
+  it.each([7, undefined])("refuses a board row whose agent prompt is %s, neither text nor null", async (agentPrompt) => {
+    const { sql } = sqlHarness([[{
+      id: "issue-1", repository_name: "co-op/harbour", issue_number: 1, title: "Prompt", url: "https://github.com/co-op/harbour/issues/1",
+      opening_name: "Promise band", opening_label: "delta", opening_comparison_points: 1, opening_reserve_points: 1,
+      asks_outside_repository: false, done_when: null, agent_prompt: agentPrompt, recommended_model: null,
+      created_at: "2026-09-01T00:00:00.000Z",
+    }]]);
+
+    await expect(listEligibleIssues("member-1", {}, { sql })).rejects.toThrow("Agent prompt was neither text nor null.");
+  });
+
+  it.each([7, undefined])("refuses a board row whose recommended model is %s, neither text nor null", async (recommendedModel) => {
+    const { sql } = sqlHarness([[{
+      id: "issue-1", repository_name: "co-op/harbour", issue_number: 1, title: "Model", url: "https://github.com/co-op/harbour/issues/1",
+      opening_name: "Promise band", opening_label: "delta", opening_comparison_points: 1, opening_reserve_points: 1,
+      asks_outside_repository: false, done_when: null, agent_prompt: null, recommended_model: recommendedModel,
+      created_at: "2026-09-01T00:00:00.000Z",
+    }]]);
+
+    await expect(listEligibleIssues("member-1", {}, { sql })).rejects.toThrow("Recommended model was neither text nor null.");
+  });
+
+  it("projects each advice column to its own field with its own notice, and null to null", async () => {
+    const base = {
+      repository_name: "co-op/harbour", title: "Advice", opening_name: "Promise band", opening_label: "delta",
+      opening_comparison_points: 1, opening_reserve_points: 1, asks_outside_repository: false, done_when: null,
+      created_at: "2026-09-01T00:00:00.000Z",
+    };
+    const { sql } = sqlHarness([[
+      { ...base, id: "both", issue_number: 1, url: "https://github.com/co-op/harbour/issues/1", agent_prompt: "Agent prompt: run the suite", recommended_model: "Opus 5" },
+      { ...base, id: "prompt-only", issue_number: 2, url: "https://github.com/co-op/harbour/issues/2", agent_prompt: "Agent prompt: only me", recommended_model: null },
+      { ...base, id: "model-only", issue_number: 3, url: "https://github.com/co-op/harbour/issues/3", agent_prompt: null, recommended_model: "Sonnet 5.5" },
+      { ...base, id: "neither", issue_number: 4, url: "https://github.com/co-op/harbour/issues/4", agent_prompt: null, recommended_model: null },
+    ]]);
+
+    const issues = await listEligibleIssues("member-1", {}, { sql });
+
+    expect(issues.map((issue) => [issue.id, issue.agentPrompt, issue.recommendedModel])).toEqual([
+      ["both", { text: "Agent prompt: run the suite", notice: AGENT_PROMPT_NOTICE }, { text: "Opus 5", notice: RECOMMENDED_MODEL_NOTICE }],
+      ["prompt-only", { text: "Agent prompt: only me", notice: AGENT_PROMPT_NOTICE }, null],
+      ["model-only", null, { text: "Sonnet 5.5", notice: RECOMMENDED_MODEL_NOTICE }],
+      ["neither", null, null],
+    ]);
+    expect(AGENT_PROMPT_NOTICE.trim()).not.toBe("");
+    expect(RECOMMENDED_MODEL_NOTICE.trim()).not.toBe("");
+    expect(AGENT_PROMPT_NOTICE).not.toBe(RECOMMENDED_MODEL_NOTICE);
   });
 
   it("caps the board page size at the documented maximum and floors fractional pages", async () => {
@@ -1091,7 +1139,7 @@ describe("dashboard projections", () => {
           opening_label: "shoal",
           opening_comparison_points: 4,
           opening_reserve_points: 6,
-          asks_outside_repository: false, done_when: null,
+          asks_outside_repository: false, done_when: null, agent_prompt: null, recommended_model: null,
           claim_assignee_github_login: "contributor",
           available_headroom: -3,
           created_at: "2026-09-01T00:00:00.000Z",
@@ -1653,7 +1701,7 @@ describe("ambiguous claim assignee sentinel", () => {
           opening_label: "delta",
           opening_comparison_points: 3,
           opening_reserve_points: 6,
-          asks_outside_repository: false, done_when: null,
+          asks_outside_repository: false, done_when: null, agent_prompt: null, recommended_model: null,
           claim_assignee_github_login: AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN,
           available_headroom: -3,
           created_at: "2026-09-01T00:00:00.000Z",
@@ -1722,7 +1770,7 @@ describe("ambiguous claim assignee sentinel", () => {
           opening_label: "delta",
           opening_comparison_points: 3,
           opening_reserve_points: 6,
-          asks_outside_repository: false, done_when: null,
+          asks_outside_repository: false, done_when: null, agent_prompt: null, recommended_model: null,
           claim_assignee_github_login: AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN,
           available_headroom: -3,
           created_at: "2026-09-01T00:00:00.000Z",
@@ -1783,7 +1831,7 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
         claim_assignee_github_login text,
         claim_assignee_github_user_id bigint,
         created_at timestamptz,
-        asks_outside_repository boolean not null default false, done_when text
+        asks_outside_repository boolean not null default false, done_when text, agent_prompt text, recommended_model text
       );
       create table balances (account_id text, balance integer);
       create table account_credit_limits (account_id text, repaid_debt numeric, credit_limit numeric);

@@ -3,7 +3,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { IssueCard } from "@/components/issue-card";
-import { DONE_WHEN_NOTICE, listEligibleIssues, type EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
+import { AGENT_PROMPT_NOTICE, DONE_WHEN_NOTICE, RECOMMENDED_MODEL_NOTICE, listEligibleIssues, type EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
 import type { DashboardSql } from "@/lib/dashboard/queries";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 
@@ -27,6 +27,8 @@ describe("eligible issue card", () => {
           availableHeadroom: -3,
           asksOutsideRepository: false,
           doneWhen: null,
+          agentPrompt: null,
+          recommendedModel: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -58,6 +60,8 @@ describe("eligible issue card", () => {
           availableHeadroom: -6,
           asksOutsideRepository: false,
           doneWhen: null,
+          agentPrompt: null,
+          recommendedModel: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -87,6 +91,8 @@ describe("eligible issue card", () => {
           availableHeadroom: -3,
           asksOutsideRepository: false,
           doneWhen: null,
+          agentPrompt: null,
+          recommendedModel: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -133,6 +139,8 @@ describe("eligible issue card", () => {
           reservePoints: 3,
           asksOutsideRepository,
           doneWhen: null,
+          agentPrompt: null,
+          recommendedModel: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -164,6 +172,8 @@ describe("eligible issue card", () => {
             reservePoints: 3 + index,
             asksOutsideRepository: true,
             doneWhen: null,
+            agentPrompt: null,
+            recommendedModel: null,
             createdAt: "2026-09-01T10:00:00.000Z",
           }}
         />,
@@ -196,6 +206,8 @@ describe("eligible issue card", () => {
           reservePoints: 1,
           asksOutsideRepository: false,
           doneWhen: null,
+          agentPrompt: null,
+          recommendedModel: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -226,6 +238,8 @@ describe("eligible issue card", () => {
           reservePoints: 8,
           asksOutsideRepository: false,
           doneWhen: null,
+          agentPrompt: null,
+          recommendedModel: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -253,6 +267,8 @@ describe("eligible issue card", () => {
           reservePoints: 8,
           asksOutsideRepository: false,
           doneWhen: null,
+          agentPrompt: null,
+          recommendedModel: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -277,6 +293,8 @@ describe("eligible issue card", () => {
           reservePoints: 8,
           asksOutsideRepository: false,
           doneWhen: null,
+          agentPrompt: null,
+          recommendedModel: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -303,6 +321,8 @@ describe("eligible issue card", () => {
           reservePoints: 1,
           asksOutsideRepository: false,
           doneWhen: null,
+          agentPrompt: null,
+          recommendedModel: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -336,7 +356,7 @@ describe("eligible issue card", () => {
     const sql = { unsafe: async () => [{
       id: "issue-7", repository_name: "co-op/harbour", issue_number: 7, title: "Statement", url: "https://github.com/co-op/harbour/issues/7",
       opening_name: "Promise band", opening_label: "delta", opening_comparison_points: 1, opening_reserve_points: 1,
-      asks_outside_repository: false, done_when: "Done when the tide turns.", created_at: "2026-09-01T00:00:00.000Z",
+      asks_outside_repository: false, done_when: "Done when the tide turns.", agent_prompt: null, recommended_model: null, created_at: "2026-09-01T00:00:00.000Z",
     }] } as unknown as DashboardSql;
     const [projected] = await listEligibleIssues("member-1", {}, { sql });
     expect(projected!.doneWhen).toEqual({ text: "Done when the tide turns.", notice: DONE_WHEN_NOTICE });
@@ -345,6 +365,64 @@ describe("eligible issue card", () => {
     const label = container.querySelector(".issue-card-done-when p");
     expect(DONE_WHEN_NOTICE.trim()).not.toBe("");
     expect(label?.textContent).toContain(DONE_WHEN_NOTICE);
+  });
+
+  it("renders the sponsor's agent prompt as text inside the reading column, never as markup, under its own notice", () => {
+    const text = "Agent prompt: run <strong>pnpm test</strong>\n  and  pnpm lint";
+    const { container } = render(<IssueCard issue={adviceIssue({ agentPrompt: { text, notice: AGENT_PROMPT_NOTICE } })} />);
+
+    const blocks = container.querySelectorAll(".issue-card-agent-prompt");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.parentElement?.classList.contains("issue-card-main")).toBe(true);
+    expect(blocks[0]!.querySelector("pre")?.textContent).toBe(text);
+    expect(blocks[0]!.querySelector("p")?.textContent).toContain(AGENT_PROMPT_NOTICE);
+    expect(container.querySelector(".issue-card-recommended-model")).toBeNull();
+    expect(document.querySelector("strong")).toBeNull();
+  });
+
+  it("renders the sponsor's recommended model as text inside the reading column, never as markup, under its own notice", () => {
+    const text = "<em>Opus 5</em>";
+    const { container } = render(<IssueCard issue={adviceIssue({ recommendedModel: { text, notice: RECOMMENDED_MODEL_NOTICE } })} />);
+
+    const blocks = container.querySelectorAll(".issue-card-recommended-model");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.parentElement?.classList.contains("issue-card-main")).toBe(true);
+    expect(blocks[0]!.querySelector("pre")?.textContent).toBe(text);
+    expect(blocks[0]!.querySelector("p")?.textContent).toContain(RECOMMENDED_MODEL_NOTICE);
+    expect(container.querySelector(".issue-card-agent-prompt")).toBeNull();
+    expect(document.querySelector("em")).toBeNull();
+  });
+
+  it("renders neither advice block for an issue without advice, leaving the card as it was", () => {
+    const { container } = render(<IssueCard issue={adviceIssue({})} />);
+
+    expect(container.querySelector(".issue-card-agent-prompt")).toBeNull();
+    expect(container.querySelector(".issue-card-recommended-model")).toBeNull();
+    expect(Array.from(container.querySelectorAll(".issue-card-main > *")).map((node) => node.tagName + "." + node.className)).toEqual([
+      "DIV.issue-card-heading",
+      "DIV.issue-card-done-when",
+      "P.mono-meta",
+    ]);
+  });
+
+  it("renders each advice block under the notice the board projection answers", async () => {
+    const sql = { unsafe: async () => [{
+      id: "issue-8", repository_name: "co-op/harbour", issue_number: 8, title: "Advice", url: "https://github.com/co-op/harbour/issues/8",
+      opening_name: "Promise band", opening_label: "delta", opening_comparison_points: 1, opening_reserve_points: 1,
+      asks_outside_repository: false, done_when: null, agent_prompt: "Agent prompt: start with the tests.", recommended_model: "Haiku 4.5",
+      created_at: "2026-09-01T00:00:00.000Z",
+    }] } as unknown as DashboardSql;
+    const [projected] = await listEligibleIssues("member-1", {}, { sql });
+    expect(projected!.agentPrompt).toEqual({ text: "Agent prompt: start with the tests.", notice: AGENT_PROMPT_NOTICE });
+    expect(projected!.recommendedModel).toEqual({ text: "Haiku 4.5", notice: RECOMMENDED_MODEL_NOTICE });
+
+    const { container } = render(<IssueCard issue={projected!} />);
+    const prompt = container.querySelector(".issue-card-agent-prompt");
+    const model = container.querySelector(".issue-card-recommended-model");
+    expect(prompt?.querySelector("p")?.textContent).toContain(AGENT_PROMPT_NOTICE);
+    expect(prompt?.querySelector("pre")?.textContent).toBe("Agent prompt: start with the tests.");
+    expect(model?.querySelector("p")?.textContent).toContain(RECOMMENDED_MODEL_NOTICE);
+    expect(model?.querySelector("pre")?.textContent).toBe("Haiku 4.5");
   });
 
   it("rounds a fractional headroom to the digits a reader uses", () => {
@@ -363,6 +441,8 @@ describe("eligible issue card", () => {
           availableHeadroom: -4 / 7,
           asksOutsideRepository: false,
           doneWhen: null,
+          agentPrompt: null,
+          recommendedModel: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -388,6 +468,8 @@ describe("eligible issue card", () => {
           availableHeadroom: 1234.5,
           asksOutsideRepository: false,
           doneWhen: null,
+          agentPrompt: null,
+          recommendedModel: null,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -407,6 +489,10 @@ function factValues(): string[] {
 }
 
 function doneWhenIssue(doneWhen: EligibleIssueProjection["doneWhen"]): EligibleIssueProjection {
+  return adviceIssue({ doneWhen });
+}
+
+function adviceIssue(overrides: Partial<EligibleIssueProjection>): EligibleIssueProjection {
   return {
     id: "issue-21",
     repositoryName: "co-op/harbour",
@@ -418,7 +504,10 @@ function doneWhenIssue(doneWhen: EligibleIssueProjection["doneWhen"]): EligibleI
     comparisonPoints: 3,
     reservePoints: 3,
     asksOutsideRepository: false,
-    doneWhen,
+    doneWhen: null,
+    agentPrompt: null,
+    recommendedModel: null,
     createdAt: "2026-09-01T10:00:00.000Z",
+    ...overrides,
   };
 }

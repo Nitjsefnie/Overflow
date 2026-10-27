@@ -35,6 +35,18 @@ export function IssueCard({ issue }: IssueCardProps) {
             </>
           )}
         </div>
+        {issue.agentPrompt === null ? null : (
+          <div className="issue-card-agent-prompt">
+            <p>The sponsor&apos;s agent prompt. {issue.agentPrompt.notice}</p>
+            <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{issue.agentPrompt.text}</pre>
+          </div>
+        )}
+        {issue.recommendedModel === null ? null : (
+          <div className="issue-card-recommended-model">
+            <p>The sponsor&apos;s recommended model. {issue.recommendedModel.notice}</p>
+            <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{issue.recommendedModel.text}</pre>
+          </div>
+        )}
         {issue.sponsorLogin !== undefined ? <p>Sponsor: {issue.sponsorLogin}</p> : null}
         {issue.claimState !== undefined ? <p>Claim: {claimPhrase(issue.claimState, issue.assigneeGitHubLogin)}</p> : null}
         {issue.availableHeadroom !== undefined ? <p>Headroom: {formatSigned(issue.availableHeadroom)}</p> : null}
