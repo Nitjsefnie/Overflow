@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { randomBytes } from "node:crypto";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
 import { WorkMailPanel } from "@/components/work-mail-panel";
@@ -44,6 +44,11 @@ function panel(): HTMLElement {
 
 async function stateNode(): Promise<HTMLElement> {
   return within(panel()).findByTestId("work-mail-state");
+}
+
+/** Waits for the given state: the node can already show the previous one while a reload is in flight. */
+async function expectState(expected: string): Promise<void> {
+  await waitFor(() => expect(within(panel()).getByTestId("work-mail-state")).toHaveAttribute("data-work-mail-state", expected));
 }
 
 beforeEach(() => {
@@ -128,20 +133,20 @@ describe("work mail panel", () => {
       fireEvent.click(within(panel()).getByRole("button", { name: "Send confirmation link" }));
     });
 
-    expect(within(panel()).getByRole("status")).toBeVisible();
+    expect(await within(panel()).findByRole("status")).toBeVisible();
     expect(within(panel()).queryByRole("alert")).not.toBeInTheDocument();
-    expect(await stateNode()).toHaveAttribute("data-work-mail-state", "pending");
+    await expectState("pending");
     expect(fetchMock.mock.calls[1]).toEqual(["/api/account/work-mail", {
       method: "POST",
       headers: { "content-type": "application/json" },
       credentials: "same-origin",
       body: JSON.stringify({ address: "typed@mail.example.org" }),
     }]);
-    expect(requests()).toEqual([
+    await waitFor(() => expect(requests()).toEqual([
       ["/api/account/work-mail", "GET"],
       ["/api/account/work-mail", "POST"],
       ["/api/account/work-mail", "GET"],
-    ]);
+    ]));
   });
 
   it("shows the route's refusal in an alert and reloads nothing", async () => {
@@ -158,7 +163,7 @@ describe("work mail panel", () => {
       fireEvent.click(within(panel()).getByRole("button", { name: "Send confirmation link" }));
     });
 
-    expect(within(panel()).getByRole("alert").textContent).toBe(message);
+    expect((await within(panel()).findByRole("alert")).textContent).toBe(message);
     expect(within(panel()).queryByRole("status")).not.toBeInTheDocument();
     expect(requests()).toEqual([["/api/account/work-mail", "GET"], ["/api/account/work-mail", "POST"]]);
   });
@@ -174,8 +179,8 @@ describe("work mail panel", () => {
       fireEvent.click(within(panel()).getByRole("button", { name: "Remove address" }));
     });
 
-    expect(await stateNode()).toHaveAttribute("data-work-mail-state", "none");
-    expect(within(panel()).getByRole("status")).toBeVisible();
+    await expectState("none");
+    expect(await within(panel()).findByRole("status")).toBeVisible();
     expect(fetchMock.mock.calls[1]).toEqual(["/api/account/work-mail", { method: "DELETE", credentials: "same-origin" }]);
   });
 
@@ -190,7 +195,7 @@ describe("work mail panel", () => {
       fireEvent.click(within(panel()).getByRole("button", { name: "Remove address" }));
     });
 
-    expect(within(panel()).getByRole("alert")).toBeVisible();
+    expect(await within(panel()).findByRole("alert")).toBeVisible();
     expect(await stateNode()).toHaveAttribute("data-work-mail-state", "confirmed");
   });
 
@@ -210,9 +215,12 @@ describe("work mail panel", () => {
     const link = new URL(mailed);
     window.history.replaceState(null, "", `${link.pathname}${link.search}${link.hash}`);
     expect(window.location.pathname).toBe("/dashboard");
-    fetchMock.mockImplementation((url: string, init?: RequestInit) => Promise.resolve(init?.method === "POST"
-      ? Response.json({ confirmed: true })
-      : state(true, { address: "reader@mail.example.org", confirmed: hashAtRequest.length > 1 })));
+    let confirmedOnServer = false;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method !== "POST") return Promise.resolve(state(true, { address: "reader@mail.example.org", confirmed: confirmedOnServer }));
+      confirmedOnServer = true;
+      return Promise.resolve(Response.json({ confirmed: true }));
+    });
 
     render(<WorkMailPanel />);
 
@@ -227,8 +235,8 @@ describe("work mail panel", () => {
     expect(hashAtRequest[confirm]).toBe("");
     expect([window.location.pathname, window.location.search, window.location.hash]).toEqual(["/dashboard", "", ""]);
     // The state is read again after the confirmation lands, so it shows confirmed.
-    expect(requests().filter(([url]) => url === "/api/account/work-mail")).toHaveLength(2);
-    expect(await stateNode()).toHaveAttribute("data-work-mail-state", "confirmed");
+    await waitFor(() => expect(requests().filter(([url]) => url === "/api/account/work-mail")).toHaveLength(2));
+    await expectState("confirmed");
   });
 
   it("alerts on a refused confirmation and still clears the token", async () => {

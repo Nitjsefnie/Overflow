@@ -3,7 +3,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
 import { buildDigestMessage } from "@/lib/accounts/work-mail-transport";
@@ -108,9 +108,8 @@ describe("work mail unsubscribe page", () => {
       answer(Response.json({ received: true }));
     });
 
+    await waitFor(() => expect(liveRegion().querySelector(".feedback.success")).not.toBeNull());
     expect(fetchMock.mock.calls).toEqual([[`/api/work-mail/unsubscribe?token=${encodeURIComponent(token)}`, { method: "POST" }]]);
-    expect(liveRegion()).not.toBeEmptyDOMElement();
-    expect(liveRegion().querySelector(".feedback.success")).not.toBeNull();
     expect(button).toBeDisabled();
     expect(jsdomErrors).toEqual([]);
     expect(window.location.pathname).toBe("/work-mail/unsubscribe");
@@ -128,7 +127,7 @@ describe("work mail unsubscribe page", () => {
       fireEvent.click(screen.getByRole("button", { name: "Unsubscribe" }));
     });
 
-    expect(liveRegion().querySelector(".feedback.error")).not.toBeNull();
+    await waitFor(() => expect(liveRegion().querySelector(".feedback.error")).not.toBeNull());
     expect(screen.getByRole("button", { name: "Unsubscribe" })).toBeEnabled();
   });
 
