@@ -150,7 +150,9 @@ describe("per-repository share of a sponsor's sweep request budget", () => {
     const small = await insertRepository(sponsorId);
     const repositories = [...large, small];
     const n = repositories.length;
-    // Sized well above the per-run overhead (a verify and a listing page).
+    // Sized well above the per-run overhead: every run spends a verify and a
+    // listing page before it can stage a subject, so a share at or below that
+    // overhead makes no walk progress under any per-window split.
     const share = Math.floor(budget / n);
     const issueCounts = new Map([...large.map((r) => [r.id, 60] as const), [small.id, 2]]);
 
