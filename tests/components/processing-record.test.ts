@@ -47,6 +47,12 @@ describe("processing record step-keeper", () => {
     expect(new Set(recordIds)).toEqual(new Set(sharedIds));
   });
 
+  it("records opt-in work mail as its own activity under consent", () => {
+    const workMail = PROCESSING_ACTIVITIES.filter(({ identifier }) => identifier === "contributor_work_mail");
+    expect(workMail.map(({ basis }) => basis)).toEqual(["consent"]);
+    expect(PROCESSING_ACTIVITIES.filter(({ basis }) => basis === "consent")).toEqual(workMail);
+  });
+
   it("renders purpose labels from the shared module inside the purposes list", async () => {
     vi.resetModules();
     vi.doMock("@/lib/processing-activities", () => ({

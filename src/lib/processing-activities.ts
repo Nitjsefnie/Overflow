@@ -1,4 +1,4 @@
-export type ProcessingBasis = "contract" | "legitimate interests";
+export type ProcessingBasis = "contract" | "legitimate interests" | "consent";
 
 export interface ProcessingActivity {
   readonly identifier: string;
@@ -35,6 +35,13 @@ export const PROCESSING_ACTIVITIES = [
     basis: "legitimate interests",
     noticeLabel:
       "automated scoring and moderation, described under Scoring and sanctions below — under legitimate interests: keeping the ledger's records accurate and its rules enforceable",
+  },
+  {
+    identifier: "contributor_work_mail",
+    name: "Work notification mail a member opts in to",
+    basis: "consent",
+    noticeLabel:
+      "work notification mail, described under Work notification mail above — the address you typed in, its confirmation, and when you were last mailed — under consent: you give it by confirming the address and withdraw it by removing the address or using a mail's unsubscribe link",
   },
 ] as const satisfies readonly ProcessingActivity[];
 

@@ -1,15 +1,11 @@
 import Link from "next/link";
 import { PublicAppShell } from "@/components/app-shell";
-import {
-  HOSTED_INSTANCE_ORIGIN,
-  HOSTED_ISSUES_URL,
-  HOSTED_SENSITIVE_URL,
-  readControllerIdentity,
-} from "@/lib/controller-config";
+import { HOSTED_INSTANCE_ORIGIN, HOSTED_ISSUES_URL, HOSTED_SENSITIVE_URL, readControllerIdentity } from "@/lib/controller-config";
 import { formatSweepWindow, readSweepWindowMs } from "@/lib/fold/sweep-request-budget";
 import { ACCOUNT_DATA_REVISION } from "@/lib/legal-revisions";
 import { PROCESSING_ACTIVITIES } from "@/lib/processing-activities";
 import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
+import { WorkMailDisclosure, WorkMailRecipient } from "@/components/work-mail-disclosure";
 
 /** Link text for a channel URL: the bare URL without its scheme. */
 function displayUrl(url: string): string {
@@ -127,7 +123,7 @@ export function AccountDataNotice() {
           contribute requests no permission at all. Signing in to register through the webhook route requests exactly
           one — the <code>admin:repo_hook</code> scope, which creating and removing Overflow&apos;s webhook on a repository
           you administer needs. App registration uses the contributor sign-in, which requests no permission.
-          Overflow reads no email address anywhere: it requests no email scope and reads no email endpoint.
+          Sign-in reads no email address: it requests no email scope and reads no email endpoint.
         </p>
         <ul>
           <li>your GitHub user id and login</li>
@@ -168,6 +164,7 @@ export function AccountDataNotice() {
         </p>
         <p>Overflow runs no analytics and no advertising scripts.</p>
       </section>
+      <WorkMailDisclosure />
 
       <section className="surface" aria-labelledby="account-data-usage-heading">
         <h2 id="account-data-usage-heading">What the tokens are used for</h2>
@@ -432,6 +429,7 @@ export function AccountDataNotice() {
             without the private half of the encryption key, which is not stored on Overflow&apos;s
             host and never travels with the copy; Discord receives no key
           </li>
+          <WorkMailRecipient />
         </ul>
         <p>
           Using this site from outside the US therefore means data is transferred to these
@@ -710,6 +708,7 @@ export function AccountDataNotice() {
           <li>your GitHub login, replaced with the placeholder (deleted account)</li>
           <li>Overflow&apos;s stored access token for your GitHub account</li>
           <li>your API token, if you have one</li>
+          <li>your work-mail address, if you added one, and your work-mail confirmation history</li>
           <li>
             each linked GitLab identity&apos;s personal access token and GitLab login, which the same
             placeholder replaces

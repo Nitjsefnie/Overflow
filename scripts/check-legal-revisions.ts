@@ -89,7 +89,11 @@ const LEGAL_PAGES: readonly string[] = [
 
 // Shared modules that supply text a reader is held to on a legal page. Keep
 // this inventory explicit: the commit walk checks changed paths, not imports.
-const SHARED_TEXT_MODULES: readonly string[] = ["src/lib/disputes.ts", "src/lib/sanctions.ts"];
+const SHARED_TEXT_MODULES: readonly string[] = [
+  "src/lib/disputes.ts",
+  "src/lib/sanctions.ts",
+  "src/components/work-mail-disclosure.tsx",
+];
 
 // Every path whose reader-facing wording is covered by the revision record.
 const LEGAL_TEXT_SOURCES: readonly string[] = [...LEGAL_PAGES, ...SHARED_TEXT_MODULES];

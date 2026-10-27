@@ -1,6 +1,7 @@
 /** @vitest-environment jsdom */
 
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
+import { randomBytes } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -61,6 +62,15 @@ function keptList(section: Element): Element {
   return kept;
 }
 
+const WORK_MAIL_HOST = "relay.mail-provider.example";
+
+// Built at run time: no credential-shaped literal is committed.
+function configureWorkMail(): void {
+  vi.stubEnv("OVERFLOW_CONTRIBUTOR_MAIL_SMTP_URL", `smtps://mailer:${randomBytes(12).toString("hex")}@${WORK_MAIL_HOST}`);
+  vi.stubEnv("OVERFLOW_CONTRIBUTOR_MAIL_FROM", "work@notify.example.org");
+  vi.stubEnv("OVERFLOW_CONTRIBUTOR_MAIL_DAILY_LIMIT", "40");
+}
+
 describe("account-data notice page", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -78,7 +88,7 @@ describe("account-data notice page", () => {
     expect(screen.getByRole("heading", { level: 1 })).toBe(heading);
 
     const sections = Array.from(main!.querySelectorAll("section.surface"));
-    expect(sections.length).toBe(13);
+    expect(sections.length).toBe(14);
     for (const section of sections) {
       const labelledBy = section.getAttribute("aria-labelledby");
       expect(labelledBy, "every section names the heading that labels it").toBeTruthy();
@@ -329,14 +339,32 @@ describe("account-data notice page", () => {
     expect(follows(controls, deletion), "deletion follows your controls").toBe(true);
   });
 
-  it("offers nothing that submits or collects an email address", async () => {
+  it.each([false, true])("offers nothing that submits or collects an email address (work mail configured: %s)", async (configured) => {
+    if (configured) configureWorkMail();
     await renderAccountDataPage();
 
+    expect(sectionLabelledBy("account-data-work-mail-heading")).toHaveAttribute("data-work-mail", configured ? "on" : "off");
     expect(document.querySelector("form")).toBeNull();
     const hrefs = Array.from(document.querySelectorAll("a[href]")).map(
       (anchor) => anchor.getAttribute("href") ?? "",
     );
     expect(hrefs.filter((href) => href.startsWith("mailto:") || /emails/i.test(href))).toEqual([]);
+  });
+
+  it("places the work-mail section after what sign-in stores, and names its host in the recipients list only when configured", async () => {
+    await renderAccountDataPage();
+    const stored = sectionLabelledBy("account-data-stored-heading");
+    expect(stored.nextElementSibling).toBe(sectionLabelledBy("account-data-work-mail-heading"));
+    const recipients = sectionLabelledBy("account-data-recipients-heading");
+    const offCount = recipients.querySelectorAll("ul > li").length;
+    expect(recipients.querySelector("[data-work-mail-host]")).toBeNull();
+
+    cleanup();
+    configureWorkMail();
+    await renderAccountDataPage();
+    const configured = sectionLabelledBy("account-data-recipients-heading");
+    expect(configured.querySelectorAll("ul > li")).toHaveLength(offCount + 1);
+    expect(configured.querySelector("ul > li [data-work-mail-host]")?.textContent).toBe(WORK_MAIL_HOST);
   });
 
   it("renders the sanction effects from the shared source, in the Scoring and sanctions section", async () => {
