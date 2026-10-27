@@ -3,8 +3,6 @@ import { formatInstant } from "@/lib/format-instant";
 import { plural } from "@/lib/plural";
 import type { SettledWorkStats } from "@/lib/public-stats";
 
-export const dynamic = "force-dynamic";
-
 function StatsSections({ stats }: { stats: SettledWorkStats }) {
   return (
     <>

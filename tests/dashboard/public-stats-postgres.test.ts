@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { runMigrations } from "../../scripts/migrate";
 import type { DashboardSql } from "@/lib/dashboard/queries";
 import { closeSql } from "@/lib/db/client";
 import { createSettledWorkReader, getSettledWorkStats } from "@/lib/public-stats";
@@ -21,14 +21,8 @@ describe("public settled work totals against PostgreSQL", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({ database: "overflow_public_stats_test", user: "overflow_public_stats_test" });
     container = started.container;
-    const migrationEnv: NodeJS.ProcessEnv = { ...process.env, OVERFLOW_DATABASE_URL: started.databaseUrl };
-    delete migrationEnv.DATABASE_URL;
-    delete migrationEnv.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD;
-    execFileSync("pnpm", ["db:migrate"], {
-      cwd: process.cwd(),
-      env: migrationEnv,
-    });
     process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
+    await runMigrations();
     sql = postgres(started.databaseUrl);
   });
 
