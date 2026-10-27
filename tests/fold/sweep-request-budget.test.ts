@@ -4,7 +4,9 @@ import { GitHubGateway } from "@/lib/github/client";
 import { GitHubGraphqlClient } from "@/lib/github/graphql";
 import { isTransientGitHubRequestError } from "@/lib/github/errors";
 import { GitLabGateway } from "@/lib/gitlab/client";
-import { checkSweepRequestBudget, readSweepRequestBudget, readSweepWindowMs, SweepBudgetSpent, withSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
+import {
+  checkSweepRequestBudget, formatSweepWindow, readSweepRequestBudget, readSweepWindowMs, SweepBudgetSpent, withSweepRequestBudget,
+} from "@/lib/fold/sweep-request-budget";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -27,6 +29,9 @@ describe("sweep HTTP admission", () => {
       .toBe(90 * 60_000);
     // The largest minute count whose product is still a safe integer.
     expect(readSweepWindowMs({ OVERFLOW_RECONCILIATION_SWEEP_WINDOW_MINUTES: "150119987579" })).toBe(150119987579 * 60_000);
+  });
+  it.each([[360, "6 hours"], [60, "1 hour"], [90, "90 minutes"], [1, "1 minute"]])("formats a %i-minute window", (minutes, text) => {
+    expect(formatSweepWindow(minutes)).toBe(text);
   });
   it("counts REST and GraphQL in one counter, before sending, without retrying a hold", async () => {
     let spent = 0;

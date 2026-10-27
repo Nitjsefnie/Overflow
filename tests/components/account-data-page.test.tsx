@@ -563,6 +563,14 @@ describe("account-data notice page", () => {
       new RegExp(`\\b${RECEIPT_PENDING_RETENTION_DAYS}\\b`),
     );
   });
+
+  it("renders the configured sweep window, from the kept list's first item", async () => {
+    vi.stubEnv("OVERFLOW_RECONCILIATION_SWEEP_WINDOW_MINUTES", "90");
+    await renderAccountDataPage();
+
+    const reReads = keptList(sectionLabelledBy("account-data-non-member-heading")).querySelector("li");
+    expect(reReads?.querySelector("time[datetime='PT90M']"), "the sweep window renders from the environment").not.toBeNull();
+  });
 });
 
 describe("routes that link the notice", () => {
