@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { readEnv } from "@/lib/env";
 
 export const SWEEP_WINDOW_MS = 6 * 60 * 60_000;
 export class SweepBudgetSpent extends Error {
@@ -11,6 +12,12 @@ export function readSweepRequestBudget(environment: Partial<Record<string, strin
   const raw = environment.RECONCILIATION_SWEEP_REQUEST_BUDGET ?? "";
   const value = /^\d+$/.test(raw) ? Number(raw) : NaN;
   return Number.isSafeInteger(value) && value > 0 ? value : 3000;
+}
+
+export function readSweepWindowMs(environment: Partial<Record<string, string>>): number {
+  const raw = readEnv("RECONCILIATION_SWEEP_WINDOW_MINUTES", environment) ?? "";
+  const value = /^\d+$/.test(raw) ? Number(raw) * 60_000 : NaN;
+  return Number.isSafeInteger(value) && value > 0 ? value : SWEEP_WINDOW_MS;
 }
 
 let observerFailureReported = false;
