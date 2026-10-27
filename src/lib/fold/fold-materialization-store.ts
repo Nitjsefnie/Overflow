@@ -8,7 +8,7 @@ import { reResolveIdentityClaims } from "@/lib/fold/identity-claims";
 import { nullableTimestampToIso, timestampToIso, toSafeInteger, recordChange, requiredId } from "@/lib/fold/postgres-row-mapping";
 import type { RepositoryCoordinator } from "@/lib/fold/repository-coordination";
 import { scrubSuppressedForgeData } from "@/lib/fold/data-subject-suppression";
-import type { FoldResult } from "@/lib/fold/repository-fold";
+import type { FoldIssue, FoldResult } from "@/lib/fold/repository-fold";
 import type { ReconciliationDeltas, ReconciliationHeldBy } from "@/lib/fold/reconcile";
 import { materializeSettlements, loadGrantedSettlementOverrides, loadExistingSettlements, materializeSelfWorkCalibrations, loadExistingSelfWorkCalibrations, materializeUnwritableClosures } from "@/lib/fold/derived-row-materialization";
 
@@ -365,9 +365,10 @@ async function upsertIssues(
   const acceptsRawView = sql`issues.github_updated_at is null or excluded.github_updated_at >= issues.github_updated_at`;
   for (const issue of fold.issues) {
     // Absent means this pass held the issue from cache, with no comment bodies to read it from.
-    const doneWhen = !registered ? sql`null` : issue.doneWhen === undefined
-      ? sql`issues.done_when`
-      : sql`case when ${acceptsRawView} then excluded.done_when else issues.done_when end`;
+    const statement = (column: "done_when" | "agent_prompt" | "recommended_model", read: FoldIssue["doneWhen"]) =>
+      !registered ? sql`null` : read === undefined
+        ? sql`issues.${sql(column)}`
+        : sql`case when ${acceptsRawView} then excluded.${sql(column)} else issues.${sql(column)} end`;
     const [row] = await sql<IssueRow[]>`
       insert into issues (
         github_issue_id, repository_id, issue_number, title, url, state, github_updated_at,
@@ -376,7 +377,7 @@ async function upsertIssues(
         settled_label, settled_points, settled_label_event_id, settled_label_actor_login,
         settled_label_applied_at, settled_rationale_comment_id, settled_rationale_actor_login,
         settled_rationale_commented_at, claim_assignee_github_login, claim_assignee_github_user_id,
-        asks_outside_repository, done_when
+        asks_outside_repository, done_when, agent_prompt, recommended_model
       )
       values (
         ${issue.githubIssueId}, ${repositoryId}, ${issue.number}, ${issue.title}, ${issue.url}, ${issue.state}, ${issue.updatedAt},
@@ -385,7 +386,8 @@ async function upsertIssues(
         ${issue.settledLabel}, ${issue.settledPoints}, ${issue.settledLabelEventId}, ${issue.settledLabelActorLogin},
         ${issue.settledLabelAppliedAt}, ${issue.settledRationaleCommentId}, ${issue.settledRationaleActorLogin},
         ${issue.settledRationaleCommentedAt}, ${issue.claimAssigneeGitHubLogin}, ${issue.claimAssigneeGitHubUserId},
-        ${issue.asksOutsideRepository}, ${registered ? issue.doneWhen?.text ?? null : null}
+        ${issue.asksOutsideRepository}, ${registered ? issue.doneWhen?.text ?? null : null},
+        ${registered ? issue.agentPrompt?.text ?? null : null}, ${registered ? issue.recommendedModel?.text ?? null : null}
       )
       on conflict (github_issue_id) do update
       set issue_number = excluded.issue_number,
@@ -394,7 +396,9 @@ async function upsertIssues(
           state = case when ${acceptsRawView} then excluded.state else issues.state end,
           github_updated_at = case when ${acceptsRawView} then excluded.github_updated_at else issues.github_updated_at end,
           asks_outside_repository = case when ${acceptsRawView} then excluded.asks_outside_repository else issues.asks_outside_repository end,
-          done_when = ${doneWhen},
+          done_when = ${statement("done_when", issue.doneWhen)},
+          agent_prompt = ${statement("agent_prompt", issue.agentPrompt)},
+          recommended_model = ${statement("recommended_model", issue.recommendedModel)},
           opening_label = case
             when issues.opening_source_event_id is null then excluded.opening_label
             else issues.opening_label

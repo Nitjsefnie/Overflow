@@ -5,6 +5,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { parseGitHubWebhookDeliveryDetailed } from "@/lib/github/webhook-schema";
+import type { FoldIssue } from "@/lib/fold/repository-fold";
 import { processWebhook } from "@/lib/webhooks/processor";
 import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -142,6 +143,54 @@ describe("webhook issue materialization", () => {
     expect(changes.filter((change) => change.entity_kind === "ISSUE" && change.change_kind === "REMOVE"
       && String(change.before).includes(String(added.githubIssueId)))).toHaveLength(1);
     expect(changes.filter((change) => `${change.before} ${change.after}`.includes("Done when"))).toEqual([]);
+  });
+
+  it("stores the agent prompt and recommended model per column: a cached pass and a webhook leave them, a stale view loses, a fresh null clears one", async () => {
+    const fixture = await materializeRepositoryFixture(sql);
+    expect(await row(fixture)).toMatchObject({ agent_prompt: null, recommended_model: null });
+    const pass = async (updatedAt: string, statements: Partial<FoldIssue>, cached = false) => {
+      fixture.fold.issues[0] = { ...fixture.fold.issues[0], updatedAt, ...statements };
+      if (cached) {
+        delete fixture.fold.issues[0].agentPrompt;
+        delete fixture.fold.issues[0].recommendedModel;
+      }
+      await materialize(fixture);
+    };
+    await pass("2026-09-08T11:00:00Z", { doneWhen: { text: "Done when A", commentId: "c1" },
+      agentPrompt: { text: "Agent prompt: do A", commentId: "c2" }, recommendedModel: { text: "Model A", commentId: "c3" } });
+    expect(await row(fixture)).toMatchObject({ done_when: "Done when A", agent_prompt: "Agent prompt: do A", recommended_model: "Model A" });
+    await pass("2026-09-08T11:30:00Z", {}, true);
+    expect(await row(fixture)).toMatchObject({ agent_prompt: "Agent prompt: do A", recommended_model: "Model A",
+      github_updated_at: new Date("2026-09-08T11:30:00Z") });
+    // A webhook view carries no comments: it advances GitHub time and leaves both statements alone.
+    await deliver(fixture, { updatedAt: "2026-09-08T12:00:00Z" });
+    expect(await row(fixture)).toMatchObject({ agent_prompt: "Agent prompt: do A", recommended_model: "Model A" });
+    await pass("2026-09-08T11:45:00Z", { agentPrompt: { text: "Agent prompt: do B", commentId: "c4" },
+      recommendedModel: { text: "Model B", commentId: "c5" } });
+    expect(await row(fixture)).toMatchObject({ agent_prompt: "Agent prompt: do A", recommended_model: "Model A" });
+    await pass("2026-09-08T12:00:00Z", { agentPrompt: { text: "Agent prompt: do C", commentId: "c6" }, recommendedModel: null });
+    expect(await row(fixture)).toMatchObject({ done_when: "Done when A", agent_prompt: "Agent prompt: do C", recommended_model: null });
+    await pass("2026-09-08T12:30:00Z", { agentPrompt: null, recommendedModel: { text: "Model D", commentId: "c7" } });
+    expect(await row(fixture)).toMatchObject({ done_when: "Done when A", agent_prompt: null, recommended_model: "Model D" });
+  });
+
+  it("inserts a fresh issue's agent prompt and recommended model and journals neither, not even when the issue is removed", async () => {
+    const fixture = await materializeRepositoryFixture(sql);
+    const added = { ...fixture.fold.issues[2], githubIssueId: fixture.fold.issues[2].githubIssueId + 900_000_000, number: 99,
+      agentPrompt: { text: "Agent prompt: do A", commentId: "c1" }, recommendedModel: { text: "Model A", commentId: "c2" } };
+    fixture.fold.issues.push(added);
+    await materialize(fixture);
+    const read = () => sql`select agent_prompt, recommended_model from issues where github_issue_id = ${added.githubIssueId}`;
+    expect(await read()).toEqual([{ agent_prompt: "Agent prompt: do A", recommended_model: "Model A" }]);
+    fixture.fold.issues.pop();
+    await materialize(fixture);
+    expect(await read()).toEqual([]);
+    const changes = await sql`
+      select changes.before_state::text as before, changes.after_state::text as after
+      from reconciliation_changes changes join reconciliation_runs runs on runs.id = changes.reconciliation_run_id
+      where runs.repository_id = ${fixture.repositoryId}
+    `;
+    expect(changes.filter((change) => /Agent prompt|Model A/.test(`${change.before} ${change.after}`))).toEqual([]);
   });
 
   it("protects a GitHub-confirmed fold closure from an older webhook but accepts a later reopen", async () => {

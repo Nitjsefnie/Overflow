@@ -74,16 +74,17 @@ describe("scrubbing free text when a repository is unregistered", () => {
     expect(await rowCount("pull_requests", repository.repositoryId)).toBe(1);
   });
 
-  it("keeps the done-when statement off an unregistered repository's issues when a pass that started before the unregistration publishes after it", async () => {
+  it("keeps the done-when, agent prompt and recommended model off an unregistered repository's issues when a pass that started before the unregistration publishes after it", async () => {
     const fixture = await materializeRepositoryFixture(sql);
     const [registration] = await sql<{ owner_name: string; sponsor_id: string }[]>`
       select owner_name, sponsor_id from registered_repositories where id = ${fixture.repositoryId}
     `;
     const [fresh, cached, older] = fixture.fold.issues;
-    const inserted = { ...older!, githubIssueId: older!.githubIssueId + 900_000_000, number: 99,
-      doneWhen: { text: "Done when inserted", commentId: "c2" } };
-    fixture.fold.issues = [{ ...fresh!, updatedAt: "2026-09-08T11:00:00Z", doneWhen: { text: "Done when fresh", commentId: "c1" } },
-      cached!, { ...older!, updatedAt: "2026-08-01T00:00:00Z", doneWhen: { text: "Done when older", commentId: "c3" } }, inserted];
+    const statements = (label: string, commentId: string) => ({ doneWhen: { text: `Done when ${label}`, commentId },
+      agentPrompt: { text: `Agent prompt: ${label}`, commentId }, recommendedModel: { text: `Model ${label}`, commentId } });
+    const inserted = { ...older!, githubIssueId: older!.githubIssueId + 900_000_000, number: 99, ...statements("inserted", "c2") };
+    fixture.fold.issues = [{ ...fresh!, updatedAt: "2026-09-08T11:00:00Z", ...statements("fresh", "c1") },
+      cached!, { ...older!, updatedAt: "2026-08-01T00:00:00Z", ...statements("older", "c3") }, inserted];
     const publication = RepositoryCoordinator.prototype.withRepositoryPublication;
     // The sponsor unregisters on another connection at the last moment the race allows: the pass has read
     // its issues and entered the publisher, which has not yet locked the registration row.
@@ -92,7 +93,8 @@ describe("scrubbing free text when a repository is unregistered", () => {
         await expect(store.unregisterRepository(registrationOf({ ownerName: registration!.owner_name, sponsorId: registration!.sponsor_id })))
           .resolves.toMatchObject({ kind: "UNREGISTERED" });
         // However a statement came to be stored, neither a cached pass nor a read older than the stored view keeps it.
-        await sql`update issues set done_when = 'Done when stored' where github_issue_id in ${sql([cached!.githubIssueId, older!.githubIssueId])}`;
+        await sql`update issues set done_when = 'Done when stored', agent_prompt = 'Agent prompt: stored', recommended_model = 'Model stored'
+          where github_issue_id in ${sql([cached!.githubIssueId, older!.githubIssueId])}`;
         return publication.apply(this, args);
       } as typeof publication);
     try {
@@ -103,10 +105,11 @@ describe("scrubbing free text when a repository is unregistered", () => {
       interleaved.mockRestore();
     }
     expect(await sql`
-      select issues.github_issue_id::text as id, issues.done_when, repositories.active from issues
+      select issues.github_issue_id::text as id, issues.done_when, issues.agent_prompt, issues.recommended_model, repositories.active from issues
       join registered_repositories repositories on repositories.id = issues.repository_id
       where issues.repository_id = ${fixture.repositoryId} order by issues.github_issue_id
-    `).toEqual(fixture.fold.issues.map((issue) => ({ id: String(issue.githubIssueId), done_when: null, active: false })));
+    `).toEqual(fixture.fold.issues.map((issue) => ({ id: String(issue.githubIssueId),
+      done_when: null, agent_prompt: null, recommended_model: null, active: false })));
   });
 
   it("narrows the evidence cache in place: comment bodies become the placeholder, issue bodies vanish, the diff stays byte-identical", async () => {

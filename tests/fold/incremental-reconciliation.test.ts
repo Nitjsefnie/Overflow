@@ -147,6 +147,45 @@ describe("incremental reconciliation", () => {
     expect(await freshPass(30)).toBeNull();
   });
 
+  it("sets the agent prompt and recommended model from fresh reads only: a cached pass keeps them, a fresh one without them clears each", async () => {
+    const f = await fixture();
+    const issue = f.issues[0]!;
+    issue.updatedAt = "2026-09-08T09:58:00Z";
+    const comment = (id: string, databaseId: number, body: string) => ({ id, databaseId, authorLogin: issue.authorLogin,
+      authorGitHubUserId: issue.authorGitHubUserId, body, createdAt: "2026-09-01T09:00:00Z", lastEditedAt: null });
+    const prompt = comment("agent-prompt", 90004, "Agent prompt: write the failing test first.");
+    const model = comment("recommended-model", 90005, "Recommended model: GLM-5.3-Flash.");
+    issue.comments = [prompt, model];
+    const advice = async () => (await sql`select agent_prompt, recommended_model from issues
+      where repository_id = ${f.id} and github_issue_id = ${issue.id}`)[0];
+    const freshPass = async (minute: number) => {
+      issue.updatedAt = `2026-09-08T10:${minute}:00Z`;
+      f.clock = new Date(`2026-09-08T10:${minute + 1}:00Z`);
+      await f.run();
+      expect(f.scans.at(-1)).toBeDefined();
+      return advice();
+    };
+    const stored = { agent_prompt: "Agent prompt: write the failing test first.", recommended_model: "GLM-5.3-Flash" };
+    await f.run();
+    expect(await advice()).toEqual(stored);
+    f.clock = new Date("2026-09-08T10:04:00Z");
+    await f.run();
+    expect(f.scans.at(-1)).toBeDefined();
+    expect(f.issueReads).toEqual([]);
+    expect(await advice()).toEqual(stored);
+
+    issue.comments = [model];
+    expect(await freshPass(10)).toEqual({ agent_prompt: null, recommended_model: "GLM-5.3-Flash" });
+    issue.comments = [prompt];
+    expect(await freshPass(20)).toEqual({ agent_prompt: stored.agent_prompt, recommended_model: null });
+    issue.comments = [prompt, model];
+    expect(await freshPass(30)).toEqual(stored);
+    issue.history.push({ kind: "ASSIGNED", id: "assigned", actorLogin: issue.authorLogin, actorGitHubUserId: issue.authorGitHubUserId,
+      assigneeLogin: "contributor", createdAt: "2026-09-02T00:00:00Z" });
+    issue.comments = [{ ...prompt, lastEditedAt: "2026-09-03T00:00:00Z" }, model];
+    expect(await freshPass(40)).toEqual({ agent_prompt: null, recommended_model: "GLM-5.3-Flash" });
+  });
+
   it("drops a suppressed sponsor's done-when statement at publication, and no later pass restores it", async () => {
     const f = await fixture();
     const issue = f.issues[0]!;

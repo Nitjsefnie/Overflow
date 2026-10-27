@@ -170,14 +170,19 @@ describe("a budget-bound reconciliation walk", () => {
     Object.assign(f.facts[0]!, { labels: ["M"], createdAt: "2026-09-01T07:00:00.000Z", authorLogin: sponsor.actorLogin,
       history: [{ kind: "LABELED", id: `opening-${f.facts[0]!.id}`, ...sponsor, createdAt: "2026-09-01T08:00:00.000Z", label: "M" }],
       comments: [{ id: "done-when", databaseId: 90002, authorLogin: sponsor.actorLogin, authorGitHubUserId: sponsor.actorGitHubUserId,
-        body: "Done when walked.", createdAt: at.toISOString(), lastEditedAt: null }] });
+        body: "Done when walked.", createdAt: at.toISOString(), lastEditedAt: null },
+      { id: "agent-prompt", databaseId: 90003, authorLogin: sponsor.actorLogin, authorGitHubUserId: sponsor.actorGitHubUserId,
+        body: "Agent prompt: walk it.", createdAt: at.toISOString(), lastEditedAt: null },
+      { id: "recommended-model", databaseId: 90004, authorLogin: sponsor.actorLogin, authorGitHubUserId: sponsor.actorGitHubUserId,
+        body: "Recommended model: Walker 1", createdAt: at.toISOString(), lastEditedAt: null }] });
     const result = await reconcileRepository({ store: f.store, github: gateway, sweep: f.sweep,
       now: () => at, onBudgetChange: () => {} }, f.repositoryId, { reason: "SWEEP" });
     expect(result.skipped).toBe(false);
     expect(f.gateway.walkReconciliation).toHaveBeenCalledOnce();
     expect(f.gateway.listIssues).not.toHaveBeenCalled();
     expect((await f.store.getReconciliationEvidence(f.repositoryId))?.issues.map(({ id }) => id)).toEqual(f.facts.map(({ id }) => id));
-    expect(await sql`select done_when from issues where github_issue_id = ${f.facts[0]!.id}`).toEqual([{ done_when: "Done when walked." }]);
+    expect(await sql`select done_when, agent_prompt, recommended_model from issues where github_issue_id = ${f.facts[0]!.id}`)
+      .toEqual([{ done_when: "Done when walked.", agent_prompt: "Agent prompt: walk it.", recommended_model: "Walker 1" }]);
   });
 
   it("keeps explicit and webhook folds on listIssues without spending sweep budget", async () => {
