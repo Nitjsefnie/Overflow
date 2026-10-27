@@ -19,6 +19,7 @@ import { readGitHubRegistrationAppAuthConfig } from "@/lib/github/app-installati
 import { errorLogToken } from "@/lib/webhooks/log-field";
 import { installJournalLevels } from "@/lib/logging/journal-levels";
 import type { SponsorGatewayInput } from "@/lib/fold/repository-size";
+import { readContributorMailConfig } from "@/lib/accounts/work-mail-config";
 
 /**
  * The drain site's failure key (issue 661): the whole-drain hook the schedule
@@ -192,4 +193,13 @@ export async function registerNodejs(): Promise<void> {
       return summary;
     },
   });
+
+  // Unset or partial contributor mail wires nothing: no interval, no transport.
+  const mailConfig = readContributorMailConfig();
+  if (mailConfig.enabled) {
+    const { startWorkMailDigest } = await import("@/lib/accounts/work-mail-digest");
+    startWorkMailDigest(mailConfig);
+  } else {
+    for (const warning of mailConfig.warnings) console.warn(warning);
+  }
 }
