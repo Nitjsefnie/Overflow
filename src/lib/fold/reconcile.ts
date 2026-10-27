@@ -201,7 +201,7 @@ async function reconcileRepositoryWhileCoordinated(
   const budgetBound = options?.reason === "SWEEP" || (options?.reason === "REDERIVATION" && diffOnly);
   return !budgetBound || dependencies.sweep === undefined
     ? reconcileRepositoryAfterRepositoryRead(dependencies, repository, repositoryId, options, budgetBound)
-    : withSweepRequestBudget(() => dependencies.sweep!.spend(repository.sponsor.id),
+    : withSweepRequestBudget(() => dependencies.sweep!.spend(repository.sponsor.id, repositoryId),
       () => reconcileRepositoryAfterRepositoryRead(dependencies, repository, repositoryId, options, budgetBound));
 }
 

@@ -30,12 +30,33 @@ export class PostgresSponsorSweepRoundStore {
     return row!;
   }
 
-  /** Null admits; a date holds until the sponsor's window resets. */
-  public async spend(sponsorId: string, now: Date, limit: number): Promise<Date | null> {
+  /**
+   * Null admits; a date holds until the sponsor's window resets. A request is
+   * admitted only while the sponsor is under `limit` and the repository is
+   * under its share, `limit` split evenly over the sponsor's active
+   * repositories, so the oldest jobs cannot take a window from a sibling.
+   * Both counters move together under the sponsor row lock `round` takes.
+   * A share no larger than a run's overhead (the verify, a listing page) admits
+   * only requests that stage nothing: walk progress needs a share above it.
+   */
+  public async spend(sponsorId: string, repositoryId: string, now: Date, limit: number): Promise<Date | null> {
     return this.sql.begin(async (transaction) => {
       const round = await this.round(transaction, sponsorId, now);
-      const rows = await transaction`update reconciliation_sweep_rounds set spent = spent + 1
-        where sponsor_id = ${sponsorId} and spent < ${limit} returning spent`;
+      // shortcut: shares of repositories with no outstanding budget-bound job are not lent out, upgrade by dividing by repositories holding a SWEEP/REDERIVATION job
+      const rows = await transaction`with share as (
+          select ${limit}::integer / greatest(count(*)::integer, 1) as share
+          from registered_repositories where sponsor_id = ${sponsorId} and active
+        ), charged as (
+          insert into reconciliation_sweep_repository_spend as repository (repository_id, window_start, spent)
+          select ${repositoryId}, round.window_start, 1 from reconciliation_sweep_rounds as round, share
+          where round.sponsor_id = ${sponsorId} and round.spent < ${limit} and share.share > 0
+          on conflict (repository_id) do update set window_start = excluded.window_start,
+            spent = case when repository.window_start = excluded.window_start then repository.spent + 1 else 1 end
+          where repository.window_start <> excluded.window_start or repository.spent < (select share from share)
+          returning repository_id
+        )
+        update reconciliation_sweep_rounds set spent = spent + 1
+        where sponsor_id = ${sponsorId} and exists (select from charged) returning spent`;
       return rows.length === 1 ? null : new Date(round.window_start.getTime() + this.windowMs);
     }) as Promise<Date | null>;
   }
