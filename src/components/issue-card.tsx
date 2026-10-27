@@ -20,6 +20,11 @@ export function IssueCard({ issue }: IssueCardProps) {
             <a href={issue.url}>{issue.title}</a>
           </h2>
         </div>
+        {issue.asksOutsideRepository ? (
+          <p className="issue-card-outside-repository">
+            Marked as asking for actions outside its repository: decline it, or work it in a sandbox.
+          </p>
+        ) : null}
         {issue.sponsorLogin !== undefined ? <p>Sponsor: {issue.sponsorLogin}</p> : null}
         {issue.claimState !== undefined ? <p>Claim: {claimPhrase(issue.claimState, issue.assigneeGitHubLogin)}</p> : null}
         {issue.availableHeadroom !== undefined ? <p>Headroom: {formatSigned(issue.availableHeadroom)}</p> : null}
