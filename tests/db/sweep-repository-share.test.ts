@@ -142,6 +142,37 @@ describe("per-repository share of a sponsor's sweep request budget", () => {
     expect((await spent())[a.id]).toBeUndefined();
   });
 
+  it("counts a repository's share against the round's window, not each request's instant", async () => {
+    const sponsorId = await insertSponsor();
+    const a = await insertRepository(sponsorId);
+    await insertRepository(sponsorId); // two active repositories: floor(10 / 2) = 5
+    const store = new PostgresSponsorSweepRoundStore(sql, windowMs);
+    // Production passes a fresh `new Date()` per request: eight distinct instants inside one window.
+    const holds = [];
+    for (let i = 1; i <= 8; i++) holds.push(await store.spend(sponsorId, a.id, new Date(at.getTime() + i * 1000), 10));
+    expect(holds.filter((hold) => hold === null)).toHaveLength(5);
+    expect(await sql`select window_start, spent from reconciliation_sweep_repository_spend where repository_id = ${a.id}`)
+      .toEqual([{ window_start: new Date(at.getTime() + 1000), spent: 5 }]);
+  });
+
+  it("never admits past the sponsor's budget when concurrent repositories race for its last request", async () => {
+    const sponsorId = await insertSponsor();
+    const [a, b, c] = [await insertRepository(sponsorId), await insertRepository(sponsorId), await insertRepository(sponsorId)];
+    await sql`update registered_repositories set active = false where id in ${sql([b.id, c.id])}`;
+    const stores = Array.from({ length: 8 }, () => new PostgresSponsorSweepRoundStore(sql, windowMs));
+    // Alone, a's share is the whole budget of 10; it spends 9.
+    for (let i = 0; i < 9; i++) expect(await stores[0]!.spend(sponsorId, a.id, at, 10)).toBeNull();
+    // Two activations drop every share to 3, so only the sponsor's last request binds b and c.
+    await sql`update registered_repositories set active = true where id in ${sql([b.id, c.id])}`;
+    for (let race = 0; race < 20; race++) {
+      await sql`update reconciliation_sweep_rounds set spent = 9 where sponsor_id = ${sponsorId}`;
+      await sql`delete from reconciliation_sweep_repository_spend where repository_id in ${sql([b.id, c.id])}`;
+      const holds = await Promise.all(Array.from({ length: 8 }, (_, i) => stores[i]!.spend(sponsorId, i % 2 ? b.id : c.id, at, 10)));
+      expect(holds.filter((hold) => hold === null)).toHaveLength(1);
+      expect(await sql`select spent from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`).toEqual([{ spent: 10 }]);
+    }
+  });
+
   it("lets every repository of a diff-only sponsor walk within N windows while four older large jobs are due", async () => {
     const budget = 100;
     const sponsorId = await insertSponsor();
@@ -178,12 +209,12 @@ describe("per-repository share of a sponsor's sweep request budget", () => {
     const passes = new PostgresSweepPassStore(sql);
     let window = 0;
     let clock = at;
-    const spends: Array<{ window: number; repositoryId: string; charged: string | undefined; admitted: boolean }> = [];
+    const spends: Array<{ window: number; repositoryId: string; charged: string; admitted: boolean }> = [];
     const stages: Array<{ window: number; repositoryId: string }> = [];
     const completions: Array<{ window: number; repositoryId: string }> = [];
     const sweepFor = (folding: string): ReconciliationSweepControl => ({
       spend: async (sponsor, charged) => {
-        const hold = await rounds.spend(sponsor, charged!, clock, budget);
+        const hold = await rounds.spend(sponsor, charged, clock, budget);
         spends.push({ window, repositoryId: folding, charged, admitted: hold === null });
         return hold;
       },
