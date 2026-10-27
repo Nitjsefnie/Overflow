@@ -53,6 +53,7 @@ function issueRow(n: number): Record<string, unknown> {
     opening_reserve_points: 5,
     claim_assignee_github_login: null,
     available_headroom: 3,
+    asks_outside_repository: false,
     created_at: "2026-09-09T00:00:00.000Z",
   };
 }

@@ -14,6 +14,7 @@ const eligibleIssue: EligibleIssueProjection = {
   openingLabel: "size/M",
   comparisonPoints: 5,
   reservePoints: 5,
+  asksOutsideRepository: false,
   createdAt: "2026-09-09T00:00:00.000Z",
 };
 

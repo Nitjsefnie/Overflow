@@ -416,6 +416,7 @@ async function deriveGetIssues(): Promise<DerivedAnswer> {
         assigneeGitHubLogin: null,
         claimState: "OPEN" as const,
         availableHeadroom: 80,
+        asksOutsideRepository: false,
         createdAt: "2026-01-10T09:00:00.000Z",
       },
     ],

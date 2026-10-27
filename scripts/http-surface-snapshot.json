@@ -1,6 +1,6 @@
 {
   "snapshotFormat": 2,
-  "httpServerVersion": "1.7.0",
+  "httpServerVersion": "1.8.0",
   "errorEnvelope": {
     "error": {
       "code": "string",
@@ -316,6 +316,7 @@
       "settledBalance": "number"
     },
     "GET /api/issues": {
+      "asksOutsideRepository": "boolean",
       "assigneeGitHubLogin": "null",
       "availableHeadroom": "number",
       "claimState": "string",

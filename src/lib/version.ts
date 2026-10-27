@@ -11,4 +11,4 @@
  * tests/lib/api-version.test.ts; the update script moves that literal and
  * scripts/mcp-surface-snapshot.json together.
  */
-export const SERVER_VERSION = "1.7.0";
+export const SERVER_VERSION = "1.8.0";

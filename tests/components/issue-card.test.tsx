@@ -23,6 +23,7 @@ describe("eligible issue card", () => {
           assigneeGitHubLogin: "mira",
           claimState: "CLAIMED",
           availableHeadroom: -3,
+          asksOutsideRepository: false,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -52,6 +53,7 @@ describe("eligible issue card", () => {
           assigneeGitHubLogin: AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN,
           claimState: "CLAIMED",
           availableHeadroom: -6,
+          asksOutsideRepository: false,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -79,6 +81,7 @@ describe("eligible issue card", () => {
           assigneeGitHubLogin: "mira",
           claimState: "CLAIMED",
           availableHeadroom: -3,
+          asksOutsideRepository: false,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -123,6 +126,7 @@ describe("eligible issue card", () => {
           openingLabel: "blue / green",
           comparisonPoints: 1,
           reservePoints: 1,
+          asksOutsideRepository: false,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -151,6 +155,7 @@ describe("eligible issue card", () => {
           openingLabel: "perceived difficulty: 3",
           comparisonPoints: 5,
           reservePoints: 8,
+          asksOutsideRepository: false,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -176,6 +181,7 @@ describe("eligible issue card", () => {
           openingLabel: "delta",
           comparisonPoints: 5,
           reservePoints: 8,
+          asksOutsideRepository: false,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -198,6 +204,7 @@ describe("eligible issue card", () => {
           openingLabel: "moonlit ridge",
           comparisonPoints: 5,
           reservePoints: 8,
+          asksOutsideRepository: false,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -222,6 +229,7 @@ describe("eligible issue card", () => {
           openingLabel: "blue / green",
           comparisonPoints: 1,
           reservePoints: 1,
+          asksOutsideRepository: false,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -245,6 +253,7 @@ describe("eligible issue card", () => {
           comparisonPoints: 5,
           reservePoints: 8,
           availableHeadroom: -4 / 7,
+          asksOutsideRepository: false,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -268,6 +277,7 @@ describe("eligible issue card", () => {
           comparisonPoints: 5,
           reservePoints: 8,
           availableHeadroom: 1234.5,
+          asksOutsideRepository: false,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
