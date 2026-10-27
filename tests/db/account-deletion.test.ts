@@ -710,8 +710,10 @@ describe("account deletion as pseudonymisation", () => {
     `;
 
     await sql`
-      insert into contributor_work_mail_subscriptions (user_id, address, confirm_token_hash, confirm_expires_at)
-      values (${exporter.id}, 'exporter@example.test', ${randomBytes(32)}, now() + interval '1 day')
+      insert into contributor_work_mail_subscriptions (user_id, address, confirm_token_hash, confirm_expires_at,
+                                                       confirmed_at, last_notified_at, created_at)
+      values (${exporter.id}, 'exporter@example.test', ${randomBytes(32)}, now() + interval '1 day',
+              now() - interval '3 days', now() - interval '2 days', now() - interval '4 days')
     `;
     await sql`
       insert into contributor_work_mail_confirmations (user_id, address_digest) values (${exporter.id}, ${randomBytes(32)})
@@ -758,13 +760,15 @@ describe("account deletion as pseudonymisation", () => {
     expect(exported.forgeIdentities).toHaveLength(1);
     expect(exported.forgeIdentities[0]!.hasStoredToken).toBe(true);
     expect(exported.apiToken).not.toBeNull();
-    const [workMail] = await sql<{ created_at: Date; confirm_expires_at: Date }[]>`
-      select created_at, confirm_expires_at from contributor_work_mail_subscriptions where user_id = ${exporter.id}
+    const [workMail] = await sql<{ created_at: Date; confirm_expires_at: Date; confirmed_at: Date; last_notified_at: Date }[]>`
+      select created_at, confirm_expires_at, confirmed_at, last_notified_at
+      from contributor_work_mail_subscriptions where user_id = ${exporter.id}
     `;
-    // The pending token's hash is never exported, not even as a presence flag.
+    // Four distinct instants, so a swapped field fails; the token hash is never exported, not even as a flag.
     expect(exported.workMail).toEqual({
-      address: "exporter@example.test", confirmedAt: null, lastNotifiedAt: null,
-      createdAt: workMail!.created_at.toISOString(), confirmExpiresAt: workMail!.confirm_expires_at.toISOString(),
+      address: "exporter@example.test", confirmedAt: workMail!.confirmed_at.toISOString(),
+      lastNotifiedAt: workMail!.last_notified_at.toISOString(), createdAt: workMail!.created_at.toISOString(),
+      confirmExpiresAt: workMail!.confirm_expires_at.toISOString(),
     });
   });
 

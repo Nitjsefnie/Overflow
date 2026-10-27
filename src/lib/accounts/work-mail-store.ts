@@ -46,25 +46,36 @@ export async function deleteAllWorkMailData(sql: SqlClient | TransactionClient, 
   `;
 }
 
+async function dailyCeilingSpent(sql: TransactionClient, limit: number): Promise<boolean> {
+  const [row] = await sql<{ spent: boolean }[]>`
+    select sent >= ${limit} as spent from contributor_work_mail_daily where utc_day = (now() at time zone 'UTC')::date
+  `;
+  return row?.spent ?? false;
+}
+
 const ceilingRefusal = new Error("contributor mail ceiling reached");
 
 export class PostgresWorkMailStore {
   public constructor(
     private readonly sql: SqlClient = getSql(),
     private readonly tokenEncryptionKey: string | undefined = readEnv("TOKEN_ENCRYPTION_KEY"),
+    private readonly previousTokenEncryptionKey: string | undefined = readEnv("TOKEN_ENCRYPTION_KEY_PREVIOUS"),
   ) {}
 
   /** Commits before the caller sends; "suppressed" must be answered exactly like "send". */
   public async requestConfirmation(userId: string, address: string, limits: { dailyLimit: number }): Promise<ConfirmationOutcome> {
-    const key = derivePurposeKey(tokenKeySetFrom(this.tokenEncryptionKey, undefined).current, ADDRESS_DIGEST_LABEL);
-    const digest = createHmac("sha256", key).update(addressDigestInput(address), "utf8").digest();
+    const keys = tokenKeySetFrom(this.tokenEncryptionKey, this.previousTokenEncryptionKey);
+    // Digests under the previous key still count, so a key rotation does not reset the address cap.
+    const [digest, previousDigest] = [keys.current, keys.previous ?? keys.current].map((key) =>
+      createHmac("sha256", derivePurposeKey(key, ADDRESS_DIGEST_LABEL)).update(addressDigestInput(address), "utf8").digest());
     return this.sql.begin(async (tx): Promise<ConfirmationOutcome> => {
       await tx`select pg_advisory_xact_lock(hashtext('overflow:work-mail-confirmation'))`;
       const [counts] = await tx<{ by_account: number; by_address: number }[]>`
         select count(*) filter (where user_id = ${userId})::int as by_account,
-               count(*) filter (where address_digest = ${digest})::int as by_address
+               count(*) filter (where address_digest in (${digest}, ${previousDigest}))::int as by_address
         from contributor_work_mail_confirmations
-        where sent_at > now() - interval '24 hours' and (user_id = ${userId} or address_digest = ${digest})
+        where sent_at > now() - interval '24 hours'
+          and (user_id = ${userId} or address_digest in (${digest}, ${previousDigest}))
       `;
       if (counts!.by_account >= CONFIRMATIONS_PER_ACCOUNT) {
         // The account frees a slot when its third-newest request leaves the window.
@@ -80,6 +91,9 @@ export class PostgresWorkMailStore {
       if (sends) {
         if (!(await reserveDailySend(tx, limits.dailyLimit))) return { kind: "ceiling" };
         await tx`insert into contributor_work_mail_confirmations (user_id, address_digest) values (${userId}, ${digest})`;
+      } else if (await dailyCeilingSpent(tx, limits.dailyLimit)) {
+        // Every refusal of success looks alike, or a spent day would tell a capped address from a fresh one.
+        return { kind: "ceiling" };
       }
       const token = randomBytes(32).toString("base64url");
       await tx`
@@ -145,20 +159,25 @@ export class PostgresWorkMailStore {
     return row!.found;
   }
 
-  /** Stamps the digest slot iff nobody else did since `prevLastNotifiedAt` was read, and spends one ceiling unit. */
-  public async claimDigestSlot(id: string, prevLastNotifiedAt: Date | null, t0: Date, limit: number): Promise<boolean | "ceiling"> {
+  /**
+   * Stamps the digest slot iff nobody else did since `prevLastNotifiedAt` was read, and spends one ceiling unit.
+   * Send to the returned address: the listed one may have been replaced and re-confirmed since.
+   */
+  public async claimDigestSlot(
+    id: string, prevLastNotifiedAt: Date | null, t0: Date, limit: number,
+  ): Promise<{ address: string } | false | "ceiling"> {
     try {
       return await this.sql.begin(async (tx) => {
         // A Date carries milliseconds and the column microseconds: compare at the precision the caller read.
-        const claimed = await tx`
+        const [claimed] = await tx<{ address: string }[]>`
           update contributor_work_mail_subscriptions set last_notified_at = ${t0}, updated_at = now()
           where id = ${id} and confirmed_at is not null
             and date_trunc('milliseconds', last_notified_at) is not distinct from ${prevLastNotifiedAt}
-          returning id
+          returning address
         `;
-        if (claimed.length === 0) return false;
+        if (claimed === undefined) return false;
         if (!(await reserveDailySend(tx, limit))) throw ceilingRefusal;
-        return true;
+        return { address: claimed.address };
       });
     } catch (error) {
       if (error === ceilingRefusal) return "ceiling";
