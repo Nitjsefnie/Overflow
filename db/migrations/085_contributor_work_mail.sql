@@ -6,9 +6,7 @@ create table contributor_work_mail_subscriptions (
   confirm_token_hash bytea unique,
   confirm_expires_at timestamptz,
   confirmed_at timestamptz,
-  -- The digest window's watermark: the start of the cycle that last claimed this row.
   last_notified_at timestamptz,
-  -- The database time of that claim; the 24-hour floor between digests reads this.
   last_digest_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
