@@ -180,6 +180,39 @@ describe("requestConfirmation", () => {
     expect(await subscriptionRow(userId)).toMatchObject({ address: replacement, confirmed_at: null, last_notified_at: null });
   });
 
+  it("answers a capped address like a fresh one once the daily ceiling is spent, writing nothing", async () => {
+    const address = addressFor("probed");
+    for (let index = 0; index < 3; index += 1) {
+      expect((await store.requestConfirmation(await insertUser(), address, { dailyLimit: 3 })).kind).toBe("send");
+    }
+    expect(await store.requestConfirmation(await insertUser(), addressFor("fresh"), { dailyLimit: 3 })).toEqual({ kind: "ceiling" });
+    const prober = await insertUser();
+    expect(await store.requestConfirmation(prober, address, { dailyLimit: 3 })).toEqual({ kind: "ceiling" });
+    expect(await subscriptionRow(prober)).toBeUndefined();
+    expect(await dailySent()).toBe(3);
+  });
+
+  it("keeps counting an address across a key rotation while the old key is the previous key", async () => {
+    const oldKey = randomBytes(32).toString("base64url");
+    const newKey = randomBytes(32).toString("base64url");
+    const address = addressFor("rotated");
+    for (let index = 0; index < 3; index += 1) {
+      await new PostgresWorkMailStore(sql, oldKey).requestConfirmation(await insertUser(), address, limits);
+    }
+    const rotated = new PostgresWorkMailStore(sql, newKey, oldKey);
+    expect(await rotated.requestConfirmation(await insertUser(), address, limits)).toEqual({ kind: "suppressed" });
+    // Control: without the previous key the old digests are unrecognisable.
+    expect((await new PostgresWorkMailStore(sql, newKey).requestConfirmation(await insertUser(), address, limits)).kind).toBe("send");
+  });
+
+  it("serialises concurrent requests of different accounts for one address to exactly three sends", async () => {
+    const address = addressFor("contested");
+    const users = await Promise.all(Array.from({ length: 6 }, () => insertUser()));
+    const outcomes = await Promise.all(users.map((userId) => store.requestConfirmation(userId, address, limits)));
+    expect(outcomes.filter((outcome) => outcome.kind === "send")).toHaveLength(3);
+    expect(outcomes.filter((outcome) => outcome.kind === "suppressed")).toHaveLength(3);
+  });
+
   it("serialises concurrent requests of one account to exactly three sends", async () => {
     const userId = await insertUser();
     const outcomes = await Promise.all(
@@ -362,7 +395,8 @@ describe("digest support", () => {
   it("claimDigestSlot stamps the slot once: a second claim on the same previous value loses", async () => {
     const { id } = await confirmedSubscriber();
     const t0 = await store.dbNow();
-    expect(await store.claimDigestSlot(id, null, t0, 10)).toBe(true);
+    const { address } = await sql<{ address: string }[]>`select address from contributor_work_mail_subscriptions where id = ${id}`.then((rows) => rows[0]!);
+    expect(await store.claimDigestSlot(id, null, t0, 10)).toEqual({ address });
     expect((await sql<{ last_notified_at: Date }[]>`
       select last_notified_at from contributor_work_mail_subscriptions where id = ${id}`)[0]!.last_notified_at).toEqual(t0);
     expect(await store.claimDigestSlot(id, null, t0, 10)).toBe(false);
@@ -373,14 +407,25 @@ describe("digest support", () => {
     const { id } = await confirmedSubscriber();
     await sql`update contributor_work_mail_subscriptions set last_notified_at = now() - interval '25 hours' where id = ${id}`;
     const [due] = await store.listDueSubscriptions();
-    expect(await store.claimDigestSlot(id, due!.lastNotifiedAt, await store.dbNow(), 10)).toBe(true);
+    expect(await store.claimDigestSlot(id, due!.lastNotifiedAt, await store.dbNow(), 10)).toEqual({ address: due!.address });
   });
 
   it("lets exactly one of two concurrent claims win", async () => {
     const { id } = await confirmedSubscriber();
     const t0 = await store.dbNow();
     const results = await Promise.all([store.claimDigestSlot(id, null, t0, 10), store.claimDigestSlot(id, null, t0, 10)]);
-    expect(results.filter((result) => result === true)).toHaveLength(1);
+    expect(results.filter((result) => typeof result === "object")).toHaveLength(1);
+    expect(results.filter((result) => result === false)).toHaveLength(1);
+  });
+
+  it("a claim after an address change returns the address it claimed, never the listed one", async () => {
+    const { id, userId, address: listed } = await confirmedSubscriber();
+    const [due] = await store.listDueSubscriptions();
+    expect(due!.address).toBe(listed);
+    const replacement = addressFor("replacement");
+    const outcome = await store.requestConfirmation(userId, replacement, limits);
+    expect(await store.confirm(userId, (outcome as { token: string }).token)).toBe(true);
+    expect(await store.claimDigestSlot(id, due!.lastNotifiedAt, await store.dbNow(), 10)).toEqual({ address: replacement });
   });
 
   it("never claims a subscription that went back to pending", async () => {
