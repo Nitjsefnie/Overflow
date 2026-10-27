@@ -11,7 +11,7 @@ beforeEach(() => {
   vi.resetModules();
   vi.doMock("@/auth", () => ({ auth, signIn: vi.fn() }));
   vi.doMock("@/lib/moderation/current-role", () => ({ getCurrentUserRole: currentRole }));
-  vi.doMock("@/lib/public-stats", () => ({ getSettledWorkStats: readStats }));
+  vi.doMock("@/lib/public-stats", () => ({ getSettledWorkStats: readStats, SETTLED_WORK_REFRESH_MINUTES: 7 }));
   auth.mockResolvedValue(null);
   readStats.mockResolvedValue({ pullRequests: 23, contributors: 4, points: 117, readAt: new Date("2026-10-27T11:12:00Z") });
 });
@@ -44,6 +44,12 @@ describe("settled work page", () => {
     expect(main.querySelector("time")).toHaveAttribute("datetime", "2026-10-27T11:12:00.000Z");
     expect(main.querySelector("time")).toHaveTextContent("2026-10-27 11:12 UTC");
     expect(screen.queryByRole("button", { name: "Sign out" })).not.toBeInTheDocument();
+  });
+
+  it("states the cache's refresh interval from the exported constant", async () => {
+    await renderStats();
+    // The mock's 7 differs from the shipped 10, so a page that hardcodes its own number fails here.
+    expect(screen.getByRole("main").querySelector("time[datetime='PT7M']")).toHaveTextContent("7 minutes");
   });
 
   it("renders zero and one without suppressing either count", async () => {
