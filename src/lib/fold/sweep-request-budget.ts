@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readEnv } from "@/lib/env";
 
-export const SWEEP_WINDOW_MS = 6 * 60 * 60_000;
+const SWEEP_WINDOW_MS = 6 * 60 * 60_000;
 export class SweepBudgetSpent extends Error {
   public constructor(public readonly resetAt: Date) {
     super("Reconciliation held for the sweep request budget.");
