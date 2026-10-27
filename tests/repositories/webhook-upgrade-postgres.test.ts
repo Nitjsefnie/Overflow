@@ -49,6 +49,42 @@ afterAll(async () => {
 });
 
 describe("upgrading actual persisted registrations", () => {
+  it("skips a gone repository without changing its registration or queuing repair", async () => {
+    const registrations = new PostgresRepositoryStore(sql, key);
+    const queue = new PostgresFoldStore(sql, key);
+    const [before] = await sql`select * from registered_repositories where id = ${repositoryIds[0]!}`;
+    const lines: string[] = [];
+    const requests: string[] = [];
+    expect.soft(await runWebhookUpgradeCli([], {
+      store: {
+        listActiveRepositoryIds: async () => [repositoryIds[0]!],
+        findActiveRepositoryById: registrations.findActiveRepositoryById.bind(registrations),
+        findActiveRepositoryForgeById: registrations.findActiveRepositoryForgeById.bind(registrations),
+        getGitHubAccessToken: async () => "synthetic-sponsor-token",
+        getForgeToken: async () => null,
+        stageWebhookCredential: registrations.stageWebhookCredential.bind(registrations),
+        finalizeWebhookCredential: registrations.finalizeWebhookCredential.bind(registrations),
+        withWebhookUpgradeLock: registrations.withWebhookUpgradeLock.bind(registrations),
+        requestRepositoryRederivation: queue.requestRepositoryRederivation.bind(queue),
+      },
+      webhookUrls: { github: "https://overflow.test/api/github/webhooks", gitlab: "" },
+      createGateway: (accessToken) => new GitHubGateway({ accessToken, fetch: async (input, init) => {
+        const request = new Request(input, init);
+        requests.push(`${request.method} ${new URL(request.url).pathname}`);
+        return new Response(null, { status: 404 });
+      } }),
+      createGitLabGateway: () => { throw new Error("unexpected GitLab gateway"); },
+      write: (line) => { lines.push(line); },
+    })).toBe(0);
+    expect(requests).toEqual(["GET /repositories/42"]);
+    expect(await sql`select * from registered_repositories where id = ${repositoryIds[0]!}`).toEqual([before]);
+    expect(await sql`select * from repository_reconciliation_jobs where repository_id = ${repositoryIds[0]!}`).toEqual([]);
+    expect(lines.map((line) => JSON.parse(line))).toEqual([
+      { repositoryId: repositoryIds[0], subscription: "SKIPPED", queue: "NOT_ATTEMPTED", failure: "REPOSITORY_GONE" },
+      { succeeded: 0, failed: 0, gone: 1 },
+    ]);
+  });
+
   it("reuses durable material after timeout, finalization failure, and queue failure", async () => {
     const [registered] = await sql<{ id: string }[]>`
       insert into registered_repositories
@@ -178,7 +214,7 @@ describe("upgrading actual persisted registrations", () => {
     expect(outcomes.slice(0, -1)).toEqual(repositoryIds.slice(0, 2).sort().map((repositoryId) => ({
       repositoryId, subscription: "FAILED", queue: "NOT_ATTEMPTED", failure: "CREDENTIALS_FAILED",
     })));
-    expect(outcomes.at(-1)).toEqual({ succeeded: 0, failed: 2 });
+    expect(outcomes.at(-1)).toEqual({ succeeded: 0, failed: 2, gone: 0 });
     expect(result.stderr).not.toContain("Error:");
   });
 
@@ -243,7 +279,7 @@ describe("upgrading actual persisted registrations", () => {
       repositoryIds.slice(0, 2).sort().map((repository_id) => ({ repository_id, reason: "REDERIVATION", state: "PENDING", rederivation_generation: 2 })),
     );
     expect(lines.map((line) => JSON.parse(line)).filter((line) => line.succeeded !== undefined)).toEqual([
-      { succeeded: 2, failed: 0 }, { succeeded: 2, failed: 0 },
+      { succeeded: 2, failed: 0, gone: 0 }, { succeeded: 2, failed: 0, gone: 0 },
     ]);
     expect(lines.join("\n")).not.toMatch(/oauth-token|original-secret|encrypted/);
     const refreshes: { repositoryId: string; rederive: boolean }[] = [];

@@ -316,11 +316,14 @@ that the fold has finished. Historical missed comments have no known subject to
 invalidate, so this administrative repair bypasses incremental checkpoints.
 A hook that was disabled stays disabled. Every verified run requests full repair,
 including reruns after a queue failure.
-The summary counts succeeded and failed registrations. Exit 0 requires every
-registration to succeed; exit 1 indicates a failed step; exit 2 indicates invalid
-arguments. Missing tokens, missing/inaccessible hooks, lost admin rights, private
-repositories and mismatched IDs remain failures. Restore the sponsor's access or
-correct the reported registration problem, then rerun. `UPGRADE_FAILED` indicates
+The summary counts `succeeded`, `failed`, and `gone` registrations. A GitHub or
+GitLab by-ID lookup that returns 404 with the sponsor's token reports
+`subscription: "SKIPPED"`, `queue: "NOT_ATTEMPTED"`, and `failure: "REPOSITORY_GONE"`.
+It counts only as `gone` and leaves the registration unchanged. Exit 0 requires
+`failed` to be zero; exit 1 indicates a failed step; exit 2 indicates invalid
+arguments. Lookup errors, missing tokens, missing/inaccessible hooks, lost admin
+rights, returned private repositories and mismatched IDs remain failures. Restore
+the sponsor's access or correct the reported registration problem, then rerun. `UPGRADE_FAILED` indicates
 configuration or enumeration failed before a complete summary was available.
 
 Retain the JSON output and real exit status with the deployment record, as the

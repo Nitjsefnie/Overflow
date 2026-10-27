@@ -209,7 +209,7 @@ describe("migration 038: forge identities and provider columns", () => {
       },
     };
 
-    expect(await upgradeRepositoryWebhooks(dependencies)).toEqual({ succeeded: 1, failed: 0 });
+    expect(await upgradeRepositoryWebhooks(dependencies)).toEqual({ succeeded: 1, failed: 0, gone: 0 });
     expect(outcomes).toEqual([
       { repositoryId: created!.id, subscription: "NOT_APPLICABLE", queue: "NOT_ATTEMPTED", failure: null },
     ]);
