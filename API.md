@@ -27,6 +27,10 @@ the security reason and the change.
 
 **Version history:**
 
+- 1.8.0: Each `GET /api/issues` row adds `asksOutsideRepository`, a boolean
+  that is `true` while the issue carries the reserved label
+  `overflow: asks outside repository`. MCP `issues_board` forwards the same
+  field.
 - 1.7.0: The registration response adds `openingLabels`, the repository's
   opening label names; an existing issue is listed once it carries one of
   them. The dashboard read's registered repositories carry the same names.
@@ -661,6 +665,14 @@ a caller who is a party to that settlement.
 | `GET /api/settlements` | None. | An array of the settlement-history rows the page renders. |
 | `GET /api/settlements/<id>` | Path parameter `id`. | `{ "settlement": <settlement proof projection>, "corrections": <correction requests raised against the settlement, or null> }`. |
 | `GET /api/calibration` | None. | `{ "comparison": <calibration comparison>, "selfWork": <self-work calibration rows, or null> }`. |
+
+Every `GET /api/issues` row carries `asksOutsideRepository`, a boolean that is
+always present. It is `true` while the issue carries the exact, case-sensitive
+label `overflow: asks outside repository`, which whoever has label rights on
+the forge (the repository owner and the collaborators he trusts) applies to an
+issue that asks for work outside its own repository. It survives edits to the
+issue and clears only when the label is removed. `false` means only that the
+label is absent: it vouches for nothing about what the issue asks for.
 
 The field lists of these projections are the server's compiled types, not a
 schema this document maintains; this section records the endpoints, their
