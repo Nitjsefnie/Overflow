@@ -3,13 +3,13 @@ import { formatInstant } from "@/lib/format-instant";
 import { plural } from "@/lib/plural";
 import type { SettledWorkStats } from "@/lib/public-stats";
 
-function StatsSections({ stats }: { stats: SettledWorkStats }) {
+function StatsSections({ stats, refreshMinutes }: { stats: SettledWorkStats; refreshMinutes: number }) {
   return (
     <>
       <section className="page-heading" aria-labelledby="stats-title">
         <h1 id="stats-title">Settled work</h1>
         <p>Read at <time dateTime={stats.readAt.toISOString()}>{formatInstant(stats.readAt)}</time>.</p>
-        <p>Figures refresh on request at most once every 10 minutes.</p>
+        <p>Figures refresh on request at most once every <time dateTime={`PT${refreshMinutes}M`}>{refreshMinutes} {plural(refreshMinutes, "minute")}</time>.</p>
       </section>
       <section className="surface" aria-label="Settled work totals">
         <p><strong>{stats.pullRequests}</strong> {plural(stats.pullRequests, "settled pull request")}</p>
@@ -28,8 +28,11 @@ function StatsSections({ stats }: { stats: SettledWorkStats }) {
 
 export default async function StatsPage() {
   const { auth } = await import("@/auth");
+  // Resolve these at call time, like @/auth above: the suite runs with
+  // `isolate: false`, and a static import freezes to the real module when
+  // another test file renders this page first in the shared worker.
   const { getCurrentUserRole } = await import("@/lib/moderation/current-role");
-  const { getSettledWorkStats } = await import("@/lib/public-stats");
+  const { getSettledWorkStats, SETTLED_WORK_REFRESH_MINUTES } = await import("@/lib/public-stats");
   const session = await auth();
   const stats = await getSettledWorkStats();
   const user = session?.user as { id?: unknown; name?: unknown } | undefined;
@@ -39,7 +42,7 @@ export default async function StatsPage() {
       const memberName = typeof user.name === "string" && user.name.trim().length > 0 ? user.name : "Member";
       return (
         <AppShell memberName={memberName} isModerator={currentRole === "MODERATOR"}>
-          <StatsSections stats={stats} />
+          <StatsSections stats={stats} refreshMinutes={SETTLED_WORK_REFRESH_MINUTES} />
         </AppShell>
       );
     }
@@ -47,7 +50,7 @@ export default async function StatsPage() {
   return (
     <PublicAppShell>
       <main className="page-content" id="main-content">
-        <StatsSections stats={stats} />
+        <StatsSections stats={stats} refreshMinutes={SETTLED_WORK_REFRESH_MINUTES} />
       </main>
     </PublicAppShell>
   );

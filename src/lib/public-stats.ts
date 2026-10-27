@@ -7,6 +7,9 @@ export type SettledWorkStats = {
   readAt: Date;
 };
 
+/** How long a reading is reused; the stats page states this same number to visitors. */
+export const SETTLED_WORK_REFRESH_MINUTES = 10;
+
 export function createSettledWorkReader(
   dependencies: Pick<DashboardQueryDependencies, "sql"> & { now?: () => number } = {},
 ) {
@@ -15,7 +18,7 @@ export function createSettledWorkReader(
   let inFlight: Promise<SettledWorkStats> | undefined;
   return async () => {
     if (inFlight !== undefined) return inFlight;
-    if (cached !== undefined && now() - cached.readAt.getTime() < 10 * 60 * 1000) return cached;
+    if (cached !== undefined && now() - cached.readAt.getTime() < SETTLED_WORK_REFRESH_MINUTES * 60 * 1000) return cached;
     inFlight = (async () => {
       const sql = resolveSql(dependencies);
       const [row] = await sql<{ pull_requests: string; contributors: string; points: string }[]>`
