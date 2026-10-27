@@ -70,6 +70,12 @@ src/app/api/account/*
 !src/app/api/account/export/
 src/app/api/account/export/*
 !src/app/api/account/export/*.ts
+!src/app/api/account/work-mail/
+src/app/api/account/work-mail/*
+!src/app/api/account/work-mail/*.ts
+!src/app/api/account/work-mail/confirm/
+src/app/api/account/work-mail/confirm/*
+!src/app/api/account/work-mail/confirm/*.ts
 !src/app/api/auth/
 src/app/api/auth/*
 !src/app/api/auth/[[]...nextauth[]]/
@@ -156,6 +162,11 @@ src/app/api/readiness/*
 !src/app/api/version/
 src/app/api/version/*
 !src/app/api/version/*.ts
+!src/app/api/work-mail/
+src/app/api/work-mail/*
+!src/app/api/work-mail/unsubscribe/
+src/app/api/work-mail/unsubscribe/*
+!src/app/api/work-mail/unsubscribe/*.ts
 !src/app/api/overrides/
 src/app/api/overrides/*
 !src/app/api/overrides/*.ts

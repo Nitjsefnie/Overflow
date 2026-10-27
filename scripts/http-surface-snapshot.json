@@ -269,6 +269,28 @@
         "id": "string"
       }
     },
+    "GET /api/account/work-mail": {
+      "enabled": "boolean",
+      "subscription": {
+        "address": "string",
+        "confirmed": "boolean",
+        "confirmedAt": "string",
+        "confirmExpiresAt": "string",
+        "lastNotifiedAt": "string"
+      }
+    },
+    "POST /api/account/work-mail": {
+      "requested": "boolean"
+    },
+    "DELETE /api/account/work-mail": {
+      "deleted": "boolean"
+    },
+    "POST /api/account/work-mail/confirm": {
+      "confirmed": "boolean"
+    },
+    "POST /api/work-mail/unsubscribe": {
+      "received": "boolean"
+    },
     "GET /api/dashboard": {
       "availableHeadroom": "number",
       "earnedTotal": "number",
@@ -936,6 +958,11 @@
     "DELETE /api/forge-identities": 200,
     "DELETE /api/account": 200,
     "POST /api/account/export": 200,
+    "GET /api/account/work-mail": 200,
+    "POST /api/account/work-mail": 202,
+    "DELETE /api/account/work-mail": 200,
+    "POST /api/account/work-mail/confirm": 200,
+    "POST /api/work-mail/unsubscribe": 200,
     "GET /api/dashboard": 200,
     "GET /api/issues": 200,
     "GET /api/settlements": 200,
@@ -1109,6 +1136,54 @@
       "415 UNSUPPORTED_MEDIA_TYPE",
       "429 RATE_LIMITED",
       "500 MISCONFIGURED",
+      "502 UPSTREAM_FAILURE"
+    ],
+    "GET /api/account/work-mail": [
+      "400 INVALID_REQUEST",
+      "401 UNAUTHENTICATED",
+      "403 FORBIDDEN",
+      "404 NOT_FOUND",
+      "413 PAYLOAD_TOO_LARGE",
+      "415 UNSUPPORTED_MEDIA_TYPE",
+      "429 RATE_LIMITED",
+      "500 MISCONFIGURED",
+      "502 UPSTREAM_FAILURE",
+      "503 DAILY_LIMIT_REACHED"
+    ],
+    "POST /api/account/work-mail": [
+      "400 INVALID_REQUEST",
+      "401 UNAUTHENTICATED",
+      "403 FORBIDDEN",
+      "404 NOT_FOUND",
+      "413 PAYLOAD_TOO_LARGE",
+      "415 UNSUPPORTED_MEDIA_TYPE",
+      "429 RATE_LIMITED",
+      "500 MISCONFIGURED",
+      "502 UPSTREAM_FAILURE",
+      "503 DAILY_LIMIT_REACHED"
+    ],
+    "DELETE /api/account/work-mail": [
+      "400 INVALID_REQUEST",
+      "401 UNAUTHENTICATED",
+      "403 FORBIDDEN",
+      "404 NOT_FOUND",
+      "413 PAYLOAD_TOO_LARGE",
+      "415 UNSUPPORTED_MEDIA_TYPE",
+      "429 RATE_LIMITED",
+      "500 MISCONFIGURED",
+      "502 UPSTREAM_FAILURE",
+      "503 DAILY_LIMIT_REACHED"
+    ],
+    "POST /api/account/work-mail/confirm": [
+      "400 INVALID_CONFIRMATION",
+      "401 UNAUTHENTICATED",
+      "403 FORBIDDEN",
+      "404 NOT_FOUND",
+      "415 UNSUPPORTED_MEDIA_TYPE",
+      "500 MISCONFIGURED",
+      "502 UPSTREAM_FAILURE"
+    ],
+    "POST /api/work-mail/unsubscribe": [
       "502 UPSTREAM_FAILURE"
     ],
     "GET /api/dashboard": [
