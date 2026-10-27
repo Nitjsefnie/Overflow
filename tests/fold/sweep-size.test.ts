@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PostgresRepositorySizeStore,
   REPOSITORY_SIZE_REMEASURE_MS,
+  findRepositoryGone,
+  measureRepositorySize,
   type RepositorySizeRow,
 } from "@/lib/fold/repository-size";
 import { sweepReconciliations } from "@/lib/fold/sweep";
+import { GitHubGraphqlRequestError } from "@/lib/github/errors";
 
 const pairs = (...ids: string[]) => ids.map((id) => ({ repositoryId: id, sponsorId: "sponsor" }));
 
@@ -60,7 +63,7 @@ describe("the sweep's repository size measure", () => {
     expect(measured).toEqual(["stale"]);
     expect(rows.get("stale")).toEqual({ totalCount: 1356, measuredAt: at });
     expect(rows.get("fresh")?.totalCount).toBe(20);
-    expect(summary).toEqual({ attempted: 2, enqueued: 2, failed: 0, measured: 1, measureFailed: 0 });
+    expect(summary).toEqual({ attempted: 2, enqueued: 2, failed: 0, measured: 1, measureFailed: 0, gone: 0 });
   });
 
   it("measures a repository that has never been measured", async () => {
@@ -177,6 +180,7 @@ describe("the sweep's repository size measure", () => {
     expect(enqueued).toEqual(["repo"]);
     expect("measured" in summary).toBe(false);
     expect("measureFailed" in summary).toBe(false);
+    expect("gone" in summary).toBe(false);
     expect(summary).toEqual({ attempted: 1, enqueued: 1, failed: 0 });
   });
 });
@@ -289,5 +293,227 @@ describe("the sweep's diff-only rotation filter", () => {
     // An unmeasured backlog reads as zero, so skipping the excluded sponsor's
     // measure would silently return it to the rotation.
     expect(measured).toEqual(["d", "u"]);
+  });
+});
+
+describe("a repository the forge no longer returns", () => {
+  /**
+   * Issue 1422: the measure's own failure does not say whether the repository
+   * is gone (a by-name NOT_FOUND is also what a rename answers), so only the
+   * by-id lookup answering 404 with the sponsor's credential does. These cases
+   * run the real measure and gone-check compositions over a recorded forge.
+   */
+  type Snapshot = { ownerName: string; provider: string; instanceUrl: string | null; githubRepositoryId: number; sponsor: { id: string } };
+  const github: Snapshot = { ownerName: "group/project", provider: "github", instanceUrl: null, githubRepositoryId: 41, sponsor: { id: "sponsor" } };
+  const notFoundByName = () => new GitHubGraphqlRequestError(
+    "GitHub GraphQL request failed. NOT_FOUND: Could not resolve to a Repository with the name 'group/project'.", false, null, 200);
+
+  function forge(options: {
+    repository?: Snapshot;
+    gitHubToken?: string | null;
+    count: () => Promise<number | null>;
+    byId?: () => Promise<object | null>;
+  }) {
+    const requests: string[] = [];
+    const lookup = {
+      getRepository: async () => options.repository ?? github,
+      getGitHubAccessToken: async () => options.gitHubToken === undefined ? "token-a" : options.gitHubToken,
+      resolveForgeToken: async () => ({ token: "pat", identityId: "identity-1" }),
+    };
+    const createGateway = () => ({
+      getRepositoryHistoryCount: async () => { requests.push("count"); return options.count(); },
+      getRepositoryById: async (id: number) => {
+        requests.push(`byId:${id}`);
+        return (options.byId ?? (async () => { throw new Error("the by-id lookup ran without a failed measure"); }))();
+      },
+    });
+    return { requests, measureSize: measureRepositorySize(lookup, createGateway), isGone: findRepositoryGone(lookup, createGateway) };
+  }
+
+  function consoleLines() {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    return { warn, error };
+  }
+
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  async function tick(
+    subject: ReturnType<typeof forge>,
+    foundAt: Map<string, number>,
+    when: Date,
+    rows = new Map<string, RepositorySizeRow>(),
+  ) {
+    const enqueued: string[] = [];
+    const reported: Array<{ repositoryId: string; error: unknown }> = [];
+    const summary = await sweepReconciliations({
+      listActiveRepositorySponsors: async () => pairs("gone-repo"),
+      enqueue: async (repositoryId) => { enqueued.push(repositoryId); },
+      now: () => when,
+      sizeStore: memorySizeStore(rows),
+      measureSize: subject.measureSize,
+      goneRepositories: { isGone: subject.isGone, foundAt },
+      onFailure: (repositoryId, error) => { reported.push({ repositoryId, error }); },
+    });
+    return { summary, enqueued, reported };
+  }
+
+  it("warns once, reports no failure, counts it gone and still offers it to the queue", async () => {
+    const lines = consoleLines();
+    const subject = forge({ count: async () => { throw notFoundByName(); }, byId: async () => null });
+    const foundAt = new Map<string, number>();
+    const { summary, enqueued, reported } = await tick(subject, foundAt, at);
+    expect(subject.requests).toEqual(["count", "byId:41"]);
+    expect(lines.warn.mock.calls).toEqual([[expect.stringContaining("gone-repo")]]);
+    expect(lines.warn.mock.calls[0]![0]).toContain("no longer returns");
+    expect(lines.error).not.toHaveBeenCalled();
+    expect(reported).toEqual([]);
+    expect(enqueued).toEqual(["gone-repo"]);
+    expect(summary).toEqual({ attempted: 1, enqueued: 1, failed: 0, measured: 0, measureFailed: 0, gone: 1 });
+    expect(foundAt).toEqual(new Map([["gone-repo", at.getTime()]]));
+  });
+
+  it("skips the remembered repository's measure on the next tick, silently, and keeps offering it", async () => {
+    const lines = consoleLines();
+    const subject = forge({ count: async () => { throw notFoundByName(); }, byId: async () => null });
+    const foundAt = new Map<string, number>();
+    await tick(subject, foundAt, at);
+    subject.requests.length = 0;
+    lines.warn.mockClear();
+    const later = new Date(at.getTime() + REPOSITORY_SIZE_REMEASURE_MS - 1);
+    const { summary, enqueued, reported } = await tick(subject, foundAt, later);
+    expect(subject.requests).toEqual([]);
+    expect(lines.warn).not.toHaveBeenCalled();
+    expect(lines.error).not.toHaveBeenCalled();
+    expect(reported).toEqual([]);
+    expect(enqueued).toEqual(["gone-repo"]);
+    expect(summary).toEqual({ attempted: 1, enqueued: 1, failed: 0, measured: 0, measureFailed: 0, gone: 1 });
+  });
+
+  it("re-checks once the remeasure window has elapsed, without a second warning while it stays gone", async () => {
+    const lines = consoleLines();
+    const subject = forge({ count: async () => { throw notFoundByName(); }, byId: async () => null });
+    const foundAt = new Map<string, number>();
+    await tick(subject, foundAt, at);
+    subject.requests.length = 0;
+    const later = new Date(at.getTime() + REPOSITORY_SIZE_REMEASURE_MS);
+    const { summary } = await tick(subject, foundAt, later);
+    expect(subject.requests).toEqual(["count", "byId:41"]);
+    expect(lines.warn).toHaveBeenCalledTimes(1);
+    expect(summary.gone).toBe(1);
+    expect(foundAt.get("gone-repo")).toBe(later.getTime());
+  });
+
+  it("forgets a remembered repository whose re-measure succeeds, and warns again if it goes again", async () => {
+    const lines = consoleLines();
+    let count: number | null = null;
+    const subject = forge({
+      count: async () => { if (count === null) throw notFoundByName(); return count; },
+      byId: async () => null,
+    });
+    const foundAt = new Map<string, number>();
+    const rows = new Map<string, RepositorySizeRow>();
+    await tick(subject, foundAt, at, rows);
+    count = 1356;
+    const back = new Date(at.getTime() + REPOSITORY_SIZE_REMEASURE_MS);
+    const { summary } = await tick(subject, foundAt, back, rows);
+    expect(summary).toMatchObject({ measured: 1, measureFailed: 0, gone: 0 });
+    expect(rows.get("gone-repo")).toEqual({ totalCount: 1356, measuredAt: back });
+    expect(foundAt.has("gone-repo")).toBe(false);
+    count = null;
+    const again = new Date(back.getTime() + REPOSITORY_SIZE_REMEASURE_MS);
+    await tick(subject, foundAt, again, rows);
+    expect(lines.warn).toHaveBeenCalledTimes(2);
+    expect(foundAt.get("gone-repo")).toBe(again.getTime());
+  });
+
+  it("reports a renamed repository's by-name NOT_FOUND as today when the by-id lookup still returns it", async () => {
+    const lines = consoleLines();
+    const failure = notFoundByName();
+    const subject = forge({ count: async () => { throw failure; }, byId: async () => ({ id: 41, fullName: "group/renamed" }) });
+    const foundAt = new Map<string, number>();
+    const { summary, enqueued, reported } = await tick(subject, foundAt, at);
+    expect(subject.requests).toEqual(["count", "byId:41"]);
+    expect(reported).toEqual([{ repositoryId: "gone-repo", error: failure }]);
+    expect(lines.warn).not.toHaveBeenCalled();
+    expect(enqueued).toEqual(["gone-repo"]);
+    expect(summary).toEqual({ attempted: 1, enqueued: 1, failed: 0, measured: 0, measureFailed: 1, gone: 0 });
+    expect(foundAt.size).toBe(0);
+  });
+
+  it.each([
+    ["a revoked token (401)", () => new Error("GitHub API request failed with status 401.")],
+    ["a server error (5xx)", () => new Error("GitHub API request failed with status 502.")],
+  ])("reports the measure's own failure when the by-id lookup throws %s", async (_label, lookupFailure) => {
+    const lines = consoleLines();
+    const failure = notFoundByName();
+    const subject = forge({ count: async () => { throw failure; }, byId: async () => { throw lookupFailure(); } });
+    const foundAt = new Map<string, number>();
+    const { summary, reported } = await tick(subject, foundAt, at);
+    expect(subject.requests).toEqual(["count", "byId:41"]);
+    expect(reported).toEqual([{ repositoryId: "gone-repo", error: failure }]);
+    expect(lines.warn).not.toHaveBeenCalled();
+    expect(summary).toMatchObject({ measureFailed: 1, gone: 0 });
+    expect(foundAt.size).toBe(0);
+  });
+
+  it.each([
+    ["no sponsor token", { gitHubToken: null }],
+    ["a malformed ownerName", { repository: { ...github, ownerName: "project" } }],
+    ["a GitLab repository without an instance URL", { repository: { ...github, provider: "gitlab", instanceUrl: null } }],
+  ])("reports today's unavailable measure, with no by-id lookup, for %s", async (_label, shape) => {
+    const lines = consoleLines();
+    const subject = forge({ ...shape, count: async () => 1356, byId: async () => null });
+    const foundAt = new Map<string, number>();
+    const { summary, reported } = await tick(subject, foundAt, at);
+    expect(subject.requests).toEqual([]);
+    expect(reported).toEqual([{ repositoryId: "gone-repo", error: new Error("The repository size measure was unavailable.") }]);
+    expect(lines.warn).not.toHaveBeenCalled();
+    expect(summary).toMatchObject({ measureFailed: 1, gone: 0 });
+  });
+
+  it("finds a GitLab project gone when its count reads null and its by-id lookup answers 404", async () => {
+    const lines = consoleLines();
+    const subject = forge({
+      repository: { ...github, provider: "gitlab", instanceUrl: "https://gitlab.test", githubRepositoryId: 77 },
+      count: async () => null,
+      byId: async () => null,
+    });
+    const { summary, reported } = await tick(subject, new Map(), at);
+    expect(subject.requests).toEqual(["count", "byId:77"]);
+    expect(reported).toEqual([]);
+    expect(lines.warn).toHaveBeenCalledTimes(1);
+    expect(summary).toMatchObject({ measureFailed: 0, gone: 1 });
+  });
+
+  it("never looks the repository up by id when the measure succeeds or only the size write fails", async () => {
+    consoleLines();
+    const subject = forge({ count: async () => 1356 });
+    const { summary } = await tick(subject, new Map(), at);
+    expect(summary).toMatchObject({ measured: 1, gone: 0 });
+    const reported: string[] = [];
+    await sweepReconciliations({
+      listActiveRepositorySponsors: async () => pairs("gone-repo"),
+      enqueue: async () => undefined,
+      now: () => at,
+      sizeStore: { ...memorySizeStore(new Map()), store: async () => { throw new Error("sizes table unavailable"); } },
+      measureSize: subject.measureSize,
+      goneRepositories: { isGone: subject.isGone, foundAt: new Map() },
+      onFailure: (repositoryId) => { reported.push(repositoryId); },
+    });
+    expect(subject.requests).toEqual(["count", "count"]);
+    expect(reported).toEqual(["gone-repo"]);
+  });
+
+  it("counts gone as zero when the size members come without a gone check", async () => {
+    const summary = await sweepReconciliations({
+      listActiveRepositorySponsors: async () => pairs("repo"),
+      enqueue: async () => undefined,
+      now: () => at,
+      sizeStore: memorySizeStore(new Map()),
+      measureSize: async () => null,
+      onFailure: () => undefined,
+    });
+    expect(summary).toEqual({ attempted: 1, enqueued: 1, failed: 0, measured: 0, measureFailed: 1, gone: 0 });
   });
 });
