@@ -313,7 +313,7 @@ describe("eligible issue card", () => {
   });
 
   it("renders the sponsor's done-when statement as text inside the reading column, never as markup", () => {
-    const text = "Done when <strong>pnpm test</strong> passes";
+    const text = "Done when <strong>pnpm test</strong> passes\n  and  pnpm lint is clean";
     const { container } = render(<IssueCard issue={doneWhenIssue({ text, notice: DONE_WHEN_NOTICE })} />);
 
     const blocks = container.querySelectorAll(".issue-card-done-when");
