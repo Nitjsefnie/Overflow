@@ -937,7 +937,7 @@ copy-only change), an operator may deliberately add
 the restart below. Only the exact value `1` suppresses the immediate startup
 sweep; unset, blank, malformed and all other values run it. A shell export in
 the deploy terminal does not configure the systemd service. This opt-out leaves
-the six-hour sweep, queued work, webhook-triggered reconciliation and manual
+the recurring sweep, queued work, webhook-triggered reconciliation and manual
 reconciliation running normally, but missed deliveries may remain unrecovered
 until a later reconciliation.
 

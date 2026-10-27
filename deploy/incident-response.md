@@ -547,7 +547,7 @@ In the locked, attacker-controlled and absent cases, what keeps running without
 the account is the instance half of
 [OPERATING.md](../OPERATING.md#governance-single-maintainer-operation): the
 service under systemd, the webhook receivers, GitHub sign-in, the
-reconciliation worker and its six-hour sweep, and automatic settlement pricing
+reconciliation worker and its recurring sweep, and automatic settlement pricing
 from repository labels. What stops is the codebase half: merges, issue triage,
 `offered:` and `settled:` labelling, deployment, secret rotation, and any
 change to branch protection, a registration's webhook or the App. The deleted
