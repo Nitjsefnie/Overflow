@@ -35,9 +35,12 @@ describe("work-mail unsubscribe tokens", () => {
     const token = mintUnsubscribeToken(id, current);
     const [, mac] = token.split(".") as [string, string];
     const flipped = `${mac.slice(0, -2)}${mac.at(-2) === "A" ? "B" : "A"}${mac.at(-1)}`;
+    // A code point whose low byte is the valid last character: a low-byte encoding reads it as that character.
+    const alias = `${mac.slice(0, -1)}${String.fromCharCode(mac.charCodeAt(mac.length - 1) + 0x100)}`;
     const refused = [
       `${randomUUID()}.${mac}`,
       `${id}.${flipped}`,
+      `${id}.${alias}`,
       `${id}.${mac}=`,
       `${id}.${mac}!`,
       `${id.toUpperCase()}.${mac}`,
