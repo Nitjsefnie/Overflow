@@ -56,14 +56,17 @@ afterAll(async () => {
 });
 
 describe("scrubbing free text when a repository is unregistered", () => {
-  it("nulls the materialized issue and pull request bodies while keeping every row", async () => {
+  it("nulls the materialized issue and pull request bodies and the done-when statement while keeping every row", async () => {
     const repository = await registeredRepository();
     await materializedRows(repository.repositoryId);
+    expect(await sql`update issues set done_when = 'Done when the suite passes.' where repository_id = ${repository.repositoryId} returning id`)
+      .toHaveLength(1);
 
     await expect(store.unregisterRepository(registrationOf(repository))).resolves.toMatchObject({
       kind: "UNREGISTERED",
     });
     expect(await issueBodies(repository.repositoryId)).toEqual([{ body: null }]);
+    expect(await sql`select done_when from issues where repository_id = ${repository.repositoryId}`).toEqual([{ done_when: null }]);
     expect(await pullRequestBodies(repository.repositoryId)).toEqual([{ body: null }]);
     expect(await rowCount("issues", repository.repositoryId)).toBe(1);
     expect(await rowCount("pull_requests", repository.repositoryId)).toBe(1);
