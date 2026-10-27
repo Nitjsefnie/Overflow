@@ -11,7 +11,7 @@ import {
   type DashboardRouteDependencies,
 } from "../src/app/api/dashboard/route.ts";
 import { createIssuesGetHandler, type IssuesRouteDependencies } from "../src/app/api/issues/route.ts";
-import { DONE_WHEN_NOTICE } from "../src/lib/dashboard/eligible-issues.ts";
+import { AGENT_PROMPT_NOTICE, DONE_WHEN_NOTICE, RECOMMENDED_MODEL_NOTICE } from "../src/lib/dashboard/eligible-issues.ts";
 import {
   createSettlementsGetHandler,
   type SettlementsRouteDependencies,
@@ -419,6 +419,8 @@ async function deriveGetIssues(): Promise<DerivedAnswer> {
         availableHeadroom: 80,
         asksOutsideRepository: false,
         doneWhen: { text: "Done when the response-shape snapshot records every route.", notice: DONE_WHEN_NOTICE },
+        agentPrompt: { text: "Agent prompt: run pnpm test, then pnpm typecheck.", notice: AGENT_PROMPT_NOTICE },
+        recommendedModel: { text: "Opus 5", notice: RECOMMENDED_MODEL_NOTICE },
         createdAt: "2026-01-10T09:00:00.000Z",
       },
     ],

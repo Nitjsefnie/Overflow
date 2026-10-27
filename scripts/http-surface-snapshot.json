@@ -1,6 +1,6 @@
 {
   "snapshotFormat": 2,
-  "httpServerVersion": "1.9.0",
+  "httpServerVersion": "1.10.0",
   "errorEnvelope": {
     "error": {
       "code": "string",
@@ -316,6 +316,10 @@
       "settledBalance": "number"
     },
     "GET /api/issues": {
+      "agentPrompt": {
+        "notice": "string",
+        "text": "string"
+      },
       "asksOutsideRepository": "boolean",
       "assigneeGitHubLogin": "null",
       "availableHeadroom": "number",
@@ -330,6 +334,10 @@
       "issueNumber": "number",
       "openingLabel": "string",
       "openingName": "string",
+      "recommendedModel": {
+        "notice": "string",
+        "text": "string"
+      },
       "repositoryName": "string",
       "reservePoints": "number",
       "sponsorLogin": "string",
