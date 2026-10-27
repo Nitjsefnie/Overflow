@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Socket } from "node:net";
+import net, { type Socket } from "node:net";
 import tls from "node:tls";
 import { parseContributorAddress, type SmtpSettings } from "@/lib/accounts/work-mail-config";
 import { plural } from "@/lib/plural";
@@ -93,9 +93,11 @@ export function buildDigestMessage(input: MessageInput & { count: number; unsubs
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const MAX_REPLY_BUFFER = 64 * 1024;
 
 function connectTls(host: string, port: number): Socket {
-  return tls.connect({ host, port, servername: host, rejectUnauthorized: true });
+  // SNI takes a host name only (RFC 6066); an IP literal is verified against the certificate without it.
+  return tls.connect({ host, port, ...(net.isIP(host) === 0 ? { servername: host } : {}), rejectUnauthorized: true });
 }
 
 /** Each reply's final code, null for a malformed line; resolves null once the socket is gone. */
@@ -106,6 +108,10 @@ function replyReader(socket: Socket): () => Promise<number | null> {
   let wake = () => {};
   socket.on("data", (chunk: Buffer) => {
     buffered += chunk.toString("latin1");
+    if (buffered.length > MAX_REPLY_BUFFER) {
+      socket.destroy();
+      return;
+    }
     for (let end = buffered.indexOf("\r\n"); end !== -1; end = buffered.indexOf("\r\n")) {
       const match = /^(\d{3})(?:([ -]).*)?$/.exec(buffered.slice(0, end));
       buffered = buffered.slice(end + 2);

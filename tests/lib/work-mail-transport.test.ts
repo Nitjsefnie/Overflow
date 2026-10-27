@@ -172,6 +172,18 @@ describe("createSmtpsTransport", () => {
     expect(sockets[0].destroyed).toBe(true);
   });
 
+  it("reads bare-code replies with no text", async () => {
+    const fake = await fakeSmtp({ greeting: "220", EHLO: "250-fake\r\n250", AUTH: "235", MAIL: "250", RCPT: "250", DATA: "354", END: "250" });
+
+    expect(await createSmtpsTransport(smtp, { connect: loopback(fake), timeoutMs: 2_000 }).send(message())).toEqual({ ok: true });
+  });
+
+  it("accepts a reply line just under 64 KiB", async () => {
+    const fake = await fakeSmtp({ greeting: `220 ${"x".repeat(60_000)}` });
+
+    expect(await createSmtpsTransport(smtp, { connect: loopback(fake) }).send(message())).toEqual({ ok: true });
+  });
+
   it("reads the code of a multi-line reply from its last line", async () => {
     const fake = await fakeSmtp({ EHLO: "250-fake\r\n250-SIZE 1000\r\n502 no" });
 
@@ -188,6 +200,8 @@ describe("createSmtpsTransport", () => {
   it.each<[string, Partial<Record<Step, Reply>>]>([
     ["a malformed greeting", { greeting: "hello there" }],
     ["a greeting with a short code", { greeting: "22 hi" }],
+    ["a greeting with a four-digit code", { greeting: "2200 hi" }],
+    ["a greeting line over 64 KiB", { greeting: `220 ${"x".repeat(70_000)}` }],
     ["a dropped connection", { MAIL: "close" }],
   ])("fails without a code on %s", async (_name, replies) => {
     const fake = await fakeSmtp(replies);
@@ -220,14 +234,18 @@ describe("createSmtpsTransport", () => {
     expect(await sending).toEqual({ ok: false, code: null });
   });
 
-  it("dials TLS with certificate verification and the host as the server name by default", async () => {
+  it.each([
+    ["a host name", "mail.example.net", { servername: "mail.example.net" }],
+    ["an IPv4 address, without a server name", "192.0.2.10", {}],
+    ["an IPv6 address, without a server name", "2001:db8::25", {}],
+  ])("dials TLS with certificate verification for %s by default", async (_name, host, sni) => {
     const fake = await fakeSmtp();
     const dial = vi.spyOn(tls, "connect").mockImplementation(() => net.connect(fake.port, "127.0.0.1") as tls.TLSSocket);
 
-    expect(await createSmtpsTransport({ ...smtp, port: 2465 }).send(message())).toEqual({ ok: true });
+    expect(await createSmtpsTransport({ ...smtp, host, port: 2465 }).send(message())).toEqual({ ok: true });
 
     expect(dial).toHaveBeenCalledTimes(1);
-    expect(dial.mock.calls[0]).toEqual([{ host: "mail.example.net", port: 2465, servername: "mail.example.net", rejectUnauthorized: true }]);
+    expect(dial.mock.calls[0]).toStrictEqual([{ host, port: 2465, ...sni, rejectUnauthorized: true }]);
   });
 });
 
