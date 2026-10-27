@@ -242,8 +242,13 @@ export class PostgresFoldMaterializationStore {
       throw new Error("Invalid reconciliation cost observation.");
     }
     return this.coordinator.withRepositoryPublication(input.repositoryId, async (transaction) => {
-      const [run] = await transaction<{ status: string; graphql_cost_sponsor_id: string | null }[]>`
-        select status, graphql_cost_sponsor_id from reconciliation_runs
+      // `active` is read after withRepositoryPublication locked the registration row, so an unregistration
+      // either committed before it or scrubs after this transaction; a pass that read earlier must not
+      // write the done-when statement back.
+      const [run] = await transaction<{ status: string; graphql_cost_sponsor_id: string | null; active: boolean | null }[]>`
+        select status, graphql_cost_sponsor_id,
+          (select active from registered_repositories where id = ${input.repositoryId}) as active
+        from reconciliation_runs
         where id = ${input.runId} and repository_id = ${input.repositoryId} for update
       `;
       // Reject terminal or charged runs before any derived write.
@@ -278,7 +283,7 @@ export class PostgresFoldMaterializationStore {
         loadExistingSelfWorkCalibrations(transaction, input.repositoryId),
         loadGrantedSettlementOverrides(transaction, input.repositoryId),
       ]);
-      const issueIds = await upsertIssues(transaction, input.repositoryId, publication.fold);
+      const issueIds = await upsertIssues(transaction, input.repositoryId, publication.fold, run.active === true);
       const pullRequestIds = await upsertPullRequests(transaction, input.repositoryId, publication.fold, issueIds);
       await replacePullRequestIssueLinks(transaction, input.repositoryId, publication.fold, issueIds, pullRequestIds);
       const settlementDeltas = await materializeSettlements(
@@ -352,15 +357,12 @@ async function upsertIssues(
   sql: TransactionClient,
   repositoryId: string,
   fold: FoldResult,
+  registered: boolean,
 ): Promise<Map<number, string>> {
   const ids = new Map<number, string>();
   // Raw fields share GitHub's clock with webhooks. A cached or in-flight fold
   // may be older; its derived evidence must still be materialized below.
   const acceptsRawView = sql`issues.github_updated_at is null or excluded.github_updated_at >= issues.github_updated_at`;
-  // The publication holds this registration row `for update`, so an unregistration either committed before
-  // this read or scrubs after this transaction; a pass that read before it must not write the statement back.
-  const [registration] = await sql<{ active: boolean }[]>`select active from registered_repositories where id = ${repositoryId}`;
-  const registered = registration?.active === true;
   for (const issue of fold.issues) {
     // Absent means this pass held the issue from cache, with no comment bodies to read it from.
     const doneWhen = !registered ? sql`null` : issue.doneWhen === undefined
