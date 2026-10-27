@@ -1,8 +1,9 @@
-import { createCipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   credentialBinding,
   decryptToken,
+  derivePurposeKey,
   encryptToken,
   isEnvelopeCurrent,
   loadTokenKeySet,
@@ -291,5 +292,18 @@ describe("current-envelope detection", () => {
 
     expect(isEnvelopeCurrent(`v2.${expectedKeyId(encryptionKey)}.x`, encryptionKey)).toBe(false);
     expect(isEnvelopeCurrent(`${current}.extra`, encryptionKey)).toBe(false);
+  });
+});
+
+describe("purpose key derivation", () => {
+  it("is HMAC-SHA256 of the label under the decoded key, so labels and keys never share a key", () => {
+    const expected = createHmac("sha256", Buffer.from(encryptionKey, "base64url")).update("purpose:a", "utf8").digest();
+    expect(derivePurposeKey(encryptionKey, "purpose:a")).toEqual(expected);
+    expect(derivePurposeKey(encryptionKey, "purpose:b")).not.toEqual(expected);
+    expect(derivePurposeKey(otherKey, "purpose:a")).not.toEqual(expected);
+  });
+
+  it("refuses a key that does not decode to 32 bytes", () => {
+    expect(() => derivePurposeKey("short", "purpose:a")).toThrow("Token encryption key must decode to exactly 32 bytes.");
   });
 });

@@ -57,6 +57,15 @@ export type AccountExportForgeIdentity = {
   hasStoredToken: boolean;
 };
 
+/** The opt-in work-mail address; the pending confirmation token's hash is never exported. */
+export type AccountExportWorkMail = {
+  address: string;
+  confirmedAt: string | null;
+  lastNotifiedAt: string | null;
+  createdAt: string;
+  confirmExpiresAt: string | null;
+};
+
 export type AccountExportSponsoredRepository = {
   id: string;
   ownerName: string;
@@ -74,6 +83,8 @@ export type AccountExport = {
   apiToken: AccountExportApiToken | null;
   forgeIdentities: AccountExportForgeIdentity[];
   sponsoredRepositories: AccountExportSponsoredRepository[];
+  workMail: AccountExportWorkMail | null;
+  workMailConfirmations: AccountExportRow[];
   settlements: { asCreditor: AccountExportRow[]; asDebtor: AccountExportRow[] };
   authoredPullRequests: AccountExportRow[];
   moderationEvents: { asTarget: AccountExportRow[]; asActor: AccountExportRow[] };
@@ -139,7 +150,7 @@ export type UserForeignKeyExportEntry =
       column: string;
       kind: "explicit";
       /** The dedicated secret-free loader that renders this table's section. */
-      loader: "apiToken" | "sponsoredRepositories" | "forgeIdentities";
+      loader: "apiToken" | "sponsoredRepositories" | "forgeIdentities" | "workMail";
     };
 
 export const userForeignKeyExports: readonly UserForeignKeyExportEntry[] = [
@@ -157,6 +168,7 @@ export const userForeignKeyExports: readonly UserForeignKeyExportEntry[] = [
     kind: "explicit",
     loader: "forgeIdentities",
   },
+  { table: "contributor_work_mail_subscriptions", column: "user_id", kind: "explicit", loader: "workMail" },
   // Everything else: the full row as jsonb.
   { table: "settlements", column: "creditor_id", path: "settlements.asCreditor", kind: "jsonb", orderBy: ["created_at", "id"] },
   { table: "settlements", column: "debtor_id", path: "settlements.asDebtor", kind: "jsonb", orderBy: ["created_at", "id"] },
@@ -192,6 +204,7 @@ export const userForeignKeyExports: readonly UserForeignKeyExportEntry[] = [
   { table: "moderation_credit_adjustment_lines", column: "creditor_id", path: "moderationCreditAdjustmentLines", kind: "jsonb", orderBy: ["adjustment_id", "settlement_id"] },
   { table: "dispute_credit_adjustments", column: "target_account_id", path: "disputeCreditAdjustments", kind: "jsonb", orderBy: ["created_at", "id"] },
   { table: "dispute_credit_adjustment_lines", column: "creditor_id", path: "disputeCreditAdjustmentLines", kind: "jsonb", orderBy: ["adjustment_id", "id"] },
+  { table: "contributor_work_mail_confirmations", column: "user_id", path: "workMailConfirmations", kind: "jsonb", orderBy: ["sent_at", "id"] },
 ];
 
 function iso(value: Date): string {
@@ -312,6 +325,28 @@ async function loadApiToken(sql: ExportClient, userId: string): Promise<AccountE
       };
 }
 
+async function loadWorkMail(sql: ExportClient, userId: string): Promise<AccountExportWorkMail | null> {
+  const [row] = await sql<{
+    address: string;
+    confirmed_at: Date | null;
+    last_notified_at: Date | null;
+    created_at: Date;
+    confirm_expires_at: Date | null;
+  }[]>`
+    select address, confirmed_at, last_notified_at, created_at, confirm_expires_at
+    from contributor_work_mail_subscriptions where user_id = ${userId}
+  `;
+  return row === undefined
+    ? null
+    : {
+        address: row.address,
+        confirmedAt: isoOrNull(row.confirmed_at),
+        lastNotifiedAt: isoOrNull(row.last_notified_at),
+        createdAt: iso(row.created_at),
+        confirmExpiresAt: isoOrNull(row.confirm_expires_at),
+      };
+}
+
 function setSection(document: AccountExport, path: string, rows: AccountExportRow[]): void {
   const keys = path.split(".");
   const last = keys.pop()!;
@@ -381,6 +416,8 @@ export async function exportAccount(
         apiToken: null,
         forgeIdentities: [],
         sponsoredRepositories: [],
+        workMail: null,
+        workMailConfirmations: [],
         settlements: { asCreditor: [], asDebtor: [] },
         authoredPullRequests: [],
         moderationEvents: { asTarget: [], asActor: [] },
@@ -415,6 +452,9 @@ export async function exportAccount(
                 break;
               case "forgeIdentities":
                 document.forgeIdentities = await loadForgeIdentities(tx, account.id);
+                break;
+              case "workMail":
+                document.workMail = await loadWorkMail(tx, account.id);
                 break;
               default: {
                 throw new Error(`no dedicated export loader for ${entry.table}.${entry.column}`);

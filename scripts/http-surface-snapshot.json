@@ -1,6 +1,6 @@
 {
   "snapshotFormat": 2,
-  "httpServerVersion": "1.9.0",
+  "httpServerVersion": "1.10.0",
   "errorEnvelope": {
     "error": {
       "code": "string",
@@ -256,6 +256,17 @@
         "ownerName": "string",
         "provider": "string",
         "unregisteredAt": "null"
+      },
+      "workMail": {
+        "address": "string",
+        "confirmedAt": "string",
+        "confirmExpiresAt": "null",
+        "createdAt": "string",
+        "lastNotifiedAt": "null"
+      },
+      "workMailConfirmations": {
+        "createdAt": "string",
+        "id": "string"
       }
     },
     "GET /api/dashboard": {

@@ -113,6 +113,7 @@ export const bundledMigrationNames: readonly string[] = [
   "081_issue_outside_repository_mark.sql",
   "082_issue_done_when.sql",
   "084_reconciliation_sweep_repository_spend.sql",
+  "085_contributor_work_mail.sql",
 ];
 
 /**
