@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  AGENT_PROMPT_MAX_BYTES, AGENT_PROMPT_PHRASE, agentPromptText, attachDoneWhen, RECOMMENDED_MODEL_MAX_CHARS,
-  RECOMMENDED_MODEL_PHRASE, recommendedModelText, sponsorAgentPrompt, sponsorDoneWhen, sponsorRecommendedModel,
+  AGENT_PROMPT_PHRASE, agentPromptText, attachDoneWhen, RECOMMENDED_MODEL_PHRASE, recommendedModelText, sponsorAgentPrompt, sponsorDoneWhen, sponsorRecommendedModel,
 } from "@/lib/fold/done-when";
 import { foldRepository, type FoldIssue, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type { GitHubIssueComment, GitHubIssueHistoryEvent } from "@/lib/github/types";
 
 const SPONSOR: FoldUser = { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE" };
+// The ruled limits, written out so changing a cap constant fails here instead of moving its own test.
+const PROMPT_LIMIT_BYTES = 2048;
+const MODEL_LIMIT_CHARS = 100;
 const T = Date.parse("2026-10-01T12:00:00.000Z");
 
 // Each field is its own sponsor comment; `valid` opens with the field's phrase and carries a value, `invalid` opens with it and does not.
@@ -105,16 +107,16 @@ describe("agentPromptText", () => {
     const text = agentPromptText(body) ?? "";
 
     expect(text.includes("�")).toBe(false);
-    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(AGENT_PROMPT_MAX_BYTES);
-    expect(Buffer.byteLength(text)).toBeGreaterThan(AGENT_PROMPT_MAX_BYTES - 6);
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(PROMPT_LIMIT_BYTES);
+    expect(Buffer.byteLength(text)).toBeGreaterThan(PROMPT_LIMIT_BYTES - 6);
     expect(text.endsWith("…")).toBe(true);
     expect(body.startsWith(text.slice(0, -1))).toBe(true);
   });
 
   it("stores a body of exactly the byte limit unchanged and cuts one byte more", () => {
-    const body = `${AGENT_PROMPT_PHRASE} ${"x".repeat(AGENT_PROMPT_MAX_BYTES - AGENT_PROMPT_PHRASE.length - 1)}`;
+    const body = `${AGENT_PROMPT_PHRASE} ${"x".repeat(PROMPT_LIMIT_BYTES - AGENT_PROMPT_PHRASE.length - 1)}`;
 
-    expect(Buffer.byteLength(body)).toBe(AGENT_PROMPT_MAX_BYTES);
+    expect(Buffer.byteLength(body)).toBe(PROMPT_LIMIT_BYTES);
     expect(agentPromptText(body)).toBe(body);
     expect(agentPromptText(`${body}x`)).toBe(`${body.slice(0, -3)}…`);
   });
@@ -148,7 +150,7 @@ describe("recommendedModelText", () => {
   });
 
   it("accepts exactly the character limit and refuses one more, counted in characters", () => {
-    const limit = RECOMMENDED_MODEL_MAX_CHARS;
+    const limit = MODEL_LIMIT_CHARS;
 
     expect(recommendedModelText(`Recommended model: ${"x".repeat(limit)}`)).toBe("x".repeat(limit));
     expect(recommendedModelText(`Recommended model: ${"x".repeat(limit + 1)}`)).toBeNull();
