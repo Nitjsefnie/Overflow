@@ -102,11 +102,13 @@ describe("agentPromptText", () => {
     expect(agentPromptText("Agent prompt x <!-- never closed\nmore")).toBe("Agent prompt x");
   });
 
-  it.each(["é", "😀"])("caps a body of %s at the byte limit on a character boundary", (unit) => {
-    const body = `${AGENT_PROMPT_PHRASE} ${unit.repeat(Math.ceil(3000 / Buffer.byteLength(unit)))}`;
+  // The ellipsis cut falls at byte limit - 3; a pad of 1 to 3 ASCII bytes puts it inside a character, so the walk back must run.
+  it.each([["é", "a"], ["😀", "a"], ["😀", "aa"], ["😀", "aaa"]])("caps a body of %s after %j on a character boundary", (unit, pad) => {
+    const body = `${AGENT_PROMPT_PHRASE} ${pad}${unit.repeat(Math.ceil(3000 / Buffer.byteLength(unit)))}`;
     const text = agentPromptText(body) ?? "";
 
-    expect(text.includes("�")).toBe(false);
+    expect(Buffer.from(body)[PROMPT_LIMIT_BYTES - Buffer.byteLength("…")]! & 0xc0).toBe(0x80);
+    expect(text.includes("\uFFFD")).toBe(false);
     expect(Buffer.byteLength(text)).toBeLessThanOrEqual(PROMPT_LIMIT_BYTES);
     expect(Buffer.byteLength(text)).toBeGreaterThan(PROMPT_LIMIT_BYTES - 6);
     expect(text.endsWith("…")).toBe(true);
@@ -161,7 +163,7 @@ describe("recommendedModelText", () => {
   });
 
   it("refuses control and format characters, and never truncates", () => {
-    for (const bad of ["\u0007", "​", "\t", "‮", "\u0000"]) {
+    for (const bad of ["\u0007", "\u200B", "\t", "\u202E", "\u0000"]) {
       expect(recommendedModelText(`Recommended model: Opus${bad}5`), JSON.stringify(bad)).toBeNull();
     }
   });
@@ -204,29 +206,64 @@ describe("settlement invariance", () => {
     ...fold,
     issues: fold.issues.map((issue) => Object.fromEntries(Object.entries(issue).filter(([key]) => !(ADVICE_FIELDS as readonly string[]).includes(key))) as FoldIssue),
   });
+  const foldAndAttach = (snapshot: RepositoryFoldSnapshot): FoldResult => {
+    const fold = foldRepository(snapshot);
+    attachSponsorStatements(fold, fresh(snapshot), SPONSOR);
+    return fold;
+  };
+  const PROMPT = "Agent prompt: run the whole suite first.";
+  const MODEL = "Recommended model: claude-opus-5-5";
 
-  it("leaves settlement, credit and claim outputs unchanged by the sponsor's prompt and model comments", () => {
+  it("keeps every other output when the issue already has a settlement rationale", () => {
     const plain = settledFixture();
     const advised = settledFixture();
-    // Inside the settlement rationale window's grace, before the assignment: the spot a rationale selector could wrongly take.
     advised.issues[0]!.comments.unshift(
-      advice("advice-1", 501, "Agent prompt: run the whole suite first.", "2026-09-01T10:48:00.000Z"),
-      advice("advice-2", 502, "Recommended model: claude-opus-5-5", "2026-09-01T10:49:00.000Z"),
+      advice("advice-1", 501, PROMPT, "2026-09-01T10:48:00.000Z"),
+      advice("advice-2", 502, MODEL, "2026-09-01T10:49:00.000Z"),
     );
-    const base = foldRepository(plain);
-    const folded = foldRepository(advised);
+    const base = foldAndAttach(plain);
+    const folded = foldAndAttach(advised);
 
-    expect(base.settlements).toHaveLength(1);
+    expect(base.settlements.map(({ status }) => status)).toEqual(["SETTLED"]);
     expect(base.ledgerEntries.length).toBeGreaterThan(0);
     expect(base.issues[0]!.claimAssigneeGitHubLogin).toBe("contributor");
     expect(base.issues[0]!.settledRationaleCommentId).toBe("comment-1");
-    attachSponsorStatements(base, fresh(plain), SPONSOR);
-    attachSponsorStatements(folded, fresh(advised), SPONSOR);
-
     expect(base.issues[0]!.agentPrompt).toBeNull();
-    expect(folded.issues[0]!.agentPrompt).toEqual({ text: "Agent prompt: run the whole suite first.", commentId: "advice-1" });
+    expect(folded.issues[0]!.agentPrompt).toEqual({ text: PROMPT, commentId: "advice-1" });
     expect(folded.issues[0]!.recommendedModel).toEqual({ text: "claude-opus-5-5", commentId: "advice-2" });
     expect(withoutAdvice(folded)).toEqual(withoutAdvice(base));
+  });
+
+  it("leaves an unsettled issue unsettled when the statements precede its assignment and the rationale window", () => {
+    const plain = settledFixture({ rationale: false });
+    const advised = settledFixture({ rationale: false });
+    advised.issues[0]!.comments.push(
+      advice("advice-1", 501, PROMPT, "2026-08-30T10:30:00.000Z"),
+      advice("advice-2", 502, MODEL, "2026-08-30T10:31:00.000Z"),
+    );
+    const base = foldAndAttach(plain);
+    const folded = foldAndAttach(advised);
+
+    expect(base.settlements.map(({ status, credits }) => [status, credits])).toEqual([["UNSETTLED", 0]]);
+    expect(base.issues[0]!.claimAssigneeGitHubLogin).toBe("contributor");
+    expect(base.issues[0]!.settledRationaleCommentId).toBeNull();
+    expect(folded.issues[0]!.agentPrompt?.commentId).toBe("advice-1");
+    expect(folded.issues[0]!.recommendedModel?.commentId).toBe("advice-2");
+    expect(withoutAdvice(folded)).toEqual(withoutAdvice(base));
+  });
+
+  it("counts a statement comment inside the rationale window as any other nonblank sponsor comment", () => {
+    const withStatement = settledFixture({ rationale: false });
+    const withOrdinary = settledFixture({ rationale: false });
+    withStatement.issues[0]!.comments.push(advice("c-1", 501, MODEL, "2026-09-01T10:49:00.000Z"));
+    withOrdinary.issues[0]!.comments.push(advice("c-1", 501, "Looks good to me.", "2026-09-01T10:49:00.000Z"));
+    const statement = foldAndAttach(withStatement);
+    const ordinary = foldAndAttach(withOrdinary);
+
+    expect(ordinary.settlements.map(({ status }) => status)).toEqual(["SETTLED"]);
+    expect(ordinary.issues[0]!.settledRationaleCommentId).toBe("c-1");
+    expect(statement.issues[0]!.recommendedModel?.commentId).toBe("c-1");
+    expect(withoutAdvice(statement)).toEqual(withoutAdvice(ordinary));
   });
 });
 
@@ -237,7 +274,7 @@ function advice(id: string, databaseId: number, body: string, createdAt: string)
   return { id, databaseId, authorLogin: "sponsor", authorGitHubUserId: 1001, body, createdAt, lastEditedAt: null };
 }
 
-function settledFixture(): RepositoryFoldSnapshot {
+function settledFixture({ rationale = true } = {}): RepositoryFoldSnapshot {
   return {
     repository: {
       id: "repository", githubRepositoryId: 5001, ownerName: "octo/example", active: true, registeredAt: "2026-01-01T00:00:00.000Z",
@@ -263,10 +300,10 @@ function settledFixture(): RepositoryFoldSnapshot {
         { kind: "ASSIGNED", id: "assigned-1", actorLogin: "sponsor", actorGitHubUserId: null, assigneeLogin: "contributor", createdAt: "2026-09-01T10:55:00.000Z" },
         { kind: "LABELED", id: "actual-1", actorLogin: "sponsor", actorGitHubUserId: null, label: "delivered/6", createdAt: "2026-09-01T11:00:00.000Z" },
       ],
-      comments: [{
+      comments: rationale ? [{
         id: "comment-1", databaseId: 401, authorLogin: "sponsor", authorGitHubUserId: null,
         body: "Settled as delivered/6 after reviewing the final diff.", createdAt: "2026-09-01T11:30:00.000Z", lastEditedAt: null,
-      }],
+      }] : [],
       closingPullRequests: [{
         id: 201, number: 11, title: "Pull request", url: "https://github.com/octo/example/pull/11", state: "MERGED",
         mergedAt: "2026-09-01T12:00:00.000Z", mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
