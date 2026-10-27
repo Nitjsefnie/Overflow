@@ -115,7 +115,9 @@ function isStoredPath({ ownerName, provider }: RepositorySizeMeasureRepository):
   const segments = ownerName.split("/");
   if (segments.some((segment) => segment === "" || segment === "." || segment === ".." || /[^A-Za-z0-9_.-]/.test(segment))) return false;
   return provider === "gitlab"
-    ? segments.length >= 2 && segments.every((segment) => !segment.startsWith("-"))
+    ? segments.length >= 2 && segments.every((segment, index) =>
+      !segment.startsWith("-") && !segment.endsWith(".git") && !segment.endsWith(".atom")
+      && (index === segments.length - 1 || !segment.endsWith(".")))
     : segments.length === 2 && /^[A-Za-z0-9]/.test(segments[0]!);
 }
 
