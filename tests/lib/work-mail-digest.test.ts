@@ -227,7 +227,7 @@ describe("the digest cycle", () => {
     expect(built.map((input) => input.origin)).toEqual(["https://board.overflow.example"]);
     const header = transport.sent[0]!.content.split("\r\n").find((line) => line.startsWith("List-Unsubscribe: "))!;
     const token = /[?&]token=([^>]+)>$/.exec(header)![1]!;
-    expect(verifyUnsubscribeToken(token, tokenKey, undefined)).toBe(row.id);
+    expect(verifyUnsubscribeToken(token, tokenKey, "")).toBe(row.id);
   });
 });
 

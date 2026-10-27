@@ -18,7 +18,7 @@ describe("work-mail unsubscribe tokens", () => {
   it("verifies to the id it names under the current key", () => {
     const current = key();
     const id = randomUUID();
-    expect(verifyUnsubscribeToken(mintUnsubscribeToken(id, current), current, undefined)).toBe(id);
+    expect(verifyUnsubscribeToken(mintUnsubscribeToken(id, current), current, "")).toBe(id);
   });
 
   it("still verifies a token minted under the key that is now the previous one", () => {
@@ -26,7 +26,7 @@ describe("work-mail unsubscribe tokens", () => {
     const id = randomUUID();
     const token = mintUnsubscribeToken(id, old);
     expect(verifyUnsubscribeToken(token, key(), old)).toBe(id);
-    expect(verifyUnsubscribeToken(token, key(), undefined)).toBeNull();
+    expect(verifyUnsubscribeToken(token, key(), "")).toBeNull();
   });
 
   it("refuses a token naming another id, a forged or re-encoded signature, and malformed shapes", () => {
@@ -51,14 +51,14 @@ describe("work-mail unsubscribe tokens", () => {
       "",
     ];
     for (const candidate of refused) {
-      expect(verifyUnsubscribeToken(candidate, current, undefined), candidate).toBeNull();
+      expect(verifyUnsubscribeToken(candidate, current, ""), candidate).toBeNull();
     }
-    expect(verifyUnsubscribeToken(token, current, undefined)).toBe(id);
+    expect(verifyUnsubscribeToken(token, current, "")).toBe(id);
   });
 
   it("refuses to mint or verify without a configured token key", () => {
-    expect(() => mintUnsubscribeToken(randomUUID(), undefined)).toThrow("Token encryption key must be configured.");
-    expect(() => verifyUnsubscribeToken("x", undefined, undefined)).toThrow("Token encryption key must be configured.");
+    expect(() => mintUnsubscribeToken(randomUUID(), "")).toThrow("Token encryption key must be configured.");
+    expect(() => verifyUnsubscribeToken("x", "", "")).toThrow("Token encryption key must be configured.");
   });
 
   it("mints a token the digest message carries in its one-click unsubscribe header", () => {
