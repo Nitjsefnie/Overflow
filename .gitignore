@@ -218,6 +218,9 @@ src/app/moderation/*
 !src/app/rules/
 src/app/rules/*
 !src/app/rules/*.tsx
+!src/app/stats/
+src/app/stats/*
+!src/app/stats/*.tsx
 !src/app/terms/
 src/app/terms/*
 !src/app/terms/*.tsx
@@ -238,6 +241,7 @@ src/lib/*
 !src/lib/opening-catalog-examples.ts
 !src/lib/controller-config.ts
 !src/lib/plural.ts
+!src/lib/public-stats.ts
 !src/lib/strip-name-prefix.ts
 !src/lib/env.ts
 !src/lib/version.ts

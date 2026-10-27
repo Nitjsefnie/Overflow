@@ -25,20 +25,15 @@ import { AppShell, PublicAppShell } from "@/components/app-shell";
 import HomePage from "@/app/page";
 
 /**
- * The routes this suite has a signed-out render for. "/" is proven by this
- * file's own HomePage render; "/account-data" is a static page with no
- * session read, proven by tests/components/account-data-page.test.tsx, which
- * renders the route signed out; "/rules" and "/terms" render for a visitor
- * with no session, proven by tests/components/rules.test.tsx and
- * tests/components/terms-page.test.tsx, which render those routes signed
- * out. The notices file is generated into the dist dir during build and
- * served by its route handler.
+ * Signed-out renders: "/" here, "/account-data" in account-data-page.test.tsx,
+ * "/rules" in rules.test.tsx, "/terms" in terms-page.test.tsx, and "/stats"
+ * in stats-page.test.tsx. The notices route serves a build-generated file without a session.
  */
-// The notices route serves its dist-dir file without a session.
 const PROVEN_PUBLIC_ROUTES = new Set([
   "/",
   "/account-data",
   "/rules",
+  "/stats",
   "/terms",
   "/third-party-notices.txt",
 ]);
