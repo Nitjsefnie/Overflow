@@ -84,6 +84,21 @@ describe("GET /api/issues", () => {
     );
   });
 
+  it("answers each row's outside-repository mark as the query projected it", async () => {
+    const markedIssue = { ...eligibleIssue, id: "00000000-0000-4000-8000-00000000000b", asksOutsideRepository: true };
+    const dependencies = issueDependencies({
+      listEligibleIssues: vi.fn().mockResolvedValue([markedIssue, eligibleIssue]),
+    });
+
+    const response = await createIssuesGetHandler(dependencies)(issuesRequest());
+
+    const rows = (await response.json()) as EligibleIssueProjection[];
+    expect(rows.map((row) => [row.id, row.asksOutsideRepository])).toEqual([
+      [markedIssue.id, true],
+      [eligibleIssue.id, false],
+    ]);
+  });
+
   it("passes the repository and opening label filters through to the query", async () => {
     const dependencies = issueDependencies();
 
