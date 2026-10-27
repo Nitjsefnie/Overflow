@@ -25,6 +25,16 @@ export function IssueCard({ issue }: IssueCardProps) {
             Marked as asking for actions outside its repository: decline it, or work it in a sandbox.
           </p>
         ) : null}
+        <div className="issue-card-done-when">
+          {issue.doneWhen === null ? (
+            <p>No done-when statement from the sponsor.</p>
+          ) : (
+            <>
+              <p>The sponsor&apos;s done-when statement. {issue.doneWhen.notice}</p>
+              <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{issue.doneWhen.text}</pre>
+            </>
+          )}
+        </div>
         {issue.sponsorLogin !== undefined ? <p>Sponsor: {issue.sponsorLogin}</p> : null}
         {issue.claimState !== undefined ? <p>Claim: {claimPhrase(issue.claimState, issue.assigneeGitHubLogin)}</p> : null}
         {issue.availableHeadroom !== undefined ? <p>Headroom: {formatSigned(issue.availableHeadroom)}</p> : null}
