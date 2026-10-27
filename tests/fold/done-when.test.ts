@@ -93,6 +93,7 @@ describe("sponsorDoneWhen", () => {
     const at100 = (n: number, databaseId: number | null) => ({ ...comment(n, `Done when ${n}`, -100), databaseId });
     const undecidable = [[at100(1, null), at100(2, null)], [at100(1, 7), at100(2, 7)]];
     const decidable = [at100(1, null), at100(2, 7), comment(3, "Done when later", -50)];
+    const earlier = [comment(1, "Done when early", -200), at100(2, null), at100(3, null)];
 
     for (const comments of undecidable) {
       expect(sponsorDoneWhen({ comments, history: [] }, SPONSOR)).toBeNull();
@@ -100,6 +101,8 @@ describe("sponsorDoneWhen", () => {
     }
     expect(sponsorDoneWhen({ comments: decidable, history: [] }, SPONSOR)?.commentId).toBe("c2");
     expect(sponsorDoneWhen({ comments: [...decidable].reverse(), history: [] }, SPONSOR)?.commentId).toBe("c2");
+    expect(sponsorDoneWhen({ comments: earlier, history: [] }, SPONSOR)?.commentId).toBe("c1");
+    expect(sponsorDoneWhen({ comments: [...earlier].reverse(), history: [] }, SPONSOR)?.commentId).toBe("c1");
   });
 
   it("keeps untrusted text verbatim; escaping is the renderer's job", () => {
