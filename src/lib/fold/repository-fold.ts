@@ -1250,7 +1250,7 @@ type FoldActorIdentity = {
  * Bot, a Mannequin, an Organization, a deleted account — which is the
  * comparison that has always been made, unchanged.
  */
-function isRepositorySponsor(actor: FoldActorIdentity, sponsor: FoldUser): boolean {
+export function isRepositorySponsor(actor: FoldActorIdentity, sponsor: FoldUser): boolean {
   if (actor.githubUserId !== null) {
     return actor.githubUserId === sponsor.githubUserId;
   }
@@ -1322,19 +1322,19 @@ function labelActorRejection(
   return `The application of the ${labelKind} label \`${label}\` by \`${actorLogin?.trim() || "unknown"}\` could not be attributed to ${sponsor}.`;
 }
 
-function validIssueHistoryEvent(event: GitHubIssueHistoryEvent): boolean {
+export function validIssueHistoryEvent(event: GitHubIssueHistoryEvent): boolean {
   return typeof event.id === "string" && event.id.length > 0 && validTimestamp(event.createdAt);
 }
 
-function validIssueComment(comment: GitHubIssueComment): boolean {
+export function validIssueComment(comment: GitHubIssueComment): boolean {
   return typeof comment.id === "string" && comment.id.length > 0 && validTimestamp(comment.createdAt);
 }
 
-function editedAfter(comment: GitHubIssueComment, deadline: number): boolean {
+export function editedAfter(comment: GitHubIssueComment, deadline: number): boolean {
   return validTimestamp(comment.lastEditedAt) && Date.parse(comment.lastEditedAt) > deadline;
 }
 
-function compareHistoryItems(
+export function compareHistoryItems(
   left: Pick<GitHubIssueHistoryEvent | GitHubIssueComment, "createdAt" | "id">,
   right: Pick<GitHubIssueHistoryEvent | GitHubIssueComment, "createdAt" | "id">,
 ): number {
@@ -1365,7 +1365,7 @@ function compareHistoryItems(
  * every run (unlike the opening evidence, which is immutable), so a tie row swaps its citation once
  * on the next fold and then stays stable — label, points, actor, instant and credits do not change.
  */
-function compareRationaleSequence(
+export function compareRationaleSequence(
   left: Pick<GitHubIssueComment, "createdAt" | "databaseId">,
   right: Pick<GitHubIssueComment, "createdAt" | "databaseId">,
 ): number {
