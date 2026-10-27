@@ -25,6 +25,7 @@ const original = process.env.OVERFLOW_DATABASE_URL;
 // name (repository-size.ts via readEnv): the sweep's rotation filter, this
 // catch-up tick, and the fold's own diff-only computation all read it so.
 const originalThreshold = process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
+const originalPrefixedThreshold = process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG;
 const at = new Date("2030-01-01T00:00:00Z");
 let externalId = 9_000_000;
 
@@ -32,6 +33,10 @@ beforeAll(async () => {
   const started = await startPostgresContainer({ database: "catchup", user: "catchup", password: randomUUID() });
   container = started.container;
   process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
+  // The threshold read resolves the prefixed name first (readEnv), so a value
+  // exported in the shell would replace this suite's 10: clear it here and
+  // restore it below so the outcome is independent of the environment.
+  delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG;
   process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = "10";
   sql = getSql();
   await runMigrations();
@@ -47,6 +52,7 @@ afterAll(async () => {
   await closeSql(); await container?.stop();
   if (original === undefined) delete process.env.OVERFLOW_DATABASE_URL; else process.env.OVERFLOW_DATABASE_URL = original;
   if (originalThreshold === undefined) delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = originalThreshold;
+  if (originalPrefixedThreshold === undefined) delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = originalPrefixedThreshold;
 });
 
 async function insertSponsor(): Promise<string> {
