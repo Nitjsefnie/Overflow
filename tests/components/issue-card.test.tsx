@@ -113,6 +113,34 @@ describe("eligible issue card", () => {
     expect(order).toEqual([0, 1, 2, 3]);
   });
 
+  it.each([true, false])("shows the outside-repository mark inside the reading column only when it is %s", (asksOutsideRepository) => {
+    const { container } = render(
+      <IssueCard
+        issue={{
+          id: "issue-13",
+          repositoryName: "co-op/harbour",
+          issueNumber: 13,
+          title: "Run the harbour setup script",
+          url: "https://github.com/co-op/harbour/issues/13",
+          openingName: "Promise band",
+          openingLabel: "delta",
+          comparisonPoints: 3,
+          reservePoints: 3,
+          asksOutsideRepository,
+          createdAt: "2026-09-01T10:00:00.000Z",
+        }}
+      />,
+    );
+
+    // Asserted through its hook, never its wording.
+    const marks = container.querySelectorAll(".issue-card-outside-repository");
+    expect(marks).toHaveLength(asksOutsideRepository ? 1 : 0);
+    if (asksOutsideRepository) {
+      expect(marks[0]).toBeVisible();
+      expect(marks[0]!.parentElement?.classList.contains("issue-card-main")).toBe(true);
+    }
+  });
+
   it("keeps the single reading column when the optional facts are absent", () => {
     const { container } = render(
       <IssueCard
