@@ -155,6 +155,23 @@ describe("createSmtpsTransport", () => {
     expect(verbs(fake)).toEqual(sentVerbs);
   });
 
+  it.each<[string, Partial<Record<Step, Reply>>]>([
+    ["a delivered message", { QUIT: "500 what" }],
+    ["a refused recipient", { RCPT: "550 no" }],
+  ])("destroys its socket after %s", async (_name, replies) => {
+    const fake = await fakeSmtp(replies);
+    const sockets: net.Socket[] = [];
+    const connect = vi.fn<SmtpConnect>(() => {
+      sockets.push(net.connect(fake.port, "127.0.0.1"));
+      return sockets[0];
+    });
+
+    await createSmtpsTransport(smtp, { connect }).send(message());
+
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0].destroyed).toBe(true);
+  });
+
   it("reads the code of a multi-line reply from its last line", async () => {
     const fake = await fakeSmtp({ EHLO: "250-fake\r\n250-SIZE 1000\r\n502 no" });
 

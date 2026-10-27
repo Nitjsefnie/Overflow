@@ -65,6 +65,7 @@ describe("parseContributorAddress", () => {
     ["no domain", "ada@"],
     ["no @", "ada.example.org"],
     ["two @", "ada@lovelace@example.org"],
+    ["two @ before two valid domains", "ada@example.org@example.net"],
     ["adjacent @", "ada@@example.org"],
     ["a single-label domain", "ada@localhost"],
     ["a leading dot", ".ada@example.org"],
