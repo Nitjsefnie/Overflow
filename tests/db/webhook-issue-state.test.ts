@@ -148,18 +148,17 @@ describe("webhook issue materialization", () => {
   it("stores the agent prompt and recommended model per column: a cached pass and a webhook leave them, a stale view loses, a fresh null clears one", async () => {
     const fixture = await materializeRepositoryFixture(sql);
     expect(await row(fixture)).toMatchObject({ agent_prompt: null, recommended_model: null });
-    const pass = async (updatedAt: string, statements: Partial<FoldIssue>, cached = false) => {
+    // A statement the pass does not name is absent from the issue: that pass held it from cache.
+    const pass = async (updatedAt: string, statements: Partial<FoldIssue> = {}) => {
       fixture.fold.issues[0] = { ...fixture.fold.issues[0], updatedAt, ...statements };
-      if (cached) {
-        delete fixture.fold.issues[0].agentPrompt;
-        delete fixture.fold.issues[0].recommendedModel;
-      }
+      if (!("agentPrompt" in statements)) delete fixture.fold.issues[0].agentPrompt;
+      if (!("recommendedModel" in statements)) delete fixture.fold.issues[0].recommendedModel;
       await materialize(fixture);
     };
     await pass("2026-09-08T11:00:00Z", { doneWhen: { text: "Done when A", commentId: "c1" },
       agentPrompt: { text: "Agent prompt: do A", commentId: "c2" }, recommendedModel: { text: "Model A", commentId: "c3" } });
     expect(await row(fixture)).toMatchObject({ done_when: "Done when A", agent_prompt: "Agent prompt: do A", recommended_model: "Model A" });
-    await pass("2026-09-08T11:30:00Z", {}, true);
+    await pass("2026-09-08T11:30:00Z");
     expect(await row(fixture)).toMatchObject({ agent_prompt: "Agent prompt: do A", recommended_model: "Model A",
       github_updated_at: new Date("2026-09-08T11:30:00Z") });
     // A webhook view carries no comments: it advances GitHub time and leaves both statements alone.
@@ -172,6 +171,11 @@ describe("webhook issue materialization", () => {
     expect(await row(fixture)).toMatchObject({ done_when: "Done when A", agent_prompt: "Agent prompt: do C", recommended_model: null });
     await pass("2026-09-08T12:30:00Z", { agentPrompt: null, recommendedModel: { text: "Model D", commentId: "c7" } });
     expect(await row(fixture)).toMatchObject({ done_when: "Done when A", agent_prompt: null, recommended_model: "Model D" });
+    // One statement read fresh does not refresh the other, which this pass held from cache.
+    await pass("2026-09-08T13:00:00Z", { agentPrompt: { text: "Agent prompt: do E", commentId: "c8" } });
+    expect(await row(fixture)).toMatchObject({ agent_prompt: "Agent prompt: do E", recommended_model: "Model D" });
+    await pass("2026-09-08T13:30:00Z", { recommendedModel: { text: "Model F", commentId: "c9" } });
+    expect(await row(fixture)).toMatchObject({ agent_prompt: "Agent prompt: do E", recommended_model: "Model F" });
   });
 
   it("inserts a fresh issue's agent prompt and recommended model and journals neither, not even when the issue is removed", async () => {
