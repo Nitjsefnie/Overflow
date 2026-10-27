@@ -255,20 +255,22 @@ export function AccountDataNotice() {
           <li>moderation notes, which can name the account that applied a label</li>
         </ul>
         <p>
-          A reconciliation pass writes no issue, pull request, or comment body text. Body text written before
-          2026-09-26 may persist until the repository is unregistered: unregistering a repository scrubs what
+          A reconciliation pass writes no issue, pull request, or comment body text except the sponsor&apos;s
+          &quot;Done when&quot; comment, without HTML comments and at most 2 KiB, stored to show contributors what
+          finishes the issue; unregistering or the sponsor&apos;s removal request removes it. Body text written
+          before 2026-09-26 may persist until the repository is unregistered: unregistering a repository scrubs what
           earlier passes stored (unless a settlement from the last few minutes is still being computed).
         </p>
         <p>Overflow stores no display name for someone who has not signed in.</p>
         <p>
-          Nothing about a person who has not signed in is shown to a visitor who is not signed in. Signed-in
-          members see a claim assignee&apos;s login and issue titles on the issues board. A repository&apos;s
-          sponsor sees the claim assignees on its dashboard, and issue titles, often with pull request titles, on
-          its dashboard, settlement history, and settlement proof and calibration pages; a member credited with a
-          settlement sees the same titles on their own dashboard and settlement history and on that
+          Nothing about a person who has not signed in is shown to a visitor who is not signed in. Signed-in members
+          see a claim assignee&apos;s login, issue titles, and done-when statements on the issues board. A
+          repository&apos;s sponsor sees the claim assignees on its dashboard, and issue titles, often with pull
+          request titles, on its dashboard, settlement history, and settlement proof and calibration pages; a member
+          credited with a settlement sees the same titles on their own dashboard and settlement history and on that
           settlement&apos;s proof page. Moderators see the moderation notes, and issue and pull request titles in
-          the moderation queues and closure history. The cache and the change log are displayed to no one. The
-          site operator administers the database.
+          the moderation queues and closure history. The cache and the change log are displayed to no one. The site
+          operator administers the database.
         </p>
         <p>How long it is kept:</p>
         <ul>
@@ -307,10 +309,10 @@ export function AccountDataNotice() {
             has not expired is never pruned, because a redelivery can still resume it.
           </li>
           <li>
-            Unregistering a repository deletes none of this — the logins, numeric ids, titles, change-log
-            entries, and closing-PR diffs and reviews all stay — and it stops the re-reads. Its free text is
-            the exception: the stored body and comment text are removed, unless a settlement from the last few
-            minutes is still being computed.
+            Unregistering a repository deletes none of this — the logins, numeric ids, titles, change-log entries,
+            and closing-PR diffs and reviews all stay — and it stops the re-reads. Its free text is the exception:
+            its done-when statements are removed, and so is the stored body and comment text unless a settlement
+            from the last few minutes is still being computed.
           </li>
           <li>The daily database backups described in the How long it is kept section below hold this data too.</li>
         </ul>
@@ -333,23 +335,21 @@ export function AccountDataNotice() {
                 : "; the Controller and contact section names the private route for a request you would not post publicly. "}
             </>
           )}
-          The operator answers with a documented procedure, keyed by the forge provider, its
-          instance origin and your numeric forge account id. They can produce an export of the rows
-          naming you, including linked account identities, issues and claim assignees, pull requests,
-          settlements, cached authors and history actors, policy diagnostics, change-log entries,
-          moderation notes and the suppression decision itself. Numeric ids control matching where
-          present; verified login aliases cover fields that have no id. A removal clears linked
-          credentials when it pseudonymises an account, tombstones the matched identity copies,
-          removes stored body text on rows you authored, and preserves ledger attribution and other
-          people&apos;s rows. Existing moderation notes and the change journal stay as written; existing
-          policy diagnostics stay until a later publication replaces them. The export shows these
-          retained records. A recorded suppression applies within that forge instance to future
-          derived rows, cache identities and generated policy diagnostics before they are written.
-          It retains verified aliases across repeated requests and learns new ones from numeric
-          evidence on import. If a renamed login occurs only in fields without numeric evidence,
-          the operator must verify and add that alias to the request. The suppression does not
-          rewrite retained audit text, titles or proof material; it prevents the matched structured
-          identities and generated diagnostic references from being reinstated.
+          The operator answers with a documented procedure, keyed by the forge provider, its instance origin and
+          your numeric forge account id. They can produce an export of the rows naming you, including linked account
+          identities, issues and claim assignees, pull requests, settlements, cached authors and history actors,
+          policy diagnostics, change-log entries, moderation notes and the suppression decision itself. Numeric ids
+          control matching where present; verified login aliases cover fields that have no id. A removal clears
+          linked credentials when it pseudonymises an account, tombstones the matched identity copies, removes
+          stored body text on rows you authored and the done-when statements on issues of repositories you currently
+          sponsor, and preserves ledger attribution and other people&apos;s rows. Existing moderation notes and the
+          change journal stay as written; existing policy diagnostics stay until a later publication replaces them.
+          The export shows these retained records. A recorded suppression applies within that forge instance to
+          future derived rows, cache identities and generated policy diagnostics before they are written. It retains
+          verified aliases across repeated requests and learns new ones from numeric evidence on import. If a
+          renamed login occurs only in fields without numeric evidence, the operator must verify and add that alias
+          to the request. The suppression does not rewrite retained audit text, titles or proof material; it
+          prevents the matched structured identities and generated diagnostic references from being reinstated.
         </p>
       </section>
 
