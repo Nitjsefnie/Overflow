@@ -56,6 +56,17 @@ export async function runWorkMailDigestCycle(dependencies: DigestCycleDependenci
   if (due.length === 0) return summary;
   const oldest = due.reduce((min, row) => (row.watermark < min ? row.watermark : min), due[0]!.watermark);
   if (!(await store.hasIssueCreatedAfter(oldest))) return summary;
+  const origin = (dependencies.readOrigin ?? readTrustedOrigin)() ?? "";
+  const mintToken = dependencies.mintToken ?? mintUnsubscribeToken;
+  const digest = (to: string, count: number, subscriptionId: string) =>
+    buildDigestMessage({ from: dependencies.from, to, origin, count, unsubscribeToken: mintToken(subscriptionId) });
+  try {
+    // The origin and the token key fail every row alike: refuse before any claim spends a slot or a ceiling unit.
+    digest(dependencies.from, 1, due[0]!.id);
+  } catch {
+    console.error("Work mail digest skipped: the app origin or the token key cannot make a digest.");
+    return summary;
+  }
 
   for (const row of due) {
     const count = await countNewIssues(listIssues, row.userId, row.watermark, t0);
@@ -68,11 +79,7 @@ export async function runWorkMailDigestCycle(dependencies: DigestCycleDependenci
     if (claim === false) continue;
     // Fixed log lines: a send error or reply can carry the address.
     try {
-      const message = buildDigestMessage({
-        from: dependencies.from, to: claim.address, origin: (dependencies.readOrigin ?? readTrustedOrigin)() ?? "", count,
-        unsubscribeToken: (dependencies.mintToken ?? mintUnsubscribeToken)(row.id),
-      });
-      const result = await transport.send(message);
+      const result = await transport.send(digest(claim.address, count, row.id));
       if (result.ok) summary.sent += 1;
       else {
         summary.failed += 1;
