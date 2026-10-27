@@ -641,6 +641,19 @@ describe("data-subject removal", () => {
     expect(planned).toMatchObject({ kind: "PLANNED", perStore: { users: 1, workMailSubscriptions: 1, workMailConfirmations: 2 } });
     expect(await workMailRows(person)).toEqual({ subscriptions: 1, confirmations: 2 });
 
+    // A failure later in the removal rolls the work-mail erasure back with it: one transaction.
+    await sql`create function refuse_person_scrub() returns trigger language plpgsql as $$
+      begin raise exception 'test refuses the scrub'; end $$`;
+    await sql`create trigger refuse_person_scrub before update on users
+      for each row execute function refuse_person_scrub()`;
+    try {
+      await expect(removeForgePerson(sql, { provider: "github", forgeId }, { confirm: true })).rejects.toThrow("test refuses the scrub");
+    } finally {
+      await sql`drop trigger refuse_person_scrub on users`;
+      await sql`drop function refuse_person_scrub()`;
+    }
+    expect(await workMailRows(person)).toEqual({ subscriptions: 1, confirmations: 2 });
+
     const removed = await removeForgePerson(sql, { provider: "github", forgeId }, { confirm: true });
     expect(removed).toMatchObject({ kind: "REMOVED", perStore: { users: 1, workMailSubscriptions: 1, workMailConfirmations: 2 } });
     expect(await workMailRows(person)).toEqual({ subscriptions: 0, confirmations: 0 });

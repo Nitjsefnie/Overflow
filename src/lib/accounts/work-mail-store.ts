@@ -8,7 +8,7 @@ import { derivePurposeKey, tokenKeySetFrom } from "@/lib/security/token-cipher";
 const CONFIRMATIONS_PER_ACCOUNT = 3;
 const CONFIRMATIONS_PER_ADDRESS = 3;
 const ADDRESS_DIGEST_LABEL = "overflow:work-mail-address-digest";
-/** The confirmation caps' window; the retention prune keeps history exactly this long. */
+/** The confirmation caps' window; the retention prune keeps history at least this long. */
 export const CONFIRMATION_CAP_WINDOW_HOURS = 24;
 
 export type ConfirmationOutcome =
