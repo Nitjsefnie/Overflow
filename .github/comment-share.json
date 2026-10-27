@@ -332,8 +332,8 @@
     12358
   ],
   "scripts/check-page-geometry.mjs": [
-    24128,
-    46768
+    24090,
+    46748
   ],
   "scripts/check-prerendered-routes.ts": [
     543,
