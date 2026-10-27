@@ -1,4 +1,5 @@
 import type { SqlClient, TransactionClient } from "@/lib/db/types";
+import { deleteAllWorkMailData } from "@/lib/accounts/work-mail-store";
 
 /**
  * The tombstone login a deleted account carries: display text only, never a
@@ -127,6 +128,7 @@ export async function scrubLinkedForgeIdentities(sql: TransactionClient, userIds
  * - its forge identities keep their (provider, instance_url, forge_user_id)
  *   triple — GitLab authorship resolves through it — but lose the token, and
  *   carry the tombstone login and a failure stamp;
+ * - its work-mail address and confirmation history are removed;
  * - settlements, moderation events and every other referencing row are
  *   untouched.
  *
@@ -199,6 +201,7 @@ export async function deleteAccount(
       delete from api_tokens where user_id = ${account.id} returning id
     `;
     const scrubbedForgeIdentities = await scrubLinkedForgeIdentities(tx, [account.id], DELETED_ACCOUNT_LOGIN);
+    await deleteAllWorkMailData(tx, [account.id]);
     // One statement clears avatar, token, resets the role and sets the stamp
     // together: the users_deleted_account_scrubbed_check admits no
     // half-scrubbed state. The role resets to MEMBER — moderator authority

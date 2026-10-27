@@ -870,4 +870,46 @@ describe("account deletion as pseudonymisation", () => {
       leftNoLiveModerator: true,
     });
   });
+
+  it("case 15: removes the account's work-mail address and confirmation history, and no one else's", async () => {
+    const leaving = await insertUser("work-mail-leaving");
+    const staying = await insertUser("work-mail-staying");
+    for (const user of [leaving, staying]) {
+      await sql`
+        insert into contributor_work_mail_subscriptions (user_id, address, confirmed_at)
+        values (${user.id}, ${`user-${user.githubUserId}@example.test`}, now())
+      `;
+      await sql`
+        insert into contributor_work_mail_confirmations (user_id, address_digest)
+        values (${user.id}, ${randomBytes(32)}), (${user.id}, ${randomBytes(32)})
+      `;
+    }
+    const workMailRows = async (userId: string) => {
+      const [row] = await sql<{ subscriptions: number; confirmations: number }[]>`
+        select (select count(*)::int from contributor_work_mail_subscriptions where user_id = ${userId}) as subscriptions,
+               (select count(*)::int from contributor_work_mail_confirmations where user_id = ${userId}) as confirmations
+      `;
+      return row;
+    };
+
+    expect((await deleteAccount(sql, leaving.githubUserId, { confirm: false })).kind).toBe("PLANNED");
+    expect(await workMailRows(leaving.id)).toEqual({ subscriptions: 1, confirmations: 2 });
+
+    // A failure later in the deletion rolls the work-mail erasure back with it: one transaction.
+    await sql`create function refuse_account_scrub() returns trigger language plpgsql as $$
+      begin raise exception 'test refuses the scrub'; end $$`;
+    await sql`create trigger refuse_account_scrub before update on users
+      for each row execute function refuse_account_scrub()`;
+    try {
+      await expect(deleteAccount(sql, leaving.githubUserId, { confirm: true })).rejects.toThrow("test refuses the scrub");
+    } finally {
+      await sql`drop trigger refuse_account_scrub on users`;
+      await sql`drop function refuse_account_scrub()`;
+    }
+    expect(await workMailRows(leaving.id)).toEqual({ subscriptions: 1, confirmations: 2 });
+
+    expect((await deleteAccount(sql, leaving.githubUserId, { confirm: true })).kind).toBe("DELETED");
+    expect(await workMailRows(leaving.id)).toEqual({ subscriptions: 0, confirmations: 0 });
+    expect(await workMailRows(staying.id)).toEqual({ subscriptions: 1, confirmations: 2 });
+  });
 });

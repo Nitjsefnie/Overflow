@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
@@ -428,6 +428,8 @@ describe("data-subject removal", () => {
       pullRequests: 1,
       settlements: 1,
       evidenceFacts: 1,
+      workMailSubscriptions: 0,
+      workMailConfirmations: 0,
     });
 
     // issues: the person-authored row loses its legacy body and its owner
@@ -604,12 +606,45 @@ describe("data-subject removal", () => {
     if (outcome.kind !== "REMOVED") return;
     expect(outcome.perStore).toEqual({
       users: 0, apiTokens: 0, forgeIdentities: 0, issues: 0, pullRequests: 0,
-      settlements: 0, evidenceFacts: 0,
+      settlements: 0, evidenceFacts: 0, workMailSubscriptions: 0, workMailConfirmations: 0,
     });
     const [suppression] = await sql<{ login: string | null }[]>`
       select login from data_subject_suppressions where provider = 'github' and forge_id = ${forgeId}
     `;
     expect(suppression!.login).toBeNull();
+  });
+
+  it("removes a signed-in person's work-mail address and confirmation history, and plans it on a dry run", async () => {
+    const seed = nextSeedNumber();
+    const insertSubscriber = async (githubUserId: number) => {
+      const [user] = await sql<{ id: string }[]>`
+        insert into users (github_user_id, github_login) values (${githubUserId}, ${`mailer-${githubUserId}`}) returning id
+      `;
+      await sql`insert into contributor_work_mail_subscriptions (user_id, address, confirmed_at)
+        values (${user!.id}, ${`mailer-${githubUserId}@example.test`}, now())`;
+      await sql`insert into contributor_work_mail_confirmations (user_id, address_digest)
+        values (${user!.id}, ${randomBytes(32)}), (${user!.id}, ${randomBytes(32)})`;
+      return user!.id;
+    };
+    const forgeId = 9_150_000 + seed;
+    const person = await insertSubscriber(forgeId);
+    const bystander = await insertSubscriber(9_160_000 + seed);
+    const workMailRows = async (userId: string) => {
+      const [row] = await sql<{ subscriptions: number; confirmations: number }[]>`
+        select (select count(*)::int from contributor_work_mail_subscriptions where user_id = ${userId}) as subscriptions,
+               (select count(*)::int from contributor_work_mail_confirmations where user_id = ${userId}) as confirmations
+      `;
+      return row;
+    };
+
+    const planned = await removeForgePerson(sql, { provider: "github", forgeId }, { confirm: false });
+    expect(planned).toMatchObject({ kind: "PLANNED", perStore: { users: 1, workMailSubscriptions: 1, workMailConfirmations: 2 } });
+    expect(await workMailRows(person)).toEqual({ subscriptions: 1, confirmations: 2 });
+
+    const removed = await removeForgePerson(sql, { provider: "github", forgeId }, { confirm: true });
+    expect(removed).toMatchObject({ kind: "REMOVED", perStore: { users: 1, workMailSubscriptions: 1, workMailConfirmations: 2 } });
+    expect(await workMailRows(person)).toEqual({ subscriptions: 0, confirmations: 0 });
+    expect(await workMailRows(bystander)).toEqual({ subscriptions: 1, confirmations: 2 });
   });
 
   it("case 8: the removal contends on the fold's repository locks and refuses while one is held", async () => {

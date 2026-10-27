@@ -38,12 +38,31 @@ export async function reserveDailySend(sql: SqlClient | TransactionClient, limit
   return rows.length === 1;
 }
 
-/** Account erasure inside the caller's transaction: the subscription and the confirmation history. */
-export async function deleteAllWorkMailData(sql: SqlClient | TransactionClient, userId: string): Promise<void> {
-  await sql`
-    with history as (delete from contributor_work_mail_confirmations where user_id = ${userId})
-    delete from contributor_work_mail_subscriptions where user_id = ${userId}
+export type WorkMailRowCounts = { subscriptions: number; confirmations: number };
+
+/** Account erasure inside the caller's transaction: the subscriptions and the confirmation history. */
+export async function deleteAllWorkMailData(
+  sql: SqlClient | TransactionClient, userIds: readonly string[],
+): Promise<WorkMailRowCounts> {
+  const users = sql.array([...userIds]);
+  const [row] = await sql<WorkMailRowCounts[]>`
+    with history as (delete from contributor_work_mail_confirmations where user_id = any(${users}::uuid[]) returning 1),
+      subscription as (delete from contributor_work_mail_subscriptions where user_id = any(${users}::uuid[]) returning 1)
+    select (select count(*) from subscription)::int as subscriptions, (select count(*) from history)::int as confirmations
   `;
+  return row!;
+}
+
+/** What deleteAllWorkMailData would remove, for a dry run. */
+export async function countAllWorkMailData(
+  sql: SqlClient | TransactionClient, userIds: readonly string[],
+): Promise<WorkMailRowCounts> {
+  const users = sql.array([...userIds]);
+  const [row] = await sql<WorkMailRowCounts[]>`
+    select (select count(*) from contributor_work_mail_subscriptions where user_id = any(${users}::uuid[]))::int as subscriptions,
+           (select count(*) from contributor_work_mail_confirmations where user_id = any(${users}::uuid[]))::int as confirmations
+  `;
+  return row!;
 }
 
 async function dailyCeilingSpent(sql: TransactionClient, limit: number): Promise<boolean> {
