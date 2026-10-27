@@ -89,7 +89,7 @@ export const fixtureNowMs = Date.parse("2026-01-15T12:00:00.000Z");
 
 const fixtureForgeId = "00000000-0000-4000-8000-000000000020";
 const fixtureRepositoryRowId = "00000000-0000-4000-8000-000000000011";
-const fixtureGithubUserId = 424242;
+export const fixtureGithubUserId = 424242;
 
 /** The 32-byte token-cipher key, base64url-encoded, the forge-link stub verifies under. */
 const fixtureTokenEncryptionKey = Buffer.from("0123456789abcdef0123456789abcdef").toString("base64url");

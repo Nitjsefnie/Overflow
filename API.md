@@ -30,6 +30,8 @@ the security reason and the change.
 - 1.10.0: `POST /api/account/export` adds `workMail`, the opt-in work-mail
   address with its confirmation and last-notification times (`null` when none
   is stored), and `workMailConfirmations`, one row per confirmation mail sent.
+  Adds the work-mail routes `/api/account/work-mail`,
+  `/api/account/work-mail/confirm` and `/api/work-mail/unsubscribe`.
 - 1.9.0: Each `GET /api/issues` row adds `doneWhen`, the repository sponsor's
   "Done when" statement as `{ "text", "notice" }`, or `null` when the issue
   has none. The text is untrusted input; `notice` carries that warning with
@@ -645,6 +647,45 @@ describes what the deletion retains and scrubs.
 | 429 | `RATE_LIMITED` | `Too many requests of this kind. Retry after the number of seconds the Retry-After header names.` | POST: the account's hourly export bound (`OVERFLOW_RATE_LIMIT_EXPORT_PER_HOUR`, default 3) is spent. Wait out the response's `Retry-After` interval, then retry. |
 | 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | Both: `OVERFLOW_APP_URL` is absent or malformed. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to export account data.` or `Unable to delete account.` | The corresponding session, database, or operation failed. |
+
+## Work-mail notifications
+
+A contributor can opt in to one email, at most once a day, when work they can
+take newly appears on their `/issues` board. Overflow never reads an address
+from GitHub or GitLab: the contributor types it in, and nothing is sent to it
+until they confirm it through a link mailed to it. The feature is off unless
+the operator configures a contributor mail transport; while it is off, the
+`POST` routes answer `404` `NOT_FOUND` (`Work mail is not enabled on this
+instance.`), and `GET`, `DELETE` and the unsubscribe route keep working.
+
+`/api/account/work-mail` and `/api/account/work-mail/confirm` require a browser
+session for a `MEMBER` or `MODERATOR`, not an Overflow API bearer token. Their
+writes require an `Origin` equal to the origin of `OVERFLOW_APP_URL` and accept
+only an absent `Content-Type` or `application/json`; each reads at most
+`4 KiB`.
+
+| Method | Request | Success |
+| --- | --- | --- |
+| `GET /api/account/work-mail` | No body. | `200` `{ "enabled": <boolean>, "subscription": { "address", "confirmed", "confirmedAt", "lastNotifiedAt", "confirmExpiresAt" } }`, or `"subscription": null` when no address is stored. Times are ISO strings or `null`; `confirmExpiresAt` is set while a confirmation is pending. |
+| `POST /api/account/work-mail` | `{ "address": <string> }`. | `202` `{ "requested": true }`. The address replaces any stored one and waits for confirmation; the confirmation link expires after 24 hours. The answer is the same whether or not a mail was sent, and a mail that fails to send still answers `202`. |
+| `DELETE /api/account/work-mail` | No body. | `200` `{ "deleted": true }`, whether or not an address was stored. |
+| `POST /api/account/work-mail/confirm` | `{ "token": <string> }`, the token from the mailed link. | `200` `{ "confirmed": true }`. |
+| `POST /api/work-mail/unsubscribe?token=<token>` | The one-click opt-out every digest names in `List-Unsubscribe` (RFC 8058). No session, `Origin` or JSON body is needed: any body is ignored. | `200` `{ "received": true }`, the same answer whether or not the token was valid and whether or not an address was stored. A valid token deletes the address. `GET` on the same URL answers a page with one button that sends this `POST`; the `GET` itself changes nothing. |
+
+| HTTP | Code | Exact message | Applies to / meaning |
+| --- | --- | --- | --- |
+| 400 | `INVALID_REQUEST` | `A valid email address is required.` | POST: unreadable JSON, or `address` missing, not a string or not a valid address. |
+| 400 | `INVALID_CONFIRMATION` | `The confirmation link is invalid or has expired.` | confirm: every failure, including an unreadable or oversized body, a missing token and a token that matches no pending confirmation of this account. |
+| 401 | `UNAUTHENTICATED` | `Sign in is required.` | Session routes: no eligible browser session. |
+| 403 | `FORBIDDEN` | `The request origin is not allowed.` | Session writes: missing or foreign `Origin`. |
+| 403 | `FORBIDDEN` | `A member account is required.` | Session routes: the session's account no longer exists. |
+| 404 | `NOT_FOUND` | `Work mail is not enabled on this instance.` | POST and confirm: no contributor mail transport is configured. |
+| 413 | `PAYLOAD_TOO_LARGE` | `The request body is too large.` | POST: body exceeds `4 KiB`. |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` | Session writes: a declared non-JSON media type. |
+| 429 | `RATE_LIMITED` | `Too many confirmation emails for this account. Retry after the number of seconds the Retry-After header names.` | POST: the account asked for 3 confirmation mails in the last 24 hours. Wait out the response's `Retry-After` interval, then retry. |
+| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | Session writes: `OVERFLOW_APP_URL` is absent or malformed. |
+| 502 | `UPSTREAM_FAILURE` | `The work mail operation could not complete.` or `Unable to unsubscribe.` | The session, database or store operation failed. |
+| 503 | `DAILY_LIMIT_REACHED` | `Overflow has sent all the email it may send today. Try again tomorrow.` | POST: the instance's daily contributor-mail ceiling is spent. |
 
 ## Reading the ledger over the API
 

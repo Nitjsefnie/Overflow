@@ -57,6 +57,7 @@ import {
 } from "./http-surface-fixtures.ts";
 import { moderationSurfaceAnswers } from "./http-surface-derive-moderation.ts";
 import { disputeSurfaceAnswers } from "./http-surface-derive-disputes.ts";
+import { workMailSurfaceAnswers } from "./http-surface-derive-work-mail.ts";
 
 /**
  * The HTTP surface snapshot's shared machinery (issue 912): what the recorded
@@ -679,6 +680,7 @@ export async function deriveHttpSurfaceAnswers(): Promise<Record<string, Derived
     "DELETE /api/forge-identities": await deriveDeleteForgeIdentities(),
     "DELETE /api/account": await deriveDeleteAccount(),
     "POST /api/account/export": await derivePostAccountExport(),
+    ...(await workMailSurfaceAnswers()),
     "GET /api/dashboard": await deriveGetDashboard(),
     "GET /api/issues": await deriveGetIssues(),
     "GET /api/settlements": await deriveGetSettlements(),
