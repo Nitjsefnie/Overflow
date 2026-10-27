@@ -108,6 +108,16 @@ describe("GET /api/account/work-mail", () => {
     expect(dependencies.createTransport).not.toHaveBeenCalled();
   });
 
+  it("reads confirmed from the confirmation time, not the digest time", async () => {
+    const { dependencies, store } = setup();
+    store.getSubscription.mockResolvedValueOnce({
+      id: "00000000-0000-4000-8000-000000000001", address: "ada@example.net", confirmedAt: new Date("2026-10-01T10:00:00.000Z"),
+      confirmExpiresAt: null, lastNotifiedAt: null, createdAt: new Date(0), updatedAt: new Date(0),
+    });
+    const body = (await (await createWorkMailGetHandler(dependencies)()).json()) as { subscription: { confirmed: boolean } };
+    expect(body.subscription.confirmed).toBe(true);
+  });
+
   it("answers null when nothing is stored", async () => {
     const { dependencies } = setup();
     await expect((await createWorkMailGetHandler(dependencies)()).json()).resolves.toEqual({ enabled: true, subscription: null });
