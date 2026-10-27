@@ -284,7 +284,7 @@ describe("subscription reads and deletes", () => {
   it("deleteAllWorkMailData removes the user's subscription and confirmation history only", async () => {
     const { userId } = await confirmedSubscriber();
     const other = await confirmedSubscriber();
-    await deleteAllWorkMailData(sql, userId);
+    await deleteAllWorkMailData(sql, [userId]);
     expect(await subscriptionRow(userId)).toBeUndefined();
     expect(await confirmationsOf(userId)).toEqual([]);
     expect(await subscriptionRow(other.userId)).toBeDefined();
@@ -293,7 +293,7 @@ describe("subscription reads and deletes", () => {
     const requester = await insertUser();
     await store.requestConfirmation(requester, addressFor("history"), limits);
     await store.deleteSubscription(requester);
-    await sql.begin((tx) => deleteAllWorkMailData(tx, requester));
+    await sql.begin((tx) => deleteAllWorkMailData(tx, [requester]));
     expect(await confirmationsOf(requester)).toEqual([]);
   });
 

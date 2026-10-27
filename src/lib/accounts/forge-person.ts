@@ -2,6 +2,7 @@ import type { ParameterOrJSON } from "postgres";
 import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { DELETED_ACCOUNT_LOGIN, scrubLinkedForgeIdentities } from "@/lib/accounts/deletion";
+import { countAllWorkMailData, deleteAllWorkMailData } from "@/lib/accounts/work-mail-store";
 import { repositoryLockNamespace } from "@/lib/fold/postgres-store";
 import { waitForRepositoryLockRetry } from "@/lib/fold/repository-lock-retry";
 import {
@@ -90,6 +91,11 @@ export const forgePersonRemovalDecisions: readonly {
       "all identities linked to a matched account are scrubbed by user_id; the (provider, instance_url, forge_user_id) " +
       "triple stays so authorship still resolves to the pseudonymised " +
       "account row; the token is cleared, the login tombstoned and a failure stamped",
+  },
+  {
+    store: "contributor_work_mail_subscriptions, contributor_work_mail_confirmations",
+    decision: "removed",
+    reason: "a matched account's opt-in work-mail address, its pending confirmation and its confirmation history",
   },
   {
     store: "registered_repositories",
@@ -433,6 +439,8 @@ export type ForgePersonRemovalPerStore = {
   pullRequests: number;
   settlements: number;
   evidenceFacts: number;
+  workMailSubscriptions: number;
+  workMailConfirmations: number;
 };
 
 /** One live registration that blocks removal, named by the refusal. */
@@ -679,6 +687,7 @@ export async function removeForgePerson(
       ) as touched`, [repositoryIds, sql.array(uniqueLogins), request.forgeId, tx.array(userIds)]);
     }
 
+    const workMail = await (options.confirm ? deleteAllWorkMailData : countAllWorkMailData)(tx, userIds);
     const perStore: ForgePersonRemovalPerStore = {
       users: 0,
       apiTokens: 0,
@@ -689,6 +698,8 @@ export async function removeForgePerson(
       pullRequests: 0,
       settlements: 0,
       evidenceFacts: 0,
+      workMailSubscriptions: workMail.subscriptions,
+      workMailConfirmations: workMail.confirmations,
     };
     const userIdsParameter = tx.array(userIds);
     for (const operation of storeOperations) {
