@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 // @ts-expect-error -- untyped .mjs script module
-import { BOARD_FIXTURE_DONE_WHEN, BOARD_FIXTURE_ISSUE_TITLE, seedBoardFixtureCard, seedFixtureUsers } from "../../scripts/page-geometry-fixtures.mjs";
+import { BOARD_FIXTURE_AGENT_PROMPT, BOARD_FIXTURE_DONE_WHEN, BOARD_FIXTURE_ISSUE_TITLE, seedBoardFixtureCard, seedFixtureUsers } from "../../scripts/page-geometry-fixtures.mjs";
 import { closeSql, getSql } from "@/lib/db/client";
 import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 import type { DashboardSql } from "@/lib/dashboard/queries";
@@ -24,6 +24,7 @@ const ISSUE_FIXTURE_ID = "00000000-0000-4000-8000-000000001069";
  */
 const EXPECTED_TITLE = "a".repeat(256);
 const EXPECTED_DONE_WHEN = `Done when ${"b".repeat(256)}`;
+const EXPECTED_AGENT_PROMPT = `Agent prompt: ${"c".repeat(256)}`;
 
 describe("seedBoardFixtureCard (issue 1067)", () => {
   let container: StartedTestContainer | undefined;
@@ -94,9 +95,12 @@ describe("seedBoardFixtureCard (issue 1067)", () => {
       availableHeadroom: 0,
     });
     expect(issues[0].doneWhen?.text).toBe(EXPECTED_DONE_WHEN);
+    expect(issues[0].agentPrompt?.text).toBe(EXPECTED_AGENT_PROMPT);
+    expect(issues[0].recommendedModel).toBeNull();
     expect(issues[0].title.length).toBe(256);
     expect(BOARD_FIXTURE_ISSUE_TITLE).toBe(EXPECTED_TITLE);
     expect(BOARD_FIXTURE_DONE_WHEN).toBe(EXPECTED_DONE_WHEN);
+    expect(BOARD_FIXTURE_AGENT_PROMPT).toBe(EXPECTED_AGENT_PROMPT);
   });
 
   it("repairs a drifted title on the next seed", async () => {
@@ -119,6 +123,17 @@ describe("seedBoardFixtureCard (issue 1067)", () => {
       select done_when as "doneWhen" from issues where id = ${ISSUE_FIXTURE_ID}
     `;
     expect(row.doneWhen).toBe(EXPECTED_DONE_WHEN);
+  });
+
+  it("repairs a drifted agent prompt on the next seed", async () => {
+    await sql`update issues set agent_prompt = null where id = ${ISSUE_FIXTURE_ID}`;
+
+    await seedBoardFixtureCard({ databaseUrl });
+
+    const [row] = await sql<{ agentPrompt: string | null }[]>`
+      select agent_prompt as "agentPrompt" from issues where id = ${ISSUE_FIXTURE_ID}
+    `;
+    expect(row.agentPrompt).toBe(EXPECTED_AGENT_PROMPT);
   });
 
   it("repairs a repository whose availability and scheme drifted, on the next seed", async () => {

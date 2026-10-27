@@ -79,6 +79,7 @@ export async function seedFixtureUsers({ databaseUrl }) {
  */
 export const BOARD_FIXTURE_ISSUE_TITLE = "a".repeat(256);
 export const BOARD_FIXTURE_DONE_WHEN = `Done when ${"b".repeat(256)}`;
+export const BOARD_FIXTURE_AGENT_PROMPT = `Agent prompt: ${"c".repeat(256)}`;
 
 /**
  * The sponsor's difficulty scheme, the one validity-checked shape the
@@ -173,15 +174,15 @@ export async function seedBoardFixtureCard({ databaseUrl }) {
     const [issue] = await sql`
       insert into issues
         (id, github_issue_id, repository_id, issue_number, title, body, url, state,
-         opening_label, opening_comparison_points, opening_reserve_points, done_when)
+         opening_label, opening_comparison_points, opening_reserve_points, done_when, agent_prompt)
       values (
         ${FIXTURE_ISSUE.id}, ${FIXTURE_ISSUE.githubIssueId}, ${repository.id}, ${FIXTURE_ISSUE.issueNumber},
         ${BOARD_FIXTURE_ISSUE_TITLE}, 'page-geometry board fixture card (issue 1067)',
         'https://github.com/geometry-fixture-owner/geometry-fixture-repository/issues/1',
-        'OPEN', 'medium', 3, 3, ${BOARD_FIXTURE_DONE_WHEN}
+        'OPEN', 'medium', 3, 3, ${BOARD_FIXTURE_DONE_WHEN}, ${BOARD_FIXTURE_AGENT_PROMPT}
       )
       on conflict (id) do update set title = excluded.title, state = excluded.state, done_when = excluded.done_when,
-        updated_at = now()
+        agent_prompt = excluded.agent_prompt, updated_at = now()
       returning id
     `;
 
