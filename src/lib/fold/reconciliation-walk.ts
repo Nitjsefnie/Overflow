@@ -109,6 +109,10 @@ async function walk({ pass, listing, gateway, repository, onDiscard }: Reconcili
 
   // Absence may restart: ceil(size/100) data pages plus boundary/tie pages and drift
   // gathers; the expensive PR refreshes retain their progress across holds below.
+  // A held run restarts this listing from its first page, so a budget-bound pass
+  // completes only while one run's verify, resumed walk listing and this whole listing
+  // fit in its repository's share of the sweep budget; above that it walks every
+  // window and never completes.
   const listed = new Map<string, WalkSubject>();
   await visitWalkListing(listing, {}, async (subject) => {
     const key = rowKey(subject.kind, subject.id), previous = listed.get(key);
