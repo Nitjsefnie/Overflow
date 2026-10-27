@@ -8,6 +8,7 @@ import type { RegistrationAppDisplayProps } from "@/components/registration-app-
 import { readEnv } from "@/lib/env";
 import { STARTING_CREDIT_LIMIT } from "@/lib/domain/credit-limit";
 import { OVERFLOW_OPENING_CATALOG } from "@/lib/opening-catalog-examples";
+import { plural } from "@/lib/plural";
 import "./landing.css";
 
 export const metadata: Metadata = {
@@ -65,7 +66,7 @@ export function LandingPage({ registrationAppConfigured = false, registrationApp
           {OVERFLOW_OPENING_CATALOG.map((entry) => (
             <article key={entry.label}>
               <h3>{entry.label}</h3>
-              <p><strong>{entry.reservePoints}</strong> {entry.reservePoints === 1 ? "point" : "points"}</p>
+              <p><strong>{entry.reservePoints}</strong> {plural(entry.reservePoints, "point")}</p>
               <p>{entry.example}</p>
             </article>
           ))}
