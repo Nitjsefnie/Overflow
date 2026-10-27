@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 
 /**
  * The cipher for every credential stored at rest: GitHub OAuth tokens, forge
@@ -89,6 +89,14 @@ export function loadTokenKeySet(env: Readonly<Record<string, string | undefined>
 /** The key set a store holds as its current and previous key parameters, read like the environment. */
 export function tokenKeySetFrom(current: string | undefined, previous: string | undefined): TokenKeySet {
   return loadTokenKeySet({ TOKEN_ENCRYPTION_KEY: current, TOKEN_ENCRYPTION_KEY_PREVIOUS: previous });
+}
+
+/**
+ * An HMAC key for one purpose, derived from one encoded token key (current or
+ * previous) under a fixed label, so no purpose ever uses the cipher key itself.
+ */
+export function derivePurposeKey(encodedKey: string, label: string): Buffer {
+  return createHmac("sha256", decodeKey(encodedKey, currentKeyFailure)).update(label, "utf8").digest();
 }
 
 export function encryptToken(plaintext: string, currentKey: string, binding: CredentialBinding): string {

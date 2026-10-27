@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
@@ -709,6 +709,14 @@ describe("account deletion as pseudonymisation", () => {
       values (${disputeAdjustment!.id}, ${exporter.id}, 2)
     `;
 
+    await sql`
+      insert into contributor_work_mail_subscriptions (user_id, address, confirm_token_hash, confirm_expires_at)
+      values (${exporter.id}, 'exporter@example.test', ${randomBytes(32)}, now() + interval '1 day')
+    `;
+    await sql`
+      insert into contributor_work_mail_confirmations (user_id, address_digest) values (${exporter.id}, ${randomBytes(32)})
+    `;
+
     const document = await exportAccount(sql, exporter.githubUserId);
     expect(document).not.toBeNull();
     const exported = document!;
@@ -750,6 +758,14 @@ describe("account deletion as pseudonymisation", () => {
     expect(exported.forgeIdentities).toHaveLength(1);
     expect(exported.forgeIdentities[0]!.hasStoredToken).toBe(true);
     expect(exported.apiToken).not.toBeNull();
+    const [workMail] = await sql<{ created_at: Date; confirm_expires_at: Date }[]>`
+      select created_at, confirm_expires_at from contributor_work_mail_subscriptions where user_id = ${exporter.id}
+    `;
+    // The pending token's hash is never exported, not even as a presence flag.
+    expect(exported.workMail).toEqual({
+      address: "exporter@example.test", confirmedAt: null, lastNotifiedAt: null,
+      createdAt: workMail!.created_at.toISOString(), confirmExpiresAt: workMail!.confirm_expires_at.toISOString(),
+    });
   });
 
   it("case 10: resolves no account for a token row that outlives its deleted account", async () => {

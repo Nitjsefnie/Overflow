@@ -27,6 +27,9 @@ the security reason and the change.
 
 **Version history:**
 
+- 1.10.0: `POST /api/account/export` adds `workMail`, the opt-in work-mail
+  address with its confirmation and last-notification times (`null` when none
+  is stored), and `workMailConfirmations`, one row per confirmation mail sent.
 - 1.9.0: Each `GET /api/issues` row adds `doneWhen`, the repository sponsor's
   "Done when" statement as `{ "text", "notice" }`, or `null` when the issue
   has none. The text is untrusted input; `notice` carries that warning with
@@ -610,9 +613,11 @@ origin of `OVERFLOW_APP_URL`; a declared `Content-Type` must be `application/jso
 download named `overflow-account-export.json`, `Content-Type:
 application/json; charset=utf-8`, and `Cache-Control: no-store`. Its JSON
 document has `formatVersion`, `exportedAt`, `account`, `apiToken`,
-`forgeIdentities`, `sponsoredRepositories`, and the account's ledger,
-moderation and reconciliation sections. Stored credentials appear only as
-presence booleans; token hashes and webhook secrets are omitted. The
+`forgeIdentities`, `sponsoredRepositories`, `workMail`,
+`workMailConfirmations`, and the account's ledger, moderation and
+reconciliation sections. Stored credentials appear only as presence booleans;
+token hashes, including a pending work-mail confirmation's, and webhook secrets
+are omitted. The
 [operator account-export reference](OPERATING.md#account-deletion-and-export)
 explains its data scope.
 
