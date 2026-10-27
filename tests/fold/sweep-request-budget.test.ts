@@ -4,7 +4,7 @@ import { GitHubGateway } from "@/lib/github/client";
 import { GitHubGraphqlClient } from "@/lib/github/graphql";
 import { isTransientGitHubRequestError } from "@/lib/github/errors";
 import { GitLabGateway } from "@/lib/gitlab/client";
-import { checkSweepRequestBudget, readSweepRequestBudget, SweepBudgetSpent, withSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
+import { checkSweepRequestBudget, readSweepRequestBudget, readSweepWindowMs, SweepBudgetSpent, withSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -14,6 +14,19 @@ describe("sweep HTTP admission", () => {
   });
   it("accepts a positive integer override", () => {
     expect(readSweepRequestBudget({ RECONCILIATION_SWEEP_REQUEST_BUDGET: "17" })).toBe(17);
+  });
+  it.each([undefined, "", "0", "-1", "1.5", "oops", "Infinity", "150119987580", String(Number.MAX_SAFE_INTEGER + 1)])(
+    "defaults invalid window %s to six hours", (value) => {
+      expect(readSweepWindowMs({ OVERFLOW_RECONCILIATION_SWEEP_WINDOW_MINUTES: value })).toBe(6 * 60 * 60_000);
+    },
+  );
+  it("reads the window in whole minutes, the prefixed name over the bare one", () => {
+    expect(readSweepWindowMs({ OVERFLOW_RECONCILIATION_SWEEP_WINDOW_MINUTES: "90" })).toBe(90 * 60_000);
+    expect(readSweepWindowMs({ RECONCILIATION_SWEEP_WINDOW_MINUTES: "45" })).toBe(45 * 60_000);
+    expect(readSweepWindowMs({ OVERFLOW_RECONCILIATION_SWEEP_WINDOW_MINUTES: "90", RECONCILIATION_SWEEP_WINDOW_MINUTES: "45" }))
+      .toBe(90 * 60_000);
+    // The largest minute count whose product is still a safe integer.
+    expect(readSweepWindowMs({ OVERFLOW_RECONCILIATION_SWEEP_WINDOW_MINUTES: "150119987579" })).toBe(150119987579 * 60_000);
   });
   it("counts REST and GraphQL in one counter, before sending, without retrying a hold", async () => {
     let spent = 0;
