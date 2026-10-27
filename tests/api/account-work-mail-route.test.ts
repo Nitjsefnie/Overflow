@@ -177,9 +177,15 @@ describe("POST /api/account/work-mail", () => {
 
   it("answers before the mail server does", async () => {
     const { dependencies, send } = setup();
-    send.mockImplementationOnce(() => new Promise<SendResult>(() => undefined));
-    expect((await post(dependencies)).status).toBe(202);
+    let release: (result: SendResult) => void = () => undefined;
+    send.mockImplementationOnce(() => new Promise<SendResult>((resolve) => { release = resolve; }));
+    let answer: Response | undefined;
+    const pending = post(dependencies).then((response) => { answer = response; });
+    // The send stays open until the answer exists; an awaited send never lets it.
+    await vi.waitFor(() => expect(answer?.status).toBe(202), { timeout: 30_000 });
     expect(send).toHaveBeenCalledTimes(1);
+    release({ ok: true });
+    await pending;
   });
 
   it.each([
