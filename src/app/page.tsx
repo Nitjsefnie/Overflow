@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { PublicAppShell } from "@/components/app-shell";
@@ -6,7 +7,12 @@ import { registrationAppConfigured, registrationAppInstallUrl } from "@/lib/gith
 import type { RegistrationAppDisplayProps } from "@/components/registration-app-guidance";
 import { readEnv } from "@/lib/env";
 import { STARTING_CREDIT_LIMIT } from "@/lib/domain/credit-limit";
-import { OVERFLOW_OPENING_CATALOG } from "@/app/landing-examples";
+import { OVERFLOW_OPENING_CATALOG } from "@/lib/opening-catalog-examples";
+import "./landing.css";
+
+export const metadata: Metadata = {
+  title: "Overflow — cooperative points",
+};
 
 export function LandingPage({ registrationAppConfigured = false, registrationAppInstallUrl = null }: RegistrationAppDisplayProps) {
   return (
@@ -18,7 +24,7 @@ export function LandingPage({ registrationAppConfigured = false, registrationApp
           Overflow records completed work, its proof, and points.
         </p>
         <p className="landing-trade">
-          You start at 0, can go {STARTING_CREDIT_LIMIT} points below zero, take an issue, earn points when your pull request merges, and spend them on issues you post.
+          You start at 0 points; take an issue and earn its points when your pull request merges; spend points on issues you post, which stay on offer until you are {STARTING_CREDIT_LIMIT} points below zero.
         </p>
         <form action={signInAsContributor}>
           <button className="action-button" type="submit">
@@ -55,7 +61,7 @@ export function LandingPage({ registrationAppConfigured = false, registrationApp
         <h2 id="landing-examples-title">Examples of issue sizes</h2>
         <p>These examples use Overflow&apos;s own opening catalog; each repository chooses its own.</p>
         <p>While an issue is assigned to an outside contributor, its listed points are reserved from the sponsor&apos;s balance; on merge, the contributor earns the settled points minus one per distinct changes-requested review round, with a minimum of zero.</p>
-        <div className="landing-principles">
+        <div className="landing-principles landing-examples">
           {OVERFLOW_OPENING_CATALOG.map((entry) => (
             <article key={entry.label}>
               <h3>{entry.label}</h3>
