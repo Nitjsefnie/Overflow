@@ -1341,7 +1341,7 @@ export async function listModerationRepositories(
   }));
 }
 
-function resolveSql(dependencies: Pick<DashboardQueryDependencies, "sql">): DashboardSql {
+export function resolveSql(dependencies: Pick<DashboardQueryDependencies, "sql">): DashboardSql {
   return dependencies.sql ?? (getSql() as unknown as DashboardSql);
 }
 

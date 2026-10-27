@@ -206,6 +206,10 @@ export function AccountDataNotice() {
         <h2 id="account-data-access-heading">Who can see it</h2>
         <p>The site operator administers Overflow&apos;s database and the token&apos;s encryption key.</p>
         <p>
+          The public <Link href="/stats">settled work page</Link> shows only aggregate totals of settled pull
+          requests, contributors, and points, including your account&apos;s settlements, and names no account.
+        </p>
+        <p>
           Other signed-in members and moderators see your GitHub login — the member roster and the moderation
           surfaces display it. It is not displayed to anyone else.
         </p>

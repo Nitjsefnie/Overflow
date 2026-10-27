@@ -57,6 +57,9 @@ export function LandingPage({ registrationAppConfigured = false, registrationApp
         <Link className="text-link" href="/rules">
           Rules
         </Link>
+        <Link className="text-link" href="/stats">
+          Settled work
+        </Link>
       </section>
       <section aria-labelledby="landing-examples-title">
         <h2 id="landing-examples-title">Examples of issue sizes</h2>
