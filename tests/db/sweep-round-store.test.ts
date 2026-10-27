@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -65,6 +65,37 @@ describe("per-sponsor durable sweep rounds", () => {
     expect(await store.enqueueNext(sponsorB, ["b1", "b2"], next, 2, offer)).toBe("b2");
     expect(offered).toEqual(["b1", "a1", "b2"]);
     expect(await sql`select * from reconciliation_sweep_round`).toEqual([]);
+  });
+
+  it("holds, rolls over and spaces a sponsor's repositories on a configured window", async () => {
+    const minute = 60_000;
+    const store = new PostgresSponsorSweepRoundStore(sql, 90 * minute);
+    const sponsorId = await insertSponsor();
+    const round = async () => (await sql<{ window_start: Date; next_enqueue_at: Date }[]>`
+      select window_start, next_enqueue_at from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`)[0];
+    expect(await store.spend(sponsorId, at, 1)).toBeNull();
+    expect(await store.spend(sponsorId, at, 1)).toEqual(new Date(at.getTime() + 90 * minute));
+    // Three repositories share the window: one slot every 90 / 3 minutes.
+    expect(await store.enqueueNext(sponsorId, ["a", "b", "c"], at, 2, async () => {})).toBe("a");
+    expect((await round())!.next_enqueue_at).toEqual(new Date(at.getTime() + 30 * minute));
+    expect(await store.spend(sponsorId, new Date(at.getTime() + 89 * minute), 1)).toEqual(new Date(at.getTime() + 90 * minute));
+    // 200 minutes in, the round aligns to the window grid: 2 * 90 minutes.
+    expect(await store.spend(sponsorId, new Date(at.getTime() + 200 * minute), 1)).toBeNull();
+    expect(await round()).toEqual({ window_start: new Date(at.getTime() + 180 * minute),
+      next_enqueue_at: new Date(at.getTime() + 180 * minute) });
+  });
+
+  it("takes the window from the environment when none is passed", async () => {
+    try {
+      vi.stubEnv("RECONCILIATION_SWEEP_WINDOW_MINUTES", undefined);
+      vi.stubEnv("OVERFLOW_RECONCILIATION_SWEEP_WINDOW_MINUTES", "90");
+      const store = new PostgresSponsorSweepRoundStore(sql);
+      const sponsorId = await insertSponsor();
+      expect(await store.spend(sponsorId, at, 1)).toBeNull();
+      expect(await store.spend(sponsorId, at, 1)).toEqual(new Date(at.getTime() + 90 * 60_000));
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("anchors a sponsor's window at its first touch, starting from zero", async () => {
