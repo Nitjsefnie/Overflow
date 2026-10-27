@@ -668,9 +668,9 @@ a caller who is a party to that settlement.
 
 Every `GET /api/issues` row carries `asksOutsideRepository`, a boolean that is
 always present. It is `true` while the issue carries the exact, case-sensitive
-label `overflow: asks outside repository`, which whoever has label rights on
-the forge (the repository owner and the collaborators he trusts) applies to an
-issue that asks for work outside its own repository. It survives edits to the
+label `overflow: asks outside repository`, which the repository owner or any
+collaborator with label rights on the forge applies to an issue that asks for
+work outside its own repository. It survives edits to the
 issue and clears only when the label is removed. `false` means only that the
 label is absent: it vouches for nothing about what the issue asks for.
 
