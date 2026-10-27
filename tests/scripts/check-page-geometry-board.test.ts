@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 // @ts-expect-error -- untyped .mjs script module
-import { BOARD_FIXTURE_ISSUE_TITLE, seedBoardFixtureCard, seedFixtureUsers } from "../../scripts/page-geometry-fixtures.mjs";
+import { BOARD_FIXTURE_DONE_WHEN, BOARD_FIXTURE_ISSUE_TITLE, seedBoardFixtureCard, seedFixtureUsers } from "../../scripts/page-geometry-fixtures.mjs";
 import { closeSql, getSql } from "@/lib/db/client";
 import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 import type { DashboardSql } from "@/lib/dashboard/queries";
@@ -23,6 +23,7 @@ const ISSUE_FIXTURE_ID = "00000000-0000-4000-8000-000000001069";
  * (issue 1067): the audit's 256-character issue title, byte for byte.
  */
 const EXPECTED_TITLE = "a".repeat(256);
+const EXPECTED_DONE_WHEN = `Done when ${"b".repeat(256)}`;
 
 describe("seedBoardFixtureCard (issue 1067)", () => {
   let container: StartedTestContainer | undefined;
@@ -92,8 +93,10 @@ describe("seedBoardFixtureCard (issue 1067)", () => {
       sponsorLogin: "geometry-fixture-sponsor",
       availableHeadroom: 0,
     });
+    expect(issues[0].doneWhen?.text).toBe(EXPECTED_DONE_WHEN);
     expect(issues[0].title.length).toBe(256);
     expect(BOARD_FIXTURE_ISSUE_TITLE).toBe(EXPECTED_TITLE);
+    expect(BOARD_FIXTURE_DONE_WHEN).toBe(EXPECTED_DONE_WHEN);
   });
 
   it("repairs a drifted title on the next seed", async () => {
@@ -105,6 +108,17 @@ describe("seedBoardFixtureCard (issue 1067)", () => {
       select title from issues where id = ${ISSUE_FIXTURE_ID}
     `;
     expect(row.title).toBe(EXPECTED_TITLE);
+  });
+
+  it("repairs a drifted done-when statement on the next seed", async () => {
+    await sql`update issues set done_when = null where id = ${ISSUE_FIXTURE_ID}`;
+
+    await seedBoardFixtureCard({ databaseUrl });
+
+    const [row] = await sql<{ doneWhen: string | null }[]>`
+      select done_when as "doneWhen" from issues where id = ${ISSUE_FIXTURE_ID}
+    `;
+    expect(row.doneWhen).toBe(EXPECTED_DONE_WHEN);
   });
 
   it("repairs a repository whose availability and scheme drifted, on the next seed", async () => {
