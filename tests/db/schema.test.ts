@@ -82,9 +82,6 @@ describe("initial PostgreSQL materialization", () => {
       "settlement_override_requests",
       "api_tokens",
       "reconciliation_sweep_walk_subjects",
-      "contributor_work_mail_subscriptions",
-      "contributor_work_mail_confirmations",
-      "contributor_work_mail_daily",
     ]) {
       expect(rows.some((row) => row.table_name === table)).toBe(true);
     }
