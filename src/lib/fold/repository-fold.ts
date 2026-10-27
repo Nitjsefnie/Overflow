@@ -154,7 +154,7 @@ export type FoldIssue = {
   settledRationaleActorLogin: string | null;
   settledRationaleCommentedAt: string | null;
   asksOutsideRepository: boolean;
-  doneWhen?: { text: string; commentId: string } | null; // absent: not read fresh this pass, the stored extract stands
+  doneWhen?: { text: string; commentId: string } | null; agentPrompt?: FoldIssue["doneWhen"]; recommendedModel?: FoldIssue["doneWhen"]; // absent: not read fresh this pass, the stored extract stands
 };
 
 export type FoldPullRequest = {
