@@ -1366,9 +1366,10 @@ environment.
 unchanged and the credential was already finalized, so no repair was requested.
 `subscription: VERIFIED` and `queue: FAILED` is partial completion. A rerun
 retries repair when the credential was not yet finalized. If an already-finalized
-hook changed, the rerun may see the updated subscription and skip the repair;
-request a rederivation for that repository through moderation instead. Do not
-report the upgrade as successful from a restart or startup sweep. Queue acceptance does not establish
+hook changed and its update response was lost or queueing failed, the rerun may
+see the updated subscription and skip the repair; request a rederivation for
+that repository through moderation instead. Do not report the upgrade as
+successful from a restart or startup sweep. Queue acceptance does not establish
 that reconciliation has finished; check the worker's outcomes afterwards.
 
 For section 5's one-time migration, run the upgrade/logging lines above after its
