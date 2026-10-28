@@ -350,19 +350,21 @@ describe("reconcileRepository", () => {
       .toEqual([[101, 201], [102, 202], [103, 203]]);
     expect(fold.pullRequests.map(({ authorGitHubUserId }) => authorGitHubUserId)).toEqual([2001, 2001, 2001]);
     expect(fold.settlements.map(({ creditorGitHubUserId }) => creditorGitHubUserId)).toEqual([2001, 2001, 2001]);
+    expect(fold.settlements.map(({ donationCommentId }) => donationCommentId)).toEqual([null, null, null]);
     expect(fold.issues.map((issue) => issue.updatedAt)).toEqual([
       "2026-09-01T12:05:00.000Z", "2026-09-01T12:05:00.000Z", "2026-09-01T12:05:00.000Z",
     ]);
     // Keep the historical digest comparable without the added provenance fields.
     const legacyFold = JSON.stringify(fold, (key, value) => (
       key === "authorGitHubUserId" || key === "creditorGitHubUserId"
-        || key === "claimAssigneeGitHubUserId" || key === "updatedAt" || key === "asksOutsideRepository" || key === "doneWhen" ? undefined : value
+        || key === "claimAssigneeGitHubUserId" || key === "updatedAt" || key === "asksOutsideRepository" || key === "doneWhen"
+        || key === "donationCommentId" ? undefined : value
     ));
     // The digest moved when the fold result stopped carrying issue and pull
     // request body text (issue 681); the JSON shape is otherwise unchanged.
     expect(createHash("sha256").update(legacyFold).digest("hex")).toBe("9640faa8a1fd4b0db7d108e447da7c9d6b347d0cfaa9d47e1f38568523ad0224");
     const unstampedFold = JSON.stringify(fold, (key, value) => (
-      key === "updatedAt" || key === "asksOutsideRepository" || key === "doneWhen" ? undefined : value
+      key === "updatedAt" || key === "asksOutsideRepository" || key === "doneWhen" || key === "donationCommentId" ? undefined : value
     ));
     expect(createHash("sha256").update(unstampedFold).digest("hex")).toBe("cfb680a10c35065663b858d59c86e2688ef85205a594e9e002ac7c08422b2b2d");
   });
@@ -385,7 +387,7 @@ describe("reconcileRepository", () => {
     // Retained CLOSED evidence changes the rows, while merged pricing stays identical.
     expect(fold.pullRequests.filter((pr) => pr.state === "CLOSED")).toHaveLength(360);
     const unstampedFold = JSON.stringify({ ...fold, pullRequests: fold.pullRequests.filter((pr) => pr.state === "MERGED") }, (key, value) => (
-      key === "updatedAt" || key === "asksOutsideRepository" || key === "doneWhen" ? undefined : value
+      key === "updatedAt" || key === "asksOutsideRepository" || key === "doneWhen" || key === "donationCommentId" ? undefined : value
     ));
     expect(createHash("sha256").update(unstampedFold).digest("hex")).toBe("cfb680a10c35065663b858d59c86e2688ef85205a594e9e002ac7c08422b2b2d");
     expect(requests.filter(({ operation }) => operation === "ClosingPullRequests")).toEqual([
