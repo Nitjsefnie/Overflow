@@ -132,6 +132,17 @@ describe("existing registration webhook upgrade", () => {
     expect(f.outcomes).toEqual([{ repositoryId: "registration-1", subscription: "FAILED", queue: "NOT_ATTEMPTED", failure: "SUBSCRIPTION_FAILED" }]);
   });
 
+  it.each(["github", "gitlab"] as const)("reports %s finalization failure after queue acceptance", async (provider) => {
+    const f = fixture({ provider, instanceUrl: provider === "gitlab" ? "https://gitlab.example.com" : null });
+    f.dependencies.store.finalizeWebhookCredential = async (_credential, beforeCommit) => {
+      await beforeCommit?.();
+      throw new Error("synthetic finalization failure");
+    };
+    expect.soft(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 1, gone: 0 });
+    expect(f.queued).toEqual([{ repositoryId: "registration-1", reason: "REDERIVATION" }]);
+    expect(f.outcomes).toEqual([{ repositoryId: "registration-1", subscription: "FAILED", queue: "QUEUED", failure: "SUBSCRIPTION_FAILED" }]);
+  });
+
   it("reconfigures a legacy hook whose events are already complete", async () => {
     const f = fixture();
     f.hook.events.push("issue_comment");
