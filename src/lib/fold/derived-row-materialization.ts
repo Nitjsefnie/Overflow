@@ -53,6 +53,7 @@ export async function materializeSettlements(
 
   for (const folded of input.fold.settlements) {
     const current = existingByIssue.get(folded.githubIssueId);
+    // Mark after the override: it rewrites the status, so a corrected donation stays DONATED.
     const settlement = donatedSettlement(applyGrantedOverride(folded, grantedOverrides), current);
     const issueId = requiredId(issueIds, settlement.githubIssueId, "Issue");
     const pullRequestId = requiredId(pullRequestIds, settlement.githubPullRequestId, "Pull request");
