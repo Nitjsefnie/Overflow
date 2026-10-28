@@ -44,7 +44,7 @@ describe("webhook upgrade CLI", () => {
     const find = f.dependencies.store.findActiveRepositoryById;
     f.dependencies.store.findActiveRepositoryById = async (id) => ({ ...(await find(id))!, githubRepositoryId: id === "repository-1" ? 42 : 43 });
     f.dependencies.store.stageWebhookCredential = async (target) => ({ ...target, credentialId: "credential-2", secret: "synthetic-secret", configuredAt: null });
-    f.dependencies.store.finalizeWebhookCredential = async () => true;
+    f.dependencies.store.finalizeWebhookCredential = async (_credential, beforeCommit) => { await beforeCommit?.(); return true; };
     f.dependencies.store.requestRepositoryRederivation = async () => {};
     const createGateway = provider === "github" ? f.dependencies.createGateway : (token: string) => f.dependencies.createGitLabGateway("https://gitlab.example.com", token);
     const gateway = createGateway("synthetic-token", "sponsor-1");
@@ -55,7 +55,7 @@ describe("webhook upgrade CLI", () => {
         id, owner: "current", ownerType: "USER" as const, name: "project", fullName: "current/project", visibility: "PUBLIC" as const,
         canAdminister: true, url: "https://forge.example/current/project",
       },
-      configureWebhook: async () => { upgraded.push(43); },
+      configureWebhook: async () => { upgraded.push(43); return true; },
     });
     f.dependencies.createGateway = create;
     f.dependencies.createGitLabGateway = create;

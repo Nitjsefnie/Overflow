@@ -297,6 +297,23 @@ describe("registering a repository against the real registered_repositories cons
     expect(await store.stageWebhookCredential(target)).toMatchObject({ credentialId: replacement.id, secret: replacement.secret });
   });
 
+  it("keeps a credential pending if its verified repair cannot be queued", async () => {
+    const submission = newRepository({ sponsorId: await sponsor() });
+    const created = (await store.createRepository(submission))!;
+    const staged = (await store.stageWebhookCredential({ repositoryId: created.id, provider: "github", instanceUrl: null,
+      projectId: submission.githubRepositoryId, webhookId: submission.githubWebhookId! }))!;
+    let attempts = 0;
+    expect(await store.finalizeWebhookCredential({ ...staged, credentialId: randomUUID() }, async () => { attempts++; })).toBe(false);
+    expect(attempts).toBe(0);
+    await expect(store.finalizeWebhookCredential(staged, async () => { attempts++; throw new Error("queue failed"); }))
+      .rejects.toThrow("queue failed");
+    expect(attempts).toBe(1);
+    expect((await store.findWebhookCredential(staged.credentialId, "github"))!.configuredAt).toBeNull();
+    expect(await store.finalizeWebhookCredential(staged, async () => { attempts++; })).toBe(true);
+    expect(attempts).toBe(2);
+    expect((await store.findWebhookCredential(staged.credentialId, "github"))!.configuredAt).toBeInstanceOf(Date);
+  });
+
   it("carries the claimed path on the owner/name conflict it raises", async () => {
     const held = await registeredRepository();
     const submission = newRepository({ sponsorId: await sponsor(), ownerName: held.ownerName });

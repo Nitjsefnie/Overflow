@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 import { GitHubGateway } from "@/lib/github/client";
 import { GitLabGateway } from "@/lib/gitlab/client";
 import { upgradeRepositoryWebhooks, type WebhookUpgradeDependencies } from "@/lib/repositories/upgrade-webhooks";
@@ -11,13 +12,14 @@ const registration: RegisteredRepository = {
   ownerName: "old-owner/old-name", sponsorId: "sponsor-1", visibility: "PUBLIC",
 };
 
-function fixture(options: { provider?: string; instanceUrl?: string | null; lookupStatus?: number } = {}) {
+function fixture(options: { provider?: string; instanceUrl?: string | null; lookupStatus?: number; configuredAt?: Date | null } = {}) {
   const requests: Request[] = [];
   const queued: { repositoryId: string; reason: string }[] = [];
   const credentials: string[] = [];
   const forgeCredentials: string[] = [];
   const outcomes: unknown[] = [];
   const registrations = [registration];
+  const credentialId = randomUUID();
   let pending: WebhookCredentialRecord | null = null;
   const repository = {
     id: 42, name: "renamed", full_name: "new-owner/renamed", private: false,
@@ -28,13 +30,19 @@ function fixture(options: { provider?: string; instanceUrl?: string | null; look
     events: ["issues", "pull_request", "pull_request_review"],
     config: { url: "https://overflow.example/api/github/webhooks", content_type: "json", insecure_ssl: "0", secret: "********" },
   };
+  const gitlabHook = { id: 81, url: "https://overflow.example/api/gitlab/webhooks", push_events: false,
+    issues_events: false, merge_requests_events: false };
   const dependencies: WebhookUpgradeDependencies = {
     store: {
       withWebhookUpgradeLock: async (_id, operation) => operation(),
       stageWebhookCredential: async (target) => pending ??= {
-        ...target, credentialId: "181a4fbb-64d1-44fd-82da-cd191613798c", secret: "scoped-upgrade-secret", configuredAt: null,
+        ...target, credentialId, secret: "scoped-upgrade-secret", configuredAt: options.configuredAt ?? null,
       },
-      finalizeWebhookCredential: async () => true,
+      finalizeWebhookCredential: async (_credential, beforeCommit) => {
+        await beforeCommit?.();
+        if (pending !== null) pending = { ...pending, configuredAt: new Date("2026-01-01T00:00:00Z") };
+        return true;
+      },
       listActiveRepositoryIds: async () => registrations.map((entry) => entry.id),
       findActiveRepositoryById: async (id) => registrations.find((entry) => entry.id === id) ?? null,
       findActiveRepositoryForgeById: async (id) =>
@@ -71,9 +79,9 @@ function fixture(options: { provider?: string; instanceUrl?: string | null; look
       if (request.url.endsWith("/projects/42") && options.lookupStatus !== undefined) {
         return new Response(null, { status: options.lookupStatus });
       }
-      if (request.method === "PUT") return Response.json({ id: 81, issues_events: true, ...await request.clone().json() });
+      if (request.method === "PUT") Object.assign(gitlabHook, await request.clone().json());
       if (request.url.includes("/hooks/")) {
-        return Response.json({ id: 81, url: "https://overflow.example/api/gitlab/webhooks", push_events: false, issues_events: false, merge_requests_events: false });
+        return Response.json(gitlabHook);
       }
       return Response.json({
         id: 42, name: "project", path: "project", path_with_namespace: "gl-group/project",
@@ -84,10 +92,38 @@ function fixture(options: { provider?: string; instanceUrl?: string | null; look
     } }),
     report: (outcome) => { outcomes.push(outcome); },
   };
-  return { dependencies, requests, queued, credentials, forgeCredentials, outcomes, registrations, repository, hook };
+  return { dependencies, requests, queued, credentials, forgeCredentials, outcomes, registrations, repository, hook, gitlabHook, credentialId };
 }
 
 describe("existing registration webhook upgrade", () => {
+  it.each([
+    ["github", "unchanged"], ["github", "events"], ["github", "URL"], ["github", "unfinalized"],
+    ["gitlab", "unchanged"], ["gitlab", "events"], ["gitlab", "URL"], ["gitlab", "unfinalized"],
+  ] as const)("queues only the needed %s repair for %s and does nothing on the next run", async (provider, change) => {
+    const f = fixture({ provider, instanceUrl: provider === "gitlab" ? "https://gitlab.example.com" : null,
+      configuredAt: change === "unfinalized" ? null : new Date("2026-01-01T00:00:00Z") });
+    const callbackUrl = new URL(f.dependencies.webhookUrls[provider]);
+    callbackUrl.searchParams.set("hook", f.credentialId);
+    f.hook.events.push("issue_comment");
+    f.hook.config.url = callbackUrl.toString();
+    Object.assign(f.gitlabHook, { url: callbackUrl.toString(), issues_events: true, merge_requests_events: true });
+    if (change === "events") {
+      if (provider === "github") f.hook.events = f.hook.events.filter((event) => event !== "issue_comment");
+      else f.gitlabHook.issues_events = false;
+    }
+    if (change === "URL") {
+      if (provider === "github") f.hook.config.url = "https://old.test/hook";
+      else f.gitlabHook.url = "https://old.test/hook";
+    }
+    expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 1, failed: 0, gone: 0 });
+    expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 1, failed: 0, gone: 0 });
+    expect(f.queued).toEqual(change === "unchanged" ? [] : [{ repositoryId: "registration-1", reason: "REDERIVATION" }]);
+    expect(f.outcomes).toEqual([
+      { repositoryId: "registration-1", subscription: "VERIFIED", queue: change === "unchanged" ? "NOT_NEEDED" : "QUEUED", failure: null },
+      { repositoryId: "registration-1", subscription: "VERIFIED", queue: "NOT_NEEDED", failure: null },
+    ]);
+  });
+
   it.each(["github", "gitlab"] as const)("refuses stale %s finalization without queueing repair", async (provider) => {
     const f = fixture({ provider, instanceUrl: provider === "gitlab" ? "https://gitlab.example.com" : null });
     f.dependencies.store.finalizeWebhookCredential = async () => false;
@@ -133,7 +169,7 @@ describe("existing registration webhook upgrade", () => {
     expect(f.queued).toEqual([]);
   });
 
-  it("resolves immutable identity and the sponsor token, writes at the current path, and queues repair on every verified run", async () => {
+  it("resolves immutable identity and the sponsor token, writes at the current path, and queues repair once", async () => {
     const f = fixture();
     await expect(upgradeRepositoryWebhooks(f.dependencies)).resolves.toEqual({ succeeded: 1, failed: 0, gone: 0 });
     await expect(upgradeRepositoryWebhooks(f.dependencies)).resolves.toEqual({ succeeded: 1, failed: 0, gone: 0 });
@@ -143,10 +179,11 @@ describe("existing registration webhook upgrade", () => {
       "GET /repositories/42", "GET /repos/new-owner/renamed/hooks/81", "PATCH /repos/new-owner/renamed/hooks/81",
     ]);
     expect(f.requests.map((request) => request.headers.get("authorization"))).toEqual(Array(6).fill("Bearer token-sponsor-1"));
-    expect(f.queued).toEqual([
-      { repositoryId: "registration-1", reason: "REDERIVATION" }, { repositoryId: "registration-1", reason: "REDERIVATION" },
+    expect(f.queued).toEqual([{ repositoryId: "registration-1", reason: "REDERIVATION" }]);
+    expect(f.outcomes).toEqual([
+      { repositoryId: "registration-1", subscription: "VERIFIED", queue: "QUEUED", failure: null },
+      { repositoryId: "registration-1", subscription: "VERIFIED", queue: "NOT_NEEDED", failure: null },
     ]);
-    expect(f.outcomes).toEqual(Array(2).fill({ repositoryId: "registration-1", subscription: "VERIFIED", queue: "QUEUED", failure: null }));
   });
 
   it.each([
@@ -211,16 +248,19 @@ describe("existing registration webhook upgrade", () => {
     expect(f.outcomes).toEqual([{ repositoryId: "registration-1", subscription: "FAILED", queue: "NOT_ATTEMPTED", failure: "REGISTRATION_FAILED" }]);
   });
 
-  it("keeps subscription and queue outcomes separate so reruns repair failed queueing", async () => {
-    const f = fixture(); const enqueue = f.dependencies.store.requestRepositoryRederivation;
+  it.each(["github", "gitlab"] as const)("keeps %s subscription and queue outcomes separate so reruns repair failed queueing", async (provider) => {
+    const f = fixture({ provider, instanceUrl: provider === "gitlab" ? "https://gitlab.example.com" : null });
+    const enqueue = f.dependencies.store.requestRepositoryRederivation;
     f.dependencies.store.requestRepositoryRederivation = async () => { throw new Error("private database password"); };
     expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 1, gone: 0 });
     f.dependencies.store.requestRepositoryRederivation = enqueue;
     expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 1, failed: 0, gone: 0 });
-    expect(f.requests.filter((request) => request.method === "PATCH")).toHaveLength(2);
+    expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 1, failed: 0, gone: 0 });
+    expect(f.requests.filter((request) => request.method === (provider === "github" ? "PATCH" : "PUT"))).toHaveLength(3);
     expect(f.outcomes).toEqual([
       { repositoryId: "registration-1", subscription: "VERIFIED", queue: "FAILED", failure: "QUEUE_FAILED" },
       { repositoryId: "registration-1", subscription: "VERIFIED", queue: "QUEUED", failure: null },
+      { repositoryId: "registration-1", subscription: "VERIFIED", queue: "NOT_NEEDED", failure: null },
     ]);
     expect(f.queued).toEqual([{ repositoryId: "registration-1", reason: "REDERIVATION" }]);
   });

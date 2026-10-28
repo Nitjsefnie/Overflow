@@ -4,6 +4,25 @@ import { GitLabGateway, GitLabApiError, gitlabCollectionTotal } from "@/lib/gitl
 import { logField } from "@/lib/webhooks/log-field";
 
 describe("scoped GitLab hook configuration", () => {
+  it.each([
+    ["unchanged", true, true, "https://example.test/hook", false],
+    ["missing issues events", false, true, "https://example.test/hook", true],
+    ["missing merge request events", true, false, "https://example.test/hook", true],
+    ["changed URL", true, true, "https://old.test/hook", true],
+  ])("reports whether %s changes the GitLab subscription", async (_name, issues, mergeRequests, url, changed) => {
+    const methods: string[] = [];
+    let remote = { id: 81, url, issues_events: issues, merge_requests_events: mergeRequests, push_events: true };
+    const gateway = new GitLabGateway({ instanceUrl: "https://gitlab.test", token: "synthetic-pat", fetch: async (input, init) => {
+      const request = new Request(input, init);
+      methods.push(request.method);
+      if (request.method === "PUT") remote = { ...remote, ...await request.json() };
+      return Response.json(remote);
+    } });
+    expect(await gateway.configureWebhook({ owner: "group", name: "project" }, 81,
+      { callbackUrl: "https://example.test/hook", secret: "fixture-secret" })).toBe(changed);
+    expect(methods).toEqual(["GET", "PUT"]);
+  });
+
   it("sanitizes upstream errors during scoped GitLab configuration", async () => {
     const gateway = new GitLabGateway({ instanceUrl: "https://gitlab.test", token: "token", fetch: async () =>
       new Response("synthetic-private-hook-secret", { status: 403 }) });

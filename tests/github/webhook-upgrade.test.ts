@@ -12,6 +12,28 @@ const hook = {
 afterEach(() => vi.useRealTimers());
 
 describe("upgrading persisted GitHub webhook subscriptions", () => {
+  it.each([
+    ["unchanged", ["issues", "pull_request", "pull_request_review", "issue_comment"], "https://example.test/hook", false],
+    ["missing event", ["issues", "pull_request", "pull_request_review"], "https://example.test/hook", true],
+    ["changed URL", ["issues", "pull_request", "pull_request_review", "issue_comment"], "https://old.test/hook", true],
+    ["wildcard", ["*"], "https://example.test/hook", false],
+  ])("reports whether %s changes the GitHub subscription", async (_name, events, url, changed) => {
+    const methods: string[] = [];
+    let remote = { ...structuredClone(hook), events, config: { ...hook.config, url } };
+    const gateway = new GitHubGateway({ accessToken: "sponsor-token", fetch: async (input, init) => {
+      const request = new Request(input, init);
+      methods.push(request.method);
+      if (request.method === "PATCH") {
+        const body = await request.json();
+        remote = { ...remote, config: body.config, events: [...remote.events, ...body.add_events] };
+      }
+      return Response.json(remote);
+    } });
+    expect(await gateway.configureWebhook(repository, 81, { callbackUrl: "https://example.test/hook", secret }))
+      .toBe(changed);
+    expect(methods).toEqual(["GET", "PATCH"]);
+  });
+
   it("retains service diagnostics without exposing them in serialized scoped errors", async () => {
     const gateway = new GitHubGateway({ accessToken: "token", fetch: async () =>
       new Response("synthetic-private-hook-secret", { status: 403 }) });
