@@ -1,6 +1,6 @@
 import { memoryPass } from "./reconciliation-walk-fixture";
 import { spawnSync } from "node:child_process";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ReconciliationSweepControl } from "@/lib/fold/sweep-pass";
 import { createReconciliationBudgetGate, reconciliationBudgetHoldUntil } from "@/lib/fold/reconciliation-budget";
 import { reconcileRepository, type ReconciliationDependencies, type ReconciliationStore } from "@/lib/fold/reconcile";
@@ -1176,6 +1176,22 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
    * path: the gateway is the real client, whose request wrappers call the
    * budget check that spends from the wrapped sponsor's round.
    */
+  // The legs below assume the documented default diff-only threshold: over
+  // 1000 runs full and charged, at or under 1000 stays incremental and
+  // uncharged. The fold's read resolves the prefixed name first, so a value
+  // exported in the shell would replace that assumption: pin it here and
+  // restore it below so the outcome does not depend on the environment.
+  const originalPrefixedThreshold = process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG;
+  const originalBareThreshold = process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
+  beforeAll(() => {
+    process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = "1000";
+    delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
+  });
+  afterAll(() => {
+    if (originalPrefixedThreshold === undefined) delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = originalPrefixedThreshold;
+    if (originalBareThreshold === undefined) delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = originalBareThreshold;
+  });
+
   function safeEvidence() {
     return {
       version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, omittedOversizedFacts: 0,
