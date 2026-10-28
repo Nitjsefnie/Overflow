@@ -323,9 +323,7 @@ export class GitHubGateway implements ForgeGateway {
     });
   }
 
-  public async configureWebhook(
-    repository: GitHubRepositoryReference, webhookId: number, configuration: GitHubWebhookConfiguration,
-  ): Promise<boolean> {
+  public async configureWebhook(repository: GitHubRepositoryReference, webhookId: number, configuration: GitHubWebhookConfiguration): Promise<boolean> {
     try {
       const path = `/repos/${segment(repository.owner)}/${segment(repository.name)}/hooks/${webhookId}`;
       const before = parseWebhook(await this.request(path, {}, [configuration.secret]), webhookId);
