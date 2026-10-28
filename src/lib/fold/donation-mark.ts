@@ -27,7 +27,7 @@ function donationCommentId(source: MarkSource, settlement: FoldSettlement): stri
   return marks[0]?.id ?? null;
 }
 
-/** Marks only fresh issues: a cached issue keeps no comment body. */
+/** Sets donationCommentId on fresh issues only; absent means not read fresh (stored mark stands), null means no mark. */
 export function attachDonationMarks(fold: FoldResult, issues: readonly MarkSource[]): FoldResult {
   const fresh = new Map(issues.filter((issue) => typeof issue.body === "string").map((issue) => [issue.id, issue]));
   return {
