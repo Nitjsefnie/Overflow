@@ -149,7 +149,6 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
         returning id
       `;
       if (row === undefined) return false;
-      // A failed repair request rolls back first-time finalization for the next retry.
       await beforeCommit?.();
       return true;
     }) as Promise<boolean>;
