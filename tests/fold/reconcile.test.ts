@@ -924,12 +924,12 @@ describe("reconcileRepository", () => {
   });
 
   it.each([
-    [new Error("GitHub GraphQL request failed. NOT_FOUND: Could not resolve to an Issue with the number of '42'."), "NOT_FOUND"],
-    [new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES), "RESPONSE_TOO_LARGE"],
-    [new GitHubGraphqlInvalidResponseError("GitHub GraphQL response was invalid. closedByPullRequestsReferences.nodes contained a null entry.", CLOSING_PULL_REQUESTS_FIELD_PATH), "UNREADABLE_FIELD"],
-    [new GitHubGraphqlInvalidResponseError("GitHub GraphQL response was invalid. labels.nodes was not a list.", "labels.nodes"), "UNREADABLE_FIELD"],
-    [new GitHubGraphqlInvalidResponseError("GitHub GraphQL response was invalid. timelineItems.nodes contained a null entry.", "timelineItems.nodes"), "UNREADABLE_FIELD"],
-  ])("completes the run when a dirty issue read answers %s, discarding only that subject", async (failure, reason) => {
+    [new Error("GitHub GraphQL request failed. NOT_FOUND: Could not resolve to an Issue with the number of '42'."), "NOT_FOUND", ""],
+    [new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES), "RESPONSE_TOO_LARGE", ""],
+    [new GitHubGraphqlInvalidResponseError("GitHub GraphQL response was invalid. closedByPullRequestsReferences.nodes contained a null entry.", CLOSING_PULL_REQUESTS_FIELD_PATH), "UNREADABLE_FIELD", " field=closedByPullRequestsReferences.nodes"],
+    [new GitHubGraphqlInvalidResponseError("GitHub GraphQL response was invalid. labels.nodes was not a list.", "labels.nodes"), "UNREADABLE_FIELD", " field=labels.nodes"],
+    [new GitHubGraphqlInvalidResponseError("GitHub GraphQL response was invalid. timelineItems.nodes contained a null entry.", "timelineItems.nodes"), "UNREADABLE_FIELD", " field=timelineItems.nodes"],
+  ])("completes the run when a dirty issue read answers %s, discarding only that subject", async (failure, reason, field) => {
     const poison = { kind: "ISSUE" as const, id: 999, number: 42, generation: 7 };
     const good = { kind: "ISSUE" as const, id: 555, number: 43, generation: 8 };
     const dependencies = reconciliationDependencies({
@@ -963,7 +963,7 @@ describe("reconcileRepository", () => {
       expect(dependencies.store.failRun).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(
-        `Reconciliation of repository repository discarded unresolvable subject kind=ISSUE number=42 reason=${reason}`,
+        `Reconciliation of repository repository discarded unresolvable subject kind=ISSUE number=42 reason=${reason}${field}`,
       );
       const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
       const foldedIds = materializeInput.fold.issues.map((issue) => issue.githubIssueId);

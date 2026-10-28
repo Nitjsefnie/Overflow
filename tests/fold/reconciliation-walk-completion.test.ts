@@ -294,7 +294,8 @@ describe("reconciliation walk completion", () => {
     const result = await f.window(20);
     expect(result.issues.map(({ id }) => id)).toEqual([2]);
     expect(f.pass.walkAnchors().subjects?.key).toBe(2);
-    expect(f.discarded).toEqual([{ kind: "issue", subject: expect.objectContaining({ id: 1 }), reason }]);
+    expect(f.discarded).toEqual([{ kind: "issue", subject: expect.objectContaining({ id: 1 }), reason,
+      ...(failure() instanceof GitHubGraphqlInvalidResponseError && { fieldPath: "labels.nodes" }) }]);
   });
 
   it.each([401, 403, 429, 500])("keeps HTTP %s on the whole-run failure path", async (status) => {
@@ -314,5 +315,53 @@ describe("reconciliation walk completion", () => {
     expect(result.issues[0]?.openingEvidenceUnreadable).toBe(true);
     expect(result.issues[1]?.closingPullRequestsUnreadable).toBe(true);
     expect(f.discarded.map(({ reason }) => reason)).toEqual(["UNREADABLE_FIELD", "UNREADABLE_FIELD"]);
+  });
+
+  it.each(["closingIssuesReferences.nodes", "closingIssuesReferences.nodes.repository"])(
+    "discards only one PR's closing read when its %s is unreadable, still staging its evidence", async (fieldPath) => {
+      const f = fixture([subject(1), subject(2, "pull_request"), subject(3), subject(4, "pull_request")]);
+      f.issues.get(1)!.closingPullRequests = [pullRequest(2)];
+      f.issues.get(3)!.closingPullRequests = [pullRequest(4)];
+      f.gateway.getPullRequestClosingIssues = (pr) => f.read(`closing:${pr.id}`, () => {
+        if (pr.id === 2) throw new GitHubGraphqlInvalidResponseError("Unreadable closing read", fieldPath);
+        return [{ id: 3, number: 3, repositoryGitHubId: 42 }];
+      });
+      const result = await f.window(40);
+      expect(f.discarded).toEqual([{ kind: "pull_request", subject: expect.objectContaining({ id: 2 }), reason: "UNREADABLE_FIELD", fieldPath }]);
+      // The issue already naming the unreadable PR is still refreshed, as is the healthy PR's.
+      expect(f.counts.get(1)).toBe(2);
+      expect(f.counts.get(3)).toBe(2);
+      expect((await f.pass.readStaged()).find(({ kind, subjectKey }) => kind === "pull_request" && subjectKey === 2)?.payload)
+        .toMatchObject({ subject: { id: 2, number: 2 }, evidence: { reviews: [], rawDiff: "diff 2" } });
+      expect(result.issues.map(({ id }) => id)).toEqual([1, 3]);
+      expect(result.pullRequests).toEqual([{ id: 2, reviews: [], rawDiff: "diff 2" }, { id: 4, reviews: [], rawDiff: "diff 4" }]);
+    });
+
+  it.each(["reviews.nodes", "timelineItems.nodes"])("omits only one PR's evidence when its %s is unreadable", async (fieldPath) => {
+    const f = fixture([subject(1)]);
+    f.issues.get(1)!.closingPullRequests = [pullRequest(8), pullRequest(9)];
+    f.gateway.getPullRequestReviews = (pr) => f.read(`reviews:${pr.id}`, () => {
+      if (pr.id === 8) throw new GitHubGraphqlInvalidResponseError("Unreadable evidence read", fieldPath);
+      return [];
+    });
+    const result = await f.window(20);
+    expect(f.discarded).toEqual([{ kind: "pull_request", subject: expect.objectContaining({ id: 8 }), reason: "UNREADABLE_FIELD", fieldPath }]);
+    expect(result.pullRequests).toEqual([{ id: 9, reviews: [], rawDiff: "diff 9" }]);
+    expect(result.missingDisputePrIds).toEqual(new Set());
+    expect(result.issues[0]?.closingPullRequests.map(({ id, rawDiff }) => [id, rawDiff])).toEqual([[8, ""], [9, "diff 9"]]);
+  });
+
+  // Classification keys on the read: a field path another read owns (or no
+  // pull request read owns) keeps whole-run semantics on this one.
+  it.each([
+    ["closing", "assignees.nodes"], ["closing", "reviews.nodes"], ["closing", "timelineItems.nodes"],
+    ["evidence", "assignees.nodes"], ["evidence", "closingIssuesReferences.nodes"], ["evidence", "closingIssuesReferences.nodes.repository"],
+  ] as const)("keeps a %s read's unrelated %s rejection on the whole-run failure path", async (read, fieldPath) => {
+    const f = fixture([subject(1), subject(2, "pull_request")]);
+    const failure = new GitHubGraphqlInvalidResponseError("Unrelated field", fieldPath);
+    if (read === "closing") f.gateway.getPullRequestClosingIssues = async () => { throw failure; };
+    else f.gateway.getPullRequestReviews = async () => { throw failure; };
+    await expect(f.window(20)).rejects.toBe(failure);
+    expect(f.discarded).toEqual([]);
   });
 });

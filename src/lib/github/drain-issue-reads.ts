@@ -25,6 +25,19 @@ export function isIssueOwnFieldPath(fieldPath: string): boolean {
     || fieldPath === OPENING_TIMELINE_FIELD_PATH;
 }
 
+/** A pull request's closing-read, then evidence-read connections; dismissals equal OPENING_TIMELINE_FIELD_PATH. */
+export const CLOSING_ISSUES_FIELD_PATH = "closingIssuesReferences.nodes";
+export const CLOSING_ISSUE_REPOSITORY_FIELD_PATH = "closingIssuesReferences.nodes.repository";
+export const REVIEWS_FIELD_PATH = "reviews.nodes";
+export const REVIEW_DISMISSALS_FIELD_PATH = "timelineItems.nodes";
+
+/** Whether the field is the closing read's (closing) or else the evidence read's. */
+export function isPullRequestOwnFieldPath(fieldPath: string, closing: boolean): boolean {
+  return closing
+    ? fieldPath === CLOSING_ISSUES_FIELD_PATH || fieldPath === CLOSING_ISSUE_REPOSITORY_FIELD_PATH
+    : fieldPath === REVIEWS_FIELD_PATH || fieldPath === REVIEW_DISMISSALS_FIELD_PATH;
+}
+
 /**
  * One issue's closing-PR read: a null entry in that connection marks this ONE
  * issue unreadable (an empty list) instead of failing the whole walk; every

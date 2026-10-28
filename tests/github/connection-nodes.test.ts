@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
 import { GitHubGraphqlInvalidResponseError } from "@/lib/github/errors";
 import { requireConnectionNodes } from "@/lib/github/graphql";
+import { walkSubjectDiscardReason } from "@/lib/fold/reconciliation-walk-discard";
 import { errorLogToken } from "@/lib/webhooks/log-field";
 
 /**
@@ -430,5 +431,36 @@ describe("GitHubGateway connection node guards", () => {
     const error = await gateway.getIssue(repository, { id: 501, number: 3 }).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(GitHubGraphqlInvalidResponseError);
     expect((error as GitHubGraphqlInvalidResponseError).fieldPath).toBe("closedByPullRequestsReferences.nodes");
+  });
+
+  it("throws the typed error naming the nested field when a closing issue's repository is null", async () => {
+    const gateway = gatewayAnswering(() => ({ repository: { pullRequest: {
+      databaseId: 9001,
+      closingIssuesReferences: page([{ databaseId: 501, number: 3, repository: null }]),
+    } } }));
+    const error = await gateway.getPullRequestClosingIssues(repository, { id: 9001, number: 7 }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(GitHubGraphqlInvalidResponseError);
+    expect((error as GitHubGraphqlInvalidResponseError).fieldPath).toBe("closingIssuesReferences.nodes.repository");
+  });
+
+  // The client's field-path literal and the walk's classifier are one
+  // contract: each pull request read's typed rejection discards that read
+  // alone, and only on its own leg (the closing read or the evidence read).
+  it.each([
+    ["closing null entry", "closingIssuesReferences.nodes", true, (gateway: GitHubGateway) => gateway.getPullRequestClosingIssues(repository, { id: 9001, number: 7 }),
+      () => ({ repository: { pullRequest: { databaseId: 9001, closingIssuesReferences: page([null]) } } })],
+    ["closing nested repository", "closingIssuesReferences.nodes.repository", true, (gateway: GitHubGateway) => gateway.getPullRequestClosingIssues(repository, { id: 9001, number: 7 }),
+      () => ({ repository: { pullRequest: { databaseId: 9001, closingIssuesReferences: page([{ databaseId: 501, number: 3, repository: null }]) } } })],
+    ["review null entry", "reviews.nodes", false, (gateway: GitHubGateway) => gateway.getPullRequestReviews(repository, 7),
+      (operation: string) => operation === "PullRequestReviewDismissals"
+        ? { repository: { pullRequest: { timelineItems: page([]) } } } : { repository: { pullRequest: { reviews: page([null]) } } }],
+    ["dismissal null entry", "timelineItems.nodes", false, (gateway: GitHubGateway) => gateway.getPullRequestReviews(repository, 7),
+      (operation: string) => operation === "PullRequestReviewDismissals"
+        ? { repository: { pullRequest: { timelineItems: page([null]) } } } : { repository: { pullRequest: { reviews: page([]) } } }],
+  ] as const)("classifies the %s rejection as its own pull request read's unreadable field", async (_name, fieldPath, closing, read, answer) => {
+    const error = await read(gatewayAnswering(answer)).catch((caught: unknown) => caught);
+    expect((error as GitHubGraphqlInvalidResponseError).fieldPath).toBe(fieldPath);
+    expect(walkSubjectDiscardReason(error, "pull_request", false, closing)).toBe("UNREADABLE_FIELD");
+    expect(walkSubjectDiscardReason(error, "pull_request", false, !closing)).toBeNull();
   });
 });
