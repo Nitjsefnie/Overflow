@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import type { ClaimPathVerdict } from "@/lib/domain/claim-path";
 import type { ActualDifficultyLabel, OpeningDifficultyLabel } from "@/lib/domain/difficulty-scheme";
 import { plural } from "@/lib/plural";
@@ -115,6 +115,7 @@ export function RepositoryForm({
   registrationAppConfigured = false,
   registrationAppInstallUrl = null,
 }: RepositoryFormProps) {
+  const catalogHelpId = useId();
   const nextOpeningRowId = useRef(initialValues.openingLabels.length);
   const [values, setValues] = useState<RepositoryFormState>(() => createFormState(initialValues));
   const [feedback, setFeedback] = useState<Feedback>(null);
@@ -490,9 +491,9 @@ export function RepositoryForm({
             </p>
           ) : null}
 
-          <fieldset className="catalog-fieldset">
+          <fieldset className="catalog-fieldset" aria-describedby={`${catalogHelpId}-opening`}>
             <legend>Opening catalog</legend>
-            <p className="field-help">Set any labels and their comparison and reservation points. An existing issue is listed once it carries one of these labels.</p>
+            <p className="field-help" id={`${catalogHelpId}-opening`}>Opening labels offer an issue: an issue carrying one is listed on the board with the comparison and reserve points that label maps to. Pick from labels the repository already has; the form lists only those.</p>
             <div className="catalog-rows">
               {values.openingLabels.map((openingLabel, index) => (
                 <div className="catalog-row" key={openingLabel.rowId}>
@@ -545,14 +546,12 @@ export function RepositoryForm({
                 </div>
               ))}
             </div>
-            <button className="quiet-button" type="button" onClick={() => addOpeningLabel(setValues, nextOpeningRowId)}>
-              Add opening label
-            </button>
+            <button className="quiet-button" type="button" onClick={() => addOpeningLabel(setValues, nextOpeningRowId)}>Add opening label</button>
           </fieldset>
 
-          <fieldset className="catalog-fieldset">
+          <fieldset className="catalog-fieldset" aria-describedby={`${catalogHelpId}-actual`}>
             <legend>Actual catalog</legend>
-            <p className="field-help">Every point from 1 through 10 must have exactly one editable label.</p>
+            <p className="field-help" id={`${catalogHelpId}-actual`}>Actual labels confirm the points at merge: the sponsor puts one on the closed issue to settle the work. Every point from 1 through 10 needs exactly one label, picked from labels the repository already has.</p>
             <div className="catalog-rows actual-catalog">
               {values.actualLabels.map((actualLabel, index) => (
                 <div className="catalog-row actual-row" key={actualLabel.points}>
