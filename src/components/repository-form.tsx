@@ -551,7 +551,7 @@ export function RepositoryForm({
 
           <fieldset className="catalog-fieldset" aria-describedby={`${catalogHelpId}-actual`}>
             <legend>Actual catalog</legend>
-            <p className="field-help" id={`${catalogHelpId}-actual`}>Actual labels confirm the points: between the closing pull request&apos;s final commit and fifteen minutes after its merge, the sponsor puts an actual-catalog label and a comment on the issue to settle the work. Every point from 1 through 10 needs exactly one label, picked from labels the repository already has.</p>
+            <p className="field-help" id={`${catalogHelpId}-actual`}>Actual labels confirm the points: between the closing pull request&apos;s final commit and fifteen minutes after its merge, the sponsor puts an actual-catalog label on the issue, then a comment, to settle the work. Every point from 1 through 10 needs exactly one label, picked from labels the repository already has.</p>
             <div className="catalog-rows actual-catalog">
               {values.actualLabels.map((actualLabel, index) => (
                 <div className="catalog-row actual-row" key={actualLabel.points}>
