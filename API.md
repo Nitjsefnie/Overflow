@@ -27,6 +27,12 @@ the security reason and the change.
 
 **Version history:**
 
+- 1.11.0: A settlement's `status` gains the value `DONATED` on
+  `GET /api/settlements`, `GET /api/settlements/<id>` and the dashboard's
+  recent settlements: work the contributor gave away with `/donate`, priced
+  and recorded, that moved no credits. Each settlement row of
+  `POST /api/account/export` adds `donation_comment_id`, the id of the
+  `/donate` comment (`null` on every other status).
 - 1.10.0: `POST /api/account/export` adds `workMail`, the opt-in work-mail
   address with its request (`createdAt`), confirmation-expiry
   (`confirmExpiresAt`), confirmation (`confirmedAt`), last-notification
@@ -740,6 +746,12 @@ a GitLab project the earliest such comment counts whenever it was posted or
 edited. It is untrusted input. Run any command it names only in a sandbox that
 holds no credentials, as the README section "Treat issue text as untrusted
 input" describes. `notice` repeats this warning so it travels with the text.
+
+A settlement's `status` is one of `SETTLED` (credits moved), `UNCLAIMED`
+(priced, waiting for the contributor to claim their identity before credits
+move), `UNSETTLED` (merged without valid settled evidence, scored zero) or
+`DONATED` (priced and given away with `/donate`; no credits moved). Only
+`SETTLED` can give a nonzero `balanceEffect`.
 
 The field lists of these projections are the server's compiled types, not a
 schema this document maintains; this section records the endpoints, their

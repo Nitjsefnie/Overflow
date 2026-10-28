@@ -1,6 +1,6 @@
 {
   "snapshotFormat": 2,
-  "httpServerVersion": "1.10.0",
+  "httpServerVersion": "1.11.0",
   "errorEnvelope": {
     "error": {
       "code": "string",
