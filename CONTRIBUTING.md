@@ -648,6 +648,10 @@ merge also leaves the round counted; no timing tolerance applies to reviews.
 A dismissed review counts only if its dismissal history establishes that it
 requested changes; missing history or an unknown previous state does not count.
 
+To give the work away instead, comment exactly `/donate` on the issue, from the
+pull request's author account and never edited, before the pull request merges:
+the settlement is recorded as `DONATED` at its full figure and moves no credits.
+
 So: labels are never applied to tidy an issue up, and never adjusted because a
 branch turned out harder or easier than expected. Retitling an issue is
 housekeeping; relabelling one is editing a ledger. If a price looks wrong, say

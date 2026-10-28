@@ -89,6 +89,23 @@ function RulesSections() {
           <li>A balance funds a posted price; it does not guarantee that anyone will pick the work up.</li>
           <li>Credits earned before signing in wait until you claim your GitHub identity.</li>
         </ul>
+        <h3>Donating work</h3>
+        <ul className="rules-list">
+          <li>
+            To give a claim&apos;s work away, comment exactly /donate on the issue from the account that authored the
+            pull request, before it merges. The settlement is recorded as donated, with its points and credits shown,
+            and no credits move.
+          </li>
+          <li>An edited /donate comment does not count.</li>
+          <li>
+            Deleting the /donate comment after the merge, by anyone with write access to the repository, turns the
+            settlement back into a paid one.
+          </li>
+          <li>
+            A donated settlement that is removed and restored, or drops to unsettled and settles again, while its
+            issue is not reread in full counts as paid until Overflow next rereads that issue in full.
+          </li>
+        </ul>
       </section>
 
       <section className="surface rules-card" aria-labelledby="rules-disputes-heading">
