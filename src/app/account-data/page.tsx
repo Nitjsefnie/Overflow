@@ -534,7 +534,8 @@ export function AccountDataNotice() {
             sponsor applied and the points that label carries, the closing pull request&apos;s
             merge record, and the review rounds that stood when it merged. The credit is the
             settled points less the number of distinct review rounds, never below zero, and the
-            ledger entry credits the author and debits the sponsor with that figure.
+            ledger entry credits the author and debits the sponsor with that figure. A settlement the
+            author donated with a /donate comment records the same figure and writes no ledger entry.
           </li>
           <li>
             A credit limit is computed per account from its history of repaying settled work: ten
