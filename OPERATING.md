@@ -298,6 +298,8 @@ pnpm reconcile
 
 Reconciliation materializes issues, linked pull requests, settlement proof, self-work calibration, and unclaimed contributor records. PostgreSQL serializes each repository from snapshot collection through materialization. Eligibility is reconstructed at merge time from immutable moderation history, so a later sanction cannot rewrite eligible historical facts.
 
+A rollback to a release older than donated settlements keeps migrations 086 and 087, because a rollback never undoes migrations. That release's writer folds donated work as paid, and `settlements_materialized_status_check` refuses its update of a `DONATED` row, so each reconciliation of a repository holding one fails, and is retried like any failing fold, rather than paying the donor; the repository folds again once the newer release returns. The same release's settlement history and proof reads fail for an account party to a donated settlement.
+
 ### Upgrade existing webhook subscriptions
 
 New registrations subscribe to `issues`, `pull_request`, `pull_request_review`,
