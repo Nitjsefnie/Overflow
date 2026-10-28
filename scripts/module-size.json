@@ -9,7 +9,7 @@
   "module_size_baseline": {
     "scripts/check-page-geometry.mjs": 1379,
     "src/app/globals.css": 1234,
-    "src/components/repository-form.tsx": 834,
+    "src/components/repository-form.tsx": 833,
     "src/lib/dashboard/queries.ts": 1526,
     "src/lib/fold/repository-fold.ts": 1420,
     "src/lib/github/client.ts": 1441,

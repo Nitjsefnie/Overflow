@@ -230,6 +230,15 @@ describe("points stamp stylesheet", () => {
   });
 });
 
+/** The fieldset's accessible description is a non-empty `.field-help` paragraph inside that same fieldset. */
+function expectDescribedByOwnHelp(fieldset: HTMLElement): void {
+  expect(fieldset).toHaveAccessibleDescription();
+  const id = fieldset.getAttribute("aria-describedby");
+  expect(id).toBeTruthy();
+  const help = [...fieldset.querySelectorAll(".field-help")].find((element) => element.id === id);
+  expect(help, `no .field-help with id ${id} inside the fieldset`).toBeDefined();
+}
+
 describe("repository registration form", () => {
   it("hides App registration when this instance has no registration App", async () => {
     const { submitCalls } = stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }));
@@ -398,13 +407,25 @@ describe("repository registration form", () => {
     expect(openingLabel).toHaveValue("moonlit ridge");
   });
 
-  it("says in the opening-catalog help when an existing issue gets listed", () => {
+  it.each(["Opening catalog", "Actual catalog"])("describes the %s fieldset by the help paragraph inside it", (name) => {
     render(<RepositoryForm initialValues={initialValues} />);
 
-    const fieldset = screen.getByRole("group", { name: "Opening catalog" });
-    expect(fieldset.querySelector(".field-help")?.textContent).toBe(
-      "Set any labels and their comparison and reservation points. An existing issue is listed once it carries one of these labels.",
+    expectDescribedByOwnHelp(screen.getByRole("group", { name }));
+  });
+
+  it("gives every catalog fieldset its own description id when two forms share a page", () => {
+    render(
+      <>
+        <RepositoryForm initialValues={initialValues} />
+        <RepositoryForm variant="catalog-change" initialValues={initialValues} />
+      </>,
     );
+
+    const ids = [...screen.getAllByRole("group", { name: "Opening catalog" }), ...screen.getAllByRole("group", { name: "Actual catalog" })]
+      .map((fieldset) => fieldset.getAttribute("aria-describedby"));
+    expect(ids).toHaveLength(4);
+    expect(ids.every((id) => id !== null && id !== "")).toBe(true);
+    expect(new Set(ids).size).toBe(4);
   });
 
   it("reads the actual catalog's point stamps with the plural each count takes", () => {
@@ -510,6 +531,12 @@ describe("repository catalog change form", () => {
   function changeForm(overrides: Partial<RepositoryFormValues> = {}) {
     return <RepositoryForm variant="catalog-change" initialValues={{ ...initialValues, ...overrides }} />;
   }
+
+  it.each(["Opening catalog", "Actual catalog"])("describes the %s fieldset by the help paragraph inside it", (name) => {
+    render(changeForm());
+
+    expectDescribedByOwnHelp(screen.getByRole("group", { name }));
+  });
 
   it("submits the catalog as a PATCH with the registration payload shape and announces the change", async () => {
     const { submitCalls } = stubFormApi(() => Response.json({
