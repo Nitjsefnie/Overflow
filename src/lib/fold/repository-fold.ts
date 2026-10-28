@@ -199,7 +199,7 @@ export type FoldSettlement = {
   reviewRounds: number;
   credits: number;
   proofSha256: string;
-  status: "SETTLED" | "UNSETTLED" | "UNCLAIMED";
+  status: "SETTLED" | "UNSETTLED" | "UNCLAIMED" | "DONATED"; donationCommentId?: string | null;
 };
 
 export type SelfWorkCalibration = {

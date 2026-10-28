@@ -19,6 +19,7 @@ export type SettlementRow = {
   credits: number;
   proof_sha256: string;
   status: FoldSettlement["status"];
+  donation_comment_id: string | null;
   settled_label: string | null;
   settled_label_event_id: string | null;
   settled_label_actor_login: string | null;

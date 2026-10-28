@@ -5,6 +5,7 @@ import { nullableTimestampToIso, toSafeInteger, recordChange, requiredId, type S
 import type { FoldResult, FoldSettlement, SelfWorkCalibration, UnwritableClosure } from "@/lib/fold/repository-fold";
 import type { ReconciliationDeltas } from "@/lib/fold/reconcile";
 import { applyGrantedSelfWorkCalibrationOverride, applyGrantedSettlementOverride } from "@/lib/overrides/apply";
+import { donatedSettlement } from "@/lib/fold/donation-mark";
 
 type SelfWorkCalibrationRow = {
   id: string;
@@ -51,10 +52,10 @@ export async function materializeSettlements(
   let removals = 0;
 
   for (const folded of input.fold.settlements) {
-    const settlement = applyGrantedOverride(folded, grantedOverrides);
+    const current = existingByIssue.get(folded.githubIssueId);
+    const settlement = donatedSettlement(applyGrantedOverride(folded, grantedOverrides), current);
     const issueId = requiredId(issueIds, settlement.githubIssueId, "Issue");
     const pullRequestId = requiredId(pullRequestIds, settlement.githubPullRequestId, "Pull request");
-    const current = existingByIssue.get(settlement.githubIssueId);
     const desired = settlementState(settlement);
     if (current === undefined) {
       await insertSettlement(sql, settlement, issueId, pullRequestId);
@@ -154,7 +155,7 @@ export async function loadExistingSettlements(
       issues.github_issue_id, pull_requests.github_pull_request_id,
       settlements.creditor_id, settlements.creditor_github_login, settlements.creditor_github_user_id, settlements.debtor_id,
       settlements.opening_comparison_points, settlements.settled_points, settlements.review_rounds,
-      settlements.credits, settlements.proof_sha256, settlements.status,
+      settlements.credits, settlements.proof_sha256, settlements.status, settlements.donation_comment_id,
       issues.settled_label, issues.settled_label_event_id, issues.settled_label_actor_login,
       issues.settled_label_applied_at, issues.settled_rationale_comment_id,
       issues.settled_rationale_actor_login, issues.settled_rationale_commented_at,
@@ -176,13 +177,13 @@ async function insertSettlement(
     insert into settlements (
       pull_request_id, issue_id, creditor_id, creditor_github_login, creditor_github_user_id, debtor_id,
       opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status, fold_revision,
-      provider, instance_url
+      provider, instance_url, donation_comment_id
     )
     values (
       ${pullRequestId}, ${issueId}, ${settlement.creditorId}, ${settlement.creditorGitHubLogin}, ${settlement.creditorGitHubUserId}, ${settlement.debtorId},
       ${settlement.openingComparisonPoints}, ${settlement.settledPoints}, ${settlement.reviewRounds},
       ${settlement.credits}, ${settlement.proofSha256}, ${settlement.status}, ${FOLD_REVISION},
-      ${settlement.provider ?? "github"}, ${settlement.instanceUrl ?? null}
+      ${settlement.provider ?? "github"}, ${settlement.instanceUrl ?? null}, ${settlement.donationCommentId ?? null}
     )
   `;
 }
@@ -201,7 +202,8 @@ async function updateSettlement(
         opening_comparison_points = ${settlement.openingComparisonPoints}, settled_points = ${settlement.settledPoints},
         review_rounds = ${settlement.reviewRounds}, credits = ${settlement.credits}, proof_sha256 = ${settlement.proofSha256},
         status = ${settlement.status}, fold_revision = ${FOLD_REVISION},
-        provider = ${settlement.provider ?? "github"}, instance_url = ${settlement.instanceUrl ?? null}
+        provider = ${settlement.provider ?? "github"}, instance_url = ${settlement.instanceUrl ?? null},
+        donation_comment_id = ${settlement.donationCommentId ?? null}
     where issue_id = ${issueId}
   `;
 }
@@ -430,6 +432,7 @@ function settlementState(settlement: FoldSettlement): JSONValue {
     credits: settlement.credits,
     proofSha256: settlement.proofSha256,
     status: settlement.status,
+    donationCommentId: settlement.donationCommentId ?? null,
   };
 }
 
@@ -456,6 +459,7 @@ function settlementStateFromRow(row: SettlementRow): JSONValue {
     credits: row.credits,
     proofSha256: row.proof_sha256,
     status: row.status,
+    donationCommentId: row.donation_comment_id,
   };
 }
 
