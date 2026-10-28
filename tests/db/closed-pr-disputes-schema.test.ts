@@ -87,10 +87,11 @@ describe("closed PR dispute schema", () => {
       process.env.OVERFLOW_DATABASE_URL = upgradeUrl.toString();
       sql = getSql();
       await runMigrations({ upTo: "073_dispute_credit_limit_replay.sql" });
-      // Today's materializer writes the fixture, so it gets the issue column a later migration adds; dropped
+      // Today's materializer writes the fixture, so it gets the columns later migrations add; dropped
       // again before the upgrade runs, the schema is 073's exactly.
       await sql`alter table issues add column asks_outside_repository boolean not null default false`;
       await sql`alter table issues add column done_when text`;
+      await sql`alter table settlements add column donation_comment_id text`;
       const affectedIssueIds: string[] = [];
       const surplusRequestIds: string[] = [];
       for (let index = 0; index < 2; index += 1) {
@@ -103,6 +104,7 @@ describe("closed PR dispute schema", () => {
       }
       await sql`alter table issues drop column asks_outside_repository`;
       await sql`alter table issues drop column done_when`;
+      await sql`alter table settlements drop column donation_comment_id`;
       await expect(runMigrations()).rejects.toThrow(
         `Closed PR dispute precondition failed: 2 issue(s) hold more than one granted dispute. Issue ids: ${affectedIssueIds.sort().join(", ")}`,
       );
