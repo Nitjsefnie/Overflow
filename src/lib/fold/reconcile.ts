@@ -28,6 +28,7 @@ import {
   type ReconciliationSynchronization,
 } from "@/lib/fold/reconciliation-evidence";
 import { attachDoneWhen } from "@/lib/fold/done-when";
+import { attachDonationMarks } from "@/lib/fold/donation-mark";
 import { foldRepository, type FoldForgeIdentity, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type {
   GitHubIssue,
@@ -536,7 +537,7 @@ async function reconcileRepositoryAfterRepositoryRead(
               })),
             })),
           };
-          const fold = foldRepository(snapshot);
+          const fold = attachDonationMarks(foldRepository(snapshot), githubIssues);
           attachDoneWhen(fold, githubIssues, repository.sponsor);
           const cost: ReconciliationCostCharge = { ...readCost(), sponsorId: repository.sponsor.id, completedAt: now() };
           const expectedVersion = pass === undefined ? cached?.version ?? null
