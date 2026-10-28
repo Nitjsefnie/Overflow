@@ -916,8 +916,10 @@ scoped-credential receiver code. Legacy hooks cannot authenticate until this
 upgrade configures their new callback UUID and independent secret. Keep the
 callback base URLs and `OVERFLOW_TOKEN_ENCRYPTION_KEY` available; change the
 encryption key only through section 11. Avoid concurrent manual hook-configuration edits. The command
-preserves active state and unrelated subscriptions, verifies each persisted hook
-at its current numeric-ID-resolved location, then requests full upstream repair.
+preserves active state and unrelated subscriptions and verifies each persisted hook
+at its current numeric-ID-resolved location. It requests full upstream repair only
+when the subscribed events or callback URL changed, or the credential is finalized
+for the first time.
 Pending credential material is durable: retry a failed run without reminting it.
 Missing sponsor credentials require relinking before that registration can upgrade.
 After all registrations migrate, retire the old shared credential and assess any
@@ -1360,9 +1362,13 @@ A nonzero upgrade leaves the new release serving but the deployment incomplete;
 inspect each sanitized `failure` code, restore sponsor credentials or hook admin
 access as needed, and rerun the `webhooks:upgrade` package script with the same
 environment.
-`subscription: VERIFIED` and `queue: FAILED` is partial completion: the rerun
-verifies the hook again and retries repair queueing. Do not report the upgrade as
-successful from a restart or startup sweep. Queue acceptance does not establish
+`subscription: VERIFIED` and `queue: NOT_NEEDED` means the subscription was
+unchanged and the credential was already finalized, so no repair was requested.
+`subscription: VERIFIED` and `queue: FAILED` is partial completion. A rerun
+retries repair when the credential was not yet finalized. If an already-finalized
+hook changed, the rerun may see the updated subscription and skip the repair;
+request a rederivation for that repository through moderation instead. Do not
+report the upgrade as successful from a restart or startup sweep. Queue acceptance does not establish
 that reconciliation has finished; check the worker's outcomes afterwards.
 
 For section 5's one-time migration, run the upgrade/logging lines above after its

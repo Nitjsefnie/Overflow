@@ -138,16 +138,21 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
     });
   }
 
-  public async finalizeWebhookCredential(credential: WebhookCredentialRecord): Promise<boolean> {
-    const [row] = await this.sql<{ id: string }[]>`
-      update registered_repositories set webhook_configured_at = coalesce(webhook_configured_at, now())
-      where id = ${credential.repositoryId} and webhook_credential_id = ${credential.credentialId}
-        and provider = ${credential.provider} and instance_url is not distinct from ${credential.instanceUrl}
-        and (case when provider = 'github' then github_repository_id else forge_project_id end) = ${credential.projectId}
-        and github_webhook_id = ${credential.webhookId} and active = true and unregistered_at is null
-      returning id
-    `;
-    return row !== undefined;
+  public async finalizeWebhookCredential(credential: WebhookCredentialRecord, beforeCommit?: () => Promise<void>): Promise<boolean> {
+    return this.sql.begin(async (transaction) => {
+      const [row] = await transaction<{ id: string }[]>`
+        update registered_repositories set webhook_configured_at = coalesce(webhook_configured_at, now())
+        where id = ${credential.repositoryId} and webhook_credential_id = ${credential.credentialId}
+          and provider = ${credential.provider} and instance_url is not distinct from ${credential.instanceUrl}
+          and (case when provider = 'github' then github_repository_id else forge_project_id end) = ${credential.projectId}
+          and github_webhook_id = ${credential.webhookId} and active = true and unregistered_at is null
+        returning id
+      `;
+      if (row === undefined) return false;
+      // A failed repair request rolls back first-time finalization for the next retry.
+      await beforeCommit?.();
+      return true;
+    }) as Promise<boolean>;
   }
 
   public async withWebhookUpgradeLock<T>(repositoryId: string, operation: () => Promise<T>): Promise<T> {

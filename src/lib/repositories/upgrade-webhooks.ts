@@ -2,7 +2,7 @@ import type { GitHubGateway } from "@/lib/github/client";
 import type { GitLabGateway } from "@/lib/gitlab/client";
 import type { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import type { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
-import { webhookCallbackUrl } from "@/lib/webhooks/credentials";
+import { webhookCallbackUrl, type WebhookCredentialRecord } from "@/lib/webhooks/credentials";
 
 export type WebhookUpgradeOutcome = {
   repositoryId: string;
@@ -10,7 +10,7 @@ export type WebhookUpgradeOutcome = {
    * to upgrade and the run is neither a success over forge work nor a
    * failure. */
   subscription: "VERIFIED" | "FAILED" | "NOT_APPLICABLE" | "SKIPPED";
-  queue: "QUEUED" | "FAILED" | "NOT_ATTEMPTED";
+  queue: "QUEUED" | "FAILED" | "NOT_ATTEMPTED" | "NOT_NEEDED";
   failure: "REGISTRATION_FAILED" | "CREDENTIALS_FAILED" | "REPOSITORY_FAILED" | "REPOSITORY_GONE" | "SUBSCRIPTION_FAILED" | "QUEUE_FAILED" | null;
 };
 
@@ -106,13 +106,10 @@ async function upgradeRegistration(
       repositoryId, provider: "github", instanceUrl: null, projectId: repository.id, webhookId: registration.githubWebhookId,
     });
     if (credential === null) return outcome;
-    await github.configureWebhook(repository, registration.githubWebhookId, {
+    const changed = await github.configureWebhook(repository, registration.githubWebhookId, {
       callbackUrl: webhookCallbackUrl(webhookUrls.github, credential.credentialId), secret: credential.secret,
     });
-    if (!await store.finalizeWebhookCredential(credential)) return outcome;
-    outcome.subscription = "VERIFIED";
-
-    return await queueRederivation({ store }, repositoryId, outcome);
+    return await finishUpgrade({ store }, credential, changed, outcome);
   } catch {
     // Only the fixed stage code escapes. Credentials, upstream bodies and DB
     // diagnostics can appear in any exception along this path.
@@ -158,15 +155,32 @@ async function upgradeGitLabRegistration(
     repositoryId, provider: "gitlab", instanceUrl: forge.instanceUrl, projectId: repository.id, webhookId,
   });
   if (credential === null) return outcome;
-  await gitlab.configureWebhook(
+  const changed = await gitlab.configureWebhook(
     { owner: repository.owner, name: repository.name },
     webhookId,
     { callbackUrl: webhookCallbackUrl(webhookUrls.gitlab, credential.credentialId), secret: credential.secret },
   );
-  if (!await store.finalizeWebhookCredential(credential)) return outcome;
-  outcome.subscription = "VERIFIED";
+  return await finishUpgrade({ store }, credential, changed, outcome);
+}
 
-  return await queueRederivation({ store }, repositoryId, outcome);
+async function finishUpgrade(
+  { store }: Pick<WebhookUpgradeDependencies, "store">,
+  credential: WebhookCredentialRecord,
+  changed: boolean,
+  outcome: WebhookUpgradeOutcome,
+): Promise<WebhookUpgradeOutcome> {
+  const firstUpgrade = credential.configuredAt === null;
+  if (!await store.finalizeWebhookCredential(credential, firstUpgrade ? async () => {
+    outcome.subscription = "VERIFIED";
+    await queueRederivation({ store }, credential.repositoryId, outcome);
+    outcome.subscription = "FAILED";
+    outcome.failure = "SUBSCRIPTION_FAILED";
+  } : undefined)) return outcome;
+  outcome.subscription = "VERIFIED";
+  if (!firstUpgrade && changed) return await queueRederivation({ store }, credential.repositoryId, outcome);
+  if (!firstUpgrade) outcome.queue = "NOT_NEEDED";
+  outcome.failure = null;
+  return outcome;
 }
 
 async function queueRederivation(

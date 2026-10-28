@@ -323,19 +323,16 @@ export class GitHubGateway implements ForgeGateway {
     });
   }
 
-  public async configureWebhook(
-    repository: GitHubRepositoryReference,
-    webhookId: number,
-    configuration: GitHubWebhookConfiguration,
-  ): Promise<void> {
+  public async configureWebhook(repository: GitHubRepositoryReference, webhookId: number, configuration: GitHubWebhookConfiguration): Promise<boolean> {
     try {
       const path = `/repos/${segment(repository.owner)}/${segment(repository.name)}/hooks/${webhookId}`;
       const before = parseWebhook(await this.request(path, {}, [configuration.secret]), webhookId);
+      const missing = githubWebhookEvents.filter((event) => !subscribesTo(before.events, event));
       const after = parseWebhook(await this.request(path, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          add_events: githubWebhookEvents.filter((event) => !subscribesTo(before.events, event)),
+          add_events: missing,
           active: before.active,
           config: { ...before.config, url: configuration.callbackUrl, secret: configuration.secret },
         }),
@@ -345,6 +342,7 @@ export class GitHubGateway implements ForgeGateway {
         || after.active !== before.active) {
         throw new Error("GitHub webhook configuration verification failed.");
       }
+      return missing.length > 0 || before.config.url !== configuration.callbackUrl;
     } catch (error) {
       if (error instanceof GitHubApiError) throw new GitHubApiError(error.status, error.rateLimited, error.retryAfterSeconds, error.body, error.headers, configuration.secret);
       throw error;

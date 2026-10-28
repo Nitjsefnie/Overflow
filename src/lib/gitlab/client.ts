@@ -546,7 +546,7 @@ export class GitLabGateway {
     repository: GitHubRepositoryReference,
     webhookId: number,
     configuration: GitHubWebhookConfiguration,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const path = `/projects/${segment(`${repository.owner}/${repository.name}`)}/hooks/${webhookId}`;
       const before = await responseJson<GitLabHookObject>(await this.request(path), path);
@@ -562,6 +562,7 @@ export class GitLabGateway {
         || Object.entries(subscriptions).some(([key, value]) => value === true && (after as unknown as Record<string, unknown>)[key] !== true)) {
         throw new Error("GitLab webhook configuration verification failed.");
       }
+      return before.issues_events !== true || before.merge_requests_events !== true || before.url !== configuration.callbackUrl;
     } catch (error) {
       if (error instanceof GitLabApiError) throw new GitLabApiError(error.status);
       throw error;

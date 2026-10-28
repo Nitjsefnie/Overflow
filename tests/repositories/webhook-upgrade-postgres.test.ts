@@ -109,9 +109,9 @@ describe("upgrading actual persisted registrations", () => {
         getForgeToken: async () => null,
         stageWebhookCredential: registrations.stageWebhookCredential.bind(registrations),
         withWebhookUpgradeLock: registrations.withWebhookUpgradeLock.bind(registrations),
-        finalizeWebhookCredential: async (credential: Parameters<typeof registrations.finalizeWebhookCredential>[0]) => {
+        finalizeWebhookCredential: async (...args: Parameters<typeof registrations.finalizeWebhookCredential>) => {
           if (phase === "finalize") throw new Error("synthetic database failure");
-          return registrations.finalizeWebhookCredential(credential);
+          return registrations.finalizeWebhookCredential(...args);
         },
         requestRepositoryRederivation: async (id: string, at: Date) => {
           if (phase === "queue") throw new Error("synthetic queue failure");
@@ -146,7 +146,7 @@ describe("upgrading actual persisted registrations", () => {
         `;
         material ??= { webhook_credential_id: row.webhook_credential_id, encrypted_webhook_secret: row.encrypted_webhook_secret };
         expect(row).toMatchObject(material);
-        expect(row.webhook_configured_at !== null, JSON.stringify({ step, outcomes })).toBe(step === "queue" || step === "ok");
+        expect(row.webhook_configured_at !== null, JSON.stringify({ step, outcomes })).toBe(step === "ok");
       }
       expect(writes).toHaveLength(4);
       expect(writes.every((write) => write.url === writes[0].url && write.secret === writes[0].secret)).toBe(true);
@@ -268,15 +268,19 @@ describe("upgrading actual persisted registrations", () => {
       write: (line: string) => { lines.push(line); },
     };
     expect(await runWebhookUpgradeCli([], dependencies)).toBe(0);
+    const firstJobs = await sql`select repository_id, reason, state, rederivation_generation::int, rederivation_requested_at
+      from repository_reconciliation_jobs order by repository_id`;
     expect(await runWebhookUpgradeCli([], dependencies)).toBe(0);
+    expect.soft(await sql`select repository_id, reason, state, rederivation_generation::int, rederivation_requested_at
+      from repository_reconciliation_jobs order by repository_id`).toEqual(firstJobs);
     expect(requests.filter((request) => request.method === "PATCH").sort((a, b) => a.path.localeCompare(b.path))).toEqual([
       { method: "PATCH", path: "/repos/current/42/hooks/81", token: "Bearer oauth-token-0" },
       { method: "PATCH", path: "/repos/current/42/hooks/81", token: "Bearer oauth-token-0" },
       { method: "PATCH", path: "/repos/current/43/hooks/82", token: "Bearer oauth-token-1" },
       { method: "PATCH", path: "/repos/current/43/hooks/82", token: "Bearer oauth-token-1" },
     ]);
-    expect(await sql`select repository_id, reason, state, rederivation_generation::int from repository_reconciliation_jobs order by repository_id`).toEqual(
-      repositoryIds.slice(0, 2).sort().map((repository_id) => ({ repository_id, reason: "REDERIVATION", state: "PENDING", rederivation_generation: 2 })),
+    expect.soft(await sql`select repository_id, reason, state, rederivation_generation::int from repository_reconciliation_jobs order by repository_id`).toEqual(
+      repositoryIds.slice(0, 2).sort().map((repository_id) => ({ repository_id, reason: "REDERIVATION", state: "PENDING", rederivation_generation: 1 })),
     );
     expect(lines.map((line) => JSON.parse(line)).filter((line) => line.succeeded !== undefined)).toEqual([
       { succeeded: 2, failed: 0, gone: 0 }, { succeeded: 2, failed: 0, gone: 0 },
@@ -292,5 +296,7 @@ describe("upgrading actual persisted registrations", () => {
     expect(refreshes.sort((a, b) => a.repositoryId.localeCompare(b.repositoryId))).toEqual(
       repositoryIds.slice(0, 2).sort().map((repositoryId) => ({ repositoryId, rederive: true })),
     );
+    expect(await runWebhookUpgradeCli([], dependencies)).toBe(0);
+    expect(await sql`select repository_id from repository_reconciliation_jobs order by repository_id`).toEqual([]);
   });
 });

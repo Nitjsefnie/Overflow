@@ -48,7 +48,7 @@ export interface ForgeGateway {
     repository: GitHubRepositoryReference,
     webhookId: number,
     configuration: GitHubWebhookConfiguration,
-  ): Promise<void>;
+  ): Promise<boolean>;
   ensureWebhookEvents(
     repository: GitHubRepositoryReference,
     webhookId: number,
