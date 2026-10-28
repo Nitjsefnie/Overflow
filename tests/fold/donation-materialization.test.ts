@@ -7,6 +7,7 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import type { GitHubIssue, GitHubIssueComment, GitHubPullRequest } from "@/lib/github/types";
+import { PostgresSettlementOverrideStore } from "@/lib/overrides/postgres-store";
 import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import { verifiedRepositoryAt } from "../support/verified-repository";
 
@@ -108,6 +109,28 @@ describe("a /donate mark reconciled into the settlements table", () => {
       before: { status: "DONATED", donationCommentId: "donate-comment", credits: 6 },
       after: { status: "SETTLED", donationCommentId: null, credits: 6 },
     }]);
+  });
+
+  it("keeps a donated settlement donated when a moderator corrects its figure", async () => {
+    const github = gateway(() => [settledIssue([donate()])]);
+    await reconcileRepository({ store, github }, repositoryId);
+    const moderatorId = await insertUser("donation-moderator", 3101);
+    const overrides = new PostgresSettlementOverrideStore(sql);
+    const [{ id: settlementId }] = await sql<{ id: string }[]>`select id from settlements`;
+    const request = await overrides.createRequest({
+      requesterId: contributorId, target: { kind: "settlement", settlementId }, reason: "Four points matches the work.",
+    });
+    if (request.kind !== "ok") throw new Error("Expected the correction request to open.");
+    await overrides.decideRequest({
+      actorId: moderatorId, requestId: request.value.id, decision: "GRANT", settledPoints: 4, reason: "Four points.",
+    });
+
+    await reconcileRepository({ store, github }, repositoryId);
+
+    await expect(settlementFacts()).resolves.toMatchObject({
+      status: "DONATED", donation_comment_id: "donate-comment", settled_points: 4, review_rounds: 1, credits: 3,
+    });
+    await expect(settlementLegs()).resolves.toEqual([]);
   });
 });
 
