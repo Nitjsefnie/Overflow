@@ -317,9 +317,12 @@ describe("reconciliation walk completion", () => {
     expect(f.discarded.map(({ reason }) => reason)).toEqual(["UNREADABLE_FIELD", "UNREADABLE_FIELD"]);
   });
 
-  it.each(["closingIssuesReferences.nodes", "closingIssuesReferences.nodes.repository"])(
-    "discards only one PR's closing read when its %s is unreadable, still staging its evidence", async (fieldPath) => {
+  it.each([
+    ["closingIssuesReferences.nodes", false], ["closingIssuesReferences.nodes.repository", false],
+    ["closingIssuesReferences.nodes", true], ["closingIssuesReferences.nodes.repository", true],
+  ] as const)("discards only one PR's closing read when its %s is unreadable (disputed: %s), still staging its evidence", async (fieldPath, disputed) => {
       const f = fixture([subject(1), subject(2, "pull_request"), subject(3), subject(4, "pull_request")]);
+      if (disputed) f.repository.disputePullRequests = [{ id: 2, number: 2 }];
       f.issues.get(1)!.closingPullRequests = [pullRequest(2)];
       f.issues.get(3)!.closingPullRequests = [pullRequest(4)];
       f.gateway.getPullRequestClosingIssues = (pr) => f.read(`closing:${pr.id}`, () => {
@@ -335,10 +338,14 @@ describe("reconciliation walk completion", () => {
         .toMatchObject({ subject: { id: 2, number: 2 }, evidence: { reviews: [], rawDiff: "diff 2" } });
       expect(result.issues.map(({ id }) => id)).toEqual([1, 3]);
       expect(result.pullRequests).toEqual([{ id: 2, reviews: [], rawDiff: "diff 2" }, { id: 4, reviews: [], rawDiff: "diff 4" }]);
+      expect(result.missingDisputePrIds).toEqual(new Set());
     });
 
-  it.each(["reviews.nodes", "timelineItems.nodes"])("omits only one PR's evidence when its %s is unreadable", async (fieldPath) => {
+  // A disputed PR's unreadable evidence is not definitive absence: it stays out of the missing-dispute set.
+  it.each([["reviews.nodes", false], ["timelineItems.nodes", false], ["reviews.nodes", true], ["timelineItems.nodes", true]] as const)(
+    "omits only one PR's evidence when its %s is unreadable (disputed: %s)", async (fieldPath, disputed) => {
     const f = fixture([subject(1)]);
+    if (disputed) f.repository.disputePullRequests = [{ id: 8, number: 8 }];
     f.issues.get(1)!.closingPullRequests = [pullRequest(8), pullRequest(9)];
     f.gateway.getPullRequestReviews = (pr) => f.read(`reviews:${pr.id}`, () => {
       if (pr.id === 8) throw new GitHubGraphqlInvalidResponseError("Unreadable evidence read", fieldPath);
@@ -356,11 +363,13 @@ describe("reconciliation walk completion", () => {
   it.each([
     ["closing", "assignees.nodes"], ["closing", "reviews.nodes"], ["closing", "timelineItems.nodes"],
     ["evidence", "assignees.nodes"], ["evidence", "closingIssuesReferences.nodes"], ["evidence", "closingIssuesReferences.nodes.repository"],
+    ["issue", "reviews.nodes"], ["issue", "closingIssuesReferences.nodes"], ["issue", "closingIssuesReferences.nodes.repository"],
   ] as const)("keeps a %s read's unrelated %s rejection on the whole-run failure path", async (read, fieldPath) => {
     const f = fixture([subject(1), subject(2, "pull_request")]);
     const failure = new GitHubGraphqlInvalidResponseError("Unrelated field", fieldPath);
     if (read === "closing") f.gateway.getPullRequestClosingIssues = async () => { throw failure; };
-    else f.gateway.getPullRequestReviews = async () => { throw failure; };
+    else if (read === "evidence") f.gateway.getPullRequestReviews = async () => { throw failure; };
+    else f.gateway.gatherIssue = async () => { throw failure; };
     await expect(f.window(20)).rejects.toBe(failure);
     expect(f.discarded).toEqual([]);
   });

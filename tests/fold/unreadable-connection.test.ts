@@ -264,8 +264,12 @@ describe("reconcileRepository unreadable issue connections", () => {
 describe("reconcileRepository unreadable pull request connections", () => {
   const cachedReview = { id: 301, state: "APPROVED" as const, submittedAt: "2026-09-01T11:00:00Z", dismissal: null };
   const closingIssue = () => ({ ...reconciliationIssue({ id: 101, number: 1 }), closingPullRequests: [reconciliationPullRequest({ id: 201, number: 11 })] });
-  function incremental(github: Partial<ReconciliationDependencies["github"]>) {
+  function incremental(github: Partial<ReconciliationDependencies["github"]>, disputed = false) {
     const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockResolvedValue([]), getIssue: vi.fn().mockResolvedValue(closingIssue()), ...github } });
+    if (disputed) {
+      const getRepository = dependencies.store.getRepository;
+      dependencies.store.getRepository = async (id) => ({ ...(await getRepository(id))!, disputePullRequests: [{ id: 201, number: 11 }] });
+    }
     dependencies.store.getReconciliationEvidence = async () => ({
       version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0,
       issues: [closingIssue()], pullRequests: [{ id: 201, reviews: [cachedReview], rawDiff: "cached diff" }],
@@ -274,12 +278,14 @@ describe("reconcileRepository unreadable pull request connections", () => {
     return dependencies;
   }
 
-  it.each(["closingIssuesReferences.nodes", "closingIssuesReferences.nodes.repository"])(
-    "discards a dirty pull request whose closing read's %s is unreadable and still reads its evidence", async (fieldPath) => {
+  it.each([
+    ["closingIssuesReferences.nodes", false], ["closingIssuesReferences.nodes.repository", false],
+    ["closingIssuesReferences.nodes", true], ["closingIssuesReferences.nodes.repository", true],
+  ] as const)("discards a dirty pull request whose closing read's %s is unreadable (disputed: %s) and still reads its evidence", async (fieldPath, disputed) => {
       const dependencies = incremental({
         getPullRequestClosingIssues: vi.fn().mockRejectedValue(new GitHubGraphqlInvalidResponseError("Unreadable closing read", fieldPath)),
         getPullRequestReviews: vi.fn().mockResolvedValue([]),
-      });
+      }, disputed);
       const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
         await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
@@ -300,11 +306,13 @@ describe("reconcileRepository unreadable pull request connections", () => {
       }
     });
 
-  it.each(["reviews.nodes", "timelineItems.nodes"])(
-    "discards a dirty pull request whose evidence read's %s is unreadable, keeping its cached evidence", async (fieldPath) => {
+  // A disputed pull request's unreadable evidence is not definitive absence:
+  // it stays out of the missing-dispute set, so its cached evidence is retained.
+  it.each([["reviews.nodes", false], ["timelineItems.nodes", false], ["reviews.nodes", true], ["timelineItems.nodes", true]] as const)(
+    "discards a dirty pull request whose evidence read's %s is unreadable (disputed: %s), keeping its cached evidence", async (fieldPath, disputed) => {
       const dependencies = incremental({
         getPullRequestReviews: vi.fn().mockRejectedValue(new GitHubGraphqlInvalidResponseError("Unreadable evidence read", fieldPath)),
-      });
+      }, disputed);
       const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
         await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
@@ -327,11 +335,12 @@ describe("reconcileRepository unreadable pull request connections", () => {
   it.each([
     ["closing", "assignees.nodes"], ["closing", "reviews.nodes"], ["closing", "timelineItems.nodes"],
     ["evidence", "assignees.nodes"], ["evidence", "closingIssuesReferences.nodes"], ["evidence", "closingIssuesReferences.nodes.repository"],
+    ["issue", "reviews.nodes"], ["issue", "closingIssuesReferences.nodes"], ["issue", "closingIssuesReferences.nodes.repository"],
   ] as const)("fails the run without discarding when a %s read answers the typed error for %s", async (read, fieldPath) => {
     const failure = new GitHubGraphqlInvalidResponseError("Unrelated field", fieldPath);
-    const dependencies = incremental(read === "closing"
-      ? { getPullRequestClosingIssues: vi.fn().mockRejectedValue(failure) }
-      : { getPullRequestReviews: vi.fn().mockRejectedValue(failure) });
+    const dependencies = incremental(read === "closing" ? { getPullRequestClosingIssues: vi.fn().mockRejectedValue(failure) }
+      : read === "evidence" ? { getPullRequestReviews: vi.fn().mockRejectedValue(failure) }
+        : { getIssue: vi.fn().mockRejectedValue(failure) });
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
