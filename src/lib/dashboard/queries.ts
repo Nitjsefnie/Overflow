@@ -90,7 +90,7 @@ export type RecentSettlementProjection = {
   settledAt: string;
 };
 
-export type SettlementStatus = "SETTLED" | "UNSETTLED" | "UNCLAIMED";
+export type SettlementStatus = "SETTLED" | "UNSETTLED" | "UNCLAIMED" | "DONATED";
 
 /** One row of the member's settlement history, including work that was found and scored zero. */
 export type SettlementHistoryProjection = {
@@ -573,7 +573,7 @@ async function readDashboardProjection(
     join pull_requests on pull_requests.id = settlements.pull_request_id
     join registered_repositories as repositories on repositories.id = issues.repository_id
     where (settlements.creditor_id = ${accountId} or settlements.debtor_id = ${accountId})
-      and settlements.status in ('SETTLED', 'UNCLAIMED')
+      and settlements.status in ('SETTLED', 'UNCLAIMED', 'DONATED')
     order by settlements.created_at desc
     limit 5
   `;
@@ -1512,7 +1512,7 @@ function readNullableMergeOid(value: string | null): string | null {
 }
 
 function readSettlementStatus(value: string): SettlementStatus {
-  if (value === "SETTLED" || value === "UNSETTLED" || value === "UNCLAIMED") {
+  if (value === "SETTLED" || value === "UNSETTLED" || value === "UNCLAIMED" || value === "DONATED") {
     return value;
   }
   throw new Error("Settlement status was invalid.");

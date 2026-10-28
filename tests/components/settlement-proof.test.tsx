@@ -170,6 +170,24 @@ describe("settlement proof page", () => {
     expect(within(settled).queryByText("Credits pending claim")).toBeNull();
   });
 
+  it("names a donated proof's credits donated, with the figure unchanged", async () => {
+    sql.mockImplementation(async (strings: TemplateStringsArray) => {
+      const text = strings.join("?");
+      if (text.includes("from settlement_override_requests")) {
+        return [];
+      }
+      if (text.includes("from settlements")) {
+        return [{ ...settlementRow, status: "DONATED", balance_effect: 0 }];
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    render(await SettlementProofPage(settlementParams));
+
+    const donated = screen.getByRole("article", { name: "co-op/harbour settlement" });
+    expect(within(donated).queryByText("Credits moved")).toBeNull();
+    expect(within(donated).getByText("Credits donated").nextElementSibling).toHaveTextContent("3");
+  });
+
   it("rounds the signed balance effect to the digits a reader uses", async () => {
     sql.mockImplementation(async (strings: TemplateStringsArray) => {
       const text = strings.join("?");

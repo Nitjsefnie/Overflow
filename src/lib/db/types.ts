@@ -21,4 +21,4 @@ export function isParticipationEligible(enforcementState: EnforcementState): boo
 export type RepositoryVisibility = "PUBLIC" | "PRIVATE";
 export type IssueState = "OPEN" | "CLOSED";
 export type PullRequestState = "OPEN" | "CLOSED" | "MERGED";
-export type SettlementStatus = "SETTLED" | "UNSETTLED";
+export type SettlementStatus = "SETTLED" | "UNSETTLED" | "UNCLAIMED" | "DONATED";

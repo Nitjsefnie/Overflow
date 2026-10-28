@@ -32,7 +32,7 @@ type OpenRequestRow = RequestRow & {
   issue_title: string;
   issue_url: string;
   settlement_id: string | null;
-  settlement_status: "SETTLED" | "UNSETTLED" | "UNCLAIMED" | null;
+  settlement_status: "SETTLED" | "UNSETTLED" | "UNCLAIMED" | "DONATED" | null;
   opening_comparison_points: number | string | null;
   settled_label: string | null;
   settlement_settled_points: number | string | null;
