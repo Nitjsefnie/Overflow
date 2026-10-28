@@ -15,11 +15,11 @@ import { z } from "zod";
 import { checkSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import { CollectionWalkBound } from "@/lib/github/collection-walk-bound";
-import { drainIssueReads, type IssueClosingPullRequestsRead } from "@/lib/github/drain-issue-reads";
+import { CLOSING_ISSUE_REPOSITORY_FIELD_PATH, CLOSING_ISSUES_FIELD_PATH, drainIssueReads, REVIEW_DISMISSALS_FIELD_PATH, REVIEWS_FIELD_PATH, type IssueClosingPullRequestsRead } from "@/lib/github/drain-issue-reads";
 import { githubWebhookEvents } from "@/lib/github/webhook-schema";
 import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
 import { checkGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
-import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
+import { classifyGitHubRateLimit, GitHubApiError, GitHubGraphqlInvalidResponseError } from "@/lib/github/errors";
 import { boundedResponseText, GitHubResponseTooLargeError, MAX_SUCCESS_BODY_BYTES } from "@/lib/github/response-text";
 import type { ForgeGateway } from "@/lib/forge/gateway";
 import type { GitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
@@ -230,7 +230,7 @@ export class GitHubGateway implements ForgeGateway {
     repository: GitHubRepositoryReference,
     subject: GitHubSubject,
   ): Promise<GitHubIssueReference[]> {
-    const nodes = await collectCursorPages("closingIssuesReferences.nodes", async (cursor) => {
+    const nodes = await collectCursorPages(CLOSING_ISSUES_FIELD_PATH, async (cursor) => {
       const data = await this.graphql.query<{
         repository: { pullRequest: { databaseId: number; closingIssuesReferences: GitHubGraphqlPage<{
           databaseId: number; number: number; repository: { databaseId: number };
@@ -245,7 +245,7 @@ export class GitHubGateway implements ForgeGateway {
     // A null entry was refused in the walk; the nested repository is read here,
     // so a null one names its own field instead of a bare TypeError.
     if (nodes.some((node) => node.repository == null)) {
-      throw new Error("GitHub GraphQL response was invalid. closingIssuesReferences.nodes.repository was null.");
+      throw new GitHubGraphqlInvalidResponseError(`GitHub GraphQL response was invalid. ${CLOSING_ISSUE_REPOSITORY_FIELD_PATH} was null.`, CLOSING_ISSUE_REPOSITORY_FIELD_PATH);
     }
     return nodes.map((node) => ({ id: node.databaseId, number: node.number, repositoryGitHubId: node.repository.databaseId }));
   }
@@ -268,9 +268,9 @@ export class GitHubGateway implements ForgeGateway {
     pullRequestNumber: number,
   ): Promise<GitHubPullRequestReview[]> {
     // Keep one HTTP request per reconciliation worker, including continuation pages.
-    const reviewNodes = await collectCursorPages("reviews.nodes", (cursor) =>
+    const reviewNodes = await collectCursorPages(REVIEWS_FIELD_PATH, (cursor) =>
       this.getPullRequestReviewsPage(repository, pullRequestNumber, cursor));
-    const dismissalNodes = await collectCursorPages("timelineItems.nodes", (cursor) =>
+    const dismissalNodes = await collectCursorPages(REVIEW_DISMISSALS_FIELD_PATH, (cursor) =>
       this.getPullRequestReviewDismissalsPage(repository, pullRequestNumber, cursor));
     const dismissals = new Map<number, GitHubPullRequestReviewDismissal>();
     for (const node of dismissalNodes) {

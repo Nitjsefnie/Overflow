@@ -1,6 +1,6 @@
 import { GitHubApiError, GitHubGraphqlInvalidResponseError, GitHubGraphqlRequestError, isGitHubSubjectNotFoundError } from "@/lib/github/errors";
 import { GitHubResponseTooLargeError } from "@/lib/github/response-text";
-import { isIssueOwnFieldPath } from "@/lib/github/drain-issue-reads";
+import { isIssueOwnFieldPath, isPullRequestOwnFieldPath } from "@/lib/github/drain-issue-reads";
 import { GitLabApiError } from "@/lib/gitlab/api-error";
 
 export type WalkDiscardReason = "NOT_FOUND" | "DIFF_TOO_LARGE" | "RESPONSE_TOO_LARGE" | "UNREADABLE_FIELD";
@@ -10,8 +10,9 @@ export function walkSubjectDiscardReason(error: unknown, kind: "issue" | "pull_r
   if (error instanceof GitHubResponseTooLargeError) return "RESPONSE_TOO_LARGE";
   if (isGitHubSubjectNotFoundError(error)) return "NOT_FOUND";
   if (error instanceof GitLabApiError && error.status === 404) return "NOT_FOUND";
+  if (error instanceof GitHubGraphqlInvalidResponseError
+    && (kind === "issue" ? isIssueOwnFieldPath(error.fieldPath) : isPullRequestOwnFieldPath(error.fieldPath, closing))) return "UNREADABLE_FIELD";
   if (kind === "issue") {
-    if (error instanceof GitHubGraphqlInvalidResponseError && isIssueOwnFieldPath(error.fieldPath)) return "UNREADABLE_FIELD";
     if (error instanceof GitHubApiError && error.status === 404) return "NOT_FOUND";
   } else if (!closing) {
     if (error instanceof GitHubApiError && error.status === 406) return "DIFF_TOO_LARGE";

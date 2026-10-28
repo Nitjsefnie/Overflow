@@ -4,6 +4,7 @@ import { sanitizeForgeStrings } from "@/lib/forge/sanitize-forge-strings";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
 import { walkSubjectDiscardReason, type WalkDiscardReason } from "@/lib/fold/reconciliation-walk-discard";
 import { visitWalkListing, type WalkListingDriver } from "@/lib/fold/reconciliation-walk-listing";
+import { GitHubGraphqlInvalidResponseError } from "@/lib/github/errors";
 import type { GitHubIssue, GitHubIssueReference, GitHubPullRequest, GitHubPullRequestReview, GitHubSubject } from "@/lib/github/types";
 
 export type { WalkListingDriver } from "@/lib/fold/reconciliation-walk-listing";
@@ -23,7 +24,8 @@ export type ReconciliationWalkInput = {
   listing: WalkListingDriver;
   gateway: WalkGateway;
   repository: { githubRepositoryId: number; disputePullRequests: GitHubSubject[] };
-  onDiscard?(input: { kind: WalkSubject["kind"]; subject: GitHubSubject; reason: WalkDiscardReason }): Promise<void>;
+  /** fieldPath names the connection a typed invalid response failed on; it is our own constant, never upstream text. */
+  onDiscard?(input: { kind: WalkSubject["kind"]; subject: GitHubSubject; reason: WalkDiscardReason; fieldPath?: string }): Promise<void>;
 };
 
 type PrEvidence = { reviews: GitHubPullRequestReview[]; rawDiff: string };
@@ -55,7 +57,7 @@ async function walk({ pass, listing, gateway, repository, onDiscard }: Reconcili
   const discard = async (error: unknown, kind: WalkSubject["kind"], subject: GitHubSubject, disputed = false, closing = false) => {
     const reason = walkSubjectDiscardReason(error, kind, disputed, closing);
     if (reason === null) throw error;
-    await onDiscard?.({ kind, subject, reason });
+    await onDiscard?.({ kind, subject, reason, ...(error instanceof GitHubGraphqlInvalidResponseError && { fieldPath: error.fieldPath }) });
     return reason;
   };
   const stage = async (anchor: string, subject: WalkSubject, fact: StagedPayload) => {

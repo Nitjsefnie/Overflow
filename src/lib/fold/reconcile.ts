@@ -9,7 +9,7 @@ import { DEFAULT_GRAPHQL_BUDGET_RESERVE, type GitHubGraphqlBudgetAssessment } fr
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
 import { withTransientRequestRetry } from "@/lib/fold/reconciliation-retry";
 import { GitHubApiError, GitHubGraphqlInvalidResponseError, GitHubGraphqlRequestError, findGitHubRateLimitError, githubRateLimitNotBefore, isGitHubSubjectNotFoundError, MAX_ERROR_CAUSE_READS } from "@/lib/github/errors";
-import { isIssueOwnFieldPath } from "@/lib/github/drain-issue-reads";
+import { isIssueOwnFieldPath, isPullRequestOwnFieldPath } from "@/lib/github/drain-issue-reads";
 import { GitHubResponseTooLargeError } from "@/lib/github/response-text";
 import { GitLabApiError } from "@/lib/gitlab/client";
 import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
@@ -231,14 +231,15 @@ async function reconcileRepositoryAfterRepositoryRead(
   // client's success-path byte cap can never be read any smaller — so its dirty
   // row is discarded and the remaining subjects keep the run alive; any other
   // per-subject failure keeps whole-run retry semantics. The journal line names
-  // the subject's identity and the failure class only, matching the
-  // reconciliation queue's rule against storing upstream error text.
+  // the subject's identity, the failure class and a typed failure's field path
+  // (our own constant), never upstream error text, as the queue's rule requires.
   const discardUnresolvableSubject = async (
     failure: unknown,
     kind: DirtyReconciliationSubject["kind"],
     subject: GitHubSubject,
     dirty: DirtyReconciliationSubject | undefined,
     classifyDiscard: (error: unknown) => SubjectDiscardReason | null = defaultSubjectDiscardReason,
+    fieldPath = failure instanceof GitHubGraphqlInvalidResponseError ? failure.fieldPath : undefined,
   ): Promise<boolean> => {
     const reason = classifyDiscard(failure);
     if (reason === null) return false;
@@ -250,7 +251,7 @@ async function reconcileRepositoryAfterRepositoryRead(
         generation: dirty.generation,
       });
     }
-    console.error(`Reconciliation of repository ${repositoryId} discarded unresolvable subject kind=${kind} number=${subject.number} reason=${reason}`);
+    console.error(`Reconciliation of repository ${repositoryId} discarded unresolvable subject kind=${kind} number=${subject.number} reason=${reason}${fieldPath === undefined ? "" : ` field=${fieldPath}`}`);
     return true;
   };
 
@@ -388,10 +389,10 @@ async function reconcileRepositoryAfterRepositoryRead(
               if (pass !== undefined) {
                 const walked = await dependencies.github.walkReconciliation!(reference, {
                   pass, repository,
-                  onDiscard: async ({ kind, subject, reason }) => {
+                  onDiscard: async ({ kind, subject, reason, fieldPath }) => {
                     const dirtyKind = kind === "issue" ? "ISSUE" : "PULL_REQUEST";
                     const dirty = pass!.dirtySubjects.find((row) => row.kind === dirtyKind && row.id === subject.id);
-                    await discardUnresolvableSubject(null, dirtyKind, subject, dirty, () => reason);
+                    await discardUnresolvableSubject(null, dirtyKind, subject, dirty, () => reason, fieldPath);
                   },
                 }, {
                   timelineCriticalLabels: new Set(repository.difficultyScheme.actualLabels.map(({ label }) => label)),
@@ -653,11 +654,12 @@ type SubjectDiscardReason = "NOT_FOUND" | "DIFF_TOO_LARGE" | "RESPONSE_TOO_LARGE
 // so it joins the same subject-alone arm under its own reason. That read can
 // also answer a body past the client's success-path byte cap, which is fixed
 // for the pull request the same way: its own bytes are what tripped the cap,
-// so every retry re-reads them and trips it again. Both the REST diff and
-// GraphQL reviews legs share this cap. Either shape is
+// so every retry re-reads them and trips it again; both legs share this cap.
+// Each shape, like an unparseable reviews or dismissals connection, is
 // definitive for that pull request, not a property of the run.
 function pullRequestDiscardReason(error: unknown): SubjectDiscardReason | null {
   if (error instanceof GitHubApiError && error.status === 406) return "DIFF_TOO_LARGE";
+  if (error instanceof GitHubGraphqlInvalidResponseError && isPullRequestOwnFieldPath(error.fieldPath, false)) return "UNREADABLE_FIELD";
   if (error instanceof GitHubResponseTooLargeError) return "RESPONSE_TOO_LARGE";
   if (isGitHubSubjectNotFoundError(error) || (error instanceof GitHubApiError && error.status === 404)) return "NOT_FOUND";
   return null;
@@ -691,10 +693,11 @@ function issueDiscardReason(error: unknown): SubjectDiscardReason | null {
 }
 
 // The default per-subject classifier also covers a pull request's closing-issue
-// references: those bytes belong to that subject, so retry cannot shrink them.
+// references: those bytes belong to that subject, so retry can neither shrink nor parse them.
 // Repository-wide list reads never enter a per-subject classifier.
 function defaultSubjectDiscardReason(error: unknown): SubjectDiscardReason | null {
   if (error instanceof GitHubResponseTooLargeError) return "RESPONSE_TOO_LARGE";
+  if (error instanceof GitHubGraphqlInvalidResponseError && isPullRequestOwnFieldPath(error.fieldPath, true)) return "UNREADABLE_FIELD";
   return isGitHubSubjectNotFoundError(error) ? "NOT_FOUND" : null;
 }
 
@@ -711,8 +714,9 @@ function defaultSubjectDiscardReason(error: unknown): SubjectDiscardReason | nul
 // blanks a settlement's proof to the empty diff. A diff over GitHub's
 // 20000-line cap (a fixed 406 on either evidence leg) and a body past the
 // client's success-path byte cap both deliberately join this arm beside
-// NOT_FOUND: the pull request's own size is what failed, so no retry can
-// succeed and the sweep would fail the run forever. Every other class —
+// NOT_FOUND, as does an unparseable reviews or dismissals connection:
+// the pull request's own size or content fails deterministically, so no retry
+// can succeed and the sweep would fail the run forever. Every other class —
 // a rate limit with its cooldown path, auth, 5xx, network, the GraphQL
 // budget held — is transient or run-invalidating and rethrows, keeping
 // whole-run retry; nothing further joins this arm.

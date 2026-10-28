@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { reconcileRepository } from "@/lib/fold/reconcile";
+import { reconcileRepository, type ReconciliationDependencies } from "@/lib/fold/reconcile";
 import { RECONCILIATION_EVIDENCE_FORMAT } from "@/lib/fold/reconciliation-evidence";
 import { GitHubGraphqlInvalidResponseError } from "@/lib/github/errors";
+import { walkReconciliation } from "@/lib/fold/reconciliation-walk";
+import { fixture, pullRequest, subject } from "./reconciliation-walk-fixture";
 import {
   pagedReconciliationGateway,
   reconciliationDependencies,
@@ -254,4 +256,114 @@ describe("reconcileRepository unreadable issue connections", () => {
     }
   });
 
+});
+
+// A pull request's own connection the read could not parse — its closing
+// references, or its reviews or dismissals evidence — discards that one read
+// and that subject's dirty row; the journal names the field, never upstream text.
+describe("reconcileRepository unreadable pull request connections", () => {
+  const cachedReview = { id: 301, state: "APPROVED" as const, submittedAt: "2026-09-01T11:00:00Z", dismissal: null };
+  const closingIssue = () => ({ ...reconciliationIssue({ id: 101, number: 1 }), closingPullRequests: [reconciliationPullRequest({ id: 201, number: 11 })] });
+  function incremental(github: Partial<ReconciliationDependencies["github"]>) {
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockResolvedValue([]), getIssue: vi.fn().mockResolvedValue(closingIssue()), ...github } });
+    dependencies.store.getReconciliationEvidence = async () => ({
+      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0,
+      issues: [closingIssue()], pullRequests: [{ id: 201, reviews: [cachedReview], rawDiff: "cached diff" }],
+    });
+    dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: 9 }];
+    return dependencies;
+  }
+
+  it.each(["closingIssuesReferences.nodes", "closingIssuesReferences.nodes.repository"])(
+    "discards a dirty pull request whose closing read's %s is unreadable and still reads its evidence", async (fieldPath) => {
+      const dependencies = incremental({
+        getPullRequestClosingIssues: vi.fn().mockRejectedValue(new GitHubGraphqlInvalidResponseError("Unreadable closing read", fieldPath)),
+        getPullRequestReviews: vi.fn().mockResolvedValue([]),
+      });
+      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
+        expect(dependencies.store.failRun).not.toHaveBeenCalled();
+        expect(dependencies.store.discardDirtyReconciliationSubject).toHaveBeenCalledExactlyOnceWith({
+          repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: 9,
+        });
+        expect(errorLog).toHaveBeenCalledExactlyOnceWith(
+          `Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=11 reason=UNREADABLE_FIELD field=${fieldPath}`,
+        );
+        // The issue already naming the pull request is still reread, and the pull request's evidence still read fresh.
+        expect(vi.mocked(dependencies.github.getIssue).mock.calls.map(([, issue]) => issue.id)).toEqual([101]);
+        expect(dependencies.github.getPullRequestReviews).toHaveBeenCalledWith(expect.anything(), 11);
+        const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
+        expect(materializeInput.synchronization?.pullRequests).toEqual([{ id: 201, reviews: [], rawDiff: "diff" }]);
+      } finally {
+        errorLog.mockRestore();
+      }
+    });
+
+  it.each(["reviews.nodes", "timelineItems.nodes"])(
+    "discards a dirty pull request whose evidence read's %s is unreadable, keeping its cached evidence", async (fieldPath) => {
+      const dependencies = incremental({
+        getPullRequestReviews: vi.fn().mockRejectedValue(new GitHubGraphqlInvalidResponseError("Unreadable evidence read", fieldPath)),
+      });
+      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
+        expect(dependencies.store.failRun).not.toHaveBeenCalled();
+        expect(dependencies.store.discardDirtyReconciliationSubject).toHaveBeenCalledExactlyOnceWith({
+          repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: 9,
+        });
+        expect(errorLog).toHaveBeenCalledExactlyOnceWith(
+          `Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=11 reason=UNREADABLE_FIELD field=${fieldPath}`,
+        );
+        const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
+        expect(materializeInput.synchronization?.pullRequests).toEqual([{ id: 201, reviews: [cachedReview], rawDiff: "cached diff" }]);
+      } finally {
+        errorLog.mockRestore();
+      }
+    });
+
+  // Classification keys on the read: a field path another read owns (or no
+  // pull request read owns) keeps whole-run retry semantics.
+  it.each([
+    ["closing", "assignees.nodes"], ["closing", "reviews.nodes"], ["closing", "timelineItems.nodes"],
+    ["evidence", "assignees.nodes"], ["evidence", "closingIssuesReferences.nodes"], ["evidence", "closingIssuesReferences.nodes.repository"],
+  ] as const)("fails the run without discarding when a %s read answers the typed error for %s", async (read, fieldPath) => {
+    const failure = new GitHubGraphqlInvalidResponseError("Unrelated field", fieldPath);
+    const dependencies = incremental(read === "closing"
+      ? { getPullRequestClosingIssues: vi.fn().mockRejectedValue(failure) }
+      : { getPullRequestReviews: vi.fn().mockRejectedValue(failure) });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
+      expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it("journals the field when the sweep walk discards a pull request's unreadable closing read", async () => {
+    const f = fixture([subject(1), subject(2, "pull_request")]);
+    f.issues.get(1)!.closingPullRequests = [pullRequest(2)];
+    f.gateway.getPullRequestClosingIssues = (pr) => f.read(`closing:${pr.id}`, () => {
+      throw new GitHubGraphqlInvalidResponseError("Unreadable closing read", "closingIssuesReferences.nodes");
+    });
+    f.pass.dirtySubjects = [{ kind: "PULL_REQUEST", id: 2, number: 2, generation: 3 }];
+    const dependencies = reconciliationDependencies({
+      github: { walkReconciliation: (_reference, input) => walkReconciliation({ ...input, listing: f.listing, gateway: f.gateway }) },
+    });
+    dependencies.sweep = { spend: async () => null, discardPass: async () => {}, openPass: async () => f.pass };
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
+      expect(dependencies.store.discardDirtyReconciliationSubject).toHaveBeenCalledExactlyOnceWith({
+        repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 2, generation: 3,
+      });
+      expect(errorLog).toHaveBeenCalledExactlyOnceWith(
+        "Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=2 reason=UNREADABLE_FIELD field=closingIssuesReferences.nodes",
+      );
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
 });
