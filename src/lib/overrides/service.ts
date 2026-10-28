@@ -24,7 +24,7 @@ export type SettlementOverrideRequest = {
  */
 export type SettlementOverrideEvidence = {
   settlementId: string;
-  status: "SETTLED" | "UNSETTLED" | "UNCLAIMED";
+  status: "SETTLED" | "UNSETTLED" | "UNCLAIMED" | "DONATED";
   openingComparisonPoints: number;
   settledLabel: string | null;
   settledPoints: number | null;

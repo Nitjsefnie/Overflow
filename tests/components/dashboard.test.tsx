@@ -200,6 +200,49 @@ describe("member dashboard", () => {
     expect(screen.queryByText("6 credits · review deduction 0")).not.toBeInTheDocument();
   });
 
+  it("tells a donated settlement's credits apart from paid ones with the same figures", () => {
+    const paid = {
+      id: "settlement-5",
+      status: "SETTLED" as const,
+      repositoryName: "co-op/harbour",
+      issueNumber: 5,
+      issueTitle: "Chart the shoal",
+      issueUrl: "https://github.com/co-op/harbour/issues/5",
+      pullRequestNumber: 10,
+      pullRequestTitle: "Buoy the shoal",
+      pullRequestUrl: "https://github.com/co-op/harbour/pull/10",
+      proofSha256: "b".repeat(64),
+      credits: 6,
+      reviewRounds: 1,
+      settledAt: "2026-09-05T00:00:00.000Z",
+    };
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 12,
+          earnedTotal: 19,
+          givenTotal: 7,
+          reservedPoints: 4,
+          availableHeadroom: 8,
+          recentSettlements: [paid, { ...paid, id: "settlement-4", status: "DONATED", issueNumber: 4 }],
+          openClaims: [],
+          registeredRepositories: [],
+          enforcementNotices: [],
+          openAudit: null,
+        }}
+      />,
+    );
+
+    const [paidFigures, donatedFigures] = screen.getAllByRole("article").map(
+      (article) => [...article.querySelectorAll(".mono-meta")].at(-1)?.textContent,
+    );
+    expect(donatedFigures).not.toBe(paidFigures);
+    expect(donatedFigures).toMatch(/\b6 credits\b/);
+    expect(donatedFigures).toMatch(/review deduction 1/);
+  });
+
   it("shows the dashboard operational queues and renders external text as text", () => {
     render(
       <DashboardContent

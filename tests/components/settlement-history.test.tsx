@@ -53,6 +53,19 @@ const unclaimed: SettlementHistoryProjection = {
   settledAt: "2026-09-01T00:00:00.000Z",
 };
 
+const donated: SettlementHistoryProjection = {
+  id: "settlement-6",
+  status: "DONATED",
+  repositoryName: "co-op/harbour",
+  issueNumber: 6,
+  issueTitle: "Light the buoy",
+  issueUrl: "https://github.com/co-op/harbour/issues/6",
+  credits: 6,
+  reviewRounds: 1,
+  balanceEffect: 0,
+  settledAt: "2026-08-31T00:00:00.000Z",
+};
+
 function historyRows(): HTMLElement[] {
   const list = screen.getByRole("list", { name: "Settlement history" });
   return within(list).getAllByRole("listitem");
@@ -83,6 +96,25 @@ describe("settlement history page", () => {
       "href",
       "/settlements/settlement-9",
     );
+  });
+
+  it("R4 clause 4: marks a donated settlement apart from every other status, with its figures", () => {
+    render(
+      <SettlementHistoryContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        settlements={[settled, unsettled, unclaimed, donated]}
+      />,
+    );
+
+    const rows = historyRows();
+    const statuses = rows.map((row) => row.querySelector(".settlement-status")?.textContent);
+    const notes = rows.map((row) => row.querySelector(".settlement-history-note")?.textContent);
+    expect(new Set(statuses).size).toBe(4);
+    expect(new Set(notes).size).toBe(4);
+    const donatedRow = rows[3] as HTMLElement;
+    expect(donatedRow.querySelector(".settlement-status")).toHaveClass("settlement-status-donated");
+    expect(within(donatedRow).getByText("6 credits · review deduction 1 · balance effect 0")).toBeVisible();
   });
 
   it("reads each settlement's credit count with the plural its count takes", () => {

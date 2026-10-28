@@ -101,6 +101,9 @@ function statusLabel(status: SettlementStatus): string {
   if (status === "UNCLAIMED") {
     return "Awaiting a claim";
   }
+  if (status === "DONATED") {
+    return "Donated";
+  }
   return "Found · scored zero";
 }
 
@@ -114,6 +117,9 @@ function statusExplanation(status: SettlementStatus): string {
   }
   if (status === "UNCLAIMED") {
     return "Priced and recorded, waiting for the contributor to claim their GitHub identity before credits move.";
+  }
+  if (status === "DONATED") {
+    return "Priced and recorded, and given away: the contributor marked the claim /donate before the merge, so no credits moved.";
   }
   return "Found and scored zero: the merge was recorded, but the settled label or its rationale comment was missing or landed outside the evidence window, so no credits moved.";
 }

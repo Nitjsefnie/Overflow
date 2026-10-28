@@ -215,6 +215,22 @@ describe("moderator settlement correction queue", () => {
     expect(entry).not.toHaveTextContent("Credits moved");
   });
 
+  it("names a donated settlement's credits donated rather than moved", () => {
+    render(
+      <SettlementOverrideQueue
+        requests={[
+          queued({
+            settlement: { ...queued().settlement!, status: "DONATED", credits: 6 },
+          }),
+        ]}
+      />,
+    );
+
+    const entry = screen.getByRole("listitem");
+    expect(evidenceValue(entry, "Credits donated")).toBe("6");
+    expect(entry).not.toHaveTextContent("Credits moved");
+  });
+
   it("offers a decision for every queued request", () => {
     render(
       <SettlementOverrideQueue

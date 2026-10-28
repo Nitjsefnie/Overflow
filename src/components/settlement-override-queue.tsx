@@ -84,7 +84,7 @@ function SettlementEvidence({ settlement }: { settlement: SettlementOverrideEvid
           <dd>{settlement.reviewRounds}</dd>
         </div>
         <div>
-          <dt>{settlement.status === "UNCLAIMED" ? "Credits pending claim" : "Credits moved"}</dt>
+          <dt>{settlement.status === "UNCLAIMED" ? "Credits pending claim" : settlement.status === "DONATED" ? "Credits donated" : "Credits moved"}</dt>
           <dd>{settlement.credits}</dd>
         </div>
       </dl>
