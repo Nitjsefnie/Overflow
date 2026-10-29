@@ -428,22 +428,29 @@ describe("the exemption's scope", () => {
     expect(violations).toEqual([]);
   });
 
-  it("exempts a shared-text-module change whose message carries a well-formed marker", () => {
-    const { violations, exemptions } = reviewCommits([
-      commit(
-        "sha-disputes-exempt",
-        [DISPUTES],
-        markerBody("reflowed the list without changing wording"),
-      ),
-    ]);
+  it("exempts a shared-text-module change whose message carries a well-formed marker", async () => {
+    const sharedTextModules = await gateSharedTextModules();
+    expect(
+      sharedTextModules.length,
+      "SHARED_TEXT_MODULES must parse out of scripts/check-legal-revisions.ts — an " +
+        "unparsable or empty list would make this exemption pin vacuous",
+    ).toBeGreaterThan(0);
 
-    expect(violations).toEqual([]);
-    expect(exemptions).toEqual([
-      {
-        sha: "sha-disputes-exempt",
-        justification: "reflowed the list without changing wording",
-      },
-    ]);
+    for (const sharedModule of sharedTextModules) {
+      const sha = `sha-exempt-${sharedModule}`;
+      const justification = "reflowed the list without changing wording";
+      const { violations, exemptions } = reviewCommits([
+        commit(sha, [sharedModule], markerBody(justification)),
+      ]);
+
+      expect(
+        violations,
+        `${sharedModule} is in SHARED_TEXT_MODULES, so a well-formed marker must exempt it`,
+      ).toEqual([]);
+      expect(exemptions, `${sharedModule} must be reported as exempted`).toEqual([
+        { sha, justification },
+      ]);
+    }
   });
 
   it("does not let a page exemption excuse an unmarked shared-module change", () => {
