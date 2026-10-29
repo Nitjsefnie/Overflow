@@ -1,4 +1,4 @@
-import { withSweepPass, type ReconciliationSweepControl, type SweepPass } from "@/lib/fold/sweep-pass";
+import { discardInactivePassAfterFailure, StagedPassDataUnreadable, withSweepPass, type ReconciliationSweepControl, type SweepPass } from "@/lib/fold/sweep-pass";
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import { readEnv } from "@/lib/env";
 import { readDiffOnlyBacklogThreshold } from "@/lib/fold/repository-size";
@@ -167,10 +167,10 @@ export async function reconcileRepository(
       ? sanitizedGateway
       : Reflect.get(target, property, receiver),
   });
-  return dependencies.store.withRepositoryReconciliation(
+  return discardInactivePassAfterFailure(dependencies.sweep, repositoryId, () => dependencies.store.withRepositoryReconciliation(
     repositoryId,
     () => reconcileRepositoryWhileCoordinated(sanitizedDependencies, repositoryId, options),
-  );
+  ));
 }
 
 function sanitizeReconciliationGateway(current: () => ReconciliationGateway): ReconciliationGateway {
@@ -580,7 +580,7 @@ async function reconcileRepositoryAfterRepositoryRead(
       return { repositoryId, runId: null, skipped: true, budgetHeldUntil: error.resetAt,
         adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 };
     }
-    await discardPass();
+    if (error instanceof StagedPassDataUnreadable) await discardPass();
     // The stored message stays fixed: an upstream error can carry the sponsor's
     // GitHub token in a URL, and reconciliation_runs is read by the product.
     // PostgreSQL diagnostic fields can quote the forge record. Keep them out

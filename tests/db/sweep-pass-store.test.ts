@@ -370,6 +370,106 @@ describe("paused full-pass pages", () => {
   });
 });
 
+describe("unregistration racing a failed fold", () => {
+  type Fixture = Awaited<ReturnType<typeof pausedFixture>>;
+  function pausedUnregistration(f: Fixture) {
+    const updated = signal(); const commit = signal();
+    const connection = new Proxy(sql, { get(target, property, receiver) {
+      if (property !== "begin") return Reflect.get(target, property, receiver);
+      return (work: (transaction: TransactionSql) => Promise<unknown>) => target.begin((transaction) =>
+        work(new Proxy(transaction, { apply(target, thisArg, args) {
+          const query = Reflect.apply(target, thisArg, args);
+          if (!String(args[0]).includes("pg_try_advisory_xact_lock")) return query;
+          return query.then(async (result: unknown) => { updated.resolve(); await commit.promise; return result; });
+        } })));
+    } });
+    return { updated, commit, done: new PostgresRepositoryStore(connection).unregisterRepository(f.registration) };
+  }
+  const failWith = (f: Fixture, before: () => Promise<void>) => {
+    f.github.listIssues = async () => {
+      await f.state.pass!.write("second", { text: "in-flight page" });
+      await before();
+      throw new Error("synthetic upstream failure");
+    };
+  };
+  const failed = (f: Fixture) => reconcileRepository(f.dependencies, f.repositoryId, { reason: "SWEEP" }).then(() => false, () => true);
+
+  it.each<[string, string, number, string[]]>([
+    ["an active repository", "", 1, ["tx:read"]],
+    ["an inactive repository", "update registered_repositories set active = false", 0, ["tx:read", "tx:try-lock", "tx:delete"]],
+    ["a registration row that reads as gone", "hide", 0, ["tx:read", "tx:try-lock", "tx:delete"]],
+  ])("settles the registration row and the pass in one transaction for %s", async (_label, change, passes, statements) => {
+    const f = await materializeRepositoryFixture(sql);
+    const pass = await new PostgresSweepPassStore(sql).open({ repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
+    await pass.write("first", { page: 1 });
+    if (change !== "" && change !== "hide") await sql`update registered_repositories set active = false where id = ${f.repositoryId}`;
+    const log: string[] = [];
+    const record = (target: Sql | TransactionSql, scope: string): Sql => new Proxy(target, {
+      apply(callee, thisArg, args) {
+        const text = String(args[0]);
+        log.push(`${scope}:${/for share/.test(text) ? "read" : /advisory/.test(text) ? "try-lock" : /delete/.test(text) ? "delete" : "other"}`);
+        if (change === "hide" && text.includes("from registered_repositories")) return Promise.resolve([]);
+        return Reflect.apply(callee as never, thisArg, args);
+      },
+      get(callee, property, receiver) {
+        if (property !== "begin") return Reflect.get(callee, property, receiver);
+        return (work: (transaction: TransactionSql) => Promise<unknown>) => (callee as Sql).begin((transaction) => work(record(transaction, "tx") as unknown as TransactionSql));
+      },
+    }) as Sql;
+    await new PostgresSweepPassStore(record(sql, "sql")).discardIfInactive(f.repositoryId);
+    expect(log).toEqual(statements);
+    expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes, pages: passes });
+  });
+
+  it("leaves no pass when the unregistration commits after the failed fold's cleanup decision", async () => {
+    const f = await pausedFixture();
+    const entered = signal(); const release = signal();
+    failWith(f, async () => { entered.resolve(); await release.promise; });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    let finished = false;
+    const settled = failed(f).finally(() => { finished = true; });
+    const unregistration = (await entered.promise, pausedUnregistration(f));
+    try {
+      await unregistration.updated.promise;
+      release.resolve();
+      await vi.waitFor(async () => {
+        const [waiting] = await sql<{ count: number }[]>`select count(*)::int as count
+          from pg_stat_activity a join pg_locks l on l.pid = a.pid and not l.granted
+          where a.datname = current_database() and a.wait_event_type = 'Lock' and a.pid <> pg_backend_pid()`;
+        expect(finished || waiting.count > 0).toBe(true);
+      });
+    } finally { unregistration.commit.resolve(); }
+    expect((await unregistration.done).kind).toBe("UNREGISTERED");
+    expect(await settled).toBe(true);
+    log.mockRestore();
+    expect(await stagedCounts(f.repositoryId, f.state.pass!.id)).toEqual({ passes: 0, pages: 0 });
+  });
+
+  it("leaves no pass when the unregistration starts after the decision but before coordination is released", async () => {
+    const f = await pausedFixture();
+    const decided = signal(); const proceed = signal();
+    failWith(f, async () => {});
+    const coordinate = f.store.withRepositoryReconciliation.bind(f.store);
+    f.store.withRepositoryReconciliation = (id, work) => coordinate(id, async () => {
+      try { return await work(); } finally { decided.resolve(); await proceed.promise; }
+    });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const settled = failed(f);
+    try {
+      await decided.promise;
+      const unregistration = pausedUnregistration(f);
+      await unregistration.updated.promise;
+      unregistration.commit.resolve();
+      expect((await unregistration.done).kind).toBe("UNREGISTERED");
+      expect(await stagedCounts(f.repositoryId, f.state.pass!.id)).toEqual({ passes: 1, pages: 2 });
+    } finally { proceed.resolve(); }
+    expect(await settled).toBe(true);
+    log.mockRestore();
+    expect(await stagedCounts(f.repositoryId, f.state.pass!.id)).toEqual({ passes: 0, pages: 0 });
+  });
+
+});
+
 describe("durable sweep walk subjects", () => {
   async function openWalk() {
     const f = await materializeRepositoryFixture(sql);
@@ -402,6 +502,41 @@ describe("durable sweep walk subjects", () => {
     await pass.stage({ ...subject, anchor });
     expect(pass.walkAnchors()).toEqual({ [anchor]: { updatedAt: at, key: subject.subjectKey } });
     expect((await store.open(input)).walkAnchors()).toEqual(pass.walkAnchors());
+  });
+
+  const good = { kind: "ISSUE", id: 1, number: 1, generation: 3 };
+  const unreadableDirtySubjects: Array<[string, unknown]> = [
+    ["an object", {}],
+    ["a null entry", [good, null, good]],
+    ["an unknown kind", [good, { ...good, kind: "COMMENT" }, good]],
+    ...["id", "number", "generation"].map((field): [string, unknown] =>
+      [`no ${field}`, [good, Object.fromEntries(Object.entries(good).filter(([key]) => key !== field)), good]]),
+    ["a string generation", [good, { ...good, generation: "1" }, good]],
+    ["an unsafe id", [good, { ...good, id: 2 ** 53 }, good]],
+    ["an unsafe number", [good, { ...good, number: 2 ** 53 }, good]],
+  ];
+
+  it("keeps a pass whose dirty subjects are readable", async () => {
+    const f = await materializeRepositoryFixture(sql);
+    const dirtySubjects = [{ kind: "ISSUE" as const, id: 1, number: 1, generation: 3 }, { kind: "PULL_REQUEST" as const, id: 2, number: 2, generation: 0 }];
+    const input = { repositoryId: f.repositoryId, evidenceVersion: "walk-v1", scanStartedAt: at, dirtySubjects };
+    const store = new PostgresSweepPassStore(sql);
+    const pass = await store.open(input);
+    await pass.stage(subject);
+    const reopened = await store.open(input);
+    expect(reopened.id).toBe(pass.id);
+    expect(reopened.dirtySubjects).toEqual(dirtySubjects);
+    expect(await reopened.readStaged()).toHaveLength(1);
+  });
+
+  it.each(unreadableDirtySubjects)("restarts a pass whose dirty subjects hold %s", async (_label, dirty) => {
+    const { pass, store, input } = await openWalk();
+    await pass.stage(subject);
+    await sql`update reconciliation_sweep_passes set dirty_subjects = ${sql.json(dirty as never)} where pass_id = ${pass.id}`;
+    const reopened = await store.open(input);
+    expect(reopened.id).not.toBe(pass.id);
+    expect(reopened.dirtySubjects).toEqual([]);
+    expect(await reopened.readStaged()).toEqual([]);
   });
 
   it("round-trips jsonb payloads and bigint keys and replaces a re-staged subject", async () => {
@@ -630,6 +765,7 @@ async function pausedFixture() {
       state.opens++; state.pass = await passes.open(input); return state.pass;
     },
     discardPass: (id: string) => passes.discardByRepository(id),
+    discardIfInactive: (id: string) => passes.discardIfInactive(id),
   } };
   expect((await reconcileRepository(dependencies, f.repositoryId, { reason: "SWEEP" })).skipped).toBe(true);
   return { ...f, github, state, dependencies,

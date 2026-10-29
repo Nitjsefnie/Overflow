@@ -5,6 +5,7 @@ import {
   reconcileRepository,
   type ReconciliationDeltas,
   type ReconciliationDependencies,
+  type ReconciliationGateway,
 } from "@/lib/fold/reconcile";
 import { ForgeCredentialRejectedError } from "@/lib/forge/gateway";
 import type { FoldResult } from "@/lib/fold/repository-fold";
@@ -22,6 +23,8 @@ import { reconciliationDependencies, reconciliationIssue, reconciliationPullRequ
 import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
 import { verifiedRepositoryPayload } from "../support/verified-repository";
 import { inspect, format } from "node:util";
+import { walkReconciliation } from "@/lib/fold/reconciliation-walk";
+import { fixture, instant, issue, pullRequest, subject } from "./reconciliation-walk-fixture";
 import { RECORD_MARKER, withRecordBearingPostgresWrite } from "../support/record-bearing-postgres-error";
 
 describe("reconcileRepository", () => {
@@ -55,23 +58,190 @@ describe("reconcileRepository", () => {
     }
   });
 
-  it("discards a failed full-pass snapshot so the next sweep can refetch corrected upstream data", async () => {
-    const dependencies = reconciliationDependencies({ github: { walkReconciliation: async () => { throw new Error("invalid upstream page"); } } });
-    const complete = vi.fn(async () => {});
-    dependencies.sweep = {
-      spend: async () => null, discardPass: async () => {},
-      openPass: async (input) => ({ id: "pass", scanStartedAt: input.scanStartedAt, dirtySubjects: input.dirtySubjects,
-        walkAnchors: () => { throw new Error("Unexpected sweep walk anchors"); },
-        stage: async () => { throw new Error("Unexpected sweep walk staging"); },
-        readStaged: async () => { throw new Error("Unexpected staged read"); },
-        deleteStaged: async () => { throw new Error("Unexpected staged deletion"); },
-        read: async () => undefined, write: async () => {}, complete }),
+  describe("sweep pass lifecycle", () => {
+    const sweepRun = () => {
+      const f = fixture([...[1, 2, 3, 9].map((id) => subject(id)), subject(19, "pull_request")]);
+      const walk = vi.fn<NonNullable<ReconciliationGateway["walkReconciliation"]>>(
+        async (_reference, input) => walkReconciliation({ ...input, listing: f.listing, gateway: f.gateway }));
+      const dependencies = reconciliationDependencies({ github: { walkReconciliation: walk } });
+      const discardPass = vi.fn(async () => { await f.pass.complete(); });
+      const discardIfInactive = vi.fn<(repositoryId: string) => Promise<void>>(async () => {});
+      dependencies.sweep = { spend: async () => null, openPass: async () => f.pass, discardPass, discardIfInactive };
+      return { f, dependencies, discardPass, discardIfInactive, walk };
     };
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).rejects.toThrow();
-      expect(complete).toHaveBeenCalledOnce();
-    } finally { logged.mockRestore(); }
+    type Run = ReturnType<typeof sweepRun>["f"];
+    const failGathering = (f: Run, id: number, failure: Error) => {
+      const gather = f.gateway.gatherIssue;
+      let failing = true;
+      f.gateway.gatherIssue = async (target) => {
+        if (failing && target.id === id) throw failure;
+        return gather(target);
+      };
+      return () => { failing = false; };
+    };
+    const failStaging = (f: Run, id: number, failure: Error) => {
+      const stage = f.pass.stage;
+      let failing = true;
+      f.pass.stage = vi.fn(async (input) => {
+        if (failing && input.subjectKey === id) throw failure;
+        return stage(input);
+      });
+      return () => { failing = false; };
+    };
+
+    it.each<[string, (f: Run) => () => void, number]>([
+      ["a forge request", (f) => failGathering(f, 3, new GitHubApiError(500)), 3],
+      ["a database write", (f) => failStaging(f, 3, new Error("connection terminated unexpectedly")), 1],
+    ])("keeps the sweep pass when a budget-bound run fails on %s and resumes it with its staged subjects", async (_label, fail, attempts) => {
+      const { f, dependencies, walk } = sweepRun();
+      const recover = fail(f);
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).rejects.toThrow();
+      } finally { logged.mockRestore(); }
+      expect(walk).toHaveBeenCalledTimes(attempts);
+      expect(f.pass.complete).not.toHaveBeenCalled();
+      expect((await f.pass.readStaged()).map(({ subjectKey }) => subjectKey)).toEqual([1, 2]);
+      expect(f.pass.walkAnchors().subjects).toEqual({ updatedAt: instant(2), key: 2 });
+      expect(dependencies.store.failRun).toHaveBeenCalledOnce();
+
+      recover();
+      await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
+      expect([f.counts.get(1), f.counts.get(2)]).toEqual([1, 1]);
+      expect(f.counts.has(3)).toBe(true);
+      expect(f.listed[1]).toEqual({ since: instant(2).toISOString(), cursor: null });
+      expect(dependencies.store.materialize).toHaveBeenCalledOnce();
+    });
+
+    const identity = { id: 19, number: 19 };
+    const stub = (id: number) => ({ subject: { id, number: id } });
+    const withoutField = (record: object, field: string) => Object.fromEntries(Object.entries(record).filter(([key]) => key !== field));
+    const closing = (bad: unknown) => ({ ...issue(9), closingPullRequests: [pullRequest(5), bad, pullRequest(6)] });
+    const wrongType: Record<string, unknown> = { id: "5", number: "5", state: 1, mergedAt: 1, repositoryGitHubId: "1" };
+    const unreadableRows: Array<[string, "issue" | "pull_request", unknown]> = [
+      ["an unavailable subject identity", "issue", null],
+      ["a string id", "issue", { ...issue(9), id: "9" }],
+      ["a fractional number", "issue", { ...issue(9), number: 9.5 }],
+      ["an unsafe id", "issue", { ...issue(9), id: 2 ** 53 }],
+      ["an unsafe number", "issue", { ...issue(9), number: 2 ** 53 }],
+      ...["labels", "history", "comments", "closingPullRequests"].flatMap((field): Array<[string, "issue", unknown]> => [
+        [`no ${field}`, "issue", withoutField(issue(9), field)],
+        [`${field} that is a string`, "issue", { ...issue(9), [field]: "x" }]]),
+      ["a null closing pull request", "issue", closing(null)],
+      ["a closing pull request with an unsafe id", "issue", closing({ ...pullRequest(7), id: 2 ** 53 })],
+      ["a closing pull request with an unsafe number", "issue", closing({ ...pullRequest(7), number: 2 ** 53 })],
+      ...Object.keys(wrongType).flatMap((field): Array<[string, "issue", unknown]> => [
+        [`a closing pull request without ${field}`, "issue", closing(withoutField(pullRequest(7), field))],
+        [`a closing pull request with a wrong-typed ${field}`, "issue", closing({ ...pullRequest(7), [field]: wrongType[field] })]]),
+      ["a pull request row without a subject", "pull_request", { evidence: null }],
+      ["a pull request row without evidence", "pull_request", { subject: identity }],
+      ["a pull request row with non-object evidence", "pull_request", { subject: identity, evidence: "unavailable" }],
+      ["a pull request row without reviews", "pull_request", { subject: identity, evidence: { rawDiff: "diff" } }],
+      ["a pull request row with object reviews", "pull_request", { subject: identity, evidence: { reviews: {}, rawDiff: "diff" } }],
+      ["a pull request row without a diff", "pull_request", { subject: identity, evidence: { reviews: [] } }],
+      ["a pull request row with a numeric diff", "pull_request", { subject: identity, evidence: { reviews: [], rawDiff: 1 } }],
+      ["a refreshed pull request row without missing", "pull_request", { subject: identity, evidence: null, refreshed: true, listed: true }],
+      ["a refreshed pull request row with a string missing", "pull_request", { subject: identity, evidence: null, refreshed: true, missing: "no", listed: true }],
+      ["a refreshed pull request row without listed", "pull_request", { subject: identity, evidence: null, refreshed: true, missing: false }],
+      ["a refreshed pull request row with a string listed", "pull_request", { subject: identity, evidence: null, refreshed: true, missing: false, listed: "yes" }],
+    ];
+
+    it.each(unreadableRows)("discards the sweep pass, without retrying, when a staged row holds %s", async (_label, kind, payload) => {
+      const { f, dependencies, walk } = sweepRun();
+      await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 8, updatedAt: instant(8), payload: stub(8) });
+      const key = kind === "issue" ? 9 : 19;
+      await f.pass.stage({ anchor: "subjects", kind, subjectKey: key, updatedAt: instant(key), payload });
+      await f.pass.stage({ anchor: "subjects", kind: "pull_request", subjectKey: 10, updatedAt: instant(10), payload: { ...stub(10), evidence: null } });
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).rejects
+          .toHaveProperty("cause.message", "Staged sweep pass data is unreadable.");
+      } finally { logged.mockRestore(); }
+      expect(walk).toHaveBeenCalledOnce();
+      expect(f.pass.complete).toHaveBeenCalledOnce();
+      expect(await f.pass.readStaged()).toEqual([]);
+      expect(dependencies.store.failRun).toHaveBeenCalledOnce();
+
+      await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
+    });
+
+    it("resumes a pass whose staged rows are all readable", async () => {
+      const { f, dependencies } = sweepRun();
+      const open = { ...pullRequest(5), state: "OPEN" as const, mergedAt: null };
+      const rows = [
+        { kind: "issue" as const, subjectKey: 9, payload: { ...issue(9), closingPullRequests: [open] } },
+        { kind: "issue" as const, subjectKey: 10, payload: { subject: { id: 10, number: 10 } } },
+        { kind: "pull_request" as const, subjectKey: 11, payload: { subject: { id: 11, number: 11 }, evidence: null } },
+        { kind: "pull_request" as const, subjectKey: 12, payload: { subject: { id: 12, number: 12 }, evidence: { reviews: [], rawDiff: "diff" } } },
+        { kind: "pull_request" as const, subjectKey: 14, payload: { subject: { id: 14, number: 14 }, evidence: null, refreshed: false } },
+        { kind: "pull_request" as const, subjectKey: 13, payload: { subject: { id: 13, number: 13 }, evidence: null, refreshed: true, missing: true, listed: false } },
+      ];
+      for (const row of rows) await f.pass.stage({ anchor: "subjects", updatedAt: instant(row.subjectKey), ...row });
+      await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
+    });
+
+    it("settles an unregistered repository's pass only after the failed run released coordination", async () => {
+      const { f, dependencies, discardIfInactive } = sweepRun();
+      failGathering(f, 3, new GitHubApiError(500));
+      let released = false;
+      const coordinate = dependencies.store.withRepositoryReconciliation.bind(dependencies.store);
+      dependencies.store.withRepositoryReconciliation = async (id, work) => {
+        try { return await coordinate(id, work); } finally { released = true; }
+      };
+      discardIfInactive.mockImplementation(async () => { expect(released).toBe(true); });
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).rejects.toThrow("Unable to reconcile repository.");
+      } finally { logged.mockRestore(); }
+      expect(discardIfInactive).toHaveBeenCalledExactlyOnceWith("repository");
+      expect(f.pass.complete).not.toHaveBeenCalled();
+    });
+
+    it("does not settle the pass of a run that succeeded and keeps the failure when settling fails", async () => {
+      const { f, dependencies, discardIfInactive } = sweepRun();
+      await reconcileRepository(dependencies, "repository", { reason: "SWEEP" });
+      expect(discardIfInactive).not.toHaveBeenCalled();
+
+      failGathering(f, 2, new GitHubApiError(500));
+      discardIfInactive.mockRejectedValue(new Error("database unavailable"));
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).rejects.toThrow("Unable to reconcile repository.");
+        expect(logged.mock.calls).toContainEqual(["Could not discard reconciliation sweep checkpoints."]);
+        expect(logged.mock.calls.flat().map(String).join("\n")).not.toContain("database unavailable");
+      } finally { logged.mockRestore(); }
+      expect(discardIfInactive).toHaveBeenCalledOnce();
+    });
+
+    it("ends the sweep pass when the fold completes", async () => {
+      const { f, dependencies } = sweepRun();
+      await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
+      expect(f.pass.complete).toHaveBeenCalledOnce();
+      expect(await f.pass.readStaged()).toEqual([]);
+    });
+
+    it.each<[string, () => GitHubRepository | null]>([
+      ["NOT_FOUND", () => null],
+      ["IDENTITY_MISMATCH", () => verifiedRepository({ id: 1 })],
+      ["NOT_PUBLIC", () => verifiedRepository({ visibility: "PRIVATE" })],
+    ])("ends the sweep pass when the crawl is declined as %s", async (reason, answer) => {
+      const { f, dependencies } = sweepRun();
+      await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 1, updatedAt: instant(1), payload: { subject: { id: 1, number: 1 } } });
+      vi.mocked(dependencies.github.getRepositoryById).mockResolvedValue(answer());
+      await reconcileRepository(dependencies, "repository", { reason: "SWEEP" });
+      expect(dependencies.store.markRepositoryUnavailable).toHaveBeenCalledWith(expect.objectContaining({ reason }));
+      expect(f.pass.complete).toHaveBeenCalledOnce();
+      expect(await f.pass.readStaged()).toEqual([]);
+    });
+
+    it("ends the sweep pass of an inactive repository", async () => {
+      const { f, dependencies, discardPass } = sweepRun();
+      await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 1, updatedAt: instant(1), payload: { subject: { id: 1, number: 1 } } });
+      (await dependencies.store.getRepository("repository"))!.active = false;
+      await reconcileRepository(dependencies, "repository", { reason: "SWEEP" });
+      expect(discardPass).toHaveBeenCalledExactlyOnceWith("repository");
+      expect(await f.pass.readStaged()).toEqual([]);
+    });
   });
 
   it("turns a sweep request hold into a skipped run rather than a repository failure", async () => {

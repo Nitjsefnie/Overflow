@@ -1,4 +1,5 @@
 import { withFreshSweepReads, type SweepPass } from "@/lib/fold/sweep-pass";
+import { readStagedRows, stagedIdentity } from "@/lib/fold/staged-pass-data";
 import type { WalkSubject } from "@/lib/forge/subject-listing";
 import { sanitizeForgeStrings } from "@/lib/forge/sanitize-forge-strings";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
@@ -49,7 +50,7 @@ export function walkReconciliation(input: ReconciliationWalkInput): Promise<Comp
 }
 
 async function walk({ pass, listing, gateway, repository, onDiscard }: ReconciliationWalkInput): Promise<CompletedReconciliationWalk> {
-  const staged = new Map((await pass.readStaged()).map((row) => [rowKey(row.kind, row.subjectKey), row]));
+  const staged = new Map((await readStagedRows(pass)).map((row) => [rowKey(row.kind, row.subjectKey), row]));
   const issues = () => [...staged.values()].flatMap((row) => row.kind === "issue" && row.payload !== null
     && typeof row.payload === "object" && "number" in row.payload ? [row.payload as GitHubIssue] : []);
   const referenced = (facts: GitHubIssue[]) => facts.flatMap((issue) => issue.closingPullRequests).filter((pr) =>
@@ -180,13 +181,6 @@ async function walk({ pass, listing, gateway, repository, onDiscard }: Reconcili
 }
 
 function rowKey(kind: WalkSubject["kind"], id: number): string { return `${kind}:${id}`; }
-function stagedIdentity(payload: unknown): GitHubSubject {
-  const value = payload !== null && typeof payload === "object" && "subject" in payload ? payload.subject : payload;
-  if (value === null || typeof value !== "object" || !("id" in value) || !("number" in value)
-    || typeof value.id !== "number" || !Number.isSafeInteger(value.id)
-    || typeof value.number !== "number" || !Number.isSafeInteger(value.number)) throw new Error("Staged subject identity is unavailable.");
-  return { id: value.id, number: value.number };
-}
 function isRefreshedPr(payload: unknown): payload is RefreshedPr {
   return payload !== null && typeof payload === "object" && "refreshed" in payload && payload.refreshed === true;
 }

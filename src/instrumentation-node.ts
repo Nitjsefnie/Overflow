@@ -66,6 +66,7 @@ export async function registerNodejs(): Promise<void> {
     spend: (sponsorId: string, repositoryId: string) => sweepRound.spend(sponsorId, repositoryId, new Date(), readSweepRequestBudget(process.env)),
     openPass: sweepPasses.open.bind(sweepPasses),
     discardPass: sweepPasses.discardByRepository.bind(sweepPasses),
+    discardIfInactive: sweepPasses.discardIfInactive.bind(sweepPasses),
   };
   try {
     await finalizeAbandonedRuns(getSql(), getCoordinationSql());
