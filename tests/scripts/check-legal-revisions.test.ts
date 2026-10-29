@@ -105,6 +105,27 @@ describe("legal revision gate", () => {
     }
   });
 
+  it("accepts an unmarked change to each shared-text module made with the guard file", async () => {
+    const sharedTextModules = await gateSharedTextModules();
+    expect(
+      sharedTextModules.length,
+      "SHARED_TEXT_MODULES must parse out of scripts/check-legal-revisions.ts — an " +
+        "unparsable or empty list would make this guard-file pin vacuous",
+    ).toBeGreaterThan(0);
+
+    for (const sharedModule of sharedTextModules) {
+      const { violations, exemptions } = reviewCommits([
+        commit(`sha-guard-${sharedModule}`, [sharedModule, GUARD]),
+      ]);
+
+      expect(
+        violations,
+        `${sharedModule} is in SHARED_TEXT_MODULES, so the guard file must excuse its change`,
+      ).toEqual([]);
+      expect(exemptions, `${sharedModule} must not be reported as exempted`).toEqual([]);
+    }
+  });
+
   it("reports both legal-text sources changed in one commit", () => {
     const sha = "sha-page-and-shared-text";
     const violations = reviewCommits([commit(sha, [TERMS, DISPUTES])]).violations;
