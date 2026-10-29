@@ -67,9 +67,9 @@ function RulesSections() {
           </li>
           <li>
             Between the closing pull request&apos;s final commit and fifteen minutes after its merge, put an
-            actual-catalog label on the issue, then a comment, to settle the work. The comment&apos;s wording is not
-            checked, but the label and the comment must both be the sponsor&apos;s, and the comment must not be edited
-            after the window closes.
+            actual-catalog label on the issue, then a comment, to settle the work. The comment must be nonblank, but its
+            wording is not checked; the label and the comment must both be the sponsor&apos;s, and the comment must not
+            be edited after the window closes.
           </li>
         </ul>
       </section>
