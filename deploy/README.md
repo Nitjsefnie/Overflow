@@ -951,7 +951,10 @@ it will run when the variable is unset or blank. Any other value, such as
 skip is visible before the restart. Once the service is active again, a file
 that still holds `1` is reported as still set, with a reminder that every later
 restart will skip the sweep until the line is removed. That reminder is the
-prompt for the removal below.
+prompt for the removal below. If the file cannot be read when either line is
+printed (it is missing or unreadable, or ends the read with `exit`), that line
+says the value could not be read, rather than reporting the variable as unset or
+saying nothing, and the deploy carries on.
 
 After restart, verify the warning naming `OVERFLOW_SKIP_STARTUP_RECONCILIATION`
 in the service journal. An authenticated moderator can also read
