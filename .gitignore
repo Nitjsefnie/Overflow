@@ -294,6 +294,7 @@ src/lib/fold/*
 !src/lib/fold/reconciliation-evidence.ts
 !src/lib/fold/reconciliation-fairness.ts
 !src/lib/fold/sweep-request-budget.ts
+!src/lib/fold/sweep-window.ts
 !src/lib/fold/sweep-round-store.ts
 !src/lib/fold/sweep-pass.ts
 !src/lib/fold/sweep-pass-store.ts
