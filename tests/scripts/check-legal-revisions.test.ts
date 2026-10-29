@@ -19,6 +19,7 @@ const RULES = "src/app/rules/page.tsx";
 const ACCOUNT_DATA = "src/app/account-data/page.tsx";
 const DISPUTES = "src/lib/disputes.ts";
 const SANCTIONS = "src/lib/sanctions.ts";
+const PROCESSING_ACTIVITIES = "src/lib/processing-activities.ts";
 const WORK_MAIL_DISCLOSURE = "src/components/work-mail-disclosure.tsx";
 const GUARD = "src/lib/legal-revisions.ts";
 const GATE_SCRIPT = "scripts/check-legal-revisions.ts";
@@ -70,6 +71,17 @@ describe("legal revision gate", () => {
     const violations = reviewCommits([commit("sha-dispute-rule-only", [DISPUTES])]).violations;
 
     expect(violations).toEqual([{ sha: "sha-dispute-rule-only", page: DISPUTES }]);
+  });
+
+  it("names a commit that rewrites a processing purpose without the guard file", () => {
+    // The account-data page renders each noticeLabel in this module.
+    const violations = reviewCommits([
+      commit("sha-processing-activity-only", [PROCESSING_ACTIVITIES]),
+    ]).violations;
+
+    expect(violations).toEqual([
+      { sha: "sha-processing-activity-only", page: PROCESSING_ACTIVITIES },
+    ]);
   });
 
   it("reports both legal-text sources changed in one commit", () => {
@@ -627,6 +639,29 @@ describe("the gate's command line", () => {
     }
   });
 
+  it("exits 1 over a commit that changes only a noticeLabel in the processing activities", async () => {
+    const fixture = await createGateFixture();
+    try {
+      const noticeLabel = (wording: string): string =>
+        `export const PROCESSING_ACTIVITIES = [{ noticeLabel: "${wording}" }];\n`;
+      const baseSha = await fixture.commit("base\n\nFixture base.\n", {
+        [PROCESSING_ACTIVITIES]: noticeLabel("running the service"),
+      });
+
+      const headSha = await fixture.commit(
+        "reword a processing purpose\n\nOnly the noticeLabel string changed.\n",
+        { [PROCESSING_ACTIVITIES]: noticeLabel("operating the service") },
+      );
+
+      const result = fixture.runGate(baseSha, headSha);
+
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toContain(`${PROCESSING_ACTIVITIES} changed in ${headSha}`);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it("exits 0 over a one-commit range and names the count and range correctly", async () => {
     // The success path through the real binary — a legal page and its revision
     // record landing in the SAME commit — and the success message's count and
@@ -975,7 +1010,7 @@ describe("the gate's coverage of shared legal-text modules", () => {
     expect(
       sharedTextModules,
       "the first-class inventory must match every shared module supplying legal-page wording",
-    ).toEqual([DISPUTES, SANCTIONS, WORK_MAIL_DISCLOSURE]);
+    ).toEqual([DISPUTES, SANCTIONS, WORK_MAIL_DISCLOSURE, PROCESSING_ACTIVITIES]);
   });
 
   it("throws its explicit parse error for malformed shared-text inventory source", async () => {

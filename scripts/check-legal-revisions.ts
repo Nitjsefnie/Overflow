@@ -93,6 +93,7 @@ const SHARED_TEXT_MODULES: readonly string[] = [
   "src/lib/disputes.ts",
   "src/lib/sanctions.ts",
   "src/components/work-mail-disclosure.tsx",
+  "src/lib/processing-activities.ts",
 ];
 
 // Every path whose reader-facing wording is covered by the revision record.
