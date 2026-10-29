@@ -16,6 +16,7 @@ import { readSuiteRuns, suiteRunsUrl, supersedingSuiteRunId } from "./pr-suite-s
 export interface ResolveDeps {
   env: Record<string, string | undefined>;
   fetchFn: typeof fetch;
+  sleepFn?: (ms: number) => Promise<void>;
 }
 
 export interface ResolveOutcome {
@@ -28,6 +29,7 @@ type RecordValue = Record<string, unknown>;
 const SHA = /^[0-9a-f]{40}$/;
 const SEGMENT = "[A-Za-z0-9_-][A-Za-z0-9_.-]*";
 const REPOSITORY = new RegExp(`^${SEGMENT}/${SEGMENT}$`);
+const BACKOFF_MS = [1_000, 2_000];
 
 function record(value: unknown): RecordValue {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -38,20 +40,37 @@ function positiveId(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
-/** Every read fails closed, is uncached, and has a bounded request lifetime. */
+/**
+ * Every read fails closed, is uncached, and has a bounded request lifetime.
+ * A 5xx, a failed request and an interrupted body retry through BACKOFF_MS;
+ * a 4xx or a body that is not JSON fails at once.
+ */
 async function apiGet(deps: ResolveDeps, url: URL): Promise<unknown> {
-  const response = await deps.fetchFn(url, {
-    method: "GET",
-    headers: {
-      accept: "application/vnd.github+json",
-      "x-github-api-version": "2022-11-28",
-      "cache-control": "no-cache",
-      authorization: `Bearer ${deps.env.GH_TOKEN}`,
-    },
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) throw new Error(`GitHub API read failed: HTTP ${response.status}`);
-  return response.json();
+  const sleep = deps.sleepFn ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  for (let attempt = 0; ; attempt += 1) {
+    const last = attempt === BACKOFF_MS.length;
+    let status: number;
+    try {
+      const response = await deps.fetchFn(url, {
+        method: "GET",
+        headers: {
+          accept: "application/vnd.github+json",
+          "x-github-api-version": "2022-11-28",
+          "cache-control": "no-cache",
+          authorization: `Bearer ${deps.env.GH_TOKEN}`,
+        },
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (response.ok) return await response.json();
+      status = response.status;
+    } catch (error) {
+      if (error instanceof SyntaxError || last) throw error;
+      await sleep(BACKOFF_MS[attempt] ?? 0);
+      continue;
+    }
+    if (status < 500 || last) throw new Error(`GitHub API read failed: HTTP ${status}`);
+    await sleep(BACKOFF_MS[attempt] ?? 0);
+  }
 }
 
 /** API-derived PR values only; no PR content is checked out or executed. */

@@ -34,6 +34,7 @@ function pr(headRepo = REPO, branch = "feature") {
 function harness(run = suite(), candidates: unknown[] = [pr()], current: unknown = candidates[0]) {
   const requests: URL[] = [];
   const headers: Headers[] = [];
+  const sleeps: number[] = [];
   const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input));
     requests.push(url);
@@ -47,10 +48,28 @@ function harness(run = suite(), candidates: unknown[] = [pr()], current: unknown
     throw new Error(`unexpected API request ${url}`);
   }) as typeof fetch;
   return {
-    deps: { env: { GITHUB_REPOSITORY: REPO, GH_TOKEN: "test-token", OVERFLOW_SUITE_RUN_ID: "123" }, fetchFn },
-    requests, headers,
+    deps: {
+      env: { GITHUB_REPOSITORY: REPO, GH_TOKEN: "test-token", OVERFLOW_SUITE_RUN_ID: "123" }, fetchFn,
+      sleepFn: async (ms: number) => { sleeps.push(ms); },
+    },
+    requests, headers, sleeps,
   };
 }
+
+function scriptRunReads(h: ReturnType<typeof harness>, outcomeFor: (attempt: number) => Response | Error | undefined) {
+  const original = h.deps.fetchFn;
+  let attempts = 0;
+  h.deps.fetchFn = async (input, init) => {
+    if (!new URL(String(input)).pathname.endsWith("/actions/runs/123")) return original(input, init);
+    const outcome = outcomeFor(attempts);
+    attempts += 1;
+    if (outcome instanceof Error) throw outcome;
+    return outcome ?? original(input, init);
+  };
+  return () => attempts;
+}
+
+const timedOut = () => new DOMException("The operation was aborted due to timeout", "TimeoutError");
 
 describe("suite run PR resolution", () => {
   it.each([[REPO, "feature"], ["fork/Overflow", "feature"], ["fork/Overflow", "main"]])(
@@ -229,5 +248,117 @@ describe("suite run PR resolution", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  describe("transient read failures", () => {
+    it.each([500, 502, 503, 504])("retries a %i read and resolves once it succeeds", async (status) => {
+      const h = harness();
+      const attempts = scriptRunReads(h, (n) => n === 0 ? new Response("unavailable", { status }) : undefined);
+      const result = await resolveSuitePullRequest(h.deps);
+      expect(result.exitCode).toBe(0);
+      expect(result.outputs).toEqual({ pr_number: "1183", head_sha: HEAD, base_sha: BASE, base_ref: "main" });
+      expect(attempts()).toBe(2);
+      expect(h.sleeps).toEqual([1_000]);
+    });
+
+    it("retries a timed-out read and resolves once it succeeds", async () => {
+      const h = harness();
+      const attempts = scriptRunReads(h, (n) => n === 0 ? timedOut() : undefined);
+      const result = await resolveSuitePullRequest(h.deps);
+      expect(result.exitCode).toBe(0);
+      expect(attempts()).toBe(2);
+      expect(h.sleeps).toEqual([1_000]);
+    });
+
+    it("retries a plain network failure and resolves once it succeeds", async () => {
+      const h = harness();
+      const attempts = scriptRunReads(h, (n) => n === 0 ? new TypeError("fetch failed") : undefined);
+      const result = await resolveSuitePullRequest(h.deps);
+      expect(result.exitCode).toBe(0);
+      expect(attempts()).toBe(2);
+      expect(h.sleeps).toEqual([1_000]);
+    });
+
+    it("bounds every request with an abort signal", async () => {
+      const h = harness();
+      const original = h.deps.fetchFn;
+      const signals: unknown[] = [];
+      h.deps.fetchFn = async (input, init) => {
+        signals.push(init?.signal);
+        return original(input, init);
+      };
+      expect((await resolveSuitePullRequest(h.deps)).exitCode).toBe(0);
+      expect(signals).toHaveLength(h.requests.length);
+      expect(signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
+    });
+
+    it("retries a body read that times out and resolves once it succeeds", async () => {
+      const h = harness();
+      const attempts = scriptRunReads(h, (n) => n === 0
+        ? Object.assign(new Response("{}", { status: 200 }), { json: async () => { throw timedOut(); } })
+        : undefined);
+      const result = await resolveSuitePullRequest(h.deps);
+      expect(result.exitCode).toBe(0);
+      expect(attempts()).toBe(2);
+      expect(h.sleeps).toEqual([1_000]);
+    });
+
+    it("fails a body whose parse throws a SyntaxError at once without retrying", async () => {
+      const h = harness();
+      const attempts = scriptRunReads(h, () =>
+        Object.assign(new Response("{}", { status: 200 }), { json: async () => { throw new SyntaxError("Unexpected token"); } }));
+      const result = await resolveSuitePullRequest(h.deps);
+      expect(result.exitCode).toBe(1);
+      expect(result.lines.join("\n")).toContain("Unexpected token");
+      expect(attempts()).toBe(1);
+      expect(h.sleeps).toEqual([]);
+    });
+
+    it.each([
+      ["5xx", () => new Response("unavailable", { status: 503 }), /::error::.*HTTP 503/],
+      ["timeout", timedOut, /::error::.*timeout/],
+    ])("fails after three attempts on a persistent %s", async (_label, failure, message) => {
+      const h = harness();
+      const attempts = scriptRunReads(h, failure);
+      const result = await resolveSuitePullRequest(h.deps);
+      expect(result.exitCode).toBe(1);
+      expect(result.outputs).toBeUndefined();
+      expect(result.lines.join("\n")).toMatch(message);
+      expect(attempts()).toBe(3);
+      expect(h.sleeps).toEqual([1_000, 2_000]);
+    });
+
+    it.each([401, 403, 404])("fails a %i read at once without retrying", async (status) => {
+      const h = harness();
+      const attempts = scriptRunReads(h, () => new Response("denied", { status }));
+      const result = await resolveSuitePullRequest(h.deps);
+      expect(result.exitCode).toBe(1);
+      expect(result.outputs).toBeUndefined();
+      expect(result.lines.join("\n")).toContain(`HTTP ${status}`);
+      expect(attempts()).toBe(1);
+      expect(h.sleeps).toEqual([]);
+    });
+
+    it("fails a malformed body at once without retrying", async () => {
+      const h = harness();
+      const attempts = scriptRunReads(h, () => new Response("{not json", { status: 200 }));
+      const result = await resolveSuitePullRequest(h.deps);
+      expect(result.exitCode).toBe(1);
+      expect(result.outputs).toBeUndefined();
+      expect(result.lines.some((line) => line.startsWith("::error::"))).toBe(true);
+      expect(attempts()).toBe(1);
+      expect(h.sleeps).toEqual([]);
+    });
+
+    it("still refuses a mismatched run after a retried read", async () => {
+      const h = harness({ ...suite(), id: 124 } as ReturnType<typeof suite>);
+      const attempts = scriptRunReads(h, (n) => n === 0 ? new Response("unavailable", { status: 502 }) : undefined);
+      const result = await resolveSuitePullRequest(h.deps);
+      expect(result.exitCode).toBe(1);
+      expect(result.outputs).toBeUndefined();
+      expect(result.lines.join("\n")).toMatch(/::error::.*does not match SUITE_RUN_ID/);
+      expect(attempts()).toBe(2);
+      expect(h.requests).toHaveLength(1);
+    });
   });
 });
