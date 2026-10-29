@@ -60,6 +60,19 @@ is_operational_ignored() {
   [[ "$1" != *$'\n'* ]] && printf '%s' "$1" | LC_ALL=C grep -Eq -- "$operational_ignored_re"
 }
 
+# The file's value in a subshell: a caller's export must not stand in for it
+# or be lost to later steps, nor set -u abort on it.
+env_file_skip_value() {
+  (
+    unset OVERFLOW_SKIP_STARTUP_RECONCILIATION
+    set +u
+    set -a
+    # shellcheck source=/dev/null
+    . "$env_file" >/dev/null
+    printf '%s' "${OVERFLOW_SKIP_STARTUP_RECONCILIATION-}"
+  )
+}
+
 # The map-refusal message's shared prefix, up to the clause each refusal
 # appends: every site below prints this with the SHA interpolated at its %s,
 # then its own clause. Hoisted so the four sites cannot drift apart in
@@ -637,9 +650,6 @@ if [ "$serving_release" != absent ] && [ -f "$serving_release/REVISION" ]; then
   fi
 fi
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
-# The unit sees the file, not this shell, so a caller's export must not stand in
-# for the file's line.
-unset OVERFLOW_SKIP_STARTUP_RECONCILIATION
 # The env file is operator input whose path is resolved at run time from
 # OVERFLOW_DEPLOY_ENV_FILE above, so there is no constant location for the
 # linter to follow it to; the directive below stops that chase rather than
@@ -685,7 +695,8 @@ chown -R overflow:overflow "$release/cache"
 chmod -R u=rwX,g=rX,o= "$release/cache"
 printf 'Previous build: %s\nNew build: %s\n' "$previous_release" "$release"
 pnpm release:switch "$tree" "$release" --expect-current "$expected_serving"
-case "${OVERFLOW_SKIP_STARTUP_RECONCILIATION-}" in
+skip_value=$(env_file_skip_value)
+case "$skip_value" in
   1)
     printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION=1 is set in %s; the immediate startup sweep will be skipped on this restart.\n' "$env_file"
     ;;
@@ -693,12 +704,12 @@ case "${OVERFLOW_SKIP_STARTUP_RECONCILIATION-}" in
     printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION is unset or blank in %s; the immediate startup sweep will run on this restart.\n' "$env_file"
     ;;
   *)
-    printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION=%q in %s is not exactly 1, so the immediate startup sweep will run on this restart.\n' "$OVERFLOW_SKIP_STARTUP_RECONCILIATION" "$env_file"
+    printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION=%q in %s is not exactly 1, so the immediate startup sweep will run on this restart.\n' "$skip_value" "$env_file"
     ;;
 esac
 systemctl restart "$unit"
 systemctl is-active "$unit"
-if [ "${OVERFLOW_SKIP_STARTUP_RECONCILIATION-}" = 1 ]; then
+if [ "$(env_file_skip_value)" = 1 ]; then
   printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION=1 is still set in %s; every later restart will also skip the immediate startup sweep until that line is removed.\n' "$env_file"
 fi
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
