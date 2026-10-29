@@ -65,7 +65,12 @@ function RulesSections() {
             </a>
             , which provides /claim, /unclaim and /release for any repository.
           </li>
-          <li>Apply the label and rationale comment within 15 minutes of merge.</li>
+          <li>
+            Between the closing pull request&apos;s final commit and fifteen minutes after its merge, put an
+            actual-catalog label on the issue, then a comment, to settle the work. The comment&apos;s wording is not
+            checked, but the label and the comment must both be the sponsor&apos;s, and the comment must not be edited
+            after the window closes.
+          </li>
         </ul>
       </section>
 
