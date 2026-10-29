@@ -20,6 +20,7 @@ const ACCOUNT_DATA = "src/app/account-data/page.tsx";
 const DISPUTES = "src/lib/disputes.ts";
 const SANCTIONS = "src/lib/sanctions.ts";
 const PROCESSING_ACTIVITIES = "src/lib/processing-activities.ts";
+const CONTROLLER_CONFIG = "src/lib/controller-config.ts";
 const WORK_MAIL_DISCLOSURE = "src/components/work-mail-disclosure.tsx";
 const GUARD = "src/lib/legal-revisions.ts";
 const GATE_SCRIPT = "scripts/check-legal-revisions.ts";
@@ -168,6 +169,15 @@ describe("legal revision gate", () => {
 
     expect(violations).toHaveLength(1);
     expect(violations[0]?.page).toBe(TERMS);
+  });
+
+  it("names a commit that renames the hosted controller without the guard file", () => {
+    // The account-data page renders HOSTED_CONTROLLER_NAME as the controller's name.
+    const violations = reviewCommits([
+      commit("sha-controller-name-only", [CONTROLLER_CONFIG]),
+    ]).violations;
+
+    expect(violations).toEqual([{ sha: "sha-controller-name-only", page: CONTROLLER_CONFIG }]);
   });
 });
 
@@ -689,6 +699,29 @@ describe("the gate's command line", () => {
     }
   });
 
+  it("exits 1 over a commit that changes only the hosted controller name", async () => {
+    const fixture = await createGateFixture();
+    try {
+      const controllerName = (name: string): string =>
+        `const HOSTED_CONTROLLER_NAME = "${name}";\n`;
+      const baseSha = await fixture.commit("base\n\nFixture base.\n", {
+        [CONTROLLER_CONFIG]: controllerName("the maintainer, personally"),
+      });
+
+      const headSha = await fixture.commit(
+        "rename the hosted controller\n\nOnly the HOSTED_CONTROLLER_NAME string changed.\n",
+        { [CONTROLLER_CONFIG]: controllerName("an association") },
+      );
+
+      const result = fixture.runGate(baseSha, headSha);
+
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toContain(`${CONTROLLER_CONFIG} changed in ${headSha}`);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it("exits 0 over a one-commit range and names the count and range correctly", async () => {
     // The success path through the real binary — a legal page and its revision
     // record landing in the SAME commit — and the success message's count and
@@ -1037,7 +1070,13 @@ describe("the gate's coverage of shared legal-text modules", () => {
     expect(
       sharedTextModules,
       "the first-class inventory must match every shared module supplying legal-page wording",
-    ).toEqual([DISPUTES, SANCTIONS, WORK_MAIL_DISCLOSURE, PROCESSING_ACTIVITIES]);
+    ).toEqual([
+      DISPUTES,
+      SANCTIONS,
+      WORK_MAIL_DISCLOSURE,
+      PROCESSING_ACTIVITIES,
+      CONTROLLER_CONFIG,
+    ]);
   });
 
   it("throws its explicit parse error for malformed shared-text inventory source", async () => {
