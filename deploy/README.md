@@ -943,6 +943,16 @@ the recurring sweep, queued work, webhook-triggered reconciliation and manual
 reconciliation running normally, but missed deliveries may remain unrecovered
 until a later reconciliation.
 
+`scripts/deploy-revision.sh` reads the environment file, not the deploy terminal,
+and says what it holds. Before the restart it prints one line: that the
+immediate startup sweep will be skipped when the file sets exactly `1`, or that
+it will run when the variable is unset or blank. Any other value, such as
+`true`, is named in that line as not exactly `1`, so an override that does not
+skip is visible before the restart. Once the service is active again, a file
+that still holds `1` is reported as still set, with a reminder that every later
+restart will skip the sweep until the line is removed. That reminder is the
+prompt for the removal below.
+
 After restart, verify the warning naming `OVERFLOW_SKIP_STARTUP_RECONCILIATION`
 in the service journal. An authenticated moderator can also read
 `GET /api/moderation/rederivation`: `startupRecoverySkipped` records whether

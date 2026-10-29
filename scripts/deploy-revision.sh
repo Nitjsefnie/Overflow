@@ -637,6 +637,9 @@ if [ "$serving_release" != absent ] && [ -f "$serving_release/REVISION" ]; then
   fi
 fi
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
+# The unit sees the file, not this shell, so a caller's export must not stand in
+# for the file's line.
+unset OVERFLOW_SKIP_STARTUP_RECONCILIATION
 # The env file is operator input whose path is resolved at run time from
 # OVERFLOW_DEPLOY_ENV_FILE above, so there is no constant location for the
 # linter to follow it to; the directive below stops that chase rather than
@@ -682,8 +685,22 @@ chown -R overflow:overflow "$release/cache"
 chmod -R u=rwX,g=rX,o= "$release/cache"
 printf 'Previous build: %s\nNew build: %s\n' "$previous_release" "$release"
 pnpm release:switch "$tree" "$release" --expect-current "$expected_serving"
+case "${OVERFLOW_SKIP_STARTUP_RECONCILIATION-}" in
+  1)
+    printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION=1 is set in %s; the immediate startup sweep will be skipped on this restart.\n' "$env_file"
+    ;;
+  '')
+    printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION is unset or blank in %s; the immediate startup sweep will run on this restart.\n' "$env_file"
+    ;;
+  *)
+    printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION=%q in %s is not exactly 1, so the immediate startup sweep will run on this restart.\n' "$OVERFLOW_SKIP_STARTUP_RECONCILIATION" "$env_file"
+    ;;
+esac
 systemctl restart "$unit"
 systemctl is-active "$unit"
+if [ "${OVERFLOW_SKIP_STARTUP_RECONCILIATION-}" = 1 ]; then
+  printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION=1 is still set in %s; every later restart will also skip the immediate startup sweep until that line is removed.\n' "$env_file"
+fi
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' "$url"
 # Sign-in smoke (issue 649): readiness certifies the database and the bundled
