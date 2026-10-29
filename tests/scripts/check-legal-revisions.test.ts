@@ -21,6 +21,7 @@ const DISPUTES = "src/lib/disputes.ts";
 const SANCTIONS = "src/lib/sanctions.ts";
 const PROCESSING_ACTIVITIES = "src/lib/processing-activities.ts";
 const CONTROLLER_CONFIG = "src/lib/controller-config.ts";
+const SWEEP_WINDOW = "src/lib/fold/sweep-window.ts";
 const WORK_MAIL_DISCLOSURE = "src/components/work-mail-disclosure.tsx";
 const GUARD = "src/lib/legal-revisions.ts";
 const GATE_SCRIPT = "scripts/check-legal-revisions.ts";
@@ -199,6 +200,13 @@ describe("legal revision gate", () => {
     ]).violations;
 
     expect(violations).toEqual([{ sha: "sha-controller-name-only", page: CONTROLLER_CONFIG }]);
+  });
+
+  it("names a commit that changes the default sweep window without the guard file", () => {
+    // The account-data page renders the sweep cadence from this module's default.
+    const violations = reviewCommits([commit("sha-sweep-window-only", [SWEEP_WINDOW])]).violations;
+
+    expect(violations).toEqual([{ sha: "sha-sweep-window-only", page: SWEEP_WINDOW }]);
   });
 });
 
@@ -743,6 +751,29 @@ describe("the gate's command line", () => {
     }
   });
 
+  it("exits 1 over a commit that changes only the default sweep window", async () => {
+    const fixture = await createGateFixture();
+    try {
+      const sweepWindow = (hours: number): string =>
+        `const SWEEP_WINDOW_MS = ${hours} * 60 * 60_000;\n`;
+      const baseSha = await fixture.commit("base\n\nFixture base.\n", {
+        [SWEEP_WINDOW]: sweepWindow(6),
+      });
+
+      const headSha = await fixture.commit(
+        "widen the sweep window\n\nOnly the SWEEP_WINDOW_MS default changed.\n",
+        { [SWEEP_WINDOW]: sweepWindow(12) },
+      );
+
+      const result = fixture.runGate(baseSha, headSha);
+
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toContain(`${SWEEP_WINDOW} changed in ${headSha}`);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it("exits 0 over a one-commit range and names the count and range correctly", async () => {
     // The success path through the real binary — a legal page and its revision
     // record landing in the SAME commit — and the success message's count and
@@ -1097,6 +1128,7 @@ describe("the gate's coverage of shared legal-text modules", () => {
       WORK_MAIL_DISCLOSURE,
       PROCESSING_ACTIVITIES,
       CONTROLLER_CONFIG,
+      SWEEP_WINDOW,
     ]);
   });
 

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { PublicAppShell } from "@/components/app-shell";
 import { HOSTED_INSTANCE_ORIGIN, HOSTED_ISSUES_URL, HOSTED_SENSITIVE_URL, readControllerIdentity } from "@/lib/controller-config";
-import { formatSweepWindow, readSweepWindowMs } from "@/lib/fold/sweep-request-budget";
+import { formatSweepWindow, readSweepWindowMs } from "@/lib/fold/sweep-window";
 import { ACCOUNT_DATA_REVISION } from "@/lib/legal-revisions";
 import { PROCESSING_ACTIVITIES } from "@/lib/processing-activities";
 import { SANCTION_EFFECT_RULES } from "@/lib/sanctions";
