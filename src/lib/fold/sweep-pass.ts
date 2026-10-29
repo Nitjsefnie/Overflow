@@ -11,6 +11,12 @@ export function readSweepPassPageCeiling(environment: Partial<Record<string, str
   return Number.isSafeInteger(value) && value > 0 ? value : DEFAULT_SWEEP_PASS_PAGE_CEILING;
 }
 
+export class StagedPassDataUnreadable extends Error {
+  public constructor() {
+    super("Staged sweep pass data is unreadable.");
+  }
+}
+
 export type SweepPass = {
   id: string;
   scanStartedAt: Date;
@@ -34,7 +40,19 @@ export type ReconciliationSweepControl = {
   spend(sponsorId: string, repositoryId: string): Promise<Date | null>;
   openPass(input: SweepPassInput): Promise<SweepPass>;
   discardPass(repositoryId: string): Promise<void>;
+  discardIfInactive?(repositoryId: string): Promise<void>;
 };
+/** Runs after coordination is released: an unregistration that committed during the run left no other disposal. */
+export async function discardInactivePassAfterFailure<T>(
+  sweep: ReconciliationSweepControl | undefined, repositoryId: string, coordinatedRun: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await coordinatedRun();
+  } catch (error) {
+    try { await sweep?.discardIfInactive?.(repositoryId); } catch { console.error("Could not discard reconciliation sweep checkpoints."); }
+    throw error;
+  }
+}
 const passes = new AsyncLocalStorage<SweepPass>();
 const freshReads = new AsyncLocalStorage<boolean>();
 export function withSweepPass<T>(pass: SweepPass | undefined, work: () => Promise<T>): Promise<T> {

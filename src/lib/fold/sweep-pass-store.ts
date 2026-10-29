@@ -5,6 +5,7 @@ import { getSql } from "@/lib/db/client";
 import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import type { DirtyReconciliationSubject } from "@/lib/fold/reconciliation-evidence";
 import { readSweepPassPageCeiling, type SweepPass, type SweepPassInput } from "@/lib/fold/sweep-pass";
+import { isDirtySubjects } from "@/lib/fold/staged-pass-data";
 
 type PassRow = { pass_id: string; scan_started_at: Date; dirty_subjects: DirtyReconciliationSubject[]; walk_anchors: unknown };
 type WalkAnchors = Record<string, { updatedAt: Date; key: number }>;
@@ -40,6 +41,15 @@ export class PostgresSweepPassStore {
     if (lock?.acquired === true) await this.discardByRepository(repositoryId, transaction);
   }
 
+  /** Reading the row FOR SHARE waits out an in-flight unregistration; discardIfIdle only tries the advisory lock, so it never waits while the row is held. */
+  public async discardIfInactive(repositoryId: string): Promise<void> {
+    await this.sql.begin(async (transaction) => {
+      const [row] = await transaction<{ active: boolean }[]>`select active from registered_repositories
+        where id = ${repositoryId} for share`;
+      if (row?.active !== true) await this.discardIfIdle(repositoryId, transaction);
+    });
+  }
+
   public async open(input: SweepPassInput): Promise<SweepPass> {
     let pageCount = 0;
     let writes = Promise.resolve();
@@ -48,6 +58,12 @@ export class PostgresSweepPassStore {
       // means an incremental publication superseded this snapshot; restart it.
       await transaction`delete from reconciliation_sweep_passes where repository_id = ${input.repositoryId}
         and evidence_version is distinct from ${input.evidenceVersion}`;
+      // The open caller has no pass to discard yet, so a pass whose own dirty subjects are unreadable is restarted here.
+      const [stored] = await transaction<{ dirty_subjects: unknown }[]>`select dirty_subjects
+        from reconciliation_sweep_passes where repository_id = ${input.repositoryId}`;
+      if (stored !== undefined && !isDirtySubjects(stored.dirty_subjects)) {
+        await transaction`delete from reconciliation_sweep_passes where repository_id = ${input.repositoryId}`;
+      }
       await transaction`insert into reconciliation_sweep_passes
         (repository_id, pass_id, scan_started_at, evidence_version, dirty_subjects)
         values (${input.repositoryId}, ${randomUUID()}, ${input.scanStartedAt}, ${input.evidenceVersion}, ${transaction.json(input.dirtySubjects)})

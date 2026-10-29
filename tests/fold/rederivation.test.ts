@@ -96,36 +96,45 @@ describe("repository re-derivation", () => {
     // Inactive repositories complete without a real GitHub client or token.
     const repository = await store.getRepository("repo-1");
     store.getRepository.mockResolvedValue({ ...repository!, active: false });
-    const startWorker = vi.fn();
     const discardPass = vi.fn(async () => {});
-    vi.doMock("@/lib/fold/sweep-pass-store", () => ({ PostgresSweepPassStore: class {
-      open = async () => { throw new Error("Inactive reconciliation must not open a pass."); };
-      discardByRepository = discardPass;
-    } }));
-    vi.doMock("@/lib/db/client", async (importActual) => ({
-      ...await importActual<typeof import("@/lib/db/client")>(),
-      getSql: vi.fn(), getCoordinationSql: vi.fn(),
-    }));
-    vi.doMock("@/lib/fold/postgres-store", () => ({ PostgresFoldStore: class { constructor() { return store; } } }));
-    vi.doMock("@/lib/fold/reconciliation-worker", async (importActual) => ({
-      ...await importActual<typeof import("@/lib/fold/reconciliation-worker")>(),
-      startReconciliationWorker: startWorker,
-    }));
-    vi.doMock("@/lib/fold/sweep", () => ({ shouldStartReconciliationBackground: () => true, startReconciliationSweep: vi.fn() }));
-    vi.doMock("@/lib/fold/abandoned-runs", () => ({ finalizeAbandonedRuns: vi.fn().mockResolvedValue({ finalized: 0, skippedLocked: 0 }) }));
-    vi.spyOn(console, "info").mockImplementation(() => {});
-    // register() checks the runtime literally, before any mocked predicate is
-    // reachable, so the test presents the Node.js runtime it wires for.
-    vi.stubEnv("NEXT_RUNTIME", "nodejs");
-    vi.resetModules();
-    const { register } = await import("@/instrumentation");
-    await register();
-    await startWorker.mock.calls[0][0].drain();
+    await drainThroughWorkerWiring(store, { open: async () => { throw new Error("Inactive reconciliation must not open a pass."); }, discardByRepository: discardPass });
     expect(discardPass).toHaveBeenCalledExactlyOnceWith("repo-1");
     expect(store.beginRun).toHaveBeenCalledExactlyOnceWith("repo-1", { rederivation: true });
     expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1);
   });
+
+  it("settles an inactive repository's pass through the production wiring when the run fails", async () => {
+    const { store } = fixture(requestedAt);
+    store.beginRun.mockRejectedValue(new Error("begin failed"));
+    const discardIfInactive = vi.fn(async () => {});
+    await drainThroughWorkerWiring(store, { discardIfInactive });
+    expect(discardIfInactive).toHaveBeenCalledExactlyOnceWith("repo-1");
+  });
 });
+
+async function drainThroughWorkerWiring(store: ReturnType<typeof fixture>["store"], passes: Record<string, unknown>) {
+  const startWorker = vi.fn();
+  vi.doMock("@/lib/fold/sweep-pass-store", () => ({ PostgresSweepPassStore: class { constructor() { Object.assign(this, { open: async () => undefined, discardByRepository: async () => {}, discardIfInactive: async () => {} }, passes); } } }));
+  vi.doMock("@/lib/db/client", async (importActual) => ({
+    ...await importActual<typeof import("@/lib/db/client")>(),
+    getSql: vi.fn(), getCoordinationSql: vi.fn(),
+  }));
+  vi.doMock("@/lib/fold/postgres-store", () => ({ PostgresFoldStore: class { constructor() { return store; } } }));
+  vi.doMock("@/lib/fold/reconciliation-worker", async (importActual) => ({
+    ...await importActual<typeof import("@/lib/fold/reconciliation-worker")>(),
+    startReconciliationWorker: startWorker,
+  }));
+  vi.doMock("@/lib/fold/sweep", () => ({ shouldStartReconciliationBackground: () => true, startReconciliationSweep: vi.fn() }));
+  vi.doMock("@/lib/fold/abandoned-runs", () => ({ finalizeAbandonedRuns: vi.fn().mockResolvedValue({ finalized: 0, skippedLocked: 0 }) }));
+  vi.spyOn(console, "info").mockImplementation(() => {});
+  // register() checks the runtime literally, before any mocked predicate is
+  // reachable, so the test presents the Node.js runtime it wires for.
+  vi.stubEnv("NEXT_RUNTIME", "nodejs");
+  vi.resetModules();
+  const { register } = await import("@/instrumentation");
+  await register();
+  await startWorker.mock.calls[0][0].drain();
+}
 
 function fixture(request: Date | null = null, attemptCount = 1) {
   const store = {
