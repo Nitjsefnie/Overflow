@@ -17,6 +17,7 @@ import { withGraphqlFoldCost } from "@/lib/github/graphql-cost";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
 import { errorLogToken } from "@/lib/webhooks/log-field";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
+import { RECONCILIATION_FULL_REPAIR_MS } from "@/lib/fold/full-repair-interval";
 import { ForgeCredentialRejectedError } from "@/lib/forge/gateway";
 import { sanitizeForgeStrings } from "@/lib/forge/sanitize-forge-strings";
 import { redactPostgresError } from "@/lib/db/redact-postgres-error";
@@ -43,7 +44,6 @@ import type {
 // reviews, then dismissals, then fetches its diff, one request at a time.
 const reconciliationConcurrency = 4;
 const reconciliationOverlapMs = 60_000;
-const reconciliationFullRepairMs = 6 * 60 * 60_000;
 
 export { DEFAULT_RECONCILIATION_COOLDOWN_SECONDS } from "@/lib/github/errors";
 
@@ -343,7 +343,7 @@ async function reconcileRepositoryAfterRepositoryRead(
         }
 
         const full = allowsFull && (options?.reason === "SWEEP" || unsafeCache || rederive
-          || scanStartedAt.getTime() - cached!.lastFullPassAt.getTime() >= reconciliationFullRepairMs);
+          || scanStartedAt.getTime() - cached!.lastFullPassAt.getTime() >= RECONCILIATION_FULL_REPAIR_MS);
 
         pass = full && budgetBound && dependencies.sweep !== undefined
           ? await dependencies.sweep.openPass({ repositoryId,
