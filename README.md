@@ -24,7 +24,7 @@ The repository owner or a collaborator with label rights applies the label `over
 
 1. A repository sponsor puts a price on an issue with an opening label.
 2. An outside contributor does the work and opens a pull request that closes the issue.
-3. Between the closing PR's final commit and fifteen minutes after its merge, the sponsor puts an actual-catalog label on the issue, then a comment, to settle the work. The comment's wording is not checked, but the label and the comment must both be the sponsor's, and the comment must not be edited after the window closes.
+3. Between the closing PR's final commit and fifteen minutes after its merge, the sponsor puts an actual-catalog label on the issue, then a comment, to settle the work. The comment must be nonblank, but its wording is not checked; the label and the comment must both be the sponsor's, and the comment must not be edited after the window closes.
 4. The PR merges. The contributor's account is credited and the sponsor's is debited.
 
 **Credit earned in their tracker can pay for work in yours.** Each repository chooses its labels. Its two catalogs map them to points on the shared 1–10 scale.

@@ -78,6 +78,6 @@ export const ACCOUNT_DATA_REVISION: LegalRevision = {
 // page, not only on the notice that points at it.
 export const RULES_REVISION: LegalRevision = {
   document: "rules",
-  version: "1.5",
+  version: "1.6",
   effectiveDate: "2026-10-29",
 };
