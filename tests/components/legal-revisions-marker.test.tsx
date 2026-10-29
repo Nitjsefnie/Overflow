@@ -250,12 +250,12 @@ describe("legal revision markers", () => {
     // bump and the pin it trips arrive in the same diff.
     expect(TERMS_REVISION.version).toBe("1.3");
     expect(ACCOUNT_DATA_REVISION.version).toBe("1.17");
-    expect(RULES_REVISION.version).toBe("1.4");
+    expect(RULES_REVISION.version).toBe("1.5");
   });
 
-  it("dates the balance-guarantee terms revision and the donation rules revision from when they take effect", () => {
+  it("dates the balance-guarantee terms revision and the settlement-window rules revision from when they take effect", () => {
     expect(TERMS_REVISION.effectiveDate).toBe("2026-10-23");
-    expect(RULES_REVISION.effectiveDate).toBe("2026-10-28");
+    expect(RULES_REVISION.effectiveDate).toBe("2026-10-29");
   });
 });
 
