@@ -61,15 +61,19 @@ is_operational_ignored() {
 }
 
 # The file's value in a subshell: a caller's export must not stand in for it
-# or be lost to later steps, nor set -u abort on it.
+# or be lost to later steps, nor set -u abort on it. A read that ends before
+# the value is printed fails, so an empty value means unset or blank.
 env_file_skip_value() {
+  [ -f "$env_file" ] && [ -r "$env_file" ] || return
   (
+    trap 'exit 1' EXIT
     unset OVERFLOW_SKIP_STARTUP_RECONCILIATION
     set +u
     set -a
     # shellcheck source=/dev/null
     . "$env_file" >/dev/null
     printf '%s' "${OVERFLOW_SKIP_STARTUP_RECONCILIATION-}"
+    trap - EXIT
   )
 }
 
@@ -695,21 +699,26 @@ chown -R overflow:overflow "$release/cache"
 chmod -R u=rwX,g=rX,o= "$release/cache"
 printf 'Previous build: %s\nNew build: %s\n' "$previous_release" "$release"
 pnpm release:switch "$tree" "$release" --expect-current "$expected_serving"
-skip_value=$(env_file_skip_value)
-case "$skip_value" in
-  1)
-    printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION=1 is set in %s; the immediate startup sweep will be skipped on this restart.\n' "$env_file"
-    ;;
-  '')
-    printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION is unset or blank in %s; the immediate startup sweep will run on this restart.\n' "$env_file"
-    ;;
-  *)
-    printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION=%q in %s is not exactly 1, so the immediate startup sweep will run on this restart.\n' "$skip_value" "$env_file"
-    ;;
-esac
+if ! skip_value=$(env_file_skip_value); then
+  printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION could not be read from %s; whether the immediate startup sweep is skipped on this restart is unknown.\n' "$env_file"
+else
+  case "$skip_value" in
+    1)
+      printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION=1 is set in %s; the immediate startup sweep will be skipped on this restart.\n' "$env_file"
+      ;;
+    '')
+      printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION is unset or blank in %s; the immediate startup sweep will run on this restart.\n' "$env_file"
+      ;;
+    *)
+      printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION=%q in %s is not exactly 1, so the immediate startup sweep will run on this restart.\n' "$skip_value" "$env_file"
+      ;;
+  esac
+fi
 systemctl restart "$unit"
 systemctl is-active "$unit"
-if [ "$(env_file_skip_value)" = 1 ]; then
+if ! skip_value=$(env_file_skip_value); then
+  printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION could not be read from %s; whether every later restart will skip the immediate startup sweep is unknown.\n' "$env_file"
+elif [ "$skip_value" = 1 ]; then
   printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION=1 is still set in %s; every later restart will also skip the immediate startup sweep until that line is removed.\n' "$env_file"
 fi
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \

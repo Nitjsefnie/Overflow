@@ -15,17 +15,35 @@ afterEach(cleanupLiveFixture);
 const KEY = "OVERFLOW_SKIP_STARTUP_RECONCILIATION";
 const MARKER = "OVERFLOW_FIXTURE_ENV_MARKER=loaded\n";
 
+// A string is the file's new content; a command runs in the stub instead.
+type Rewrite = string | { run: string };
+
 interface Rewrites {
-  afterSwitch?: string;
-  afterActive?: string;
+  afterSwitch?: Rewrite;
+  afterActive?: Rewrite;
 }
+
+const ENV_FILE = '"$OVERFLOW_DEPLOY_ENV_FILE"';
+const REMOVED = { run: `rm ${ENV_FILE}` };
+const A_DIRECTORY = { run: `rm ${ENV_FILE} && mkdir ${ENV_FILE}` };
+const UNREADABLE = { run: `command -p chmod 000 ${ENV_FILE}` };
+const RESTORED = { run: `rm -rf ${ENV_FILE}; echo ${KEY}=1 > ${ENV_FILE}` };
+
+const unreadableBefore = (envFile: string) =>
+  `${KEY} could not be read from ${envFile}; whether the immediate startup sweep is skipped on this restart is unknown.`;
+const unreadableAfter = (envFile: string) =>
+  `${KEY} could not be read from ${envFile}; whether every later restart will skip the immediate startup sweep is unknown.`;
+const skipBefore = (envFile: string) =>
+  `${KEY}=1 is set in ${envFile}; the immediate startup sweep will be skipped on this restart.`;
+const stillSet = (envFile: string) =>
+  `${KEY}=1 is still set in ${envFile}; every later restart will also skip the immediate startup sweep until that line is removed.`;
 
 // The stubs rewrite the env file when the deploy reaches release:switch or the is-active check.
 async function deployWith(fileLines: string, callerEnv: Record<string, string> = {}, rewrites: Rewrites = {}) {
   const fixture = await makeFixture();
   await appendFile(fixture.envFile, fileLines);
   const rewrite = (name: string) =>
-    `if [ -n "\${${name}+x}" ]; then printf '%s' "$${name}" > "$OVERFLOW_DEPLOY_ENV_FILE"; fi\n`;
+    `if [ -n "\${${name}+x}" ]; then case "$${name}" in '!'*) eval "\${${name}#!}";; *) printf '%s' "$${name}" > "$OVERFLOW_DEPLOY_ENV_FILE";; esac; fi\n`;
   const shims: Record<string, string> = {
     systemctl: shimBody("systemctl", [], `
 if [ "$1" = is-active ]; then ${rewrite("SHIM_AFTER_ACTIVE")}fi
@@ -41,8 +59,9 @@ exit 0
     await chmod(path.join(fixture.bins, name), 0o755);
   }
   const hookEnv: Record<string, string> = {};
-  if (rewrites.afterSwitch !== undefined) hookEnv.SHIM_AFTER_SWITCH = MARKER + rewrites.afterSwitch;
-  if (rewrites.afterActive !== undefined) hookEnv.SHIM_AFTER_ACTIVE = MARKER + rewrites.afterActive;
+  const hookValue = (rewrite: Rewrite) => (typeof rewrite === "string" ? MARKER + rewrite : `!${rewrite.run}`);
+  if (rewrites.afterSwitch !== undefined) hookEnv.SHIM_AFTER_SWITCH = hookValue(rewrites.afterSwitch);
+  if (rewrites.afterActive !== undefined) hookEnv.SHIM_AFTER_ACTIVE = hookValue(rewrites.afterActive);
   const result = await runDeploy(fixture, { ...callerEnv, ...hookEnv }, { omitShims: Object.keys(shims) });
   expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
   const lines = result.stdout.split("\n");
@@ -190,6 +209,54 @@ describe("scripts/deploy-revision.sh — the startup-sweep override", () => {
       `${KEY}=1 is set in ${fixture.envFile}; the immediate startup sweep will be skipped on this restart.`,
       `${KEY}=1 is still set in ${fixture.envFile}; every later restart will also skip the immediate startup sweep until that line is removed.`,
     ]);
+  });
+
+  const FAILED_READS: [string, Rewrite][] = [
+    ["exits non-zero", "exit 37\n"],
+    ["exits 0 after setting the variable", `${KEY}=1\nexit 0\n`],
+    ["defines a printf that exits 0", `printf() { exit 0; }\n${KEY}=1\n`],
+    ["is removed", REMOVED],
+    ["is replaced by a directory", A_DIRECTORY],
+  ];
+
+  it("restarts and reports the file as unreadable at both reports when it exits non-zero on its second source", async () => {
+    const { fixture, lines, restartAt, activeAt, mentions } = await deployWith(
+      `${KEY}=1\nmkdir "$OVERFLOW_DEPLOY_ENV_FILE.once" || exit 37\n`,
+    );
+    expect(restartAt).toBeGreaterThan(-1);
+    expect(mentions).toEqual([unreadableBefore(fixture.envFile), unreadableAfter(fixture.envFile)]);
+    expect(lines.indexOf(mentions[0]!)).toBeLessThan(restartAt);
+    expect(lines.indexOf(mentions[1]!)).toBeGreaterThan(activeAt);
+  });
+
+  it("restarts and reports the file as unreadable at both reports when it defines an unset that exits 0", async () => {
+    const { fixture, restartAt, mentions } = await deployWith(`unset() { exit 0; }\n${KEY}=1\n`);
+    expect(restartAt).toBeGreaterThan(-1);
+    expect(mentions).toEqual([unreadableBefore(fixture.envFile), unreadableAfter(fixture.envFile)]);
+  });
+
+  it.each(FAILED_READS)("restarts and announces the file as unreadable when it %s after it was first read", async (_label, failure) => {
+    const { fixture, lines, stderr, restartAt, mentions } = await deployWith(`${KEY}=1\n`, {}, { afterSwitch: failure, afterActive: RESTORED });
+    expect(restartAt).toBeGreaterThan(-1);
+    expect(mentions).toEqual([unreadableBefore(fixture.envFile), stillSet(fixture.envFile)]);
+    expect(lines.indexOf(mentions[0]!)).toBeLessThan(restartAt);
+    expect(stderr).not.toMatch(/No such file or directory|is a directory/);
+  });
+
+  it.each(FAILED_READS)("reports the file as unreadable after the restart when it %s once the service is active", async (_label, failure) => {
+    const { fixture, lines, activeAt, mentions } = await deployWith(`${KEY}=1\n`, {}, { afterActive: failure });
+    expect(mentions).toEqual([skipBefore(fixture.envFile), unreadableAfter(fixture.envFile)]);
+    expect(lines.indexOf(mentions[1]!)).toBeGreaterThan(activeAt);
+  });
+
+  it.skipIf(process.getuid?.() === 0)("reports a file that is present but not readable as unreadable", async () => {
+    const { fixture, mentions } = await deployWith(`${KEY}=1\n`, {}, { afterSwitch: UNREADABLE });
+    expect(mentions).toEqual([unreadableBefore(fixture.envFile), unreadableAfter(fixture.envFile)]);
+  });
+
+  it("reports the value of a file that fails a command when the main shell has inherit_errexit set", async () => {
+    const { fixture, mentions } = await deployWith("shopt -s inherit_errexit\n", {}, { afterSwitch: `${KEY}=1\nfalse\n` });
+    expect(mentions).toEqual([skipBefore(fixture.envFile), stillSet(fixture.envFile)]);
   });
 
   it("is described beside the override in deploy/README.md", async () => {
