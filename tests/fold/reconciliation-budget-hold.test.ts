@@ -1166,6 +1166,48 @@ describe("the sweep request budget binds only the folds that run under it", () =
   });
 });
 
+function setThresholdVariablesForSuite(prefixed: string | undefined, bare: string | undefined) {
+  let originalPrefixedThreshold: string | undefined;
+  let originalBareThreshold: string | undefined;
+  beforeAll(() => {
+    originalPrefixedThreshold = process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG;
+    originalBareThreshold = process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
+    if (prefixed === undefined) delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = prefixed;
+    if (bare === undefined) delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = bare;
+  });
+  afterAll(() => {
+    if (originalPrefixedThreshold === undefined) delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = originalPrefixedThreshold;
+    if (originalBareThreshold === undefined) delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = originalBareThreshold;
+  });
+}
+
+function removeThresholdVariablesForSuite() {
+  setThresholdVariablesForSuite(undefined, undefined);
+}
+
+describe.each([
+  { start: "both set to different values", prefixed: "7", bare: "11" },
+  { start: "both set to empty strings", prefixed: "", bare: "" },
+  { start: "only the prefixed name set", prefixed: "7", bare: undefined },
+  { start: "only the bare name set", prefixed: undefined, bare: "11" },
+  { start: "both absent", prefixed: undefined, bare: undefined },
+])("removing the diff-only threshold variables for a suite, starting with $start", ({ prefixed, bare }) => {
+  setThresholdVariablesForSuite(prefixed, bare);
+
+  describe("the suite", () => {
+    removeThresholdVariablesForSuite();
+    it("runs with neither name present", () => {
+      expect(process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG).toBeUndefined();
+      expect(process.env.RECONCILIATION_DIFF_ONLY_BACKLOG).toBeUndefined();
+    });
+  });
+
+  it("leaves each name as the suite found it", () => {
+    expect(process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG).toBe(prefixed);
+    expect(process.env.RECONCILIATION_DIFF_ONLY_BACKLOG).toBe(bare);
+  });
+});
+
 describe("a diff-only repository's re-derivation re-derives under the sweep request budget", () => {
   /**
    * Item 5a of the diff-only reconciliation plan: a REDERIVATION job of a
@@ -1181,19 +1223,10 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
   // DEFAULT_DIFF_ONLY_BACKLOG, and one over it: over runs full and charged, at
   // or under stays incremental and uncharged. The fold's read resolves the
   // prefixed name first, so a value exported in the shell would replace the
-  // default: remove both names here and restore them below so the outcome does
+  // default: remove both names here and restore them afterwards so the outcome does
   // not depend on the environment, and the legs follow the default.
   const overThreshold = DEFAULT_DIFF_ONLY_BACKLOG + 1;
-  const originalPrefixedThreshold = process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG;
-  const originalBareThreshold = process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
-  beforeAll(() => {
-    delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG;
-    delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
-  });
-  afterAll(() => {
-    if (originalPrefixedThreshold === undefined) delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = originalPrefixedThreshold;
-    if (originalBareThreshold === undefined) delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = originalBareThreshold;
-  });
+  removeThresholdVariablesForSuite();
 
   function safeEvidence() {
     return {
