@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_DIFF_ONLY_BACKLOG,
   PostgresRepositorySizeStore,
@@ -186,16 +186,31 @@ describe("the sweep's repository size measure", () => {
   });
 });
 
+const thresholdVariables = { OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG: "7", RECONCILIATION_DIFF_ONLY_BACKLOG: "11" };
+const thresholdVariablesFound = Object.fromEntries(Object.keys(thresholdVariables).map((name) => [name, process.env[name]]));
+
+function recordingSizeStore(backlogs: ReadonlyMap<string, number>) {
+  const store = memorySizeStore(new Map(), backlogs);
+  const reads: Record<string, number | null> = {};
+  return { reads, store: { ...store, getSponsorBacklog: async (sponsorId: string) => (reads[sponsorId] = await store.getSponsorBacklog(sponsorId)) } };
+}
+
 describe("the sweep's diff-only rotation filter", () => {
-  const thresholdVariables = ["OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG", "RECONCILIATION_DIFF_ONLY_BACKLOG"];
+  beforeAll(() => {
+    for (const [name, seeded] of Object.entries(thresholdVariables)) vi.stubEnv(name, seeded);
+  });
+  afterAll(() => { vi.unstubAllEnvs(); });
 
   beforeEach(() => {
-    for (const name of thresholdVariables) {
+    for (const [name, seeded] of Object.entries(thresholdVariables)) {
+      expect(process.env[name]).toBe(seeded);
       vi.stubEnv(name, undefined);
       expect(Object.hasOwn(process.env, name)).toBe(false);
     }
   });
-  afterEach(() => { vi.unstubAllEnvs(); });
+  afterEach(() => {
+    for (const [name, seeded] of Object.entries(thresholdVariables)) vi.stubEnv(name, seeded);
+  });
 
   /**
    * Item 4 of the diff-only reconciliation plan: a sponsor whose stored backlog
@@ -207,8 +222,7 @@ describe("the sweep's diff-only rotation filter", () => {
   it("offers a sponsor over the backlog threshold no slot and still rotates an under-threshold sponsor", async () => {
     const offered: string[] = [];
     const slots: Array<{ sponsorId: string; repositoryIds: readonly string[] }> = [];
-    const sizeStore = memorySizeStore(new Map(), new Map([["sponsor-over", DEFAULT_DIFF_ONLY_BACKLOG + 1], ["sponsor-under", DEFAULT_DIFF_ONLY_BACKLOG - 1]]));
-    expect(await Promise.all(["sponsor-over", "sponsor-under"].map(async (id) => (await sizeStore.getSponsorBacklog(id))! - DEFAULT_DIFF_ONLY_BACKLOG))).toEqual([1, -1]);
+    const { reads, store } = recordingSizeStore(new Map([["sponsor-over", DEFAULT_DIFF_ONLY_BACKLOG + 1], ["sponsor-under", DEFAULT_DIFF_ONLY_BACKLOG - 1]]));
     const summary = await sweepReconciliations({
       listActiveRepositorySponsors: async () => [
         { repositoryId: "d1", sponsorId: "sponsor-over" },
@@ -222,19 +236,19 @@ describe("the sweep's diff-only rotation filter", () => {
       } },
       enqueue: async (id) => { offered.push(id); },
       now: () => at,
-      sizeStore,
+      sizeStore: store,
     });
     // The over-threshold sponsor's whole group is filtered, so its round is
     // never touched: the tick spends no slot on a repository it must not queue.
     expect(slots).toEqual([{ sponsorId: "sponsor-under", repositoryIds: ["u1"] }]);
     expect(offered).toEqual(["u1"]);
     expect(summary).toEqual({ attempted: 1, enqueued: 1, failed: 0 });
+    expect(Object.fromEntries(Object.entries(reads).map(([id, backlog]) => [id, backlog! - DEFAULT_DIFF_ONLY_BACKLOG]))).toEqual({ "sponsor-over": 1, "sponsor-under": -1 });
   });
 
   it("keeps a sponsor at exactly the threshold in the rotation, since only a greater backlog is diff-only", async () => {
     const slots: string[] = [];
-    const sizeStore = memorySizeStore(new Map(), new Map([["sponsor-at", DEFAULT_DIFF_ONLY_BACKLOG]]));
-    expect(await sizeStore.getSponsorBacklog("sponsor-at")).toBe(DEFAULT_DIFF_ONLY_BACKLOG);
+    const { reads, store } = recordingSizeStore(new Map([["sponsor-at", DEFAULT_DIFF_ONLY_BACKLOG]]));
     await sweepReconciliations({
       listActiveRepositorySponsors: async () => [{ repositoryId: "r", sponsorId: "sponsor-at" }],
       round: { enqueueNext: async (sponsorId, _ids, _now, _limit, enqueue) => {
@@ -244,9 +258,10 @@ describe("the sweep's diff-only rotation filter", () => {
       } },
       enqueue: async () => undefined,
       now: () => at,
-      sizeStore,
+      sizeStore: store,
     });
     expect(slots).toEqual(["sponsor-at"]);
+    expect(reads).toEqual({ "sponsor-at": DEFAULT_DIFF_ONLY_BACKLOG });
   });
 
   it("resolves the documented OVERFLOW_-prefixed threshold variable through the production sweep", async () => {
@@ -277,8 +292,7 @@ describe("the sweep's diff-only rotation filter", () => {
 
   it("filters the unpaced sweep too, so both sweep shapes skip a diff-only sponsor", async () => {
     const enqueued: string[] = [];
-    const sizeStore = memorySizeStore(new Map(), new Map([["sponsor-over", DEFAULT_DIFF_ONLY_BACKLOG + 1], ["sponsor-under", DEFAULT_DIFF_ONLY_BACKLOG - 1]]));
-    expect(await Promise.all(["sponsor-over", "sponsor-under"].map(async (id) => (await sizeStore.getSponsorBacklog(id))! - DEFAULT_DIFF_ONLY_BACKLOG))).toEqual([1, -1]);
+    const { reads, store } = recordingSizeStore(new Map([["sponsor-over", DEFAULT_DIFF_ONLY_BACKLOG + 1], ["sponsor-under", DEFAULT_DIFF_ONLY_BACKLOG - 1]]));
     await sweepReconciliations({
       listActiveRepositorySponsors: async () => [
         { repositoryId: "d", sponsorId: "sponsor-over" },
@@ -286,9 +300,10 @@ describe("the sweep's diff-only rotation filter", () => {
       ],
       enqueue: async (id) => { enqueued.push(id); },
       now: () => at,
-      sizeStore,
+      sizeStore: store,
     });
     expect(enqueued).toEqual(["u"]);
+    expect(Object.fromEntries(Object.entries(reads).map(([id, backlog]) => [id, backlog! - DEFAULT_DIFF_ONLY_BACKLOG]))).toEqual({ "sponsor-over": 1, "sponsor-under": -1 });
   });
 
   it("still measures every repository, including an excluded sponsor's, so the decision reads fresh sizes", async () => {
@@ -311,6 +326,10 @@ describe("the sweep's diff-only rotation filter", () => {
     // measure would silently return it to the rotation.
     expect(measured).toEqual(["d", "u"]);
   });
+});
+
+it("leaves both threshold names as the file found them", () => {
+  for (const [name, value] of Object.entries(thresholdVariablesFound)) expect(process.env[name]).toBe(value);
 });
 
 describe("a repository the forge no longer returns", () => {
