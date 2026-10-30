@@ -1,7 +1,7 @@
 import { rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { resolveSuitePullRequest } from "../../scripts/resolve-suite-pull-request.ts";
 
@@ -69,6 +69,7 @@ function scriptRunReads(h: ReturnType<typeof harness>, outcomeFor: (attempt: num
   return () => attempts;
 }
 
+const CANCEL_TIMEOUT_MS = 30_000;
 const timedOut = () => new DOMException("The operation was aborted due to timeout", "TimeoutError");
 
 function rejectedReads(h: ReturnType<typeof harness>, status: number, rejections: number, cancelFailure?: Error) {
@@ -87,6 +88,21 @@ function rejectedReads(h: ReturnType<typeof harness>, status: number, rejections
     }), { status });
   });
   return events;
+}
+
+function rejectedWithBody(h: ReturnType<typeof harness>, status: number, rejections: number, body: () => unknown) {
+  return scriptRunReads(h, (n) => n >= rejections
+    ? undefined
+    : Object.defineProperty(new Response(null, { status }), "body", { get: body }));
+}
+
+async function withFakeTimers(run: () => Promise<void>) {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    await run();
+  } finally {
+    vi.useRealTimers();
+  }
 }
 
 describe("suite run PR resolution", () => {
@@ -410,5 +426,69 @@ describe("suite run PR resolution", () => {
         expect(h.sleeps).toEqual(expectedSleeps);
       },
     );
+
+    describe.each([
+      ["a body getter that throws", () => { throw new Error("body getter failed"); }],
+      ["a cancel that throws synchronously", () => ({ cancel() { throw new Error("cancel threw"); } })],
+      ["a body without a cancel method", () => ({})],
+    ])("rejected response with %s", (_label, body) => {
+      it.each([[503, 3, [1_000, 2_000]], [404, 1, []]])(
+        "is reported as the HTTP %i failure after %i attempt(s)",
+        async (status, expectedAttempts, expectedSleeps) => {
+          const h = harness();
+          const attempts = rejectedWithBody(h, status, 3, body);
+          const result = await resolveSuitePullRequest(h.deps);
+          expect(result).toEqual({ exitCode: 1, lines: [`::error::GitHub API read failed: HTTP ${status}`] });
+          expect(attempts()).toBe(expectedAttempts);
+          expect(h.sleeps).toEqual(expectedSleeps);
+        },
+      );
+
+      it("retries a 5xx and resolves once the retry succeeds", async () => {
+        const h = harness();
+        const attempts = rejectedWithBody(h, 503, 1, body);
+        const result = await resolveSuitePullRequest(h.deps);
+        expect(result.exitCode).toBe(0);
+        expect(attempts()).toBe(2);
+        expect(h.sleeps).toEqual([1_000]);
+      });
+    });
+
+    it.each([[503, 3, [1_000, 2_000]], [404, 1, []]])(
+      "gives up on a cancel that never settles once its 30 second cancel deadline passes and reports the HTTP %i failure",
+      (status, expectedAttempts, expectedSleeps) => withFakeTimers(async () => {
+        const h = harness();
+        const attempts = scriptRunReads(h, () =>
+          new Response(new ReadableStream({ cancel: () => new Promise<void>(() => {}) }), { status }));
+        let result: Awaited<ReturnType<typeof resolveSuitePullRequest>> | undefined;
+        const done = resolveSuitePullRequest(h.deps).then((outcome) => { result = outcome; });
+        for (let read = 1; read <= expectedAttempts; read += 1) {
+          await vi.advanceTimersByTimeAsync(CANCEL_TIMEOUT_MS - 1);
+          expect(attempts()).toBe(read);
+          expect(h.sleeps).toEqual(expectedSleeps.slice(0, read - 1));
+          expect(result).toBeUndefined();
+          await vi.advanceTimersByTimeAsync(1);
+          expect(attempts()).toBe(Math.min(read + 1, expectedAttempts));
+          expect(h.sleeps).toEqual(expectedSleeps.slice(0, read));
+        }
+        expect(result).toEqual({ exitCode: 1, lines: [`::error::GitHub API read failed: HTTP ${status}`] });
+        await done;
+        expect(vi.getTimerCount()).toBe(0);
+      }),
+    );
+
+    it("restores the real timers when a fake-timer run fails", async () => {
+      await expect(withFakeTimers(async () => { throw new Error("run failed"); })).rejects.toThrow("run failed");
+      expect(vi.isFakeTimers()).toBe(false);
+    });
+
+    it("leaves no deadline timer behind once a cancel has settled", () => withFakeTimers(async () => {
+      const h = harness();
+      const attempts = rejectedWithBody(h, 503, 3, () => ({ cancel: async () => {} }));
+      const result = await resolveSuitePullRequest(h.deps);
+      expect(result.lines).toEqual(["::error::GitHub API read failed: HTTP 503"]);
+      expect(attempts()).toBe(3);
+      expect(vi.getTimerCount()).toBe(0);
+    }));
   });
 });

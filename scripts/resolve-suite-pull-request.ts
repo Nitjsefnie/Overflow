@@ -30,6 +30,7 @@ const SHA = /^[0-9a-f]{40}$/;
 const SEGMENT = "[A-Za-z0-9_-][A-Za-z0-9_.-]*";
 const REPOSITORY = new RegExp(`^${SEGMENT}/${SEGMENT}$`);
 const BACKOFF_MS = [1_000, 2_000];
+const CANCEL_TIMEOUT_MS = 30_000;
 
 function record(value: unknown): RecordValue {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -38,6 +39,19 @@ function record(value: unknown): RecordValue {
 
 function positiveId(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+/**
+ * Cancels a rejected response's body. Whatever the body does, a throw or a
+ * cancel that never settles, this settles within CANCEL_TIMEOUT_MS and throws
+ * nothing, so it can neither replace the HTTP failure nor end the retry loop.
+ */
+async function discardBody(response: Response): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cancelled = (async () => { await response.body?.cancel(); })().catch(() => {});
+  const expired = new Promise<void>((resolve) => { timer = setTimeout(resolve, CANCEL_TIMEOUT_MS); });
+  await Promise.race([cancelled, expired]);
+  clearTimeout(timer);
 }
 
 /**
@@ -63,8 +77,7 @@ async function apiGet(deps: ResolveDeps, url: URL): Promise<unknown> {
       });
       if (response.ok) return await response.json();
       status = response.status;
-      // A failed cancel must not replace the HTTP failure or end the retry.
-      await Promise.allSettled([response.body?.cancel()]);
+      await discardBody(response);
     } catch (error) {
       if (error instanceof SyntaxError || last) throw error;
       await sleep(BACKOFF_MS[attempt] ?? 0);
