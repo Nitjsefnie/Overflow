@@ -1192,19 +1192,28 @@ describe.each([
   { start: "only the bare name set", prefixed: undefined, bare: "11" },
   { start: "both absent", prefixed: undefined, bare: undefined },
 ])("removing the diff-only threshold variables for a suite, starting with $start", ({ prefixed, bare }) => {
-  setThresholdVariablesForSuite(prefixed, bare);
+  const found = { prefixed: process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG, bare: process.env.RECONCILIATION_DIFF_ONLY_BACKLOG };
 
-  describe("the suite", () => {
-    removeThresholdVariablesForSuite();
-    it("runs with neither name present", () => {
-      expect(process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG).toBeUndefined();
-      expect(process.env.RECONCILIATION_DIFF_ONLY_BACKLOG).toBeUndefined();
+  describe("the seeded suite", () => {
+    setThresholdVariablesForSuite(prefixed, bare);
+
+    describe("the suite", () => {
+      removeThresholdVariablesForSuite();
+      it("runs with neither name present", () => {
+        expect(process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG).toBeUndefined();
+        expect(process.env.RECONCILIATION_DIFF_ONLY_BACKLOG).toBeUndefined();
+      });
+    });
+
+    it("leaves each name as the suite found it", () => {
+      expect(process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG).toBe(prefixed);
+      expect(process.env.RECONCILIATION_DIFF_ONLY_BACKLOG).toBe(bare);
     });
   });
 
-  it("leaves each name as the suite found it", () => {
-    expect(process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG).toBe(prefixed);
-    expect(process.env.RECONCILIATION_DIFF_ONLY_BACKLOG).toBe(bare);
+  it("leaves each name as it was before the seeded suite", () => {
+    expect(process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG).toBe(found.prefixed);
+    expect(process.env.RECONCILIATION_DIFF_ONLY_BACKLOG).toBe(found.bare);
   });
 });
 
