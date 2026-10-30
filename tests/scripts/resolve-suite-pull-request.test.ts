@@ -70,6 +70,7 @@ function scriptRunReads(h: ReturnType<typeof harness>, outcomeFor: (attempt: num
 }
 
 const CANCEL_TIMEOUT_MS = 30_000;
+const READ_TIMEOUT_MS = 30_000;
 const timedOut = () => new DOMException("The operation was aborted due to timeout", "TimeoutError");
 
 function rejectedReads(h: ReturnType<typeof harness>, status: number, rejections: number, cancelFailure?: Error) {
@@ -94,6 +95,12 @@ function rejectedWithBody(h: ReturnType<typeof harness>, status: number, rejecti
   return scriptRunReads(h, (n) => n >= rejections
     ? undefined
     : Object.defineProperty(new Response(null, { status }), "body", { get: body }));
+}
+
+function resolveWithDefaultSleep(h: ReturnType<typeof harness>) {
+  const deps = { env: h.deps.env, fetchFn: h.deps.fetchFn };
+  expect("sleepFn" in deps).toBe(false);
+  return resolveSuitePullRequest(deps);
 }
 
 async function withFakeTimers(run: () => Promise<void>) {
@@ -313,17 +320,62 @@ describe("suite run PR resolution", () => {
       expect(h.sleeps).toEqual([1_000]);
     });
 
-    it("bounds every request with an abort signal", async () => {
+    it("bounds every request with its own 30 second timeout signal", async () => {
       const h = harness();
+      const attempts = scriptRunReads(h, (n) => n < 2 ? new Response(null, { status: 503 }) : undefined);
       const original = h.deps.fetchFn;
       const signals: unknown[] = [];
       h.deps.fetchFn = async (input, init) => {
         signals.push(init?.signal);
         return original(input, init);
       };
-      expect((await resolveSuitePullRequest(h.deps)).exitCode).toBe(0);
-      expect(signals).toHaveLength(h.requests.length);
-      expect(signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
+      const timeout = vi.spyOn(AbortSignal, "timeout");
+      try {
+        expect(timeout.getMockImplementation()).toBeUndefined();
+        expect((await resolveSuitePullRequest(h.deps)).exitCode).toBe(0);
+        expect(attempts()).toBe(3);
+        expect(signals).toHaveLength(h.requests.length + 2);
+        expect(timeout.mock.calls).toEqual(signals.map(() => [READ_TIMEOUT_MS]));
+        signals.forEach((signal, call) => expect(signal).toBe(timeout.mock.results[call]?.value));
+        expect(new Set(signals).size).toBe(signals.length);
+        expect(timeout.getMockImplementation()).toBeUndefined();
+        expect(timeout.mock.results.map(({ value }) => Object.getOwnPropertySymbols(value).some((key) => key.description === "kTimeout")))
+          .toEqual(signals.map(() => true));
+      } finally {
+        timeout.mockRestore();
+      }
+    });
+
+    it.each([
+      ["a 503", () => new Response(null, { status: 503 }), /::error::.*HTTP 503/],
+      ["a network failure", () => new TypeError("fetch failed"), /::error::.*fetch failed/],
+    ])("waits 1000 ms and then 2000 ms with the default sleep between attempts after %s", (_label, failure, message) =>
+      withFakeTimers(async () => {
+        const h = harness();
+        const attempts = scriptRunReads(h, failure);
+        let result: Awaited<ReturnType<typeof resolveSuitePullRequest>> | undefined;
+        void resolveWithDefaultSleep(h).then((outcome) => { result = outcome; });
+        const attemptsAt = [[0, 1], [999, 1], [1_000, 2], [2_999, 2], [3_000, 3]] as const;
+        let elapsed = 0;
+        for (const [at, expectedAttempts] of attemptsAt) {
+          await vi.advanceTimersByTimeAsync(at - elapsed);
+          elapsed = at;
+          expect(attempts()).toBe(expectedAttempts);
+        }
+        expect(attemptsAt.map(([at]) => at)).toEqual([0, 999, 1_000, 2_999, 3_000]);
+        expect(result?.exitCode).toBe(1);
+        expect(result?.lines.join("\n")).toMatch(message);
+      }));
+
+    it("keeps the event loop alive through the default backoff", async () => {
+      const h = harness();
+      scriptRunReads(h, (n) => n < 1 ? new TypeError("fetch failed") : undefined);
+      const timers = () => process.getActiveResourcesInfo().filter((type) => type === "Timeout").length;
+      const idle = timers();
+      const done = resolveWithDefaultSleep(h);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(timers()).toBe(idle + 1);
+      expect((await done).exitCode).toBe(0);
     });
 
     it("retries a body read that times out and resolves once it succeeds", async () => {
