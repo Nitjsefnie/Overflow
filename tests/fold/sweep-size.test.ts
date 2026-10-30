@@ -199,7 +199,10 @@ describe("the sweep's diff-only rotation filter", () => {
   beforeAll(() => {
     for (const [name, seeded] of Object.entries(thresholdVariables)) vi.stubEnv(name, seeded);
   });
-  afterAll(() => { vi.unstubAllEnvs(); });
+  afterAll(() => {
+    vi.unstubAllEnvs();
+    for (const [name, value] of Object.entries(thresholdVariablesFound)) expect(process.env[name]).toBe(value);
+  });
 
   beforeEach(() => {
     for (const [name, seeded] of Object.entries(thresholdVariables)) {
@@ -326,10 +329,6 @@ describe("the sweep's diff-only rotation filter", () => {
     // measure would silently return it to the rotation.
     expect(measured).toEqual(["d", "u"]);
   });
-});
-
-it("leaves both threshold names as the file found them", () => {
-  for (const [name, value] of Object.entries(thresholdVariablesFound)) expect(process.env[name]).toBe(value);
 });
 
 describe("a repository the forge no longer returns", () => {
