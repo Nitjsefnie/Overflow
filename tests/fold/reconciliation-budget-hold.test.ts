@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { ReconciliationSweepControl } from "@/lib/fold/sweep-pass";
 import { createReconciliationBudgetGate, reconciliationBudgetHoldUntil } from "@/lib/fold/reconciliation-budget";
 import { reconcileRepository, type ReconciliationDependencies, type ReconciliationStore } from "@/lib/fold/reconcile";
-import { DEFAULT_DIFF_ONLY_BACKLOG } from "@/lib/fold/repository-size";
+import { DEFAULT_DIFF_ONLY_BACKLOG, readDiffOnlyBacklogThreshold } from "@/lib/fold/repository-size";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import {
   drainReconciliationJobs,
@@ -1302,23 +1302,35 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
     expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1);
   });
 
+  const sponsorBacklog = 6;
+  const runsFullUnder = (threshold: string | undefined) =>
+    sponsorBacklog > readDiffOnlyBacklogThreshold({ RECONCILIATION_DIFF_ONLY_BACKLOG: threshold });
+
+  it("takes a threshold equal to the sponsor's backlog as not over it", () => {
+    expect(runsFullUnder(String(sponsorBacklog))).toBe(false);
+  });
+
   it("resolves the documented OVERFLOW_-prefixed threshold variable through the fold's diff-only read", async () => {
     const f = fixture(4000);
     const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
     const materialize = pagedCostGateway(f, [1], 4000, requests);
     f.fold.store.getReconciliationEvidence = async () => safeEvidence();
-    f.fold.store.getSponsorBacklog = vi.fn(async () => 6);
+    f.fold.store.getSponsorBacklog = vi.fn(async () => sponsorBacklog);
     const spends = sponsorRound(f, false);
     queued(f, rederivationJob(1));
     const originalPrefixed = process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG;
     const originalUnprefixed = process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
     process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = "5";
-    delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
+    process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = "1000000";
     try {
+      expect(runsFullUnder(process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG)).toBe(true);
+      expect(process.env.RECONCILIATION_DIFF_ONLY_BACKLOG).toBeDefined();
+      expect(runsFullUnder(process.env.RECONCILIATION_DIFF_ONLY_BACKLOG)).toBe(false);
       await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
       // The prefixed knob is the documented one: a backlog of 6 is over a
       // threshold of 5 but under the default, so this re-derivation is
-      // full and charged only while the fold's read resolves the prefix.
+      // full and charged only while the fold's read resolves the prefix. The
+      // bare name sits above the backlog, so it decides the other way if it wins.
       expect(f.fold.store.beginRun).toHaveBeenCalledExactlyOnceWith("repository-1", { rederivation: true });
       expect(materialize).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
         repositoryId: "repository-1",
@@ -1332,6 +1344,37 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
       if (originalPrefixed === undefined) delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = originalPrefixed;
       if (originalUnprefixed === undefined) delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = originalUnprefixed;
     }
+  });
+
+  describe.each([
+    { names: "the bare name alone, over the backlog", prefixed: undefined, bare: "5", full: true, winner: "bare", blank: false, losingFull: undefined },
+    { names: "an empty prefixed name and a bare name over the backlog", prefixed: "", bare: "5", full: false, winner: "prefixed", blank: true, losingFull: true },
+    { names: "a prefixed name above the backlog and a bare name under it", prefixed: "1000000", bare: "5", full: false, winner: "prefixed", blank: false, losingFull: true },
+  ])("the fold's diff-only read with $names", ({ prefixed, bare, full, winner, blank, losingFull }) => {
+    setThresholdVariablesForSuite(prefixed, bare);
+
+    it(`re-derives a backlog of ${sponsorBacklog} ${full ? "in one full pass" : "incrementally"}`, async () => {
+      const winning = winner === "prefixed" ? process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG : process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
+      const losing = winner === "prefixed" ? process.env.RECONCILIATION_DIFF_ONLY_BACKLOG : process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG;
+      expect(winning).toBeDefined();
+      expect(winning === "").toBe(blank);
+      expect(runsFullUnder(winning)).toBe(full);
+      expect(losing === undefined ? undefined : runsFullUnder(losing)).toBe(losingFull);
+      const f = fixture(4000);
+      const materialize = pagedCostGateway(f, [1]);
+      f.fold.store.getReconciliationEvidence = async () => safeEvidence();
+      f.fold.store.getSponsorBacklog = vi.fn(async () => sponsorBacklog);
+      const spends = sponsorRound(f, false);
+      expect(f.fold.sweep).toBeDefined();
+      queued(f, rederivationJob(1));
+
+      await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
+      expect(f.fold.store.beginRun).toHaveBeenCalledExactlyOnceWith("repository-1", { rederivation: full });
+      expect(materialize).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        synchronization: expect.objectContaining({ full }),
+      }));
+      expect(spends).toEqual(full ? ["sponsor-1", "sponsor-1", "sponsor-1"] : []);
+    });
   });
 
   it.each([
