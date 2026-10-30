@@ -1211,7 +1211,7 @@ describe.each([
     });
   });
 
-  it("leaves each name as it was before the seeded suite", () => {
+  afterAll(() => {
     expect(process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG).toBe(found.prefixed);
     expect(process.env.RECONCILIATION_DIFF_ONLY_BACKLOG).toBe(found.bare);
   });
