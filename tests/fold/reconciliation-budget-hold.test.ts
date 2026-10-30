@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { ReconciliationSweepControl } from "@/lib/fold/sweep-pass";
 import { createReconciliationBudgetGate, reconciliationBudgetHoldUntil } from "@/lib/fold/reconciliation-budget";
 import { reconcileRepository, type ReconciliationDependencies, type ReconciliationStore } from "@/lib/fold/reconcile";
+import { DEFAULT_DIFF_ONLY_BACKLOG } from "@/lib/fold/repository-size";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import {
   drainReconciliationJobs,
@@ -1176,15 +1177,17 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
    * path: the gateway is the real client, whose request wrappers call the
    * budget check that spends from the wrapped sponsor's round.
    */
-  // The legs below assume the documented default diff-only threshold: over
-  // 1000 runs full and charged, at or under 1000 stays incremental and
-  // uncharged. The fold's read resolves the prefixed name first, so a value
-  // exported in the shell would replace that assumption: pin it here and
-  // restore it below so the outcome does not depend on the environment.
+  // The legs below sit at the code default diff-only threshold,
+  // DEFAULT_DIFF_ONLY_BACKLOG, and one over it: over runs full and charged, at
+  // or under stays incremental and uncharged. The fold's read resolves the
+  // prefixed name first, so a value exported in the shell would replace the
+  // default: remove both names here and restore them below so the outcome does
+  // not depend on the environment, and the legs follow the default.
+  const overThreshold = DEFAULT_DIFF_ONLY_BACKLOG + 1;
   const originalPrefixedThreshold = process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG;
   const originalBareThreshold = process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
   beforeAll(() => {
-    process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = "1000";
+    delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG;
     delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
   });
   afterAll(() => {
@@ -1244,7 +1247,7 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
     const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
     const materialize = pagedCostGateway(f, [1], 4000, requests);
     f.fold.store.getReconciliationEvidence = async () => safeEvidence();
-    f.fold.store.getSponsorBacklog = vi.fn(async () => 2000);
+    f.fold.store.getSponsorBacklog = vi.fn(async () => overThreshold);
     const spends = sponsorRound(f, false);
     queued(f, rederivationJob(1));
 
@@ -1281,7 +1284,7 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
     try {
       await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
       // The prefixed knob is the documented one: a backlog of 6 is over a
-      // threshold of 5 but under the 1000 default, so this re-derivation is
+      // threshold of 5 but under the default, so this re-derivation is
       // full and charged only while the fold's read resolves the prefix.
       expect(f.fold.store.beginRun).toHaveBeenCalledExactlyOnceWith("repository-1", { rederivation: true });
       expect(materialize).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
@@ -1300,7 +1303,7 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
 
   it.each([
     { name: "an under-threshold sponsor's", backlog: 10 as number | undefined },
-    { name: "a backlog exactly at the threshold's", backlog: 1000 },
+    { name: "a backlog exactly at the threshold's", backlog: DEFAULT_DIFF_ONLY_BACKLOG },
     { name: "a fold store without the backlog member's", backlog: undefined },
   ])("leaves $name re-derivation incremental and uncharged", async ({ backlog }) => {
     const f = fixture(4000);
@@ -1335,7 +1338,7 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
     const materialize = pagedCostGateway(f, [1], 4000, requests);
     // The fold's cache-miss skip arm is the witness: a WEBHOOK fold that gains
     // allowsFull against the plan would skip nothing and crawl a full pass.
-    f.fold.store.getSponsorBacklog = vi.fn(async () => 2000);
+    f.fold.store.getSponsorBacklog = vi.fn(async () => overThreshold);
     const spends = sponsorRound(f, false);
     queued(f, webhookJob(1));
 
@@ -1354,7 +1357,7 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
     const f = fixture(4000);
     const materialize = pagedCostGateway(f, [1]);
     f.fold.store.getReconciliationEvidence = async () => safeEvidence();
-    f.fold.store.getSponsorBacklog = vi.fn(async () => 2000);
+    f.fold.store.getSponsorBacklog = vi.fn(async () => overThreshold);
     const spends = sponsorRound(f, true);
     queued(f, rederivationJob(1));
 
