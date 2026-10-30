@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_DIFF_ONLY_BACKLOG,
   PostgresRepositorySizeStore,
   REPOSITORY_SIZE_REMEASURE_MS,
   findRepositoryGone,
@@ -186,6 +187,16 @@ describe("the sweep's repository size measure", () => {
 });
 
 describe("the sweep's diff-only rotation filter", () => {
+  const thresholdVariables = ["OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG", "RECONCILIATION_DIFF_ONLY_BACKLOG"];
+
+  beforeEach(() => {
+    for (const name of thresholdVariables) {
+      vi.stubEnv(name, undefined);
+      expect(Object.hasOwn(process.env, name)).toBe(false);
+    }
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
   /**
    * Item 4 of the diff-only reconciliation plan: a sponsor whose stored backlog
    * is strictly over the diff-only threshold gets NO sweep slot — its
@@ -196,6 +207,8 @@ describe("the sweep's diff-only rotation filter", () => {
   it("offers a sponsor over the backlog threshold no slot and still rotates an under-threshold sponsor", async () => {
     const offered: string[] = [];
     const slots: Array<{ sponsorId: string; repositoryIds: readonly string[] }> = [];
+    const sizeStore = memorySizeStore(new Map(), new Map([["sponsor-over", DEFAULT_DIFF_ONLY_BACKLOG + 1], ["sponsor-under", DEFAULT_DIFF_ONLY_BACKLOG - 1]]));
+    expect(await Promise.all(["sponsor-over", "sponsor-under"].map(async (id) => (await sizeStore.getSponsorBacklog(id))! - DEFAULT_DIFF_ONLY_BACKLOG))).toEqual([1, -1]);
     const summary = await sweepReconciliations({
       listActiveRepositorySponsors: async () => [
         { repositoryId: "d1", sponsorId: "sponsor-over" },
@@ -209,7 +222,7 @@ describe("the sweep's diff-only rotation filter", () => {
       } },
       enqueue: async (id) => { offered.push(id); },
       now: () => at,
-      sizeStore: memorySizeStore(new Map(), new Map([["sponsor-over", 1356], ["sponsor-under", 500]])),
+      sizeStore,
     });
     // The over-threshold sponsor's whole group is filtered, so its round is
     // never touched: the tick spends no slot on a repository it must not queue.
@@ -220,6 +233,8 @@ describe("the sweep's diff-only rotation filter", () => {
 
   it("keeps a sponsor at exactly the threshold in the rotation, since only a greater backlog is diff-only", async () => {
     const slots: string[] = [];
+    const sizeStore = memorySizeStore(new Map(), new Map([["sponsor-at", DEFAULT_DIFF_ONLY_BACKLOG]]));
+    expect(await sizeStore.getSponsorBacklog("sponsor-at")).toBe(DEFAULT_DIFF_ONLY_BACKLOG);
     await sweepReconciliations({
       listActiveRepositorySponsors: async () => [{ repositoryId: "r", sponsorId: "sponsor-at" }],
       round: { enqueueNext: async (sponsorId, _ids, _now, _limit, enqueue) => {
@@ -229,7 +244,7 @@ describe("the sweep's diff-only rotation filter", () => {
       } },
       enqueue: async () => undefined,
       now: () => at,
-      sizeStore: memorySizeStore(new Map(), new Map([["sponsor-at", 1000]])),
+      sizeStore,
     });
     expect(slots).toEqual(["sponsor-at"]);
   });
@@ -262,6 +277,8 @@ describe("the sweep's diff-only rotation filter", () => {
 
   it("filters the unpaced sweep too, so both sweep shapes skip a diff-only sponsor", async () => {
     const enqueued: string[] = [];
+    const sizeStore = memorySizeStore(new Map(), new Map([["sponsor-over", DEFAULT_DIFF_ONLY_BACKLOG + 1], ["sponsor-under", DEFAULT_DIFF_ONLY_BACKLOG - 1]]));
+    expect(await Promise.all(["sponsor-over", "sponsor-under"].map(async (id) => (await sizeStore.getSponsorBacklog(id))! - DEFAULT_DIFF_ONLY_BACKLOG))).toEqual([1, -1]);
     await sweepReconciliations({
       listActiveRepositorySponsors: async () => [
         { repositoryId: "d", sponsorId: "sponsor-over" },
@@ -269,7 +286,7 @@ describe("the sweep's diff-only rotation filter", () => {
       ],
       enqueue: async (id) => { enqueued.push(id); },
       now: () => at,
-      sizeStore: memorySizeStore(new Map(), new Map([["sponsor-over", 1356], ["sponsor-under", 500]])),
+      sizeStore,
     });
     expect(enqueued).toEqual(["u"]);
   });
