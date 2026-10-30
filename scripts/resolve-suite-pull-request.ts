@@ -63,6 +63,8 @@ async function apiGet(deps: ResolveDeps, url: URL): Promise<unknown> {
       });
       if (response.ok) return await response.json();
       status = response.status;
+      // A failed cancel must not replace the HTTP failure or end the retry.
+      await Promise.allSettled([response.body?.cancel()]);
     } catch (error) {
       if (error instanceof SyntaxError || last) throw error;
       await sleep(BACKOFF_MS[attempt] ?? 0);
