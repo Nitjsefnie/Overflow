@@ -71,6 +71,24 @@ function scriptRunReads(h: ReturnType<typeof harness>, outcomeFor: (attempt: num
 
 const timedOut = () => new DOMException("The operation was aborted due to timeout", "TimeoutError");
 
+function rejectedReads(h: ReturnType<typeof harness>, status: number, rejections: number, cancelFailure?: Error) {
+  const events: string[] = [];
+  const sleep = h.deps.sleepFn;
+  h.deps.sleepFn = async (ms) => { events.push("sleep"); await sleep(ms); };
+  scriptRunReads(h, (n) => {
+    events.push(`read ${n}`);
+    if (n >= rejections) return undefined;
+    return new Response(new ReadableStream({
+      async cancel() {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        events.push(`cancelled ${n}`);
+        if (cancelFailure) throw cancelFailure;
+      },
+    }), { status });
+  });
+  return events;
+}
+
 describe("suite run PR resolution", () => {
   it.each([[REPO, "feature"], ["fork/Overflow", "feature"], ["fork/Overflow", "main"]])(
     "binds %s's %s branch to its exact head",
@@ -360,5 +378,37 @@ describe("suite run PR resolution", () => {
       expect(attempts()).toBe(2);
       expect(h.requests).toHaveLength(1);
     });
+
+    describe.each([
+      ["cancel succeeds", undefined],
+      ["cancel rejects", new Error("stream errored")],
+    ])("rejected response body, %s", (_label, cancelFailure) => {
+      it.each([
+        ["a retried 5xx", 503, 1, 0, ["read 0", "cancelled 0", "sleep", "read 1"]],
+        ["the final 5xx", 503, 3, 1,
+          ["read 0", "cancelled 0", "sleep", "read 1", "cancelled 1", "sleep", "read 2", "cancelled 2"]],
+        ["a 4xx", 404, 1, 1, ["read 0", "cancelled 0"]],
+      ])("is cancelled before the next attempt or the failure on %s", async (_path, status, rejections, exitCode, expected) => {
+        const h = harness();
+        const events = rejectedReads(h, status, rejections, cancelFailure);
+        const result = await resolveSuitePullRequest(h.deps);
+        expect(result.exitCode).toBe(exitCode);
+        expect(result.lines.some((line) => line.includes(`HTTP ${status}`))).toBe(exitCode === 1);
+        expect(events).toEqual(expected);
+      });
+    });
+
+    it.each([[503, 3, [1_000, 2_000]], [404, 1, []]])(
+      "reports a bodiless %i response as the HTTP failure",
+      async (status, expectedAttempts, expectedSleeps) => {
+        const h = harness();
+        const attempts = scriptRunReads(h, () => new Response(null, { status }));
+        const result = await resolveSuitePullRequest(h.deps);
+        expect(result.exitCode).toBe(1);
+        expect(result.lines.join("\n")).toContain(`HTTP ${status}`);
+        expect(attempts()).toBe(expectedAttempts);
+        expect(h.sleeps).toEqual(expectedSleeps);
+      },
+    );
   });
 });
