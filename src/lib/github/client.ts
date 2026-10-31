@@ -698,12 +698,13 @@ export class GitHubGateway implements ForgeGateway {
     if (issues.length === 0) return manifest;
     const watchedEvents = new Set(["labeled", "unlabeled", "assigned", "unassigned"]);
     const path = `/repos/${segment(repository.owner)}/${segment(repository.name)}/issues`;
-    const budget = issues.length * 4 + 4;
+    let budget = issues.length * 4 + 4;
     let requests = 0;
     for (const issue of issues) {
       for (const collection of ["events", "comments"] as const) {
+        let last: number | null = null;
         for (let page = 1; ; page += 1) {
-          if (requests === budget) {
+          if (requests === budget || (last !== null && page > last)) {
             throw new Error("GitHub timeline completeness could not be verified within the per-issue manifest request budget.");
           }
           checkGraphqlRequestBudget();
@@ -712,20 +713,18 @@ export class GitHubGateway implements ForgeGateway {
           const payload = await responseJson<unknown>(response);
           if (collection === "events") {
             for (const event of perIssueEventRows.parse(payload)) {
-              if (watchedEvents.has(event.event)) {
-                manifest.get(issue.number)!.add(event.node_id);
-              }
+              if (watchedEvents.has(event.event)) manifest.get(issue.number)!.add(event.node_id);
             }
           } else {
             for (const comment of manifestCommentRows.parse(payload)) {
               const match = /\/issues\/([1-9]\d*)$/.exec(new URL(comment.issue_url).pathname);
-              if (match === null || Number(match[1]) !== issue.number) {
-                throw new Error("GitHub timeline manifest issue identity was invalid.");
-              }
+              if (match === null || Number(match[1]) !== issue.number) throw new Error("GitHub timeline manifest issue identity was invalid.");
               manifest.get(issue.number)!.add(comment.node_id);
             }
           }
-          if (!hasNextLink(response.headers.get("link"))) break;
+          const link = response.headers.get("link");
+          if (page === 1) { last = lastLinkPage(link); budget += (last ?? 1) - 1; }
+          if (!hasNextLink(link) && (last === null || page === last)) break;
         }
       }
     }
