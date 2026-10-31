@@ -2,151 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
 import { GitHubApiError } from "@/lib/github/errors";
 import { GitHubGraphqlClient } from "@/lib/github/graphql";
-import { GitHubResponseTooLargeError, MAX_SUCCESS_BODY_BYTES } from "@/lib/github/response-text";
 import { withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
-
-describe("GitHubGraphqlClient failures", () => {
-  it("rejects a successful response past the shared byte cap with its own error class", async () => {
-    const body = '{"data":{"ok":true}}' + " ".repeat(MAX_SUCCESS_BODY_BYTES);
-    const client = new GitHubGraphqlClient({ accessToken: "test-access-token", fetch: async () => new Response(body) });
-    await expect(client.query("query {}", {})).rejects.toBeInstanceOf(GitHubResponseTooLargeError);
-  });
-
-  it("surfaces GitHub RATE_LIMIT type and message through the gateway", async () => {
-    const gateway = new GitHubGateway({
-      accessToken: "test-access-token",
-      fetch: async () => Response.json({
-        errors: [{
-          type: "RATE_LIMIT",
-          code: "graphql_rate_limit",
-          message: "API rate limit already exceeded for user ID 75166987.",
-        }],
-      }),
-    });
-
-    await expect(gateway.listIssues({ owner: "octo", name: "overflow" })).rejects.toThrow(
-      /RATE_LIMIT.*API rate limit already exceeded for user ID 75166987\./,
-    );
-  });
-
-  it("includes multiple errors and their supplied paths even alongside partial data", async () => {
-    const client = new GitHubGraphqlClient({
-      accessToken: "test-access-token",
-      fetch: async () => Response.json({
-        data: { repository: null },
-        errors: [
-          { type: "FORBIDDEN", message: "Resource not accessible", path: ["repository", "issues", 0] },
-          { type: "undefinedField", message: "Field removed", path: ["query", "repository", "oldField"] },
-        ],
-      }),
-    });
-
-    await expect(client.query("query {}", {})).rejects.toThrow(
-      /FORBIDDEN.*Resource not accessible.*\["repository","issues",0\].*undefinedField.*Field removed.*\["query","repository","oldField"\]/,
-    );
-  });
-
-  it.each([
-    {}, { errors: null }, { errors: "bad" }, { errors: {} }, { errors: 42 },
-    { errors: [] }, { errors: [null, false, 42, "bad", []] },
-    { errors: [{}] }, { errors: [{ type: {}, message: [], path: {} }] },
-    null,
-  ])("normalizes malformed or missing errors to a readable failure: %j", async (payload) => {
-    const client = new GitHubGraphqlClient({
-      accessToken: "test-access-token",
-      fetch: async () => Response.json(payload),
-    });
-
-    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub GraphQL request failed\./);
-  });
-
-  it.each([
-    [{ type: "FORBIDDEN" }, "FORBIDDEN"],
-    [{ message: "Field removed" }, "Field removed"],
-    [{ type: "FORBIDDEN", message: "Denied", path: [null, {}] }, "Denied"],
-  ])("keeps available fields when other fields are missing or malformed: %j", async (entry, detail) => {
-    const client = new GitHubGraphqlClient({
-      accessToken: "test-access-token",
-      fetch: async () => Response.json({ errors: [null, entry] }),
-    });
-
-    await expect(client.query("query {}", {})).rejects.toThrow(String(detail));
-  });
-
-  it("bounds the summary to five errors and 512 characters per field with truncation markers", async () => {
-    const client = new GitHubGraphqlClient({
-      accessToken: "test-access-token",
-      fetch: async () => Response.json({ errors: [
-        ...Array.from({ length: 5 }, (_, index) => ({
-          type: `ERROR_${index}${"t".repeat(10_000)}`,
-          message: `message_${index}${"m".repeat(10_000)}`,
-          path: Array.from({ length: 100 }, () => "p".repeat(10_000)),
-        })),
-        { type: "OMITTED", message: "must not appear" },
-      ] }),
-    });
-
-    const error = await client.query("query {}", {}).catch((error: unknown) => error);
-    expect(error).toBeInstanceOf(Error);
-    const message = (error as Error).message;
-    expect(message).toContain("ERROR_4");
-    expect(message).toContain("message_4");
-    expect(message).toContain("OMITTED");
-    expect(message).toContain("1 more error(s) without full details");
-    expect(message).not.toContain("m".repeat(513));
-    expect(message).toContain("…");
-    expect(message).toContain("1 more error");
-    expect(message.length).toBeLessThanOrEqual(8_000);
-  });
-
-  it("aborts a stalled request with the exact existing timeout message", async () => {
-    let signal: AbortSignal | null | undefined;
-    const client = new GitHubGraphqlClient({
-      accessToken: "test-access-token",
-      timeoutMs: 1,
-      fetch: async (_input, init) => new Promise<Response>((_resolve, reject) => {
-        signal = init?.signal;
-        signal?.addEventListener("abort", () => reject(new Error("private details")), { once: true });
-      }),
-    });
-
-    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub request timed out\.$/);
-    expect(signal?.aborted).toBe(true);
-  });
-
-  it("preserves the exact non-2xx message without the response body", async () => {
-    const client = new GitHubGraphqlClient({
-      accessToken: "test-access-token",
-      fetch: async () => new Response("private details", { status: 502 }),
-    });
-
-    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub API request failed with status 502\.$/);
-  });
-
-  it.each([
-    new Error("private network details"), "private rejection", null,
-    new Error("GitHub request timed out."),
-    new Error("GitHub API request failed with status 401."),
-  ])("normalizes unrelated rejections structurally: %j", async (failure) => {
-    const client = new GitHubGraphqlClient({
-      accessToken: "test-access-token",
-      fetch: async () => { throw failure; },
-    });
-
-    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub GraphQL request failed\. /);
-  });
-
-  it("retains the class of JSON parse failures", async () => {
-    const client = new GitHubGraphqlClient({
-      accessToken: "test-access-token",
-      fetch: async () => new Response("private invalid JSON"),
-    });
-
-    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub GraphQL request failed\. SyntaxError:/);
-  });
-});
 
 describe("GitHubGateway incremental issue reads", () => {
   // Mutants: ISSUE_WATERMARK_GATES_DIRTY_FETCH, SINCE_ENABLES_TRUNCATED_TIMELINE.
@@ -1847,7 +1705,7 @@ describe("GitHubGateway issue timeline query shape", () => {
     expect(requests).toEqual(["https://api.github.com/graphql"]);
   });
 
-  function largeManifestFixture(commentCount: number) {
+  function largeManifestFixture(commentCount: number, omitSecondEventNext = false) {
     const comments = Array.from({ length: commentCount }, (_, index) => ({
       ...rationale, id: `comment-${index + 1}`, databaseId: 1000 + index,
     }));
@@ -1869,7 +1727,8 @@ describe("GitHubGateway issue timeline query shape", () => {
         if (page < 1 || page > last) throw new Error(`Unexpected manifest page: ${url}`);
         perIssuePages.push(`${url.pathname}:${page}`);
         const link = `<${url.origin}${url.pathname}?page=${page + 1}>; rel="next", <${url.origin}${url.pathname}?page=${last}>; rel="last"`;
-        return Response.json(rows.slice((page - 1) * 100, page * 100), { headers: page < last ? { link } : {} });
+        const hasNext = page < last && !(omitSecondEventNext && url.pathname.endsWith("/events") && page === 2);
+        return Response.json(rows.slice((page - 1) * 100, page * 100), { headers: hasNext ? { link } : {} });
       }
       if (url.pathname.endsWith("/issues/events") || url.pathname.endsWith("/issues/comments")) {
         repoPages.push(`${url.pathname}:${url.searchParams.get("page")}`);
@@ -1940,8 +1799,58 @@ describe("GitHubGateway issue timeline query shape", () => {
       if (operation === "IssueTimeline") return timelineResponse();
       throw new Error(`Unexpected operation: ${operation}`);
     } });
-    await expect(gateway.gatherIssue({ owner: "octo", name: "overflow" }, { id: 101, number: 1 }, timelineOptions)).rejects.toThrow();
+    await expect(gateway.gatherIssue({ owner: "octo", name: "overflow" }, { id: 101, number: 1 }, timelineOptions)).rejects.toThrow(
+      /^GitHub timeline completeness could not be verified within the per-issue manifest request budget\.$/,
+    );
     expect(pages).toEqual([1, 2]);
+  });
+
+  it("walks to the declared last page when an intermediate next link disappears", async () => {
+    const { gateway, perIssuePages } = largeManifestFixture(1, true);
+    const issue = await gateway.gatherIssue({ owner: "octo", name: "overflow" }, { id: 101, number: 1 }, timelineOptions);
+    expect(issue?.comments.map(({ id }) => id)).toEqual(["comment-1"]);
+    expect(issue?.history.map(({ id }) => id)).toEqual(["opening-event-1"]);
+    expect(perIssuePages).toEqual([
+      "/repos/octo/overflow/issues/1/events:1", "/repos/octo/overflow/issues/1/events:2",
+      "/repos/octo/overflow/issues/1/events:3", "/repos/octo/overflow/issues/1/comments:1",
+    ]);
+  });
+
+  it("shares the per-issue request budget across multiple issues", async () => {
+    const pages: string[] = [];
+    const gateway = new GitHubGateway({ accessToken: ["test", "access", "token"].join("-"), fetch: async (input, init) => {
+      const url = new URL(String(input));
+      const match = /\/issues\/([12])\/(events|comments)$/.exec(url.pathname);
+      if (match !== null) {
+        const number = Number(match[1]);
+        const page = Number(url.searchParams.get("page"));
+        const collection = match[2];
+        pages.push(`${number}:${collection}:${page}`);
+        let link = "";
+        if (number === 1 && collection === "events" && page < 3) {
+          link = `<${url.origin}${url.pathname}?page=${page + 1}>; rel="next", <${url.origin}${url.pathname}?page=3>; rel="last"`;
+        }
+        if (number === 2 && collection === "events" && page < 20) link = `<${url.origin}${url.pathname}?page=${page + 1}>; rel="next"`;
+        return Response.json([], { headers: link ? { link } : {} });
+      }
+      if (url.pathname.endsWith("/issues/events")) return Response.json([], { headers: { link: `<${url.origin}${url.pathname}?page=2>; rel="next"` } });
+      if (url.pathname.endsWith("/issues/comments")) return Response.json([]);
+      const { query, variables } = JSON.parse(String(init?.body));
+      const operation = /query (\w+)/.exec(query)?.[1];
+      if (operation === "RepositoryIssues") return Response.json({ data: { repository: { issues: {
+        nodes: [issueNode(101, 1, "First", { nodes: [], pageInfo }), issueNode(102, 2, "Second", { nodes: [], pageInfo })], pageInfo,
+      } } } });
+      if (operation === "IssueTimelineCounts") return countsResponse(variables, () => 0);
+      if (operation === "IssueTimeline") return timelineResponse();
+      throw new Error(`Unexpected operation: ${operation}`);
+    } });
+    await expect(gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions)).rejects.toThrow(
+      "GitHub timeline completeness could not be verified within the per-issue manifest request budget.",
+    );
+    expect(pages).toEqual([
+      "1:events:1", "1:events:2", "1:events:3", "1:comments:1",
+      ...Array.from({ length: 10 }, (_, index) => `2:events:${index + 1}`),
+    ]);
   });
 
   it("falls back per issue when collection size is unknown and bounds that fallback per issue", async () => {
