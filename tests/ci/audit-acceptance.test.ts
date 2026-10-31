@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { productionClosure, productionClosureContains } from "./production-closure";
 
 /**
@@ -20,6 +21,13 @@ const root = fileURLToPath(new URL("../..", import.meta.url));
 const ACCEPTED_GHSAS = ["GHSA-vfj7-8cjw-p6xm", "GHSA-g3hv-75wg-m249", "GHSA-3g3m-2fjr-6pw4"];
 const ACCEPTED_BRACES_VERSION = "3.0.3";
 
+type LockDependency = string | { specifier?: string; version?: string };
+type LockEntry = Partial<Record<
+  "dependencies" | "devDependencies" | "optionalDependencies" | "peerDependencies",
+  Record<string, LockDependency>
+>>;
+type Lockfile = Record<"packages" | "snapshots" | "importers", Record<string, LockEntry>>;
+
 describe("dev-only advisory acceptance", () => {
   it("records exactly the accepted advisory ids in pnpm's audit config", async () => {
     const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
@@ -36,17 +44,46 @@ describe("dev-only advisory acceptance", () => {
   });
 
   it.each([
-    ["minimatch", ["3.1.5", "5.1.9", "9.0.9", "10.2.6"]],
-    ["glob", ["10.5.0"]],
-  ])("keeps the acceptance scoped to the lockfile's audited %s versions", async (name, expected) => {
+    ["minimatch", ["3.1.5", "5.1.9", "9.0.9", "10.2.6"], [
+      ["@eslint/config-array@0.23.5", "10.2.6"],
+      ["@typescript-eslint/typescript-estree@8.72.0(typescript@6.0.3)", "10.2.6"],
+      ["eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.72.0(eslint@10.13.0(jiti@2.7.0))"
+        + "(typescript@6.0.3))(eslint-import-resolver-typescript@3.10.1)(eslint@10.13.0(jiti@2.7.0))", "3.1.5"],
+      ["eslint-plugin-jsx-a11y@6.10.2(eslint@10.13.0(jiti@2.7.0))", "3.1.5"],
+      ["eslint-plugin-react@7.37.5(eslint@10.13.0(jiti@2.7.0))", "3.1.5"],
+      ["eslint@10.13.0(jiti@2.7.0)", "10.2.6"],
+      ["glob@10.5.0", "9.0.9"],
+      ["readdir-glob@1.1.3", "5.1.9"],
+    ]],
+    ["glob", ["10.5.0"], [["archiver-utils@5.0.2", "10.5.0"]]],
+  ] as const)("keeps the acceptance scoped to the lockfile's audited %s versions", async (name, expected, expectedEdges) => {
     const lock = await readFile(resolve(root, "pnpm-lock.yaml"), "utf8");
-    const sections = lock.split(/^snapshots:$/m);
-    expect(sections).toHaveLength(2);
-    for (const section of sections) {
-      const versions = new Set([...section.matchAll(new RegExp(`^  ${name}@([^:()\\s]+)`, "gm"))].map((match) => match[1]));
+    const parsed = parse(lock) as Lockfile;
+    for (const section of ["packages", "snapshots"] as const) {
+      const versions = new Set(Object.keys(parsed[section])
+        .filter((key) => key.startsWith(`${name}@`))
+        .map((key) => key.slice(name.length + 1).split("(")[0]));
       expect(versions.size).toBeGreaterThan(0);
       expect(versions).toEqual(new Set(expected));
     }
+
+    const references: string[] = [];
+    for (const section of ["packages", "snapshots", "importers"] as const) {
+      for (const [referrer, entry] of Object.entries(parsed[section])) {
+        if (referrer.includes(`(${name}@`)) references.push(JSON.stringify([section, referrer]));
+        for (const kind of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const) {
+          for (const [dependency, value] of Object.entries(entry?.[kind] ?? {})) {
+            const values = typeof value === "string" ? [value] : [value?.specifier, value?.version];
+            if (dependency === name || values.some((part) => typeof part === "string" &&
+              (part.startsWith(`${name}@`) || part.startsWith(`npm:${name}@`) || part.includes(`(${name}@`)))) {
+              references.push(JSON.stringify([section, referrer, kind, dependency, value]));
+            }
+          }
+        }
+      }
+    }
+    expect(references.sort()).toEqual(expectedEdges.map(([referrer, value]) =>
+      JSON.stringify(["snapshots", referrer, "dependencies", name, value])).sort());
   });
 
   it.each(["braces", "minimatch", "glob"])("keeps %s out of the production dependency closure", async (name) => {
