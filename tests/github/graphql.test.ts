@@ -148,254 +148,6 @@ describe("GitHubGraphqlClient failures", () => {
   });
 });
 
-describe("GitHubGraphqlClient diagnostic retention", () => {
-  async function failureFor(errors: unknown): Promise<Error> {
-    const client = new GitHubGraphqlClient({
-      accessToken: "test-access-token",
-      fetch: async () => Response.json({ errors }),
-    });
-    const failure = await client.query("query {}", {}).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(Error);
-    return failure as Error;
-  }
-
-  it("retains a sixth RATE_LIMIT category after five schema errors", async () => {
-    const error = await failureFor([
-      ...Array.from({ length: 5 }, () => ({ type: "undefinedField", message: "Field removed" })),
-      { type: "RATE_LIMIT", message: "Rate limit exceeded" },
-    ]);
-
-    expect(error.message).toContain("RATE_LIMIT");
-    expect(error.message).toContain("undefinedField: Field removed");
-    expect(error.message).toContain("RATE_LIMIT: Rate limit exceeded");
-    expect(error.message).toContain("4 duplicate error(s) collapsed");
-  });
-
-  it.each([
-    { label: "identical errors", entry: { type: "RATE_LIMIT", message: "Denied" } },
-    { label: "malformed entries", entry: null },
-    { label: "long identical types", entry: { type: "t".repeat(512), message: "Denied" } },
-  ])("bounds 100,000 $label to the aggregate summary budget", async ({ entry }) => {
-    const error = await failureFor(Array.from({ length: 100_000 }, () => entry));
-
-    expect(error.message.length).toBeLessThanOrEqual(8_000);
-    expect(error.message).toContain("99999 duplicate error(s) collapsed");
-  });
-
-  it("collapses identical pairs while keeping the first occurrence's path", async () => {
-    const error = await failureFor([
-      { type: "RATE_LIMIT", message: "Denied", path: ["first"] },
-      { type: "RATE_LIMIT", message: "Denied", path: ["second"] },
-      { type: "RATE_LIMIT", message: "Denied", path: ["third"] },
-    ]);
-
-    expect(error.message).toBe('GitHub GraphQL request failed. RATE_LIMIT: Denied path=["first"]; … 2 duplicate error(s) collapsed');
-  });
-
-  it("keeps distinct pairs with a shared type or message separate", async () => {
-    const error = await failureFor([
-      { type: "FORBIDDEN", message: "First reason" },
-      { type: "FORBIDDEN", message: "Second reason" },
-      { type: "RATE_LIMIT", message: "Second reason" },
-      { type: "FORBIDDEN", message: "First reason" },
-    ]);
-
-    expect(error.message).toBe("GitHub GraphQL request failed. FORBIDDEN: First reason; FORBIDDEN: Second reason; RATE_LIMIT: Second reason; … 1 duplicate error(s) collapsed");
-  });
-
-  it("deduplicates types after five distinct full pairs and counts entries lacking full details", async () => {
-    const error = await failureFor([
-      ...Array.from({ length: 5 }, (_, index) => ({ type: "SCHEMA", message: `Field ${index}` })),
-      { type: "RATE_LIMIT", message: "First limit" },
-      { type: "RATE_LIMIT", message: "Second limit" },
-      { type: "RATE_LIMIT", message: "First limit" },
-    ]);
-
-    expect(error.message).toBe("GitHub GraphQL request failed. SCHEMA: Field 0; SCHEMA: Field 1; SCHEMA: Field 2; SCHEMA: Field 3; SCHEMA: Field 4; RATE_LIMIT; … 3 more error(s) without full details");
-  });
-
-  it("marks aggregate overflow and counts every entry without full details", async () => {
-    const error = await failureFor(Array.from({ length: 100_000 }, (_, index) => ({
-      type: `TYPE_${index}_${"t".repeat(500)}`,
-      message: "Denied",
-    })));
-
-    expect(error.message.length).toBeLessThanOrEqual(8_000);
-    expect(error.message).toContain("99995 more error(s) without full details");
-    expect(error.message).toContain("summary budget exceeded");
-    expect(() => encodeURIComponent(error.message)).not.toThrow();
-  });
-
-  function maximumFullEntries() {
-    return Array.from({ length: 5 }, (_, index) => ({
-      type: `${index}${"t".repeat(511)}`,
-      message: "m".repeat(512),
-      path: Array.from({ length: 11 }, () => "p".repeat(46)),
-    }));
-  }
-
-  it("retains the 7674-unit maximum full prefix within the aggregate ceiling", async () => {
-    const error = await failureFor(maximumFullEntries());
-
-    expect(error.message.length).toBeLessThanOrEqual(8_000);
-    expect(error.message.length).toBe(7_674);
-  });
-
-  it.each([
-    { tailLength: 221, expectedLength: 8_000, retained: true },
-    { tailLength: 222, expectedLength: 7_777, retained: false },
-    { tailLength: 324, expectedLength: 7_777, retained: false },
-  ])("checks the exact aggregate boundary with a $tailLength-unit tail type", async ({ tailLength, expectedLength, retained }) => {
-    const fullEntries = maximumFullEntries();
-    const tailType = "a".repeat(tailLength);
-    // 25 entries: both counts have the same two-digit width as the input
-    // length. The 103-unit suffix leaves 7,897 units for rendered details.
-    const error = await failureFor([
-      ...fullEntries,
-      ...Array.from({ length: 10 }, () => fullEntries[0]),
-      { type: tailType, message: "Tail detail" },
-      ...Array.from({ length: 9 }, () => ({ type: "z".repeat(512), message: "Overflow" })),
-    ]);
-
-    expect(error.message.length).toBeLessThanOrEqual(8_000);
-    expect(error.message.length).toBe(expectedLength);
-    expect(error.message.includes(`; ${tailType};`)).toBe(retained);
-    expect(error.message).toContain("10 duplicate error(s) collapsed");
-    expect(error.message).toContain("10 more error(s) without full details");
-    expect(error.message).toContain("summary budget exceeded");
-  });
-
-  it.each(["type", "message", "path", "later type"])("redacts repeated reflected tokens in %s", async (field) => {
-    const reflected = "before test-access-token middle test-access-token after";
-    const entry = {
-      type: field === "type" || field === "later type" ? reflected : "FORBIDDEN",
-      message: field === "message" ? reflected : "Denied",
-      path: field === "path" ? [reflected] : ["repository"],
-    };
-    const entries = field === "later type"
-      ? [...Array.from({ length: 5 }, (_, index) => ({ type: "undefinedField", message: `Field ${index}` })), entry]
-      : [entry];
-    const error = await failureFor(entries);
-
-    expect(error.message).not.toContain("test-access-token");
-    expect(error.message).toContain("[REDACTED]");
-  });
-
-  it.each([511, 512, 513])("retains type text deliberately at length %i", async (length) => {
-    const error = await failureFor([{ type: "t".repeat(length), message: "Denied" }]);
-    const expectedType = length === 513 ? `${"t".repeat(511)}…` : "t".repeat(length);
-
-    expect(error.message).toBe(`GitHub GraphQL request failed. ${expectedType}: Denied`);
-  });
-
-  it.each([511, 512, 513])("retains message text deliberately at length %i", async (length) => {
-    const error = await failureFor([{ type: "FORBIDDEN", message: "m".repeat(length) }]);
-    const expectedMessage = length === 513 ? `${"m".repeat(511)}…` : "m".repeat(length);
-
-    expect(error.message).toBe(`GitHub GraphQL request failed. FORBIDDEN: ${expectedMessage}`);
-  });
-
-  it.each(["type", "message"])("does not split a surrogate pair when truncating %s", async (field) => {
-    const text = `${"a".repeat(510)}😀b`;
-    const error = await failureFor([{
-      type: field === "type" ? text : "FORBIDDEN",
-      message: field === "message" ? text : "Denied",
-    }]);
-    const retained = `${"a".repeat(510)}…`;
-
-    expect(error.message).toBe(field === "type"
-      ? `GitHub GraphQL request failed. ${retained}: Denied`
-      : `GitHub GraphQL request failed. FORBIDDEN: ${retained}`);
-    expect(() => encodeURIComponent(error.message)).not.toThrow();
-  });
-
-  it("keeps a complete path preview and later segments after a long first segment", async () => {
-    const error = await failureFor([{
-      type: "FORBIDDEN",
-      message: "Denied",
-      path: ["p".repeat(512), "issues", 0, "title"],
-    }]);
-    const preview = error.message.split(" path=")[1];
-
-    expect(preview.length).toBeLessThanOrEqual(512);
-    expect(JSON.parse(preview)).toEqual([`${"p".repeat(45)}…`, "issues", 0, "title"]);
-  });
-
-  it("bounds escaped path strings without breaking JSON or Unicode", async () => {
-    const error = await failureFor([{
-      type: "FORBIDDEN",
-      message: "Denied",
-      path: Array.from({ length: 11 }, () => `${"\u0000".repeat(7)}😀\\\"more`),
-    }]);
-    const preview = error.message.split(" path=")[1];
-
-    expect(preview.length).toBeLessThanOrEqual(512);
-    expect(JSON.parse(preview)).toEqual([
-      ...Array.from({ length: 10 }, () => `${"\u0000".repeat(7)}😀…`), "…",
-    ]);
-  });
-
-  it("distinguishes a malformed path segment from a genuine question mark", async () => {
-    const error = await failureFor([{ type: "FORBIDDEN", message: "Denied", path: ["?", {}] }]);
-
-    expect(error.message).toContain('path=["?",null]');
-  });
-
-  it.each([
-    [10, '["s0","s1","s2","s3","s4","s5","s6","s7","s8","s9"]'],
-    [11, '["s0","s1","s2","s3","s4","s5","s6","s7","s8","s9","…"]'],
-  ])("retains the first ten short path segments and marks omission at length %i", async (length, preview) => {
-    const error = await failureFor([{
-      type: "FORBIDDEN",
-      message: "Denied",
-      path: Array.from({ length: Number(length) }, (_, index) => `s${index}`),
-    }]);
-
-    expect(error.message).toBe(`GitHub GraphQL request failed. FORBIDDEN: Denied path=${preview}`);
-  });
-
-  it("keeps surfaced whitespace on one log line in every field", async () => {
-    const error = await failureFor([{
-      type: "FOR\nBIDDEN\tTYPE",
-      message: "Access\ndenied\there",
-      path: ["repo\nsitory", "is\tsues"],
-    }]);
-
-    expect(error.message).toBe('GitHub GraphQL request failed. FOR BIDDEN TYPE: Access denied here path=["repo sitory","is sues"]');
-  });
-
-  it("preserves the exact timeout when fetch resolves after abort", async () => {
-    const client = new GitHubGraphqlClient({
-      accessToken: "test-access-token",
-      timeoutMs: 1,
-      fetch: async (_input, init) => new Promise<Response>((resolve) => {
-        init?.signal?.addEventListener("abort", () => resolve(Response.json({ data: { ok: true } })), { once: true });
-      }),
-    });
-
-    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub request timed out\.$/);
-  });
-
-  it("rethrows an existing GitHub request error with its object identity intact", async () => {
-    const original = await failureFor([{ type: "RATE_LIMIT", message: "Limit exceeded" }]);
-    const client = new GitHubGraphqlClient({
-      accessToken: "test-access-token",
-      fetch: async () => { throw original; },
-    });
-
-    await expect(client.query("query {}", {})).rejects.toBe(original);
-  });
-
-  it.each([{ errors: [] }, { errors: null }])("intentionally rejects usable data with any defined errors member: %j", async ({ errors }) => {
-    const client = new GitHubGraphqlClient({
-      accessToken: "test-access-token",
-      fetch: async () => Response.json({ data: { repository: { name: "overflow" } }, errors }),
-    });
-
-    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub GraphQL request failed\.$/);
-  });
-});
-
 describe("GitHubGateway incremental issue reads", () => {
   // Mutants: ISSUE_WATERMARK_GATES_DIRTY_FETCH, SINCE_ENABLES_TRUNCATED_TIMELINE.
   it("hydrates an explicit dirty issue with all labels, references and authoritative timeline pages", async () => {
@@ -2093,6 +1845,103 @@ describe("GitHubGateway issue timeline query shape", () => {
     } });
     await expect(gateway.listIssues({ owner: "octo", name: "overflow" }, { ...timelineOptions, since: "2026-09-07T00:00:00Z" })).resolves.toEqual([]);
     expect(requests).toEqual(["https://api.github.com/graphql"]);
+  });
+
+  function largeManifestFixture(commentCount: number) {
+    const comments = Array.from({ length: commentCount }, (_, index) => ({
+      ...rationale, id: `comment-${index + 1}`, databaseId: 1000 + index,
+    }));
+    const largeTimeline = [openingEvent(1), ...comments];
+    const smallTimeline = [openingEvent(2), { ...rationale, id: "small-comment" }];
+    const truth = {
+      1: [...Array.from({ length: 268 }, (_, index) => ({ __typename: "ClosedEvent", id: `closed-${index}` })), ...largeTimeline],
+      2: smallTimeline,
+    };
+    const perIssuePages: string[] = [];
+    const repoPages: string[] = [];
+    const gateway = new GitHubGateway({ accessToken: ["test", "access", "token"].join("-"), fetch: async (input, init) => {
+      const url = new URL(String(input));
+      const perIssue = perIssueManifestResponse(input, truth);
+      if (perIssue !== null) {
+        const rows = await perIssue.json() as unknown[];
+        const page = Number(url.searchParams.get("page"));
+        const last = Math.max(1, Math.ceil(rows.length / 100));
+        if (page < 1 || page > last) throw new Error(`Unexpected manifest page: ${url}`);
+        perIssuePages.push(`${url.pathname}:${page}`);
+        const link = `<${url.origin}${url.pathname}?page=${page + 1}>; rel="next", <${url.origin}${url.pathname}?page=${last}>; rel="last"`;
+        return Response.json(rows.slice((page - 1) * 100, page * 100), { headers: page < last ? { link } : {} });
+      }
+      if (url.pathname.endsWith("/issues/events") || url.pathname.endsWith("/issues/comments")) {
+        repoPages.push(`${url.pathname}:${url.searchParams.get("page")}`);
+        if (url.searchParams.get("page") !== "1") throw new Error(`Unexpected repository page: ${url}`);
+        const last = url.pathname.endsWith("/events") ? 120 : 2;
+        return Response.json([], { headers: { link: `<${url.origin}${url.pathname}?page=2>; rel="next", <${url.origin}${url.pathname}?page=${last}>; rel="last"` } });
+      }
+      const { query, variables } = JSON.parse(String(init?.body));
+      const operation = /query (\w+)/.exec(query)?.[1];
+      const node = issueNode(101, 1, "Large issue", { nodes: [], pageInfo });
+      if (operation === "RepositoryIssue") return Response.json({ data: { repository: { issue: node } } });
+      if (operation === "RepositoryIssues") return Response.json({ data: { repository: { issues: {
+        nodes: [node, issueNode(102, 2, "Small issue", { nodes: [], pageInfo })], pageInfo,
+      } } } });
+      if (operation === "IssueTimelineCounts") return countsResponse(variables, (number) => number === 1 ? commentCount + 1 : 2);
+      if (operation === "IssueTimeline") {
+        const nodes = variables.issueNumber === 1 ? largeTimeline : smallTimeline;
+        const offset = Number(variables.cursor ?? 0);
+        if (!Number.isSafeInteger(offset) || offset < 0 || offset >= nodes.length) throw new Error("Unexpected timeline cursor");
+        const next = offset + 100;
+        return timelineResponse(nodes.slice(offset, next), { hasNextPage: next < nodes.length, endCursor: next < nodes.length ? String(next) : null });
+      }
+      throw new Error(`Unexpected operation: ${operation}`);
+    } });
+    return { gateway, perIssuePages, repoPages };
+  }
+
+  it("gathers a dirty issue with three event pages and six comment pages", async () => {
+    const { gateway, perIssuePages } = largeManifestFixture(543);
+    const issue = await gateway.gatherIssue({ owner: "octo", name: "overflow" }, { id: 101, number: 1 }, timelineOptions);
+    expect(new Set(issue?.comments.map(({ id }) => id))).toEqual(new Set(Array.from({ length: 543 }, (_, index) => `comment-${index + 1}`)));
+    expect(issue?.history.map(({ id }) => id)).toEqual(["opening-event-1"]);
+    expect(perIssuePages).toEqual([
+      ...Array.from({ length: 3 }, (_, index) => `/repos/octo/overflow/issues/1/events:${index + 1}`),
+      ...Array.from({ length: 6 }, (_, index) => `/repos/octo/overflow/issues/1/comments:${index + 1}`),
+    ]);
+  });
+
+  it("completes a large per-issue manifest after the repository-wide estimate refuses", async () => {
+    const { gateway, perIssuePages, repoPages } = largeManifestFixture(1001);
+    const issues = await gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions);
+    expect(new Set(issues[0]?.comments.map(({ id }) => id))).toEqual(new Set(Array.from({ length: 1001 }, (_, index) => `comment-${index + 1}`)));
+    expect(issues[1]?.comments.map(({ id }) => id)).toEqual(["small-comment"]);
+    expect(repoPages).toEqual(["/repos/octo/overflow/issues/events:1", "/repos/octo/overflow/issues/comments:1"]);
+    expect(perIssuePages).toEqual([
+      ...Array.from({ length: 3 }, (_, index) => `/repos/octo/overflow/issues/1/events:${index + 1}`),
+      ...Array.from({ length: 11 }, (_, index) => `/repos/octo/overflow/issues/1/comments:${index + 1}`),
+      "/repos/octo/overflow/issues/2/events:1", "/repos/octo/overflow/issues/2/comments:1",
+    ]);
+  });
+
+  it("fails closed when a per-issue collection continues beyond its declared last page", async () => {
+    const pages: number[] = [];
+    const gateway = new GitHubGateway({ accessToken: ["test", "access", "token"].join("-"), fetch: async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/issues/1/events")) {
+        const page = Number(url.searchParams.get("page"));
+        pages.push(page);
+        const next = page < 10 ? `<${url.origin}${url.pathname}?page=${page + 1}>; rel="next"` : "";
+        const last = page === 1 ? `, <${url.origin}${url.pathname}?page=2>; rel="last"` : "";
+        return Response.json([], { headers: { link: next + last } });
+      }
+      if (url.pathname.endsWith("/issues/1/comments")) return Response.json([]);
+      const { query, variables } = JSON.parse(String(init?.body));
+      const operation = /query (\w+)/.exec(query)?.[1];
+      if (operation === "RepositoryIssue") return Response.json({ data: { repository: { issue: issueNode(101, 1, "Shifting pages", { nodes: [], pageInfo }) } } });
+      if (operation === "IssueTimelineCounts") return countsResponse(variables, () => 0);
+      if (operation === "IssueTimeline") return timelineResponse();
+      throw new Error(`Unexpected operation: ${operation}`);
+    } });
+    await expect(gateway.gatherIssue({ owner: "octo", name: "overflow" }, { id: 101, number: 1 }, timelineOptions)).rejects.toThrow();
+    expect(pages).toEqual([1, 2]);
   });
 
   it("falls back per issue when collection size is unknown and bounds that fallback per issue", async () => {

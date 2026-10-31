@@ -12,10 +12,10 @@
     "src/components/repository-form.tsx": 833,
     "src/lib/dashboard/queries.ts": 1526,
     "src/lib/fold/repository-fold.ts": 1420,
-    "src/lib/github/client.ts": 1439,
+    "src/lib/github/client.ts": 1438,
     "src/lib/moderation/credit-adjustment-store.ts": 827,
     "src/lib/repositories/register.ts": 2004,
     "tests/db/schema.test.ts": 5074,
-    "tests/github/graphql.test.ts": 3018
+    "tests/github/graphql.test.ts": 2867
   }
 }
