@@ -5,38 +5,25 @@ import { describe, expect, it } from "vitest";
 import { productionClosure, productionClosureContains } from "./production-closure";
 
 /**
- * Acceptance record — GHSA-vfj7-8cjw-p6xm (braces <= 3.0.3, no patched
- * release exists). Disposition: scoped, recorded acceptance.
- *
- * Basis: the only vulnerable path is the dev-only lint chain
- * eslint-config-next -> @next/eslint-plugin-next -> fast-glob -> micromatch ->
- * braces. It never reaches the production dependency tree and is never
- * shipped. `pnpm.auditConfig.ignoreGhsas` in package.json records the
- * acceptance for pnpm's audit — the engine the dependency-audit workflow
- * runs — and this suite holds that record to its scope:
- *
- * - exactly one ignored advisory id, so widening to a blanket ignore fails
- *   here;
- * - every `braces@<semver>` token in the lockfile still 3.0.3, and at least
- *   one token present. Either a braces version change in the lockfile (e.g.
- *   a patched release gets adopted) or braces leaving the tree voids the
- *   acceptance and forces re-disposition — that is the review trigger;
- * - braces stays ABSENT from the lockfile's production dependency closure —
- *   the property the acceptance rests on. A production dependency that pulls
- *   braces in leaves every pnpm audit green while shipping it; this check
- *   goes red the day that happens and forces re-disposition. The closure
- *   walk over pnpm-lock.yaml lives in ./production-closure.
+ * Scoped acceptance records for braces, minimatch and glob advisories.
+ * The dev-only Next lint chain reaches braces without a patched release.
+ * ESLint requires minimatch ^10; eslint-plugin-import, eslint-plugin-jsx-a11y
+ * and eslint-plugin-react require ^3 and break on 11's exports. Testcontainers
+ * reaches glob ^10 via archiver 7 and archiver-utils 5. No compatible patched
+ * parent releases are available for these paths; none is shipped in production.
+ * Changes to the ignored IDs, audited versions or production closure require
+ * re-disposition; the closure walk lives in ./production-closure.
  */
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
-const ACCEPTED_GHSA = "GHSA-vfj7-8cjw-p6xm";
+const ACCEPTED_GHSAS = ["GHSA-vfj7-8cjw-p6xm", "GHSA-g3hv-75wg-m249", "GHSA-3g3m-2fjr-6pw4"];
 const ACCEPTED_BRACES_VERSION = "3.0.3";
 
-describe("braces advisory acceptance (GHSA-vfj7-8cjw-p6xm)", () => {
-  it("records exactly the accepted advisory id in pnpm's audit config", async () => {
+describe("dev-only advisory acceptance", () => {
+  it("records exactly the accepted advisory ids in pnpm's audit config", async () => {
     const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
-    expect(pkg.pnpm?.auditConfig?.ignoreGhsas).toStrictEqual([ACCEPTED_GHSA]);
+    expect(pkg.pnpm?.auditConfig?.ignoreGhsas).toStrictEqual(ACCEPTED_GHSAS);
   });
 
   it("keeps the acceptance scoped to the lockfile's audited braces version", async () => {
@@ -48,15 +35,22 @@ describe("braces advisory acceptance (GHSA-vfj7-8cjw-p6xm)", () => {
     }
   });
 
-  it("keeps braces out of the production dependency closure", async () => {
+  it.each([
+    ["minimatch", ["3.1.5", "5.1.9", "9.0.9", "10.2.6"]],
+    ["glob", ["10.5.0"]],
+  ])("keeps the acceptance scoped to the lockfile's audited %s versions", async (name, expected) => {
     const lock = await readFile(resolve(root, "pnpm-lock.yaml"), "utf8");
-    // The pinned property itself: the walk reports no braces snapshot
-    // reachable from the root importer through production edges.
-    expect(productionClosureContains(lock, "braces")).toBe(false);
-    // Non-vacuity: the walk must also find every root production dependency
-    // package.json declares, so a broken or empty closure cannot read as a
-    // green "absent". The walk input is parsed once; membership is checked
-    // against the computed closure's names.
+    const sections = lock.split(/^snapshots:$/m);
+    expect(sections).toHaveLength(2);
+    for (const section of sections) {
+      const versions = new Set([...section.matchAll(new RegExp(`^  ${name}@([^:()\\s]+)`, "gm"))].map((match) => match[1]));
+      expect(versions.size).toBeGreaterThan(0);
+      expect(versions).toEqual(new Set(expected));
+    }
+  });
+
+  it.each(["braces", "minimatch", "glob"])("keeps %s out of the production dependency closure", async (name) => {
+    const lock = await readFile(resolve(root, "pnpm-lock.yaml"), "utf8");
     const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
     const rootProdDeps = Object.keys(pkg.dependencies ?? {});
     expect(rootProdDeps.length).toBeGreaterThan(0);
@@ -64,6 +58,7 @@ describe("braces advisory acceptance (GHSA-vfj7-8cjw-p6xm)", () => {
     for (const name of rootProdDeps) {
       expect(closureNames.has(name)).toBe(true);
     }
+    expect(closureNames.has(name)).toBe(false);
   });
 
   it("reports braces present when a production edge pulls it in (synthetic fixture)", () => {
@@ -113,6 +108,21 @@ describe("braces advisory acceptance (GHSA-vfj7-8cjw-p6xm)", () => {
     );
     expect(planted).not.toBe(lock);
     expect(productionClosureContains(planted, "braces")).toBe(true);
+  });
+
+  it.each([
+    ["minimatch", "3.1.5"],
+    ["glob", "10.5.0"],
+  ])("reports %s present when the real lockfile gains a fabricated production edge", async (name, version) => {
+    const lock = await readFile(resolve(root, "pnpm-lock.yaml"), "utf8");
+    const anchor = "    dependencies:\n      next:\n";
+    expect(lock.includes(anchor)).toBe(true);
+    const planted = lock.replace(
+      anchor,
+      `    dependencies:\n      ${name}:\n        specifier: ${version}\n        version: ${version}\n      next:\n`,
+    );
+    expect(planted).not.toBe(lock);
+    expect(productionClosureContains(planted, name)).toBe(true);
   });
 });
 
