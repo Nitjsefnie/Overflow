@@ -1204,8 +1204,8 @@
     8375
   ],
   "tests/ci/audit-acceptance.test.ts": [
-    2587,
-    6327
+    1700,
+    8414
   ],
   "tests/ci/concurrency.test.ts": [
     18464,
