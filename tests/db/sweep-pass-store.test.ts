@@ -505,6 +505,11 @@ describe("durable sweep walk subjects", () => {
   });
 
   const good = { kind: "ISSUE", id: 1, number: 1, generation: 3 };
+  const unpublishableGenerations: Array<[string, number]> = [
+    ["a fractional generation", 1.5],
+    ["a generation of 2 ** 63", 2 ** 63],
+    ["a generation of -(2 ** 64)", -(2 ** 64)],
+  ];
   const unreadableDirtySubjects: Array<[string, unknown]> = [
     ["an object", {}],
     ["a null entry", [good, null, good]],
@@ -514,13 +519,14 @@ describe("durable sweep walk subjects", () => {
     ["a string generation", [good, { ...good, generation: "1" }, good]],
     ["an unsafe id", [good, { ...good, id: 2 ** 53 }, good]],
     ["an unsafe number", [good, { ...good, number: 2 ** 53 }, good]],
-    ["a fractional generation", [good, { ...good, generation: 1.5 }, good]],
-    ["an unsafe generation", [good, { ...good, generation: 2 ** 53 }, good]],
+    ...unpublishableGenerations.map(([label, generation]): [string, unknown] => [label, [good, { ...good, generation }, good]]),
   ];
 
   it("keeps a pass whose dirty subjects are readable", async () => {
     const f = await materializeRepositoryFixture(sql);
-    const dirtySubjects = [{ kind: "ISSUE" as const, id: 1, number: 1, generation: 3 }, { kind: "PULL_REQUEST" as const, id: 2, number: 2, generation: 0 }];
+    const dirtySubjects = [{ kind: "ISSUE" as const, id: 1, number: 1, generation: 3 }, { kind: "PULL_REQUEST" as const, id: 2, number: 2, generation: 0 },
+      { kind: "ISSUE" as const, id: 3, number: 3, generation: 2 ** 63 - 1024 },
+      { kind: "ISSUE" as const, id: 4, number: 4, generation: -(2 ** 63 - 1024) }];
     const input = { repositoryId: f.repositoryId, evidenceVersion: "walk-v1", scanStartedAt: at, dirtySubjects };
     const store = new PostgresSweepPassStore(sql);
     const pass = await store.open(input);
@@ -529,6 +535,48 @@ describe("durable sweep walk subjects", () => {
     expect(reopened.id).toBe(pass.id);
     expect(reopened.dirtySubjects).toEqual(dirtySubjects);
     expect(await reopened.readStaged()).toHaveLength(1);
+  });
+
+  it("resumes a held pass whose sequence-generated dirty generation is 2 ** 53 with its page and staged work", async () => {
+    const f = await materializeRepositoryFixture(sql);
+    const repository = (await f.store.getRepository(f.repositoryId))!;
+    f.store.getGitHubAccessToken = async () => randomBytes(24).toString("hex");
+    const [sequence] = await sql<{ last_value: string }[]>`select last_value from repository_reconciliation_dirty_generation`;
+    await sql`select setval('repository_reconciliation_dirty_generation', 9007199254740991)`;
+    try {
+      const issue = f.fold.issues[0]!;
+      await sql`insert into repository_reconciliation_dirty_subjects (repository_id, kind, github_subject_id, subject_number)
+        values (${f.repositoryId}, 'ISSUE', ${issue.githubIssueId}, ${issue.number})`;
+      const passes = new PostgresSweepPassStore(sql);
+      const seen: Array<{ id: string; generation: number | undefined; page: unknown; staged: number }> = [];
+      let pass: SweepPass | undefined;
+      const github: ReconciliationGateway = {
+        walkReconciliation: async () => {
+          if (seen.length === 0) {
+            await pass!.write("first", { text: "paused page" });
+            await pass!.stage(subject);
+          }
+          seen.push({ id: pass!.id, generation: pass!.dirtySubjects[0]?.generation, page: await pass!.read("first"), staged: (await pass!.readStaged()).length });
+          throw new SweepBudgetSpent(new Date("2030-01-01T06:00:00Z"));
+        },
+        getRepositoryById: verifiedRepositoryAt(repository.ownerName),
+        listIssues: async () => [], getIssue: async () => null, getPullRequestClosingIssues: async () => [],
+        getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
+      };
+      const sweep = {
+        spend: async () => null,
+        openPass: async (input: Parameters<PostgresSweepPassStore["open"]>[0]) => (pass = await passes.open(input)),
+        discardPass: (id: string) => passes.discardByRepository(id),
+        discardIfInactive: (id: string) => passes.discardIfInactive(id),
+      };
+      for (let run = 0; run < 3; run++) {
+        await reconcileRepository({ store: f.store, github, sweep, now: () => at, onBudgetChange: () => {} }, f.repositoryId, { reason: "SWEEP" });
+      }
+      const held = { id: seen[0]!.id, generation: 2 ** 53, page: { text: "paused page" }, staged: 1 };
+      expect(seen).toEqual([held, held, held]);
+    } finally {
+      await sql`select setval('repository_reconciliation_dirty_generation', ${sequence!.last_value})`;
+    }
   });
 
   it.each(unreadableDirtySubjects)("restarts a pass whose dirty subjects hold %s", async (_label, dirty) => {
