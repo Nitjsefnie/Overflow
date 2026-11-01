@@ -534,12 +534,12 @@ describe("suite run PR resolution", () => {
       expect(vi.isFakeTimers()).toBe(false);
     });
 
-    it("leaves no deadline timer behind once a cancel has settled", () => withFakeTimers(async () => {
+    it.each([[503, 3], [404, 1]])("leaves no deadline timer behind once a cancel of a rejected %i has settled", (status, reads) => withFakeTimers(async () => {
       const h = harness();
-      const attempts = rejectedWithBody(h, 503, 3, () => ({ cancel: async () => {} }));
+      const attempts = rejectedWithBody(h, status, reads, () => ({ cancel: async () => {} }));
       const result = await resolveSuitePullRequest(h.deps);
-      expect(result.lines).toEqual(["::error::GitHub API read failed: HTTP 503"]);
-      expect(attempts()).toBe(3);
+      expect(result.lines).toEqual([`::error::GitHub API read failed: HTTP ${status}`]);
+      expect(attempts()).toBe(reads);
       expect(vi.getTimerCount()).toBe(0);
     }));
   });
