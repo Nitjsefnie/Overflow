@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -542,5 +543,31 @@ describe("suite run PR resolution", () => {
       expect(attempts()).toBe(reads);
       expect(vi.getTimerCount()).toBe(0);
     }));
+  });
+
+  it("keeps a process alive until the failure of a rejected read whose body cancel never settles is reported", () => {
+    const child = `
+      const { resolveSuitePullRequest } = await import(${JSON.stringify(new URL("../../scripts/resolve-suite-pull-request.ts", import.meta.url).href)});
+      const fetchFn = async () => new Response(new ReadableStream({
+        cancel: () => { console.log("cancel requested"); return new Promise(() => {}); },
+      }), { status: 404 });
+      const outcome = await resolveSuitePullRequest({
+        env: { GITHUB_REPOSITORY: "o/r", GH_TOKEN: "t", OVERFLOW_SUITE_RUN_ID: "123" },
+        fetchFn, sleepFn: async () => {},
+      });
+      console.log(JSON.stringify(outcome));
+    `;
+    const childEnv: Record<string, string> = { PATH: process.env.PATH ?? "" };
+    const result = spawnSync(process.execPath, ["--input-type=module", "--eval", child], {
+      env: childEnv as NodeJS.ProcessEnv,
+      encoding: "utf8",
+      timeout: 90_000,
+    });
+    if (result.error) throw result.error;
+    expect({ status: result.status, signal: result.signal, stdout: result.stdout.trim().split("\n") }).toEqual({
+      status: 0,
+      signal: null,
+      stdout: ["cancel requested", JSON.stringify({ exitCode: 1, lines: ["::error::GitHub API read failed: HTTP 404"] })],
+    });
   });
 });
