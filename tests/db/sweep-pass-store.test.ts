@@ -514,6 +514,8 @@ describe("durable sweep walk subjects", () => {
     ["a string generation", [good, { ...good, generation: "1" }, good]],
     ["an unsafe id", [good, { ...good, id: 2 ** 53 }, good]],
     ["an unsafe number", [good, { ...good, number: 2 ** 53 }, good]],
+    ["a fractional generation", [good, { ...good, generation: 1.5 }, good]],
+    ["an unsafe generation", [good, { ...good, generation: 2 ** 53 }, good]],
   ];
 
   it("keeps a pass whose dirty subjects are readable", async () => {
