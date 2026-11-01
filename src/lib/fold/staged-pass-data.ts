@@ -46,5 +46,5 @@ export async function readStagedRows(pass: SweepPass): Promise<StagedRow[]> {
 export function isDirtySubjects(value: unknown): boolean {
   return Array.isArray(value) && value.every((subject) => isFields(subject)
     && (subject.kind === "ISSUE" || subject.kind === "PULL_REQUEST")
-    && isId(subject.id) && isId(subject.number) && typeof subject.generation === "number");
+    && isId(subject.id) && isId(subject.number) && isId(subject.generation));
 }
