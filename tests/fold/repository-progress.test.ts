@@ -38,8 +38,12 @@ it("keeps the first and second listed issue milestones through removal and unreg
   expect(initial).toEqual({ first: String(f.source.fold.issues[0]!.githubIssueId), second: true });
   const first = { ...f.source.fold.issues[0]!, githubIssueId: nextId++, number: 1 };
   const second = { ...first, githubIssueId: nextId++, number: 2, openingSourceEventId: `opening-${nextId}` };
+  const notBefore = new Date("2035-01-01T00:00:00.000Z");
+  await f.source.store.withRepositoryReconciliation(f.repositoryId, () =>
+    f.source.store.setReconciliationCooldown(f.repositoryId, notBefore));
   await f.publish({ ...f.empty, issues: [first] });
   expect(await f.markers()).toEqual({ first: String(first.githubIssueId), second: false, reviewed: false });
+  expect(await f.source.store.getReconciliationCooldown(f.repositoryId)).toEqual(notBefore);
   await f.publish({ ...f.empty, issues: [first] });
   expect(await f.markers()).toEqual({ first: String(first.githubIssueId), second: false, reviewed: false });
   await f.publish(f.empty);
