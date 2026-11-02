@@ -16,6 +16,8 @@ import { ForgeIdentityError } from "@/lib/forge/identities";
 import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-store";
 import { getSql } from "@/lib/db/client";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
+import { registrationRefusal } from "@/lib/repositories/registration-refusal";
+import { incrementRegistrationAttempt, recordRegistrationAttempt, type RegistrationAttemptKind } from "@/lib/stats/registration-attempts";
 import { hashApiToken, readApiTokenCredential } from "@/lib/security/api-token";
 import {
   applyRouteRateGate,
@@ -111,6 +113,7 @@ export type RepositoryRouteDependencies = {
    * test factory call — stays unbounded.
    */
   rateGate?: RouteRateGate;
+  incrementRegistrationAttempt?: (kind: RegistrationAttemptKind) => Promise<void>;
 };
 
 /**
@@ -210,6 +213,10 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
         openingLabels: input.openingLabels.map((entry) => entry.label),
       }, { status: 201 });
     } catch (error) {
+      const refusal = registrationRefusal(error);
+      if (refusal !== null && dependencies.incrementRegistrationAttempt !== undefined) {
+        await recordRegistrationAttempt(refusal, dependencies.incrementRegistrationAttempt);
+      }
       if (error instanceof RepositoryRegistrationError) {
         return registrationErrorResponse(error);
       }
@@ -472,6 +479,7 @@ async function authorizeRepositoryRequest(
 
 export const POST = createRepositoryPostHandler({
   getCurrentRole: getCurrentUserRole,
+  incrementRegistrationAttempt,
   rateGate: repositoryRateGate,
   async findAccountByTokenHash(hash) {
     return new PostgresApiTokenStore().findAccountByTokenHash(hash);

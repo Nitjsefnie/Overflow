@@ -5,6 +5,7 @@ import {
   GITHUB_REPOSITORY_REGISTRATION_SCOPE,
 } from "@/lib/auth/github-oauth-scopes";
 import { assertTrustedServerActionOrigin } from "@/lib/security/server-action-origin";
+import { recordRegistrationAttempt } from "@/lib/stats/registration-attempts";
 
 /**
  * The GitHub sign-ins (issue 599). Each names its scope per call, which
@@ -30,6 +31,7 @@ export async function signInAsContributor(): Promise<void> {
  */
 export async function signInForRepositoryRegistration(): Promise<void> {
   await assertTrustedServerActionOrigin();
+  await recordRegistrationAttempt("REGISTRATION_START");
   const { signIn } = await import("@/auth");
   await signIn("github", { redirectTo: "/repositories/new" }, { scope: GITHUB_REPOSITORY_REGISTRATION_SCOPE });
 }

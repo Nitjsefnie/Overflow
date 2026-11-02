@@ -248,6 +248,9 @@ src/components/*
 !src/components/*.tsx
 !src/lib/
 src/lib/*
+!src/lib/stats/
+src/lib/stats/*
+!src/lib/stats/*.ts
 !src/lib/processing-activities.ts
 !src/lib/disputes.ts
 !src/lib/sanctions.ts
