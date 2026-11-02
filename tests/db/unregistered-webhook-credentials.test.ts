@@ -69,9 +69,11 @@ describe(`upgrading across ${backfillMigration}`, () => {
 
     await runMigrations();
     const after = await rowsById();
+    const progressDefaults = { first_listed_issue_id: null, second_issue_listed: false, contributor_review_received: false };
 
     expect(after.get(unregistered)).toEqual({
       ...before.get(unregistered),
+      ...progressDefaults,
       webhook_credential_id: null,
       encrypted_webhook_secret: null,
       webhook_configured_at: null,
@@ -85,7 +87,7 @@ describe(`upgrading across ${backfillMigration}`, () => {
     });
     for (const untouched of [moderated, active, legacyUnregistered]) {
       expect(after.get(untouched)).toEqual({
-        ...before.get(untouched), sanction_deactivated_at: null, registration_method: "oauth_hook",
+        ...before.get(untouched), ...progressDefaults, sanction_deactivated_at: null, registration_method: "oauth_hook",
         reconciliation_auth_path: null, reconciliation_auth_path_at: null,
       });
     }

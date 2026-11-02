@@ -92,6 +92,9 @@ describe("closed PR dispute schema", () => {
       await sql`alter table issues add column asks_outside_repository boolean not null default false`;
       await sql`alter table issues add column done_when text`;
       await sql`alter table settlements add column donation_comment_id text`;
+      await sql`alter table registered_repositories add column first_listed_issue_id bigint,
+        add column second_issue_listed boolean not null default false,
+        add column contributor_review_received boolean not null default false`;
       const affectedIssueIds: string[] = [];
       const surplusRequestIds: string[] = [];
       for (let index = 0; index < 2; index += 1) {
@@ -105,6 +108,8 @@ describe("closed PR dispute schema", () => {
       await sql`alter table issues drop column asks_outside_repository`;
       await sql`alter table issues drop column done_when`;
       await sql`alter table settlements drop column donation_comment_id`;
+      await sql`alter table registered_repositories drop column first_listed_issue_id,
+        drop column second_issue_listed, drop column contributor_review_received`;
       await expect(runMigrations()).rejects.toThrow(
         `Closed PR dispute precondition failed: 2 issue(s) hold more than one granted dispute. Issue ids: ${affectedIssueIds.sort().join(", ")}`,
       );
