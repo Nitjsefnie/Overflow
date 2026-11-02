@@ -98,8 +98,7 @@ it("keeps the response and reconciliation when a marker write fails, without log
       .resolves.toEqual({ status: "PROCESSED" });
     expect(await sql`select id from repository_reconciliation_jobs where repository_id = ${f.repositoryId}`).toHaveLength(1);
     expect(log).toHaveBeenCalledOnce();
-    expect(log.mock.calls[0]).toHaveLength(1);
-    expect(String(log.mock.calls[0]![0])).not.toContain(String(f.githubId));
+    expect(log.mock.calls[0]).toEqual(["Contributor review progress marker write failed."]);
   } finally {
     log.mockRestore();
   }

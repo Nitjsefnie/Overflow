@@ -50,6 +50,8 @@ it("keeps the first and second listed issue milestones through removal and unreg
   expect(await f.markers()).toEqual({ first: String(first.githubIssueId), second: false, reviewed: false });
   await f.publish({ ...f.empty, issues: [second] });
   expect(await f.markers()).toEqual({ first: String(first.githubIssueId), second: true, reviewed: false });
+  await f.publish(f.empty);
+  expect(await f.markers()).toEqual({ first: String(first.githubIssueId), second: true, reviewed: false });
   await expect(new PostgresRepositoryStore(sql).unregisterRepository({
     ownerName: f.ownerName, sponsorId: f.sponsorId, provider: "github",
   })).resolves.toMatchObject({ kind: "UNREGISTERED" });
