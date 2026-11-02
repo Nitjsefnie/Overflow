@@ -17,6 +17,7 @@ vi.mock("next/headers", async () => (await import("../support/trusted-origin")).
 useTrustedOrigin();
 
 import HomePage, { LandingPage, metadata } from "@/app/page";
+import { GITHUB_REPOSITORY_REGISTRATION_SCOPE } from "@/lib/auth/github-oauth-scopes";
 import { OVERFLOW_OPENING_CATALOG } from "@/lib/opening-catalog-examples";
 
 describe("landing page", () => {
@@ -28,13 +29,32 @@ describe("landing page", () => {
   it.each(["https://github.com/apps/overflow-registration/installations/new", null])("explains configured registration on the landing page with URL %s", (url) => {
     const { container } = render(<LandingPage registrationAppConfigured registrationAppInstallUrl={url} />);
     const notes = container.querySelectorAll(".landing-action-note");
-    expect(notes[0]!.textContent).toBe("Contributing asks GitHub for nothing beyond your public profile. Registering a repository through Overflow's webhook needs webhook administration on it, granted through a separate sign-in:");
-    expect(notes[1]!.textContent).toBe('Or register without webhook administration: sign in with GitHub above, install this instance\'s registration App on the repository, and choose "GitHub App" on the registration form.');
+    expect(notes[0]!.textContent).toBe("Contributing asks GitHub for nothing beyond your public profile. Registering a repository through Overflow's webhook needs webhook administration on it, granted through a separate sign-in requesting the admin:repo_hook scope:");
+    expect(notes[1]!.textContent).toBe('Or register without webhook administration: sign in with GitHub above, install this instance\'s registration App on the repository, and choose "GitHub App" on the registration form. The App\'s repository permissions are metadata: read, issues: read, and pull_requests: read.');
     const link = notes[1]!.querySelector("a");
     if (url === null) expect(link).toBeNull();
     else expect(link).toHaveAttribute("href", url);
     const registration = screen.getByRole("button", { name: "Sign in to register a repository" });
     expect(registration.compareDocumentPosition(notes[1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it.each([false, true])("names the webhook scope when the registration App is configured: %s", (configured) => {
+    const { container } = render(<LandingPage registrationAppConfigured={configured} />);
+    const note = container.querySelector(".landing-action-note")!;
+    expect(Array.from(note.querySelectorAll("code"), (element) => element.textContent))
+      .toEqual([GITHUB_REPOSITORY_REGISTRATION_SCOPE]);
+  });
+
+  it.each(["https://github.com/apps/overflow-registration/installations/new", null])("lists exactly the App's repository permissions with URL %s", (url) => {
+    const { container } = render(<LandingPage registrationAppConfigured registrationAppInstallUrl={url} />);
+    const note = container.querySelectorAll(".landing-action-note")[1]!;
+    expect(Array.from(note.querySelectorAll("code"), (element) => element.textContent))
+      .toEqual(["metadata: read", "issues: read", "pull_requests: read"]);
+  });
+
+  it.each(["metadata: read", "issues: read", "pull_requests: read"])("does not show %s without the registration App", (permission) => {
+    const { container } = render(<LandingPage />);
+    expect(container).not.toHaveTextContent(permission);
   });
 
   it("reads the App display environment during each HomePage render", async () => {
