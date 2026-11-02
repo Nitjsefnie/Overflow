@@ -30,7 +30,7 @@ export async function registerGitHubAppRepository(
     throw registrationAppLookupError(error);
   }
   if (installation === null) {
-    throw new RepositoryRegistrationError("INVALID_INPUT", "Install the registration App on this repository first, then retry registration.");
+    throw new RepositoryRegistrationError("INVALID_INPUT", "Install the registration App on this repository first, then retry registration.", undefined, "NOT_ADMINISTRATOR_OR_APP_NOT_INSTALLED");
   }
   let created: RegisteredRepository | null;
   try {
@@ -51,7 +51,7 @@ export async function registerGitHubAppRepository(
     throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to save the repository registration.");
   }
   if (created === null) {
-    throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
+    throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.", undefined, "ALREADY_REGISTERED");
   }
   return created;
 }

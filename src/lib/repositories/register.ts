@@ -286,7 +286,7 @@ export type RepositoryUnregisterApiResult = {
 export class RepositoryRegistrationError extends Error {
   public constructor(
     public readonly code: "CONFLICT" | "FORBIDDEN" | "GITHUB_ACCESS" | "GITHUB_CREDENTIALS" | "GITHUB_RATE_LIMITED" | "INVALID_INPUT" | "NOT_FOUND" | "ROLLBACK_INCOMPLETE" | "UPSTREAM_FAILURE",
-    message: string, cause?: unknown,
+    message: string, cause?: unknown, public readonly refusal?: import("@/lib/stats/registration-attempts").RegistrationRefusalKind | null,
   ) {
     // Issue 883: the message is the submitter's; the cause is what the wrap was handed. Omitted installs none.
     super(message, cause === undefined ? undefined : { cause });
@@ -405,7 +405,7 @@ export async function registerRepository(
   if (repository.visibility !== "PUBLIC") {
     throw new RepositoryRegistrationError(
       "FORBIDDEN",
-      "Only public GitHub repositories can be registered.",
+      "Only public GitHub repositories can be registered.", undefined, "NOT_PUBLIC",
     );
   }
 
@@ -414,7 +414,7 @@ export async function registerRepository(
       "FORBIDDEN",
       input.registrationMethod === "app"
         ? "GitHub did not report you as an administrator of this repository. Install the registration App on this repository and ensure you hold administrator permission, then retry registration."
-        : "GitHub administrator permission is required for the submitted repository.",
+        : "GitHub administrator permission is required for the submitted repository.", undefined, "NOT_ADMINISTRATOR_OR_APP_NOT_INSTALLED",
     );
   }
 
@@ -423,7 +423,7 @@ export async function registerRepository(
   // registration stands in the way.
   const existing = await findExistingRepository(dependencies.store, repository.id);
   if (existing !== null && existing.unregisteredAt === null) {
-    throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
+    throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.", undefined, "ALREADY_REGISTERED");
   }
 
   // The reverse cross-forge guard: a GitHub registration may not take over an
@@ -431,7 +431,7 @@ export async function registerRepository(
   // forge history never migrates between forges.
   const existingProvider = await dependencies.store.findRepositoryProviderById(repository.id);
   if (existingProvider !== null && existingProvider !== "github") {
-    throw new RepositoryRegistrationError("CONFLICT", forgeCollisionMessage("github", repository.id, existingProvider, "registration"));
+    throw new RepositoryRegistrationError("CONFLICT", forgeCollisionMessage("github", repository.id, existingProvider, "registration"), undefined, "ALREADY_REGISTERED");
   }
 
   await verifySchemeLabelsExist(dependencies.github, submittedRepository, repository, difficultyScheme, "register again");
@@ -509,7 +509,7 @@ export async function registerRepository(
         "The GitHub webhook created for the submitted repository collided with one a different "
           + "registration already records. The submitted repository is not registered. Registering "
           + "again requests a new webhook from GitHub, so retry once before treating this as stored "
-          + "state that has to be resolved.",
+          + "state that has to be resolved.", undefined, null,
       );
     }
 
@@ -547,7 +547,7 @@ export async function registerRepository(
     if (!abandonment.proven) {
       throw new RepositoryRegistrationError("ROLLBACK_INCOMPLETE", rollbackIncompleteMessage);
     }
-    throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
+    throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.", undefined, "ALREADY_REGISTERED");
   }
 
   return completeGitHubRegistration(dependencies, submittedRepository, created);
@@ -695,14 +695,14 @@ async function registerGitLabRepository(
   if (repository.visibility !== "PUBLIC") {
     throw new RepositoryRegistrationError(
       "FORBIDDEN",
-      "Only public GitLab projects can be registered.",
+      "Only public GitLab projects can be registered.", undefined, "NOT_PUBLIC",
     );
   }
 
   if (!repository.canAdminister) {
     throw new RepositoryRegistrationError(
       "FORBIDDEN",
-      "GitLab maintainer permission is required for the submitted project.",
+      "GitLab maintainer permission is required for the submitted project.", undefined, "NOT_ADMINISTRATOR_OR_APP_NOT_INSTALLED",
     );
   }
 
@@ -710,7 +710,7 @@ async function registerGitLabRepository(
   // update), so only a row still holding the registration conflicts.
   const existing = await findExistingRepository(dependencies.store, repository.id);
   if (existing !== null && existing.unregisteredAt === null) {
-    throw new RepositoryRegistrationError("CONFLICT", "This GitLab project is already registered.");
+    throw new RepositoryRegistrationError("CONFLICT", "This GitLab project is already registered.", undefined, "ALREADY_REGISTERED");
   }
 
   // Cross-forge collision: an id registered under GitHub — even an
@@ -719,7 +719,7 @@ async function registerGitLabRepository(
   // (GitHub-era settlements folded against this id) travels with the row.
   const existingProvider = await dependencies.store.findRepositoryProviderById(repository.id);
   if (existingProvider !== null && existingProvider !== "gitlab") {
-    throw new RepositoryRegistrationError("CONFLICT", forgeCollisionMessage("gitlab", repository.id, existingProvider, "registration"));
+    throw new RepositoryRegistrationError("CONFLICT", forgeCollisionMessage("gitlab", repository.id, existingProvider, "registration"), undefined, "ALREADY_REGISTERED");
   }
 
   // Label existence through the gateway: the labels endpoint may refuse
@@ -734,7 +734,7 @@ async function registerGitLabRepository(
   if (missing.length > 0) {
     throw new RepositoryRegistrationError(
       "INVALID_INPUT",
-      `The GitLab project does not carry these labels: ${missing.map((entry) => entry.label).join(", ")}. Create them, then register again.`,
+      `The GitLab project does not carry these labels: ${missing.map((entry) => entry.label).join(", ")}. Create them, then register again.`, undefined, "MISSING_CATALOG_LABELS",
     );
   }
 
@@ -804,7 +804,7 @@ async function registerGitLabRepository(
         "The project webhook created for the submitted repository collided with one a different "
           + "registration already records. The submitted project is not registered. Registering "
           + "again requests a new webhook, so retry once before treating this as stored "
-          + "state that has to be resolved.",
+          + "state that has to be resolved.", undefined, null,
       );
     }
     if (error instanceof RepositoryRegistrationEnforcementError) {
@@ -832,7 +832,7 @@ async function registerGitLabRepository(
     if (!abandonment.proven) {
       throw new RepositoryRegistrationError("ROLLBACK_INCOMPLETE", gitlabRollbackIncompleteMessage);
     }
-    throw new RepositoryRegistrationError("CONFLICT", "This GitLab project is already registered.");
+    throw new RepositoryRegistrationError("CONFLICT", "This GitLab project is already registered.", undefined, "ALREADY_REGISTERED");
   }
 
   // The registration stands. The initial import queues through the same
@@ -1770,7 +1770,7 @@ async function verifySchemeLabelsExist(
     throw new RepositoryRegistrationError(
       "INVALID_INPUT",
       `The repository is missing the difficulty labels ${missing.map((label) => `\`${label}\``).join(", ")}. `
-        + `Create them on GitHub, then ${remedy}.`,
+        + `Create them on GitHub, then ${remedy}.`, undefined, "MISSING_CATALOG_LABELS",
     );
   }
 }

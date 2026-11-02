@@ -116,6 +116,7 @@ export const bundledMigrationNames: readonly string[] = [
   "085_contributor_work_mail.sql",
   "086_settlement_donations.sql",
   "087_donated_settlement_status_check.sql",
+  "088_registration_attempt_counts.sql",
 ];
 
 /**
