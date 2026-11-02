@@ -16,7 +16,7 @@ import { ForgeIdentityError } from "@/lib/forge/identities";
 import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-store";
 import { getSql } from "@/lib/db/client";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
-import { registrationRefusal } from "@/lib/repositories/registration-refusal";
+import { isCountableRegistrationInput, registrationRefusal } from "@/lib/repositories/registration-refusal";
 import { incrementRegistrationAttempt, recordRegistrationAttempt, type RegistrationAttemptKind } from "@/lib/stats/registration-attempts";
 import { hashApiToken, readApiTokenCredential } from "@/lib/security/api-token";
 import {
@@ -214,7 +214,7 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
       }, { status: 201 });
     } catch (error) {
       const refusal = registrationRefusal(error);
-      if (refusal !== null && dependencies.incrementRegistrationAttempt !== undefined) {
+      if (refusal !== null && dependencies.incrementRegistrationAttempt !== undefined && isCountableRegistrationInput(input)) {
         await recordRegistrationAttempt(refusal, dependencies.incrementRegistrationAttempt);
       }
       if (error instanceof RepositoryRegistrationError) {
