@@ -68,7 +68,9 @@ it("resolves a GitLab approval through the linked identity on the correct instan
 it("does not write a marker for an unregistered repository", async () => {
   const f = await fixture();
   await sql`update registered_repositories set active = false, unregistered_at = now() where id = ${f.repositoryId}`;
-  await f.deliver(github(f.githubId, "submitted", f.contributorForgeId));
+  const delivery = github(f.githubId, "submitted", f.contributorForgeId);
+  await f.deliver(delivery);
+  await new PostgresWebhookDeliveryStore(sql).markContributorReviewReceived(f.repositoryId, delivery);
   expect(await f.reviewed()).toBe(false);
   expect(await sql`select id from repository_reconciliation_jobs where repository_id = ${f.repositoryId}`).toHaveLength(0);
 });
