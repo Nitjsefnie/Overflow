@@ -1,6 +1,52 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DashboardSql } from "@/lib/dashboard/queries";
-import { createSettledWorkReader } from "@/lib/public-stats";
+import { createOwnerProgressReader, createSettledWorkReader } from "@/lib/public-stats";
+
+const progressRow = (starts: string) => [{
+  repositories: "2", github_repositories: "1", gitlab_repositories: "1", listed_issue: "1",
+  contributor_reviewed: "1", listed_second_issue: "1", attempts: { REGISTRATION_START: starts },
+}];
+
+describe("owner progress cache", () => {
+  it("reuses a reading until the settled-work refresh boundary", async () => {
+    let time = 100_000;
+    const query = vi.fn().mockResolvedValueOnce(progressRow("2")).mockResolvedValueOnce(progressRow("4"));
+    const read = createOwnerProgressReader({ sql: query as unknown as DashboardSql, now: () => time });
+    expect((await read()).registrationStarts).toBe(2);
+    time += 599_999;
+    expect((await read()).registrationStarts).toBe(2);
+    expect(query).toHaveBeenCalledTimes(1);
+    time += 1;
+    expect((await read()).registrationStarts).toBe(4);
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares an in-flight reading between callers", async () => {
+    let resolve!: (rows: ReturnType<typeof progressRow>) => void;
+    const pending = new Promise<ReturnType<typeof progressRow>>((done) => { resolve = done; });
+    const query = vi.fn().mockReturnValue(pending);
+    const read = createOwnerProgressReader({ sql: query as unknown as DashboardSql });
+    const first = read();
+    const second = read();
+    expect(query).toHaveBeenCalledTimes(1);
+    resolve(progressRow("8"));
+    expect((await Promise.all([first, second])).map((result) => result.registrationStarts)).toEqual([8, 8]);
+  });
+
+  it("retries after a failed initial read or refresh", async () => {
+    let time = 100_000;
+    const query = vi.fn().mockRejectedValueOnce(new Error("unavailable"))
+      .mockResolvedValueOnce(progressRow("3")).mockRejectedValueOnce(new Error("refresh failed"))
+      .mockResolvedValueOnce(progressRow("4"));
+    const read = createOwnerProgressReader({ sql: query as unknown as DashboardSql, now: () => time });
+    await expect(read()).rejects.toThrow("unavailable");
+    expect((await read()).registrationStarts).toBe(3);
+    time += 600_000;
+    await expect(read()).rejects.toThrow("refresh failed");
+    expect((await read()).registrationStarts).toBe(4);
+    expect(query).toHaveBeenCalledTimes(4);
+  });
+});
 
 describe("settled work cache", () => {
   it("reuses a reading until the ten-minute boundary, then reads again", async () => {

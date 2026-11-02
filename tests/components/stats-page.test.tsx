@@ -6,20 +6,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const auth = vi.fn();
 const currentRole = vi.fn();
 const readStats = vi.fn();
+const readProgress = vi.fn();
 
 beforeEach(() => {
   vi.resetModules();
   vi.doMock("@/auth", () => ({ auth, signIn: vi.fn() }));
   vi.doMock("@/lib/moderation/current-role", () => ({ getCurrentUserRole: currentRole }));
-  vi.doMock("@/lib/public-stats", () => ({ getSettledWorkStats: readStats, SETTLED_WORK_REFRESH_MINUTES: 7 }));
+  vi.doMock("@/lib/public-stats", async () => ({
+    ...await vi.importActual<typeof import("@/lib/public-stats")>("@/lib/public-stats"),
+    getSettledWorkStats: readStats, getOwnerProgressStats: readProgress, SETTLED_WORK_REFRESH_MINUTES: 7,
+  }));
   auth.mockResolvedValue(null);
   readStats.mockResolvedValue({ pullRequests: 23, contributors: 4, points: 117, readAt: new Date("2026-10-27T11:12:00Z") });
+  readProgress.mockResolvedValue({
+    registrationStarts: 101, repositories: 58, githubRepositories: 41, gitlabRepositories: 17,
+    listedIssue: 29, contributorReviewed: 19, listedSecondIssue: 11,
+    refusedAttempts: {
+      MISSING_CATALOG_LABELS: 2, WEBHOOK_SCOPE_MISSING: 3, NOT_ADMINISTRATOR_OR_APP_NOT_INSTALLED: 5,
+      NOT_PUBLIC: 7, ALREADY_REGISTERED: 13, OTHER: 0,
+    },
+  });
 });
 
 afterEach(() => {
   auth.mockReset();
   currentRole.mockReset();
   readStats.mockReset();
+  readProgress.mockReset();
   vi.doUnmock("@/auth");
   vi.doUnmock("@/lib/moderation/current-role");
   vi.doUnmock("@/lib/public-stats");
@@ -37,7 +50,7 @@ describe("settled work page", () => {
     const main = screen.getByRole("main");
     expect(main).toHaveClass("page-content");
     expect(main).toHaveAttribute("id", "main-content");
-    expect([...main.querySelectorAll("strong")].map((node) => node.textContent)).toEqual(["23", "4", "117"]);
+    expect([...main.querySelectorAll("section.surface")[0]!.querySelectorAll("strong")].map((node) => node.textContent)).toEqual(["23", "4", "117"]);
     expect(screen.getByText("23")).toBeVisible();
     expect(screen.getByText("4")).toBeVisible();
     expect(screen.getByText("117")).toBeVisible();
@@ -55,11 +68,23 @@ describe("settled work page", () => {
   it("renders zero and one without suppressing either count", async () => {
     readStats.mockResolvedValue({ pullRequests: 0, contributors: 0, points: 0, readAt: new Date("2026-10-27T11:12:00Z") });
     const empty = await renderStats();
-    expect(screen.getAllByText("0")).toHaveLength(3);
+    expect([...screen.getByRole("main").querySelectorAll("section.surface")[0]!.querySelectorAll("strong")].map((node) => node.textContent)).toEqual(["0", "0", "0"]);
     empty.unmount();
     readStats.mockResolvedValue({ pullRequests: 1, contributors: 1, points: 1, readAt: new Date("2026-10-27T11:12:00Z") });
     await renderStats();
-    expect(screen.getAllByText("1")).toHaveLength(3);
+    expect([...screen.getByRole("main").querySelectorAll("section.surface")[0]!.querySelectorAll("strong")].map((node) => node.textContent)).toEqual(["1", "1", "1"]);
+  });
+
+  it.each(["public", "signed-in"])("renders every owner-progress figure in its section for a %s visitor", async (visitor) => {
+    if (visitor === "signed-in") {
+      auth.mockResolvedValue({ user: { id: "member-1", name: "Ada" } });
+      currentRole.mockResolvedValue("MEMBER");
+    }
+    await renderStats();
+    const sections = screen.getByRole("main").querySelectorAll("section.surface");
+    expect(sections[1]).toBeDefined();
+    expect([...sections[1]!.querySelectorAll("strong")].map((node) => node.textContent))
+      .toEqual(["101", "58", "41", "17", "29", "19", "11", "2", "3", "5", "7", "13", "0"]);
   });
 
   it.each(["MEMBER", "MODERATOR"] as const)("uses the live %s role for member chrome", async (role) => {
