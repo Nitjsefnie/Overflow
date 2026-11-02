@@ -277,7 +277,6 @@ describe("registration refusal counts", () => {
     expect([...actual.headers]).toEqual([...expected.headers]);
     expect(await actual.json()).toEqual(await expected.json());
     expect(failingWrite).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledOnce();
-    expect(JSON.stringify(log.mock.calls)).not.toContain("private database detail");
+    expect(log.mock.calls).toEqual([["Registration attempt counter write failed."]]);
   });
 });

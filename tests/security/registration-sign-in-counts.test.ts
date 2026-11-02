@@ -2,8 +2,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { foreignOrigin, trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
 
 const state = vi.hoisted(() => ({
-  sql: vi.fn(async (..._args: unknown[]) => []),
-  signIn: vi.fn(async (..._args: unknown[]) => undefined),
+  sql: vi.fn(async () => []),
+  signIn: vi.fn(async () => undefined),
   origin: "https://overflow.example",
 }));
 
@@ -84,8 +84,7 @@ describe("repository-registration sign-in counting", () => {
 
     expect(state.sql).toHaveBeenCalledTimes(1);
     expect(state.signIn).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledOnce();
-    expect(JSON.stringify(log.mock.calls)).not.toContain("private database detail");
+    expect(log.mock.calls).toEqual([["Registration attempt counter write failed."]]);
   });
 
   it("does not count an untrusted origin", async () => {
