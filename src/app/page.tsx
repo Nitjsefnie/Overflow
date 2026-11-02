@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { PublicAppShell } from "@/components/app-shell";
+import { GITHUB_REPOSITORY_REGISTRATION_SCOPE } from "@/lib/auth/github-oauth-scopes";
 import { signInAsContributor, signInForRepositoryRegistration } from "@/lib/auth/sign-in-actions";
 import { registrationAppConfigured, registrationAppInstallUrl } from "@/lib/github/registration-app-display";
 import type { RegistrationAppDisplayProps } from "@/components/registration-app-guidance";
@@ -33,9 +34,12 @@ export function LandingPage({ registrationAppConfigured = false, registrationApp
           </button>
         </form>
         <p className="landing-action-note">
+          Contributing asks GitHub for nothing beyond your public profile.{" "}
           {registrationAppConfigured
-            ? "Contributing asks GitHub for nothing beyond your public profile. Registering a repository through Overflow's webhook needs webhook administration on it, granted through a separate sign-in:"
-            : "Contributing asks GitHub for nothing beyond your public profile. Registering a repository you administer needs webhook administration on it, granted through a separate sign-in:"}
+            ? "Registering a repository through Overflow's webhook"
+            : "Registering a repository you administer"}{" "}
+          needs webhook administration on it, granted through a separate sign-in requesting the{" "}
+          <code>{GITHUB_REPOSITORY_REGISTRATION_SCOPE}</code> scope:
         </p>
         <form action={signInForRepositoryRegistration}>
           <button className="quiet-button" type="submit">
@@ -46,7 +50,8 @@ export function LandingPage({ registrationAppConfigured = false, registrationApp
           Or register without webhook administration: sign in with GitHub above,{" "}
           {registrationAppInstallUrl === null ? "install this instance's registration App"
             : <a href={registrationAppInstallUrl}>install this instance&apos;s registration App</a>}{" "}
-          on the repository, and choose &quot;GitHub App&quot; on the registration form.
+          on the repository, and choose &quot;GitHub App&quot; on the registration form. The App&apos;s repository
+          permissions are <code>metadata: read</code>, <code>issues: read</code>, and <code>pull_requests: read</code>.
         </p> : null}
         <Link className="text-link" href="/account-data">
           What Overflow stores about your account
