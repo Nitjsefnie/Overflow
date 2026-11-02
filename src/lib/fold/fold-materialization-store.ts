@@ -313,6 +313,22 @@ export class PostgresFoldMaterializationStore {
         input.runId,
         publication.synchronization,
       );
+      await transaction`
+        update registered_repositories as repository
+        set first_listed_issue_id = coalesce(repository.first_listed_issue_id,
+              (select min(github_issue_id) from issues where repository_id = repository.id)),
+            second_issue_listed = repository.second_issue_listed or exists (
+              select 1 from issues where repository_id = repository.id
+                and github_issue_id <> coalesce(repository.first_listed_issue_id,
+                  (select min(github_issue_id) from issues where repository_id = repository.id))
+            ),
+            contributor_review_received = repository.contributor_review_received or exists (
+              select 1 from pull_requests join review_rounds on review_rounds.pull_request_id = pull_requests.id
+              where pull_requests.repository_id = repository.id and pull_requests.author_id is not null
+                and pull_requests.author_id <> repository.sponsor_id
+            )
+        where repository.id = ${input.repositoryId}
+      `;
       await recordNewPolicyViolations(transaction, input.repositoryId, input.runId, publication.fold.policyViolations);
       if (input.synchronization !== undefined) {
         await transaction`update registered_repositories set reconciliation_not_before = null where id = ${input.repositoryId}`;

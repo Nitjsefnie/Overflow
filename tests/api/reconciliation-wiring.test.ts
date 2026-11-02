@@ -232,6 +232,7 @@ function createQueueingStore() {
     } = {
     completed,
     async applyIssueView() {},
+    async markContributorReviewReceived() {},
     outstanding: () => pending.map((job) => job.repositoryId),
     async claimDelivery() {
       return { status: "CLAIMED" as const, receiptId: "receipt-1", leaseToken: "delivery-lease" };

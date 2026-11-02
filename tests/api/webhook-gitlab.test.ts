@@ -512,6 +512,7 @@ describe("GitLab webhook route: the shared processor and the body cap", () => {
     } = {
       store: {
         applyIssueView: async () => {},
+        markContributorReviewReceived: async () => {},
         claimDelivery: async () => ({ status: "CLAIMED", receiptId: "receipt-1", leaseToken: "lease-1" }),
         findRepositoryByGitHubId,
         findRepositoryByForgeIdentity,

@@ -207,6 +207,10 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return this.webhookDeliveries.applyIssueView(repositoryId, githubIssueId, issue);
   }
 
+  public async markContributorReviewReceived(repositoryId: string, delivery: GitHubWebhookDelivery): Promise<void> {
+    return this.webhookDeliveries.markContributorReviewReceived(repositoryId, delivery);
+  }
+
   public async markProcessed(receiptId: string, leaseToken: string): Promise<boolean> {
     return this.webhookDeliveries.markProcessed(receiptId, leaseToken);
   }

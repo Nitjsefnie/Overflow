@@ -45,6 +45,7 @@ export type WebhookDeliveryStore = {
     forgeProjectId: number,
   ): Promise<WebhookRepositoryRegistration | null>;
   applyIssueView(repositoryId: string, githubIssueId: number, issue: GitHubWebhookIssue): Promise<void>;
+  markContributorReviewReceived(repositoryId: string, delivery: GitHubWebhookDelivery): Promise<void>;
   markProcessed(receiptId: string, leaseToken: string): Promise<boolean>;
   markFailed(receiptId: string, leaseToken: string, errorMessage: string): Promise<boolean>;
 };
@@ -94,8 +95,16 @@ export async function processWebhook(
           delivery.forge.instanceUrl,
           delivery.repositoryGitHubId,
         );
+    if (repository !== null && repository.active && delivery.event === "pull_request_review"
+      && delivery.action === "submitted" && delivery.pullRequestAuthorId !== undefined) {
+      try {
+        await dependencies.store.markContributorReviewReceived(repository.id, delivery);
+      } catch {
+        console.error("Contributor review progress marker write failed.");
+      }
+    }
     // A delivery whose own payload marks the repository non-public applies
-    // nothing and enqueues nothing, even while the registration row still
+    // no issue view and enqueues nothing, even while the registration row still
     // reads active: the payload is the forge's own word about visibility, and
     // acting on it would keep exposing a repository that has gone private.
     // The registration row itself carries the same veto through its sweep

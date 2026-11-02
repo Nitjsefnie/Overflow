@@ -89,6 +89,7 @@ const gitlabMergeRequestAttributesSchema = z.object({
   id: z.number().int().positive(),
   iid: z.number().int().positive(),
   action: z.string().trim().min(1),
+  author_id: z.unknown().optional(),
 });
 
 const gitlabKindSchema = z
@@ -188,6 +189,7 @@ function parseMergeRequestPayload(deliveryId: string, executionId: string, paylo
 
   const instanceUrl = instanceUrlOf(parsed.data.project);
   if (instanceUrl === null) return { status: "invalid" };
+  const author = z.number().int().positive().safeParse(parsed.data.object_attributes.author_id);
 
   return {
     status: "ok",
@@ -210,6 +212,7 @@ function parseMergeRequestPayload(deliveryId: string, executionId: string, paylo
         id: parsed.data.object_attributes.id,
         number: parsed.data.object_attributes.iid,
       },
+      ...(mapped.event === "pull_request_review" && author.success ? { pullRequestAuthorId: author.data } : {}),
       forge: { provider: "gitlab", instanceUrl },
       ...repositoryPrivateOf(parsed.data.project),
     },
