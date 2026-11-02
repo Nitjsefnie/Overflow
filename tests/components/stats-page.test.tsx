@@ -7,6 +7,13 @@ const auth = vi.fn();
 const currentRole = vi.fn();
 const readStats = vi.fn();
 const readProgress = vi.fn();
+const refusedAttempts = {
+  MISSING_CATALOG_LABELS: 2, WEBHOOK_SCOPE_MISSING: 3, NOT_ADMINISTRATOR_OR_APP_NOT_INSTALLED: 5,
+  NOT_PUBLIC: 7, ALREADY_REGISTERED: 13, OTHER: 0,
+};
+const refusalLabels = Object.fromEntries(
+  Object.keys(refusedAttempts).map((kind, index) => [kind, `sentinel-refusal-${index}`]),
+) as Record<keyof typeof refusedAttempts, string>;
 
 beforeEach(() => {
   vi.resetModules();
@@ -15,16 +22,14 @@ beforeEach(() => {
   vi.doMock("@/lib/public-stats", async () => ({
     ...await vi.importActual<typeof import("@/lib/public-stats")>("@/lib/public-stats"),
     getSettledWorkStats: readStats, getOwnerProgressStats: readProgress, SETTLED_WORK_REFRESH_MINUTES: 7,
+    REGISTRATION_REFUSAL_LABELS: refusalLabels,
   }));
   auth.mockResolvedValue(null);
   readStats.mockResolvedValue({ pullRequests: 23, contributors: 4, points: 117, readAt: new Date("2026-10-27T11:12:00Z") });
   readProgress.mockResolvedValue({
     registrationStarts: 101, repositories: 58, githubRepositories: 41, gitlabRepositories: 17,
     listedIssue: 29, contributorReviewed: 19, listedSecondIssue: 11,
-    refusedAttempts: {
-      MISSING_CATALOG_LABELS: 2, WEBHOOK_SCOPE_MISSING: 3, NOT_ADMINISTRATOR_OR_APP_NOT_INSTALLED: 5,
-      NOT_PUBLIC: 7, ALREADY_REGISTERED: 13, OTHER: 0,
-    },
+    refusedAttempts,
   });
 });
 
@@ -45,6 +50,20 @@ async function renderStats() {
 }
 
 describe("settled work page", () => {
+  it("places both figure sections under peer headings beneath the page heading", async () => {
+    await renderStats();
+    const main = screen.getByRole("main");
+    const pageHeading = main.querySelector(".page-heading h1");
+    expect(pageHeading).not.toBeNull();
+    const sections = main.querySelectorAll("section.surface");
+    expect(sections).toHaveLength(2);
+    for (const section of sections) {
+      const heading = section.querySelector(":scope > h2");
+      expect(heading).not.toBeNull();
+      expect(pageHeading!.compareDocumentPosition(heading!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
   it("renders aggregate figures and their read time for a signed-out visitor", async () => {
     await renderStats();
     const main = screen.getByRole("main");
@@ -80,11 +99,35 @@ describe("settled work page", () => {
       auth.mockResolvedValue({ user: { id: "member-1", name: "Ada" } });
       currentRole.mockResolvedValue("MEMBER");
     }
-    await renderStats();
+    const { container } = await renderStats();
     const sections = screen.getByRole("main").querySelectorAll("section.surface");
     expect(sections[1]).toBeDefined();
     expect([...sections[1]!.querySelectorAll("strong")].map((node) => node.textContent))
       .toEqual(["101", "58", "41", "17", "29", "19", "11", "2", "3", "5", "7", "13", "0"]);
+    for (const [kind, count] of Object.entries(refusedAttempts)) {
+      const label = refusalLabels[kind as keyof typeof refusedAttempts];
+      const row = [...sections[1]!.querySelectorAll("p")].find((candidate) => candidate.textContent!.endsWith(label));
+      expect(row, `row for ${label}`).toBeDefined();
+      expect(row!.querySelector("strong")?.textContent).toBe(String(count));
+    }
+    expect(container.querySelector("script")).toBeNull();
+  });
+
+  it.each(["public", "signed-in"])("preserves settled figures when owner progress fails for a %s visitor", async (visitor) => {
+    if (visitor === "signed-in") {
+      auth.mockResolvedValue({ user: { id: "member-1", name: "Ada" } });
+      currentRole.mockResolvedValue("MEMBER");
+    }
+    readProgress.mockRejectedValue(new Error("owner-progress unavailable"));
+    await renderStats();
+    const sections = screen.getByRole("main").querySelectorAll("section.surface");
+    const settledFigures = [...sections[0]!.querySelectorAll("strong")];
+    expect(settledFigures.map((node) => node.textContent)).toEqual(["23", "4", "117"]);
+    for (const figure of settledFigures) expect(figure).toBeVisible();
+    const status = sections[1]!.querySelector("[role='status']");
+    expect(status).toBeVisible();
+    expect(status!.textContent!.trim().length).toBeGreaterThan(0);
+    expect(sections[1]!.querySelector("strong")).toBeNull();
   });
 
   it.each(["MEMBER", "MODERATOR"] as const)("uses the live %s role for member chrome", async (role) => {
@@ -117,8 +160,11 @@ describe("settled work page", () => {
     const link = landing.container.querySelector<HTMLAnchorElement>('.landing-hero a[href="/stats"]');
     expect(link).not.toBeNull();
     expect(link).toHaveClass("text-link");
+    const linkLabel = link!.textContent!.trim();
+    expect(linkLabel.length).toBeGreaterThan(0);
     landing.unmount();
     await renderStats();
+    expect(screen.getByRole("heading", { level: 1 }).textContent!.trim()).toBe(linkLabel);
     expect(screen.getByText("23")).toBeVisible();
   });
 });

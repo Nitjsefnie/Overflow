@@ -63,7 +63,7 @@ export function LandingPage({ registrationAppConfigured = false, registrationApp
           Rules
         </Link>
         <Link className="text-link" href="/stats">
-          Settled work
+          Statistics
         </Link>
       </section>
       <section aria-labelledby="landing-examples-title">
