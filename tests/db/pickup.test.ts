@@ -18,7 +18,7 @@ describe("pickup stock", () => {
     const started = await startPostgresContainer({ database: "pickup_test", user: "pickup_test" });
     container = started.container;
     process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
-    execFileSync("pnpm", ["db:migrate"], { env: process.env, stdio: "pipe" });
+    execFileSync("pnpm", ["db:migrate"], { env: { ...process.env, OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD: "skip" }, stdio: "pipe" });
     sql = getSql();
   });
 

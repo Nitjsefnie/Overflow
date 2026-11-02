@@ -22,7 +22,7 @@ describe("hourly credit issued", () => {
     const started = await startPostgresContainer({ database: "credit_issued_test", user: "credit_issued_test" });
     container = started.container;
     process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
-    execFileSync("pnpm", ["db:migrate"], { env: process.env, stdio: "pipe" });
+    execFileSync("pnpm", ["db:migrate"], { env: { ...process.env, OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD: "skip" }, stdio: "pipe" });
     sql = getSql();
   });
 
