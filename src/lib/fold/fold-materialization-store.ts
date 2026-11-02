@@ -313,6 +313,7 @@ export class PostgresFoldMaterializationStore {
         input.runId,
         publication.synchronization,
       );
+      await recordNewPolicyViolations(transaction, input.repositoryId, input.runId, publication.fold.policyViolations);
       await transaction`
         update registered_repositories as repository
         set first_listed_issue_id = coalesce(repository.first_listed_issue_id,
@@ -327,12 +328,9 @@ export class PostgresFoldMaterializationStore {
               where pull_requests.repository_id = repository.id and pull_requests.author_id is not null
                 and pull_requests.author_id <> repository.sponsor_id
             )
+            ${input.synchronization === undefined ? transaction`` : transaction`, reconciliation_not_before = null`}
         where repository.id = ${input.repositoryId}
       `;
-      await recordNewPolicyViolations(transaction, input.repositoryId, input.runId, publication.fold.policyViolations);
-      if (input.synchronization !== undefined) {
-        await transaction`update registered_repositories set reconciliation_not_before = null where id = ${input.repositoryId}`;
-      }
       if (cost !== undefined) {
         await transaction`
           insert into repository_reconciliation_usage
