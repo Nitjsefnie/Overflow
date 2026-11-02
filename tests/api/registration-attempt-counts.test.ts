@@ -102,6 +102,60 @@ function route(s: Scenario = {}, setupError?: unknown) {
 
 describe("registration refusal counts", () => {
   it.each([
+    ["GitHub URL", { ...input, repositoryUrl: "not-a-repository" }, input],
+    ["GitHub opening catalog", { ...input, openingLabels: [] }, input],
+    ["GitHub display name", { ...input, openingName: "  " }, input],
+    ["App URL", { ...input, registrationMethod: "app", repositoryUrl: "not-a-repository" }, { ...input, registrationMethod: "app" }],
+    ["App catalog", { ...input, registrationMethod: "app", actualLabels: [] }, { ...input, registrationMethod: "app" }],
+    ["GitLab instance missing", { ...gitlabInput, instanceUrl: "" }, gitlabInput],
+    ["GitLab instance invalid", { ...gitlabInput, instanceUrl: "http://gitlab.example.com" }, gitlabInput],
+    ["GitLab project missing", { ...gitlabInput, project: "" }, gitlabInput],
+    ["GitLab project path", { ...gitlabInput, project: "project" }, gitlabInput],
+    ["GitLab project zero", { ...gitlabInput, project: "0" }, gitlabInput],
+    ["GitLab project overflow", { ...gitlabInput, project: "9007199254740992" }, gitlabInput],
+    ["GitLab App method", { ...gitlabInput, registrationMethod: "app" }, gitlabInput],
+  ])("does not count malformed %s when account eligibility refuses first", async (_name, malformed, valid) => {
+    const fixture = route();
+    const handler = createRepositoryPostHandler({ ...fixture.dependencies,
+      createRegistrationDependencies: async () => ({ ...registrationDependencies(),
+        actor: { id: "member-id", role: "MEMBER", enforcementState: "BANNED" } }),
+    });
+    const baseline = await handler(json(valid));
+    expect(baseline.status).toBe(403);
+    expect(fixture.counts).toEqual(["OTHER"]);
+
+    const response = await handler(json(malformed));
+    expect(response.status).toBe(baseline.status);
+    expect(await response.json()).toEqual(await baseline.json());
+    expect(fixture.counts).toEqual(["OTHER"]);
+  });
+
+  it("counts an eligible GitLab refusal without interpreting its ignored repository URL as GitHub", async () => {
+    const fixture = route({}, new RepositoryRegistrationError("FORBIDDEN", "refusal"));
+    const response = await fixture.handler(json({ ...gitlabInput, repositoryUrl: "not-a-github-repository" }));
+    expect(response.status).toBe(403);
+    expect(fixture.counts).toEqual(["OTHER"]);
+  });
+
+  it.each([
+    ["scope", new GitHubWebhookScopeError([]), "WEBHOOK_SCOPE_MISSING"],
+    ["labels", new RepositoryRegistrationError("INVALID_INPUT", "refusal", undefined, "MISSING_CATALOG_LABELS"), "MISSING_CATALOG_LABELS"],
+    ["administrator", new RepositoryRegistrationError("FORBIDDEN", "refusal", undefined, "NOT_ADMINISTRATOR_OR_APP_NOT_INSTALLED"), "NOT_ADMINISTRATOR_OR_APP_NOT_INSTALLED"],
+    ["visibility", new RepositoryRegistrationError("FORBIDDEN", "refusal", undefined, "NOT_PUBLIC"), "NOT_PUBLIC"],
+    ["already registered", new RepositoryRegistrationError("CONFLICT", "refusal", undefined, "ALREADY_REGISTERED"), "ALREADY_REGISTERED"],
+    ["other", new RepositoryRegistrationError("FORBIDDEN", "refusal"), "OTHER"],
+  ])("does not count a malformed request for the %s refusal", async (_name, error, kind) => {
+    const fixture = route({}, error);
+    const baseline = await fixture.handler(json(input));
+    expect(fixture.counts).toEqual([kind]);
+
+    const response = await fixture.handler(json({ ...input, repositoryUrl: "not-a-repository" }));
+    expect(response.status).toBe(baseline.status);
+    expect(await response.json()).toEqual(await baseline.json());
+    expect(fixture.counts).toEqual([kind]);
+  });
+
+  it.each([
     ["GitHub missing labels", { labelsMissing: true }, "MISSING_CATALOG_LABELS", 400],
     ["GitLab missing labels", { forge: "gitlab", labelsMissing: true }, "MISSING_CATALOG_LABELS", 400],
     ["GitHub private", { visibility: "PRIVATE" }, "NOT_PUBLIC", 403],

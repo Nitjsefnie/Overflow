@@ -54,3 +54,34 @@ it("the production POST records a scope refusal in PostgreSQL", async () => {
     { kind: "WEBHOOK_SCOPE_MISSING", attempts: 1 },
   ]);
 });
+
+it.each([
+  ["invalid repository URL", 68170002, { repositoryUrl: "not-a-repository" }],
+  ["empty opening catalog", 68170003, { openingLabels: [] }],
+])("does not count %s when the production scope probe refuses first", async (_name, githubId, override) => {
+  await sql`truncate registration_attempt_counts`;
+  const [user] = await sql<{ id: string }[]>`
+    insert into users (github_user_id, github_login) values (${githubId}, ${`wiring-${githubId}`}) returning id
+  `;
+  session.userId = user!.id;
+  vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken").mockResolvedValue("example");
+  const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+  const { POST } = await import("@/app/api/repositories/route");
+  const valid = {
+    repositoryUrl: "https://github.com/octo/project", openingName: "Scope", actualName: "Delivered",
+    openingLabels: [{ label: "size/S", comparisonPoints: 2, reservePoints: 2 }],
+    actualLabels: Array.from({ length: 10 }, (_, i) => ({ label: `done/${i + 1}`, points: i + 1 })),
+  };
+  const baseline = await POST(json(valid));
+  expect(baseline.status).toBe(403);
+  expect(await sql`select kind, attempts from registration_attempt_counts`).toEqual([
+    { kind: "WEBHOOK_SCOPE_MISSING", attempts: 1 },
+  ]);
+  await sql`truncate registration_attempt_counts`;
+
+  const response = await POST(json({ ...valid, ...override }));
+  expect(response.status).toBe(baseline.status);
+  expect(await response.json()).toEqual(await baseline.json());
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(await sql`select kind, attempts from registration_attempt_counts`).toEqual([]);
+});
