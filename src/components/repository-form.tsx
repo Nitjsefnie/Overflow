@@ -395,7 +395,7 @@ export function RepositoryForm({
         </label>
       ) : null}
       {appRegistration ? <RegistrationAppHelp url={registrationAppInstallUrl} /> : null}
-
+      {!isCatalogChange ? <p className="field-help">Start with one small, self-contained issue priced at 1 to 3 points.</p> : null}
       {provider === "gitlab" ? (
         <>
           <div className="form-grid">
