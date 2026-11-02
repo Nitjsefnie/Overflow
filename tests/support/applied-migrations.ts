@@ -93,4 +93,5 @@ export const appliedMigrationNames: readonly string[] = [
   "086_settlement_donations.sql",
   "087_donated_settlement_status_check.sql",
   "088_registration_attempt_counts.sql",
+  "089_repository_progress_markers.sql",
 ];

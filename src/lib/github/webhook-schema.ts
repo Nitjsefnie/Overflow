@@ -19,6 +19,7 @@ export type GitHubWebhookDelivery = {
   repositoryGitHubId: number;
   repositoryFullName: string;
   subject: { kind: "ISSUE" | "PULL_REQUEST"; id: number; number: number };
+  pullRequestAuthorId?: number;
   /** Present only for genuine, PR-free issue envelopes; a PR-carrying envelope yields no subject at all. */
   issue?: GitHubWebhookIssue;
   /**
@@ -116,6 +117,9 @@ export function parseGitHubWebhookDeliveryDetailed(
   if (!subject.success) return { status: "invalid" };
   let issue: GitHubWebhookIssue | undefined;
   const kind = isIssueEvent ? "ISSUE" : "PULL_REQUEST";
+  const author = eventName === "pull_request_review"
+    ? z.object({ user: z.object({ id: z.number().int().positive() }) }).safeParse(parsed.data.pull_request)
+    : undefined;
   if (isIssueEvent) {
     const envelope = issueEnvelopeSchema.safeParse(parsed.data.issue);
     if (!envelope.success) return { status: "invalid" };
@@ -141,6 +145,7 @@ export function parseGitHubWebhookDeliveryDetailed(
       repositoryGitHubId: parsed.data.repository.id,
       repositoryFullName: parsed.data.repository.full_name,
       subject: { kind, ...subject.data },
+      ...(author?.success ? { pullRequestAuthorId: author.data.user.id } : {}),
       ...(issue === undefined ? {} : { issue }),
       ...(parsed.data.repository.private === true ? { repositoryPrivate: true } : {}),
     },

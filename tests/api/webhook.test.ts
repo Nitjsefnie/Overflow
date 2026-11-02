@@ -214,6 +214,7 @@ describe("GitHub webhook route", () => {
     } = {
       store: {
         applyIssueView: async () => {},
+        markContributorReviewReceived: async () => {},
         claimDelivery: async () => ({ status: "CLAIMED", receiptId: "receipt-1", leaseToken: "lease-1" }),
         findRepositoryByGitHubId: async () => ({ id: "repository-1", active: true, unavailableReason: null }),
         findRepositoryByForgeIdentity: async () => null,
@@ -253,6 +254,7 @@ describe("GitHub webhook route", () => {
     const dependencies: WebhookProcessorDependencies = {
       store: {
         applyIssueView: async () => {},
+        markContributorReviewReceived: async () => {},
         claimDelivery: async () => ({ status: "CLAIMED", receiptId: "receipt-1", leaseToken: "lease-1" }),
         findRepositoryByGitHubId: async () => ({ id: "repository-1", active: true, unavailableReason: null }),
         findRepositoryByForgeIdentity: async () => null,
@@ -513,6 +515,7 @@ describe("GitHub webhook route", () => {
     const dependencies: WebhookProcessorDependencies = {
       store: {
         applyIssueView: async () => {},
+        markContributorReviewReceived: async () => {},
         claimDelivery: async () => ({ status: "CLAIMED", receiptId: "receipt-1", leaseToken: "lease-1" }),
         findRepositoryByGitHubId: async () => ({ id: "repository-1", active: true, unavailableReason: null }),
         findRepositoryByForgeIdentity: async () => null,

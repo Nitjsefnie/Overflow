@@ -146,6 +146,54 @@ afterAll(async () => {
 });
 
 describe("upgrading an already-deployed database", () => {
+  it("backfills repository progress from current listed issues and contributor reviews", async () => {
+    await onNewDatabase("repository_progress_upgrade", async (sql) => {
+      await runMigrations({ upTo: "088_registration_attempt_counts.sql" });
+      const sponsor = await insertAccount(sql, "progress-sponsor", "ACTIVE");
+      const contributor = await insertAccount(sql, "progress-contributor", "ACTIVE");
+      const repositories: string[] = [];
+      for (let n = 0; n < 4; n += 1) {
+        const repository = await insertRepository(sql, sponsor);
+        repositories.push(repository.id);
+        await sql`update registered_repositories set owner_name = ${`progress/repository-${n}`} where id = ${repository.id}`;
+      }
+      const issueIds: string[][] = [[], [], [], []];
+      for (const [index, forgeIds] of [[], [102], [203, 201], [301]].entries()) {
+        for (const forgeId of forgeIds) {
+          const [issue] = await sql<{ id: string }[]>`
+            insert into issues (github_issue_id, repository_id, issue_number, title, url, state,
+              opening_label, opening_comparison_points, opening_reserve_points)
+            values (${forgeId}, ${repositories[index]}, ${forgeId}, 'Listed', 'https://example.test/issue', 'OPEN', 'M', 5, 5)
+            returning id
+          `;
+          issueIds[index]!.push(issue!.id);
+        }
+      }
+      for (const [index, author] of [[1, sponsor.id], [2, contributor.id], [3, null]] as const) {
+        const [pr] = await sql<{ id: string }[]>`
+          insert into pull_requests (github_pull_request_id, repository_id, issue_id, pull_request_number,
+            url, title, author_id, state)
+          values (${400 + index}, ${repositories[index]}, ${issueIds[index]![0]}, ${index},
+            'https://example.test/pr', 'Contribution', ${author}, 'OPEN') returning id
+        `;
+        await sql`insert into review_rounds (pull_request_id, github_review_id, submitted_at)
+          values (${pr!.id}, ${500 + index}, '2026-01-01T00:00:00Z')`;
+      }
+      await runMigrations();
+      const rows = await sql<{ data: Record<string, unknown> }[]>`
+        select to_jsonb(r) as data from registered_repositories r where id = any(${repositories}::uuid[])
+        order by owner_name
+      `;
+      expect(rows.map(({ data }) => ({ first: data.first_listed_issue_id, second: data.second_issue_listed,
+        reviewed: data.contributor_review_received }))).toEqual([
+        { first: null, second: false, reviewed: false },
+        { first: 102, second: false, reviewed: false },
+        { first: 201, second: true, reviewed: true },
+        { first: 301, second: false, reviewed: false },
+      ]);
+    });
+  });
+
   it("leaves legacy webhook credentials unconfigured when upgrading from 042", async () => {
     await onNewDatabase("scoped_webhook_upgrade", async (sql) => {
       await runMigrations({ upTo: "042_gitlab_webhook_orphan_cleanup.sql" });

@@ -50,6 +50,25 @@ export class PostgresWebhookDeliveryStore implements WebhookDeliveryStore {
     `;
   }
 
+  public async markContributorReviewReceived(repositoryId: string, delivery: GitHubWebhookDelivery): Promise<void> {
+    const author = delivery.pullRequestAuthorId;
+    if (author === undefined) return;
+    const provider = delivery.forge?.provider ?? "github";
+    await this.sql`
+      update registered_repositories as repository set contributor_review_received = true
+      where repository.id = ${repositoryId} and repository.active and not repository.contributor_review_received
+        and (
+          (${provider} = 'github' and exists (
+            select 1 from users where github_user_id = ${author} and id <> repository.sponsor_id
+          )) or (${provider} = 'gitlab' and exists (
+            select 1 from user_forge_identities where provider = 'gitlab'
+              and instance_url = ${delivery.forge?.instanceUrl ?? null} and forge_user_id = ${author}
+              and user_id <> repository.sponsor_id
+          ))
+        )
+    `;
+  }
+
   public async markProcessed(receiptId: string, leaseToken: string): Promise<boolean> {
     return webhookReceipts.markProcessed(this.sql, receiptId, leaseToken);
   }

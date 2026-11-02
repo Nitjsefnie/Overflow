@@ -146,6 +146,16 @@ function parseMergeRequest(payloadValue: unknown, deliveryUuid = "uuid-mr") {
 }
 
 describe("GitLab webhook merge request delivery", () => {
+  it("only carries the merge request author for review deliveries", () => {
+    const ordinary = parseMergeRequest(mergeRequestPayload({ action: "merge", author_id: 123 }));
+    const review = parseMergeRequest(mergeRequestPayload({ action: "approval", author_id: 123 }));
+    expect(ordinary.status).toBe("ok");
+    expect(review.status).toBe("ok");
+    if (ordinary.status !== "ok" || review.status !== "ok") throw new Error("Expected merge request deliveries");
+    expect(ordinary.delivery.pullRequestAuthorId).toBeUndefined();
+    expect(review.delivery.pullRequestAuthorId).toBe(123);
+  });
+
   it("maps a merge request payload onto a PULL_REQUEST subject with no issue view", () => {
     // Strict equality: the delivery must carry no `issue` key at all, since the
     // processor applies the issue view only for ISSUE subjects.
