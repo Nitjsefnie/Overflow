@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { runMigrations } from "../../scripts/migrate";
 import type { DashboardSql } from "@/lib/dashboard/queries";
 import { closeSql } from "@/lib/db/client";
-import { createSettledWorkReader, getSettledWorkStats } from "@/lib/public-stats";
+import { createOwnerProgressReader, createSettledWorkReader, getOwnerProgressStats, getSettledWorkStats } from "@/lib/public-stats";
 import { startPostgresContainer } from "../support/postgres-container";
 
 let container: StartedTestContainer | undefined;
@@ -28,6 +28,7 @@ describe("public settled work totals against PostgreSQL", () => {
 
   beforeEach(async () => {
     await sql`truncate users cascade`;
+    await sql`truncate registration_attempt_counts`;
     nextId = 20_000;
   });
 
@@ -41,6 +42,46 @@ describe("public settled work totals against PostgreSQL", () => {
 
   it("returns zero totals on an empty database", async () => {
     expect(await read()).toEqual({ pullRequests: 0, contributors: 0, points: 0, readAt });
+  });
+
+  it("counts all registered repositories, their progress markers, and daily attempts", async () => {
+    const readProgress = () => createOwnerProgressReader({ sql: sql as unknown as DashboardSql })();
+    expect(await readProgress()).toEqual({
+      registrationStarts: 0, repositories: 0, githubRepositories: 0, gitlabRepositories: 0,
+      listedIssue: 0, contributorReviewed: 0, listedSecondIssue: 0,
+      refusedAttempts: {
+        MISSING_CATALOG_LABELS: 0, WEBHOOK_SCOPE_MISSING: 0, NOT_ADMINISTRATOR_OR_APP_NOT_INSTALLED: 0,
+        NOT_PUBLIC: 0, ALREADY_REGISTERED: 0, OTHER: 0,
+      },
+    });
+
+    const sponsor = await insertUser("sponsor");
+    const active = await insertRepository(sponsor);
+    const unregistered = await insertRepository(sponsor);
+    const sanctioned = await insertRepository(sponsor);
+    const inactive = await insertRepository(sponsor);
+    await insertRepository(sponsor);
+    await sql`update registered_repositories set first_listed_issue_id = 101 where id = ${active}`;
+    await sql`update registered_repositories set active = false, unregistered_at = now(),
+      first_listed_issue_id = 102, contributor_review_received = true where id = ${unregistered}`;
+    await sql`update registered_repositories set provider = 'gitlab', active = false, sanction_deactivated_at = now(),
+      first_listed_issue_id = 103, contributor_review_received = true, second_issue_listed = true where id = ${sanctioned}`;
+    await sql`update registered_repositories set provider = 'gitlab', active = false where id = ${inactive}`;
+    await sql`insert into registration_attempt_counts (utc_day, kind, attempts) values
+      ('2026-10-01', 'REGISTRATION_START', 5), ('2026-10-02', 'REGISTRATION_START', 7),
+      ('2026-10-01', 'MISSING_CATALOG_LABELS', 2), ('2026-10-02', 'MISSING_CATALOG_LABELS', 3),
+      ('2026-10-01', 'WEBHOOK_SCOPE_MISSING', 7), ('2026-10-02', 'NOT_ADMINISTRATOR_OR_APP_NOT_INSTALLED', 11),
+      ('2026-10-01', 'NOT_PUBLIC', 13), ('2026-10-02', 'ALREADY_REGISTERED', 17), ('2026-10-01', 'OTHER', 19)`;
+    const expected = {
+      registrationStarts: 12, repositories: 5, githubRepositories: 3, gitlabRepositories: 2,
+      listedIssue: 3, contributorReviewed: 2, listedSecondIssue: 1,
+      refusedAttempts: {
+        MISSING_CATALOG_LABELS: 5, WEBHOOK_SCOPE_MISSING: 7, NOT_ADMINISTRATOR_OR_APP_NOT_INSTALLED: 11,
+        NOT_PUBLIC: 13, ALREADY_REGISTERED: 17, OTHER: 19,
+      },
+    };
+    expect(await readProgress()).toEqual(expected);
+    expect(await getOwnerProgressStats()).toEqual(expected);
   });
 
   it("counts distinct settled pull requests and contributors, and sums all their issue rows", async () => {
@@ -104,7 +145,7 @@ async function insertRepository(sponsor: string): Promise<string> {
   };
   const [row] = await sql<{ id: string }[]>`
     insert into registered_repositories (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme)
-    values (${nextId++}, 'example/private-work', ${sponsor}, 'PRIVATE', ${nextId++}, ${sql.json(scheme)}) returning id`;
+    values (${nextId++}, ${`example/private-work-${nextId}`}, ${sponsor}, 'PRIVATE', ${nextId++}, ${sql.json(scheme)}) returning id`;
   return row.id;
 }
 

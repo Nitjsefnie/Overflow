@@ -162,7 +162,8 @@ export function AccountDataNotice() {
           The same GitLab identity can belong to only one Overflow account; linking it to a second account is
           refused. Overflow reads no GitLab email address.
         </p>
-        <p>Overflow runs no analytics and no advertising scripts.</p>
+        <p>Overflow keeps aggregate per-day counts of webhook-route registration sign-ins started and of refused registration attempts by step, with no account,
+          repository, login or IP address attached. These counts do not expire automatically. Overflow runs no analytics and no advertising scripts.</p>
       </section>
       <WorkMailDisclosure />
 
@@ -205,8 +206,8 @@ export function AccountDataNotice() {
         <h2 id="account-data-access-heading">Who can see it</h2>
         <p>The site operator administers Overflow&apos;s database and the token&apos;s encryption key.</p>
         <p>
-          The public <Link href="/stats">settled work page</Link> shows only aggregate totals of settled pull
-          requests, contributors, and points, including your account&apos;s settlements, and names no account.
+          The public <Link href="/stats">stats page</Link> shows only aggregate totals of settled work and owner
+          progress, including your account&apos;s settlements, and names no account or repository.
         </p>
         <p>
           Other signed-in members and moderators see your GitHub login — the member roster and the moderation

@@ -1,14 +1,15 @@
 import { AppShell, PublicAppShell } from "@/components/app-shell";
 import { formatInstant } from "@/lib/format-instant";
 import { plural } from "@/lib/plural";
-import type { SettledWorkStats } from "@/lib/public-stats";
+import { REGISTRATION_REFUSAL_LABELS, type OwnerProgressStats, type SettledWorkStats } from "@/lib/public-stats";
+import type { RegistrationRefusalKind } from "@/lib/stats/registration-attempts";
 
-function StatsSections({ stats, refreshMinutes }: { stats: SettledWorkStats; refreshMinutes: number }) {
+function StatsSections({ stats, progress, refreshMinutes }: { stats: SettledWorkStats; progress: OwnerProgressStats; refreshMinutes: number }) {
   return (
     <>
       <section className="page-heading" aria-labelledby="stats-title">
         <h1 id="stats-title">Settled work</h1>
-        <p>Read at <time dateTime={stats.readAt.toISOString()}>{formatInstant(stats.readAt)}</time>.</p>
+        <p>Settled work read at <time dateTime={stats.readAt.toISOString()}>{formatInstant(stats.readAt)}</time>.</p>
         <p>Figures refresh on request at most once every <time dateTime={`PT${refreshMinutes}M`}>{refreshMinutes} {plural(refreshMinutes, "minute")}</time>.</p>
       </section>
       <section className="surface" aria-label="Settled work totals">
@@ -22,6 +23,22 @@ function StatsSections({ stats, refreshMinutes }: { stats: SettledWorkStats; ref
         <p><strong>{stats.points}</strong> {plural(stats.points, "point")}</p>
         <p>The points those settlements moved to contributors.</p>
       </section>
+      <section className="surface" aria-label="Owner progress">
+        <h2>Owner progress</h2>
+        <p><strong>{progress.registrationStarts}</strong> webhook-route registration {plural(progress.registrationStarts, "sign-in")} started.</p>
+        <p>
+          <strong>{progress.repositories}</strong> {plural(progress.repositories, "repository", "repositories")} ever registered
+          (<strong>{progress.githubRepositories}</strong> GitHub, <strong>{progress.gitlabRepositories}</strong> GitLab).
+          App-route registrations start with their registration request.
+        </p>
+        <p><strong>{progress.listedIssue}</strong> {plural(progress.listedIssue, "repository", "repositories")} listed an issue.</p>
+        <p><strong>{progress.contributorReviewed}</strong> {plural(progress.contributorReviewed, "repository", "repositories")} had a contributor pull request reviewed.</p>
+        <p><strong>{progress.listedSecondIssue}</strong> {plural(progress.listedSecondIssue, "repository", "repositories")} listed a second issue.</p>
+        <h3>Refused registration attempts by step</h3>
+        {(Object.entries(REGISTRATION_REFUSAL_LABELS) as [RegistrationRefusalKind, string][]).map(([kind, label]) => (
+          <p key={kind}><strong>{progress.refusedAttempts[kind]}</strong> {plural(progress.refusedAttempts[kind], "attempt")} — {label}</p>
+        ))}
+      </section>
     </>
   );
 }
@@ -32,9 +49,10 @@ export default async function StatsPage() {
   // `isolate: false`, and a static import freezes to the real module when
   // another test file renders this page first in the shared worker.
   const { getCurrentUserRole } = await import("@/lib/moderation/current-role");
-  const { getSettledWorkStats, SETTLED_WORK_REFRESH_MINUTES } = await import("@/lib/public-stats");
+  const { getSettledWorkStats, getOwnerProgressStats, SETTLED_WORK_REFRESH_MINUTES } = await import("@/lib/public-stats");
   const session = await auth();
   const stats = await getSettledWorkStats();
+  const progress = await getOwnerProgressStats();
   const user = session?.user as { id?: unknown; name?: unknown } | undefined;
   if (typeof user?.id === "string") {
     const currentRole = await getCurrentUserRole(user.id).catch(() => null);
@@ -42,7 +60,7 @@ export default async function StatsPage() {
       const memberName = typeof user.name === "string" && user.name.trim().length > 0 ? user.name : "Member";
       return (
         <AppShell memberName={memberName} isModerator={currentRole === "MODERATOR"}>
-          <StatsSections stats={stats} refreshMinutes={SETTLED_WORK_REFRESH_MINUTES} />
+          <StatsSections stats={stats} progress={progress} refreshMinutes={SETTLED_WORK_REFRESH_MINUTES} />
         </AppShell>
       );
     }
@@ -50,7 +68,7 @@ export default async function StatsPage() {
   return (
     <PublicAppShell>
       <main className="page-content" id="main-content">
-        <StatsSections stats={stats} refreshMinutes={SETTLED_WORK_REFRESH_MINUTES} />
+        <StatsSections stats={stats} progress={progress} refreshMinutes={SETTLED_WORK_REFRESH_MINUTES} />
       </main>
     </PublicAppShell>
   );
