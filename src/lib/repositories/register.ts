@@ -11,6 +11,7 @@ import {
 import { GitLabApiError, GitLabGateway } from "@/lib/gitlab/client";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { gitlabWebhookError } from "@/lib/repositories/gitlab-forge-errors";
+import { parseGitLabRegistrationInput } from "@/lib/repositories/gitlab-registration-input";
 import { deleteGitLabWebhookForUnregistration } from "@/lib/repositories/gitlab-unregister";
 import {
   completeGitHubUnregistration,
@@ -598,38 +599,7 @@ async function registerGitLabRepository(
   input: RepositoryRegistrationInput,
   difficultyScheme: DifficultyScheme,
 ): Promise<RepositoryRegistrationResult> {
-  if (input.instanceUrl === undefined || input.project === undefined || input.instanceUrl === "" || input.project === "") {
-    throw new RepositoryRegistrationError(
-      "INVALID_INPUT",
-      "A GitLab registration requires the instance URL and the project id or path.",
-    );
-  }
-
-  // The same normalization the link flow stores under: one input cannot be
-  // valid here and invalid there (or vice versa).
-  let instanceUrl: string;
-  try {
-    instanceUrl = normalizeInstanceUrl(input.instanceUrl);
-  } catch (error) {
-    throw new RepositoryRegistrationError(
-      "INVALID_INPUT",
-      error instanceof Error ? error.message : "The instance URL is malformed.",
-    );
-  }
-  if (/^\d+$/.test(input.project)) {
-    const numericProject = Number(input.project);
-    if (!Number.isSafeInteger(numericProject) || numericProject <= 0) {
-      throw new RepositoryRegistrationError(
-        "INVALID_INPUT",
-        "The GitLab project id must be a positive integer.",
-      );
-    }
-  } else if (!input.project.includes("/")) {
-    throw new RepositoryRegistrationError(
-      "INVALID_INPUT",
-      "Submit the GitLab project as a positive numeric id or a path with namespace.",
-    );
-  }
+  const { instanceUrl, project } = parseGitLabRegistrationInput(input);
 
   // The verified-identity requirement is the authorization for the whole
   // path: without a linked, live-verified PAT on THIS instance there is no
@@ -648,8 +618,8 @@ async function registerGitLabRepository(
     fetch: dependencies.forgeFetch,
   });
   let repository: GitHubRepository;
-  if (/^\d+$/.test(input.project)) {
-    const byId = await gateway.getRepositoryById(Number(input.project));
+  if (/^\d+$/.test(project)) {
+    const byId = await gateway.getRepositoryById(Number(project));
     if (byId === null) {
       throw new RepositoryRegistrationError(
         "NOT_FOUND",
@@ -658,7 +628,7 @@ async function registerGitLabRepository(
     }
     repository = byId;
   } else {
-    const segments = input.project.split("/");
+    const segments = project.split("/");
     if (segments.length < 2) {
       throw new RepositoryRegistrationError(
         "INVALID_INPUT",
