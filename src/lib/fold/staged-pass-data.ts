@@ -23,7 +23,8 @@ function ensureClosingPullRequest(value: unknown): void {
 function ensureIssue(issue: Fields): void {
   ensure(Array.isArray(issue.labels) && Array.isArray(issue.history) && Array.isArray(issue.comments)
     && Array.isArray(issue.closingPullRequests));
-  ensure(issue.history.every(isFields));
+  ensure(issue.history.every((event) => isFields(event)
+    && (event.actorLogin === null || typeof event.actorLogin === "string")));
   ensure(issue.comments.every((comment) => typeof comment?.body === "string"
     && (comment.authorLogin === null || typeof comment.authorLogin === "string")));
   issue.closingPullRequests.forEach(ensureClosingPullRequest);
