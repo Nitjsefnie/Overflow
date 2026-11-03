@@ -8,10 +8,11 @@ import { productionClosure, productionClosureContains } from "./production-closu
 /**
  * Scoped acceptance records for braces, minimatch and glob advisories.
  * The dev-only Next lint chain reaches braces without a patched release.
- * ESLint requires minimatch ^10; eslint-plugin-import, eslint-plugin-jsx-a11y
- * and eslint-plugin-react require ^3 and break on 11's exports. Testcontainers
- * reaches glob ^10 via archiver 7 and archiver-utils 5. No compatible patched
- * parent releases are available for these paths; none is shipped in production.
+ * Minimatch 3.1.5 is accepted only for eslint-plugin-import,
+ * eslint-plugin-jsx-a11y and eslint-plugin-react, which break on 11's exports.
+ * Testcontainers reaches glob 10.5.0 and minimatch 9.0.9 via archiver 7 and
+ * archiver-utils 5. No compatible patched parent releases are available for
+ * these paths; none is shipped in production.
  * Changes to the ignored IDs, audited versions or production closure require
  * re-disposition; the closure walk lives in ./production-closure.
  */
@@ -49,15 +50,15 @@ describe("dev-only advisory acceptance", () => {
   });
 
   it.each([
-    ["minimatch", ["3.1.5", "5.1.9", "9.0.9", "10.2.6"], [
-      ["@eslint/config-array", "10.2.6"],
-      ["@typescript-eslint/typescript-estree", "10.2.6"],
+    ["minimatch", ["3.1.5", "9.0.9", "11.0.4"], [
+      ["@eslint/config-array", "11.0.4"],
+      ["@typescript-eslint/typescript-estree", "11.0.4"],
       ["eslint-plugin-import", "3.1.5"],
       ["eslint-plugin-jsx-a11y", "3.1.5"],
       ["eslint-plugin-react", "3.1.5"],
-      ["eslint", "10.2.6"],
+      ["eslint", "11.0.4"],
       ["glob", "9.0.9"],
-      ["readdir-glob", "5.1.9"],
+      ["readdir-glob", "11.0.4"],
     ]],
     ["glob", ["10.5.0"], [["archiver-utils", "10.5.0"]]],
   ] as const)("keeps the acceptance scoped to the lockfile's audited %s versions", async (name, expected, expectedEdges) => {
