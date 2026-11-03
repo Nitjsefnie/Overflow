@@ -1,8 +1,15 @@
 import { defineConfig, globalIgnores } from "eslint/config";
-import nextTypeScript from "eslint-config-next/typescript";
+import tseslint from "typescript-eslint";
 
 export default defineConfig([
-  ...nextTypeScript,
+  ...tseslint.configs.recommended,
+  {
+    rules: {
+      "@typescript-eslint/no-unused-vars": "warn",
+      "@typescript-eslint/no-unused-expressions": "warn",
+    },
+  },
+  { ignores: [".next/**", "out/**", "build/**", "next-env.d.ts"] },
   {
     files: ["tests/**"],
     ignores: ["tests/support/owned-temp-directory.ts"],
