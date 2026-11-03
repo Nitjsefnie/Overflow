@@ -548,9 +548,8 @@ describe("suite run PR resolution", () => {
   it("keeps a process alive until the failure of a rejected read whose body cancel never settles is reported", () => {
     const child = `
       const { resolveSuitePullRequest } = await import(${JSON.stringify(new URL("../../scripts/resolve-suite-pull-request.ts", import.meta.url).href)});
-      const startTimer = globalThis.setTimeout;
-      const fired = [];
-      globalThis.setTimeout = (callback, ms) => startTimer(() => { fired.push(ms); callback(); }, ms);
+      const timeouts = () => process.getActiveResourcesInfo().filter((name) => name === "Timeout").length;
+      setTimeout(() => console.log("timers while waiting:", timeouts()), ${CANCEL_TIMEOUT_MS - 1_000});
       let drained = false;
       process.on("exit", () => console.log("exiting on its own:", drained));
       process.on("beforeExit", () => { drained = true; });
@@ -560,8 +559,7 @@ describe("suite run PR resolution", () => {
         fetchFn, sleepFn: async () => {},
       });
       console.log(JSON.stringify(outcome));
-      console.log("deadline fired after", fired.join());
-      console.log("timers referenced:", process.getActiveResourcesInfo().filter((name) => name === "Timeout").length);
+      console.log("timers referenced:", timeouts());
     `;
     const childEnv: Record<string, string> = { PATH: process.env.PATH ?? "" };
     const result = spawnSync(process.execPath, ["--input-type=module", "--eval", child], {
@@ -574,8 +572,8 @@ describe("suite run PR resolution", () => {
       status: 0,
       signal: null,
       stdout: [
+        "timers while waiting: 2",
         JSON.stringify({ exitCode: 1, lines: ["::error::GitHub API read failed: HTTP 404"] }),
-        `deadline fired after ${CANCEL_TIMEOUT_MS}`,
         "timers referenced: 0",
         "exiting on its own: true",
       ],
