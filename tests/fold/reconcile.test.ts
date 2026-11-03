@@ -121,6 +121,10 @@ describe("reconcileRepository", () => {
     it("builds history rows for issue 9 under a non-blank author", () => {
       expect(historied([])).toMatchObject({ id: 9, number: 9, authorLogin: "author" });
     });
+    const commented = (comments: unknown[]) => ({ ...reconciliationIssue({ id: 9, number: 9 }), closingPullRequests: [], comments });
+    it("builds comment rows for issue 9 under a non-blank author", () => {
+      expect(commented([null])).toMatchObject({ id: 9, number: 9, authorLogin: "sponsor", closingPullRequests: [], comments: [null] });
+    });
     const wrongType: Record<string, unknown> = { id: "5", number: "5", state: 1, mergedAt: 1, repositoryGitHubId: "1" };
     const unreadableRows: Array<[string, "issue" | "pull_request", unknown]> = [
       ["an unavailable subject identity", "issue", null],
@@ -132,6 +136,7 @@ describe("reconcileRepository", () => {
         [`no ${field}`, "issue", withoutField(issue(9), field)],
         [`${field} that is a string`, "issue", { ...issue(9), [field]: "x" }]]),
       ...[[null], [1], ["x"], [false], [{}, null], [null, {}], [{}, {}, null]].map((history): [string, "issue", unknown] => [`a history of ${inspect(history)}`, "issue", historied(history)]),
+      ...[[null], [1], ["x"], [false], [{}, null], [null, {}], [{}, {}, null]].map((comments): [string, "issue", unknown] => [`a comments list of ${inspect(comments)}`, "issue", commented(comments)]),
       ["a null closing pull request", "issue", closing(null)],
       ["a closing pull request with an unsafe id", "issue", closing({ ...pullRequest(7), id: 2 ** 53 })],
       ["a closing pull request with an unsafe number", "issue", closing({ ...pullRequest(7), number: 2 ** 53 })],
@@ -174,7 +179,7 @@ describe("reconcileRepository", () => {
       const { f, dependencies } = sweepRun();
       const open = { ...pullRequest(5), state: "OPEN" as const, mergedAt: null };
       const rows = [
-        { kind: "issue" as const, subjectKey: 9, payload: { ...historied([{}, []]), closingPullRequests: [open] } },
+        { kind: "issue" as const, subjectKey: 9, payload: { ...commented([{}, []]), history: historied([{}, []]).history, closingPullRequests: [open] } },
         { kind: "issue" as const, subjectKey: 10, payload: { subject: { id: 10, number: 10 } } },
         { kind: "pull_request" as const, subjectKey: 11, payload: { subject: { id: 11, number: 11 }, evidence: null } },
         { kind: "pull_request" as const, subjectKey: 12, payload: { subject: { id: 12, number: 12 }, evidence: { reviews: [], rawDiff: "diff" } } },
@@ -182,6 +187,7 @@ describe("reconcileRepository", () => {
         { kind: "pull_request" as const, subjectKey: 13, payload: { subject: { id: 13, number: 13 }, evidence: null, refreshed: true, missing: true, listed: false } },
       ];
       expect((rows[0].payload as { history: unknown[] }).history).toEqual([{}, []]);
+      expect((rows[0].payload as { comments: unknown[] }).comments).toEqual([{}, []]);
       for (const row of rows) await f.pass.stage({ anchor: "subjects", updatedAt: instant(row.subjectKey), ...row });
       await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
     });
