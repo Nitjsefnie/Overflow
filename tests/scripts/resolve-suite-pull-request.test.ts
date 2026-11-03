@@ -547,9 +547,22 @@ describe("suite run PR resolution", () => {
 
   it("keeps a process alive until the failure of a rejected read whose body cancel never settles is reported", () => {
     const child = `
-      const { resolveSuitePullRequest } = await import(${JSON.stringify(new URL("../../scripts/resolve-suite-pull-request.ts", import.meta.url).href)});
+      import { createHook } from "node:async_hooks";
       const timeouts = () => process.getActiveResourcesInfo().filter((name) => name === "Timeout").length;
-      setTimeout(() => console.log("timers while waiting:", timeouts()), ${CANCEL_TIMEOUT_MS - 1_000});
+      const resolverTimers = [];
+      setTimeout(() => {
+        console.log("timers while waiting:", timeouts());
+        console.log("resolver timers referenced while waiting:", resolverTimers.filter((timer) => timer.hasRef()).length);
+      }, ${CANCEL_TIMEOUT_MS - 1_000});
+      createHook({
+        init(asyncId, type, triggerAsyncId, resource) {
+          if (type !== "Timeout") return;
+          const frames = new Error().stack.split("\\n");
+          const creator = frames[frames.findIndex((frame) => frame.includes("(node:timers")) + 1];
+          if (creator?.includes("scripts/resolve-suite-pull-request.ts") && frames.some((frame) => frame.includes("discardBody"))) resolverTimers.push(resource);
+        },
+      }).enable();
+      const { resolveSuitePullRequest } = await import(${JSON.stringify(new URL("../../scripts/resolve-suite-pull-request.ts", import.meta.url).href)});
       let drained = false;
       process.on("exit", () => console.log("exiting on its own:", drained));
       process.on("beforeExit", () => { drained = true; });
@@ -573,6 +586,7 @@ describe("suite run PR resolution", () => {
       signal: null,
       stdout: [
         "timers while waiting: 2",
+        "resolver timers referenced while waiting: 1",
         JSON.stringify({ exitCode: 1, lines: ["::error::GitHub API read failed: HTTP 404"] }),
         "timers referenced: 0",
         "exiting on its own: true",
