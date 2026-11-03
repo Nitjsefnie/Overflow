@@ -126,6 +126,7 @@ describe("reconcileRepository", () => {
       expect(commented([null])).toMatchObject({ id: 9, number: 9, authorLogin: "sponsor", closingPullRequests: [], comments: [null] });
     });
     const wrongType: Record<string, unknown> = { id: "5", number: "5", state: 1, mergedAt: 1, repositoryGitHubId: "1" };
+    const unreadableComments = [[null], [1], ["x"], [false], [{}, null], [null, {}], [{}, {}, null]];
     const unreadableRows: Array<[string, "issue" | "pull_request", unknown]> = [
       ["an unavailable subject identity", "issue", null],
       ["a string id", "issue", { ...issue(9), id: "9" }],
@@ -136,7 +137,7 @@ describe("reconcileRepository", () => {
         [`no ${field}`, "issue", withoutField(issue(9), field)],
         [`${field} that is a string`, "issue", { ...issue(9), [field]: "x" }]]),
       ...[[null], [1], ["x"], [false], [{}, null], [null, {}], [{}, {}, null]].map((history): [string, "issue", unknown] => [`a history of ${inspect(history)}`, "issue", historied(history)]),
-      ...[[null], [1], ["x"], [false], [{}, null], [null, {}], [{}, {}, null]].map((comments): [string, "issue", unknown] => [`a comments list of ${inspect(comments)}`, "issue", commented(comments)]),
+      ...unreadableComments.map((comments): [string, "issue", unknown] => [`a comments list of ${inspect(comments)}`, "issue", commented(comments)]),
       ["a null closing pull request", "issue", closing(null)],
       ["a closing pull request with an unsafe id", "issue", closing({ ...pullRequest(7), id: 2 ** 53 })],
       ["a closing pull request with an unsafe number", "issue", closing({ ...pullRequest(7), number: 2 ** 53 })],
@@ -155,6 +156,12 @@ describe("reconcileRepository", () => {
       ["a refreshed pull request row without listed", "pull_request", { subject: identity, evidence: null, refreshed: true, missing: false }],
       ["a refreshed pull request row with a string listed", "pull_request", { subject: identity, evidence: null, refreshed: true, missing: false, listed: "yes" }],
     ];
+
+    it("stages each unreadable comments row in comments, beside a readable history", () => {
+      const rows = unreadableRows.filter(([label]) => label.startsWith("a comments list of ")).map(([, , payload]) => payload as { comments: unknown; history: unknown[] });
+      expect(rows.map((payload) => payload.comments)).toEqual(unreadableComments);
+      for (const payload of rows) expect(payload.history.every((entry) => entry !== null && typeof entry === "object")).toBe(true);
+    });
 
     it.each(unreadableRows)("discards the sweep pass, without retrying, when a staged row holds %s", async (_label, kind, payload) => {
       const { f, dependencies, walk } = sweepRun();
