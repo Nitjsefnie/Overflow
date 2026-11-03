@@ -548,20 +548,22 @@ describe("suite run PR resolution", () => {
   it("keeps a process alive until the failure of a rejected read whose body cancel never settles is reported", () => {
     const child = `
       const { resolveSuitePullRequest } = await import(${JSON.stringify(new URL("../../scripts/resolve-suite-pull-request.ts", import.meta.url).href)});
-      process.on("beforeExit", () => console.log("exiting on its own"));
-      const fetchFn = async () => new Response(new ReadableStream({
-        cancel: () => {
-          const cancel = new Promise(() => {});
-          void Promise.race([cancel, Promise.resolve("sentinel")])
-            .then((won) => console.log(won === "sentinel" ? "cancel pending" : "cancel settled"));
-          return cancel;
-        },
-      }), { status: 404 });
+      const pending = (promise) => Promise.race([promise, Promise.reject("pending")]).catch((value) => value);
+      process.once("beforeExit", () => setImmediate(() => console.log("exiting on its own")));
+      const body = new ReadableStream({ cancel: () => new Promise(() => {}) });
+      const cancel = body.cancel.bind(body);
+      let returned, awaited = false;
+      body.cancel = (reason) => (returned = cancel(reason), { then: (...callbacks) => (awaited = true, returned.then(...callbacks)) });
+      const fetchFn = async () => new Response(body, { status: 404 });
       const outcome = await resolveSuitePullRequest({
         env: { GITHUB_REPOSITORY: "o/r", GH_TOKEN: "t", OVERFLOW_SUITE_RUN_ID: "123" },
         fetchFn, sleepFn: async () => {},
       });
       console.log(JSON.stringify(outcome));
+      console.log("awaited", awaited);
+      console.log("cancel", await pending(returned));
+      console.log("control", await pending(Promise.resolve("settled")));
+      console.log("control", await pending(Promise.reject("rejected")));
     `;
     const childEnv: Record<string, string> = { PATH: process.env.PATH ?? "" };
     const result = spawnSync(process.execPath, ["--input-type=module", "--eval", child], {
@@ -574,8 +576,11 @@ describe("suite run PR resolution", () => {
       status: 0,
       signal: null,
       stdout: [
-        "cancel pending",
         JSON.stringify({ exitCode: 1, lines: ["::error::GitHub API read failed: HTTP 404"] }),
+        "awaited true",
+        "cancel pending",
+        "control settled",
+        "control rejected",
         "exiting on its own",
       ],
     });
