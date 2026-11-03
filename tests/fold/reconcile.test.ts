@@ -126,7 +126,21 @@ describe("reconcileRepository", () => {
       expect(commented([null])).toMatchObject({ id: 9, number: 9, authorLogin: "sponsor", closingPullRequests: [], comments: [null] });
     });
     const wrongType: Record<string, unknown> = { id: "5", number: "5", state: 1, mergedAt: 1, repositoryGitHubId: "1" };
-    const unreadableComments = [[null], [1], ["x"], [false], [{}, null], [null, {}], [{}, {}, null]];
+    const sponsorComment = { id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: null, body: "Done when it works." };
+    const unreadableComments = [[null], [1], ["x"], [false], [sponsorComment, null], [null, sponsorComment], [sponsorComment, sponsorComment, null]];
+    const bodyless = withoutField(sponsorComment, "body");
+    const unreadableBodies: Array<[string, unknown[]]> = [
+      ["no body", [bodyless]],
+      ["a null body", [{ ...sponsorComment, body: null }]],
+      ["a numeric body", [{ ...sponsorComment, body: 1 }]],
+      ["a boolean body", [{ ...sponsorComment, body: false }]],
+      ["an object body", [{ ...sponsorComment, body: {} }]],
+      ["an array body", [{ ...sponsorComment, body: [] }]],
+      ["no body after a readable comment", [sponsorComment, bodyless]],
+      ["no body before a readable comment", [bodyless, sponsorComment]],
+      ["no body after two readable comments", [sponsorComment, sponsorComment, bodyless]],
+      ["no body, the sponsor's numeric id", [{ ...bodyless, authorGitHubUserId: 1001 }]],
+    ];
     const unreadableRows: Array<[string, "issue" | "pull_request", unknown]> = [
       ["an unavailable subject identity", "issue", null],
       ["a string id", "issue", { ...issue(9), id: "9" }],
@@ -138,6 +152,7 @@ describe("reconcileRepository", () => {
         [`${field} that is a string`, "issue", { ...issue(9), [field]: "x" }]]),
       ...[[null], [1], ["x"], [false], [{}, null], [null, {}], [{}, {}, null]].map((history): [string, "issue", unknown] => [`a history of ${inspect(history)}`, "issue", historied(history)]),
       ...unreadableComments.map((comments): [string, "issue", unknown] => [`a comments list of ${inspect(comments)}`, "issue", commented(comments)]),
+      ...unreadableBodies.map(([label, comments]): [string, "issue", unknown] => [`a sponsor comment with ${label}`, "issue", commented(comments)]),
       ["a null closing pull request", "issue", closing(null)],
       ["a closing pull request with an unsafe id", "issue", closing({ ...pullRequest(7), id: 2 ** 53 })],
       ["a closing pull request with an unsafe number", "issue", closing({ ...pullRequest(7), number: 2 ** 53 })],
@@ -163,6 +178,21 @@ describe("reconcileRepository", () => {
       for (const payload of rows) expect(payload.history.every((entry) => entry !== null && typeof entry === "object")).toBe(true);
     });
 
+    it("stages each unreadable body row as sponsor comments of which one has the wrong body", () => {
+      const rows = unreadableRows.filter(([label]) => label.startsWith("a sponsor comment with ")).map(([, , payload]) => payload as { comments: Array<Record<string, unknown>>; history: unknown[] });
+      expect(bodyless).toEqual({ id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: null });
+      expect(rows.map((payload) => payload.comments)).toEqual(unreadableBodies.map(([, comments]) => comments));
+      for (const { comments, history, ...row } of rows) {
+        expect(row).toMatchObject({ id: 9, number: 9, labels: expect.any(Array), closingPullRequests: [] });
+        expect(comments.map((comment) => withoutField(withoutField(comment, "body"), "authorGitHubUserId"))).toEqual(comments.map(() => withoutField(withoutField(sponsorComment, "body"), "authorGitHubUserId")));
+        expect(history.every((entry) => entry !== null && typeof entry === "object")).toBe(true);
+      }
+      expect(rows.map(({ comments }) => comments.filter((comment) => typeof comment.body !== "string").map((comment) => ("body" in comment ? comment.body : "absent"))))
+        .toEqual([["absent"], [null], [1], [false], [{}], [[]], ["absent"], ["absent"], ["absent"], ["absent"]]);
+      expect(rows.map(({ comments }) => comments.filter((comment) => comment.body === "Done when it works.").length)).toEqual([0, 0, 0, 0, 0, 0, 1, 1, 2, 0]);
+      expect(rows.map(({ comments }) => comments.map((comment) => comment.authorGitHubUserId))).toEqual([[null], [null], [null], [null], [null], [null], [null, null], [null, null], [null, null, null], [1001]]);
+    });
+
     it.each(unreadableRows)("discards the sweep pass, without retrying, when a staged row holds %s", async (_label, kind, payload) => {
       const { f, dependencies, walk } = sweepRun();
       await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 8, updatedAt: instant(8), payload: stub(8) });
@@ -186,7 +216,7 @@ describe("reconcileRepository", () => {
       const { f, dependencies } = sweepRun();
       const open = { ...pullRequest(5), state: "OPEN" as const, mergedAt: null };
       const rows = [
-        { kind: "issue" as const, subjectKey: 9, payload: { ...commented([{}, []]), history: historied([{}, []]).history, closingPullRequests: [open] } },
+        { kind: "issue" as const, subjectKey: 9, payload: { ...commented([{ ...sponsorComment, body: "" }, sponsorComment]), history: historied([{}, []]).history, closingPullRequests: [open] } },
         { kind: "issue" as const, subjectKey: 10, payload: { subject: { id: 10, number: 10 } } },
         { kind: "pull_request" as const, subjectKey: 11, payload: { subject: { id: 11, number: 11 }, evidence: null } },
         { kind: "pull_request" as const, subjectKey: 12, payload: { subject: { id: 12, number: 12 }, evidence: { reviews: [], rawDiff: "diff" } } },
@@ -194,8 +224,16 @@ describe("reconcileRepository", () => {
         { kind: "pull_request" as const, subjectKey: 13, payload: { subject: { id: 13, number: 13 }, evidence: null, refreshed: true, missing: true, listed: false } },
       ];
       expect((rows[0].payload as { history: unknown[] }).history).toEqual([{}, []]);
-      expect((rows[0].payload as { comments: unknown[] }).comments).toEqual([{}, []]);
+      expect((rows[0].payload as { comments: unknown[] }).comments).toEqual([{ ...sponsorComment, body: "" }, sponsorComment]);
       for (const row of rows) await f.pass.stage({ anchor: "subjects", updatedAt: instant(row.subjectKey), ...row });
+      await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
+    });
+
+    it("resumes a pass whose staged sponsor comment has an empty body", async () => {
+      const { f, dependencies } = sweepRun();
+      const payload = commented([{ ...sponsorComment, body: "" }]);
+      expect(payload.comments).toEqual([{ ...sponsorComment, body: "" }]);
+      await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 9, updatedAt: instant(9), payload });
       await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
     });
 
