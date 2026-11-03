@@ -117,6 +117,10 @@ describe("reconcileRepository", () => {
     const stub = (id: number) => ({ subject: { id, number: id } });
     const withoutField = (record: object, field: string) => Object.fromEntries(Object.entries(record).filter(([key]) => key !== field));
     const closing = (bad: unknown) => ({ ...issue(9), closingPullRequests: [pullRequest(5), bad, pullRequest(6)] });
+    const historied = (history: unknown[]) => ({ ...issue(9), authorLogin: "author", history });
+    it("builds history rows for issue 9 under a non-blank author", () => {
+      expect(historied([])).toMatchObject({ id: 9, number: 9, authorLogin: "author" });
+    });
     const wrongType: Record<string, unknown> = { id: "5", number: "5", state: 1, mergedAt: 1, repositoryGitHubId: "1" };
     const unreadableRows: Array<[string, "issue" | "pull_request", unknown]> = [
       ["an unavailable subject identity", "issue", null],
@@ -127,6 +131,7 @@ describe("reconcileRepository", () => {
       ...["labels", "history", "comments", "closingPullRequests"].flatMap((field): Array<[string, "issue", unknown]> => [
         [`no ${field}`, "issue", withoutField(issue(9), field)],
         [`${field} that is a string`, "issue", { ...issue(9), [field]: "x" }]]),
+      ...[[null], [1], ["x"], [{}, null], [null, {}]].map((history): [string, "issue", unknown] => [`a history of ${inspect(history)}`, "issue", historied(history)]),
       ["a null closing pull request", "issue", closing(null)],
       ["a closing pull request with an unsafe id", "issue", closing({ ...pullRequest(7), id: 2 ** 53 })],
       ["a closing pull request with an unsafe number", "issue", closing({ ...pullRequest(7), number: 2 ** 53 })],
@@ -169,13 +174,14 @@ describe("reconcileRepository", () => {
       const { f, dependencies } = sweepRun();
       const open = { ...pullRequest(5), state: "OPEN" as const, mergedAt: null };
       const rows = [
-        { kind: "issue" as const, subjectKey: 9, payload: { ...issue(9), closingPullRequests: [open] } },
+        { kind: "issue" as const, subjectKey: 9, payload: { ...historied([{}]), closingPullRequests: [open] } },
         { kind: "issue" as const, subjectKey: 10, payload: { subject: { id: 10, number: 10 } } },
         { kind: "pull_request" as const, subjectKey: 11, payload: { subject: { id: 11, number: 11 }, evidence: null } },
         { kind: "pull_request" as const, subjectKey: 12, payload: { subject: { id: 12, number: 12 }, evidence: { reviews: [], rawDiff: "diff" } } },
         { kind: "pull_request" as const, subjectKey: 14, payload: { subject: { id: 14, number: 14 }, evidence: null, refreshed: false } },
         { kind: "pull_request" as const, subjectKey: 13, payload: { subject: { id: 13, number: 13 }, evidence: null, refreshed: true, missing: true, listed: false } },
       ];
+      expect((rows[0].payload as { history: unknown[] }).history).toHaveLength(1);
       for (const row of rows) await f.pass.stage({ anchor: "subjects", updatedAt: instant(row.subjectKey), ...row });
       await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
     });
