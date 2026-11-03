@@ -179,6 +179,8 @@ describe("reconcileRepository", () => {
     });
 
     it("stages each unreadable body row as sponsor comments of which one has the wrong body", () => {
+      expect(unreadableRows.filter(([label]) => label.startsWith("a sponsor comment with ")))
+        .toStrictEqual(unreadableBodies.map(([label, comments]) => [`a sponsor comment with ${label}`, "issue", commented(comments)]));
       const rows = unreadableRows.filter(([label]) => label.startsWith("a sponsor comment with ")).map(([, , payload]) => payload as { comments: Array<Record<string, unknown>>; history: unknown[] });
       expect(bodyless).toEqual({ id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: null });
       expect(rows.map((payload) => payload.comments)).toEqual(unreadableBodies.map(([, comments]) => comments));
