@@ -32,7 +32,11 @@ describe("landing page", () => {
     const registration = screen.getByRole("button", { name: "Sign in to register a repository" });
     const section = registration.closest("section")!;
     expect(hero.nextElementSibling).toBe(section);
-    expect(within(section).getByRole("heading", { level: 2 })).toBeVisible();
+    const heading = within(section).getByRole("heading", { level: 2 });
+    expect(heading).toBeVisible();
+    expect(heading.id).not.toBe("");
+    expect(section).toHaveAccessibleName(heading.textContent!);
+    expect(section).toHaveAttribute("aria-labelledby", heading.id);
     expect(hero.querySelectorAll(".landing-action-note")).toHaveLength(1);
     const notes = section.querySelectorAll(".landing-action-note");
     expect(notes).toHaveLength(2);
@@ -174,6 +178,7 @@ describe("landing page", () => {
     const registration = screen.getByRole("button", { name: "Sign in to register a repository" });
     const nav = accountData.closest("nav");
     expect(nav).not.toBeNull();
+    expect(nav).toHaveAccessibleName();
     expect(screen.getByRole("main").lastElementChild).toBe(nav);
     for (const link of [terms, rules]) {
       expect(link.closest("nav")).toBe(nav);
