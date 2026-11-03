@@ -569,30 +569,34 @@ describe("suite run PR resolution", () => {
     const child = `
       import { createHook } from "node:async_hooks";
       const timeouts = () => process.getActiveResourcesInfo().filter((name) => name === "Timeout").length;
-      const resolverTimers = [];
+      const timers = [];
       setTimeout(() => {
         console.log("timers while waiting:", timeouts());
-        console.log("resolver timers referenced while waiting:", resolverTimers.filter((timer) => timer.hasRef()).length);
+        console.log("referenced timers while waiting:", JSON.stringify(timers.filter(({ resource }) => resource.hasRef()).map(({ resource, creator, discardBody }) => [resource._idleTimeout, creator, discardBody])));
       }, ${CANCEL_TIMEOUT_MS - 1_000});
+      Error.stackTraceLimit = Infinity;
       createHook({
         init(asyncId, type, triggerAsyncId, resource) {
           if (type !== "Timeout") return;
           const frames = new Error().stack.split("\\n");
           const creator = frames[frames.findIndex((frame) => frame.includes("(node:timers")) + 1];
-          if (creator?.includes("scripts/resolve-suite-pull-request.ts") && frames.some((frame) => frame.includes("discardBody"))) resolverTimers.push(resource);
+          timers.push({ resource, creator: creator.slice(creator.lastIndexOf("/") + 1).split(":")[0], discardBody: frames.some((frame) => frame.includes("discardBody")) });
         },
       }).enable();
+      setTimeout(() => {}, ${CANCEL_TIMEOUT_MS - 250});
       const { resolveSuitePullRequest } = await import(${JSON.stringify(new URL("../../scripts/resolve-suite-pull-request.ts", import.meta.url).href)});
-      let drained = false;
-      process.on("exit", () => console.log("exiting on its own:", drained));
-      process.on("beforeExit", () => { drained = true; });
-      const fetchFn = async () => new Response(new ReadableStream({ cancel: () => new Promise(() => {}) }), { status: 404 });
+      let drains = 0;
+      process.on("exit", () => console.log("exiting on its own:", drains));
+      process.on("beforeExit", () => { drains += 1; });
+      let fetches = 0;
+      const fetchFn = async () => new Response(new ReadableStream({ cancel: () => new Promise(() => { setTimeout(() => {}, ${CANCEL_TIMEOUT_MS - 500}); }) }), { status: 404 });
       const outcome = await resolveSuitePullRequest({
         env: { GITHUB_REPOSITORY: "o/r", GH_TOKEN: "t", OVERFLOW_SUITE_RUN_ID: "123" },
-        fetchFn, sleepFn: async () => {},
+        fetchFn: async (...args) => { fetches += 1; return fetchFn(...args); }, sleepFn: async () => {},
       });
       console.log(JSON.stringify(outcome));
       console.log("timers referenced:", timeouts());
+      console.log("fetches:", fetches);
     `;
     const childEnv: Record<string, string> = { PATH: process.env.PATH ?? "" };
     const result = spawnSync(process.execPath, ["--input-type=module", "--eval", child], {
@@ -605,11 +609,12 @@ describe("suite run PR resolution", () => {
       status: 0,
       signal: null,
       stdout: [
-        "timers while waiting: 2",
-        "resolver timers referenced while waiting: 1",
+        "timers while waiting: 4",
+        `referenced timers while waiting: ${JSON.stringify([[CANCEL_TIMEOUT_MS - 250, "[eval1]", false], [CANCEL_TIMEOUT_MS - 500, "[eval1]", true], [CANCEL_TIMEOUT_MS, "resolve-suite-pull-request.ts", true]])}`,
         JSON.stringify({ exitCode: 1, lines: ["::error::GitHub API read failed: HTTP 404"] }),
         "timers referenced: 0",
-        "exiting on its own: true",
+        "fetches: 1",
+        "exiting on its own: 1",
       ],
     });
   });
