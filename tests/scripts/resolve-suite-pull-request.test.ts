@@ -538,15 +538,19 @@ describe("suite run PR resolution", () => {
     it.each([[503, 3], [404, 1]])("leaves no deadline timer behind once a cancel of a rejected %i has settled", (status, reads) => withFakeTimers(async () => {
       const h = harness();
       const fixture = () => ({ cancel: async () => {} });
+      const bodies: unknown[] = [];
       const cancels: MockInstance<() => Promise<void>>[] = [];
-      const attempts = rejectedWithBody(h, status, reads, () => {
+      const received = vi.fn(() => {
         const body = fixture();
+        bodies.push(body);
         cancels.push(vi.spyOn(body, "cancel"));
         return body;
       });
+      const attempts = rejectedWithBody(h, status, reads, received);
       const result = await resolveSuitePullRequest(h.deps);
       expect(result.lines).toEqual([`::error::GitHub API read failed: HTTP ${status}`]);
       expect(attempts()).toBe(reads);
+      expect(received.mock.results.map(({ value }) => value)).toEqual(bodies);
       expect(cancels.flatMap((cancel) => cancel.mock.settledResults)).toEqual(
         Array.from({ length: reads }, () => ({ type: "fulfilled" })),
       );
