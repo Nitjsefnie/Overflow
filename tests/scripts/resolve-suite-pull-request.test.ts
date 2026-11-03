@@ -539,8 +539,10 @@ describe("suite run PR resolution", () => {
       const h = harness();
       const fixture = () => ({ cancel: async () => {} });
       const bodies: unknown[] = [];
+      const readers: string[] = [];
       const cancels: MockInstance<() => Promise<void>>[] = [];
       const received = vi.fn(() => {
+        readers.push(new Error().stack ?? "");
         const body = fixture();
         bodies.push(body);
         cancels.push(vi.spyOn(body, "cancel"));
@@ -555,6 +557,7 @@ describe("suite run PR resolution", () => {
       const rejected = (await Promise.all(fetched.mock.results.map(({ value }) => value))).filter((response) => response.status === status);
       expect(rejected.map((response) => Object.getOwnPropertyDescriptor(response, "body")?.get)).toEqual(Array.from({ length: reads }, () => received));
       expect(received.mock.results.map(({ value }) => value)).toEqual(bodies);
+      expect(readers.map((stack) => /at discardBody \(\S*scripts\/resolve-suite-pull-request\.ts:/.test(stack))).toEqual(Array.from({ length: reads }, () => true));
       expect(cancels.flatMap((cancel) => cancel.mock.settledResults)).toEqual(
         Array.from({ length: reads }, () => ({ type: "fulfilled" })),
       );
