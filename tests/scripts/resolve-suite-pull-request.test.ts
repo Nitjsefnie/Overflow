@@ -574,8 +574,6 @@ describe("suite run PR resolution", () => {
         console.log("timers while waiting:", timeouts());
         console.log("referenced timers while waiting:", JSON.stringify(timers.filter(({ resource }) => resource.hasRef() && !resource._destroyed).map(({ resource, creator, discardBody }) => [resource._idleTimeout, creator, discardBody])));
       };
-      setTimeout(observe, ${CANCEL_TIMEOUT_MS - 5_000});
-      setTimeout(observe, ${CANCEL_TIMEOUT_MS - 2_000});
       Error.stackTraceLimit = Infinity;
       createHook({
         init(asyncId, type, triggerAsyncId, resource) {
@@ -585,7 +583,6 @@ describe("suite run PR resolution", () => {
           timers.push({ resource, creator: creator.slice(creator.lastIndexOf("/") + 1).split(":")[0], discardBody: frames.some((frame) => frame.includes("discardBody")) });
         },
       }).enable();
-      setTimeout(() => {}, ${CANCEL_TIMEOUT_MS - 1_000});
       const { resolveSuitePullRequest } = await import(${JSON.stringify(new URL("../../scripts/resolve-suite-pull-request.ts", import.meta.url).href)});
       let drains = 0;
       const witness = () => console.log("exiting on its own:", drains);
@@ -596,10 +593,17 @@ describe("suite run PR resolution", () => {
         witness();
       });
       let fetches = 0;
-      const fetchFn = async () => new Response(new ReadableStream({ cancel: () => new Promise(() => { setTimeout(() => {}, ${CANCEL_TIMEOUT_MS - 4_000}); }) }), { status: 404 });
+      const fetchFn = async () => new Response(new ReadableStream({ cancel: () => new Promise(() => {}) }), { status: 404 });
       const outcome = await resolveSuitePullRequest({
         env: { GITHUB_REPOSITORY: "o/r", GH_TOKEN: "t", OVERFLOW_SUITE_RUN_ID: "123" },
-        fetchFn: async (...args) => { fetches += 1; return fetchFn(...args); }, sleepFn: async () => {},
+        fetchFn: async (...args) => {
+          fetches += 1;
+          setTimeout(observe, ${CANCEL_TIMEOUT_MS - 5_000});
+          setTimeout(observe, ${CANCEL_TIMEOUT_MS - 2_000});
+          setTimeout(() => {}, ${CANCEL_TIMEOUT_MS - 1_000});
+          setTimeout(() => {}, ${CANCEL_TIMEOUT_MS - 4_000});
+          return fetchFn(...args);
+        }, sleepFn: async () => {},
       });
       console.log(JSON.stringify(outcome));
       console.log("timers referenced:", timeouts());
@@ -617,9 +621,9 @@ describe("suite run PR resolution", () => {
       signal: null,
       stdout: [
         "timers while waiting: 5",
-        `referenced timers while waiting: ${JSON.stringify([[CANCEL_TIMEOUT_MS - 1_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 4_000, "[eval1]", true], [CANCEL_TIMEOUT_MS, "resolve-suite-pull-request.ts", true]])}`,
+        `referenced timers while waiting: ${JSON.stringify([[CANCEL_TIMEOUT_MS - 5_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 2_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 1_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 4_000, "[eval1]", false], [CANCEL_TIMEOUT_MS, "resolve-suite-pull-request.ts", true]])}`,
         "timers while waiting: 3",
-        `referenced timers while waiting: ${JSON.stringify([[CANCEL_TIMEOUT_MS - 1_000, "[eval1]", false], [CANCEL_TIMEOUT_MS, "resolve-suite-pull-request.ts", true]])}`,
+        `referenced timers while waiting: ${JSON.stringify([[CANCEL_TIMEOUT_MS - 2_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 1_000, "[eval1]", false], [CANCEL_TIMEOUT_MS, "resolve-suite-pull-request.ts", true]])}`,
         JSON.stringify({ exitCode: 1, lines: ["::error::GitHub API read failed: HTTP 404"] }),
         "timers referenced: 0",
         "fetches: 1",
