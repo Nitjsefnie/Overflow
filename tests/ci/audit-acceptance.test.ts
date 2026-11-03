@@ -6,14 +6,12 @@ import { parse } from "yaml";
 import { productionClosure, productionClosureContains } from "./production-closure";
 
 /**
- * Scoped acceptance records for braces, minimatch and glob advisories.
- * The dev-only Next lint chain reaches braces without a patched release.
- * Minimatch 3.1.5 is accepted only for eslint-plugin-import,
- * eslint-plugin-jsx-a11y and eslint-plugin-react, which break on 11's exports.
- * Testcontainers reaches glob 10.5.0 and minimatch 9.0.9 via archiver 7 and
- * archiver-utils 5. No compatible patched parent releases are available for
- * these paths; none is shipped in production.
- * Changes to the ignored IDs, audited versions or production closure require
+ * Scoped dev-only acceptance for braces, minimatch and glob advisories.
+ * Next's lint chain reaches braces without a patched release.
+ * eslint-plugin-import, eslint-plugin-jsx-a11y and eslint-plugin-react use
+ * minimatch 3.1.5 and break on 11's exports. Testcontainers reaches glob
+ * 10.5.0 and minimatch 9.0.9 through archiver 7 and archiver-utils 5.
+ * Changes to ignored IDs, audited versions or the production closure require
  * re-disposition; the closure walk lives in ./production-closure.
  */
 
