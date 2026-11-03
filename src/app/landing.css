@@ -2,6 +2,12 @@
   color: var(--ink-muted);
 }
 
+.landing-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1rem;
+}
+
 .landing-examples h3 {
   margin: 0 0 0.8rem;
   font-family: var(--display);

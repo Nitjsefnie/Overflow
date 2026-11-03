@@ -632,14 +632,16 @@ describe("routes that link the notice", () => {
     expect(link!).toBeVisible();
   });
 
-  it("links /account-data directly beneath the landing sign-in form", () => {
+  it("links /account-data in the landing page navigation after the sign-in form", () => {
     render(<LandingPage />);
 
     const link = anchorByHref("/account-data");
     expect(link).toBeVisible();
 
-    const form = screen.getByRole("button", { name: "Sign in with GitHub" }).closest("form")!;
-    expect(link.parentElement).toBe(form.parentElement);
+    const form = screen.getByRole("button", { name: "Sign in with GitHub to contribute" }).closest("form")!;
+    const nav = link.closest("nav");
+    expect(nav).not.toBeNull();
+    expect(screen.getByRole("main").lastElementChild).toBe(nav);
     expect(form.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

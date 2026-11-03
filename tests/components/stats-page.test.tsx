@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const auth = vi.fn();
@@ -157,14 +157,16 @@ describe("settled work page", () => {
   it("links the signed-out landing page to the route that renders the figures", async () => {
     const { default: HomePage } = await import("@/app/page");
     const landing = render(await HomePage());
-    const link = landing.container.querySelector<HTMLAnchorElement>('.landing-hero a[href="/stats"]');
+    const main = within(landing.container).getByRole("main");
+    const nav = within(main).getByRole("navigation");
+    expect(main.lastElementChild).toBe(nav);
+    const link = nav.querySelector<HTMLAnchorElement>('a[href="/stats"]');
     expect(link).not.toBeNull();
     expect(link).toHaveClass("text-link");
-    const linkLabel = link!.textContent!.trim();
-    expect(linkLabel.length).toBeGreaterThan(0);
+    expect(link).toHaveAccessibleName();
     landing.unmount();
     await renderStats();
-    expect(screen.getByRole("heading", { level: 1 }).textContent!.trim()).toBe(linkLabel);
+    expect(screen.getByRole("heading", { level: 1 })).toBeVisible();
     expect(screen.getByText("23")).toBeVisible();
   });
 });

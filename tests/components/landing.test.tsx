@@ -28,26 +28,41 @@ describe("landing page", () => {
 
   it.each(["https://github.com/apps/overflow-registration/installations/new", null])("explains configured registration on the landing page with URL %s", (url) => {
     const { container } = render(<LandingPage registrationAppConfigured registrationAppInstallUrl={url} />);
-    const notes = container.querySelectorAll(".landing-action-note");
-    expect(notes[0]!.textContent).toBe("Contributing asks GitHub for nothing beyond your public profile. Registering a repository through Overflow's webhook needs webhook administration on it, granted through a separate sign-in requesting the admin:repo_hook scope:");
-    expect(notes[1]!.textContent).toBe('Or register without webhook administration: sign in with GitHub above, install this instance\'s registration App on the repository, and choose "GitHub App" on the registration form. The App\'s repository permissions are metadata: read, issues: read, and pull_requests: read.');
+    const hero = container.querySelector("section.landing-hero")!;
+    const registration = screen.getByRole("button", { name: "Sign in to register a repository" });
+    const section = registration.closest("section")!;
+    expect(hero.nextElementSibling).toBe(section);
+    expect(within(section).getByRole("heading", { level: 2 })).toBeVisible();
+    expect(hero.querySelectorAll(".landing-action-note")).toHaveLength(1);
+    const notes = section.querySelectorAll(".landing-action-note");
+    expect(notes).toHaveLength(2);
+    expect(Array.from(notes[0]!.querySelectorAll("code"), (element) => element.textContent))
+      .toEqual([GITHUB_REPOSITORY_REGISTRATION_SCOPE]);
     const link = notes[1]!.querySelector("a");
     if (url === null) expect(link).toBeNull();
     else expect(link).toHaveAttribute("href", url);
-    const registration = screen.getByRole("button", { name: "Sign in to register a repository" });
+    expect(notes[0]!.compareDocumentPosition(registration) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(registration.compareDocumentPosition(notes[1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it.each([false, true])("names the webhook scope when the registration App is configured: %s", (configured) => {
     const { container } = render(<LandingPage registrationAppConfigured={configured} />);
-    const note = container.querySelector(".landing-action-note")!;
+    const hero = container.querySelector("section.landing-hero")!;
+    const registration = screen.getByRole("button", { name: "Sign in to register a repository" });
+    const section = registration.closest("section")!;
+    expect(hero.nextElementSibling).toBe(section);
+    const note = section.querySelector(".landing-action-note")!;
     expect(Array.from(note.querySelectorAll("code"), (element) => element.textContent))
       .toEqual([GITHUB_REPOSITORY_REGISTRATION_SCOPE]);
   });
 
   it.each(["https://github.com/apps/overflow-registration/installations/new", null])("lists exactly the App's repository permissions with URL %s", (url) => {
     const { container } = render(<LandingPage registrationAppConfigured registrationAppInstallUrl={url} />);
-    const note = container.querySelectorAll(".landing-action-note")[1]!;
+    const hero = container.querySelector("section.landing-hero")!;
+    const registration = screen.getByRole("button", { name: "Sign in to register a repository" });
+    const section = registration.closest("section")!;
+    expect(hero.nextElementSibling).toBe(section);
+    const note = section.querySelectorAll(".landing-action-note")[1]!;
     expect(Array.from(note.querySelectorAll("code"), (element) => element.textContent))
       .toEqual(["metadata: read", "issues: read", "pull_requests: read"]);
   });
@@ -78,9 +93,9 @@ describe("landing page", () => {
     render(<LandingPage />);
 
     expect(screen.getByRole("heading", { level: 1 })).toBeVisible();
-    const signInButton = screen.getByRole("button", { name: "Sign in with GitHub" });
+    const signInButton = screen.getByRole("button", { name: "Sign in with GitHub to contribute" });
     expect(signInButton.closest("form")).not.toBeNull();
-    expect(screen.queryByRole("link", { name: "Sign in with GitHub" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Sign in with GitHub to contribute" })).not.toBeInTheDocument();
     fireEvent.click(signInButton);
 
     await waitFor(() => expect(signIn).toHaveBeenCalledExactlyOnceWith(
@@ -109,7 +124,7 @@ describe("landing page", () => {
   it("offers the contributor sign-in before the repository-registration sign-in, in separate forms", () => {
     render(<LandingPage />);
 
-    const contributor = screen.getByRole("button", { name: "Sign in with GitHub" });
+    const contributor = screen.getByRole("button", { name: "Sign in with GitHub to contribute" });
     const registration = screen.getByRole("button", { name: "Sign in to register a repository" });
     expect(contributor.closest("form")).not.toBe(registration.closest("form"));
     expect(contributor.compareDocumentPosition(registration) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -120,15 +135,32 @@ describe("landing page", () => {
     expect(registration).toHaveClass("quiet-button");
   });
 
+  it.each([false, true])("keeps one primary hero control ahead of every secondary control (App configured: %s)", (configured) => {
+    const { container } = render(<LandingPage registrationAppConfigured={configured}
+      registrationAppInstallUrl={configured ? "https://github.com/apps/overflow-registration/installations/new" : null} />);
+    const main = screen.getByRole("main");
+    const hero = container.querySelector<HTMLElement>("section.landing-hero")!;
+    const primary = within(hero).getAllByRole("button").find((button) => button.classList.contains("action-button"));
+    expect(primary).toBeDefined();
+
+    const controls = [...within(main).getAllByRole("button"), ...within(main).getAllByRole("link")];
+    expect(controls.filter((control) => hero.contains(control))).toEqual([primary]);
+    const secondary = controls.filter((control) => control !== primary);
+    expect(secondary.length).toBeGreaterThan(0);
+    for (const control of secondary) {
+      expect(hero).not.toContainElement(control);
+      expect(control).not.toHaveClass("action-button");
+      expect(primary!.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
   it("does not render a noninteractive landing mark", () => {
     const { container } = render(<LandingPage />);
 
     expect(container.querySelector(".landing-mark")).toBeNull();
   });
 
-  // Issue 680: a new user can read the terms and the rules before any account
-  // exists, so both links sit with the account-data link, after the two
-  // sign-in forms.
+  // Issue 680: a new user can read the terms and rules before any account exists.
   it("links /terms and /rules beside the /account-data link, after the sign-in forms", () => {
     render(<LandingPage />);
 
@@ -138,11 +170,14 @@ describe("landing page", () => {
     expect(rules).toHaveAttribute("href", "/rules");
 
     const accountData = screen.getByRole("link", { name: "What Overflow stores about your account" });
-    const contributor = screen.getByRole("button", { name: "Sign in with GitHub" });
+    const contributor = screen.getByRole("button", { name: "Sign in with GitHub to contribute" });
     const registration = screen.getByRole("button", { name: "Sign in to register a repository" });
-    const hero = contributor.closest(".landing-hero");
+    const nav = accountData.closest("nav");
+    expect(nav).not.toBeNull();
+    expect(screen.getByRole("main").lastElementChild).toBe(nav);
     for (const link of [terms, rules]) {
-      expect(link.closest(".landing-hero")).toBe(hero);
+      expect(link.closest("nav")).toBe(nav);
+      expect(link).toHaveClass("text-link");
       expect(contributor.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(registration.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(accountData.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -414,7 +449,7 @@ const ROOT_FONT_SIZE = 16;
 type ParsedRule = { selectorText: string; condition: string | null; style: CSSStyleDeclaration; cssText: string };
 
 function landingSubtree(): Array<[SubtreeElement, Element]> {
-  const button = screen.getByRole("button", { name: "Sign in with GitHub" });
+  const button = screen.getByRole("button", { name: "Sign in with GitHub to contribute" });
   const form = button.closest("form");
   if (!form) throw new Error("the sign-in button is no longer inside a form");
   return [

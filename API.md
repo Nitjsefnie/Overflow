@@ -77,7 +77,7 @@ bookkeeping.
 ## Programmatic repository registration
 
 Members can register repositories with an **Overflow-issued API token**. Account
-registration still happens manually in a browser through **Sign in with GitHub**;
+registration still happens manually in a browser through **Sign in with GitHub to contribute**;
 after that, repositories can be registered over the API. The existing web form
 remains unchanged and available — programmatic registration is an additional way
 to submit the same repository and catalogs.
