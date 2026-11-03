@@ -81,7 +81,7 @@ describe("signed-out landing chrome", () => {
     expect(document.querySelectorAll("#main-content")).toHaveLength(1);
 
     expect(screen.getByRole("heading", { level: 1 })).toBeVisible();
-    const signInButton = screen.getByRole("button", { name: "Sign in with GitHub" });
+    const signInButton = screen.getByRole("button", { name: "Sign in with GitHub to contribute" });
     expect(signInButton.closest("form")).not.toBeNull();
     expect(signInButton.closest("main")).toBe(main);
   });

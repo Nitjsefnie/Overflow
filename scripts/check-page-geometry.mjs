@@ -439,7 +439,7 @@ const PAGE_CONTRACTS = [
       [1280, 700],
       // issue 1067 @320: RED ran with scrollWidth 330px vs 320 (the hero h1's
       // clamp floor pushed .landing-hero's grid-item min-content past the
-      // viewport). Post-fix bottom 547.6px (this box); 650 pins ~102px.
+      // viewport). Bottom 623.6px (this box); 650 leaves 26.4px.
       [320, 650],
     ],
     primaryAction: ".landing-hero .action-button",

@@ -30,11 +30,16 @@ export function LandingPage({ registrationAppConfigured = false, registrationApp
         </p>
         <form action={signInAsContributor}>
           <button className="action-button" type="submit">
-            Sign in with GitHub
+            Sign in with GitHub to contribute
           </button>
         </form>
         <p className="landing-action-note">
-          Contributing asks GitHub for nothing beyond your public profile.{" "}
+          Contributing asks GitHub for nothing beyond your public profile.
+        </p>
+      </section>
+      <section className="landing-registration" aria-labelledby="landing-registration-title">
+        <h2 id="landing-registration-title">Register a repository</h2>
+        <p className="landing-action-note">
           {registrationAppConfigured
             ? "Registering a repository through Overflow's webhook"
             : "Registering a repository you administer"}{" "}
@@ -47,24 +52,12 @@ export function LandingPage({ registrationAppConfigured = false, registrationApp
           </button>
         </form>
         {registrationAppConfigured ? <p className="landing-action-note">
-          Or register without webhook administration: sign in with GitHub above,{" "}
+          Or register without webhook administration: use the contributor sign-in above,{" "}
           {registrationAppInstallUrl === null ? "install this instance's registration App"
             : <a href={registrationAppInstallUrl}>install this instance&apos;s registration App</a>}{" "}
           on the repository, and choose &quot;GitHub App&quot; on the registration form. The App&apos;s repository
           permissions are <code>metadata: read</code>, <code>issues: read</code>, and <code>pull_requests: read</code>.
         </p> : null}
-        <Link className="text-link" href="/account-data">
-          What Overflow stores about your account
-        </Link>
-        <Link className="text-link" href="/terms">
-          Terms
-        </Link>
-        <Link className="text-link" href="/rules">
-          Rules
-        </Link>
-        <Link className="text-link" href="/stats">
-          Statistics
-        </Link>
       </section>
       <section aria-labelledby="landing-examples-title">
         <h2 id="landing-examples-title">Examples of issue sizes</h2>
@@ -94,6 +87,20 @@ export function LandingPage({ registrationAppConfigured = false, registrationApp
           <p>Samples compare self-work with outsider settlements without turning people into a retention metric.</p>
         </article>
       </section>
+      <nav className="landing-links" aria-label="More information">
+        <Link className="text-link" href="/account-data">
+          What Overflow stores about your account
+        </Link>
+        <Link className="text-link" href="/terms">
+          Terms
+        </Link>
+        <Link className="text-link" href="/rules">
+          Rules
+        </Link>
+        <Link className="text-link" href="/stats">
+          Statistics
+        </Link>
+      </nav>
     </main>
   );
 }
