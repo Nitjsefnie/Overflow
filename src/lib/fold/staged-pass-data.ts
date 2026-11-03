@@ -24,7 +24,7 @@ function ensureIssue(issue: Fields): void {
   ensure(Array.isArray(issue.labels) && Array.isArray(issue.history) && Array.isArray(issue.comments)
     && Array.isArray(issue.closingPullRequests));
   ensure(issue.history.every(isFields));
-  ensure(issue.comments.every(isFields));
+  ensure(issue.comments.every((comment) => typeof comment?.body === "string"));
   issue.closingPullRequests.forEach(ensureClosingPullRequest);
 }
 
