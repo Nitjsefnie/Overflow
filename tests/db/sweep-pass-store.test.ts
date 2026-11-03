@@ -537,12 +537,17 @@ describe("durable sweep walk subjects", () => {
     expect(await reopened.readStaged()).toHaveLength(1);
   });
 
-  it("resumes a held pass whose sequence-generated dirty generation is 2 ** 53 with its page and staged work", async () => {
+  it.each([true, false])("resumes a held pass whose sequence-generated dirty generation is 2 ** 53 with its page and staged work (sequence is_called %s)", async (called) => {
     const f = await materializeRepositoryFixture(sql);
     const repository = (await f.store.getRepository(f.repositoryId))!;
     f.store.getGitHubAccessToken = async () => randomBytes(24).toString("hex");
-    const [sequence] = await sql<{ last_value: string }[]>`select last_value from repository_reconciliation_dirty_generation`;
-    await sql`select setval('repository_reconciliation_dirty_generation', 9007199254740991)`;
+    const readSequence = async () => (await sql<{ last_value: string; is_called: boolean }[]>`select last_value, is_called from repository_reconciliation_dirty_generation`)[0]!;
+    const { last_value } = await readSequence();
+    await sql`select setval('repository_reconciliation_dirty_generation', ${last_value}, ${called})`;
+    const before = await readSequence();
+    expect(before).toEqual({ last_value, is_called: called });
+    const moved = 2 ** 53 - 1;
+    await sql`select setval('repository_reconciliation_dirty_generation', ${moved})`;
     try {
       const issue = f.fold.issues[0]!;
       await sql`insert into repository_reconciliation_dirty_subjects (repository_id, kind, github_subject_id, subject_number)
@@ -550,11 +555,14 @@ describe("durable sweep walk subjects", () => {
       const passes = new PostgresSweepPassStore(sql);
       const seen: Array<{ id: string; generation: number | undefined; page: unknown; staged: number }> = [];
       let pass: SweepPass | undefined;
+      let writes = 0, stages = 0;
       const github: ReconciliationGateway = {
         walkReconciliation: async () => {
           if (seen.length === 0) {
             await pass!.write("first", { text: "paused page" });
+            writes++;
             await pass!.stage(subject);
+            stages++;
           }
           seen.push({ id: pass!.id, generation: pass!.dirtySubjects[0]?.generation, page: await pass!.read("first"), staged: (await pass!.readStaged()).length });
           throw new SweepBudgetSpent(new Date("2030-01-01T06:00:00Z"));
@@ -574,9 +582,11 @@ describe("durable sweep walk subjects", () => {
       }
       const held = { id: seen[0]!.id, generation: 2 ** 53, page: { text: "paused page" }, staged: 1 };
       expect(seen).toEqual([held, held, held]);
+      expect({ writes, stages }).toEqual({ writes: 1, stages: 1 });
     } finally {
-      await sql`select setval('repository_reconciliation_dirty_generation', ${sequence!.last_value})`;
+      await sql`select setval('repository_reconciliation_dirty_generation', ${before.last_value}, ${before.is_called})`;
     }
+    expect(await readSequence()).toEqual(before);
   });
 
   it.each(unreadableDirtySubjects)("restarts a pass whose dirty subjects hold %s", async (_label, dirty) => {
