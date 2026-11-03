@@ -547,9 +547,13 @@ describe("suite run PR resolution", () => {
         return body;
       });
       const attempts = rejectedWithBody(h, status, reads, received);
+      const fetched = vi.spyOn(h.deps, "fetchFn");
+      expect(h.deps.fetchFn).toBe(fetched);
       const result = await resolveSuitePullRequest(h.deps);
       expect(result.lines).toEqual([`::error::GitHub API read failed: HTTP ${status}`]);
       expect(attempts()).toBe(reads);
+      const rejected = (await Promise.all(fetched.mock.results.map(({ value }) => value))).filter((response) => response.status === status);
+      expect(rejected.map((response) => Object.getOwnPropertyDescriptor(response, "body")?.get)).toEqual(Array.from({ length: reads }, () => received));
       expect(received.mock.results.map(({ value }) => value)).toEqual(bodies);
       expect(cancels.flatMap((cancel) => cancel.mock.settledResults)).toEqual(
         Array.from({ length: reads }, () => ({ type: "fulfilled" })),
