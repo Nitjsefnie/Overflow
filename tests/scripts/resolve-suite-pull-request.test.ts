@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type MockInstance } from "vitest";
 
 import { resolveSuitePullRequest } from "../../scripts/resolve-suite-pull-request.ts";
 
@@ -537,10 +537,19 @@ describe("suite run PR resolution", () => {
 
     it.each([[503, 3], [404, 1]])("leaves no deadline timer behind once a cancel of a rejected %i has settled", (status, reads) => withFakeTimers(async () => {
       const h = harness();
-      const attempts = rejectedWithBody(h, status, reads, () => ({ cancel: async () => {} }));
+      const fixture = () => ({ cancel: async () => {} });
+      const cancels: MockInstance<() => Promise<void>>[] = [];
+      const attempts = rejectedWithBody(h, status, reads, () => {
+        const body = fixture();
+        cancels.push(vi.spyOn(body, "cancel"));
+        return body;
+      });
       const result = await resolveSuitePullRequest(h.deps);
       expect(result.lines).toEqual([`::error::GitHub API read failed: HTTP ${status}`]);
       expect(attempts()).toBe(reads);
+      expect(cancels.flatMap((cancel) => cancel.mock.settledResults)).toEqual(
+        Array.from({ length: reads }, () => ({ type: "fulfilled" })),
+      );
       expect(vi.getTimerCount()).toBe(0);
     }));
   });
