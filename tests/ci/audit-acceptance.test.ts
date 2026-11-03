@@ -6,19 +6,16 @@ import { parse } from "yaml";
 import { productionClosure, productionClosureContains } from "./production-closure";
 
 /**
- * Scoped dev-only acceptance for braces, minimatch and glob advisories.
- * Next's lint chain reaches braces without a patched release.
- * eslint-plugin-import, eslint-plugin-jsx-a11y and eslint-plugin-react use
- * minimatch 3.1.5 and break on 11's exports. Testcontainers reaches glob
- * 10.5.0 and minimatch 9.0.9 through archiver 7 and archiver-utils 5.
+ * Scoped dev-only acceptance for minimatch and glob advisories.
+ * Testcontainers reaches glob 10.5.0 and minimatch 9.0.9 through archiver 7
+ * and archiver-utils 5.
  * Changes to ignored IDs, audited versions or the production closure require
  * re-disposition; the closure walk lives in ./production-closure.
  */
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
-const ACCEPTED_GHSAS = ["GHSA-vfj7-8cjw-p6xm", "GHSA-g3hv-75wg-m249", "GHSA-3g3m-2fjr-6pw4"];
-const ACCEPTED_BRACES_VERSION = "3.0.3";
+const ACCEPTED_GHSAS = ["GHSA-g3hv-75wg-m249", "GHSA-3g3m-2fjr-6pw4"];
 
 type LockDependency = string | { specifier?: string; version?: string };
 type LockEntry = Partial<Record<
@@ -38,22 +35,10 @@ describe("dev-only advisory acceptance", () => {
     expect(pkg.pnpm?.auditConfig?.ignoreGhsas).toStrictEqual(ACCEPTED_GHSAS);
   });
 
-  it("keeps the acceptance scoped to the lockfile's audited braces version", async () => {
-    const lock = await readFile(resolve(root, "pnpm-lock.yaml"), "utf8");
-    const versions = [...lock.matchAll(/braces@(\d+\.\d+\.\d+)/g)].map((match) => match[1]);
-    expect(versions.length).toBeGreaterThan(0);
-    for (const version of versions) {
-      expect(version).toBe(ACCEPTED_BRACES_VERSION);
-    }
-  });
-
   it.each([
-    ["minimatch", ["3.1.5", "9.0.9", "11.0.4"], [
+    ["minimatch", ["9.0.9", "11.0.4"], [
       ["@eslint/config-array", "11.0.4"],
       ["@typescript-eslint/typescript-estree", "11.0.4"],
-      ["eslint-plugin-import", "3.1.5"],
-      ["eslint-plugin-jsx-a11y", "3.1.5"],
-      ["eslint-plugin-react", "3.1.5"],
       ["eslint", "11.0.4"],
       ["glob", "9.0.9"],
       ["readdir-glob", "11.0.4"],
@@ -96,7 +81,7 @@ describe("dev-only advisory acceptance", () => {
     expect(references.sort()).toEqual(expectedEdges.map((edge) => JSON.stringify(edge)).sort());
   });
 
-  it.each(["braces", "minimatch", "glob"])("keeps %s out of the production dependency closure", async (name) => {
+  it.each(["minimatch", "glob"])("keeps %s out of the production dependency closure", async (name) => {
     const lock = await readFile(resolve(root, "pnpm-lock.yaml"), "utf8");
     const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
     const rootProdDeps = Object.keys(pkg.dependencies ?? {});
@@ -120,8 +105,7 @@ describe("dev-only advisory acceptance", () => {
 
   it("reports a dev-only braces chain outside the production closure (synthetic fixture)", () => {
     // The mirror property: braces reachable only through devDependencies
-    // edges is outside the closure — that is exactly what licenses the real
-    // repo's acceptance.
+    // edges is outside the production closure.
     expect(productionClosureContains(LOCK_FIXTURE_DEV_ONLY_BRACES, "braces")).toBe(false);
     expect(productionClosureContains(LOCK_FIXTURE_DEV_ONLY_BRACES, "prod-root")).toBe(true);
     expect(productionClosureContains(LOCK_FIXTURE_DEV_ONLY_BRACES, "dev-root")).toBe(false);
@@ -137,28 +121,8 @@ describe("dev-only advisory acceptance", () => {
     ).toThrow(/unresolved production edge "ghost: 9\.9\.9"/);
   });
 
-  it("reports braces present when the real lockfile gains a fabricated production edge", async () => {
-    // Watch-it-fail on the real tree: a string transformation of the actual
-    // pnpm-lock.yaml that plants braces as a root production dependency must
-    // flip the pinned property to "present". No file in the repository is
-    // modified — the planted lockfile lives only in this test.
-    const lock = await readFile(resolve(root, "pnpm-lock.yaml"), "utf8");
-    const anchor = "    dependencies:\n      next:\n";
-    expect(lock.includes(anchor)).toBe(true);
-    const planted = lock.replace(
-      anchor,
-      "    dependencies:\n"
-      + "      braces:\n"
-      + "        specifier: 3.0.3\n"
-      + "        version: 3.0.3\n"
-      + "      next:\n",
-    );
-    expect(planted).not.toBe(lock);
-    expect(productionClosureContains(planted, "braces")).toBe(true);
-  });
-
   it.each([
-    ["minimatch", "3.1.5"],
+    ["minimatch", "9.0.9"],
     ["glob", "10.5.0"],
   ])("reports %s present when the real lockfile gains a fabricated production edge", async (name, version) => {
     const lock = await readFile(resolve(root, "pnpm-lock.yaml"), "utf8");

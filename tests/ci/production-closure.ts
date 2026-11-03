@@ -10,7 +10,7 @@
  *   PRODUCTION entry edges; each entry's `version:` value is the snapshot id
  *   suffix (the id is `name@value`). `devDependencies:` entries are NOT
  *   edges of this walk — a package reachable only through them is outside
- *   the closure, which is the property the braces acceptance rests on.
+ *   the closure, which supports dev-only advisory acceptances.
  * - `snapshots:` holds one entry per resolved package instance, keyed by the
  *   full id `name@version` plus the version's resolved peer suffix where the
  *   version has peers (e.g. `micromatch@4.0.8` vs a peer-suffixed
@@ -232,8 +232,7 @@ export function productionClosure(lockfile: string): ProductionClosure {
 
 /**
  * Whether `packageName` has a snapshot inside the lockfile's production
- * closure — the negation of which is the property the braces acceptance
- * rests on.
+ * closure; a false result supports a dev-only advisory acceptance.
  */
 export function productionClosureContains(lockfile: string, packageName: string): boolean {
   return productionClosure(lockfile).names.has(packageName);
