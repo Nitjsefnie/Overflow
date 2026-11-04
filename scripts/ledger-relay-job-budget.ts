@@ -1,8 +1,8 @@
 // The relay's job-start budget. The job's timeout-minutes also covers the
 // runner's "Set up job" phase (action downloads), which no step timeout
 // bounds, so a deadline measured from the script's own entry cannot keep a
-// write inside the job. The run deadline is also measured from the later of
-// the job and setup-step starts when available; an unknown job start fails red.
+// write inside the job. It uses the listed start unless that is at or before a
+// parseable creation time, when a later setup-step start may govern; an unknown start fails red.
 // Without step evidence, a placeholder (like an impossibly old start) uses the entry deadline, which can outlive the job.
 import { API_HEADERS, API_ROOT, REQUEST_TIMEOUT_MS, apiCall, type RelayHttpDeps } from "./ledger-relay-http.ts";
 
@@ -66,10 +66,10 @@ export function jobStartDeadline(startedAtMs: number): number {
 }
 
 /**
- * The earlier of the entry and job-start deadlines, using the later of the job
- * and setup-step starts when available. A placeholder without step evidence or
- * an impossibly old start uses the entry deadline. Throws before any write if
- * the listing cannot be read or proven, or no request may start any more.
+ * The earlier of the entry and listed job-start deadlines. For a placeholder,
+ * use the later job or setup-step start when available. A placeholder without
+ * step evidence or an impossibly old start uses the entry deadline. Throws before
+ * any write if the listing cannot be read or proven, or no request may start any more.
  */
 export async function readEffectiveDeadline(deps: RelayHttpDeps, job: RelayJobIdentity): Promise<number> {
   const body = await apiCall<unknown>(deps, {
@@ -79,10 +79,11 @@ export async function readEffectiveDeadline(deps: RelayHttpDeps, job: RelayJobId
   }, `the relay's own job listing (run ${job.runId}, attempt ${job.runAttempt})`);
   const listedJob = relayJob(body);
   const listedStartMs = listedJobStartedAt(listedJob);
-  const setupStartMs = setupJobStartedAt(listedJob);
   const createdAt = listedJob.created_at;
   const createdAtMs = typeof createdAt === "string" ? Date.parse(createdAt) : Number.NaN;
-  if (setupStartMs === undefined && Number.isFinite(createdAtMs) && listedStartMs <= createdAtMs) {
+  const placeholder = Number.isFinite(createdAtMs) && listedStartMs <= createdAtMs;
+  const setupStartMs = placeholder ? setupJobStartedAt(listedJob) : undefined;
+  if (placeholder && setupStartMs === undefined) {
     console.warn(
       `[ledger-relay] the listed started_at ${new Date(listedStartMs).toISOString()} is at or before ` +
         `created_at ${new Date(createdAtMs).toISOString()}; ` +
