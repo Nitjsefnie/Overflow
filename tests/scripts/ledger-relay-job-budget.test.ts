@@ -11,9 +11,9 @@ import { runRelay, type RelayDeps } from "../../scripts/ledger-relay.ts";
 
 /**
  * The job's timeout-minutes also covers the runner's "Set up job" phase,
- * which no step timeout bounds. The relay therefore reads its own job's
- * started_at before any write and stops starting requests in time for the
- * last one to finish inside the job, whatever that phase took.
+ * which no step timeout bounds. The relay budgets requests from a trusted
+ * job start or setup-step evidence. A placeholder without step evidence uses
+ * the entry deadline, which can outlive the job.
  */
 const REPO = "Nitjsefnie/Overflow";
 const ROOT = `https://api.github.com/repos/${REPO}`;
@@ -305,11 +305,8 @@ describe("the ledger relay's job-start budget", () => {
     expect(w.state.requests[1]?.url).toMatch(/\/access_tokens$/);
   });
 
-  it("starts no write that could outlive the job when Set up job ran to ~905 s of a 960 s job (claim-1 re-check)", async () => {
-    // The re-check's trace: Set up job ends at ~905 s, checkout and
-    // setup-node finish within their bounds, the relay step enters at 930 s,
-    // and each request takes a few seconds. Measured from its own entry,
-    // the relay would still be POSTing when the job timeout cancelled it.
+  it("starts no write when 930 s have elapsed since a trusted job start", async () => {
+    // The remaining job time must cover the request timeout and margin.
     expect(jobTimeoutMs).toBe(seconds(960));
     const w = world(JOB_STARTED_AT + seconds(930));
 
@@ -361,6 +358,29 @@ describe("the ledger relay's job-start budget", () => {
       expect(result.sweep.relayed).toHaveLength(1);
       expect(writesOf(w.state.requests).some(({ url }) => url === `${ROOT}/check-runs`)).toBe(true);
       expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("returns the entry deadline for a similarly named setup step", async () => {
+    const entryMs = JOB_STARTED_AT + seconds(959);
+    const queuedAt = new Date(JOB_STARTED_AT).toISOString();
+    const deps: RelayHttpDeps = {
+      deadlineMs: entryMs + seconds(1200), nowFn: () => entryMs,
+      fetchFn: async () => response({ jobs: [ownJob({
+        created_at: queuedAt,
+        steps: [{ name: "Set up job extra", started_at: new Date(JOB_STARTED_AT + seconds(951)).toISOString() }],
+      })] }),
+      delayFn: async () => undefined,
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const deadline = await readEffectiveDeadline(deps, {
+        repo: REPO, runId: RUN_ID, runAttempt: ATTEMPT, workflowToken: WORKFLOW_TOKEN,
+      });
+
+      expect(deadline).toBe(JOB_STARTED_AT + seconds(2159));
     } finally {
       warn.mockRestore();
     }
