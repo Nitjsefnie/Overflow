@@ -593,7 +593,12 @@ describe("suite run PR resolution", () => {
         witness();
       });
       let fetches = 0;
-      const fetchFn = async () => new Response(new ReadableStream({ cancel: () => new Promise(() => {}) }), { status: 404 });
+      const fetchFn = async () => new Response(new ReadableStream({
+        cancel() {
+          setTimeout(() => {}, ${CANCEL_TIMEOUT_MS - 500});
+          return new Promise(() => {});
+        },
+      }), { status: 404 });
       const outcome = await resolveSuitePullRequest({
         env: { GITHUB_REPOSITORY: "o/r", GH_TOKEN: "t", OVERFLOW_SUITE_RUN_ID: "123" },
         fetchFn: async (...args) => {
@@ -620,10 +625,10 @@ describe("suite run PR resolution", () => {
       status: 0,
       signal: null,
       stdout: [
-        "timers while waiting: 5",
-        `referenced timers while waiting: ${JSON.stringify([[CANCEL_TIMEOUT_MS - 5_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 2_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 1_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 4_000, "[eval1]", false], [CANCEL_TIMEOUT_MS, "resolve-suite-pull-request.ts", true]])}`,
-        "timers while waiting: 3",
-        `referenced timers while waiting: ${JSON.stringify([[CANCEL_TIMEOUT_MS - 2_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 1_000, "[eval1]", false], [CANCEL_TIMEOUT_MS, "resolve-suite-pull-request.ts", true]])}`,
+        "timers while waiting: 6",
+        `referenced timers while waiting: ${JSON.stringify([[CANCEL_TIMEOUT_MS - 5_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 2_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 1_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 4_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 500, "[eval1]", true], [CANCEL_TIMEOUT_MS, "resolve-suite-pull-request.ts", true]])}`,
+        "timers while waiting: 4",
+        `referenced timers while waiting: ${JSON.stringify([[CANCEL_TIMEOUT_MS - 2_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 1_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 500, "[eval1]", true], [CANCEL_TIMEOUT_MS, "resolve-suite-pull-request.ts", true]])}`,
         JSON.stringify({ exitCode: 1, lines: ["::error::GitHub API read failed: HTTP 404"] }),
         "timers referenced: 0",
         "fetches: 1",
