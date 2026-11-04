@@ -6,7 +6,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 
 import { REQUEST_TIMEOUT_MS, type RelayHttpDeps } from "../../scripts/ledger-relay-http.ts";
-import { JOB_DEADLINE_MARGIN_MS, RELAY_JOB_TIMEOUT_MINUTES, jobStartDeadline, readEffectiveDeadline } from "../../scripts/ledger-relay-job-budget.ts";
+import { JOB_DEADLINE_MARGIN_MS, RELAY_JOB_TIMEOUT_MINUTES, jobStartDeadline, readEffectiveDeadline, relayJobStartedAt } from "../../scripts/ledger-relay-job-budget.ts";
 import { runRelay, type RelayDeps } from "../../scripts/ledger-relay.ts";
 
 /**
@@ -95,6 +95,81 @@ function world(entryMs: number, stepMs = seconds(5)) {
 const writesOf = (requests: Recorded[]) => requests.filter(({ method }) => method === "POST");
 
 describe("the ledger relay's effective deadline", () => {
+  it.each([0, -1])("keeps the job start when setup evidence starts %i s after it", async (offset) => {
+    const nowMs = JOB_STARTED_AT + seconds(420);
+    const timestamp = new Date(JOB_STARTED_AT).toISOString();
+    const deps: RelayHttpDeps = {
+      deadlineMs: nowMs + seconds(600), nowFn: () => nowMs,
+      fetchFn: async () => response({ jobs: [ownJob({
+        created_at: timestamp,
+        steps: [{ name: "Set up job", started_at: new Date(JOB_STARTED_AT + seconds(offset)).toISOString() }],
+      })] }),
+      delayFn: async () => undefined,
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const deadline = await readEffectiveDeadline(deps, {
+        repo: REPO, runId: RUN_ID, runAttempt: ATTEMPT, workflowToken: WORKFLOW_TOKEN,
+      });
+
+      expect(deadline).toBe(jobStartDeadline(JOB_STARTED_AT));
+      expect(deadline).toBe(JOB_STARTED_AT + seconds(870));
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.each([["absent", undefined], ["unparseable", "not a date"]])(
+    "uses a later valid setup start when creation is %s",
+    async (_description, createdAt) => {
+      const nowMs = JOB_STARTED_AT + seconds(420);
+      const stepStartMs = JOB_STARTED_AT + seconds(30);
+      const deps: RelayHttpDeps = {
+        deadlineMs: nowMs + seconds(600), nowFn: () => nowMs,
+        fetchFn: async () => response({ jobs: [ownJob({ created_at: createdAt, steps: [
+          null,
+          { name: "Checkout", started_at: new Date(JOB_STARTED_AT + seconds(100)).toISOString() },
+          { name: "Set up job", started_at: "not a date" },
+          { name: "Set up job", status: "in_progress", started_at: new Date(stepStartMs).toISOString() },
+        ] })] }),
+        delayFn: async () => undefined,
+      };
+
+      const deadline = await readEffectiveDeadline(deps, {
+        repo: REPO, runId: RUN_ID, runAttempt: ATTEMPT, workflowToken: WORKFLOW_TOKEN,
+      });
+
+      expect(deadline).toBe(jobStartDeadline(stepStartMs));
+      expect(deadline).toBe(JOB_STARTED_AT + seconds(900));
+    },
+  );
+
+  it("keeps the entry deadline when it is earlier than the setup-based deadline", async () => {
+    const nowMs = JOB_STARTED_AT + seconds(600);
+    const deps: RelayHttpDeps = {
+      deadlineMs: nowMs + seconds(600), nowFn: () => nowMs,
+      fetchFn: async () => response({ jobs: [ownJob({
+        steps: [{ name: "Set up job", started_at: new Date(JOB_STARTED_AT + seconds(590)).toISOString() }],
+      })] }),
+      delayFn: async () => undefined,
+    };
+
+    const deadline = await readEffectiveDeadline(deps, {
+      repo: REPO, runId: RUN_ID, runAttempt: ATTEMPT, workflowToken: WORKFLOW_TOKEN,
+    });
+
+    expect(deadline).toBe(JOB_STARTED_AT + seconds(1200));
+  });
+
+  it("preserves the exported listed-start reader when setup evidence is present", () => {
+    const timestamp = new Date(JOB_STARTED_AT).toISOString();
+    const steps = [{ name: "Set up job", started_at: timestamp }];
+
+    expect(relayJobStartedAt({ jobs: [ownJob({ steps })] })).toBe(JOB_STARTED_AT);
+    expect(() => relayJobStartedAt({ jobs: [ownJob({ started_at: "not a date", steps })] })).toThrow();
+  });
+
   it.each([0, -1])(
     "returns the entry deadline when a fresh listed start is %i s after creation",
     async (startOffset) => {
@@ -236,6 +311,127 @@ describe("the ledger relay's job-start budget", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it.each([
+    ["an unrelated step", [{ name: "Checkout", started_at: new Date(JOB_STARTED_AT + seconds(951)).toISOString() }]],
+    ["a similarly named step", [{ name: "Set up job extra", started_at: new Date(JOB_STARTED_AT + seconds(951)).toISOString() }]],
+    ["an unparseable setup start", [{ name: "Set up job", started_at: "not a date" }]],
+    ["a missing setup start", [{ name: "Set up job" }]],
+    ["a non-array steps field", null],
+  ])("sweeps the queued placeholder with %s", async (_description, steps) => {
+    const w = world(JOB_STARTED_AT + seconds(959), 0);
+    const queuedAt = new Date(JOB_STARTED_AT).toISOString();
+    w.state.jobStart = async () => response({ jobs: [
+      ownJob({ name: "other", steps: [{ name: "Set up job", started_at: queuedAt }] }),
+      ownJob({ started_at: queuedAt, created_at: queuedAt, steps }),
+    ] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await w.run();
+
+      expect(result.sweep.relayed).toHaveLength(1);
+      expect(writesOf(w.state.requests).some(({ url }) => url === `${ROOT}/check-runs`)).toBe(true);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("exits without writing when setup evidence confirms a start 959 s before entry", async () => {
+    const w = world(JOB_STARTED_AT + seconds(959), 0);
+    const timestamp = new Date(JOB_STARTED_AT).toISOString();
+    w.state.jobStart = async () => response({ jobs: [ownJob({
+      created_at: timestamp, steps: [{ name: "Set up job", started_at: timestamp }],
+    })] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await expect(w.run()).rejects.toThrow();
+
+      expect(w.state.requests.map(({ url }) => url)).toEqual([JOB_START]);
+      expect(w.state.checks).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("applies the old-start guard to the later setup start", async () => {
+    const w = world(JOB_STARTED_AT + seconds(1019), 0);
+    w.state.jobStart = async () => response({ jobs: [ownJob({
+      steps: [{ name: "Set up job", started_at: new Date(JOB_STARTED_AT + seconds(60)).toISOString() }],
+    })] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await expect(w.run()).rejects.toThrow();
+
+      expect(w.state.requests.map(({ url }) => url)).toEqual([JOB_START]);
+      expect(w.state.checks).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("uses the entry deadline when the setup start is exactly one job timeout old", async () => {
+    const w = world(JOB_STARTED_AT + seconds(1020), 0);
+    w.state.jobStart = async () => response({ jobs: [ownJob({
+      steps: [{ name: "Set up job", started_at: new Date(JOB_STARTED_AT + seconds(60)).toISOString() }],
+    })] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await w.run();
+
+      expect(result.sweep.relayed).toHaveLength(1);
+      expect(w.state.checks).toHaveLength(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("uses setup evidence 951 s after the queued placeholder and sweeps", async () => {
+    const entryMs = JOB_STARTED_AT + seconds(959);
+    const stepStartMs = JOB_STARTED_AT + seconds(951);
+    const queuedAt = new Date(JOB_STARTED_AT).toISOString();
+    const listedJob = ownJob({
+      started_at: queuedAt, created_at: queuedAt,
+      steps: [{ name: "Set up job", started_at: new Date(stepStartMs).toISOString() }],
+    });
+    const deps: RelayHttpDeps = {
+      deadlineMs: entryMs + seconds(1200), nowFn: () => entryMs,
+      fetchFn: async () => response({ jobs: [ownJob({ name: "other" }), listedJob] }),
+      delayFn: async () => undefined,
+    };
+    const w = world(entryMs, 0);
+    w.state.jobStart = async () => response({ jobs: [listedJob] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const deadline = await readEffectiveDeadline(deps, {
+        repo: REPO, runId: RUN_ID, runAttempt: ATTEMPT, workflowToken: WORKFLOW_TOKEN,
+      });
+
+      expect(deadline).toBe(jobStartDeadline(stepStartMs));
+      expect(deadline).toBe(JOB_STARTED_AT + seconds(1821));
+      const result = await w.run();
+      expect(result.sweep.relayed).toHaveLength(1);
+      expect(writesOf(w.state.requests).some(({ url }) => url === `${ROOT}/check-runs`)).toBe(true);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("exits without writing for a bad job start even with valid setup evidence", async () => {
+    const w = world(JOB_STARTED_AT + seconds(30), 0);
+    w.state.jobStart = async () => response({ jobs: [ownJob({
+      started_at: "not a date", steps: [{ name: "Set up job", started_at: new Date(JOB_STARTED_AT).toISOString() }],
+    })] });
+
+    await expect(w.run()).rejects.toThrow();
+
+    expect(w.state.requests.map(({ url }) => url)).toEqual([JOB_START]);
+    expect(w.state.checks).toEqual([]);
   });
 
   it("exits without writing when the listed start is one second after creation and 959 s before entry", async () => {
