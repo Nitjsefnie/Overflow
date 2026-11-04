@@ -120,19 +120,22 @@ describe("the ledger relay's effective deadline", () => {
     }
   });
 
-  it.each([["absent", undefined], ["unparseable", "not a date"]])(
-    "uses a later valid setup start when creation is %s",
-    async (_description, createdAt) => {
+  it.each([0, 1])(
+    "uses a later valid setup start when creation is %i s after the listed start",
+    async (creationOffset) => {
       const nowMs = JOB_STARTED_AT + seconds(420);
       const stepStartMs = JOB_STARTED_AT + seconds(30);
       const deps: RelayHttpDeps = {
         deadlineMs: nowMs + seconds(600), nowFn: () => nowMs,
-        fetchFn: async () => response({ jobs: [ownJob({ created_at: createdAt, steps: [
-          null,
-          { name: "Checkout", started_at: new Date(JOB_STARTED_AT + seconds(100)).toISOString() },
-          { name: "Set up job", started_at: "not a date" },
-          { name: "Set up job", status: "in_progress", started_at: new Date(stepStartMs).toISOString() },
-        ] })] }),
+        fetchFn: async () => response({ jobs: [ownJob({
+          created_at: new Date(JOB_STARTED_AT + seconds(creationOffset)).toISOString(),
+          steps: [
+            null,
+            { name: "Checkout", started_at: new Date(JOB_STARTED_AT + seconds(100)).toISOString() },
+            { name: "Set up job", started_at: "not a date" },
+            { name: "Set up job", status: "in_progress", started_at: new Date(stepStartMs).toISOString() },
+          ],
+        })] }),
         delayFn: async () => undefined,
       };
 
@@ -145,11 +148,36 @@ describe("the ledger relay's effective deadline", () => {
     },
   );
 
+  it.each([
+    ["earlier", new Date(JOB_STARTED_AT - seconds(1)).toISOString()],
+    ["absent", undefined],
+    ["unparseable", "not a date"],
+    ["non-string", 123],
+  ])("keeps the listed start with an 80 s-late setup step when creation is %s", async (_description, createdAt) => {
+    const nowMs = JOB_STARTED_AT + seconds(420);
+    const deps: RelayHttpDeps = {
+      deadlineMs: nowMs + seconds(600), nowFn: () => nowMs,
+      fetchFn: async () => response({ jobs: [ownJob({
+        created_at: createdAt,
+        steps: [{ name: "Set up job", started_at: new Date(JOB_STARTED_AT + seconds(80)).toISOString() }],
+      })] }),
+      delayFn: async () => undefined,
+    };
+
+    const deadline = await readEffectiveDeadline(deps, {
+      repo: REPO, runId: RUN_ID, runAttempt: ATTEMPT, workflowToken: WORKFLOW_TOKEN,
+    });
+
+    expect(deadline).toBe(jobStartDeadline(JOB_STARTED_AT));
+    expect(deadline).toBe(JOB_STARTED_AT + seconds(870));
+  });
+
   it("keeps the entry deadline when it is earlier than the setup-based deadline", async () => {
     const nowMs = JOB_STARTED_AT + seconds(600);
     const deps: RelayHttpDeps = {
       deadlineMs: nowMs + seconds(600), nowFn: () => nowMs,
       fetchFn: async () => response({ jobs: [ownJob({
+        created_at: new Date(JOB_STARTED_AT).toISOString(),
         steps: [{ name: "Set up job", started_at: new Date(JOB_STARTED_AT + seconds(590)).toISOString() }],
       })] }),
       delayFn: async () => undefined,
@@ -356,9 +384,23 @@ describe("the ledger relay's job-start budget", () => {
     }
   });
 
+  it.each([940, 959])("exits without writing at %i s with an 80 s-late setup step and a real start", async (age) => {
+    const w = world(JOB_STARTED_AT + seconds(age), 0);
+    w.state.jobStart = async () => response({ jobs: [ownJob({
+      created_at: new Date(JOB_STARTED_AT - seconds(1)).toISOString(),
+      steps: [{ name: "Set up job", started_at: new Date(JOB_STARTED_AT + seconds(80)).toISOString() }],
+    })] });
+
+    await expect(w.run()).rejects.toThrow();
+
+    expect(w.state.requests.map(({ url }) => url)).toEqual([JOB_START]);
+    expect(w.state.checks).toEqual([]);
+  });
+
   it("applies the old-start guard to the later setup start", async () => {
     const w = world(JOB_STARTED_AT + seconds(1019), 0);
     w.state.jobStart = async () => response({ jobs: [ownJob({
+      created_at: new Date(JOB_STARTED_AT).toISOString(),
       steps: [{ name: "Set up job", started_at: new Date(JOB_STARTED_AT + seconds(60)).toISOString() }],
     })] });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -376,6 +418,7 @@ describe("the ledger relay's job-start budget", () => {
   it("uses the entry deadline when the setup start is exactly one job timeout old", async () => {
     const w = world(JOB_STARTED_AT + seconds(1020), 0);
     w.state.jobStart = async () => response({ jobs: [ownJob({
+      created_at: new Date(JOB_STARTED_AT).toISOString(),
       steps: [{ name: "Set up job", started_at: new Date(JOB_STARTED_AT + seconds(60)).toISOString() }],
     })] });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
